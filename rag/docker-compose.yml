@@ -1,0 +1,40 @@
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      - AI_SERVICE_ADAPTER=${AI_SERVICE_ADAPTER:-local}
+      - LOCAL_STORAGE_DIR=/tmp/production-ready-rag
+      - OCI_CONFIG_FILE=/home/appuser/.oci/config
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
+      - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-60}
+    ports:
+      - "8000:8000"
+    # OCI 設定 / Oracle wallet をマウント
+    volumes:
+      - ~/.oci:/home/appuser/.oci:ro
+      - backend-local-storage:/tmp/production-ready-rag
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    environment:
+      - BACKEND_URL=http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  backend-local-storage:

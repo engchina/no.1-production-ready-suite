@@ -1,0 +1,28 @@
+{
+  "cases": [
+    {
+      "id": "invoice-amount-basic",
+      "query": "2026年6月のクラウド利用料の請求金額はいくらですか。",
+      "relevant_document_ids": ["doc-cloud-usage-2026-06"],
+      "expected_answer_keywords": ["120000", "クラウド利用料"]
+    },
+    {
+      "id": "invoice-vendor-basic",
+      "query": "株式会社サンプルから届いた請求書の請求書番号を教えてください。",
+      "relevant_document_ids": ["doc-sample-vendor-invoice"],
+      "expected_answer_keywords": ["INV-001", "株式会社サンプル"]
+    }
+  ],
+  "top_k": 10,
+  "rerank_top_n": 5,
+  "mode": "hybrid",
+  "filters": {
+    "status": "REGISTERED"
+  },
+  "thresholds": {
+    "precision_at_k": 0.4,
+    "recall_at_k": 0.8,
+    "mrr": 0.7,
+    "answer_keyword_hit_rate": 0.8
+  }
+}
