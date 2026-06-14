@@ -28,6 +28,40 @@ Use a writable cache directory for verification commands, for example `uv --cach
 
 ---
 
+## [ERR-20260614-019] uv_cache_readonly_root
+
+**Logged**: 2026-06-14T13:11:46+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+`uv run` failed in the managed sandbox because the default cache under `/root/.cache/uv` is read-only.
+
+### Error
+```text
+error: Could not acquire lock
+  Caused by: Could not create temporary file
+  Caused by: Read-only file system (os error 30) at path "/root/.cache/uv/.tmp..."
+```
+
+### Context
+- Commands attempted: `uv run ruff check ...` and `uv run pytest ...`
+- Re-running with `UV_CACHE_DIR=/tmp/uv-cache` allowed ruff and pytest to complete.
+
+### Suggested Fix
+Use `UV_CACHE_DIR=/tmp/uv-cache uv run ...` for backend validation commands in this sandbox.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pyproject.toml
+
+### Resolution
+- **Resolved**: 2026-06-14T13:11:46+09:00
+- **Notes**: Re-ran backend ruff and targeted pytest with `UV_CACHE_DIR=/tmp/uv-cache`; both passed.
+
+---
+
 ## [ERR-20260614-014] stale_settings_route_probe
 
 **Logged**: 2026-06-14T11:22:04+09:00

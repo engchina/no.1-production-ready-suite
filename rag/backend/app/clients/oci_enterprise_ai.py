@@ -16,7 +16,12 @@ from typing import Any, Protocol
 
 import httpx
 
-from app.config import Settings, get_settings
+from app.config import (
+    Settings,
+    enterprise_ai_default_model_id,
+    enterprise_ai_vision_model_id,
+    get_settings,
+)
 from app.schemas.extraction import StructuredExtraction
 
 DEFAULT_LLM_PATH = "/responses"
@@ -308,13 +313,14 @@ def _build_vlm_payload(
     mime_type: str,
 ) -> dict[str, Any]:
     """VLM endpoint へ送る payload を標準形または template から作る。"""
+    model_id = enterprise_ai_vision_model_id(settings)
     data_base64 = base64.b64encode(image_bytes).decode("ascii")
     response_format = {
         "type": "json_schema",
         "schema": StructuredExtraction.model_json_schema(),
     }
     values = {
-        "model": settings.oci_enterprise_ai_vlm_model,
+        "model": model_id,
         "project": settings.oci_enterprise_ai_project_ocid,
         "project_ocid": settings.oci_enterprise_ai_project_ocid,
         "compartment_id": settings.oci_compartment_id,
@@ -343,9 +349,9 @@ def _build_vlm_payload(
             "OCI Enterprise AI VLM payload template",
         )
 
-    _require_value(settings.oci_enterprise_ai_vlm_model, "OCI Enterprise AI VLM model")
+    _require_value(model_id, "OCI Enterprise AI Vision model")
     return {
-        "model": settings.oci_enterprise_ai_vlm_model,
+        "model": model_id,
         "compartment_id": settings.oci_compartment_id,
         "task": "structured_document_extraction",
         "language": "ja",
@@ -361,6 +367,7 @@ def _build_vlm_payload(
 
 def _build_llm_payload(settings: Settings, prompt: str, context: str) -> dict[str, Any]:
     """LLM endpoint へ送る payload を標準形または template から作る。"""
+    model_id = enterprise_ai_default_model_id(settings)
     user_message = _rag_user_message(prompt, context)
     messages = [
         {"role": "system", "content": LLM_SYSTEM_PROMPT},
@@ -371,7 +378,7 @@ def _build_llm_payload(settings: Settings, prompt: str, context: str) -> dict[st
         "max_output_tokens": 1200,
     }
     values = {
-        "model": settings.oci_enterprise_ai_llm_model,
+        "model": model_id,
         "project": settings.oci_enterprise_ai_project_ocid,
         "project_ocid": settings.oci_enterprise_ai_project_ocid,
         "compartment_id": settings.oci_compartment_id,
@@ -398,9 +405,9 @@ def _build_llm_payload(settings: Settings, prompt: str, context: str) -> dict[st
             "OCI Enterprise AI LLM payload template",
         )
 
-    _require_value(settings.oci_enterprise_ai_llm_model, "OCI Enterprise AI LLM model")
+    _require_value(model_id, "OCI Enterprise AI default model")
     return {
-        "model": settings.oci_enterprise_ai_llm_model,
+        "model": model_id,
         "compartment_id": settings.oci_compartment_id,
         "task": "rag_answer_generation",
         "language": "ja",

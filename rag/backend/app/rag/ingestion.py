@@ -7,7 +7,7 @@ from time import perf_counter
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
-from app.config import Settings, get_settings
+from app.config import Settings, enterprise_ai_vision_model_id, get_settings
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction
 from app.rag.observability import (
@@ -90,7 +90,7 @@ class IngestionPipeline:
                 self._vlm.extract_with_vlm(image_bytes, prompt, mime_type=content_type),
                 attributes={
                     "adapter": self._settings.ai_service_adapter,
-                    "model": self._settings.oci_enterprise_ai_vlm_model or "local",
+                    "model": enterprise_ai_vision_model_id(self._settings) or "local",
                     "source_bytes": len(image_bytes),
                     "content_type": _observability_content_type(content_type),
                     "prompt_chars": len(prompt),

@@ -55,7 +55,6 @@ export const ja = {
   "settings.oci.field.region": "リージョン",
   "settings.oci.field.objectStorageRegion": "Object Storage リージョン",
   "settings.oci.field.objectStorageNamespace": "Object Storage ネームスペース",
-  "settings.oci.field.objectStorageBucket": "Object Storage バケット",
   "settings.oci.required": "必須",
   "settings.oci.helper.configFile":
     "~/.oci/config 固定です。右のボタンで DEFAULT profile を読み取り、内容を反映します。",
@@ -65,12 +64,13 @@ export const ja = {
   "settings.oci.helper.tenancyOcid": "OCI config の tenancy に相当するテナンシ OCID。",
   "settings.oci.helper.keyFile":
     "秘密鍵 PEM ファイルを選択すると ~/.oci/oci_api_key.pem に上書き保存します。パスは変更しません。",
+  "settings.oci.keyFile.missing":
+    "~/.oci/oci_api_key.pem が見つかりません。秘密鍵を選択すると、このパスに安全な権限で保存します。",
   "settings.oci.helper.region": "例: ap-tokyo-1 / ap-osaka-1 / us-chicago-1",
   "settings.oci.helper.objectStorageRegion":
-    "Object Storage bucket のリージョン。例: ap-tokyo-1 / ap-osaka-1 / us-chicago-1",
+    "アップロード保存先で指定する bucket のリージョン。例: ap-tokyo-1 / ap-osaka-1 / us-chicago-1",
   "settings.oci.helper.objectStorageNamespace":
     "取得ボタンで OCI Object Storage から取得します。手入力では変更できません。",
-  "settings.oci.helper.objectStorageBucket": "処理対象ファイルを保存する bucket 名。",
   "settings.oci.configSample": "config ファイル例",
   "settings.oci.configContent.title": "OCI config 内容",
   "settings.oci.configContent.description":
@@ -82,7 +82,7 @@ export const ja = {
   "settings.oci.configContent.preview": "生成プレビュー",
   "settings.oci.storage.title": "Object Storage",
   "settings.oci.storage.description":
-    "アップロード原本の保存先です。処理状態別 bucket 運用にする場合は代表 bucket を設定します。",
+    "アップロード保存先で使う Object Storage の namespace とリージョンを設定します。",
   "settings.oci.actions.save": "下書きを保存",
   "settings.oci.actions.saved": "保存しました",
   "settings.oci.actions.reset": "既定値へ戻す",
@@ -137,9 +137,6 @@ export const ja = {
     "fingerprint は 16 進数をコロン区切りで入力してください。",
   "settings.oci.validation.invalidKeyFile": ".pem または .key ファイルを選択してください。",
   "settings.oci.validation.invalidProfile": "プロファイル名に [ ] や改行は使用できません。",
-  "settings.oci.validation.invalidBucket":
-    "bucket 名は英数字、ハイフン、アンダースコア、ドットで入力してください。",
-
   "settings.uploadStorage.subtitle":
     "ドキュメントアップロード時の原本保存先を local または OCI Object Storage から選択します。",
   "settings.uploadStorage.loading": "アップロード保存先設定を読み込んでいます。",
@@ -168,6 +165,12 @@ export const ja = {
   "settings.uploadStorage.actions.saving": "保存中…",
   "settings.uploadStorage.actions.saved": "保存しました",
   "settings.uploadStorage.actions.reload": "再読み込み",
+  "settings.uploadStorage.env.title": ".env プレビュー",
+  "settings.uploadStorage.env.description":
+    "この画面で管理するアップロード保存先の .env 値です。永続化は backend/.env または OCI Vault 経由で反映します。",
+  "settings.uploadStorage.env.copy": ".env をコピー",
+  "settings.uploadStorage.env.copied": "コピーしました",
+  "settings.uploadStorage.env.copyFailed": "コピーできませんでした",
   "settings.uploadStorage.status.title": "保存先状態",
   "settings.uploadStorage.status.description": "現在の保存先と readiness を確認します。",
   "settings.uploadStorage.status.readiness": "Readiness",
@@ -202,7 +205,7 @@ export const ja = {
     "英数字、ハイフン、アンダースコア、ドットで入力してください。",
 
   "settings.model.subtitle":
-    "OCI Enterprise AI（LLM/VLM）と OCI Generative AI（埋め込み/リランク）のモデルを設定します。",
+    "OCI Enterprise AI の LLM カタログと OCI Generative AI（埋め込み/リランク）のモデルを設定します。",
   "settings.model.loading": "モデル設定を読み込んでいます。",
   "settings.model.loadError": "モデル設定の取得に失敗しました。",
   "settings.model.unsaved": "未保存の変更があります。",
@@ -228,9 +231,9 @@ export const ja = {
   "settings.model.status.missing": "未設定",
   "settings.model.status.invalid": "要確認",
   "settings.model.status.enterprise.ok":
-    "LLM/VLM の endpoint、project、モデル ID が揃っています。",
+    "Enterprise AI の endpoint、project、既定モデル、Vision 対応モデルが揃っています。",
   "settings.model.status.enterprise.missing":
-    "OCI 運用前に endpoint、project、LLM、VLM を設定してください。",
+    "OCI 運用前に endpoint、project、既定モデル、Vision 対応モデルを設定してください。",
   "settings.model.status.enterprise.invalid": "Enterprise AI の設定形式を確認してください。",
   "settings.model.status.generative.ok": "埋め込み/リランクのモデル ID が揃っています。",
   "settings.model.status.generative.missing": "埋め込みモデルとリランクモデルを設定してください。",
@@ -241,7 +244,7 @@ export const ja = {
 
   "settings.model.enterprise.title": "OCI Enterprise AI",
   "settings.model.enterprise.description":
-    "LLM 回答生成と VLM/OCR 解析に使う Enterprise AI endpoint、project、モデル ID。",
+    "回答生成と Vision/OCR 解析に使う Enterprise AI endpoint、project、モデルカタログ。",
   "settings.model.enterprise.endpoint": "Endpoint URL",
   "settings.model.enterprise.endpointHelp":
     "公式 docs の OpenAI-compatible base URL を指定します。Responses API path は /responses です。",
@@ -256,10 +259,14 @@ export const ja = {
   "settings.model.enterprise.apiKeyShow": "API key を表示",
   "settings.model.enterprise.apiKeyHide": "API key を隠す",
   "settings.model.enterprise.clearApiKey": "保存済み API key を削除する",
-  "settings.model.enterprise.llmModel": "LLM モデル ID",
-  "settings.model.enterprise.vlmModel": "VLM モデル ID",
-  "settings.model.enterprise.llmPath": "LLM API パス",
-  "settings.model.enterprise.vlmPath": "VLM API パス",
+  "settings.model.enterprise.models": "登録モデル",
+  "settings.model.enterprise.addModel": "追加",
+  "settings.model.enterprise.default": "既定",
+  "settings.model.enterprise.modelId": "モデル ID",
+  "settings.model.enterprise.displayName": "表示名",
+  "settings.model.enterprise.vision": "Vision",
+  "settings.model.enterprise.removeModel": "モデルを削除",
+  "settings.model.enterprise.apiPath": "API パス",
   "settings.model.enterprise.timeout": "タイムアウト（秒）",
   "settings.model.enterprise.retries": "最大リトライ回数",
   "settings.model.enterprise.advancedPayloadTitle": "カスタム gateway payload",
@@ -269,8 +276,8 @@ export const ja = {
   "settings.model.enterprise.advancedPayloadStandard": "標準 payload",
   "settings.model.enterprise.advancedPayloadNotice":
     "OCI 公式の必須項目ではありません。独自 gateway / model deployment の request body が標準 payload と異なる場合のみ入力してください。",
-  "settings.model.enterprise.llmPayloadTemplate": "LLM payload template",
-  "settings.model.enterprise.vlmPayloadTemplate": "VLM payload template",
+  "settings.model.enterprise.textPayloadTemplate": "回答生成 payload template",
+  "settings.model.enterprise.visionPayloadTemplate": "Vision/OCR payload template",
   "settings.model.enterprise.payloadTemplateHelp":
     "空欄の場合は公式 OpenAI-compatible endpoint 向けの標準 payload を使用します。",
 
@@ -284,7 +291,7 @@ export const ja = {
 
   "settings.model.ops.title": "運用メモ",
   "settings.model.ops.enterpriseOnly":
-    "回答生成と画像解析は OCI Enterprise AI に固定します。",
+    "回答生成は既定モデルを使い、画像解析は Vision 対応モデルを使います。",
   "settings.model.ops.genaiOnly":
     "OCI Generative AI は embedding/rerank のみで使います。",
   "settings.model.ops.vectorDim":
@@ -294,13 +301,12 @@ export const ja = {
     "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
   "settings.model.placeholder.project": "ocid1.generativeaiproject.oc1.us-chicago-1.xxxxxxxx",
   "settings.model.placeholder.apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-  "settings.model.placeholder.llmModel": "enterprise-llm",
-  "settings.model.placeholder.vlmModel": "enterprise-vlm",
-  "settings.model.placeholder.llmPath": "/responses",
-  "settings.model.placeholder.vlmPath": "/responses",
-  "settings.model.placeholder.llmPayloadTemplate":
+  "settings.model.placeholder.modelId": "enterprise-llm",
+  "settings.model.placeholder.displayName": "業務 RAG 標準",
+  "settings.model.placeholder.apiPath": "/responses",
+  "settings.model.placeholder.textPayloadTemplate":
     "{\"model\":\"${model}\",\"messages\":\"${messages}\",\"parameters\":\"${parameters}\"}",
-  "settings.model.placeholder.vlmPayloadTemplate":
+  "settings.model.placeholder.visionPayloadTemplate":
     "{\"model\":\"${model}\",\"input\":{\"mime_type\":\"${mime_type}\",\"data_base64\":\"${data_base64}\"},\"response_format\":\"${response_format}\"}",
   "settings.model.placeholder.embeddingModel": "cohere.embed-v4.0",
   "settings.model.placeholder.rerankModel": "cohere.rerank-v4.0-fast",
@@ -313,6 +319,10 @@ export const ja = {
     "API key 認証を使う場合は API key を入力してください。",
   "settings.model.validation.path": "API パスは / または http(s):// で始めてください。",
   "settings.model.validation.pathRequired": "API パスを入力してください。",
+  "settings.model.validation.modelRequired": "Enterprise AI のモデル ID を 1 件以上入力してください。",
+  "settings.model.validation.modelDuplicate": "Enterprise AI のモデル ID は重複できません。",
+  "settings.model.validation.defaultModel": "既定モデルを登録モデルから選択してください。",
+  "settings.model.validation.visionModel": "OCR 用に Vision 対応モデルを 1 件以上有効にしてください。",
   "settings.model.validation.timeout": "タイムアウトは 0 より大きく 600 以下にしてください。",
   "settings.model.validation.retries": "最大リトライ回数は 0 から 5 の範囲にしてください。",
   "settings.model.validation.embeddingDim": "Embedding 次元は 1536 固定です。",
@@ -346,6 +356,8 @@ export const ja = {
   "settings.database.helper.dsnService": "選択すると DSN / 接続文字列へ反映します。",
   "settings.database.helper.walletDir":
     "ORACLE_CLIENT_LIB_DIR/network/admin に固定されます。この画面からは変更できません。",
+  "settings.database.walletDir.missing":
+    "Wallet ディレクトリが見つかりません。Wallet ZIP を選択すると、この固定ディレクトリへ展開して作成します。",
   "settings.database.helper.walletZip":
     "ADB からダウンロードした Wallet ZIP を選択します。固定ディレクトリの内容を置き換えます。",
   "settings.database.helper.passwordSaved":

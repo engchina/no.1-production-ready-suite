@@ -21,14 +21,24 @@ function createModelSettings() {
         api_key: "",
         has_api_key: true,
         clear_api_key: false,
-        llm_model: "enterprise-llm",
-        vlm_model: "enterprise-vlm",
-        llm_path: "/responses",
-        vlm_path: "/responses",
-        llm_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
-        vlm_payload_template: '{"input":{"document":"${document}","params":"${parameters}"}}',
-        llm_response_path: "",
-        vlm_response_path: "",
+        models: [
+          {
+            model_id: "enterprise-llm",
+            display_name: "標準 LLM",
+            vision_enabled: false,
+          },
+          {
+            model_id: "enterprise-vision",
+            display_name: "Vision LLM",
+            vision_enabled: true,
+          },
+        ],
+        default_model_id: "enterprise-llm",
+        api_path: "/responses",
+        text_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
+        vision_payload_template: '{"input":{"document":"${data_base64}"}}',
+        text_response_path: "",
+        vision_response_path: "",
         timeout_seconds: 60,
         max_retries: 3,
       },
@@ -57,7 +67,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 720, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`モデル設定は API key gateway 前提の認証フォームを表示する (${viewport.name})`, async ({ page }) => {
+  test(`モデル設定は Enterprise AI の複数 LLM と既定モデルを表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await page.addInitScript(() => {
@@ -79,19 +89,33 @@ for (const viewport of [
     );
     await expect(page.getByRole("textbox", { name: "API key" })).toBeVisible();
     await expect(page.getByText("保存済み", { exact: true }).first()).toBeVisible();
+    await expect(page.getByLabel("モデル ID 1")).toHaveValue("enterprise-llm");
+    await expect(page.getByLabel("表示名 1")).toHaveValue("標準 LLM");
+    await expect(page.getByLabel("モデル ID 2")).toHaveValue("enterprise-vision");
+    await expect(page.getByRole("radio", { name: "既定 1" })).toBeChecked();
+    await expect(page.getByRole("switch", { name: "Vision 1" })).toHaveAttribute(
+      "aria-checked",
+      "false"
+    );
+    await expect(page.getByRole("switch", { name: "Vision 2" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+    await expect(page.getByLabel("API パス")).toHaveValue("/responses");
     await expect(page.getByLabel("最大リトライ回数")).toHaveValue("3");
     await expect(page.getByText("カスタム gateway payload")).toBeVisible();
     await expect(page.getByText("設定あり", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("LLM payload template")).toBeHidden();
-    await expect(page.getByLabel("VLM payload template")).toBeHidden();
+    await expect(page.getByLabel("回答生成 payload template")).toBeHidden();
+    await expect(page.getByLabel("Vision/OCR payload template")).toBeHidden();
     await expect(
       page.getByText("OpenAI-compatible gateway の Bearer 認証で使います。")
     ).toBeVisible();
-    await expect(page.getByRole("switch")).toHaveCount(0);
+    await expect(page.getByText("LLM モデル ID")).toHaveCount(0);
+    await expect(page.getByText("VLM モデル ID")).toHaveCount(0);
 
     await page.getByText("カスタム gateway payload").click();
-    await expect(page.getByLabel("LLM payload template")).toBeVisible();
-    await expect(page.getByLabel("VLM payload template")).toBeVisible();
+    await expect(page.getByLabel("回答生成 payload template")).toBeVisible();
+    await expect(page.getByLabel("Vision/OCR payload template")).toBeVisible();
     await expect(page.getByText("OCI 公式の必須項目ではありません。")).toBeVisible();
   });
 }

@@ -30,6 +30,10 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
     monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "sk-runtime-secret")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "enterprise-llm")
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_model", "enterprise-vlm")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_models", [])
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_model", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_path", "/responses")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_path", "/responses")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_payload_template", LLM_TEMPLATE)
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_payload_template", VLM_TEMPLATE)
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_response_path", "/data/text")
@@ -49,12 +53,24 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
     )
     assert body["settings"]["enterprise_ai"]["api_key"] == ""
     assert body["settings"]["enterprise_ai"]["has_api_key"] is True
-    assert body["settings"]["enterprise_ai"]["llm_model"] == "enterprise-llm"
-    assert body["settings"]["enterprise_ai"]["vlm_model"] == "enterprise-vlm"
-    assert body["settings"]["enterprise_ai"]["llm_payload_template"] == LLM_TEMPLATE
-    assert body["settings"]["enterprise_ai"]["vlm_payload_template"] == VLM_TEMPLATE
-    assert body["settings"]["enterprise_ai"]["llm_response_path"] == "/data/text"
-    assert body["settings"]["enterprise_ai"]["vlm_response_path"] == "/data/document"
+    assert body["settings"]["enterprise_ai"]["models"] == [
+        {
+            "model_id": "enterprise-llm",
+            "display_name": "enterprise-llm",
+            "vision_enabled": False,
+        },
+        {
+            "model_id": "enterprise-vlm",
+            "display_name": "enterprise-vlm",
+            "vision_enabled": True,
+        },
+    ]
+    assert body["settings"]["enterprise_ai"]["default_model_id"] == "enterprise-llm"
+    assert body["settings"]["enterprise_ai"]["api_path"] == "/responses"
+    assert body["settings"]["enterprise_ai"]["text_payload_template"] == LLM_TEMPLATE
+    assert body["settings"]["enterprise_ai"]["vision_payload_template"] == VLM_TEMPLATE
+    assert body["settings"]["enterprise_ai"]["text_response_path"] == "/data/text"
+    assert body["settings"]["enterprise_ai"]["vision_response_path"] == "/data/document"
     assert body["settings"]["generative_ai"]["embedding_dim"] == 1536
     assert "sk-runtime-secret" not in resp.text
     assert body["checks"] == {
@@ -78,6 +94,13 @@ def test_update_model_settings_mutates_runtime_settings() -> None:
     assert settings.oci_enterprise_ai_api_key == "sk-update-secret"
     assert settings.oci_enterprise_ai_llm_model == "enterprise-llm"
     assert settings.oci_enterprise_ai_vlm_model == "enterprise-vlm"
+    assert [model.model_id for model in settings.oci_enterprise_ai_models] == [
+        "enterprise-llm",
+        "enterprise-vlm",
+    ]
+    assert settings.oci_enterprise_ai_default_model == "enterprise-llm"
+    assert settings.oci_enterprise_ai_llm_path == "/responses"
+    assert settings.oci_enterprise_ai_vlm_path == "/responses"
     assert settings.oci_enterprise_ai_llm_payload_template == LLM_TEMPLATE
     assert settings.oci_enterprise_ai_vlm_payload_template == VLM_TEMPLATE
     assert settings.oci_enterprise_ai_llm_response_path == "/data/text"
@@ -139,28 +162,10 @@ def test_model_settings_requires_enterprise_ai_api_key() -> None:
     assert resp.json()["data"]["checks"]["enterprise_ai"] == "missing"
 
 
-def test_model_settings_allows_model_id_omitted_when_template_does_not_reference_model() -> None:
+def test_model_settings_requires_enterprise_ai_model_catalog() -> None:
     payload = _payload()
-    payload["enterprise_ai"]["llm_model"] = ""
-    payload["enterprise_ai"]["vlm_model"] = ""
-    payload["enterprise_ai"]["llm_payload_template"] = LLM_TEMPLATE
-    payload["enterprise_ai"]["vlm_payload_template"] = VLM_TEMPLATE
-
-    resp = client.post("/api/settings/model/check", json=payload)
-
-    assert resp.status_code == 200
-    assert resp.json()["data"]["checks"]["enterprise_ai"] == "ok"
-
-
-def test_enterprise_ai_model_settings_defaults_max_retries_to_three() -> None:
-    """設定 API スキーマの最大リトライ回数既定値は 3。"""
-    assert EnterpriseAiModelSettings().max_retries == 3
-
-
-def test_model_settings_requires_model_id_when_template_references_model() -> None:
-    payload = _payload()
-    payload["enterprise_ai"]["llm_model"] = ""
-    payload["enterprise_ai"]["llm_payload_template"] = '{"model":"${model}"}'
+    payload["enterprise_ai"]["models"] = []
+    payload["enterprise_ai"]["default_model_id"] = ""
 
     resp = client.post("/api/settings/model/check", json=payload)
 
@@ -168,9 +173,24 @@ def test_model_settings_requires_model_id_when_template_references_model() -> No
     assert resp.json()["data"]["checks"]["enterprise_ai"] == "missing"
 
 
+def test_enterprise_ai_model_settings_defaults_max_retries_to_three() -> None:
+    """設定 API スキーマの最大リトライ回数既定値は 3。"""
+    assert EnterpriseAiModelSettings().max_retries == 3
+
+
+def test_model_settings_reports_invalid_default_model() -> None:
+    payload = _payload()
+    payload["enterprise_ai"]["default_model_id"] = "missing-model"
+
+    resp = client.post("/api/settings/model/check", json=payload)
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["checks"]["enterprise_ai"] == "invalid"
+
+
 def test_model_settings_rejects_invalid_payload_template() -> None:
     payload = _payload()
-    payload["enterprise_ai"]["llm_payload_template"] = "[1, 2, 3]"
+    payload["enterprise_ai"]["text_payload_template"] = "[1, 2, 3]"
 
     resp = client.patch("/api/settings/model", json=payload)
 
@@ -265,6 +285,75 @@ def test_read_oci_config_uses_requested_profile_from_backend_path(tmp_path: Path
         ],
     }
     assert "compartment" not in body
+
+
+def test_get_oci_settings_returns_runtime_and_config_values(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    key_file = tmp_path / ".oci" / "oci_api_key.pem"
+    key_file.parent.mkdir()
+    key_file.write_text(
+        "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+    config_file = tmp_path / ".oci" / "config"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[DEFAULT]",
+                "user=ocid1.user.oc1..runtime",
+                "fingerprint=12:34:56:78",
+                "tenancy=ocid1.tenancy.oc1..runtime",
+                "region=ap-tokyo-1",
+                "key_file=/tmp/ignored.pem",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(config_file))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
+    monkeypatch.setattr(settings, "oci_region", "us-chicago-1")
+
+    resp = client.get("/api/settings/oci")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body == {
+        "config_file": str(config_file),
+        "profile": "DEFAULT",
+        "user": "ocid1.user.oc1..runtime",
+        "fingerprint": "12:34:56:78",
+        "tenancy": "ocid1.tenancy.oc1..runtime",
+        "region": "us-chicago-1",
+        "key_file": "~/.oci/oci_api_key.pem",
+        "key_file_exists": True,
+        "config_file_exists": True,
+        "config_source": "runtime",
+    }
+
+
+def test_get_oci_settings_reports_missing_private_key_without_failing(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_config_file", str(tmp_path / ".oci" / "missing-config"))
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
+    monkeypatch.setattr(settings, "oci_region", "ap-osaka-1")
+
+    resp = client.get("/api/settings/oci")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["user"] == ""
+    assert body["fingerprint"] == ""
+    assert body["tenancy"] == ""
+    assert body["region"] == "ap-osaka-1"
+    assert body["key_file"] == "~/.oci/oci_api_key.pem"
+    assert body["key_file_exists"] is False
+    assert body["config_file_exists"] is False
 
 
 def test_read_oci_config_rejects_missing_requested_profile(tmp_path: Path) -> None:
@@ -674,14 +763,24 @@ def _payload() -> dict[str, Any]:
             "api_key": "sk-update-secret",
             "has_api_key": False,
             "clear_api_key": False,
-            "llm_model": "enterprise-llm",
-            "vlm_model": "enterprise-vlm",
-            "llm_path": "/v1/llm/generate",
-            "vlm_path": "/v1/vlm/extract",
-            "llm_payload_template": LLM_TEMPLATE,
-            "vlm_payload_template": VLM_TEMPLATE,
-            "llm_response_path": "/data/text",
-            "vlm_response_path": "/data/document",
+            "models": [
+                {
+                    "model_id": "enterprise-llm",
+                    "display_name": "標準 LLM",
+                    "vision_enabled": False,
+                },
+                {
+                    "model_id": "enterprise-vlm",
+                    "display_name": "Vision LLM",
+                    "vision_enabled": True,
+                },
+            ],
+            "default_model_id": "enterprise-llm",
+            "api_path": "/responses",
+            "text_payload_template": LLM_TEMPLATE,
+            "vision_payload_template": VLM_TEMPLATE,
+            "text_response_path": "/data/text",
+            "vision_response_path": "/data/document",
             "timeout_seconds": 60.0,
             "max_retries": 2,
         },

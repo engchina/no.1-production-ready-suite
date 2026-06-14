@@ -9,7 +9,7 @@ from time import perf_counter
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
-from app.config import Settings, get_settings
+from app.config import Settings, enterprise_ai_default_model_id, get_settings
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.guardrails import GuardrailPolicy
@@ -290,7 +290,7 @@ class RagPipeline:
                 self._llm.generate(query_guardrail.sanitized_text, context),
                 attributes={
                     "adapter": self._settings.ai_service_adapter,
-                    "model": self._settings.oci_enterprise_ai_llm_model or "local",
+                    "model": enterprise_ai_default_model_id(self._settings) or "local",
                     "context_chars": len(context),
                     "citation_count": len(context_citations),
                 },

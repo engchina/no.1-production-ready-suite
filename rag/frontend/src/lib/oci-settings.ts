@@ -14,14 +14,12 @@ export interface OciSettingsDraft {
   region: string;
   objectStorageRegion: string;
   objectStorageNamespace: string;
-  objectStorageBucket: string;
 }
 
 export type OciSettingsField = keyof OciSettingsDraft;
 
 export type OciValidationCode =
   | "required"
-  | "invalid_bucket"
   | "invalid_fingerprint"
   | "invalid_tenancy_ocid"
   | "invalid_user_ocid"
@@ -39,7 +37,6 @@ export const DEFAULT_OCI_SETTINGS: OciSettingsDraft = {
   region: "us-chicago-1",
   objectStorageRegion: DEFAULT_OBJECT_STORAGE_REGION,
   objectStorageNamespace: "",
-  objectStorageBucket: "",
 };
 
 export const REQUIRED_OCI_SETTINGS_FIELDS = [
@@ -52,10 +49,8 @@ export const REQUIRED_OCI_SETTINGS_FIELDS = [
   "region",
   "objectStorageRegion",
   "objectStorageNamespace",
-  "objectStorageBucket",
 ] as const satisfies readonly OciSettingsField[];
 
-const OCI_BUCKET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,255}$/;
 const OCI_FINGERPRINT_PATTERN = /^[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2})+$/;
 const OCI_CONFIG_KEYS = [
   "user",
@@ -92,9 +87,6 @@ export function normalizeOciSettingsDraft(input: Partial<OciSettingsDraft>): Oci
     ).trim(),
     objectStorageNamespace: (
       input.objectStorageNamespace ?? DEFAULT_OCI_SETTINGS.objectStorageNamespace
-    ).trim(),
-    objectStorageBucket: (
-      input.objectStorageBucket ?? DEFAULT_OCI_SETTINGS.objectStorageBucket
     ).trim(),
   };
 }
@@ -140,13 +132,6 @@ export function validateOciSettingsDraft(draft: OciSettingsDraft): OciValidation
     errors.fingerprint = "invalid_fingerprint";
   }
 
-  if (
-    normalized.objectStorageBucket &&
-    !OCI_BUCKET_NAME_PATTERN.test(normalized.objectStorageBucket)
-  ) {
-    errors.objectStorageBucket = "invalid_bucket";
-  }
-
   return errors;
 }
 
@@ -168,7 +153,6 @@ export function buildOciEnvFile(draft: OciSettingsDraft): string {
       [
         ["OBJECT_STORAGE_REGION", normalized.objectStorageRegion],
         ["OBJECT_STORAGE_NAMESPACE", normalized.objectStorageNamespace],
-        ["OBJECT_STORAGE_BUCKET", normalized.objectStorageBucket],
       ],
     ],
   ];

@@ -19,7 +19,6 @@ const COMPLETE_SETTINGS: OciSettingsDraft = {
   tenancyOcid: "ocid1.tenancy.oc1..example",
   keyFile: "~/.oci/oci_api_key.pem",
   objectStorageNamespace: "mytenancy",
-  objectStorageBucket: "rag-originals",
 };
 
 describe("normalizeOciSettingsDraft", () => {
@@ -69,22 +68,19 @@ describe("validateOciSettingsDraft", () => {
     expect(errors.fingerprint).toBe("required");
     expect(errors.tenancyOcid).toBe("required");
     expect(errors.objectStorageNamespace).toBe("required");
-    expect(errors.objectStorageBucket).toBe("required");
   });
 
-  it("OCI config 値と bucket 名の形式を検証する", () => {
+  it("OCI config 値の形式を検証する", () => {
     const errors = validateOciSettingsDraft({
       ...COMPLETE_SETTINGS,
       userOcid: "ocid1.tenancy.oc1..wrong",
       fingerprint: "not-a-fingerprint",
       tenancyOcid: "ocid1.user.oc1..wrong",
-      objectStorageBucket: "bad bucket",
     });
 
     expect(errors.userOcid).toBe("invalid_user_ocid");
     expect(errors.fingerprint).toBe("invalid_fingerprint");
     expect(errors.tenancyOcid).toBe("invalid_tenancy_ocid");
-    expect(errors.objectStorageBucket).toBe("invalid_bucket");
   });
 });
 
@@ -184,6 +180,6 @@ describe("buildOciEnvFile", () => {
     expect(env).not.toContain("OCI_COMPARTMENT_ID=");
     expect(env).toContain("OBJECT_STORAGE_REGION=ap-osaka-1");
     expect(env).toContain("OBJECT_STORAGE_NAMESPACE=mytenancy");
-    expect(env).toContain("OBJECT_STORAGE_BUCKET=rag-originals");
+    expect(env).not.toContain("OBJECT_STORAGE_BUCKET=");
   });
 });

@@ -8,11 +8,13 @@ import {
   Database,
   Eye,
   EyeOff,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
   ShieldCheck,
   SlidersHorizontal,
+  Trash2,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -21,8 +23,10 @@ import { ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   ApiError,
+  type EnterpriseAiConfiguredModel,
   type EnterpriseAiModelSettings,
   type GenerativeAiModelSettings,
   type ModelSettingsCheckStatus,
@@ -103,8 +107,8 @@ export function ModelSettingsClient() {
   const activeChecks = checkData?.checks ?? baselineData?.checks;
   const canSubmit = Boolean(draft && validationMessages.length === 0);
   const hasCustomPayloadTemplate = Boolean(
-    draft?.enterprise_ai.llm_payload_template.trim() ||
-      draft?.enterprise_ai.vlm_payload_template.trim()
+    draft?.enterprise_ai.text_payload_template.trim() ||
+      draft?.enterprise_ai.vision_payload_template.trim()
   );
 
   const updateEnterprise = <K extends keyof EnterpriseAiModelSettings>(
@@ -154,6 +158,81 @@ export function ModelSettingsClient() {
           }
         : current
     );
+    setCheckData(baselineData);
+    setNotice(null);
+    setErrorText("");
+  };
+
+  const updateEnterpriseModel = (
+    index: number,
+    patch: Partial<EnterpriseAiConfiguredModel>
+  ) => {
+    setDraft((current) => {
+      if (!current) return current;
+      const models = current.enterprise_ai.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, ...patch } : model
+      );
+      const previousModelId = current.enterprise_ai.models[index]?.model_id ?? "";
+      const nextModelId =
+        typeof patch.model_id === "string" ? patch.model_id : previousModelId;
+      let defaultModelId = current.enterprise_ai.default_model_id;
+      if (previousModelId && previousModelId === defaultModelId) {
+        defaultModelId = nextModelId;
+      } else if (!defaultModelId && nextModelId.trim()) {
+        defaultModelId = nextModelId;
+      }
+      return {
+        ...current,
+        enterprise_ai: {
+          ...current.enterprise_ai,
+          models,
+          default_model_id: defaultModelId,
+        },
+      };
+    });
+    setCheckData(baselineData);
+    setNotice(null);
+    setErrorText("");
+  };
+
+  const addEnterpriseModel = () => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            enterprise_ai: {
+              ...current.enterprise_ai,
+              models: [
+                ...current.enterprise_ai.models,
+                { model_id: "", display_name: "", vision_enabled: false },
+              ],
+            },
+          }
+        : current
+    );
+    setCheckData(baselineData);
+    setNotice(null);
+    setErrorText("");
+  };
+
+  const removeEnterpriseModel = (index: number) => {
+    setDraft((current) => {
+      if (!current) return current;
+      const removedModelId = current.enterprise_ai.models[index]?.model_id ?? "";
+      const models = current.enterprise_ai.models.filter((_, modelIndex) => modelIndex !== index);
+      const defaultModelId =
+        removedModelId === current.enterprise_ai.default_model_id
+          ? models.find((model) => model.model_id.trim())?.model_id ?? ""
+          : current.enterprise_ai.default_model_id;
+      return {
+        ...current,
+        enterprise_ai: {
+          ...current.enterprise_ai,
+          models,
+          default_model_id: defaultModelId,
+        },
+      };
+    });
     setCheckData(baselineData);
     setNotice(null);
     setErrorText("");
@@ -333,35 +412,21 @@ export function ModelSettingsClient() {
                     </span>
                   </label>
                 ) : null}
-                <TextField
-                  id="enterprise-llm-model"
-                  label={t("settings.model.enterprise.llmModel")}
-                  badge={t("settings.model.requiredInOci")}
-                  value={draft.enterprise_ai.llm_model}
-                  placeholder={t("settings.model.placeholder.llmModel")}
-                  onChange={(value) => updateEnterprise("llm_model", value)}
+                <ModelCatalogEditor
+                  models={draft.enterprise_ai.models}
+                  defaultModelId={draft.enterprise_ai.default_model_id}
+                  onDefaultChange={(modelId) => updateEnterprise("default_model_id", modelId)}
+                  onModelChange={updateEnterpriseModel}
+                  onAdd={addEnterpriseModel}
+                  onRemove={removeEnterpriseModel}
                 />
                 <TextField
-                  id="enterprise-vlm-model"
-                  label={t("settings.model.enterprise.vlmModel")}
-                  badge={t("settings.model.requiredInOci")}
-                  value={draft.enterprise_ai.vlm_model}
-                  placeholder={t("settings.model.placeholder.vlmModel")}
-                  onChange={(value) => updateEnterprise("vlm_model", value)}
-                />
-                <TextField
-                  id="enterprise-llm-path"
-                  label={t("settings.model.enterprise.llmPath")}
-                  value={draft.enterprise_ai.llm_path}
-                  placeholder={t("settings.model.placeholder.llmPath")}
-                  onChange={(value) => updateEnterprise("llm_path", value)}
-                />
-                <TextField
-                  id="enterprise-vlm-path"
-                  label={t("settings.model.enterprise.vlmPath")}
-                  value={draft.enterprise_ai.vlm_path}
-                  placeholder={t("settings.model.placeholder.vlmPath")}
-                  onChange={(value) => updateEnterprise("vlm_path", value)}
+                  id="enterprise-api-path"
+                  label={t("settings.model.enterprise.apiPath")}
+                  value={draft.enterprise_ai.api_path}
+                  placeholder={t("settings.model.placeholder.apiPath")}
+                  onChange={(value) => updateEnterprise("api_path", value)}
+                  className="md:col-span-2"
                 />
                 <NumberField
                   id="enterprise-timeout"
@@ -425,23 +490,23 @@ export function ModelSettingsClient() {
                       </p>
                       <div className="grid gap-5 md:grid-cols-2">
                         <TextAreaField
-                          id="enterprise-llm-payload-template"
-                          label={t("settings.model.enterprise.llmPayloadTemplate")}
-                          value={draft.enterprise_ai.llm_payload_template}
-                          placeholder={t("settings.model.placeholder.llmPayloadTemplate")}
+                          id="enterprise-text-payload-template"
+                          label={t("settings.model.enterprise.textPayloadTemplate")}
+                          value={draft.enterprise_ai.text_payload_template}
+                          placeholder={t("settings.model.placeholder.textPayloadTemplate")}
                           helper={t("settings.model.enterprise.payloadTemplateHelp")}
                           rows={6}
-                          onChange={(value) => updateEnterprise("llm_payload_template", value)}
+                          onChange={(value) => updateEnterprise("text_payload_template", value)}
                           className="md:col-span-2"
                         />
                         <TextAreaField
-                          id="enterprise-vlm-payload-template"
-                          label={t("settings.model.enterprise.vlmPayloadTemplate")}
-                          value={draft.enterprise_ai.vlm_payload_template}
-                          placeholder={t("settings.model.placeholder.vlmPayloadTemplate")}
+                          id="enterprise-vision-payload-template"
+                          label={t("settings.model.enterprise.visionPayloadTemplate")}
+                          value={draft.enterprise_ai.vision_payload_template}
+                          placeholder={t("settings.model.placeholder.visionPayloadTemplate")}
                           helper={t("settings.model.enterprise.payloadTemplateHelp")}
                           rows={6}
-                          onChange={(value) => updateEnterprise("vlm_payload_template", value)}
+                          onChange={(value) => updateEnterprise("vision_payload_template", value)}
                           className="md:col-span-2"
                         />
                       </div>
@@ -590,6 +655,137 @@ function CheckCard({ checkKey, status }: { checkKey: CheckKey; status: ModelSett
         </span>
       </CardContent>
     </Card>
+  );
+}
+
+function ModelCatalogEditor({
+  models,
+  defaultModelId,
+  onDefaultChange,
+  onModelChange,
+  onAdd,
+  onRemove,
+}: {
+  models: EnterpriseAiConfiguredModel[];
+  defaultModelId: string;
+  onDefaultChange: (modelId: string) => void;
+  onModelChange: (index: number, patch: Partial<EnterpriseAiConfiguredModel>) => void;
+  onAdd: () => void;
+  onRemove: (index: number) => void;
+}) {
+  return (
+    <div className="space-y-3 md:col-span-2">
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-2">
+        <FieldLabel
+          htmlFor="enterprise-model-catalog"
+          label={t("settings.model.enterprise.models")}
+          badge={t("settings.model.requiredInOci")}
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={onAdd}
+          disabled={models.length >= 20}
+        >
+          <Plus size={14} aria-hidden />
+          {t("settings.model.enterprise.addModel")}
+        </Button>
+      </div>
+      <div
+        id="enterprise-model-catalog"
+        className="overflow-hidden rounded-md border border-border bg-background"
+      >
+        <div className="hidden border-b border-border bg-card px-3 py-2 text-xs font-medium text-muted md:grid md:grid-cols-[78px_minmax(0,1.2fr)_minmax(0,1fr)_96px_44px] md:gap-3">
+          <span>{t("settings.model.enterprise.default")}</span>
+          <span>{t("settings.model.enterprise.modelId")}</span>
+          <span>{t("settings.model.enterprise.displayName")}</span>
+          <span>{t("settings.model.enterprise.vision")}</span>
+          <span aria-hidden />
+        </div>
+        {models.map((model, index) => {
+          const modelNumber = index + 1;
+          const trimmedModelId = model.model_id.trim();
+          return (
+            <div
+              key={index}
+              className="grid gap-3 border-b border-border p-3 last:border-b-0 md:grid-cols-[78px_minmax(0,1.2fr)_minmax(0,1fr)_96px_44px] md:items-start"
+            >
+              <label className="flex min-h-10 items-center gap-2 text-sm text-foreground">
+                <input
+                  type="radio"
+                  name="enterprise-default-model"
+                  checked={Boolean(trimmedModelId) && defaultModelId === model.model_id}
+                  disabled={!trimmedModelId}
+                  aria-label={`${t("settings.model.enterprise.default")} ${modelNumber}`}
+                  onChange={() => onDefaultChange(model.model_id)}
+                  className="h-4 w-4 cursor-pointer accent-[var(--primary)] disabled:cursor-not-allowed"
+                />
+                <span className="md:sr-only">{t("settings.model.enterprise.default")}</span>
+              </label>
+              <CompactTextInput
+                label={`${t("settings.model.enterprise.modelId")} ${modelNumber}`}
+                value={model.model_id}
+                placeholder={t("settings.model.placeholder.modelId")}
+                onChange={(value) => onModelChange(index, { model_id: value })}
+              />
+              <CompactTextInput
+                label={`${t("settings.model.enterprise.displayName")} ${modelNumber}`}
+                value={model.display_name}
+                placeholder={t("settings.model.placeholder.displayName")}
+                onChange={(value) => onModelChange(index, { display_name: value })}
+              />
+              <div className="flex min-h-10 items-center justify-between gap-3 text-sm text-foreground md:justify-start">
+                <span className="md:sr-only">{t("settings.model.enterprise.vision")}</span>
+                <Switch
+                  checked={model.vision_enabled}
+                  aria-label={`${t("settings.model.enterprise.vision")} ${modelNumber}`}
+                  onCheckedChange={(checked) =>
+                    onModelChange(index, { vision_enabled: checked })
+                  }
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-10 w-full px-2 text-danger hover:bg-danger-bg md:w-10"
+                aria-label={`${t("settings.model.enterprise.removeModel")} ${modelNumber}`}
+                onClick={() => onRemove(index)}
+              >
+                <Trash2 size={15} aria-hidden />
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CompactTextInput({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="space-y-1.5">
+      <span className="block text-xs font-medium text-muted md:sr-only">{label}</span>
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        aria-label={label}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+      />
+    </label>
   );
 }
 
@@ -846,12 +1042,27 @@ function validateDraft(draft: ModelSettingsPayload): string[] {
   ) {
     messages.push(t("settings.model.validation.apiKey"));
   }
-  for (const path of [draft.enterprise_ai.llm_path, draft.enterprise_ai.vlm_path]) {
-    if (!path.trim()) {
-      messages.push(t("settings.model.validation.pathRequired"));
-    } else if (!isApiPath(path)) {
-      messages.push(t("settings.model.validation.path"));
-    }
+  const modelIds = draft.enterprise_ai.models.map((model) => model.model_id.trim());
+  const presentModelIds = modelIds.filter(Boolean);
+  if (draft.enterprise_ai.models.length === 0 || presentModelIds.length !== modelIds.length) {
+    messages.push(t("settings.model.validation.modelRequired"));
+  }
+  if (new Set(presentModelIds).size !== presentModelIds.length) {
+    messages.push(t("settings.model.validation.modelDuplicate"));
+  }
+  if (
+    !draft.enterprise_ai.default_model_id.trim() ||
+    !presentModelIds.includes(draft.enterprise_ai.default_model_id.trim())
+  ) {
+    messages.push(t("settings.model.validation.defaultModel"));
+  }
+  if (!draft.enterprise_ai.models.some((model) => model.model_id.trim() && model.vision_enabled)) {
+    messages.push(t("settings.model.validation.visionModel"));
+  }
+  if (!draft.enterprise_ai.api_path.trim()) {
+    messages.push(t("settings.model.validation.pathRequired"));
+  } else if (!isApiPath(draft.enterprise_ai.api_path)) {
+    messages.push(t("settings.model.validation.path"));
   }
   if (
     draft.enterprise_ai.timeout_seconds <= 0 ||
@@ -871,8 +1082,8 @@ function validateDraft(draft: ModelSettingsPayload): string[] {
     messages.push(t("settings.model.validation.embeddingDim"));
   }
   for (const template of [
-    draft.enterprise_ai.llm_payload_template,
-    draft.enterprise_ai.vlm_payload_template,
+    draft.enterprise_ai.text_payload_template,
+    draft.enterprise_ai.vision_payload_template,
   ]) {
     if (template.trim() && !isJsonObject(template)) {
       messages.push(t("settings.model.validation.payloadTemplate"));
@@ -900,7 +1111,10 @@ function isJsonObject(value: string) {
 
 function cloneSettings(settings: ModelSettingsPayload): ModelSettingsPayload {
   return {
-    enterprise_ai: { ...settings.enterprise_ai },
+    enterprise_ai: {
+      ...settings.enterprise_ai,
+      models: settings.enterprise_ai.models.map((model) => ({ ...model })),
+    },
     generative_ai: { ...settings.generative_ai },
   };
 }

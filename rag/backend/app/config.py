@@ -8,12 +8,26 @@ from pathlib import Path
 from tempfile import gettempdir
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AiServiceAdapter = Literal["local", "oci"]
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
+
+
+class EnterpriseAiConfiguredModel(BaseModel):
+    """OCI Enterprise AI provider に登録する LLM。"""
+
+    model_id: str = Field(default="", max_length=256)
+    display_name: str = Field(default="", max_length=256)
+    vision_enabled: bool = Field(default=False)
+
+    @field_validator("model_id", "display_name")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
 
 
 class Settings(BaseSettings):
@@ -49,11 +63,14 @@ class Settings(BaseSettings):
     oci_region: str = Field(default="ap-osaka-1")
     oci_compartment_id: str = Field(default="")
 
-    # --- OCI Enterprise AI（LLM / VLM）---
+    # --- OCI Enterprise AI（LLM / Vision-capable LLM）---
     # 注意: OCI Generative AI の chat 推論 API ではなく Enterprise AI を使う
     oci_enterprise_ai_endpoint: str = Field(default="")
     oci_enterprise_ai_project_ocid: str = Field(default="")
     oci_enterprise_ai_api_key: str = Field(default="")
+    oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
+    oci_enterprise_ai_default_model: str = Field(default="")
+    # 互換用: 旧設定名。新 UI/API では models/default_model を正とする。
     oci_enterprise_ai_llm_model: str = Field(default="")
     oci_enterprise_ai_vlm_model: str = Field(default="")
     oci_enterprise_ai_llm_path: str = Field(default="/responses")
@@ -251,6 +268,82 @@ class Settings(BaseSettings):
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
         return self.oracle_wallet_dir.strip()
+
+
+def enterprise_ai_model_catalog(settings: Settings) -> list[EnterpriseAiConfiguredModel]:
+    """Enterprise AI の登録モデル一覧を返す。旧 LLM/VLM 設定からも補完する。"""
+    configured = [
+        model
+        for model in (
+            _coerce_enterprise_ai_model(item)
+            for item in getattr(settings, "oci_enterprise_ai_models", [])
+        )
+        if model.model_id
+    ]
+    if configured:
+        return configured
+    return _legacy_enterprise_ai_model_catalog(settings)
+
+
+def enterprise_ai_default_model_id(settings: Settings) -> str:
+    """通常の LLM 呼び出しで使う既定モデル ID を返す。"""
+    configured_default = getattr(settings, "oci_enterprise_ai_default_model", "").strip()
+    if configured_default:
+        return configured_default
+    legacy_default = getattr(settings, "oci_enterprise_ai_llm_model", "").strip()
+    if legacy_default:
+        return legacy_default
+    catalog = enterprise_ai_model_catalog(settings)
+    return catalog[0].model_id if catalog else ""
+
+
+def enterprise_ai_vision_model_id(settings: Settings) -> str:
+    """Vision/OCR 呼び出しで使うモデル ID を返す。"""
+    catalog = enterprise_ai_model_catalog(settings)
+    default_model = enterprise_ai_default_model_id(settings)
+    for model in catalog:
+        if model.model_id == default_model and model.vision_enabled:
+            return model.model_id
+    for model in catalog:
+        if model.vision_enabled:
+            return model.model_id
+    legacy_vision = getattr(settings, "oci_enterprise_ai_vlm_model", "").strip()
+    if legacy_vision:
+        return legacy_vision
+    return ""
+
+
+def _coerce_enterprise_ai_model(
+    value: EnterpriseAiConfiguredModel | dict[str, object],
+) -> EnterpriseAiConfiguredModel:
+    """Settings の model_construct や env JSON 由来の値を model object へ寄せる。"""
+    if isinstance(value, EnterpriseAiConfiguredModel):
+        return value
+    return EnterpriseAiConfiguredModel.model_validate(value)
+
+
+def _legacy_enterprise_ai_model_catalog(settings: Settings) -> list[EnterpriseAiConfiguredModel]:
+    """旧 LLM/VLM model ID から新しい model catalog を作る。"""
+    llm_model = getattr(settings, "oci_enterprise_ai_llm_model", "").strip()
+    vlm_model = getattr(settings, "oci_enterprise_ai_vlm_model", "").strip()
+    models: list[EnterpriseAiConfiguredModel] = []
+    if llm_model:
+        models.append(
+            EnterpriseAiConfiguredModel(
+                model_id=llm_model,
+                display_name=llm_model,
+                vision_enabled=bool(vlm_model and vlm_model == llm_model),
+            )
+        )
+    if vlm_model and vlm_model != llm_model:
+        models.append(
+            EnterpriseAiConfiguredModel(
+                model_id=vlm_model,
+                display_name=vlm_model,
+                vision_enabled=True,
+            )
+        )
+    return models
 
 
 @lru_cache

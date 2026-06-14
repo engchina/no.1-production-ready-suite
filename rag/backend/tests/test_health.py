@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pytest import LogCaptureFixture, MonkeyPatch
 
-from app.config import get_settings
+from app.config import EnterpriseAiConfiguredModel, get_settings
 from app.main import UNHANDLED_ERROR_MESSAGE, app, create_app
 from tests.support import AsgiTestClient
 
@@ -85,6 +85,7 @@ def test_readiness_oci_missing_config_is_degraded(monkeypatch: MonkeyPatch) -> N
         "oci_enterprise_ai_endpoint",
         "oci_enterprise_ai_project_ocid",
         "oci_enterprise_ai_api_key",
+        "oci_enterprise_ai_default_model",
         "oci_enterprise_ai_llm_model",
         "oci_enterprise_ai_vlm_model",
         "oci_genai_embedding_model",
@@ -97,6 +98,7 @@ def test_readiness_oci_missing_config_is_degraded(monkeypatch: MonkeyPatch) -> N
         "object_storage_bucket",
     ):
         monkeypatch.setattr(settings, field, "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_models", [])
 
     resp = client.get("/api/ready")
 
@@ -152,11 +154,13 @@ def test_readiness_oci_adapter_with_local_upload_storage_checks_local_storage(
     }
 
 
-def test_readiness_oci_allows_enterprise_ai_templates_without_model_ids(
+def test_readiness_oci_requires_enterprise_ai_model_catalog(
     monkeypatch: MonkeyPatch,
 ) -> None:
     _configure_oci_readiness(monkeypatch)
     settings = get_settings()
+    monkeypatch.setattr(settings, "oci_enterprise_ai_models", [])
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_model", "")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "")
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_model", "")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_payload_template", LLM_TEMPLATE)
@@ -164,8 +168,8 @@ def test_readiness_oci_allows_enterprise_ai_templates_without_model_ids(
 
     resp = client.get("/api/ready")
 
-    assert resp.status_code == 200
-    assert resp.json()["data"]["checks"]["enterprise_ai"] == "ok"
+    assert resp.status_code == 503
+    assert resp.json()["data"]["checks"]["enterprise_ai"] == "missing"
 
 
 def test_readiness_production_oci_requires_audit_salt(monkeypatch: MonkeyPatch) -> None:
@@ -347,6 +351,19 @@ def _configure_oci_readiness(
     )
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "enterprise-llm")
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_model", "enterprise-vlm")
+    monkeypatch.setattr(
+        settings,
+        "oci_enterprise_ai_models",
+        [
+            EnterpriseAiConfiguredModel(model_id="enterprise-llm", display_name="標準 LLM"),
+            EnterpriseAiConfiguredModel(
+                model_id="enterprise-vlm",
+                display_name="Vision LLM",
+                vision_enabled=True,
+            ),
+        ],
+    )
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_model", "enterprise-llm")
     monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "sk-test-secret")
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_path", "/v1/llm/generate")
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_path", "/v1/vlm/extract")

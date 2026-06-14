@@ -68,6 +68,7 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   const walletDir = page.getByLabel("Wallet ディレクトリ");
   await expect(walletDir).toHaveValue("/u01/aipoc/instantclient_23_26/network/admin");
   await expect(walletDir).toHaveAttribute("readonly", "");
+  await expect(page.getByText("Wallet ディレクトリが見つかりません。")).toBeVisible();
   await page.getByLabel("Wallet ZIP ファイルを選択").setInputFiles({
     name: "Wallet_RAGDB.zip",
     mimeType: "application/zip",
@@ -78,6 +79,7 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   await expect(
     page.getByText("Wallet ZIP をアップロードしました: Wallet_RAGDB.zip")
   ).toBeVisible();
+  await expect(page.getByText("Wallet ディレクトリが見つかりません。")).toHaveCount(0);
   await expect(page.getByText("Readiness: OK")).toBeVisible();
 
   await page.getByRole("combobox", { name: "Wallet サービス名" }).click();

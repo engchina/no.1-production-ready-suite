@@ -23,6 +23,7 @@ import {
   api,
   type HealthData,
   type OciConfigReadData,
+  type OciSettingsData,
   type UploadStorageSettingsData,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -67,7 +68,6 @@ const FIELD_LABEL_KEYS: Record<OciSettingsField, I18nKey> = {
   region: "settings.oci.field.region",
   objectStorageRegion: "settings.oci.field.objectStorageRegion",
   objectStorageNamespace: "settings.oci.field.objectStorageNamespace",
-  objectStorageBucket: "settings.oci.field.objectStorageBucket",
 };
 
 const AUTH_PROFILE_FIELDS = [
@@ -83,7 +83,6 @@ const AUTH_PROFILE_FIELDS = [
 const OBJECT_STORAGE_FIELDS = [
   "objectStorageRegion",
   "objectStorageNamespace",
-  "objectStorageBucket",
 ] as const satisfies readonly OciSettingsField[];
 
 export function OciSettingsClient() {
@@ -96,6 +95,7 @@ export function OciSettingsClient() {
   const [configImportMessage, setConfigImportMessage] = useState("");
   const [keyFileState, setKeyFileState] = useState<FeedbackState>("idle");
   const [keyFileMessage, setKeyFileMessage] = useState("");
+  const [keyFileExists, setKeyFileExists] = useState<boolean | null>(null);
   const [namespaceFetchState, setNamespaceFetchState] = useState<FeedbackState>("idle");
   const [namespaceFetchMessage, setNamespaceFetchMessage] = useState("");
   const [readyState, setReadyState] = useState<ReadyState>({ phase: "idle" });
@@ -106,20 +106,32 @@ export function OciSettingsClient() {
     const storedDraft = readStoredOciSettingsDraft();
     setDraft(storedDraft);
 
-    void api
-      .getUploadStorageSettings()
-      .then((settings) => {
-        if (!active || !settings) return;
-        setDraft((current) =>
-          normalizeOciSettingsDraft({
-            ...current,
-            ...runtimeObjectStorageSettingsToDraft(settings, current),
-          })
-        );
-      })
-      .catch(() => {
-        // 下書き保存画面なので、runtime 設定が読めない場合はブラウザ内の下書きを優先する。
-      });
+    void Promise.allSettled([api.getOciSettings(), api.getUploadStorageSettings()]).then(
+      ([ociResult, storageResult]) => {
+        if (!active) return;
+
+        setDraft((current) => {
+          let next = current;
+          if (ociResult.status === "fulfilled" && ociResult.value) {
+            next = normalizeOciSettingsDraft({
+              ...next,
+              ...runtimeOciSettingsToDraft(ociResult.value, next),
+            });
+          }
+          if (storageResult.status === "fulfilled" && storageResult.value) {
+            next = normalizeOciSettingsDraft({
+              ...next,
+              ...runtimeObjectStorageSettingsToDraft(storageResult.value, next),
+            });
+          }
+          return next;
+        });
+
+        if (ociResult.status === "fulfilled" && ociResult.value) {
+          setKeyFileExists(ociResult.value.key_file_exists);
+        }
+      }
+    );
 
     return () => {
       active = false;
@@ -269,6 +281,7 @@ export function OciSettingsClient() {
     try {
       await api.uploadOciPrivateKey(file);
       updateDraft("keyFile", FIXED_OCI_KEY_FILE);
+      setKeyFileExists(true);
       setKeyFileState("success");
     } catch (error) {
       setKeyFileState("error");
@@ -422,6 +435,11 @@ export function OciSettingsClient() {
                   accept=".pem,.key"
                   fileState={keyFileState}
                   fileMessage={keyFileMessage}
+                  warning={
+                    keyFileExists === false
+                      ? t("settings.oci.keyFile.missing")
+                      : undefined
+                  }
                   onFileChange={selectKeyFile}
                   required
                 />
@@ -472,16 +490,6 @@ export function OciSettingsClient() {
                   fetchState={namespaceFetchState}
                   fetchError={namespaceFetchMessage}
                   onFetch={() => void fetchObjectStorageNamespace()}
-                  required
-                />
-                <TextField
-                  id="oci-object-storage-bucket"
-                  label={t("settings.oci.field.objectStorageBucket")}
-                  value={draft.objectStorageBucket}
-                  onChange={(value) => updateDraft("objectStorageBucket", value)}
-                  error={errorText(errors.objectStorageBucket)}
-                  helper={t("settings.oci.helper.objectStorageBucket")}
-                  placeholder="rag-originals"
                   required
                 />
                 <SelectField
@@ -666,20 +674,33 @@ function SectionActions({
   );
 }
 
-function runtimeObjectStorageSettingsToDraft(
-  settings: UploadStorageSettingsData,
+function runtimeOciSettingsToDraft(
+  settings: OciSettingsData,
   current: OciSettingsDraft
 ): Pick<
   OciSettingsDraft,
-  "objectStorageRegion" | "objectStorageNamespace" | "objectStorageBucket"
+  "configFile" | "configProfile" | "userOcid" | "fingerprint" | "tenancyOcid" | "keyFile" | "region"
 > {
+  return {
+    configFile: (settings.config_file ?? "").trim() || current.configFile,
+    configProfile: (settings.profile ?? "").trim() || current.configProfile,
+    userOcid: (settings.user ?? "").trim() || current.userOcid,
+    fingerprint: (settings.fingerprint ?? "").trim() || current.fingerprint,
+    tenancyOcid: (settings.tenancy ?? "").trim() || current.tenancyOcid,
+    keyFile: FIXED_OCI_KEY_FILE,
+    region: (settings.region ?? "").trim() || current.region,
+  };
+}
+
+function runtimeObjectStorageSettingsToDraft(
+  settings: UploadStorageSettingsData,
+  current: OciSettingsDraft
+): Pick<OciSettingsDraft, "objectStorageRegion" | "objectStorageNamespace"> {
   return {
     objectStorageRegion:
       (settings.object_storage_region ?? "").trim() || current.objectStorageRegion,
     objectStorageNamespace:
       (settings.object_storage_namespace ?? "").trim() || current.objectStorageNamespace,
-    objectStorageBucket:
-      (settings.object_storage_bucket ?? "").trim() || current.objectStorageBucket,
   };
 }
 
@@ -912,6 +933,7 @@ function FilePickerField({
   accept,
   fileState,
   fileMessage,
+  warning,
   onFileChange,
   required,
 }: {
@@ -928,16 +950,19 @@ function FilePickerField({
   accept: string;
   fileState: FeedbackState;
   fileMessage: string;
+  warning?: string;
   onFileChange: (file: File | undefined) => void | Promise<void>;
   required?: boolean;
 }) {
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
   const fileErrorId = `${id}-file-error`;
+  const warningId = `${id}-warning`;
   const describedBy = [
     hintId,
     error ? errorId : "",
     fileState === "error" ? fileErrorId : "",
+    warning ? warningId : "",
   ].filter(Boolean).join(" ");
 
   return (
@@ -998,6 +1023,16 @@ function FilePickerField({
       <p id={hintId} className="text-xs leading-relaxed text-muted">
         {helper}
       </p>
+      {warning ? (
+        <p
+          id={warningId}
+          className="flex items-start gap-1.5 text-xs leading-relaxed text-warning"
+          role="status"
+        >
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden />
+          <span>{warning}</span>
+        </p>
+      ) : null}
       {error ? (
         <p id={errorId} className="text-xs text-danger" role="alert">
           {error}
@@ -1186,8 +1221,6 @@ function errorText(code?: OciValidationCode): string | undefined {
 
 function validationMessageKey(code: OciValidationCode): I18nKey {
   switch (code) {
-    case "invalid_bucket":
-      return "settings.oci.validation.invalidBucket";
     case "invalid_user_ocid":
       return "settings.oci.validation.invalidUserOcid";
     case "invalid_tenancy_ocid":

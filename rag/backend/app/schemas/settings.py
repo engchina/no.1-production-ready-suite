@@ -14,22 +14,35 @@ DatabaseConnectionTestStatus = Literal["success", "failed", "skipped"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 
 
+class EnterpriseAiModelEntrySettings(BaseModel):
+    """OCI Enterprise AI provider に登録する LLM。"""
+
+    model_id: str = Field(default="", max_length=256)
+    display_name: str = Field(default="", max_length=256)
+    vision_enabled: bool = False
+
+    @field_validator("model_id", "display_name")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+
 class EnterpriseAiModelSettings(BaseModel):
-    """OCI Enterprise AI（LLM/VLM）モデル設定。"""
+    """OCI Enterprise AI モデル provider 設定。"""
 
     endpoint: str = Field(default="", max_length=2048)
     project_ocid: str = Field(default="", max_length=512)
     api_key: str = Field(default="", max_length=4096)
     has_api_key: bool = False
     clear_api_key: bool = False
-    llm_model: str = Field(default="", max_length=256)
-    vlm_model: str = Field(default="", max_length=256)
-    llm_path: str = Field(default="/responses", max_length=512)
-    vlm_path: str = Field(default="/responses", max_length=512)
-    llm_payload_template: str = Field(default="", max_length=20000)
-    vlm_payload_template: str = Field(default="", max_length=20000)
-    llm_response_path: str = Field(default="", max_length=1024)
-    vlm_response_path: str = Field(default="", max_length=1024)
+    models: list[EnterpriseAiModelEntrySettings] = Field(default_factory=list, max_length=20)
+    default_model_id: str = Field(default="", max_length=256)
+    api_path: str = Field(default="/responses", max_length=512)
+    text_payload_template: str = Field(default="", max_length=20000)
+    vision_payload_template: str = Field(default="", max_length=20000)
+    text_response_path: str = Field(default="", max_length=1024)
+    vision_response_path: str = Field(default="", max_length=1024)
     timeout_seconds: float = Field(default=60.0, gt=0.0, le=600.0)
     max_retries: int = Field(default=3, ge=0, le=5)
 
@@ -37,14 +50,12 @@ class EnterpriseAiModelSettings(BaseModel):
         "endpoint",
         "project_ocid",
         "api_key",
-        "llm_model",
-        "vlm_model",
-        "llm_path",
-        "vlm_path",
-        "llm_payload_template",
-        "vlm_payload_template",
-        "llm_response_path",
-        "vlm_response_path",
+        "default_model_id",
+        "api_path",
+        "text_payload_template",
+        "vision_payload_template",
+        "text_response_path",
+        "vision_response_path",
     )
     @classmethod
     def strip_text(cls, value: str) -> str:
@@ -67,7 +78,7 @@ class EnterpriseAiModelSettings(BaseModel):
             raise ValueError("project OCID は ocid1.generativeaiproject. で始めてください。")
         return value
 
-    @field_validator("llm_path", "vlm_path")
+    @field_validator("api_path")
     @classmethod
     def validate_api_path(cls, value: str) -> str:
         """Enterprise AI の呼び出し先は相対 path または HTTP(S) URL に限定する。"""
@@ -77,7 +88,7 @@ class EnterpriseAiModelSettings(BaseModel):
             raise ValueError("API パスは / または http(s):// で始めてください。")
         return value
 
-    @field_validator("llm_payload_template", "vlm_payload_template")
+    @field_validator("text_payload_template", "vision_payload_template")
     @classmethod
     def validate_payload_template(cls, value: str) -> str:
         """payload template は空または JSON object 文字列だけを許可する。"""
@@ -91,13 +102,21 @@ class EnterpriseAiModelSettings(BaseModel):
             raise ValueError("payload template は JSON object で入力してください。")
         return value
 
-    @field_validator("llm_response_path", "vlm_response_path")
+    @field_validator("text_response_path", "vision_response_path")
     @classmethod
     def validate_response_path(cls, value: str) -> str:
         """response path は空または JSON Pointer 形式だけを許可する。"""
         if value and not value.startswith("/"):
             raise ValueError("response path は / で始まる JSON Pointer で入力してください。")
         return value
+
+    @model_validator(mode="after")
+    def validate_model_catalog(self) -> "EnterpriseAiModelSettings":
+        """モデル ID の重複を拒否する。"""
+        model_ids = [model.model_id for model in self.models if model.model_id]
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("Enterprise AI の model ID は重複できません。")
+        return self
 
 
 class GenerativeAiModelSettings(BaseModel):
@@ -264,6 +283,21 @@ class OciConfigReadData(BaseModel):
     region: str = ""
     key_file: str = ""
     applied_fields: list[OciConfigField] = Field(default_factory=list)
+
+
+class OciSettingsData(BaseModel):
+    """OCI 認証設定画面の初期表示用 runtime データ。"""
+
+    config_file: str
+    profile: str
+    user: str = ""
+    fingerprint: str = ""
+    tenancy: str = ""
+    region: str = ""
+    key_file: str = ""
+    key_file_exists: bool = False
+    config_file_exists: bool = False
+    config_source: Literal["runtime"]
 
 
 class OciObjectStorageNamespaceRequest(BaseModel):

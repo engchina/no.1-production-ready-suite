@@ -4,6 +4,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Cloud,
+  Clipboard,
   HardDrive,
   RefreshCw,
   Save,
@@ -31,6 +32,8 @@ import {
 import { readStoredOciSettingsDraft } from "@/lib/oci-settings";
 import { cn } from "@/lib/utils";
 
+type CopyState = "idle" | "success" | "error";
+
 interface UploadStorageForm {
   backend: UploadStorageBackend;
   localStorageDir: string;
@@ -55,6 +58,7 @@ export function UploadStorageSettingsClient() {
   const [objectStorageNamespace, setObjectStorageNamespace] = useState("");
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saved, setSaved] = useState(false);
+  const [copyState, setCopyState] = useState<CopyState>("idle");
 
   useEffect(() => {
     if (query.data) {
@@ -62,6 +66,7 @@ export function UploadStorageSettingsClient() {
       setObjectStorageNamespace(resolveObjectStorageNamespace(query.data));
       setErrors({});
       setSaved(false);
+      setCopyState("idle");
     }
   }, [query.data]);
 
@@ -76,6 +81,7 @@ export function UploadStorageSettingsClient() {
       return next;
     });
     setSaved(false);
+    setCopyState("idle");
     save.reset();
   }
 
@@ -92,6 +98,17 @@ export function UploadStorageSettingsClient() {
         setSaved(true);
       },
     });
+  }
+
+  async function copyEnv() {
+    try {
+      await navigator.clipboard.writeText(
+        buildUploadStorageEnvFile(form, objectStorageNamespace)
+      );
+      setCopyState("success");
+    } catch {
+      setCopyState("error");
+    }
   }
 
   if (query.isPending) {
@@ -244,6 +261,11 @@ export function UploadStorageSettingsClient() {
 
         <aside className="space-y-5">
           <StatusPanel settings={settings} />
+          <EnvPreviewPanel
+            envPreview={buildUploadStorageEnvFile(form, objectStorageNamespace)}
+            copyState={copyState}
+            onCopy={() => void copyEnv()}
+          />
           <OperationPanel />
         </aside>
       </div>
@@ -397,6 +419,56 @@ function StatusPanel({ settings }: { settings: UploadStorageSettingsData }) {
   );
 }
 
+function EnvPreviewPanel({
+  envPreview,
+  copyState,
+  onCopy,
+}: {
+  envPreview: string;
+  copyState: CopyState;
+  onCopy: () => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+          <div className="min-w-0 space-y-1">
+            <CardTitle>{t("settings.uploadStorage.env.title")}</CardTitle>
+            <CardDescription className="leading-relaxed">
+              {t("settings.uploadStorage.env.description")}
+            </CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="min-h-10 w-full shrink-0 whitespace-nowrap sm:w-auto"
+            onClick={onCopy}
+          >
+            <Clipboard size={14} aria-hidden />
+            {copyState === "success"
+              ? t("settings.uploadStorage.env.copied")
+              : t("settings.uploadStorage.env.copy")}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <textarea
+          readOnly
+          value={envPreview}
+          aria-label={t("settings.uploadStorage.env.title")}
+          className="h-40 w-full resize-none rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed text-foreground outline-none focus-visible:border-primary"
+        />
+        {copyState === "error" ? (
+          <p className="text-xs text-danger" role="alert">
+            {t("settings.uploadStorage.env.copyFailed")}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 function OperationPanel() {
   return (
     <Card>
@@ -467,6 +539,30 @@ function payloadFromForm(
     payload.object_storage_namespace = objectStorageNamespace;
   }
   return payload;
+}
+
+function buildUploadStorageEnvFile(
+  form: UploadStorageForm,
+  objectStorageNamespace: string
+): string {
+  const entries: [string, string][] = [["UPLOAD_STORAGE_BACKEND", form.backend]];
+  if (form.backend === "local") {
+    entries.push(["LOCAL_STORAGE_DIR", form.localStorageDir]);
+  } else {
+    entries.push(["OBJECT_STORAGE_NAMESPACE", objectStorageNamespace]);
+    entries.push(["OBJECT_STORAGE_BUCKET", form.objectStorageBucket]);
+  }
+  return [
+    "# アップロード保存先",
+    ...entries.map(([key, value]) => `${key}=${formatEnvValue(value)}`),
+  ].join("\n");
+}
+
+function formatEnvValue(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) return "";
+  if (/[\s#"']/u.test(normalized)) return JSON.stringify(normalized);
+  return normalized;
 }
 
 function validateForm(

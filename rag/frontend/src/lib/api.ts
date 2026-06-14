@@ -351,20 +351,25 @@ export interface EvaluationCompareResponse {
 }
 
 // --- 設定: モデル ---
+export interface EnterpriseAiConfiguredModel {
+  model_id: string;
+  display_name: string;
+  vision_enabled: boolean;
+}
+
 export interface EnterpriseAiModelSettings {
   endpoint: string;
   project_ocid: string;
   api_key: string;
   has_api_key: boolean;
   clear_api_key: boolean;
-  llm_model: string;
-  vlm_model: string;
-  llm_path: string;
-  vlm_path: string;
-  llm_payload_template: string;
-  vlm_payload_template: string;
-  llm_response_path: string;
-  vlm_response_path: string;
+  models: EnterpriseAiConfiguredModel[];
+  default_model_id: string;
+  api_path: string;
+  text_payload_template: string;
+  vision_payload_template: string;
+  text_response_path: string;
+  vision_response_path: string;
   timeout_seconds: number;
   max_retries: number;
 }
@@ -459,6 +464,19 @@ export interface OciConfigReadData {
   region: string;
   key_file: string;
   applied_fields: OciConfigField[];
+}
+
+export interface OciSettingsData {
+  config_file: string;
+  profile: string;
+  user: string;
+  fingerprint: string;
+  tenancy: string;
+  region: string;
+  key_file: string;
+  key_file_exists: boolean;
+  config_file_exists: boolean;
+  config_source: "runtime";
 }
 
 export interface OciObjectStorageNamespaceRequest {
@@ -623,6 +641,7 @@ export const api = {
     }),
 
   // 設定: OCI config
+  getOciSettings: () => request<OciSettingsData>("/api/settings/oci"),
   readOciConfig: (body: OciConfigReadRequest) =>
     request<OciConfigReadData>("/api/settings/oci/config/read", jsonBody(body)),
   readOciObjectStorageNamespace: (body: OciObjectStorageNamespaceRequest) =>

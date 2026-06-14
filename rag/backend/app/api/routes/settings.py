@@ -14,7 +14,13 @@ from zipfile import BadZipFile, ZipFile
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.clients.oracle import close_oracle_pool, test_oracle_connection
-from app.config import Settings, get_settings
+from app.config import (
+    EnterpriseAiConfiguredModel,
+    Settings,
+    enterprise_ai_default_model_id,
+    enterprise_ai_model_catalog,
+    get_settings,
+)
 from app.readiness import READINESS_OK, oracle_readiness_check, upload_storage_readiness_checks
 from app.schemas.common import ApiResponse
 from app.schemas.settings import (
@@ -22,6 +28,7 @@ from app.schemas.settings import (
     DatabaseConnectionTestStatus,
     DatabaseSettingsData,
     DatabaseSettingsUpdate,
+    EnterpriseAiModelEntrySettings,
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
     ModelSettingsCheckStatus,
@@ -33,6 +40,7 @@ from app.schemas.settings import (
     OciObjectStorageNamespaceData,
     OciObjectStorageNamespaceRequest,
     OciPrivateKeyUploadData,
+    OciSettingsData,
     UploadStorageSettingsData,
     UploadStorageSettingsUpdate,
 )
@@ -195,6 +203,12 @@ async def update_upload_storage_settings(
     return ApiResponse(data=_upload_storage_settings_data(settings))
 
 
+@router.get("/oci", response_model=ApiResponse[OciSettingsData])
+async def get_oci_settings() -> ApiResponse[OciSettingsData]:
+    """OCI 認証設定画面の初期表示に使う runtime 設定を返す。"""
+    return ApiResponse(data=_oci_settings_data(get_settings()))
+
+
 @router.post("/oci/config/read", response_model=ApiResponse[OciConfigReadData])
 async def read_oci_config(
     payload: OciConfigReadRequest,
@@ -232,6 +246,7 @@ async def upload_oci_private_key(
 
 def _payload_from_settings(settings: Settings) -> ModelSettingsPayload:
     """Settings から UI 用 payload を組み立てる。"""
+    api_path = settings.oci_enterprise_ai_llm_path or settings.oci_enterprise_ai_vlm_path
     return ModelSettingsPayload(
         enterprise_ai=EnterpriseAiModelSettings(
             endpoint=settings.oci_enterprise_ai_endpoint,
@@ -239,14 +254,20 @@ def _payload_from_settings(settings: Settings) -> ModelSettingsPayload:
             api_key="",
             has_api_key=bool(settings.oci_enterprise_ai_api_key.strip()),
             clear_api_key=False,
-            llm_model=settings.oci_enterprise_ai_llm_model,
-            vlm_model=settings.oci_enterprise_ai_vlm_model,
-            llm_path=settings.oci_enterprise_ai_llm_path,
-            vlm_path=settings.oci_enterprise_ai_vlm_path,
-            llm_payload_template=settings.oci_enterprise_ai_llm_payload_template,
-            vlm_payload_template=settings.oci_enterprise_ai_vlm_payload_template,
-            llm_response_path=settings.oci_enterprise_ai_llm_response_path,
-            vlm_response_path=settings.oci_enterprise_ai_vlm_response_path,
+            models=[
+                EnterpriseAiModelEntrySettings(
+                    model_id=model.model_id,
+                    display_name=model.display_name,
+                    vision_enabled=model.vision_enabled,
+                )
+                for model in enterprise_ai_model_catalog(settings)
+            ],
+            default_model_id=enterprise_ai_default_model_id(settings),
+            api_path=api_path or "/responses",
+            text_payload_template=settings.oci_enterprise_ai_llm_payload_template,
+            vision_payload_template=settings.oci_enterprise_ai_vlm_payload_template,
+            text_response_path=settings.oci_enterprise_ai_llm_response_path,
+            vision_response_path=settings.oci_enterprise_ai_vlm_response_path,
             timeout_seconds=settings.oci_enterprise_ai_timeout_seconds,
             max_retries=settings.oci_enterprise_ai_max_retries,
         ),
@@ -270,14 +291,40 @@ def _apply_model_settings(settings: Settings, request: ModelSettingsPayload) -> 
         update=enterprise_ai.api_key,
         clear=enterprise_ai.clear_api_key,
     )
-    settings.oci_enterprise_ai_llm_model = enterprise_ai.llm_model
-    settings.oci_enterprise_ai_vlm_model = enterprise_ai.vlm_model
-    settings.oci_enterprise_ai_llm_path = enterprise_ai.llm_path
-    settings.oci_enterprise_ai_vlm_path = enterprise_ai.vlm_path
-    settings.oci_enterprise_ai_llm_payload_template = enterprise_ai.llm_payload_template
-    settings.oci_enterprise_ai_vlm_payload_template = enterprise_ai.vlm_payload_template
-    settings.oci_enterprise_ai_llm_response_path = enterprise_ai.llm_response_path
-    settings.oci_enterprise_ai_vlm_response_path = enterprise_ai.vlm_response_path
+    settings.oci_enterprise_ai_models = [
+        EnterpriseAiConfiguredModel(
+            model_id=model.model_id,
+            display_name=model.display_name,
+            vision_enabled=model.vision_enabled,
+        )
+        for model in enterprise_ai.models
+        if model.model_id
+    ]
+    settings.oci_enterprise_ai_default_model = enterprise_ai.default_model_id
+    default_model = enterprise_ai.default_model_id
+    vision_model = next(
+        (
+            model.model_id
+            for model in enterprise_ai.models
+            if model.model_id == default_model and model.vision_enabled
+        ),
+        "",
+    ) or next(
+        (
+            model.model_id
+            for model in enterprise_ai.models
+            if model.model_id and model.vision_enabled
+        ),
+        default_model,
+    )
+    settings.oci_enterprise_ai_llm_model = default_model
+    settings.oci_enterprise_ai_vlm_model = vision_model
+    settings.oci_enterprise_ai_llm_path = enterprise_ai.api_path
+    settings.oci_enterprise_ai_vlm_path = enterprise_ai.api_path
+    settings.oci_enterprise_ai_llm_payload_template = enterprise_ai.text_payload_template
+    settings.oci_enterprise_ai_vlm_payload_template = enterprise_ai.vision_payload_template
+    settings.oci_enterprise_ai_llm_response_path = enterprise_ai.text_response_path
+    settings.oci_enterprise_ai_vlm_response_path = enterprise_ai.vision_response_path
     settings.oci_enterprise_ai_timeout_seconds = enterprise_ai.timeout_seconds
     settings.oci_enterprise_ai_max_retries = enterprise_ai.max_retries
 
@@ -634,6 +681,35 @@ def _upload_storage_readiness(settings: Settings) -> str:
     return next(iter(checks.values()), "missing")
 
 
+def _oci_settings_data(settings: Settings) -> OciSettingsData:
+    """Settings と OCI config から OCI 設定画面の初期表示データを作る。"""
+    parsed = _read_runtime_oci_config(settings)
+    config_path = Path(settings.oci_config_file).expanduser()
+    key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+
+    return OciSettingsData(
+        config_file=settings.oci_config_file,
+        profile=settings.oci_config_profile,
+        user=parsed.user if parsed is not None else "",
+        fingerprint=parsed.fingerprint if parsed is not None else "",
+        tenancy=parsed.tenancy if parsed is not None else "",
+        region=settings.oci_region.strip() or (parsed.region if parsed is not None else ""),
+        key_file=OCI_PRIVATE_KEY_FILE,
+        key_file_exists=key_path.is_file(),
+        config_file_exists=config_path.is_file(),
+        config_source="runtime",
+    )
+
+
+def _read_runtime_oci_config(settings: Settings) -> OciConfigReadData | None:
+    """runtime の OCI config を表示用に読む。読めない場合は画面表示を継続する。"""
+    try:
+        content = _read_oci_config_text(settings.oci_config_file)
+        return _parse_oci_config(content, settings.oci_config_profile)
+    except HTTPException:
+        return None
+
+
 def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) -> str:
     """OCI SDK で Object Storage namespace を取得する。"""
     try:
@@ -785,14 +861,19 @@ def _enterprise_ai_status(
     settings: EnterpriseAiModelSettings,
 ) -> ModelSettingsCheckStatus:
     """Enterprise AI の必須設定が揃っているか確認する。"""
-    required = (settings.endpoint, settings.project_ocid, settings.llm_path, settings.vlm_path)
+    required = (settings.endpoint, settings.project_ocid, settings.api_path)
     if not all(_is_present(value) for value in required):
         return "missing"
     if not _secret_is_available(settings):
         return "missing"
-    if not _model_setting_is_satisfied(settings.llm_model, settings.llm_payload_template):
+    model_ids = [model.model_id for model in settings.models if _is_present(model.model_id)]
+    if len(model_ids) != len(settings.models):
         return "missing"
-    if not _model_setting_is_satisfied(settings.vlm_model, settings.vlm_payload_template):
+    if not model_ids or not _is_present(settings.default_model_id):
+        return "missing"
+    if settings.default_model_id not in model_ids:
+        return "invalid"
+    if not any(model.vision_enabled for model in settings.models if _is_present(model.model_id)):
         return "missing"
     return "ok"
 
@@ -817,13 +898,6 @@ def _embedding_dim_status(
 def _is_present(value: str) -> bool:
     """空白のみの値を未設定として扱う。"""
     return bool(value.strip())
-
-
-def _model_setting_is_satisfied(model: str, payload_template: str) -> bool:
-    """template が model を要求しない場合は model id なしを許可する。"""
-    if _is_present(model):
-        return True
-    return _is_present(payload_template) and "${model}" not in payload_template
 
 
 def _secret_is_available(settings: EnterpriseAiModelSettings) -> bool:

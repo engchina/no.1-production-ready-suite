@@ -3,7 +3,12 @@
 from collections.abc import Mapping
 from pathlib import Path
 
-from app.config import Settings
+from app.config import (
+    Settings,
+    enterprise_ai_default_model_id,
+    enterprise_ai_model_catalog,
+    enterprise_ai_vision_model_id,
+)
 
 READINESS_OK = "ok"
 READINESS_MISSING = "missing"
@@ -101,26 +106,24 @@ def _genai_check(settings: Settings) -> str:
 
 
 def _enterprise_ai_check(settings: Settings) -> str:
-    """OCI Enterprise AI の endpoint / model または payload template を確認する。"""
+    """OCI Enterprise AI の endpoint / model catalog を確認する。"""
+    api_path = settings.oci_enterprise_ai_llm_path or settings.oci_enterprise_ai_vlm_path
     required_status = _required_values_check(
         settings.oci_enterprise_ai_endpoint,
         settings.oci_enterprise_ai_project_ocid,
-        settings.oci_enterprise_ai_llm_path,
-        settings.oci_enterprise_ai_vlm_path,
+        api_path,
     )
     if required_status != READINESS_OK:
         return required_status
     if not _is_present(settings.oci_enterprise_ai_api_key):
         return READINESS_MISSING_CREDENTIALS
-    if not _model_setting_is_satisfied(
-        settings.oci_enterprise_ai_llm_model,
-        settings.oci_enterprise_ai_llm_payload_template,
-    ):
+    model_ids = {model.model_id for model in enterprise_ai_model_catalog(settings)}
+    default_model = enterprise_ai_default_model_id(settings)
+    if not model_ids or not _is_present(default_model):
         return READINESS_MISSING
-    if not _model_setting_is_satisfied(
-        settings.oci_enterprise_ai_vlm_model,
-        settings.oci_enterprise_ai_vlm_payload_template,
-    ):
+    if default_model not in model_ids:
+        return READINESS_INVALID
+    if not _is_present(enterprise_ai_vision_model_id(settings)):
         return READINESS_MISSING
     return READINESS_OK
 
@@ -152,13 +155,6 @@ def _required_values_check(*values: str) -> str:
 def _is_present(value: str) -> bool:
     """空白のみの値を未設定として扱う。"""
     return bool(value.strip())
-
-
-def _model_setting_is_satisfied(model: str, payload_template: str) -> bool:
-    """template が model を要求しない場合は model id なしを許可する。"""
-    if _is_present(model):
-        return True
-    return _is_present(payload_template) and "${model}" not in payload_template
 
 
 def _is_production(settings: Settings) -> bool:

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
-from app.config import Settings
+from app.config import EnterpriseAiConfiguredModel, Settings
 
 
 async def test_oci_vlm_posts_structured_extraction_payload() -> None:
@@ -262,6 +262,84 @@ async def test_oci_generate_posts_rag_generation_payload() -> None:
     assert "OCI Generative AI" not in str(messages)
     assert "承認条件は？" in messages[1]["content"]
     assert "[policy.txt#doc-1:0]" in messages[1]["content"]
+
+
+async def test_oci_generate_uses_configured_default_model() -> None:
+    """複数 LLM 登録時は既定モデルを回答生成に使う。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_models = [
+        EnterpriseAiConfiguredModel(model_id="enterprise-small", display_name="Small"),
+        EnterpriseAiConfiguredModel(
+            model_id="enterprise-default",
+            display_name="Default",
+            vision_enabled=True,
+        ),
+    ]
+    settings.oci_enterprise_ai_default_model = "enterprise-default"
+    transport = FakeEnterpriseAiTransport({"answer": "回答"})
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    assert await client.generate("質問", "根拠") == "回答"
+
+    assert transport.calls[0]["payload"]["model"] == "enterprise-default"
+
+
+async def test_oci_vlm_uses_default_model_when_it_supports_vision() -> None:
+    """既定モデルが Vision 対応なら OCR でも既定モデルを使う。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_models = [
+        EnterpriseAiConfiguredModel(model_id="enterprise-text", display_name="Text"),
+        EnterpriseAiConfiguredModel(
+            model_id="enterprise-default",
+            display_name="Default Vision",
+            vision_enabled=True,
+        ),
+    ]
+    settings.oci_enterprise_ai_default_model = "enterprise-default"
+    transport = FakeEnterpriseAiTransport(
+        {
+            "data": {
+                "raw_text": "画像本文",
+                "document_type": "ドキュメント",
+                "confidence": 0.9,
+                "warnings": [],
+            }
+        }
+    )
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    await client.extract_with_vlm(b"image", "OCR")
+
+    assert transport.calls[0]["payload"]["model"] == "enterprise-default"
+
+
+async def test_oci_vlm_uses_first_vision_model_when_default_is_text_only() -> None:
+    """既定モデルが text-only の場合は Vision 対応モデルへ切り替える。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_models = [
+        EnterpriseAiConfiguredModel(model_id="enterprise-default", display_name="Default"),
+        EnterpriseAiConfiguredModel(
+            model_id="enterprise-vision",
+            display_name="Vision",
+            vision_enabled=True,
+        ),
+    ]
+    settings.oci_enterprise_ai_default_model = "enterprise-default"
+    transport = FakeEnterpriseAiTransport(
+        {
+            "data": {
+                "raw_text": "画像本文",
+                "document_type": "ドキュメント",
+                "confidence": 0.9,
+                "warnings": [],
+            }
+        }
+    )
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    await client.extract_with_vlm(b"image", "OCR")
+
+    assert transport.calls[0]["payload"]["model"] == "enterprise-vision"
 
 
 async def test_oci_adapter_adds_project_and_api_key_headers() -> None:

@@ -70,9 +70,19 @@ test("アップロード保存先設定で OCI Object Storage に切り替えら
     page.getByRole("heading", { name: "アップロード保存先" })
   ).toBeVisible();
   await expect(page.getByText("200.0 MB")).toBeVisible();
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toBeVisible();
+  const envPreview = page.getByLabel(".env プレビュー");
+  await expect(envPreview).toContainText("UPLOAD_STORAGE_BACKEND=local");
+  await expect(envPreview).toContainText("LOCAL_STORAGE_DIR=/tmp/production-ready-rag");
   await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
   await expect(page.getByLabel("Object Storage ネームスペース")).toHaveCount(0);
   await page.getByLabel("Object Storage バケット").fill("rag-originals");
+  await expect(envPreview).toContainText("UPLOAD_STORAGE_BACKEND=oci");
+  await expect(envPreview).toContainText(
+    "OBJECT_STORAGE_NAMESPACE=oci-page-namespace"
+  );
+  await expect(envPreview).toContainText("OBJECT_STORAGE_BUCKET=rag-originals");
+  await expect(envPreview).not.toContainText("OBJECT_STORAGE_REGION");
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("保存しました")).toBeVisible();

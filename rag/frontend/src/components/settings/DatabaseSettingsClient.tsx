@@ -192,6 +192,11 @@ export function DatabaseSettingsClient() {
                   uploadPending={walletUpload.isPending}
                   uploadedFileName={uploadedWalletFileName}
                   uploadError={walletUpload.isError ? walletUploadError : null}
+                  warning={
+                    settings.wallet_uploaded
+                      ? null
+                      : t("settings.database.walletDir.missing")
+                  }
                 />
               </div>
               <DsnField
@@ -392,17 +397,21 @@ function WalletDirectoryField({
   uploadPending,
   uploadedFileName,
   uploadError,
+  warning,
 }: {
   value: string;
   onUpload: (file: File) => void;
   uploadPending: boolean;
   uploadedFileName: string | null;
   uploadError: string | null;
+  warning: string | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const id = "oracle-wallet-dir";
   const hintId = `${id}-hint`;
+  const warningId = `${id}-warning`;
   const uploadHintId = "oracle-wallet-upload-hint";
+  const describedBy = [hintId, warning ? warningId : ""].filter(Boolean).join(" ");
 
   return (
     <div className="space-y-2">
@@ -416,12 +425,22 @@ function WalletDirectoryField({
           value={value}
           readOnly
           placeholder={t("settings.database.placeholder.walletDir")}
-          aria-describedby={hintId}
+          aria-describedby={describedBy}
           className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted/70"
         />
         <p id={hintId} className="text-xs leading-relaxed text-muted">
           {t("settings.database.helper.walletDir")}
         </p>
+        {warning ? (
+          <p
+            id={warningId}
+            className="flex items-start gap-1.5 text-xs leading-relaxed text-warning"
+            role="status"
+          >
+            <AlertCircle size={13} className="mt-0.5 shrink-0" aria-hidden />
+            <span>{warning}</span>
+          </p>
+        ) : null}
       </div>
 
       <div className="flex flex-col gap-2 rounded-md border border-border bg-background px-3 py-3 sm:flex-row sm:items-start sm:justify-between">
