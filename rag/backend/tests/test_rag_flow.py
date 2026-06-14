@@ -7,7 +7,6 @@ from typing import Any, cast
 
 from pytest import LogCaptureFixture, MonkeyPatch
 
-from app.api.routes.documents import MISSING_INDEX_CHUNKS_MESSAGE
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
@@ -26,32 +25,32 @@ def setup_function() -> None:
     reset_local_store()
 
 
-def test_upload_analyze_search_register_flow() -> None:
-    """アップロードから検索・登録までの最小フローを確認する。"""
+def test_upload_ingest_search_flow() -> None:
+    """アップロードから取込・検索までの最小フローを確認する。"""
     sample = (
-        "請求書番号: INV-001\n"
-        "発行日: 2026/06/01\n"
-        "株式会社サンプル 御中\n"
-        "請求金額: 120,000\n"
-        "クラウド利用料の請求書です。"
+        "社内規程: 経費申請\n"
+        "部門長の承認後、経理部が確認します。\n"
+        "申請者は証憑を添付してください。"
     ).encode()
 
     upload_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice.txt", sample, "text/plain")},
+        files={"file": ("expense-policy.txt", sample, "text/plain")},
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
 
-    analyze_resp = client.post(f"/api/documents/{document_id}/analyze")
-    assert analyze_resp.status_code == 200
-    analyzed = analyze_resp.json()["data"]
-    assert analyzed["status"] == "ANALYZED"
-    assert analyzed["extracted_fields"]["fields"]["document_number"] == "INV-001"
+    ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+    assert ingest_resp.status_code == 200
+    indexed = ingest_resp.json()["data"]
+    assert indexed["status"] == "INDEXED"
+    assert "部門長の承認" in indexed["extraction"]["raw_text"]
+    assert indexed["extraction"]["elements"]
+    assert "fields" not in indexed["extraction"]
 
     search_resp = client.post(
         "/api/search",
-        json={"query": "クラウド利用料の請求金額", "top_k": 5, "rerank_top_n": 3},
+        json={"query": "経費申請の承認者は？", "top_k": 5, "rerank_top_n": 3},
     )
     assert search_resp.status_code == 200
     search_data = search_resp.json()["data"]
@@ -63,37 +62,30 @@ def test_upload_analyze_search_register_flow() -> None:
         "vector",
         "keyword",
     }
+    assert search_data["citations"][0]["metadata"]["chunk_profile"] == "structure_v1"
+    assert search_data["citations"][0]["metadata"]["content_kind"] == "text"
+    assert search_data["citations"][0]["metadata"]["page_start"] == 1
     assert "rrf_score" in search_data["citations"][0]["metadata"]
 
-    register_resp = client.post(f"/api/documents/{document_id}/register")
-    assert register_resp.status_code == 200
-    registered = register_resp.json()["data"]
-    assert registered["status"] == "REGISTERED"
 
-    register_again_resp = client.post(f"/api/documents/{document_id}/register")
-    assert register_again_resp.status_code == 200
-    assert register_again_resp.json()["data"]["registered_at"] == registered["registered_at"]
-
-
-def test_analyze_emits_ingestion_audit_without_raw_text(caplog: LogCaptureFixture) -> None:
-    """分析成功時は OCR 原文を出さず、取込監査イベントを出す。"""
+def test_ingest_emits_ingestion_audit_without_raw_text(caplog: LogCaptureFixture) -> None:
+    """取込成功時は OCR 原文を出さず、取込監査イベントを出す。"""
     sample = (
-        "請求書番号: INV-SECRET\n"
-        "発行日: 2026/06/01\n"
-        "請求金額: 120,000\n"
+        "社内規程: 秘密の承認フロー\n"
+        "部門長と管理部が承認します。\n"
         "監査ログに出してはいけない原文です。"
     ).encode()
     upload_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice.txt", sample, "text/plain")},
+        files={"file": ("secret-policy.txt", sample, "text/plain")},
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        analyze_resp = client.post(f"/api/documents/{document_id}/analyze")
+        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
 
-    assert analyze_resp.status_code == 200
+    assert ingest_resp.status_code == 200
     audit_record = next(
         record for record in caplog.records if record.message == "rag_ingestion_audit"
     )
@@ -103,10 +95,10 @@ def test_analyze_emits_ingestion_audit_without_raw_text(caplog: LogCaptureFixtur
     assert audit_event["outcome"] == "success"
     assert audit_event["source_sha256"] == hashlib.sha256(sample).hexdigest()
     assert audit_event["source_bytes"] == len(sample)
-    assert audit_event["document_type"] == "請求書"
+    assert audit_event["document_type"] == "社内規程"
     assert audit_event["chunk_count"] >= 1
     assert audit_event["vector_count"] == audit_event["chunk_count"]
-    assert "INV-SECRET" not in str(audit_event)
+    assert "秘密の承認フロー" not in str(audit_event)
     assert "監査ログに出してはいけない原文" not in str(audit_event)
 
 
@@ -140,9 +132,9 @@ async def test_ingestion_records_trace_spans_without_payload_text(
         oracle=oracle,
     )
 
-    detail = await pipeline.ingest(document.id, b"test", "INV-SECRET を抽出する prompt")
+    detail = await pipeline.ingest(document.id, b"test", "秘密の規程を抽出する prompt")
 
-    assert detail.status == FileStatus.ANALYZED
+    assert detail.status == FileStatus.INDEXED
     assert [(event["span_name"], event["outcome"]) for event in observed] == [
         ("vlm_extraction", "success"),
         ("chunking", "success"),
@@ -157,16 +149,16 @@ async def test_ingestion_records_trace_spans_without_payload_text(
     ]
     assert len({event["trace_id"] for event in observed}) == 1
     assert all(seconds >= 0.0 for *_, seconds in stage_metrics)
-    assert "INV-SECRET" not in str(observed)
-    assert "請求金額 120000" not in str(observed)
+    assert "秘密の規程" not in str(observed)
+    assert "部門長が承認" not in str(observed)
     assert "抽出する prompt" not in str(observed)
 
     vlm_attributes = observed[0]["attributes"]
     assert isinstance(vlm_attributes, dict)
     assert vlm_attributes["source_bytes"] == 4
-    assert vlm_attributes["prompt_chars"] == len("INV-SECRET を抽出する prompt")
-    assert vlm_attributes["document_type"] == "請求書"
-    assert vlm_attributes["field_count"] == 1
+    assert vlm_attributes["content_type"] == "application/octet-stream"
+    assert vlm_attributes["prompt_chars"] == len("秘密の規程を抽出する prompt")
+    assert vlm_attributes["document_type"] == "社内規程"
     assert vlm_attributes["raw_text_chars"] > 0
     indexing_attributes = observed[-1]["attributes"]
     assert isinstance(indexing_attributes, dict)
@@ -237,7 +229,7 @@ async def test_ingestion_normalizes_untrusted_document_type_in_logs(
     with caplog.at_level(logging.INFO):
         detail = await pipeline.ingest(document.id, b"test", "prompt")
 
-    assert detail.status == FileStatus.ANALYZED
+    assert detail.status == FileStatus.INDEXED
     trace_event = next(
         cast(Any, record).trace_event
         for record in caplog.records
@@ -359,11 +351,16 @@ def test_prompt_injection_query_is_blocked(caplog: LogCaptureFixture) -> None:
 class LongTextVlm(OciEnterpriseAiClient):
     """上限超過する長文抽出結果を返すテスト用 VLM。"""
 
-    async def extract_with_vlm(self, image_bytes: bytes, prompt: str) -> dict[str, object]:
+    async def extract_with_vlm(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = "application/octet-stream",
+    ) -> dict[str, object]:
         return {
-            "raw_text": "請求書です。" + ("クラウド利用料の明細です。" * 120),
-            "document_type": "請求書",
-            "fields": {},
+            "raw_text": "社内規程です。" + ("経費申請の手順です。" * 120),
+            "document_type": "社内規程",
             "confidence": 0.9,
             "warnings": [],
         }
@@ -372,11 +369,16 @@ class LongTextVlm(OciEnterpriseAiClient):
 class ShortTextVlm(OciEnterpriseAiClient):
     """短い抽出結果を返すテスト用 VLM。"""
 
-    async def extract_with_vlm(self, image_bytes: bytes, prompt: str) -> dict[str, object]:
+    async def extract_with_vlm(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = "application/octet-stream",
+    ) -> dict[str, object]:
         return {
-            "raw_text": "請求書番号 INV-SECRET。請求金額 120000 円。",
-            "document_type": "請求書",
-            "fields": {"document_number": "INV-SECRET"},
+            "raw_text": "秘密の規程本文です。部門長が承認します。",
+            "document_type": "社内規程",
             "confidence": 0.9,
             "warnings": [],
         }
@@ -385,11 +387,16 @@ class ShortTextVlm(OciEnterpriseAiClient):
 class SensitiveDocumentTypeVlm(OciEnterpriseAiClient):
     """機微な document_type を返すテスト用 VLM。"""
 
-    async def extract_with_vlm(self, image_bytes: bytes, prompt: str) -> dict[str, object]:
+    async def extract_with_vlm(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = "application/octet-stream",
+    ) -> dict[str, object]:
         return {
-            "raw_text": "請求書本文です。",
-            "document_type": "請求書 INV-SECRET",
-            "fields": {},
+            "raw_text": "社内規程本文です。",
+            "document_type": "社内規程 SECRET",
             "confidence": 0.9,
             "warnings": [],
         }
@@ -422,8 +429,8 @@ class FailingEmbeddingClient(OciGenAiClient):
 def test_search_filters_are_applied_to_retrieval() -> None:
     """SearchRequest.filters は実際の検索候補に適用される。"""
     document_ids: list[str] = []
-    for file_name in ("invoice-a.txt", "invoice-b.txt"):
-        content = "請求書 クラウド利用料".encode()
+    for file_name in ("policy-a.txt", "policy-b.txt"):
+        content = "社内規程 クラウド利用料".encode()
         upload_resp = client.post(
             "/api/documents/upload",
             files={"file": (file_name, content, "text/plain")},
@@ -431,8 +438,8 @@ def test_search_filters_are_applied_to_retrieval() -> None:
         assert upload_resp.status_code == 200
         document_id = upload_resp.json()["data"]["id"]
         document_ids.append(document_id)
-        analyze_resp = client.post(f"/api/documents/{document_id}/analyze")
-        assert analyze_resp.status_code == 200
+        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+        assert ingest_resp.status_code == 200
 
     response = client.post(
         "/api/search",
@@ -454,18 +461,18 @@ def test_search_status_filter_is_case_insensitive() -> None:
     """status filter は小文字でも正規化されて検索に使われる。"""
     upload_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice.txt", "請求書 クラウド利用料".encode(), "text/plain")},
+        files={"file": ("policy.txt", "社内規程 クラウド利用料".encode(), "text/plain")},
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
-    analyze_resp = client.post(f"/api/documents/{document_id}/analyze")
-    assert analyze_resp.status_code == 200
+    ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+    assert ingest_resp.status_code == 200
 
     response = client.post(
         "/api/search",
         json={
             "query": "クラウド利用料",
-            "filters": {"status": "analyzed"},
+            "filters": {"status": "indexed"},
         },
     )
 
@@ -479,11 +486,11 @@ def test_stream_search_returns_sse_events() -> None:
     """検索ストリーム API は SSE イベント列を返す。"""
     upload_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice.txt", "請求書 クラウド利用料".encode(), "text/plain")},
+        files={"file": ("policy.txt", "社内規程 クラウド利用料".encode(), "text/plain")},
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
-    assert client.post(f"/api/documents/{document_id}/analyze").status_code == 200
+    assert client.post(f"/api/documents/{document_id}/ingest").status_code == 200
 
     response = client.post(
         "/api/search/stream",
@@ -504,7 +511,7 @@ def test_search_rejects_unknown_filter_with_api_response_shape() -> None:
     """未対応 filter は ApiResponse 形式の 422 として返す。"""
     response = client.post(
         "/api/search",
-        json={"query": "請求書", "filters": {"tenant_id": "tenant-a"}},
+        json={"query": "社内規程", "filters": {"tenant_id": "tenant-a"}},
     )
 
     assert response.status_code == 422
@@ -527,7 +534,7 @@ def test_search_rejects_rerank_top_n_larger_than_top_k() -> None:
     """rerank_top_n が top_k を超える検索リクエストは拒否する。"""
     response = client.post(
         "/api/search",
-        json={"query": "請求金額", "top_k": 2, "rerank_top_n": 3},
+        json={"query": "承認条件", "top_k": 2, "rerank_top_n": 3},
     )
 
     assert response.status_code == 422
@@ -550,7 +557,7 @@ def test_stream_search_rejects_rerank_top_n_larger_than_top_k() -> None:
     """SSE 検索でも rerank depth の制約を適用する。"""
     response = client.post(
         "/api/search/stream",
-        json={"query": "請求金額", "top_k": 2, "rerank_top_n": 3},
+        json={"query": "承認条件", "top_k": 2, "rerank_top_n": 3},
     )
 
     assert response.status_code == 422
@@ -561,7 +568,7 @@ def test_stream_search_rejects_rerank_top_n_larger_than_top_k() -> None:
 
 def test_list_documents_supports_pagination_status_and_query_filter() -> None:
     """文書一覧はページング・状態・ファイル名検索を返す。"""
-    for file_name in ("invoice-a.txt", "receipt-b.txt", "invoice-c.txt"):
+    for file_name in ("policy-a.txt", "manual-b.txt", "policy-c.txt"):
         response = client.post(
             "/api/documents/upload",
             files={"file": (file_name, b"sample text", "text/plain")},
@@ -577,12 +584,12 @@ def test_list_documents_supports_pagination_status_and_query_filter() -> None:
 
     filtered_resp = client.get(
         "/api/documents",
-        params={"q": "invoice", "status": FileStatus.UPLOADED},
+        params={"q": "policy", "status": FileStatus.UPLOADED},
     )
     assert filtered_resp.status_code == 200
     filtered = filtered_resp.json()["data"]
     assert filtered["total"] == 2
-    assert all("invoice" in item["file_name"] for item in filtered["items"])
+    assert all("policy" in item["file_name"] for item in filtered["items"])
 
 
 def test_get_missing_document_preserves_business_error_message() -> None:
@@ -593,66 +600,26 @@ def test_get_missing_document_preserves_business_error_message() -> None:
     assert response.json()["error_messages"] == ["ドキュメントが見つかりません。"]
 
 
-def test_register_missing_document_returns_404() -> None:
-    """存在しないドキュメントの本登録は 404 にする。"""
-    response = client.post("/api/documents/missing-document/register")
+def test_ingest_missing_document_preserves_business_error_message() -> None:
+    """取込 API の 404 detail は汎用メッセージで上書きしない。"""
+    response = client.post("/api/documents/missing-document/ingest")
 
     assert response.status_code == 404
     assert response.json()["error_messages"] == ["ドキュメントが見つかりません。"]
-
-
-def test_register_uploaded_document_is_rejected() -> None:
-    """未分析のドキュメントは本登録できない。"""
-    upload_resp = client.post(
-        "/api/documents/upload",
-        files={"file": ("invoice.txt", b"sample text", "text/plain")},
-    )
-    assert upload_resp.status_code == 200
-    document_id = upload_resp.json()["data"]["id"]
-
-    response = client.post(f"/api/documents/{document_id}/register")
-
-    assert response.status_code == 409
-    assert response.json()["error_messages"] == ["分析済みのドキュメントのみ登録できます。"]
-    stored = asyncio.run(OracleClient().get_document(document_id))
-    assert stored is not None
-    assert stored.status == FileStatus.UPLOADED
-    assert stored.registered_at is None
-
-
-def test_register_analyzed_document_without_chunks_is_rejected() -> None:
-    """ANALYZED でも索引 chunk がない場合は本登録しない。"""
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="analyzed-without-index.txt",
-            object_storage_path="local://uploaded/analyzed-without-index.txt",
-            content_type="text/plain",
-        )
-    )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.ANALYZED))
-
-    response = client.post(f"/api/documents/{detail.id}/register")
-
-    assert response.status_code == 409
-    assert response.json()["error_messages"] == [MISSING_INDEX_CHUNKS_MESSAGE]
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.ANALYZED
-    assert stored.registered_at is None
 
 
 def test_upload_sanitizes_filename_and_document_stats() -> None:
     """アップロード時は basename を保存し、状態別 stats を返す。"""
     response = client.post(
         "/api/documents/upload",
-        files={"file": ("../nested/invoice.txt", b"sample text", "text/plain")},
+        files={"file": ("../nested/policy.txt", b"sample text", "text/plain")},
     )
     assert response.status_code == 200
     document_id = response.json()["data"]["id"]
 
     detail_resp = client.get(f"/api/documents/{document_id}")
     assert detail_resp.status_code == 200
-    assert detail_resp.json()["data"]["file_name"] == "invoice.txt"
+    assert detail_resp.json()["data"]["file_name"] == "policy.txt"
 
     stats_resp = client.get("/api/documents/stats")
     assert stats_resp.status_code == 200
@@ -663,12 +630,12 @@ def test_upload_sanitizes_filename_and_document_stats() -> None:
 
 def test_upload_records_file_hash_size_and_duplicate_source() -> None:
     """アップロード時に原本の hash/サイズを保存し、重複元を返す。"""
-    content = b"same invoice bytes"
+    content = b"same policy bytes"
     expected_hash = hashlib.sha256(content).hexdigest()
 
     first_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice-a.txt", content, "text/plain")},
+        files={"file": ("policy-a.txt", content, "text/plain")},
     )
     assert first_resp.status_code == 200
     first = first_resp.json()["data"]
@@ -678,7 +645,7 @@ def test_upload_records_file_hash_size_and_duplicate_source() -> None:
 
     second_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice-b.txt", content, "text/plain")},
+        files={"file": ("policy-b.txt", content, "text/plain")},
     )
     assert second_resp.status_code == 200
     second = second_resp.json()["data"]
@@ -695,13 +662,13 @@ def test_upload_records_file_hash_size_and_duplicate_source() -> None:
 
 def test_duplicate_detection_is_scoped_by_tenant_header() -> None:
     """同一ファイルでも tenant が違えば duplicate_of にしない。"""
-    content = b"same tenant-scoped invoice"
+    content = b"same tenant-scoped policy"
     tenant_a = {"X-Tenant-ID": "tenant-a"}
     tenant_b = {"X-Tenant-ID": "tenant-b"}
 
     first_a_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice-a.txt", content, "text/plain")},
+        files={"file": ("policy-a.txt", content, "text/plain")},
         headers=tenant_a,
     )
     assert first_a_resp.status_code == 200
@@ -710,7 +677,7 @@ def test_duplicate_detection_is_scoped_by_tenant_header() -> None:
 
     first_b_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice-b.txt", content, "text/plain")},
+        files={"file": ("policy-b.txt", content, "text/plain")},
         headers=tenant_b,
     )
     assert first_b_resp.status_code == 200
@@ -718,7 +685,7 @@ def test_duplicate_detection_is_scoped_by_tenant_header() -> None:
 
     second_a_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice-a-copy.txt", content, "text/plain")},
+        files={"file": ("policy-a-copy.txt", content, "text/plain")},
         headers=tenant_a,
     )
     assert second_a_resp.status_code == 200
@@ -732,12 +699,24 @@ def test_documents_and_search_are_scoped_by_tenant_header() -> None:
 
     upload_a = client.post(
         "/api/documents/upload",
-        files={"file": ("tenant-a.txt", "請求書 テナントA クラウド利用料".encode(), "text/plain")},
+        files={
+            "file": (
+                "tenant-a.txt",
+                "社内規程 テナントA クラウド利用料".encode(),
+                "text/plain",
+            )
+        },
         headers=tenant_a,
     )
     upload_b = client.post(
         "/api/documents/upload",
-        files={"file": ("tenant-b.txt", "請求書 テナントB 保守費用".encode(), "text/plain")},
+        files={
+            "file": (
+                "tenant-b.txt",
+                "社内規程 テナントB 保守費用".encode(),
+                "text/plain",
+            )
+        },
         headers=tenant_b,
     )
     assert upload_a.status_code == 200
@@ -746,10 +725,10 @@ def test_documents_and_search_are_scoped_by_tenant_header() -> None:
     document_b_id = upload_b.json()["data"]["id"]
 
     assert (
-        client.post(f"/api/documents/{document_a_id}/analyze", headers=tenant_a).status_code == 200
+        client.post(f"/api/documents/{document_a_id}/ingest", headers=tenant_a).status_code == 200
     )
     assert (
-        client.post(f"/api/documents/{document_b_id}/analyze", headers=tenant_b).status_code == 200
+        client.post(f"/api/documents/{document_b_id}/ingest", headers=tenant_b).status_code == 200
     )
 
     list_a = client.get("/api/documents", headers=tenant_a)
@@ -764,12 +743,12 @@ def test_documents_and_search_are_scoped_by_tenant_header() -> None:
 
     search_a = client.post(
         "/api/search",
-        json={"query": "請求書", "top_k": 5, "rerank_top_n": 3},
+        json={"query": "社内規程", "top_k": 5, "rerank_top_n": 3},
         headers=tenant_a,
     )
     search_b = client.post(
         "/api/search",
-        json={"query": "請求書", "top_k": 5, "rerank_top_n": 3},
+        json={"query": "社内規程", "top_k": 5, "rerank_top_n": 3},
         headers=tenant_b,
     )
     assert search_a.status_code == 200
@@ -778,9 +757,50 @@ def test_documents_and_search_are_scoped_by_tenant_header() -> None:
     assert {item["document_id"] for item in search_b.json()["data"]["citations"]} == {document_b_id}
 
 
+def test_documents_and_search_are_scoped_by_access_scope_header() -> None:
+    """認可済み document id scope がある場合は一覧・詳細・検索をその範囲に閉じる。"""
+    upload_a = client.post(
+        "/api/documents/upload",
+        files={"file": ("scope-a.txt", "社内規程 スコープA クラウド利用料".encode(), "text/plain")},
+    )
+    upload_b = client.post(
+        "/api/documents/upload",
+        files={"file": ("scope-b.txt", "社内規程 スコープB 保守費用".encode(), "text/plain")},
+    )
+    assert upload_a.status_code == 200
+    assert upload_b.status_code == 200
+    document_a_id = upload_a.json()["data"]["id"]
+    document_b_id = upload_b.json()["data"]["id"]
+
+    assert client.post(f"/api/documents/{document_a_id}/ingest").status_code == 200
+    assert client.post(f"/api/documents/{document_b_id}/ingest").status_code == 200
+
+    access_a = {"X-RAG-Allowed-Document-Ids": document_a_id}
+    list_a = client.get("/api/documents", headers=access_a)
+    assert list_a.status_code == 200
+    assert {item["id"] for item in list_a.json()["data"]["items"]} == {document_a_id}
+
+    allowed_detail = client.get(f"/api/documents/{document_a_id}", headers=access_a)
+    denied_detail = client.get(f"/api/documents/{document_b_id}", headers=access_a)
+    assert allowed_detail.status_code == 200
+    assert denied_detail.status_code == 404
+
+    search_a = client.post(
+        "/api/search",
+        json={"query": "社内規程", "top_k": 5, "rerank_top_n": 3},
+        headers=access_a,
+    )
+    assert search_a.status_code == 200
+    assert {item["document_id"] for item in search_a.json()["data"]["citations"]} == {document_a_id}
+
+    deny_all = client.get("/api/documents", headers={"X-RAG-Allowed-Document-Ids": "bad id"})
+    assert deny_all.status_code == 200
+    assert deny_all.json()["data"]["items"] == []
+
+
 def test_upload_sanitizes_control_chars_and_truncates_filename() -> None:
     """表示用ファイル名から制御文字を除き、長すぎる名前は切り詰める。"""
-    long_name = f"invoice\n2026\t{'x' * 300}.txt"
+    long_name = f"policy\n2026\t{'x' * 300}.txt"
     response = client.post(
         "/api/documents/upload",
         files={"file": (long_name, b"sample text", "text/plain")},
@@ -800,7 +820,7 @@ def test_upload_rejects_unsupported_content_type() -> None:
     """許可していない MIME type は 415 にする。"""
     response = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice.exe", b"sample", "application/x-msdownload")},
+        files={"file": ("policy.exe", b"sample", "application/x-msdownload")},
     )
     assert response.status_code == 415
     assert response.json()["error_messages"] == ["対応していないファイル形式です。"]
@@ -810,7 +830,7 @@ def test_upload_accepts_content_type_parameters() -> None:
     """MIME type パラメータ付きの text/plain も許可する。"""
     response = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice.txt", b"sample", "text/plain; charset=utf-8")},
+        files={"file": ("policy.txt", b"sample", "text/plain; charset=utf-8")},
     )
     assert response.status_code == 200
 
@@ -821,66 +841,66 @@ def test_upload_rejects_file_over_configured_size(monkeypatch: MonkeyPatch) -> N
 
     response = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice.txt", b"12345", "text/plain")},
+        files={"file": ("policy.txt", b"12345", "text/plain")},
     )
 
     assert response.status_code == 413
 
 
-def test_analyze_rejects_document_already_analyzing() -> None:
-    """ANALYZING 状態のドキュメントは二重分析しない。"""
+def test_ingest_rejects_document_already_ingesting() -> None:
+    """INGESTING 状態のドキュメントは二重取込しない。"""
     detail = asyncio.run(
         OracleClient().create_document(
-            file_name="analyzing.txt",
-            object_storage_path="local://uploaded/analyzing.txt",
+            file_name="ingesting.txt",
+            object_storage_path="local://uploaded/ingesting.txt",
             content_type="text/plain",
         )
     )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.ANALYZING))
+    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INGESTING))
 
-    response = client.post(f"/api/documents/{detail.id}/analyze")
+    response = client.post(f"/api/documents/{detail.id}/ingest")
 
     assert response.status_code == 409
-    assert response.json()["error_messages"] == ["このドキュメントは現在分析中です。"]
+    assert response.json()["error_messages"] == ["このドキュメントは現在取込中です。"]
     stored = asyncio.run(OracleClient().get_document(detail.id))
     assert stored is not None
-    assert stored.status == FileStatus.ANALYZING
+    assert stored.status == FileStatus.INGESTING
 
 
-def test_analyze_is_idempotent_for_already_analyzed_document() -> None:
-    """ANALYZED は force なしなら原本取得せず既存結果を返す。"""
+def test_ingest_is_idempotent_for_already_indexed_document() -> None:
+    """INDEXED は force なしなら原本取得せず既存結果を返す。"""
     detail = asyncio.run(
         OracleClient().create_document(
-            file_name="already-analyzed.txt",
-            object_storage_path="local://missing/already-analyzed.txt",
+            file_name="already-indexed.txt",
+            object_storage_path="local://missing/already-indexed.txt",
             content_type="text/plain",
         )
     )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.ANALYZED))
+    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-    response = client.post(f"/api/documents/{detail.id}/analyze")
+    response = client.post(f"/api/documents/{detail.id}/ingest")
 
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["id"] == detail.id
-    assert data["status"] == "ANALYZED"
+    assert data["status"] == "INDEXED"
     stored = asyncio.run(OracleClient().get_document(detail.id))
     assert stored is not None
-    assert stored.status == FileStatus.ANALYZED
+    assert stored.status == FileStatus.INDEXED
 
 
-def test_force_analyze_retries_already_analyzed_document() -> None:
-    """ANALYZED に force=true を付けると再分析として原本取得まで進む。"""
+def test_force_ingest_retries_already_indexed_document() -> None:
+    """INDEXED に force=true を付けると再取込として原本取得まで進む。"""
     detail = asyncio.run(
         OracleClient().create_document(
-            file_name="retry-analyzed.txt",
-            object_storage_path="local://missing/retry-analyzed.txt",
+            file_name="retry-indexed.txt",
+            object_storage_path="local://missing/retry-indexed.txt",
             content_type="text/plain",
         )
     )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.ANALYZED))
+    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-    response = client.post(f"/api/documents/{detail.id}/analyze", params={"force": "true"})
+    response = client.post(f"/api/documents/{detail.id}/ingest", params={"force": "true"})
 
     assert response.status_code == 409
     assert response.json()["error_messages"] == ["原本ファイルが見つかりません。"]
@@ -889,44 +909,24 @@ def test_force_analyze_retries_already_analyzed_document() -> None:
     assert stored.status == FileStatus.ERROR
 
 
-def test_force_analyze_rejects_registered_document() -> None:
-    """本登録済みドキュメントは明示 force でも再分析しない。"""
+def test_indexed_document_is_idempotent_without_force() -> None:
+    """INDEXED は force なしなら再取込せず既存状態を返す。"""
     detail = asyncio.run(
         OracleClient().create_document(
-            file_name="registered.txt",
-            object_storage_path="local://missing/registered.txt",
+            file_name="indexed-noop.txt",
+            object_storage_path="local://missing/indexed-noop.txt",
             content_type="text/plain",
         )
     )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.REGISTERED))
+    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-    response = client.post(f"/api/documents/{detail.id}/analyze", params={"force": "true"})
-
-    assert response.status_code == 409
-    assert response.json()["error_messages"] == ["本登録済みドキュメントは再分析できません。"]
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.REGISTERED
-
-
-def test_analyze_registered_document_is_idempotent_without_force() -> None:
-    """REGISTERED は force なしなら再分析せず既存状態を返す。"""
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="registered-noop.txt",
-            object_storage_path="local://missing/registered-noop.txt",
-            content_type="text/plain",
-        )
-    )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.REGISTERED))
-
-    response = client.post(f"/api/documents/{detail.id}/analyze")
+    response = client.post(f"/api/documents/{detail.id}/ingest")
 
     assert response.status_code == 200
-    assert response.json()["data"]["status"] == "REGISTERED"
+    assert response.json()["data"]["status"] == "INDEXED"
 
 
-def test_analyze_marks_document_error_when_local_extraction_is_empty(
+def test_ingest_marks_document_error_when_local_extraction_is_empty(
     caplog: LogCaptureFixture,
 ) -> None:
     """ローカル抽出でテキスト化できない場合は 422 と ERROR 状態にする。"""
@@ -938,9 +938,9 @@ def test_analyze_marks_document_error_when_local_extraction_is_empty(
     document_id = upload_resp.json()["data"]["id"]
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        analyze_resp = client.post(f"/api/documents/{document_id}/analyze")
+        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
 
-    assert analyze_resp.status_code == 422
+    assert ingest_resp.status_code == 422
     stored = asyncio.run(OracleClient().get_document(document_id))
     assert stored is not None
     assert stored.status == FileStatus.ERROR
@@ -956,7 +956,7 @@ def test_analyze_marks_document_error_when_local_extraction_is_empty(
     assert audit_event["vector_count"] == 0
 
 
-def test_analyze_marks_document_error_when_source_object_is_missing() -> None:
+def test_ingest_marks_document_error_when_source_object_is_missing() -> None:
     """原本ファイルが消えている場合は説明可能な 409 と ERROR 状態にする。"""
     detail = asyncio.run(
         OracleClient().create_document(
@@ -966,7 +966,7 @@ def test_analyze_marks_document_error_when_source_object_is_missing() -> None:
         )
     )
 
-    response = client.post(f"/api/documents/{detail.id}/analyze")
+    response = client.post(f"/api/documents/{detail.id}/ingest")
 
     assert response.status_code == 409
     stored = asyncio.run(OracleClient().get_document(detail.id))
@@ -975,9 +975,9 @@ def test_analyze_marks_document_error_when_source_object_is_missing() -> None:
     assert stored.error_message == "原本ファイルが見つかりません。"
 
 
-def test_analyze_rejects_source_size_mismatch() -> None:
-    """取得した原本サイズがアップロード時メタデータと違う場合は分析しない。"""
-    data = b"invoice body"
+def test_ingest_rejects_source_size_mismatch() -> None:
+    """取得した原本サイズがアップロード時メタデータと違う場合は取込しない。"""
+    data = b"policy body"
     object_path = asyncio.run(
         ObjectStorageClient().put("uploaded/size-mismatch.txt", data, "text/plain")
     )
@@ -991,7 +991,7 @@ def test_analyze_rejects_source_size_mismatch() -> None:
         )
     )
 
-    response = client.post(f"/api/documents/{detail.id}/analyze")
+    response = client.post(f"/api/documents/{detail.id}/ingest")
 
     assert response.status_code == 409
     assert response.json()["error_messages"] == [
@@ -1003,9 +1003,9 @@ def test_analyze_rejects_source_size_mismatch() -> None:
     assert stored.error_message == "原本ファイルのサイズがアップロード時と一致しません。"
 
 
-def test_analyze_rejects_source_hash_mismatch() -> None:
-    """取得した原本 hash がアップロード時メタデータと違う場合は分析しない。"""
-    data = b"invoice body"
+def test_ingest_rejects_source_hash_mismatch() -> None:
+    """取得した原本 hash がアップロード時メタデータと違う場合は取込しない。"""
+    data = b"policy body"
     object_path = asyncio.run(
         ObjectStorageClient().put("uploaded/hash-mismatch.txt", data, "text/plain")
     )
@@ -1019,7 +1019,7 @@ def test_analyze_rejects_source_hash_mismatch() -> None:
         )
     )
 
-    response = client.post(f"/api/documents/{detail.id}/analyze")
+    response = client.post(f"/api/documents/{detail.id}/ingest")
 
     assert response.status_code == 409
     assert response.json()["error_messages"] == [
@@ -1031,7 +1031,7 @@ def test_analyze_rejects_source_hash_mismatch() -> None:
     assert stored.error_message == "原本ファイルの SHA-256 がアップロード時と一致しません。"
 
 
-def test_analyze_rejects_non_local_uri_in_local_adapter() -> None:
+def test_ingest_rejects_non_local_uri_in_local_adapter() -> None:
     """local adapter では OCI URI をローカルキーとして誤解釈しない。"""
     detail = asyncio.run(
         OracleClient().create_document(
@@ -1041,7 +1041,7 @@ def test_analyze_rejects_non_local_uri_in_local_adapter() -> None:
         )
     )
 
-    response = client.post(f"/api/documents/{detail.id}/analyze")
+    response = client.post(f"/api/documents/{detail.id}/ingest")
 
     assert response.status_code == 400
     assert response.json()["error_messages"] == ["原本ファイルの参照パスが不正です。"]

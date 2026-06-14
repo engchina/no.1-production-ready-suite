@@ -10,6 +10,8 @@ from app.main import UNHANDLED_ERROR_MESSAGE, app, create_app
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+LLM_TEMPLATE = '{"input":"${user_message}"}'
+VLM_TEMPLATE = '{"input":"${data_base64}"}'
 
 
 def test_health() -> None:
@@ -76,10 +78,13 @@ def test_readiness_production_local_adapter_is_degraded(
 def test_readiness_oci_missing_config_is_degraded(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "ai_service_adapter", "oci")
+    monkeypatch.setattr(settings, "upload_storage_backend", "oci")
     for field in (
         "oci_region",
         "oci_compartment_id",
         "oci_enterprise_ai_endpoint",
+        "oci_enterprise_ai_project_ocid",
+        "oci_enterprise_ai_api_key",
         "oci_enterprise_ai_llm_model",
         "oci_enterprise_ai_vlm_model",
         "oci_genai_embedding_model",
@@ -123,6 +128,44 @@ def test_readiness_oci_complete_config_is_ok(monkeypatch: MonkeyPatch) -> None:
         "object_storage": "ok",
     }
     assert "super-secret-password" not in str(body)
+
+
+def test_readiness_oci_adapter_with_local_upload_storage_checks_local_storage(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_oci_readiness(monkeypatch)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "upload_storage_backend", "local")
+    monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path / "upload-storage"))
+
+    resp = client.get("/api/ready")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["checks"] == {
+        "oci_common": "ok",
+        "enterprise_ai": "ok",
+        "genai": "ok",
+        "oracle": "ok",
+        "local_storage": "ok",
+    }
+
+
+def test_readiness_oci_allows_enterprise_ai_templates_without_model_ids(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _configure_oci_readiness(monkeypatch)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_model", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_payload_template", LLM_TEMPLATE)
+    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_payload_template", VLM_TEMPLATE)
+
+    resp = client.get("/api/ready")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["checks"]["enterprise_ai"] == "ok"
 
 
 def test_readiness_production_oci_requires_audit_salt(monkeypatch: MonkeyPatch) -> None:
@@ -171,7 +214,12 @@ def test_readiness_production_oci_complete_config_is_ok(monkeypatch: MonkeyPatch
 def test_readiness_oci_missing_oracle_credentials_is_degraded(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _configure_oci_readiness(monkeypatch, oracle_password="", oracle_wallet_dir="")
+    _configure_oci_readiness(
+        monkeypatch,
+        oracle_password="",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir="",
+    )
 
     resp = client.get("/api/ready")
 
@@ -236,7 +284,7 @@ def test_validation_error_preserves_request_id() -> None:
     """検証エラーでもクライアント指定の request id を返す。"""
     resp = client.post(
         "/api/search",
-        json={"query": "請求書", "top_k": 0},
+        json={"query": "社内規程", "top_k": 0},
         headers={"X-Request-ID": "validation-request"},
     )
 
@@ -279,6 +327,7 @@ def _configure_oci_readiness(
     monkeypatch: MonkeyPatch,
     *,
     oracle_password: str = "oracle-password",
+    oracle_client_lib_dir: str = "",
     oracle_wallet_dir: str = "",
     oci_genai_embedding_dim: int = 1536,
     environment: str = "development",
@@ -287,17 +336,29 @@ def _configure_oci_readiness(
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", environment)
     monkeypatch.setattr(settings, "ai_service_adapter", "oci")
+    monkeypatch.setattr(settings, "upload_storage_backend", "oci")
     monkeypatch.setattr(settings, "oci_region", "ap-osaka-1")
     monkeypatch.setattr(settings, "oci_compartment_id", "ocid1.compartment.oc1..example")
     monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "https://enterprise-ai.example")
+    monkeypatch.setattr(
+        settings,
+        "oci_enterprise_ai_project_ocid",
+        "ocid1.generativeaiproject.oc1..example",
+    )
     monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "enterprise-llm")
     monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_model", "enterprise-vlm")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "sk-test-secret")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_path", "/v1/llm/generate")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_path", "/v1/vlm/extract")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_payload_template", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_vlm_payload_template", "")
     monkeypatch.setattr(settings, "oci_genai_embedding_model", "cohere.embed-v4.0")
     monkeypatch.setattr(settings, "oci_genai_embedding_dim", oci_genai_embedding_dim)
     monkeypatch.setattr(settings, "oci_genai_rerank_model", "cohere.rerank-v4.0-fast")
     monkeypatch.setattr(settings, "oracle_user", "rag_app")
     monkeypatch.setattr(settings, "oracle_password", oracle_password)
     monkeypatch.setattr(settings, "oracle_dsn", "adb.example.com/rag")
+    monkeypatch.setattr(settings, "oracle_client_lib_dir", oracle_client_lib_dir)
     monkeypatch.setattr(settings, "oracle_wallet_dir", oracle_wallet_dir)
     monkeypatch.setattr(settings, "object_storage_namespace", "example-namespace")
     monkeypatch.setattr(settings, "object_storage_bucket", "rag-originals")

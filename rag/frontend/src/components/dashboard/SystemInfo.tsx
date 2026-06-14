@@ -45,7 +45,7 @@ export function SystemInfo({ info }: { info: DashboardSystemInfo }) {
             <dd className="tnum font-medium text-foreground">v{info.version}</dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-muted">{t("dashboard.system.registeredRows")}</dt>
+            <dt className="text-muted">{t("dashboard.system.indexedRows")}</dt>
             <dd className="tnum font-medium text-foreground">
               {formatNumber(info.searchable_rows)}
             </dd>

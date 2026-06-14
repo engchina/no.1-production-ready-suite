@@ -10,7 +10,13 @@ from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings
-from app.rag.pipeline import NO_RESULTS_ANSWER, NO_RESULTS_WARNING, RagPipeline, _build_context
+from app.rag.pipeline import (
+    NO_RESULTS_ANSWER,
+    NO_RESULTS_WARNING,
+    RagPipeline,
+    _build_context,
+    _dedupe_ranked_chunks,
+)
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
 
@@ -21,16 +27,16 @@ def test_build_context_keeps_truncated_first_chunk_when_window_is_small() -> Non
             RetrievedChunk(
                 document_id="doc-1",
                 chunk_id="doc-1:0",
-                text="これは非常に長い請求書チャンクです。",
+                text="これは非常に長い社内規程チャンクです。",
                 score=1.0,
-                file_name="invoice.txt",
+                file_name="policy.txt",
             )
         ],
         max_chars=16,
     )
 
     assert context
-    assert context == "[invoice.txt#doc"
+    assert context == "[policy.txt#doc-"
 
 
 async def test_pipeline_returns_no_results_without_llm_call(
@@ -42,7 +48,7 @@ async def test_pipeline_returns_no_results_without_llm_call(
     trace_id = "trace-no-results"
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        response = await pipeline.run(SearchRequest(query="存在しない請求書"), trace_id=trace_id)
+        response = await pipeline.run(SearchRequest(query="存在しない社内規程"), trace_id=trace_id)
 
     assert response.trace_id == trace_id
     assert response.answer == NO_RESULTS_ANSWER
@@ -71,7 +77,7 @@ async def test_pipeline_records_error_audit_when_embedding_fails(
 ) -> None:
     """RAG 主処理の例外は error outcome として監査ログに残してから再送出する。"""
     pipeline = RagPipeline(genai=ExplodingEmbeddingClient())
-    query = "INV-SECRET の請求金額"
+    query = "INV-SECRET の承認条件"
 
     with (
         caplog.at_level(logging.INFO, logger="app.audit"),
@@ -101,7 +107,7 @@ async def test_pipeline_propagates_low_groundedness_warning_to_response_and_audi
     )
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        response = await pipeline.run(SearchRequest(query="請求金額"))
+        response = await pipeline.run(SearchRequest(query="承認条件"))
 
     assert response.answer == "明日の天気は晴れです。"
     assert response.citations
@@ -181,7 +187,7 @@ async def test_pipeline_records_answer_guardrail_findings_metric(
         llm=UngroundedLlm(),
     )
 
-    response = await pipeline.run(SearchRequest(query="請求金額"))
+    response = await pipeline.run(SearchRequest(query="承認条件"))
 
     assert response.guardrail_warnings
     assert observed == [("answer", ["low_groundedness"], "warning")]
@@ -200,7 +206,7 @@ async def test_pipeline_returns_only_citations_in_generation_context(
     )
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        response = await pipeline.run(SearchRequest(query="請求金額", top_k=2, rerank_top_n=2))
+        response = await pipeline.run(SearchRequest(query="承認条件", top_k=2, rerank_top_n=2))
 
     assert [citation.chunk_id for citation in response.citations] == ["doc-1:0"]
     assert response.diagnostics.top_k == 2
@@ -222,6 +228,288 @@ async def test_pipeline_returns_only_citations_in_generation_context(
     assert audit_event["document_ids"] == ["doc-1"]
 
 
+async def test_pipeline_deduplicates_reranked_chunks_before_context(
+    caplog: LogCaptureFixture,
+) -> None:
+    """同一本文 chunk は context に重複投入せず、diagnostics/audit に件数を残す。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=TwoResultGenAiClient(),
+        oracle=DuplicateChunkOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(rag_query_expansion_enabled=False),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(SearchRequest(query="重複根拠", top_k=2, rerank_top_n=2))
+
+    assert [citation.chunk_id for citation in response.citations] == ["doc-1:0"]
+    assert response.diagnostics.retrieved_count == 2
+    assert response.diagnostics.reranked_count == 2
+    assert response.diagnostics.deduplicated_count == 1
+    assert response.diagnostics.citation_count == 1
+    assert llm.context.count("承認条件: 120000 円。") == 1
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["deduplicated_count"] == 1
+    assert audit_event["citation_count"] == 1
+    assert audit_event["document_ids"] == ["doc-1"]
+
+
+async def test_pipeline_expands_neighbor_chunks_for_generation_context(
+    caplog: LogCaptureFixture,
+) -> None:
+    """設定時は rerank anchor の前後 chunk を生成 context に低優先で追加する。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=NeighborOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_neighbor_window=1,
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert [citation.chunk_id for citation in response.citations] == [
+        "doc-1:1",
+        "doc-1:0",
+        "doc-1:2",
+    ]
+    assert response.diagnostics.retrieved_count == 1
+    assert response.diagnostics.reranked_count == 1
+    assert response.diagnostics.context_expanded_count == 2
+    assert "中心: 承認条件。" in llm.context
+    assert "前段: 申請条件。" in llm.context
+    assert "後段: 証憑要件。" in llm.context
+    assert response.citations[1].metadata["context_expanded"] is True
+    assert response.citations[1].metadata["context_anchor_chunk_id"] == "doc-1:1"
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["context_expanded_count"] == 2
+    assert audit_event["citation_count"] == 3
+    assert audit_event["document_ids"] == ["doc-1"]
+
+
+async def test_pipeline_expands_same_group_chunks_for_generation_context(
+    caplog: LogCaptureFixture,
+) -> None:
+    """chunk lineage がある場合は同じ親 group の sibling を context に追加する。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=GroupSiblingOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_group_expansion_enabled=True,
+            rag_context_group_max_chunks=2,
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert [citation.chunk_id for citation in response.citations] == [
+        "doc-1:1",
+        "doc-1:0",
+        "doc-1:2",
+    ]
+    assert response.diagnostics.retrieved_count == 1
+    assert response.diagnostics.reranked_count == 1
+    assert response.diagnostics.context_group_expanded_count == 2
+    assert response.diagnostics.context_expanded_count == 0
+    assert "表ヘッダー: 項目 / 条件。" in llm.context
+    assert "表行: 承認条件 / 120000 円以上。" in llm.context
+    assert "表注記: 証憑添付が必要。" in llm.context
+    assert response.citations[1].metadata["context_group_expanded"] is True
+    assert response.citations[1].metadata["context_anchor_chunk_id"] == "doc-1:1"
+    assert response.citations[1].metadata["context_group_id"] == "grp-table"
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["context_group_expanded_count"] == 2
+    assert audit_event["context_expanded_count"] == 0
+    assert audit_event["citation_count"] == 3
+    assert audit_event["document_ids"] == ["doc-1"]
+
+
+async def test_pipeline_diversifies_context_anchors_before_generation(
+    caplog: LogCaptureFixture,
+) -> None:
+    """context diversity 有効時は同質 chunk より異質 chunk を context 上位へ寄せる。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=ThreeResultGenAiClient(),
+        oracle=DiverseChunkOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_diversity_lambda=0.2,
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(SearchRequest(query="承認条件", top_k=3, rerank_top_n=3))
+
+    assert [citation.chunk_id for citation in response.citations] == [
+        "doc-1:0",
+        "doc-3:0",
+        "doc-2:0",
+    ]
+    assert response.diagnostics.retrieved_count == 3
+    assert response.diagnostics.reranked_count == 3
+    assert response.diagnostics.context_diversified_count == 2
+    assert response.citations[1].metadata["context_diversified"] is True
+    assert response.citations[1].metadata["context_original_rank"] == 3
+    assert response.citations[1].metadata["context_diversified_rank"] == 2
+    assert response.citations[2].metadata["context_diversified"] is True
+    assert response.citations[2].metadata["context_original_rank"] == 2
+    assert response.citations[2].metadata["context_diversified_rank"] == 3
+    assert llm.context.index("承認条件") < llm.context.index("監査ログ")
+    assert llm.context.index("監査ログ") < llm.context.index("類似した承認条件")
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["context_diversified_count"] == 2
+    assert audit_event["citation_count"] == 3
+
+
+async def test_pipeline_compresses_long_chunks_before_generation_context(
+    caplog: LogCaptureFixture,
+) -> None:
+    """context compression 有効時は query 関連 sentence だけを LLM context へ残す。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=LongChunkOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_compression_enabled=True,
+            rag_context_compression_max_sentences=2,
+            rag_context_compression_max_chars_per_chunk=120,
+            rag_context_window_chars=400,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(
+            SearchRequest(query="承認条件 120000", top_k=1, rerank_top_n=1)
+        )
+
+    assert response.diagnostics.context_compressed_count == 1
+    assert response.diagnostics.context_compression_saved_chars > 0
+    assert response.diagnostics.citation_count == 1
+    assert "承認条件は 120000 円以上" in llm.context
+    assert "120000 円未満" in llm.context
+    assert "無関係な監査メモ" not in llm.context
+    citation = response.citations[0]
+    assert citation.chunk_id == "doc-long:0"
+    assert citation.metadata["context_compressed"] is True
+    original_chars = citation.metadata["context_original_chars"]
+    compressed_chars = citation.metadata["context_compressed_chars"]
+    assert isinstance(original_chars, int)
+    assert isinstance(compressed_chars, int)
+    assert original_chars > compressed_chars
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["context_compressed_count"] == 1
+    assert audit_event["context_compression_saved_chars"] > 0
+    assert "無関係な監査メモ" not in str(audit_event)
+
+
+def test_dedupe_ranked_chunks_falls_back_to_normalized_text_hash() -> None:
+    """text_sha256 がない古い chunk でも正規化本文で重複を抑止する。"""
+    chunks = [
+        RetrievedChunk(
+            document_id="doc-1",
+            chunk_id="doc-1:0",
+            text="承認条件: 120000 円。",
+            score=0.9,
+        ),
+        RetrievedChunk(
+            document_id="doc-2",
+            chunk_id="doc-2:0",
+            text=" 承認条件:   120000 円。 ",
+            score=0.8,
+        ),
+    ]
+
+    unique, removed = _dedupe_ranked_chunks(chunks)
+
+    assert [chunk.chunk_id for chunk in unique] == ["doc-1:0"]
+    assert removed == 1
+
+
+async def test_pipeline_expands_retrieval_queries_without_changing_generation_prompt(
+    caplog: LogCaptureFixture,
+) -> None:
+    """query expansion は retrieval だけに使い、生成 prompt は元 query を維持する。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = CapturingPromptLlm()
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=True,
+            rag_query_expansion_max_variants=3,
+            rag_rrf_k=60,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(
+            SearchRequest(query="invoice storage", top_k=5, rerank_top_n=2)
+        )
+
+    assert genai.embedded_texts[0] == "invoice storage"
+    assert len(genai.embedded_texts) == 3
+    assert oracle.queries == genai.embedded_texts
+    assert genai.rerank_query == "invoice storage"
+    assert llm.prompt == "invoice storage"
+    assert response.diagnostics.query_variant_count == 3
+    assert response.citations[0].chunk_id == "doc-storage:0"
+    assert response.citations[0].metadata["query_variant_count"] == 3
+    assert response.citations[0].metadata["matched_query_variant_count"] == 2
+    assert "query_fusion_score" in response.citations[0].metadata
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["query_variant_count"] == 3
+    assert "請求書" not in str(audit_event)
+    assert "保管" not in str(audit_event)
+
+
+async def test_pipeline_can_disable_query_expansion() -> None:
+    """query expansion を無効化すると retrieval query は 1 つだけになる。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=CapturingPromptLlm(),
+        settings=Settings.model_construct(rag_query_expansion_enabled=False),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5))
+
+    assert genai.embedded_texts == ["invoice storage"]
+    assert oracle.queries == ["invoice storage"]
+    assert response.diagnostics.query_variant_count == 1
+
+
 async def test_pipeline_records_stage_metrics(monkeypatch: MonkeyPatch) -> None:
     """成功した検索は主要 stage の処理時間を記録する。"""
     observed: list[tuple[str, str, str, float]] = []
@@ -235,7 +523,7 @@ async def test_pipeline_records_stage_metrics(monkeypatch: MonkeyPatch) -> None:
         llm=GroundedLlm(),
     )
 
-    await pipeline.run(SearchRequest(query="請求金額"))
+    await pipeline.run(SearchRequest(query="承認条件"))
 
     assert [(stage, outcome) for _, stage, outcome, _ in observed] == [
         ("embedding", "success"),
@@ -265,7 +553,7 @@ async def test_pipeline_records_trace_spans_without_payload_text(
     )
 
     response = await pipeline.run(
-        SearchRequest(query="INV-SECRET の請求金額"),
+        SearchRequest(query="INV-SECRET の承認条件"),
         trace_id="trace-spans",
     )
 
@@ -278,7 +566,7 @@ async def test_pipeline_records_trace_spans_without_payload_text(
     ]
     assert {event["trace_id"] for event in observed} == {"trace-spans"}
     assert "INV-SECRET" not in str(observed)
-    assert "請求金額: 120000" not in str(observed)
+    assert "承認条件: 120000" not in str(observed)
     generation_attributes = observed[-1]["attributes"]
     assert isinstance(generation_attributes, dict)
     assert generation_attributes["context_chars"] > 0
@@ -299,7 +587,7 @@ async def test_pipeline_records_stage_error_metrics(monkeypatch: MonkeyPatch) ->
     )
 
     with pytest.raises(RuntimeError, match="rerank unavailable"):
-        await pipeline.run(SearchRequest(query="請求金額"))
+        await pipeline.run(SearchRequest(query="承認条件"))
 
     assert [(stage, outcome) for _, stage, outcome, _ in observed] == [
         ("embedding", "success"),
@@ -324,7 +612,7 @@ async def test_pipeline_records_error_trace_span(monkeypatch: MonkeyPatch) -> No
     )
 
     with pytest.raises(RuntimeError, match="rerank unavailable"):
-        await pipeline.run(SearchRequest(query="INV-SECRET の請求金額"), trace_id="trace-error")
+        await pipeline.run(SearchRequest(query="INV-SECRET の承認条件"), trace_id="trace-error")
 
     assert [(event["span_name"], event["outcome"]) for event in observed] == [
         ("embedding", "success"),
@@ -376,6 +664,31 @@ class StubGenAiClient(OciGenAiClient):
         return [(0, 0.99)]
 
 
+class CapturingExpansionGenAiClient(OciGenAiClient):
+    """query expansion の embedding/rerank 入力を記録する GenAI client。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedded_texts: list[str] = []
+        self.rerank_query = ""
+
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        input_type: str = "SEARCH_DOCUMENT",
+    ) -> list[list[float]]:
+        self.embedded_texts = texts
+        return [
+            [1.0 if index == dimension else 0.0 for dimension in range(1536)]
+            for index, _ in enumerate(texts)
+        ]
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        self.rerank_query = query
+        return [(index, 1.0 - (index * 0.01)) for index, _ in enumerate(documents[:top_n])]
+
+
 class TwoResultGenAiClient(OciGenAiClient):
     """2 件の embedding / rerank を返すテスト用 GenAI client。"""
 
@@ -389,6 +702,21 @@ class TwoResultGenAiClient(OciGenAiClient):
 
     async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
         return [(0, 0.99), (1, 0.98)][:top_n]
+
+
+class ThreeResultGenAiClient(OciGenAiClient):
+    """3 件の embedding / rerank を返すテスト用 GenAI client。"""
+
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        input_type: str = "SEARCH_DOCUMENT",
+    ) -> list[list[float]]:
+        return [[1.0] + [0.0] * 1535 for _ in texts]
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        return [(0, 1.0), (1, 0.99), (2, 0.98)][:top_n]
 
 
 class FailingRerankGenAiClient(OciGenAiClient):
@@ -428,11 +756,53 @@ class StubOracleClient(OracleClient):
             RetrievedChunk(
                 document_id="doc-1",
                 chunk_id="doc-1:0",
-                text="請求金額: 120000 円。クラウド利用料。",
+                text="承認条件: 120000 円。クラウド利用料。",
                 score=0.9,
-                file_name="invoice.txt",
+                file_name="policy.txt",
             )
         ]
+
+
+class QueryVariantOracleClient(OracleClient):
+    """query variant ごとに異なる検索候補を返す Oracle client。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.queries: list[str] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del embedding, mode, filters
+        self.queries.append(query)
+        if query == "invoice storage":
+            return [
+                RetrievedChunk(
+                    document_id="doc-english",
+                    chunk_id="doc-english:0",
+                    text="invoice storage overview",
+                    score=0.8,
+                    file_name="english.txt",
+                    metadata={"chunk_index": 0},
+                )
+            ][:top_k]
+        if "請求書" in query and "保管" in query:
+            return [
+                RetrievedChunk(
+                    document_id="doc-storage",
+                    chunk_id="doc-storage:0",
+                    text="請求書原本は Object Storage に保管します。",
+                    score=0.9,
+                    file_name="storage.txt",
+                    metadata={"chunk_index": 0},
+                )
+            ][:top_k]
+        return []
 
 
 class SensitiveOracleClient(OracleClient):
@@ -452,9 +822,40 @@ class SensitiveOracleClient(OracleClient):
                 chunk_id="doc-sensitive:0",
                 text="振込先の口座番号: 1234567。クラウド利用料。",
                 score=0.9,
-                file_name="invoice-sensitive.txt",
+                file_name="policy-sensitive.txt",
             )
         ]
+
+
+class LongChunkOracleClient(OracleClient):
+    """context compression のために長い citation を返す Oracle client。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        irrelevant = "無関係な監査メモです。" * 12
+        text = (
+            f"{irrelevant}"
+            "承認条件は 120000 円以上の場合に部門長の承認が必要です。"
+            "120000 円未満はチームリード承認です。"
+            f"{irrelevant}"
+        )
+        return [
+            RetrievedChunk(
+                document_id="doc-long",
+                chunk_id="doc-long:0",
+                text=text,
+                score=0.9,
+                file_name="long-policy.txt",
+                metadata={"chunk_index": 0},
+            )
+        ][:top_k]
 
 
 class TwoChunkOracleClient(OracleClient):
@@ -472,16 +873,223 @@ class TwoChunkOracleClient(OracleClient):
             RetrievedChunk(
                 document_id="doc-1",
                 chunk_id="doc-1:0",
-                text="請求金額: 120000 円。",
+                text="承認条件: 120000 円。",
                 score=0.9,
-                file_name="invoice-a.txt",
+                file_name="policy-a.txt",
             ),
             RetrievedChunk(
                 document_id="doc-2",
                 chunk_id="doc-2:0",
                 text="支払期限: 2026/07/31。振込先: テスト銀行。",
                 score=0.8,
-                file_name="invoice-b.txt",
+                file_name="policy-b.txt",
+            ),
+        ][:top_k]
+
+
+class DuplicateChunkOracleClient(OracleClient):
+    """重複本文 chunk を返す Oracle client。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="承認条件: 120000 円。",
+                score=0.9,
+                file_name="policy-a.txt",
+                metadata={"chunk_index": 0, "text_sha256": "a" * 64},
+            ),
+            RetrievedChunk(
+                document_id="doc-2",
+                chunk_id="doc-2:0",
+                text="承認条件: 120000 円。",
+                score=0.8,
+                file_name="policy-b.txt",
+                metadata={"chunk_index": 0, "text_sha256": "a" * 64},
+            ),
+        ][:top_k]
+
+
+class NeighborOracleClient(OracleClient):
+    """中心 chunk と隣接 context を返す Oracle client。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:1",
+                text="中心: 承認条件。",
+                score=0.9,
+                file_name="policy.txt",
+                metadata={"chunk_index": 1},
+            )
+        ][:top_k]
+
+    async def context_neighbors(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        window: int,
+    ) -> list[RetrievedChunk]:
+        assert window == 1
+        assert [chunk.chunk_id for chunk in anchors] == ["doc-1:1"]
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="前段: 申請条件。",
+                score=anchors[0].score,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 0,
+                    "context_expanded": True,
+                    "context_anchor_chunk_id": "doc-1:1",
+                    "context_neighbor_distance": -1,
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:2",
+                text="後段: 証憑要件。",
+                score=anchors[0].score,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 2,
+                    "context_expanded": True,
+                    "context_anchor_chunk_id": "doc-1:1",
+                    "context_neighbor_distance": 1,
+                },
+            ),
+        ]
+
+
+class GroupSiblingOracleClient(OracleClient):
+    """同一 chunk group の sibling context を返す Oracle client。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:1",
+                text="表行: 承認条件 / 120000 円以上。",
+                score=0.9,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 1,
+                    "content_kind": "table",
+                    "chunk_group_id": "grp-table",
+                    "chunk_group_kind": "table",
+                    "chunk_part_index": 1,
+                    "chunk_part_count": 3,
+                },
+            )
+        ][:top_k]
+
+    async def context_group_siblings(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+    ) -> list[RetrievedChunk]:
+        assert max_chunks_per_group == 2
+        assert [chunk.chunk_id for chunk in anchors] == ["doc-1:1"]
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="表ヘッダー: 項目 / 条件。",
+                score=anchors[0].score,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 0,
+                    "content_kind": "table",
+                    "chunk_group_id": "grp-table",
+                    "context_group_expanded": True,
+                    "context_anchor_chunk_id": "doc-1:1",
+                    "context_group_id": "grp-table",
+                    "context_group_distance": -1,
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:2",
+                text="表注記: 証憑添付が必要。",
+                score=anchors[0].score,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 2,
+                    "content_kind": "table",
+                    "chunk_group_id": "grp-table",
+                    "context_group_expanded": True,
+                    "context_anchor_chunk_id": "doc-1:1",
+                    "context_group_id": "grp-table",
+                    "context_group_distance": 1,
+                },
+            ),
+        ]
+
+
+class DiverseChunkOracleClient(OracleClient):
+    """context diversity のために同質 chunk と異質 chunk を返す Oracle client。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="承認条件 クラウド利用料 申請 承認 支払。",
+                score=0.93,
+                file_name="policy-a.txt",
+                metadata={"chunk_index": 0},
+            ),
+            RetrievedChunk(
+                document_id="doc-2",
+                chunk_id="doc-2:0",
+                text="類似した承認条件 クラウド利用料 申請 承認 支払。",
+                score=0.92,
+                file_name="policy-b.txt",
+                metadata={"chunk_index": 0},
+            ),
+            RetrievedChunk(
+                document_id="doc-3",
+                chunk_id="doc-3:0",
+                text="監査ログ トレース メトリクス 観測性。",
+                score=0.91,
+                file_name="observability.txt",
+                metadata={"chunk_index": 0},
             ),
         ][:top_k]
 
@@ -497,7 +1105,7 @@ class GroundedLlm(OciEnterpriseAiClient):
     """citation に基づく回答を返すテスト用 LLM。"""
 
     async def generate(self, prompt: str, context: str) -> str:
-        return "請求金額は 120000 円です。"
+        return "承認条件は 120000 円です。"
 
 
 class CapturingLlm(OciEnterpriseAiClient):
@@ -509,4 +1117,18 @@ class CapturingLlm(OciEnterpriseAiClient):
 
     async def generate(self, prompt: str, context: str) -> str:
         self.context = context
-        return "請求金額は 120000 円です。"
+        return "承認条件は 120000 円です。"
+
+
+class CapturingPromptLlm(OciEnterpriseAiClient):
+    """生成 prompt と context を記録する LLM。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompt = ""
+        self.context = ""
+
+    async def generate(self, prompt: str, context: str) -> str:
+        self.prompt = prompt
+        self.context = context
+        return "請求書原本は Object Storage に保管します。"

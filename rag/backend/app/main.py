@@ -16,10 +16,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
 from app.api.router import api_router
+from app.auth import attach_refreshed_auth_cookie, prepare_auth_request
 from app.clients.oracle import close_oracle_pool
 from app.config import get_settings
 from app.logging_config import configure_logging
-from app.rag.observability import record_http_request
+from app.rag.observability import (
+    close_trace_exporter,
+    configure_trace_exporter,
+    record_http_request,
+)
 from app.rag.request_context import (
     audit_request_context_from_headers,
     reset_audit_request_context,
@@ -37,9 +42,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """起動・終了時の初期化/後始末。"""
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure_trace_exporter(settings)
     try:
         yield
     finally:
+        close_trace_exporter()
         close_oracle_pool()
 
 
@@ -101,7 +108,7 @@ def create_app() -> FastAPI:
     """FastAPI アプリを生成する。"""
     settings = get_settings()
     app = FastAPI(
-        title="お任せ！RAG - production-ready RAG API",
+        title="Production Ready RAG API",
         version=settings.app_version,
         lifespan=lifespan,
     )
@@ -129,7 +136,9 @@ def create_app() -> FastAPI:
         )
         context_token = set_audit_request_context(context)
         try:
-            response = await call_next(request)
+            response = prepare_auth_request(request, settings)
+            if response is None:
+                response = await call_next(request)
         except Exception:
             record_http_request(
                 method=request.method,
@@ -139,6 +148,7 @@ def create_app() -> FastAPI:
             )
             raise
         else:
+            attach_refreshed_auth_cookie(response, request, settings)
             response.headers["X-Request-ID"] = request_id
             record_http_request(
                 method=request.method,

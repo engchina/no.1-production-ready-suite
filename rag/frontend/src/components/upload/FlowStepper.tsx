@@ -4,15 +4,15 @@ import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import type { FileStatus } from "@/lib/api";
 
-type StepStatus = "UPLOADED" | "ANALYZED" | "REGISTERED";
-const ORDER: StepStatus[] = ["UPLOADED", "ANALYZED", "REGISTERED"];
+type StepStatus = "UPLOADED" | "INGESTING" | "INDEXED";
+const ORDER: StepStatus[] = ["UPLOADED", "INGESTING", "INDEXED"];
 const STEP_LABEL: Record<StepStatus, string> = {
   UPLOADED: "アップロード",
-  ANALYZED: "AI 分析",
-  REGISTERED: "本登録",
+  INGESTING: "取込中",
+  INDEXED: "索引済み",
 };
 
-/** ドキュメントの処理段階を可視化する（UPLOADED→ANALYZED→REGISTERED）。 */
+/** ドキュメントの処理段階を可視化する（UPLOADED→INGESTING→INDEXED）。 */
 export function FlowStepper({ status }: { status: FileStatus }) {
   if (status === "ERROR") {
     return (
@@ -26,14 +26,13 @@ export function FlowStepper({ status }: { status: FileStatus }) {
     );
   }
 
-  const analyzing = status === "ANALYZING";
-  const currentIndex = analyzing ? 0 : ORDER.indexOf(status as StepStatus);
+  const currentIndex = ORDER.indexOf(status as StepStatus);
 
   return (
     <ol className="flex flex-wrap items-center gap-y-2">
       {ORDER.map((step, i) => {
-        const done = i < currentIndex || status === "REGISTERED";
-        const active = i === currentIndex || (analyzing && step === "UPLOADED");
+        const done = i < currentIndex || status === "INDEXED";
+        const active = i === currentIndex;
         return (
           <li key={step} className="flex items-center">
             <span className="flex items-center gap-2">
@@ -56,7 +55,6 @@ export function FlowStepper({ status }: { status: FileStatus }) {
                 )}
               >
                 {STEP_LABEL[step]}
-                {analyzing && step === "UPLOADED" ? ` ・ ${t("action.analyzing")}` : ""}
               </span>
             </span>
             {i < ORDER.length - 1 ? (

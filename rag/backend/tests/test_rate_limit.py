@@ -16,8 +16,8 @@ def test_search_rate_limit_returns_429_with_retry_headers(monkeypatch: MonkeyPat
     monkeypatch.setattr(settings, "rate_limit_search_requests", 1)
     monkeypatch.setattr(settings, "rate_limit_window_seconds", 60.0)
 
-    first = client.post("/api/search", json={"query": "存在しない請求書"})
-    second = client.post("/api/search", json={"query": "存在しない請求書"})
+    first = client.post("/api/search", json={"query": "存在しない社内規程"})
+    second = client.post("/api/search", json={"query": "存在しない社内規程"})
 
     assert first.status_code == 200
     assert second.status_code == 429
@@ -34,17 +34,17 @@ def test_search_rate_limit_is_scoped_by_tenant_hash(monkeypatch: MonkeyPatch) ->
 
     tenant_a = client.post(
         "/api/search",
-        json={"query": "存在しない請求書"},
+        json={"query": "存在しない社内規程"},
         headers={"X-Tenant-ID": "tenant-a"},
     )
     tenant_b = client.post(
         "/api/search",
-        json={"query": "存在しない請求書"},
+        json={"query": "存在しない社内規程"},
         headers={"X-Tenant-ID": "tenant-b"},
     )
     tenant_a_again = client.post(
         "/api/search",
-        json={"query": "存在しない請求書"},
+        json={"query": "存在しない社内規程"},
         headers={"X-Tenant-ID": "tenant-a"},
     )
 
@@ -60,8 +60,8 @@ def test_rate_limit_can_be_disabled(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "rate_limit_enabled", False)
     monkeypatch.setattr(settings, "rate_limit_search_requests", 1)
 
-    first = client.post("/api/search", json={"query": "存在しない請求書"})
-    second = client.post("/api/search", json={"query": "存在しない請求書"})
+    first = client.post("/api/search", json={"query": "存在しない社内規程"})
+    second = client.post("/api/search", json={"query": "存在しない社内規程"})
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -75,7 +75,7 @@ def test_evaluation_rate_limit_protects_golden_set_runs(monkeypatch: MonkeyPatch
         "cases": [
             {
                 "id": "case-1",
-                "query": "存在しない請求書",
+                "query": "存在しない社内規程",
                 "relevant_document_ids": [],
             }
         ],
@@ -98,26 +98,12 @@ def test_upload_rate_limit_blocks_second_file(monkeypatch: MonkeyPatch) -> None:
 
     first = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice-a.txt", "請求書A".encode(), "text/plain")},
+        files={"file": ("policy-a.txt", "社内規程A".encode(), "text/plain")},
     )
     second = client.post(
         "/api/documents/upload",
-        files={"file": ("invoice-b.txt", "請求書B".encode(), "text/plain")},
+        files={"file": ("policy-b.txt", "社内規程B".encode(), "text/plain")},
     )
-
-    assert first.status_code == 200
-    assert second.status_code == 429
-    assert second.json()["error_messages"] == [RATE_LIMIT_MESSAGE]
-
-
-def test_table_query_rate_limit_protects_select_ai(monkeypatch: MonkeyPatch) -> None:
-    """Select AI 代替の自然言語 table query も rate limit 対象にする。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rate_limit_table_queries", 1)
-    payload = {"query": "登録済み伝票を表示", "limit": 5}
-
-    first = client.post("/api/table-browser/query", json=payload)
-    second = client.post("/api/table-browser/query", json=payload)
 
     assert first.status_code == 200
     assert second.status_code == 429

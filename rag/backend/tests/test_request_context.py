@@ -61,6 +61,38 @@ def test_audit_context_ignores_invalid_or_oversized_header_values() -> None:
     assert context.user_id_hash is None
 
 
+def test_audit_context_parses_access_scope_headers_without_repr_leakage() -> None:
+    """アクセス範囲 header は request 内 filter として保持し、repr へ raw 値を出さない。"""
+    context = audit_request_context_from_headers(
+        {
+            "x-rag-allowed-document-ids": "doc-1, doc-2, bad id",
+            "x-rag-allowed-category-names": "契約書, FAQ",
+        },
+        request_id="request-1",
+        settings=Settings(),
+    )
+
+    assert context.allowed_document_ids == frozenset({"doc-1", "doc-2"})
+    assert context.allowed_category_names == frozenset({"契約書".casefold(), "faq"})
+    assert "doc-1" not in repr(context)
+    assert "契約書" not in repr(context)
+
+
+def test_audit_context_empty_access_scope_header_means_deny_all_scope() -> None:
+    """アクセス範囲 header が存在するが有効値なしなら空 scope として扱う。"""
+    context = audit_request_context_from_headers(
+        {
+            "x-rag-allowed-document-ids": "bad id, \n",
+            "x-rag-allowed-category-names": "  ",
+        },
+        request_id="request-1",
+        settings=Settings(),
+    )
+
+    assert context.allowed_document_ids == frozenset()
+    assert context.allowed_category_names == frozenset()
+
+
 def test_audit_request_context_is_scoped_to_current_context() -> None:
     """contextvars の設定・復元ができる。"""
     assert current_audit_request_context() == AuditRequestContext()

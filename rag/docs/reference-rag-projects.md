@@ -1,9 +1,9 @@
 # 参考 RAG プロジェクト一覧
 
-> 本ドキュメントは **no.1-production-ready-rag が参照する外部 OSS / 研究プロジェクトのカタログ** です。
+> 本ドキュメントは **Production Ready RAG が参照する外部 OSS / 研究プロジェクトのカタログ** です。
 > 目的は「各プロジェクトの優れた点を抽出し、本プロジェクトに統合する」こと。
 > 技術選定の正本は [AGENTS.md](../AGENTS.md)。本一覧はあくまで **着想・ベストプラクティスの調査源**であり、
-> 採用する場合も本プロジェクトの確定スタック(OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai / Next.js)に
+> 採用する場合も本プロジェクトの確定スタック(OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai / Vite + React Router)に
 > 合わせて再実装する。外部ベクトル DB・別 LLM プロバイダをそのまま導入しないこと(逸脱時は AGENTS.md §8 に従い要確認)。
 
 最終更新: 2026-06-14
@@ -99,7 +99,7 @@
 
 - **Flowise**: ローコード生態系は強いが、深刻な脆弱性が悪用された報道あり。公開デプロイ時は**必ず最新化し隔離**する。
 - **Dify / Open WebUI / FastGPT** などソース利用可能プロジェクトは、**ライセンス/ブランド/商用制限**を企業商用前に法務確認する。
-- 本プロジェクトへ取り込む際は、確定スタック(OCI Enterprise AI / OCI Generative AI Cohere Embed v4・Rerank v4 fast / Oracle 26ai AI Vector Search / Next.js)に**必ず再マッピング**する。外部ベクトル DB・別 LLM プロバイダの直接導入は AGENTS.md §3・§8 に反するため不可(逸脱時は理由を添えて要確認)。
+- 本プロジェクトへ取り込む際は、確定スタック(OCI Enterprise AI / OCI Generative AI Cohere Embed v4・Rerank v4 fast / Oracle 26ai AI Vector Search / Vite + React Router)に**必ず再マッピング**する。外部ベクトル DB・別 LLM プロバイダの直接導入は AGENTS.md §3・§8 に反するため不可(逸脱時は理由を添えて要確認)。
 
 ## 8. リンク集
 

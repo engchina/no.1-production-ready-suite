@@ -1,4 +1,4 @@
-"""ドキュメント（伝票）API。アップロード・一覧・分析・登録。"""
+"""ドキュメント API。アップロード・一覧・取込(抽出→索引)。"""
 
 import hashlib
 import mimetypes
@@ -20,16 +20,13 @@ from app.schemas.document import (
     DocumentDetail,
     DocumentStats,
     DocumentSummary,
-    ExtractedFieldsUpdate,
     FileStatus,
     UploadResult,
 )
-from app.schemas.extraction import StructuredExtraction
 
 router = APIRouter()
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
-MISSING_INDEX_CHUNKS_MESSAGE = "索引済みチャンクがないため本登録できません。再分析してください。"
 
 
 @router.post("/upload", response_model=ApiResponse[UploadResult])
@@ -37,7 +34,7 @@ async def upload_document(
     http_request: Request,
     file: Annotated[UploadFile, File(...)],
 ) -> ApiResponse[UploadResult]:
-    """伝票ファイルをアップロードし、Object Storage へ保管する。"""
+    """ドキュメントファイルをアップロードし、Object Storage へ保管する。"""
     enforce_rate_limit("upload", http_request)
     settings = get_settings()
     content_type = _normalized_content_type(file.content_type)
@@ -89,7 +86,7 @@ async def list_documents(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[DocumentSummary]]:
-    """登録対象ドキュメントの一覧を返す。"""
+    """取込対象ドキュメントの一覧を返す。"""
     oracle = OracleClient()
     documents = await oracle.list_documents(status=status, query=q, limit=limit, offset=offset)
     total = await oracle.count_documents(status=status, query=q)
@@ -112,30 +109,28 @@ async def document_stats() -> ApiResponse[DocumentStats]:
 
 @router.get("/{document_id}", response_model=ApiResponse[DocumentDetail])
 async def get_document(document_id: str) -> ApiResponse[DocumentDetail]:
-    """ドキュメント詳細（VLM 抽出結果含む）を返す。"""
+    """ドキュメント詳細（抽出本文含む）を返す。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return ApiResponse(data=detail)
 
 
-@router.post("/{document_id}/analyze", response_model=ApiResponse[DocumentDetail])
-async def analyze_document(
+@router.post("/{document_id}/ingest", response_model=ApiResponse[DocumentDetail])
+async def ingest_document(
     http_request: Request,
     document_id: str,
     force: bool = Query(default=False),
 ) -> ApiResponse[DocumentDetail]:
-    """OCI Enterprise AI の VLM で OCR・構造化抽出を行う。"""
-    enforce_rate_limit("analyze", http_request)
+    """OCI Enterprise AI の VLM で OCR・本文抽出し、チャンク→埋め込み→索引まで行う。"""
+    enforce_rate_limit("ingest", http_request)
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status == FileStatus.ANALYZING:
-        raise HTTPException(status_code=409, detail="このドキュメントは現在分析中です。")
-    if detail.status == FileStatus.REGISTERED and force:
-        raise HTTPException(status_code=409, detail="本登録済みドキュメントは再分析できません。")
-    if detail.status in (FileStatus.ANALYZED, FileStatus.REGISTERED) and not force:
+    if detail.status == FileStatus.INGESTING:
+        raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
+    if detail.status == FileStatus.INDEXED and not force:
         return ApiResponse(data=detail)
     try:
         data = await ObjectStorageClient().get(detail.object_storage_path)
@@ -156,14 +151,15 @@ async def analyze_document(
 
     pipeline = IngestionPipeline(oracle=oracle)
     try:
-        analyzed = await pipeline.ingest(
+        indexed = await pipeline.ingest(
             document_id=document_id,
             image_bytes=data,
-            prompt="請求書・伝票の OCR と構造化抽出を日本語で行ってください。",
+            prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
+            content_type=detail.content_type or "application/octet-stream",
         )
     except IngestionUserError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ApiResponse(data=analyzed)
+    return ApiResponse(data=indexed)
 
 
 @router.get("/{document_id}/content")
@@ -180,10 +176,9 @@ async def document_content(document_id: str) -> Response:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="原本ファイルの参照パスが不正です。") from exc
 
-    media_type, _ = mimetypes.guess_type(detail.file_name)
     return Response(
         content=data,
-        media_type=media_type or "application/octet-stream",
+        media_type=_document_media_type(detail),
         headers={
             # 非 ASCII ファイル名は RFC 5987 でエンコードして inline 表示する
             "Content-Disposition": f"inline; filename*=UTF-8''{quote(detail.file_name)}",
@@ -192,50 +187,6 @@ async def document_content(document_id: str) -> Response:
             "Cache-Control": "private, max-age=60",
         },
     )
-
-
-@router.patch("/{document_id}/fields", response_model=ApiResponse[DocumentDetail])
-async def update_document_fields(
-    document_id: str,
-    payload: ExtractedFieldsUpdate,
-) -> ApiResponse[DocumentDetail]:
-    """分析済みドキュメントの抽出フィールドを修正して保存する。
-
-    検索索引（chunk/vector）は更新しない。再索引が必要なら再分析を行う。
-    """
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status != FileStatus.ANALYZED:
-        raise HTTPException(status_code=409, detail="分析済みのドキュメントのみ編集できます。")
-
-    base = (
-        StructuredExtraction.model_validate(detail.extracted_fields)
-        if detail.extracted_fields
-        else StructuredExtraction()
-    )
-    update: dict[str, object] = {"fields": payload.fields}
-    if payload.raw_text is not None:
-        update["raw_text"] = payload.raw_text
-    extraction = base.model_copy(update=update)
-    updated = await oracle.save_extraction(document_id, extraction)
-    return ApiResponse(data=updated)
-
-
-@router.post("/{document_id}/register", response_model=ApiResponse[DocumentDetail])
-async def register_document(document_id: str) -> ApiResponse[DocumentDetail]:
-    """抽出結果を確定し本登録する。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status not in (FileStatus.ANALYZED, FileStatus.REGISTERED):
-        raise HTTPException(status_code=409, detail="分析済みのドキュメントのみ登録できます。")
-    if await oracle.count_document_chunks(document_id) == 0:
-        raise HTTPException(status_code=409, detail=MISSING_INDEX_CHUNKS_MESSAGE)
-    registered = await oracle.update_document_status(document_id, FileStatus.REGISTERED)
-    return ApiResponse(data=registered)
 
 
 async def _read_upload_file(file: UploadFile, max_bytes: int) -> bytes:
@@ -281,3 +232,11 @@ def _source_integrity_error(data: bytes, detail: DocumentDetail) -> str | None:
     if detail.content_sha256 is not None and _sha256_hex(data) != detail.content_sha256:
         return SOURCE_HASH_MISMATCH_MESSAGE
     return None
+
+
+def _document_media_type(detail: DocumentDetail) -> str:
+    """原本配信用 MIME type は保存済み metadata を優先する。"""
+    if detail.content_type:
+        return _normalized_content_type(detail.content_type)
+    media_type, _ = mimetypes.guess_type(detail.file_name)
+    return media_type or "application/octet-stream"

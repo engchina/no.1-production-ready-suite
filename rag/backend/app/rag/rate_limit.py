@@ -15,7 +15,7 @@ from app.config import Settings, get_settings
 from app.rag.observability import record_rate_limit_decision
 from app.rag.request_context import current_audit_request_context
 
-RateLimitScope = Literal["search", "evaluation", "upload", "analyze", "table_query"]
+RateLimitScope = Literal["search", "evaluation", "upload", "ingest"]
 
 RATE_LIMIT_MESSAGE = "リクエスト数が上限を超えました。しばらく待ってから再度お試しください。"
 
@@ -145,10 +145,8 @@ def _limit_for_scope(scope: RateLimitScope, settings: Settings) -> int:
             return settings.rate_limit_evaluation_runs
         case "upload":
             return settings.rate_limit_uploads
-        case "analyze":
-            return settings.rate_limit_analyze_requests
-        case "table_query":
-            return settings.rate_limit_table_queries
+        case "ingest":
+            return settings.rate_limit_ingest_requests
 
 
 def _subject_fingerprint(request: Request, settings: Settings) -> str:

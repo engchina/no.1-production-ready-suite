@@ -37,6 +37,14 @@ class ObjectStorageSdkClientProtocol(Protocol):
     ) -> Any:
         """OCI Object Storage get_object を呼び出す。"""
 
+    def delete_object(
+        self,
+        namespace_name: str,
+        bucket_name: str,
+        object_name: str,
+    ) -> Any:
+        """OCI Object Storage delete_object を呼び出す。"""
+
 
 class ObjectStorageClient:
     """OCI Object Storage への保存・取得。"""
@@ -54,8 +62,36 @@ class ObjectStorageClient:
     async def put(self, key: str, data: bytes, content_type: str) -> str:
         """オブジェクトを保存し、参照パスを返す。"""
         safe_key = _local_storage_key(key)
-        if self._settings.ai_service_adapter == "oci":
+        if self._settings.upload_storage_backend == "oci":
             return await self._put_to_oci(safe_key, data, content_type)
+        return self._put_to_local(safe_key, data)
+
+    async def get(self, key: str) -> bytes:
+        """オブジェクトを取得する。"""
+        if key.strip().startswith("oci://"):
+            if self._has_oci_location() or self._settings.upload_storage_backend == "oci":
+                return await self._get_from_oci(key)
+            return self._get_from_local(key)
+        if key.strip().startswith("local://"):
+            return self._get_from_local(key)
+        if self._settings.upload_storage_backend == "oci":
+            return await self._get_from_oci(key)
+        return self._get_from_local(key)
+
+    async def delete(self, key: str) -> bool:
+        """オブジェクトを削除する。存在した場合は True を返す。"""
+        if key.strip().startswith("oci://"):
+            if self._has_oci_location() or self._settings.upload_storage_backend == "oci":
+                return await self._delete_from_oci(key)
+            return self._delete_from_local(key)
+        if key.strip().startswith("local://"):
+            return self._delete_from_local(key)
+        if self._settings.upload_storage_backend == "oci":
+            return await self._delete_from_oci(key)
+        return self._delete_from_local(key)
+
+    def _put_to_local(self, safe_key: str, data: bytes) -> str:
+        """ローカル保存先へ保存する。"""
         root = Path(self._settings.local_storage_dir).expanduser().resolve()
         path = (root / "objects" / safe_key).resolve()
         if not path.is_relative_to(root):
@@ -64,16 +100,25 @@ class ObjectStorageClient:
         _atomic_write(path, data)
         return f"local://{safe_key}"
 
-    async def get(self, key: str) -> bytes:
-        """オブジェクトを取得する。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._get_from_oci(key)
+    def _get_from_local(self, key: str) -> bytes:
+        """ローカル保存先から取得する。"""
         safe_key = _local_object_key(key)
         root = Path(self._settings.local_storage_dir).expanduser().resolve()
         path = (root / "objects" / safe_key).resolve()
         if not path.is_relative_to(root):
             raise ValueError("取得キーが不正です。")
         return path.read_bytes()
+
+    def _delete_from_local(self, key: str) -> bool:
+        """ローカル保存先から削除する。"""
+        safe_key = _local_object_key(key)
+        root = Path(self._settings.local_storage_dir).expanduser().resolve()
+        path = (root / "objects" / safe_key).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("削除キーが不正です。")
+        existed = path.exists()
+        path.unlink(missing_ok=True)
+        return existed
 
     async def _put_to_oci(self, key: str, data: bytes, content_type: str) -> str:
         """OCI Object Storage へ保存する。"""
@@ -98,6 +143,15 @@ class ObjectStorageClient:
         )
         return _response_body_to_bytes(response)
 
+    async def _delete_from_oci(self, key: str) -> bool:
+        """OCI Object Storage から削除する。"""
+        namespace, bucket = self._require_oci_location()
+        object_key = _oci_object_key(key, namespace=namespace, bucket=bucket)
+        await self._sdk_call_runner(
+            lambda: self._client().delete_object(namespace, bucket, object_key)
+        )
+        return True
+
     def _client(self) -> ObjectStorageSdkClientProtocol:
         """OCI Object Storage client を遅延初期化する。"""
         if self._storage_client is not None:
@@ -109,7 +163,10 @@ class ObjectStorageClient:
             str(Path(self._settings.oci_config_file).expanduser()),
             self._settings.oci_config_profile,
         )
-        if self._settings.oci_region.strip():
+        object_storage_region = self._settings.object_storage_region.strip()
+        if object_storage_region:
+            config["region"] = object_storage_region
+        elif self._settings.oci_region.strip():
             config["region"] = self._settings.oci_region
         self._storage_client = object_storage.ObjectStorageClient(config)
         return self._storage_client
@@ -122,6 +179,12 @@ class ObjectStorageClient:
             raise ValueError("OCI Object Storage の namespace / bucket が未設定です。")
         return namespace, bucket
 
+    def _has_oci_location(self) -> bool:
+        """既存 OCI URI を取得できる最小設定があるか確認する。"""
+        return bool(
+            self._settings.object_storage_namespace.strip()
+            and self._settings.object_storage_bucket.strip()
+        )
 
 def _safe_key(key: str, *, reject_relative_segments: bool = False) -> str:
     """Object Storage キーとして扱える文字だけに正規化する。"""

@@ -1,6 +1,6 @@
 # RAG アーキテクチャ
 
-このリポジトリは、請求書・伝票を対象にした production-ready RAG の参照実装です。クラウド接続なしで動く `AI_SERVICE_ADAPTER=local` を既定にし、同じ抽象境界を `AI_SERVICE_ADAPTER=oci` で OCI Enterprise AI / OCI Generative AI / Oracle 26ai へ差し替える構成です。
+このリポジトリは、data ingestion、chunking、indexing、hybrid retrieval、reranking、evaluation、observability、guardrails、deployment best practices をカバーする production-ready RAG reference implementation です。クラウド接続なしで動く `AI_SERVICE_ADAPTER=local` を既定にし、同じ抽象境界を `AI_SERVICE_ADAPTER=oci` で OCI Enterprise AI / OCI Generative AI / Oracle 26ai へ差し替える構成です。
 
 ## パイプライン
 
@@ -11,19 +11,28 @@
    - 原本 bytes から SHA-256 とサイズを計算し、`content_sha256` / `file_size_bytes` として文書行へ保存する。
    - 同一 `content_sha256` の既存文書がある場合は `duplicate_of_document_id` に最初の原本文書 ID を保存する。
 
-2. OCR・構造化抽出
-   - API: `POST /api/documents/{document_id}/analyze`
+2. OCR・本文抽出と索引
+   - API: `POST /api/documents/{document_id}/ingest`
    - LLM/VLM は **OCI Enterprise AI** のみを使う。OCI Generative AI chat API は使わない。
    - Object Storage から取得した原本 bytes は、保存済み `file_size_bytes` / `content_sha256` と照合してから OCR へ渡す。
+   - アップロード時の MIME type を VLM payload へ渡し、PDF / 画像 / text の real endpoint 解析条件を維持する。
    - サイズまたは SHA-256 が一致しない場合は `ERROR` にし、409 で拒否する。
-   - VLM 出力は `StructuredExtraction` で Pydantic 検証してから保存する。
-   - `UPLOADED` / `ERROR` を分析対象にし、`ANALYZING` は二重実行防止で 409 にする。
-   - `ANALYZED` / `REGISTERED` は force なしなら既存結果を返す。`force=true` は `ANALYZED` の再分析に限定し、`REGISTERED` の再分析は拒否する。
-   - 本登録は `ANALYZED` / `REGISTERED` かつ検索可能 chunk が 1 件以上ある場合だけ許可する。
+   - VLM 出力は `StructuredExtraction` で Pydantic 検証してから保存する。`raw_text` に加えて `elements`（`title` / `text` / `list` / `table` / `figure` / `header` / `footer` 等）を持ち、page number、bbox、section path、confidence、parser metadata を保存できる。
+   - `elements` が欠落した旧形式の抽出結果は `raw_text` から軽量推定し、`raw_text` が欠落した構造化結果は検索可能 element から本文を合成する。
+   - Docling / Marker / Unstructured / RAGFlow DeepDoc の「ページ・読み順・表・章節を要素として残す」ベストプラクティスは、外部 parser 依存を追加せず OCI Enterprise AI の structured output schema と local fallback に再実装する。
+   - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
+   - `python -m app.rag.enterprise_ai_probe` で LLM/VLM endpoint の request preview と実 response parsing を Oracle / Object Storage から切り離して確認できる。probe 出力には raw prompt、context、OCR 本文、回答本文を含めず、payload shape と parse summary だけを残す。
+   - `UPLOADED` / `ERROR` を取込対象にし、`INGESTING` は二重実行防止で 409 にする。
+   - `INDEXED` は force なしなら既存結果を返す。`force=true` は `INDEXED` の再取込に使える。
+   - 取込成功時点で `INDEXED` へ遷移し、検索可能 chunk を RAG 検索対象にする。帳票項目の人手修正や登録確認ゲートは設けない。
 
 3. チャンク分割
    - 実装: `backend/app/rag/chunking.py`
-   - 日本語の句点・疑問符・感嘆符を文境界として扱い、`RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` で制御する。
+   - 取込では `chunk_extraction()` を使い、`StructuredExtraction.elements` を優先して `structure_v1` chunk を作る。`chunk_text()` は旧 raw text fallback と単体テスト用に残す。
+   - Unstructured の `by_title` 風に章節境界を跨がず、RAGFlow / DeepDoc 風に表は他の本文と混ぜず独立 chunk にする。図・画像説明と図注は `content_kind=figure` として同一 chunk にまとめ、リストは連続性を保ち、通常本文だけ同一章節内で overlap を使う。
+   - `header` / `footer` は繰り返しノイズとして主索引から除外する。表が長すぎる場合は行境界優先で分割する。
+   - `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` で制御する。重複 chunk でも元章節・ページ・要素 metadata は維持する。
+   - chunk metadata には `chunk_profile`、`chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count`、`section_title`、`section_path`、`section_level`、`content_kind`、`page_start`、`page_end`、`element_kinds`、`element_ids`、`text_sha256`、`text_chars` を保存し、複雑文書 RAG で必要になる引用トレーサビリティと parent/child lineage を軽量に実現する。
    - `RAG_CHUNK_OVERLAP >= RAG_CHUNK_SIZE` は設定検証で拒否する。
    - `RAG_MAX_CHUNKS_PER_DOCUMENT` を超える文書は索引せず `ERROR` にして、異常な OCR 出力や誤設定による embedding コスト急増を防ぐ。
 
@@ -37,29 +46,48 @@
 5. 索引
    - 実装: `backend/app/clients/oracle.py`
    - 本番は Oracle 26ai AI Vector Search。ベクトル列は `VECTOR(1536, FLOAT32)`。
+   - スキーマ成果物は HNSW 索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)を作成する。
+   - OCI adapter のベクトル検索は `FETCH APPROX ... WITH TARGET ACCURACY` を使い、問い合わせ側の精度は `ORACLE_VECTOR_TARGET_ACCURACY` で調整する。
    - OCI adapter は python-oracledb の共有 pool を遅延初期化し、document/chunk の永続化、集計、状態更新を Oracle table に対して実行する。
    - chunk 保存と vector search の入口でも embedding 幅を再検証する。
-   - 検索対象の chunk は `ANALYZED` / `REGISTERED` の文書に限定する。
-   - `OracleClient.count_document_chunks()` で document 単位の索引存在確認を行い、索引のない文書を本登録させない。
-   - 文書が `ANALYZING` / `ERROR` へ移る場合は、その文書の既存 chunk/index 行と古い抽出フィールドを削除して古い根拠や OCR 結果を残さない。
+   - 検索対象の chunk は `INDEXED` の文書に限定する。
+   - `OracleClient.count_document_chunks()` で document 単位の索引済み chunk 数を確認できる。
+   - 文書が `INGESTING` / `ERROR` へ移る場合は、その文書の既存 chunk/index 行と古い抽出結果を削除して古い根拠や OCR 結果を残さない。
    - 外部ベクトル DB は使わない。
 
 6. ハイブリッド検索
    - API: `POST /api/search`
-   - `mode=hybrid|vector|keyword` を指定できる。hybrid は vector と keyword を Reciprocal Rank Fusion で統合する。
-   - `filters` は `document_id`、`file_name`、`category_name`、`status` に対応し、retrieval 前に適用する。
+   - `mode=hybrid|vector|keyword` を指定できる。hybrid は vector と keyword を Reciprocal Rank Fusion で統合し、RRF 定数は `RAG_RRF_K` で調整する。
+   - retrieval 前に deterministic な query expansion を行い、請求書/invoice、保管/storage、図/figure などの業務同義語を最大 `RAG_QUERY_EXPANSION_MAX_VARIANTS` 件の query variant として検索する。元 query は rerank / LLM 生成に維持し、audit / trace には query 本文や展開語ではなく `query_variant_count` だけを残す。
+   - 複数 query variant の検索結果は chunk id 単位で RRF 融合し、citation metadata には `query_fusion_score`、`query_variant_count`、`matched_query_variant_count` を低機密 metadata として付与する。
+   - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path` に対応し、retrieval 前に適用する。
+   - `content_kind` は `text` / `list` / `table` / `figure` の完全一致、`section_title` / `section_path` は部分一致で使い、複雑文書の章節、表、図・画像説明だけに検索候補を絞れるようにする。
    - keyword score は重複を除いた query token coverage として 0.0-1.0 に正規化する。
    - vector / keyword / hybrid の同点は document id、chunk index、chunk id で安定順にし、評価の再現性を保つ。
-   - citation metadata には `retrieval_mode`、vector/keyword の rank/score、RRF score を含め、hybrid 召回の由来を query 本文なしで追跡できるようにする。
+   - citation metadata には章節 metadata に加えて `retrieval_mode`、vector/keyword の rank/score、`rrf_k`、RRF score を含め、hybrid 召回の由来を query 本文なしで追跡できるようにする。
 
-7. リランク
+7. Oracle Select AI
+   - API: `POST /api/search/select-ai`
+   - `AI_SERVICE_ADAPTER=oci` と `ORACLE_SELECT_AI_PROFILE` が設定されている場合だけ有効化する。local adapter では 503 を返す。
+   - 既定 action は `showsql` で、自然言語から生成 SQL を返すだけにする。`runsql` は明示指定時のみ許可し、データ変更意図を含む query は guardrail で拒否する。
+   - `DBMS_CLOUD_AI.GENERATE` 呼び出しでは prompt、profile、action をすべて bind し、自然言語 query や profile 名を SQL 文字列へ連結しない。
+   - Vector/keyword RAG とは独立した構造化問い合わせ境界として扱い、Select AI profile 作成・権限・対象 schema 制御は Oracle 側の運用手順で管理する。
+
+8. リランク
    - 本番は OCI Generative AI Cohere Rerank v4 fast。
    - local は語彙一致スコアで deterministic に並べ替える。
    - `rerank_top_n` は `top_k` 以下に制限し、retrieval 候補数を超える無意味な rerank 指定を拒否する。
    - adapter の返却 index は候補範囲内・重複なし、返却件数は `top_n` 以内、score は finite number であることを検証し、不正な rerank 結果は fail fast する。
+   - rerank 後、context へ入れる前に `text_sha256` または正規化本文 hash で同一本文 chunk を除外し、重複根拠が context window を消費しないようにする。去重件数は diagnostics / audit の `deduplicated_count` にだけ残し、本文はログへ出さない。
+   - `RAG_CONTEXT_DIVERSITY_LAMBDA` が 1.0 未満の場合は、rerank anchor を MMR 風に重排し、同質 chunk だけが先に context window を消費しないようにする。既定は 1.0 で無効。重排件数は `context_diversified_count`、順位が変わった citation は `context_diversified` / `context_original_rank` / `context_diversified_rank` に残す。
+   - `RAG_CONTEXT_GROUP_EXPANSION_ENABLED=true` の場合は、rerank anchor の `chunk_group_id` と同じ sibling chunk を Oracle から取得し、分割された表・箇条書き・章節の前後文脈を生成 context へ低優先で追加する。既定は無効。anchor ごとの追加上限は `RAG_CONTEXT_GROUP_MAX_CHUNKS`、追加件数は `context_group_expanded_count`、citation metadata は `context_group_expanded` / `context_anchor_chunk_id` / `context_group_id` / `context_group_distance` で追跡する。
+   - `RAG_CONTEXT_NEIGHBOR_WINDOW` が 1 以上の場合は、rerank anchor の同一 document 前後 chunk を Oracle の `chunk_index` で取得し、生成 context へ低優先で追加する。既定は 0 で無効。追加件数は `context_expanded_count`、citation metadata は `context_expanded`、`context_anchor_chunk_id`、`context_neighbor_distance` で追跡する。
+   - `RAG_CONTEXT_COMPRESSION_ENABLED=true` の場合は、LLM context へ入れる前に query 関連 sentence / line を抽出して長い chunk を圧縮する。既定は無効。圧縮件数と節約文字数は `context_compressed_count` / `context_compression_saved_chars` に残し、citation metadata は `context_compressed`、`context_original_chars`、`context_compressed_chars` を持つ。query 本文や除外した本文は audit / trace に残さない。
 
-8. 回答生成
+9. 回答生成
    - LLM は **OCI Enterprise AI**。検索根拠だけを context として渡す。
+   - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
+   - LLM 契約は `python -m app.rag.enterprise_ai_probe --surface llm` で個別に検証できる。回答本文は probe artifact に保存せず、parse 成功と文字数だけを確認する。
    - retrieval / rerank 後に citation が 0 件の場合は LLM を呼ばず、固定の no-results 回答と warning を返す。
    - generation context は rerank 後の上位 chunk を `RAG_CONTEXT_WINDOW_CHARS` に収めて作り、レスポンスと監査ログの `citations` には実際に context へ入った chunk だけを含める。
    - 生成後に secret leakage をブロックし、回答と citation context の token / n-gram 重なりが少ない場合は `low_groundedness` warning を返す。
@@ -71,17 +99,8 @@
 ## ダッシュボード集計
 
 - API: `GET /api/dashboard/summary`
-- 文書件数、月次アップロード/登録件数、カテゴリ数、検索可能チャンク数、最近の活動、readiness check をまとめて返す。
+- 文書件数、月次アップロード/索引済み件数、検索可能チャンク数、最近の活動、readiness check をまとめて返す。
 - local adapter は in-memory document/chunk store から算出する。OCI adapter は Oracle document/chunk table の集計 SQL を使う。
-
-## データ参照 / Select AI
-
-- API: `POST /api/table-browser/query`
-- 本番は Oracle Select AI で自然言語を SQL に変換し、Oracle 内の登録済みデータを参照する。
-- `ORACLE_SELECT_AI_PROFILE` が設定されている場合は `DBMS_CLOUD_AI.GENERATE` に profile name を渡す。
-- local adapter は同じレスポンス契約（`columns` / `rows` / `row_count`）で、登録済みドキュメントを JSON-ready な行として返す。
-- `query` は空白だけの入力を拒否し、`limit` は 1〜200 行に制限する。
-- Select AI 境界は参照専用とし、prompt injection と SQL 変更意図（`drop/delete/update/insert` など）は 422 で拒否する。
 
 ## Oracle 26ai DDL 例
 
@@ -99,10 +118,10 @@ CREATE TABLE rag_documents (
     file_size_bytes          NUMBER(19),
     content_sha256           CHAR(64),
     duplicate_of_document_id VARCHAR2(64),
-    extracted_fields         JSON,
+    extraction               JSON,
     error_message            VARCHAR2(2000),
     uploaded_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    registered_at            TIMESTAMP WITH TIME ZONE
+    indexed_at               TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX rag_documents_content_sha256_idx
@@ -122,17 +141,23 @@ CREATE TABLE rag_chunks (
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 
-CREATE VECTOR INDEX rag_chunks_embedding_idx
+CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx
     ON rag_chunks (embedding)
-    ORGANIZATION NEIGHBOR PARTITIONS
-    DISTANCE COSINE;
+    ORGANIZATION INMEMORY NEIGHBOR GRAPH
+    DISTANCE COSINE
+    WITH TARGET ACCURACY 95
+    PARAMETERS (
+        TYPE HNSW,
+        NEIGHBORS 32,
+        EFCONSTRUCTION 500
+    );
 
 CREATE INDEX rag_chunks_text_idx
     ON rag_chunks (chunk_text)
     INDEXTYPE IS CTXSYS.CONTEXT;
 
 CREATE INDEX rag_chunks_tenant_document_idx
-    ON rag_chunks (tenant_id_hash, document_id);
+    ON rag_chunks (tenant_id_hash, document_id, chunk_index);
 
 CREATE TABLE rag_search_audit (
     audit_id              VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
@@ -148,10 +173,17 @@ CREATE TABLE rag_search_audit (
     filter_keys           JSON,
     top_k                 NUMBER(10),
     rerank_top_n          NUMBER(10),
+    query_variant_count   NUMBER(10) DEFAULT 1 NOT NULL,
     guardrail_codes       JSON,
     guardrail_severities  JSON,
     retrieved_count       NUMBER(10) DEFAULT 0 NOT NULL,
     reranked_count        NUMBER(10) DEFAULT 0 NOT NULL,
+    deduplicated_count    NUMBER(10) DEFAULT 0 NOT NULL,
+    context_diversified_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_group_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_compressed_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_compression_saved_chars NUMBER(10) DEFAULT 0 NOT NULL,
     citation_count        NUMBER(10) DEFAULT 0 NOT NULL,
     context_chars         NUMBER(10) DEFAULT 0 NOT NULL,
     context_window_chars  NUMBER(10),
@@ -177,7 +209,6 @@ CREATE TABLE rag_ingestion_audit (
     source_bytes           NUMBER(19) NOT NULL,
     document_type          VARCHAR2(128),
     extraction_confidence  NUMBER(6, 5),
-    field_count            NUMBER(10) DEFAULT 0 NOT NULL,
     chunk_count            NUMBER(10) DEFAULT 0 NOT NULL,
     vector_count           NUMBER(10) DEFAULT 0 NOT NULL,
     elapsed_ms             NUMBER(12, 3) NOT NULL,
@@ -187,13 +218,10 @@ CREATE TABLE rag_ingestion_audit (
 );
 ```
 
-document / chunk table には `tenant_id_hash` を持たせる。HTTP header `X-Tenant-ID` がある場合、raw tenant id は保存せず hash 化し、一覧・詳細・重複判定・Select AI 代替・retrieval を同一 tenant に閉じる。tenant header がない local/CI 実行では全体を参照できる。
+document / chunk table には `tenant_id_hash` を持たせる。HTTP header `X-Tenant-ID` がある場合、raw tenant id は保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる。tenant header がない local/CI 実行では全体を参照できる。認証済みの上位層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle 26ai vector search、Oracle Text keyword search の SQL predicate と local adapter filter の両方に適用する。scope header が存在するが有効値がない場合は deny-all とする。
 
-監査 table は query 本文、OCR 原文、tenant/user id の raw 値を保存しない。検索は `query_hash` と `query_chars`、retrieval/rerank/citation 件数、context 文字数、RAG 設定 fingerprint を保存する。tenant/user id は `tenant_id_hash` / `user_id_hash` として保存する。取込は `source_sha256` と `source_bytes` を保存し、trace id / request id でアプリログ・Langfuse・Prometheus と相関する。
+監査 table は query 本文、OCR 原文、tenant/user id の raw 値を保存しない。検索は `query_hash` と `query_chars`、retrieval/rerank/context diversity/context group expansion/context expansion/context compression/citation 件数、context 文字数、RAG 設定 fingerprint を保存する。tenant/user id は `tenant_id_hash` / `user_id_hash` として保存する。取込は `source_sha256` と `source_bytes` を保存し、trace id / request id でアプリログ・Langfuse・Prometheus と相関する。
 
-## 残る本番差し替え点
+## Trace export
 
-- `OciEnterpriseAiClient._extract_with_enterprise_ai`
-- `OciEnterpriseAiClient._generate_with_enterprise_ai`
-
-これらの公開メソッドは既に API / pipeline から利用されているため、実装を接続しても上位レイヤーの契約は維持される。
+`record_trace_span()` は構造化ログへ `rag_trace_span` を出し、`TRACE_EXPORT_HTTP_ENDPOINT` が設定されている場合は同じ脱機密化済み event を非同期 HTTP JSON で OpenTelemetry / Langfuse gateway へ送信する。export 対象は `trace_id`、stage 名、outcome、duration、低 cardinality attributes、`error_type` のみで、query 本文、context 本文、OCR 原文、prompt、例外 message は含めない。export queue が満杯または送信失敗しても RAG pipeline は継続し、失敗は `app.trace` logger の `rag_trace_export_*` イベントで確認する。

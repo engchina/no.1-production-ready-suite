@@ -58,6 +58,11 @@ SENSITIVE_IDENTIFIER_PATTERNS = [
         re.IGNORECASE,
     ),
 ]
+SQL_MUTATION_INTENT_PATTERN = re.compile(
+    r"\b(drop|delete|truncate|update|insert|merge)\b|"
+    r"(削除|消去|更新|挿入|追加|上書き)\s*(?:して|する|してください|を実行)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,17 @@ class GuardrailResult:
     def warnings(self) -> list[str]:
         """API レスポンス向けの警告メッセージ。"""
         return [finding.message for finding in self.findings]
+
+
+@dataclass(frozen=True)
+class GroundednessEvaluation:
+    """回答が citation context に支えられているかの軽量評価。"""
+
+    grounded: bool
+    score: float
+    overlap_count: int
+    answer_feature_count: int
+    high_signal_overlap: bool
 
 
 class GuardrailPolicy:
@@ -159,7 +175,7 @@ class GuardrailPolicy:
         if self._settings.guardrail_mask_sensitive_identifiers:
             sanitized, sensitive_findings = _mask_sensitive_identifiers(sanitized)
             findings.extend(sensitive_findings)
-        if context is not None and not _is_grounded_in_context(sanitized, context):
+        if context is not None and not evaluate_groundedness(sanitized, context).grounded:
             findings.append(
                 GuardrailFinding(
                     code="low_groundedness",
@@ -172,7 +188,7 @@ class GuardrailPolicy:
 
 def _looks_like_sql_mutation(text: str) -> bool:
     """SELECT 以外の SQL 変更文らしさを検出する。"""
-    return bool(re.search(r"\b(drop|delete|truncate|update|insert|merge)\b", text, re.I))
+    return bool(SQL_MUTATION_INTENT_PATTERN.search(text))
 
 
 def _mask_sensitive_identifiers(text: str) -> tuple[str, list[GuardrailFinding]]:
@@ -198,23 +214,45 @@ def _sensitive_replacement(match: re.Match[str]) -> str:
     return f"{label}{SENSITIVE_VALUE_MASK}"
 
 
-def _is_grounded_in_context(answer: str, context: str) -> bool:
+def evaluate_groundedness(answer: str, context: str) -> GroundednessEvaluation:
     """回答が引用 context と最低限重なっているかを軽量に評価する。"""
     if not answer.strip() or not context.strip():
-        return True
+        return GroundednessEvaluation(
+            grounded=True,
+            score=1.0,
+            overlap_count=0,
+            answer_feature_count=0,
+            high_signal_overlap=False,
+        )
 
     answer_features = _grounding_features(answer)
     context_features = _grounding_features(context)
     if not answer_features or not context_features:
-        return True
+        return GroundednessEvaluation(
+            grounded=True,
+            score=1.0,
+            overlap_count=0,
+            answer_feature_count=len(answer_features),
+            high_signal_overlap=False,
+        )
 
     overlap = answer_features & context_features
     high_signal = {feature for feature in answer_features if _is_high_signal_feature(feature)}
     if high_signal and high_signal & context_features:
-        return True
-    return (
-        len(overlap) >= MIN_GROUNDING_OVERLAP
-        or len(overlap) / len(answer_features) >= MIN_GROUNDING_RATIO
+        return GroundednessEvaluation(
+            grounded=True,
+            score=1.0,
+            overlap_count=len(overlap),
+            answer_feature_count=len(answer_features),
+            high_signal_overlap=True,
+        )
+    score = round(min(1.0, len(overlap) / len(answer_features)), 4)
+    return GroundednessEvaluation(
+        grounded=len(overlap) >= MIN_GROUNDING_OVERLAP or score >= MIN_GROUNDING_RATIO,
+        score=score,
+        overlap_count=len(overlap),
+        answer_feature_count=len(answer_features),
+        high_signal_overlap=False,
     )
 
 

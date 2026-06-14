@@ -6,10 +6,15 @@ from typing import Any, cast
 
 from pytest import LogCaptureFixture, MonkeyPatch
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.main import app
 from app.rag.evaluation import EVALUATION_CASE_ERROR_MESSAGE, EvaluationRunner
-from app.schemas.evaluation import EvaluationCase, EvaluationThresholds
+from app.schemas.evaluation import (
+    EvaluationCase,
+    EvaluationExperiment,
+    EvaluationRagOverrides,
+    EvaluationThresholds,
+)
 from app.schemas.search import (
     RetrievedChunk,
     SearchDiagnostics,
@@ -38,12 +43,12 @@ class StubPipeline:
         self.requests.append(request)
         self.trace_ids.append(trace_id)
         return SearchResponse(
-            answer="請求金額は 120000 円です。",
+            answer="承認条件は 120000 円です。",
             citations=[
                 RetrievedChunk(
                     document_id="doc-1",
                     chunk_id="doc-1:0",
-                    text="請求金額: 120,000",
+                    text="承認条件: 120000",
                     score=1.0,
                 )
             ],
@@ -68,7 +73,7 @@ async def test_evaluation_runner_computes_metrics() -> None:
         cases=[
             EvaluationCase(
                 id="case-1",
-                query="請求金額",
+                query="承認条件",
                 relevant_document_ids=["doc-1"],
                 expected_answer_keywords=["120000"],
             )
@@ -76,15 +81,17 @@ async def test_evaluation_runner_computes_metrics() -> None:
         top_k=5,
         rerank_top_n=3,
         mode=SearchMode.KEYWORD,
-        filters={"status": "analyzed"},
+        filters={"status": "indexed"},
     )
     assert metrics.evaluated_k == 3
     assert metrics.precision_at_k == 0.3333
     assert metrics.recall_at_k == 1.0
     assert metrics.mrr == 1.0
     assert metrics.answer_keyword_hit_rate == 1.0
+    assert metrics.groundedness_pass_rate == 1.0
     assert metrics.passed is True
     assert metrics.threshold_failures == []
+    assert metrics.failure_reason_counts == {}
     assert len(metrics.case_results) == 1
     result = metrics.case_results[0]
     assert result.case_id == "case-1"
@@ -97,13 +104,18 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert result.recall_at_k == 1.0
     assert result.reciprocal_rank == 1.0
     assert result.answer_keyword_hit is True
+    assert result.groundedness_passed is True
+    assert result.groundedness_score == 1.0
+    assert result.grounding_overlap_count >= 1
+    assert result.grounding_answer_feature_count >= 1
     assert result.guardrail_warnings == []
+    assert result.failure_reasons == []
     assert result.diagnostics.top_k == 5
     assert result.diagnostics.rerank_top_n == 3
     assert result.diagnostics.retrieved_count == 1
     assert result.diagnostics.citation_count == 1
     assert pipeline.requests[0].mode == SearchMode.KEYWORD
-    assert pipeline.requests[0].filters == {"status": "ANALYZED"}
+    assert pipeline.requests[0].filters == {"status": "INDEXED"}
 
 
 class DuplicateChunkPipeline:
@@ -115,11 +127,26 @@ class DuplicateChunkPipeline:
         trace_id: str | None = None,
     ) -> SearchResponse:
         return SearchResponse(
-            answer="A 文書が関連します。",
+            answer="A 文書の承認条件が関連します。",
             citations=[
-                RetrievedChunk(document_id="doc-a", chunk_id="doc-a:0", text="A", score=1.0),
-                RetrievedChunk(document_id="doc-a", chunk_id="doc-a:1", text="A2", score=0.9),
-                RetrievedChunk(document_id="doc-b", chunk_id="doc-b:0", text="B", score=0.8),
+                RetrievedChunk(
+                    document_id="doc-a",
+                    chunk_id="doc-a:0",
+                    text="A 文書には承認条件が記載されています。",
+                    score=1.0,
+                ),
+                RetrievedChunk(
+                    document_id="doc-a",
+                    chunk_id="doc-a:1",
+                    text="A 文書の補足説明です。",
+                    score=0.9,
+                ),
+                RetrievedChunk(
+                    document_id="doc-b",
+                    chunk_id="doc-b:0",
+                    text="B 文書の検索候補です。",
+                    score=0.8,
+                ),
             ],
             trace_id=trace_id or "trace",
             guardrail_warnings=[],
@@ -147,6 +174,7 @@ async def test_evaluation_metrics_are_document_level_not_chunk_level() -> None:
     assert metrics.evaluated_k == 3
     assert metrics.recall_at_k == 1.0
     assert metrics.mrr == 1.0
+    assert metrics.groundedness_pass_rate == 1.0
     assert metrics.case_results[0].retrieved_document_ids == ["doc-a", "doc-b"]
     assert metrics.case_results[0].hit_document_ids == ["doc-a"]
 
@@ -159,7 +187,7 @@ async def test_evaluation_runner_marks_threshold_gate_passed() -> None:
         cases=[
             EvaluationCase(
                 id="case-pass",
-                query="請求金額",
+                query="承認条件",
                 relevant_document_ids=["doc-1"],
                 expected_answer_keywords=["120000"],
             )
@@ -171,6 +199,7 @@ async def test_evaluation_runner_marks_threshold_gate_passed() -> None:
             recall_at_k=1.0,
             mrr=1.0,
             answer_keyword_hit_rate=1.0,
+            groundedness_pass_rate=1.0,
         ),
     )
 
@@ -186,7 +215,7 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
         cases=[
             EvaluationCase(
                 id="case-fail",
-                query="請求金額",
+                query="承認条件",
                 relevant_document_ids=["doc-a"],
                 expected_answer_keywords=["120000"],
             )
@@ -198,6 +227,7 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
             recall_at_k=0.9,
             mrr=0.5,
             answer_keyword_hit_rate=0.9,
+            groundedness_pass_rate=0.9,
         ),
     )
 
@@ -210,6 +240,7 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
         ("recall_at_k", 0.0, 0.9),
         ("mrr", 0.0, 0.5),
         ("answer_keyword_hit_rate", 0.0, 0.9),
+        ("groundedness_pass_rate", 0.0, 0.9),
     ]
 
 
@@ -224,7 +255,12 @@ class MissPipeline:
         return SearchResponse(
             answer="関連しない回答です。",
             citations=[
-                RetrievedChunk(document_id="doc-x", chunk_id="doc-x:0", text="X", score=0.8),
+                RetrievedChunk(
+                    document_id="doc-x",
+                    chunk_id="doc-x:0",
+                    text="支払条件は月末締め翌月末払いです。",
+                    score=0.8,
+                ),
             ],
             trace_id=trace_id or "trace-miss",
             guardrail_warnings=["検索条件に一致する根拠が見つかりませんでした。"],
@@ -240,7 +276,7 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
         cases=[
             EvaluationCase(
                 id="case-miss",
-                query="請求金額",
+                query="承認条件",
                 relevant_document_ids=["doc-a"],
                 expected_answer_keywords=["120000"],
             )
@@ -253,6 +289,7 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
     assert metrics.recall_at_k == 0.0
     assert metrics.mrr == 0.0
     assert metrics.answer_keyword_hit_rate == 0.0
+    assert metrics.groundedness_pass_rate == 0.0
     result = metrics.case_results[0]
     assert result.case_id == "case-miss"
     assert result.trace_id
@@ -264,7 +301,22 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
     assert result.recall_at_k == 0.0
     assert result.reciprocal_rank == 0.0
     assert result.answer_keyword_hit is False
+    assert result.groundedness_passed is False
+    assert result.groundedness_score == 0.0
+    assert result.grounding_answer_feature_count > 0
     assert result.guardrail_warnings == ["検索条件に一致する根拠が見つかりませんでした。"]
+    assert result.failure_reasons == [
+        "retrieval_miss",
+        "answer_keyword_miss",
+        "low_groundedness",
+        "guardrail_warning",
+    ]
+    assert metrics.failure_reason_counts == {
+        "retrieval_miss": 1,
+        "answer_keyword_miss": 1,
+        "low_groundedness": 1,
+        "guardrail_warning": 1,
+    }
     assert result.elapsed_ms == 12.5
 
 
@@ -277,7 +329,7 @@ async def test_evaluation_runner_isolates_case_errors(caplog: LogCaptureFixture)
             cases=[
                 EvaluationCase(
                     id="case-ok",
-                    query="請求金額",
+                    query="承認条件",
                     relevant_document_ids=["doc-1"],
                     expected_answer_keywords=["120000"],
                 ),
@@ -299,6 +351,7 @@ async def test_evaluation_runner_isolates_case_errors(caplog: LogCaptureFixture)
     assert metrics.recall_at_k == 0.5
     assert metrics.mrr == 0.5
     assert metrics.answer_keyword_hit_rate == 0.5
+    assert metrics.groundedness_pass_rate == 0.5
 
     ok_result, error_result = metrics.case_results
     assert ok_result.status == "success"
@@ -310,6 +363,10 @@ async def test_evaluation_runner_isolates_case_errors(caplog: LogCaptureFixture)
     assert error_result.relevant_document_ids == ["doc-2"]
     assert error_result.precision_at_k == 0.0
     assert error_result.answer_keyword_hit is False
+    assert error_result.groundedness_passed is False
+    assert error_result.groundedness_score == 0.0
+    assert error_result.failure_reasons == ["case_error"]
+    assert metrics.failure_reason_counts == {"case_error": 1}
     assert "INV-SECRET" not in str(error_result.model_dump(mode="json"))
     assert "raw secret detail" not in str(error_result.model_dump(mode="json"))
 
@@ -337,7 +394,7 @@ async def test_evaluation_runner_records_case_metrics(monkeypatch: MonkeyPatch) 
         cases=[
             EvaluationCase(
                 id="case-ok",
-                query="請求金額",
+                query="承認条件",
                 relevant_document_ids=["doc-1"],
                 expected_answer_keywords=["120000"],
             ),
@@ -401,6 +458,164 @@ async def test_evaluation_runner_records_timeout_audit(
     assert "INV-SECRET" not in str(audit_event)
 
 
+async def test_evaluation_runner_compares_experiments_and_ranks_best() -> None:
+    """同じ golden set で複数 RAG 設定を比較し、metric と失敗数で順位付けする。"""
+    runner = EvaluationRunner(pipeline=ComparePipeline())
+
+    comparison = await runner.compare(
+        cases=[
+            EvaluationCase(
+                id="case-compare",
+                query="承認条件",
+                relevant_document_ids=["doc-1"],
+                expected_answer_keywords=["120000"],
+            )
+        ],
+        experiments=[
+            EvaluationExperiment(
+                id="vector-small",
+                mode=SearchMode.VECTOR,
+                top_k=1,
+                rerank_top_n=1,
+            ),
+            EvaluationExperiment(
+                id="hybrid-wide",
+                mode=SearchMode.HYBRID,
+                top_k=3,
+                rerank_top_n=3,
+            ),
+        ],
+        ranking_metric="recall_at_k",
+    )
+
+    assert comparison.ranking_metric == "recall_at_k"
+    assert comparison.best_experiment_id == "hybrid-wide"
+    assert [result.rank for result in comparison.results] == [1, 2]
+    assert [result.experiment.id for result in comparison.results] == [
+        "hybrid-wide",
+        "vector-small",
+    ]
+    assert comparison.results[0].ranking_score == 1.0
+    assert comparison.results[0].metrics.failure_reason_counts == {}
+    assert comparison.results[1].ranking_score == 0.0
+    assert comparison.results[1].metrics.failure_reason_counts["retrieval_miss"] == 1
+
+
+async def test_evaluation_compare_applies_experiment_rag_overrides(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """compare experiment ごとの RAG override を一時 Settings として pipeline へ渡す。"""
+    observed_settings: list[Settings] = []
+
+    class CapturingRagPipeline:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+            observed_settings.append(settings)
+
+        async def run(
+            self,
+            request: SearchRequest,
+            trace_id: str | None = None,
+        ) -> SearchResponse:
+            return SearchResponse(
+                answer="承認条件は 120000 円です。",
+                citations=[
+                    RetrievedChunk(
+                        document_id="doc-1",
+                        chunk_id="doc-1:0",
+                        text="承認条件: 120000",
+                        score=1.0,
+                    )
+                ],
+                trace_id=trace_id or "trace",
+                guardrail_warnings=[],
+                elapsed_ms=1.0,
+                diagnostics=SearchDiagnostics(
+                    mode=request.mode.value,
+                    top_k=request.top_k,
+                    rerank_top_n=request.rerank_top_n,
+                    rrf_k=self.settings.rag_rrf_k,
+                    context_window_chars=self.settings.rag_context_window_chars,
+                    oracle_vector_target_accuracy=(
+                        self.settings.oracle_vector_target_accuracy
+                    ),
+                    query_variant_count=(
+                        self.settings.rag_query_expansion_max_variants
+                        if self.settings.rag_query_expansion_enabled
+                        else 1
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
+    runner = EvaluationRunner(
+        settings=Settings.model_construct(
+            ai_service_adapter="local",
+            rag_search_timeout_seconds=30.0,
+            rag_rrf_k=60,
+            rag_context_window_chars=12000,
+            rag_context_neighbor_window=0,
+            rag_context_diversity_lambda=1.0,
+            rag_context_group_expansion_enabled=False,
+            rag_context_group_max_chunks=4,
+            rag_context_compression_enabled=False,
+            rag_context_compression_max_sentences=3,
+            rag_context_compression_max_chars_per_chunk=1200,
+            rag_query_expansion_enabled=True,
+            rag_query_expansion_max_variants=3,
+            oracle_vector_target_accuracy=95,
+        )
+    )
+
+    comparison = await runner.compare(
+        cases=[
+            EvaluationCase(
+                id="case-overrides",
+                query="承認条件",
+                relevant_document_ids=["doc-1"],
+                expected_answer_keywords=["120000"],
+            )
+        ],
+        experiments=[
+            EvaluationExperiment(id="baseline", top_k=3, rerank_top_n=3),
+            EvaluationExperiment(
+                id="diverse-context",
+                top_k=3,
+                rerank_top_n=3,
+                rag_overrides=EvaluationRagOverrides(
+                    rrf_k=10,
+                    query_expansion_enabled=False,
+                    query_expansion_max_variants=2,
+                    context_window_chars=4096,
+                    context_neighbor_window=1,
+                    context_diversity_lambda=0.35,
+                    context_group_expansion_enabled=True,
+                    context_group_max_chunks=2,
+                    context_compression_enabled=True,
+                    context_compression_max_sentences=2,
+                    context_compression_max_chars_per_chunk=800,
+                    oracle_vector_target_accuracy=90,
+                ),
+            ),
+        ],
+        ranking_metric="mrr",
+    )
+
+    assert [settings.rag_rrf_k for settings in observed_settings] == [60, 10]
+    assert observed_settings[0].rag_context_diversity_lambda == 1.0
+    assert observed_settings[1].rag_context_diversity_lambda == 0.35
+    assert observed_settings[1].rag_context_neighbor_window == 1
+    assert observed_settings[1].rag_context_group_expansion_enabled is True
+    assert observed_settings[1].rag_context_group_max_chunks == 2
+    assert observed_settings[1].rag_context_compression_enabled is True
+    assert observed_settings[1].rag_context_compression_max_sentences == 2
+    assert observed_settings[1].rag_context_compression_max_chars_per_chunk == 800
+    assert observed_settings[1].rag_query_expansion_enabled is False
+    assert observed_settings[1].rag_context_window_chars == 4096
+    assert observed_settings[1].oracle_vector_target_accuracy == 90
+    assert comparison.results[0].metrics.case_results[0].diagnostics.rrf_k in {60, 10}
+
+
 class PartiallyFailingPipeline:
     """一部 case だけ失敗する評価 runner 用 pipeline。"""
 
@@ -412,12 +627,12 @@ class PartiallyFailingPipeline:
         if "失敗" in request.query:
             raise RuntimeError("raw secret detail: INV-SECRET")
         return SearchResponse(
-            answer="請求金額は 120000 円です。",
+            answer="承認条件は 120000 円です。",
             citations=[
                 RetrievedChunk(
                     document_id="doc-1",
                     chunk_id="doc-1:0",
-                    text="請求金額: 120000",
+                    text="承認条件: 120000",
                     score=1.0,
                 )
             ],
@@ -440,6 +655,45 @@ class SlowPipeline:
         raise AssertionError("timeout 前に完了しない")
 
 
+class ComparePipeline:
+    """evaluation compare の順位付けを確認する pipeline。"""
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+    ) -> SearchResponse:
+        if request.mode == SearchMode.HYBRID:
+            return SearchResponse(
+                answer="承認条件は 120000 円です。",
+                citations=[
+                    RetrievedChunk(
+                        document_id="doc-1",
+                        chunk_id="doc-1:0",
+                        text="承認条件: 120000",
+                        score=1.0,
+                    )
+                ],
+                trace_id=trace_id or "trace-hybrid",
+                guardrail_warnings=[],
+                elapsed_ms=2.0,
+            )
+        return SearchResponse(
+            answer="関連しない回答です。",
+            citations=[
+                RetrievedChunk(
+                    document_id="doc-x",
+                    chunk_id="doc-x:0",
+                    text="支払条件は月末締め翌月末払いです。",
+                    score=0.8,
+                )
+            ],
+            trace_id=trace_id or "trace-vector",
+            guardrail_warnings=[],
+            elapsed_ms=2.0,
+        )
+
+
 def test_evaluation_api_rejects_empty_cases() -> None:
     response = client.post(
         "/api/evaluation/run",
@@ -459,7 +713,7 @@ def test_evaluation_api_rejects_threshold_out_of_range() -> None:
             "cases": [
                 {
                     "id": "bad-threshold",
-                    "query": "請求金額",
+                    "query": "承認条件",
                     "relevant_document_ids": [],
                     "expected_answer_keywords": [],
                 }
@@ -481,7 +735,7 @@ def test_evaluation_api_rejects_rerank_top_n_larger_than_top_k() -> None:
             "cases": [
                 {
                     "id": "bad-depth",
-                    "query": "請求金額",
+                    "query": "承認条件",
                     "relevant_document_ids": [],
                     "expected_answer_keywords": [],
                 }
@@ -495,6 +749,66 @@ def test_evaluation_api_rejects_rerank_top_n_larger_than_top_k() -> None:
     body = response.json()
     assert body["data"] is None
     assert any("rerank_top_n は top_k 以下" in message for message in body["error_messages"])
+
+
+def test_evaluation_compare_api_rejects_duplicate_experiment_ids() -> None:
+    response = client.post(
+        "/api/evaluation/compare",
+        json={
+            "cases": [
+                {
+                    "id": "case-1",
+                    "query": "承認条件",
+                    "relevant_document_ids": [],
+                    "expected_answer_keywords": [],
+                }
+            ],
+            "experiments": [
+                {"id": "same", "top_k": 5, "rerank_top_n": 3},
+                {"id": "same", "top_k": 10, "rerank_top_n": 5},
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["data"] is None
+    assert any("experiment id が重複" in message for message in body["error_messages"])
+
+
+def test_evaluation_compare_api_rejects_invalid_rag_overrides() -> None:
+    response = client.post(
+        "/api/evaluation/compare",
+        json={
+            "cases": [
+                {
+                    "id": "case-1",
+                    "query": "承認条件",
+                    "relevant_document_ids": [],
+                    "expected_answer_keywords": [],
+                }
+            ],
+            "experiments": [
+                {
+                    "id": "bad-overrides",
+                    "top_k": 5,
+                    "rerank_top_n": 3,
+                    "rag_overrides": {
+                        "context_diversity_lambda": 1.2,
+                        "context_group_max_chunks": 21,
+                        "context_neighbor_window": 6,
+                        "context_compression_max_sentences": 11,
+                        "context_compression_max_chars_per_chunk": 199,
+                    },
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["data"] is None
+    assert body["error_messages"]
 
 
 def test_evaluation_api_rejects_blank_case_query() -> None:
@@ -528,7 +842,7 @@ def test_evaluation_api_runs_against_local_pipeline() -> None:
             "cases": [
                 {
                     "id": "empty-store",
-                    "query": "存在しない請求書",
+                    "query": "存在しない社内規程",
                     "relevant_document_ids": [],
                     "expected_answer_keywords": [],
                 }
@@ -551,8 +865,12 @@ def test_evaluation_api_runs_against_local_pipeline() -> None:
     assert data["precision_at_k"] == 1.0
     assert data["recall_at_k"] == 1.0
     assert data["answer_keyword_hit_rate"] == 1.0
+    assert data["groundedness_pass_rate"] == 1.0
     assert data["passed"] is True
     assert data["threshold_failures"] == []
+    assert data["failure_reason_counts"] == {}
     assert data["case_results"][0]["case_id"] == "empty-store"
     assert data["case_results"][0]["retrieved_document_ids"] == []
     assert data["case_results"][0]["answer_keyword_hit"] is True
+    assert data["case_results"][0]["groundedness_passed"] is True
+    assert data["case_results"][0]["failure_reasons"] == []

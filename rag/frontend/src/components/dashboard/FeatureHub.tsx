@@ -1,9 +1,8 @@
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import {
   ArrowRight,
   FileSearch,
   FileStack,
-  FolderTree,
   Upload,
   type LucideIcon,
 } from "lucide-react";
@@ -38,12 +37,6 @@ const FEATURES: Feature[] = [
     descKey: "dashboard.feature.search.description",
     icon: FileSearch,
   },
-  {
-    href: APP_ROUTES.categoryManagement,
-    labelKey: "nav.categoryManagement",
-    descKey: "dashboard.feature.category.description",
-    icon: FolderTree,
-  },
 ];
 
 /** 主要機能ハブ：各機能への導線カード。 */
@@ -55,13 +48,13 @@ export function FeatureHub() {
         <CardDescription>{t("dashboard.featureHub.subtitle")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f) => {
             const Icon = f.icon;
             return (
               <Link
                 key={f.href}
-                href={f.href}
+                to={f.href}
                 className="group flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-background p-4 transition-colors hover:border-primary hover:bg-info-bg/40"
               >
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">

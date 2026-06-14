@@ -1,28 +1,34 @@
 {
   "cases": [
     {
-      "id": "invoice-amount-basic",
-      "query": "2026年6月のクラウド利用料の請求金額はいくらですか。",
-      "relevant_document_ids": ["doc-cloud-usage-2026-06"],
-      "expected_answer_keywords": ["120000", "クラウド利用料"]
+      "id": "policy-approval-flow-basic",
+      "query": "経費申請の承認フローを教えてください。",
+      "relevant_document_ids": ["doc-expense-policy"],
+      "expected_answer_keywords": ["部門長", "承認"]
     },
     {
-      "id": "invoice-vendor-basic",
-      "query": "株式会社サンプルから届いた請求書の請求書番号を教えてください。",
-      "relevant_document_ids": ["doc-sample-vendor-invoice"],
-      "expected_answer_keywords": ["INV-001", "株式会社サンプル"]
+      "id": "manual-troubleshooting-basic",
+      "query": "検索結果が表示されない場合の確認項目は何ですか。",
+      "relevant_document_ids": ["doc-search-troubleshooting"],
+      "expected_answer_keywords": ["インデックス", "再実行"]
     }
   ],
   "top_k": 10,
   "rerank_top_n": 5,
   "mode": "hybrid",
   "filters": {
-    "status": "REGISTERED"
+    "status": "INDEXED"
+  },
+  "rag_overrides": {
+    "rrf_k": 60,
+    "context_window_chars": 12000,
+    "oracle_vector_target_accuracy": 95
   },
   "thresholds": {
     "precision_at_k": 0.4,
     "recall_at_k": 0.8,
     "mrr": 0.7,
-    "answer_keyword_hit_rate": 0.8
+    "answer_keyword_hit_rate": 0.8,
+    "groundedness_pass_rate": 0.9
   }
 }

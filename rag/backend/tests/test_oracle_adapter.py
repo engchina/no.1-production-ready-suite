@@ -1,5 +1,6 @@
 """Oracle adapter 境界のテスト。"""
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ import pytest
 
 from app.clients.oracle import (
     OracleClient,
+    SelectAiUnavailableError,
     oracle_audit_schema_sql,
     oracle_document_schema_sql,
     oracle_ingestion_audit_schema_sql,
@@ -18,9 +20,14 @@ from app.clients.oracle import (
 )
 from app.config import Settings
 from app.rag.chunking import Chunk
+from app.rag.request_context import (
+    AuditRequestContext,
+    reset_audit_request_context,
+    set_audit_request_context,
+)
 from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
-from app.schemas.search import SearchMode
+from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
 
 
 def setup_function() -> None:
@@ -34,12 +41,12 @@ async def test_oci_adapter_does_not_fall_back_to_local_document_store() -> None:
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     detail = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="oci://bucket/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="oci://bucket/policy.txt",
         content_type="text/plain",
     )
 
-    assert detail.file_name == "invoice.txt"
+    assert detail.file_name == "policy.txt"
     assert pool.connection.commits == 1
     assert "INSERT INTO rag_documents" in pool.connection.calls[0].statement
     assert await OracleClient().list_documents() == []
@@ -53,10 +60,10 @@ async def test_oci_vector_search_uses_ai_vector_search_sql() -> None:
                 {
                     "document_id": "doc-1",
                     "chunk_id": "doc-1:0",
-                    "chunk_text": "請求書 クラウド利用料",
+                    "chunk_text": "社内規程 クラウド利用料",
                     "metadata_json": '{"chunk_index":0}',
-                    "file_name": "invoice.txt",
-                    "category_name": "請求書",
+                    "file_name": "policy.txt",
+                    "category_name": "社内規程",
                     "score": 0.91,
                 }
             ]
@@ -76,10 +83,54 @@ async def test_oci_vector_search_uses_ai_vector_search_sql() -> None:
     assert hits[0].metadata["vector_score"] == 0.91
     call = pool.connection.calls[0]
     assert "VECTOR_DISTANCE" in call.statement
-    assert "d.status IN ('ANALYZED', 'REGISTERED')" in call.statement
+    assert "d.status = 'INDEXED'" in call.statement
+    assert "FETCH APPROX FIRST 3 ROWS ONLY WITH TARGET ACCURACY 90" in call.statement
     assert call.parameters["embedding"] == [1.0, 0.0, 0.0]
-    assert call.parameters["top_k"] == 3
+    assert "top_k" not in call.parameters
     assert call.parameters["filter_document_id"] == "doc-1"
+
+
+async def test_oci_vector_search_applies_chunk_metadata_filters() -> None:
+    """OCI retrieval SQL は chunk metadata filter も bind 付きで適用する。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:2",
+                    "chunk_text": "料金表 クラウド利用料",
+                    "metadata_json": (
+                        '{"chunk_index":2,"content_kind":"table",'
+                        '"section_title":"料金表","section_path":"経費申請 > 料金表"}'
+                    ),
+                    "file_name": "policy.txt",
+                    "category_name": "社内規程",
+                    "score": 0.93,
+                }
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    hits = await client.vector_search(
+        [1.0, 0.0, 0.0],
+        top_k=3,
+        filters={
+            "content_kind": "TABLE",
+            "section_title": "料金",
+            "section_path": "経費申請",
+        },
+    )
+
+    assert len(hits) == 1
+    assert hits[0].metadata["content_kind"] == "table"
+    call = pool.connection.calls[0]
+    assert "JSON_VALUE(c.metadata_json, '$.content_kind')" in call.statement
+    assert "JSON_VALUE(c.metadata_json, '$.section_title')" in call.statement
+    assert "JSON_VALUE(c.metadata_json, '$.section_path')" in call.statement
+    assert call.parameters["filter_content_kind"] == "table"
+    assert call.parameters["filter_section_title"] == "%料金%"
+    assert call.parameters["filter_section_path"] == "%経費申請%"
 
 
 async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> None:
@@ -89,12 +140,21 @@ async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> N
 
     saved = await client.save_chunks(
         "doc-1",
-        [Chunk(index=0, text="請求書", start_offset=0, end_offset=3)],
+        [
+            Chunk(
+                index=0,
+                text="社内規程",
+                start_offset=0,
+                end_offset=3,
+                metadata={"section_path": "経費申請 > 承認", "content_kind": "text"},
+            )
+        ],
         [[1.0, 0.0, 0.0]],
     )
 
     assert saved[0].chunk_id == "doc-1:0"
     assert saved[0].metadata["chunk_index"] == 0
+    assert saved[0].metadata["section_path"] == "経費申請 > 承認"
     assert pool.connection.commits == 1
     statements = [call.statement for call in pool.connection.calls]
     assert any("DELETE FROM rag_chunks" in statement for statement in statements)
@@ -102,12 +162,317 @@ async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> N
     inserted = pool.connection.many_calls[0].rows[0]
     assert inserted["chunk_id"] == "doc-1:0"
     assert inserted["embedding"] == [1.0, 0.0, 0.0]
+    metadata = json.loads(str(inserted["metadata_json"]))
+    assert metadata["chunk_index"] == 0
+    assert metadata["section_path"] == "経費申請 > 承認"
+    assert metadata["content_kind"] == "text"
+
+
+async def test_local_retrieval_filters_by_chunk_metadata() -> None:
+    """local reference store でも chunk metadata filter を検索前に適用する。"""
+    client = OracleClient(
+        settings=Settings.model_construct(
+            ai_service_adapter="local",
+            oci_genai_embedding_dim=3,
+            rag_min_similarity=0.0,
+        )
+    )
+    document = await client.create_document(
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
+        content_type="text/plain",
+    )
+    await client.save_chunks(
+        document.id,
+        [
+            Chunk(
+                index=0,
+                text="クラウド利用料の申請本文",
+                start_offset=0,
+                end_offset=12,
+                metadata={
+                    "content_kind": "text",
+                    "section_title": "本文",
+                    "section_path": "経費申請 > 本文",
+                },
+            ),
+            Chunk(
+                index=1,
+                text="クラウド利用料 料金表",
+                start_offset=13,
+                end_offset=25,
+                metadata={
+                    "content_kind": "table",
+                    "section_title": "料金表",
+                    "section_path": "経費申請 > 料金表",
+                },
+            ),
+        ],
+        [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+    )
+    await client.update_document_status(document.id, FileStatus.INDEXED)
+
+    hits = await client.keyword_search(
+        "クラウド利用料",
+        top_k=10,
+        filters={
+            "content_kind": "TABLE",
+            "section_title": "料金",
+            "section_path": "経費申請",
+        },
+    )
+
+    assert len(hits) == 1
+    assert hits[0].metadata["chunk_index"] == 1
+    assert hits[0].metadata["content_kind"] == "table"
+    assert hits[0].metadata["section_title"] == "料金表"
+
+
+async def test_local_context_neighbors_returns_searchable_adjacent_chunks() -> None:
+    """local store の隣接 context は同一 document の検索可能 chunk だけを返す。"""
+    client = OracleClient(
+        settings=Settings.model_construct(
+            ai_service_adapter="local",
+            oci_genai_embedding_dim=3,
+            rag_min_similarity=0.0,
+        )
+    )
+    document = await client.create_document(
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
+        content_type="text/plain",
+    )
+    await client.save_chunks(
+        document.id,
+        [
+            Chunk(index=0, text="前段: 申請条件。", start_offset=0, end_offset=8),
+            Chunk(index=1, text="中心: 承認条件。", start_offset=8, end_offset=16),
+            Chunk(index=2, text="後段: 証憑要件。", start_offset=16, end_offset=24),
+        ],
+        [[1.0, 0.0, 0.0], [0.9, 0.1, 0.0], [0.8, 0.2, 0.0]],
+    )
+    await client.update_document_status(document.id, FileStatus.INDEXED)
+    anchor = RetrievedChunk(
+        document_id=document.id,
+        chunk_id=f"{document.id}:1",
+        text="中心: 承認条件。",
+        score=0.92,
+        file_name="policy.txt",
+        metadata={"chunk_index": 1},
+    )
+
+    neighbors = await client.context_neighbors([anchor], window=1)
+
+    assert [chunk.chunk_id for chunk in neighbors] == [
+        f"{document.id}:0",
+        f"{document.id}:2",
+    ]
+    assert [chunk.metadata["context_neighbor_distance"] for chunk in neighbors] == [-1, 1]
+    for neighbor in neighbors:
+        assert neighbor.score == 0.92
+        assert neighbor.metadata["context_expanded"] is True
+        assert neighbor.metadata["context_anchor_chunk_id"] == anchor.chunk_id
+
+
+async def test_local_context_group_siblings_returns_same_group_chunks() -> None:
+    """local store の同一 group context は lineage metadata で sibling を返す。"""
+    client = OracleClient(
+        settings=Settings.model_construct(
+            ai_service_adapter="local",
+            oci_genai_embedding_dim=3,
+            rag_min_similarity=0.0,
+        )
+    )
+    document = await client.create_document(
+        file_name="table-policy.txt",
+        object_storage_path="local://uploaded/table-policy.txt",
+        content_type="text/plain",
+    )
+    await client.save_chunks(
+        document.id,
+        [
+            Chunk(
+                index=0,
+                text="表ヘッダー: 項目 / 条件。",
+                start_offset=0,
+                end_offset=12,
+                metadata={"chunk_group_id": "grp-table", "content_kind": "table"},
+            ),
+            Chunk(
+                index=1,
+                text="表行: 承認条件 / 120000 円以上。",
+                start_offset=12,
+                end_offset=28,
+                metadata={"chunk_group_id": "grp-table", "content_kind": "table"},
+            ),
+            Chunk(
+                index=2,
+                text="表注記: 証憑添付が必要。",
+                start_offset=28,
+                end_offset=40,
+                metadata={"chunk_group_id": "grp-table", "content_kind": "table"},
+            ),
+            Chunk(
+                index=3,
+                text="別 group の注記。",
+                start_offset=40,
+                end_offset=48,
+                metadata={"chunk_group_id": "grp-other", "content_kind": "table"},
+            ),
+        ],
+        [
+            [1.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0],
+            [0.8, 0.2, 0.0],
+            [0.7, 0.3, 0.0],
+        ],
+    )
+    await client.update_document_status(document.id, FileStatus.INDEXED)
+    anchor = RetrievedChunk(
+        document_id=document.id,
+        chunk_id=f"{document.id}:1",
+        text="表行: 承認条件 / 120000 円以上。",
+        score=0.92,
+        file_name="table-policy.txt",
+        metadata={"chunk_index": 1, "chunk_group_id": "grp-table"},
+    )
+
+    siblings = await client.context_group_siblings([anchor], max_chunks_per_group=2)
+
+    assert [chunk.chunk_id for chunk in siblings] == [
+        f"{document.id}:0",
+        f"{document.id}:2",
+    ]
+    assert [chunk.metadata["context_group_distance"] for chunk in siblings] == [-1, 1]
+    for sibling in siblings:
+        assert sibling.score == 0.92
+        assert sibling.metadata["context_group_expanded"] is True
+        assert sibling.metadata["context_anchor_chunk_id"] == anchor.chunk_id
+        assert sibling.metadata["context_group_id"] == "grp-table"
+
+
+async def test_oci_context_neighbors_uses_chunk_index_window_sql() -> None:
+    """OCI mode の隣接 context は chunk_index window を bind 付き SQL で取得する。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:1",
+                    "chunk_text": "前段: 申請条件。",
+                    "metadata_json": "{}",
+                    "chunk_index": 1,
+                    "file_name": "policy.txt",
+                    "category_name": "社内規程",
+                    "score": 0,
+                },
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:3",
+                    "chunk_text": "後段: 証憑要件。",
+                    "metadata_json": "{}",
+                    "chunk_index": 3,
+                    "file_name": "policy.txt",
+                    "category_name": "社内規程",
+                    "score": 0,
+                },
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    anchor = RetrievedChunk(
+        document_id="doc-1",
+        chunk_id="doc-1:2",
+        text="中心: 承認条件。",
+        score=0.91,
+        file_name="policy.txt",
+        metadata={"chunk_index": 2},
+    )
+
+    neighbors = await client.context_neighbors([anchor], window=1)
+
+    assert [chunk.chunk_id for chunk in neighbors] == ["doc-1:1", "doc-1:3"]
+    assert [chunk.metadata["chunk_index"] for chunk in neighbors] == [1, 3]
+    assert [chunk.metadata["context_neighbor_distance"] for chunk in neighbors] == [-1, 1]
+    assert all(chunk.score == 0.91 for chunk in neighbors)
+    call = pool.connection.calls[0]
+    assert "c.chunk_index BETWEEN :start_index AND :end_index" in call.statement
+    assert "c.chunk_id <> :anchor_chunk_id" in call.statement
+    assert "ABS(c.chunk_index - :anchor_index)" in call.statement
+    assert "d.status = 'INDEXED'" in call.statement
+    assert "d.document_id = :filter_document_id" in call.statement
+    assert call.parameters["filter_document_id"] == "doc-1"
+    assert call.parameters["anchor_index"] == 2
+    assert call.parameters["start_index"] == 1
+    assert call.parameters["end_index"] == 3
+    assert call.parameters["anchor_chunk_id"] == "doc-1:2"
+
+
+async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
+    """OCI mode の同一 group context は chunk_group_id を bind 付き SQL で取得する。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:1",
+                    "chunk_text": "表ヘッダー: 項目 / 条件。",
+                    "metadata_json": json.dumps({"chunk_group_id": "grp-table"}),
+                    "chunk_index": 1,
+                    "file_name": "policy.txt",
+                    "category_name": "社内規程",
+                    "score": 0,
+                },
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:3",
+                    "chunk_text": "表注記: 証憑添付が必要。",
+                    "metadata_json": json.dumps({"chunk_group_id": "grp-table"}),
+                    "chunk_index": 3,
+                    "file_name": "policy.txt",
+                    "category_name": "社内規程",
+                    "score": 0,
+                },
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    anchor = RetrievedChunk(
+        document_id="doc-1",
+        chunk_id="doc-1:2",
+        text="表行: 承認条件 / 120000 円以上。",
+        score=0.91,
+        file_name="policy.txt",
+        metadata={"chunk_index": 2, "chunk_group_id": "grp-table"},
+    )
+
+    siblings = await client.context_group_siblings([anchor], max_chunks_per_group=2)
+
+    assert [chunk.chunk_id for chunk in siblings] == ["doc-1:1", "doc-1:3"]
+    assert [chunk.metadata["chunk_index"] for chunk in siblings] == [1, 3]
+    assert [chunk.metadata["context_group_distance"] for chunk in siblings] == [-1, 1]
+    assert all(chunk.score == 0.91 for chunk in siblings)
+    assert all(chunk.metadata["context_group_expanded"] is True for chunk in siblings)
+    call = pool.connection.calls[0]
+    assert "JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id" in (
+        call.statement
+    )
+    assert "c.chunk_id <> :anchor_chunk_id" in call.statement
+    assert "ABS(c.chunk_index - :anchor_index)" in call.statement
+    assert "ROWNUM <= :max_chunks_per_group" in call.statement
+    assert "d.status = 'INDEXED'" in call.statement
+    assert "d.document_id = :filter_document_id" in call.statement
+    assert call.parameters["filter_document_id"] == "doc-1"
+    assert call.parameters["chunk_group_id"] == "grp-table"
+    assert call.parameters["anchor_index"] == 2
+    assert call.parameters["anchor_chunk_id"] == "doc-1:2"
+    assert call.parameters["max_chunks_per_group"] == 2
 
 
 async def test_oci_update_error_status_clears_chunks_and_extraction() -> None:
     """ERROR への状態遷移では Oracle 側でも古い chunk と抽出 JSON を外す。"""
-    errored = _oracle_document_row(status="ERROR", extracted_fields=None)
-    pool = FakeOraclePool(execute_results=[[errored]])
+    errored = _oracle_document_row(status="ERROR", extraction=None)
+    pool = FakeOraclePool(execute_results=[[_oracle_document_row()], [errored]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     detail = await client.update_document_status(
@@ -117,36 +482,100 @@ async def test_oci_update_error_status_clears_chunks_and_extraction() -> None:
     )
 
     assert detail.status == FileStatus.ERROR
-    assert detail.extracted_fields == {}
+    assert detail.extraction == {}
     statements = [call.statement for call in pool.connection.calls]
     assert any("DELETE FROM rag_chunks" in statement for statement in statements)
-    assert any("extracted_fields = NULL" in statement for statement in statements)
+    assert any("extraction = NULL" in statement for statement in statements)
     assert pool.connection.commits == 1
 
 
-async def test_oci_select_ai_parses_json_result_and_applies_limit() -> None:
-    """Select AI の JSON result は table browser 用の行 dict に正規化する。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [
-                {
-                    "result": (
-                        '[{"document_id":"doc-1","status":"ANALYZED"},'
-                        '{"document_id":"doc-2","status":"REGISTERED"}]'
-                    )
-                }
-            ]
-        ]
-    )
+async def test_oci_delete_document_removes_chunks_and_document_with_access_scope() -> None:
+    """OCI mode の削除は access scope を維持して document と chunk を同一 transaction で消す。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    token = set_audit_request_context(
+        AuditRequestContext(
+            request_id="request-1",
+            allowed_document_ids=frozenset({"doc-1"}),
+        )
+    )
+    try:
+        deleted = await client.delete_document("doc-1")
+    finally:
+        reset_audit_request_context(token)
 
-    rows = await client.select_ai("登録済み伝票を表示", limit=1)
+    assert deleted is True
+    statements = [call.statement for call in pool.connection.calls]
+    assert statements[0].startswith("SELECT")
+    assert "document_id IN (:access_document_id_0)" in statements[0]
+    assert any("DELETE FROM rag_chunks" in statement for statement in statements)
+    document_delete = next(
+        call
+        for call in pool.connection.calls
+        if call.statement.startswith("DELETE FROM rag_documents")
+    )
+    assert "document_id = :document_id" in document_delete.statement
+    assert "document_id IN (:access_document_id_0)" in document_delete.statement
+    assert document_delete.parameters["document_id"] == "doc-1"
+    assert document_delete.parameters["access_document_id_0"] == "doc-1"
+    assert pool.connection.commits == 1
 
-    assert rows == [{"document_id": "doc-1", "status": "ANALYZED"}]
+
+async def test_oci_select_ai_uses_dbms_cloud_ai_generate_with_binds() -> None:
+    """Select AI は DBMS_CLOUD_AI.GENERATE を bind 付きで呼び出す。"""
+    pool = FakeOraclePool(
+        execute_results=[[{"result_text": "SELECT COUNT(*) FROM rag_documents"}]]
+    )
+    settings = _oci_settings()
+    settings.oracle_select_ai_profile = "rag_select_ai"
+    client = OracleClient(settings=settings, pool=pool, db_call_runner=_run_inline)
+
+    result = await client.select_ai(
+        "索引済み文書数を教えて",
+        action=SelectAiAction.SHOWSQL,
+    )
+
+    assert result == "SELECT COUNT(*) FROM rag_documents"
     call = pool.connection.calls[0]
     assert "DBMS_CLOUD_AI.GENERATE" in call.statement
-    assert call.parameters["profile_name"] == "rag_select_ai"
-    assert "最大 1 行" in str(call.parameters["prompt"])
+    assert ":prompt" in call.statement
+    assert call.parameters == {
+        "prompt": "索引済み文書数を教えて",
+        "profile_name": "rag_select_ai",
+        "action": "showsql",
+    }
+    assert "索引済み文書数" not in call.statement
+    assert pool.connection.commits == 0
+
+
+async def test_local_select_ai_is_unavailable() -> None:
+    """local adapter では Select AI を実行しない。"""
+    with pytest.raises(SelectAiUnavailableError):
+        await OracleClient().select_ai("索引済み文書数を教えて")
+
+
+async def test_oci_retrieval_applies_request_access_scope_predicates() -> None:
+    """OCI retrieval SQL は request context の認可済み document/category scope を必ず含める。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    token = set_audit_request_context(
+        AuditRequestContext(
+            request_id="request-1",
+            allowed_document_ids=frozenset({"doc-allowed"}),
+            allowed_category_names=frozenset({"社内規程".casefold()}),
+        )
+    )
+    try:
+        hits = await client.keyword_search("社内規程", top_k=3)
+    finally:
+        reset_audit_request_context(token)
+
+    assert hits == []
+    call = pool.connection.calls[0]
+    assert "d.document_id IN (:access_document_id_0)" in call.statement
+    assert "LOWER(d.category_name) IN (:access_category_name_0)" in call.statement
+    assert call.parameters["access_document_id_0"] == "doc-allowed"
+    assert call.parameters["access_category_name_0"] == "社内規程".casefold()
 
 
 async def test_local_update_missing_document_raises_key_error() -> None:
@@ -154,49 +583,35 @@ async def test_local_update_missing_document_raises_key_error() -> None:
     client = OracleClient()
 
     with pytest.raises(KeyError):
-        await client.update_document_status("missing", FileStatus.ANALYZING)
+        await client.update_document_status("missing", FileStatus.INGESTING)
 
 
-async def test_local_select_ai_returns_json_ready_status() -> None:
-    """local Select AI 代替は enum ではなく文字列 status を返す。"""
-    client = OracleClient()
+async def test_local_delete_document_removes_chunks_and_is_idempotent() -> None:
+    """local reference store でも document 削除時に関連 chunk を消す。"""
+    client = OracleClient(
+        settings=Settings.model_construct(
+            ai_service_adapter="local",
+            oci_genai_embedding_dim=3,
+            rag_min_similarity=0.0,
+        )
+    )
     document = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="local://uploaded/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
         content_type="text/plain",
     )
-
-    rows = await client.select_ai("請求書を表示")
-
-    assert rows == [
-        {
-            "document_id": document.id,
-            "file_name": "invoice.txt",
-            "status": "UPLOADED",
-            "uploaded_at": document.uploaded_at.isoformat(),
-        }
-    ]
-
-
-async def test_local_select_ai_applies_limit_and_newest_first() -> None:
-    """local Select AI 代替も limit を適用し、新しい document から返す。"""
-    client = OracleClient()
-    await client.create_document(
-        file_name="old.txt",
-        object_storage_path="local://uploaded/old.txt",
-        content_type="text/plain",
+    await client.save_chunks(
+        document.id,
+        [Chunk(index=0, text="社内規程", start_offset=0, end_offset=4)],
+        [[1.0, 0.0, 0.0]],
     )
-    newest = await client.create_document(
-        file_name="new.txt",
-        object_storage_path="local://uploaded/new.txt",
-        content_type="text/plain",
-    )
+    await client.update_document_status(document.id, FileStatus.INDEXED)
+    assert await client.count_chunks() == 1
 
-    rows = await client.select_ai("登録済み伝票を表示", limit=1)
-
-    assert len(rows) == 1
-    assert rows[0]["document_id"] == newest.id
-    assert rows[0]["file_name"] == "new.txt"
+    assert await client.delete_document(document.id) is True
+    assert await client.delete_document(document.id) is False
+    assert await client.get_document(document.id) is None
+    assert await client.count_chunks() == 0
 
 
 async def test_local_find_document_by_content_hash_prefers_original_document() -> None:
@@ -244,7 +659,15 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     ddl = oracle_vector_schema_sql()
 
     assert "tenant_id_hash  CHAR(64)" in ddl
+    assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in ddl
+    assert "ORGANIZATION INMEMORY NEIGHBOR GRAPH" in ddl
+    assert "DISTANCE COSINE" in ddl
+    assert "WITH TARGET ACCURACY 95" in ddl
+    assert "TYPE HNSW" in ddl
+    assert "NEIGHBORS 32" in ddl
+    assert "EFCONSTRUCTION 500" in ddl
     assert "rag_chunks_tenant_document_idx" in ddl
+    assert "ON rag_chunks (tenant_id_hash, document_id, chunk_index)" in ddl
     assert "INDEXTYPE IS CTXSYS.CONTEXT" in ddl
 
 
@@ -261,8 +684,15 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
     assert "query_hash            char(64) not null" in normalized
     assert "top_k                 number(10)" in normalized
     assert "rerank_top_n          number(10)" in normalized
+    assert "query_variant_count   number(10) default 1 not null" in normalized
     assert "guardrail_codes       json" in normalized
     assert "reranked_count        number(10) default 0 not null" in normalized
+    assert "deduplicated_count    number(10) default 0 not null" in normalized
+    assert "context_diversified_count number(10) default 0 not null" in normalized
+    assert "context_group_expanded_count number(10) default 0 not null" in normalized
+    assert "context_expanded_count number(10) default 0 not null" in normalized
+    assert "context_compressed_count number(10) default 0 not null" in normalized
+    assert "context_compression_saved_chars number(10) default 0 not null" in normalized
     assert "context_chars         number(10) default 0 not null" in normalized
     assert "config_fingerprint    char(64)" in normalized
     assert "document_ids          json" in normalized
@@ -316,21 +746,21 @@ async def test_save_chunks_rejects_wrong_embedding_dimension() -> None:
     """保存 embedding が Oracle VECTOR 幅と違う場合は明示的に拒否する。"""
     client = OracleClient(settings=Settings.model_construct(oci_genai_embedding_dim=3))
     document = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="local://uploaded/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
         content_type="text/plain",
     )
 
     with pytest.raises(ValueError, match=r"chunk embedding\[0\] の次元数が不正です"):
         await client.save_chunks(
             document.id,
-            [Chunk(index=0, text="請求書", start_offset=0, end_offset=3)],
+            [Chunk(index=0, text="社内規程", start_offset=0, end_offset=3)],
             [[1.0, 0.0]],
         )
 
 
 async def test_non_searchable_status_clears_existing_chunks() -> None:
-    """ERROR / ANALYZING 状態へ移ると古い index chunk を検索対象から外す。"""
+    """ERROR / INGESTING 状態へ移ると古い index chunk を検索対象から外す。"""
     client = OracleClient(
         settings=Settings.model_construct(
             ai_service_adapter="local",
@@ -339,18 +769,18 @@ async def test_non_searchable_status_clears_existing_chunks() -> None:
         )
     )
     document = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="local://uploaded/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
         content_type="text/plain",
     )
     await client.save_chunks(
         document.id,
-        [Chunk(index=0, text="請求書 クラウド利用料", start_offset=0, end_offset=10)],
+        [Chunk(index=0, text="社内規程 クラウド利用料", start_offset=0, end_offset=10)],
         [[1.0, 0.0, 0.0]],
     )
     assert await client.count_chunks() == 0
 
-    await client.update_document_status(document.id, FileStatus.ANALYZED)
+    await client.update_document_status(document.id, FileStatus.INDEXED)
     assert await client.count_chunks() == 1
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1)
 
@@ -382,20 +812,20 @@ async def test_count_document_chunks_returns_searchable_rows_for_one_document() 
     await client.save_chunks(
         first.id,
         [
-            Chunk(index=0, text="請求書 A", start_offset=0, end_offset=4),
-            Chunk(index=1, text="請求書 A 明細", start_offset=4, end_offset=10),
+            Chunk(index=0, text="社内規程 A", start_offset=0, end_offset=4),
+            Chunk(index=1, text="社内規程 A 明細", start_offset=4, end_offset=10),
         ],
         [[1.0, 0.0, 0.0], [0.9, 0.1, 0.0]],
     )
     await client.save_chunks(
         second.id,
-        [Chunk(index=0, text="請求書 B", start_offset=0, end_offset=4)],
+        [Chunk(index=0, text="社内規程 B", start_offset=0, end_offset=4)],
         [[0.0, 1.0, 0.0]],
     )
 
     assert await client.count_document_chunks(first.id) == 0
-    await client.update_document_status(first.id, FileStatus.ANALYZED)
-    await client.update_document_status(second.id, FileStatus.ANALYZED)
+    await client.update_document_status(first.id, FileStatus.INDEXED)
+    await client.update_document_status(second.id, FileStatus.INDEXED)
 
     assert await client.count_document_chunks(first.id) == 2
     assert await client.count_document_chunks(second.id) == 1
@@ -416,18 +846,18 @@ async def test_keyword_score_uses_unique_query_terms_and_is_bounded() -> None:
         )
     )
     document = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="local://uploaded/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
         content_type="text/plain",
     )
     await client.save_chunks(
         document.id,
-        [Chunk(index=0, text="invoice", start_offset=0, end_offset=7)],
+        [Chunk(index=0, text="policy", start_offset=0, end_offset=7)],
         [[1.0, 0.0, 0.0]],
     )
-    await client.update_document_status(document.id, FileStatus.ANALYZED)
+    await client.update_document_status(document.id, FileStatus.INDEXED)
 
-    hits = await client.keyword_search("invoice invoice", top_k=1)
+    hits = await client.keyword_search("policy policy", top_k=1)
 
     assert len(hits) == 1
     assert hits[0].score == 1.0
@@ -446,16 +876,16 @@ async def test_vector_search_exposes_retrieval_metadata() -> None:
         )
     )
     document = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="local://uploaded/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
         content_type="text/plain",
     )
     await client.save_chunks(
         document.id,
-        [Chunk(index=0, text="invoice", start_offset=0, end_offset=7)],
+        [Chunk(index=0, text="policy", start_offset=0, end_offset=7)],
         [[1.0, 0.0, 0.0]],
     )
-    await client.update_document_status(document.id, FileStatus.ANALYZED)
+    await client.update_document_status(document.id, FileStatus.INDEXED)
 
     hits = await client.vector_search([1.0, 0.0, 0.0], top_k=1)
 
@@ -486,21 +916,21 @@ async def test_keyword_search_tie_breaks_by_document_and_chunk() -> None:
     )
     await client.save_chunks(
         second.id,
-        [Chunk(index=0, text="invoice", start_offset=0, end_offset=7)],
+        [Chunk(index=0, text="policy", start_offset=0, end_offset=7)],
         [[1.0, 0.0, 0.0]],
     )
     await client.save_chunks(
         first.id,
         [
-            Chunk(index=1, text="invoice", start_offset=8, end_offset=15),
-            Chunk(index=0, text="invoice", start_offset=0, end_offset=7),
+            Chunk(index=1, text="policy", start_offset=8, end_offset=15),
+            Chunk(index=0, text="policy", start_offset=0, end_offset=7),
         ],
         [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
     )
-    await client.update_document_status(first.id, FileStatus.ANALYZED)
-    await client.update_document_status(second.id, FileStatus.ANALYZED)
+    await client.update_document_status(first.id, FileStatus.INDEXED)
+    await client.update_document_status(second.id, FileStatus.INDEXED)
 
-    hits = await client.keyword_search("invoice", top_k=3)
+    hits = await client.keyword_search("policy", top_k=3)
 
     expected = sorted([(first.id, 0), (first.id, 1), (second.id, 0)])
     assert [(hit.document_id, hit.metadata["chunk_index"]) for hit in hits] == expected
@@ -527,19 +957,19 @@ async def test_hybrid_search_tie_breaks_rrf_scores_stably() -> None:
     )
     await client.save_chunks(
         second.id,
-        [Chunk(index=0, text="invoice", start_offset=0, end_offset=7)],
+        [Chunk(index=0, text="policy", start_offset=0, end_offset=7)],
         [[1.0, 0.0, 0.0]],
     )
     await client.save_chunks(
         first.id,
-        [Chunk(index=0, text="invoice", start_offset=0, end_offset=7)],
+        [Chunk(index=0, text="policy", start_offset=0, end_offset=7)],
         [[1.0, 0.0, 0.0]],
     )
-    await client.update_document_status(first.id, FileStatus.ANALYZED)
-    await client.update_document_status(second.id, FileStatus.ANALYZED)
+    await client.update_document_status(first.id, FileStatus.INDEXED)
+    await client.update_document_status(second.id, FileStatus.INDEXED)
 
     hits = await client.hybrid_search(
-        query="invoice",
+        query="policy",
         embedding=[1.0, 0.0, 0.0],
         top_k=2,
         mode=SearchMode.HYBRID,
@@ -552,7 +982,43 @@ async def test_hybrid_search_tie_breaks_rrf_scores_stably() -> None:
         assert isinstance(hit.metadata["keyword_rank"], int)
         assert hit.metadata["vector_score"] == 1.0
         assert hit.metadata["keyword_score"] == 1.0
+        assert hit.metadata["rrf_k"] == 60
         assert hit.metadata["rrf_score"] == hit.score
+
+
+async def test_hybrid_search_uses_configured_rrf_k() -> None:
+    """Hybrid 検索の RRF 定数は Settings から変更できる。"""
+    client = OracleClient(
+        settings=Settings.model_construct(
+            ai_service_adapter="local",
+            oci_genai_embedding_dim=3,
+            rag_min_similarity=0.0,
+            rag_rrf_k=10,
+        )
+    )
+    document = await client.create_document(
+        file_name="rrf.txt",
+        object_storage_path="local://uploaded/rrf.txt",
+        content_type="text/plain",
+    )
+    await client.save_chunks(
+        document.id,
+        [Chunk(index=0, text="policy", start_offset=0, end_offset=7)],
+        [[1.0, 0.0, 0.0]],
+    )
+    await client.update_document_status(document.id, FileStatus.INDEXED)
+
+    hits = await client.hybrid_search(
+        query="policy",
+        embedding=[1.0, 0.0, 0.0],
+        top_k=1,
+        mode=SearchMode.HYBRID,
+    )
+
+    assert len(hits) == 1
+    assert hits[0].metadata["rrf_k"] == 10
+    assert hits[0].score == pytest.approx(round((1 / 11) + (1 / 11), 6))
+    assert hits[0].metadata["rrf_score"] == hits[0].score
 
 
 async def test_hybrid_search_marks_vector_only_results() -> None:
@@ -565,8 +1031,8 @@ async def test_hybrid_search_marks_vector_only_results() -> None:
         )
     )
     document = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="local://uploaded/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
         content_type="text/plain",
     )
     await client.save_chunks(
@@ -574,10 +1040,10 @@ async def test_hybrid_search_marks_vector_only_results() -> None:
         [Chunk(index=0, text="no keyword match", start_offset=0, end_offset=16)],
         [[1.0, 0.0, 0.0]],
     )
-    await client.update_document_status(document.id, FileStatus.ANALYZED)
+    await client.update_document_status(document.id, FileStatus.INDEXED)
 
     hits = await client.hybrid_search(
-        query="請求書",
+        query="社内規程",
         embedding=[1.0, 0.0, 0.0],
         top_k=1,
         mode=SearchMode.HYBRID,
@@ -589,28 +1055,27 @@ async def test_hybrid_search_marks_vector_only_results() -> None:
     assert "keyword_rank" not in hits[0].metadata
 
 
-async def test_non_searchable_status_clears_extracted_fields() -> None:
-    """ERROR / ANALYZING 状態へ移ると古い抽出結果も表示対象から外す。"""
+async def test_non_searchable_status_clears_extraction() -> None:
+    """ERROR / INGESTING 状態へ移ると古い抽出結果も表示対象から外す。"""
     client = OracleClient(settings=Settings.model_construct(ai_service_adapter="local"))
     document = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="local://uploaded/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
         content_type="text/plain",
     )
     await client.save_extraction(
         document.id,
         StructuredExtraction(
-            raw_text="請求書番号: INV-001",
-            document_type="請求書",
-            fields={"document_number": "INV-001"},
+            raw_text="社内規程: 経費申請",
+            document_type="社内規程",
             confidence=0.9,
             warnings=[],
         ),
     )
-    await client.update_document_status(document.id, FileStatus.ANALYZED)
-    analyzed = await client.get_document(document.id)
-    assert analyzed is not None
-    assert analyzed.extracted_fields
+    await client.update_document_status(document.id, FileStatus.INDEXED)
+    indexed = await client.get_document(document.id)
+    assert indexed is not None
+    assert indexed.extraction
 
     errored = await client.update_document_status(
         document.id,
@@ -618,7 +1083,7 @@ async def test_non_searchable_status_clears_extracted_fields() -> None:
         "再分析に失敗しました。",
     )
 
-    assert errored.extracted_fields == {}
+    assert errored.extraction == {}
 
 
 async def test_analyzing_status_removes_stale_chunks_during_reindex() -> None:
@@ -631,19 +1096,19 @@ async def test_analyzing_status_removes_stale_chunks_during_reindex() -> None:
         )
     )
     document = await client.create_document(
-        file_name="invoice.txt",
-        object_storage_path="local://uploaded/invoice.txt",
+        file_name="policy.txt",
+        object_storage_path="local://uploaded/policy.txt",
         content_type="text/plain",
     )
     await client.save_chunks(
         document.id,
-        [Chunk(index=0, text="古い請求書チャンク", start_offset=0, end_offset=9)],
+        [Chunk(index=0, text="古い社内規程チャンク", start_offset=0, end_offset=9)],
         [[1.0, 0.0, 0.0]],
     )
-    await client.update_document_status(document.id, FileStatus.ANALYZED)
+    await client.update_document_status(document.id, FileStatus.INDEXED)
     assert await client.count_chunks() == 1
 
-    await client.update_document_status(document.id, FileStatus.ANALYZING)
+    await client.update_document_status(document.id, FileStatus.INGESTING)
 
     assert await client.count_chunks() == 0
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1) == []
@@ -751,33 +1216,33 @@ def _oci_settings() -> Settings:
         ai_service_adapter="oci",
         oci_genai_embedding_dim=3,
         rag_min_similarity=0.05,
+        oracle_vector_target_accuracy=90,
         oracle_user="rag_app",
         oracle_password="oracle-password",
         oracle_dsn="adb.example.com/rag",
-        oracle_select_ai_profile="rag_select_ai",
     )
 
 
 def _oracle_document_row(
     *,
-    status: str = "ANALYZED",
-    extracted_fields: object = '{"fields":{"document_number":"INV-001"}}',
+    status: str = "INDEXED",
+    extraction: object = '{"raw_text":"社内規程本文","document_type":"社内規程"}',
 ) -> dict[str, object]:
     return {
         "document_id": "doc-1",
-        "file_name": "invoice.txt",
+        "file_name": "policy.txt",
         "status": status,
         "tenant_id_hash": None,
-        "category_name": "請求書",
-        "object_storage_path": "oci://namespace/bucket/invoice.txt",
+        "category_name": "社内規程",
+        "object_storage_path": "oci://namespace/bucket/policy.txt",
         "content_type": "text/plain",
         "file_size_bytes": 12,
         "content_sha256": "a" * 64,
         "duplicate_of_document_id": None,
-        "extracted_fields": extracted_fields,
+        "extraction": extraction,
         "error_message": None,
         "uploaded_at": datetime(2026, 1, 1, tzinfo=UTC),
-        "registered_at": None,
+        "indexed_at": None,
     }
 
 

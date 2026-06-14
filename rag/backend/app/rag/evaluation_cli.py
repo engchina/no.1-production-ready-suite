@@ -5,16 +5,25 @@ import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import ValidationError
 
-from app.schemas.evaluation import EvaluationMetrics, EvaluationRunRequest
+from app.schemas.evaluation import (
+    EvaluationCompareRequest,
+    EvaluationCompareResponse,
+    EvaluationMetrics,
+    EvaluationRunRequest,
+)
 
 DEFAULT_EVALUATION_API_URL = "http://localhost:8000/api/evaluation/run"
+DEFAULT_EVALUATION_COMPARE_API_URL = "http://localhost:8000/api/evaluation/compare"
+DEFAULT_EVALUATION_API_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT_SECONDS = 300.0
+EvaluationRequestKind = Literal["run", "compare"]
 
 
 class EvaluationGateError(RuntimeError):
@@ -25,28 +34,45 @@ class EvaluationGateError(RuntimeError):
         self.exit_code = exit_code
 
 
+@dataclass(frozen=True)
+class LoadedEvaluationRequest:
+    """CLI 入力ファイルを API payload と種別に分けた結果。"""
+
+    kind: EvaluationRequestKind
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class GateEvaluation:
+    """CI gate 判定に使う metrics と compare 追加情報。"""
+
+    metrics: EvaluationMetrics
+    best_experiment_id: str | None = None
+    ranking_metric: str | None = None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
-        request_payload = _load_evaluation_request(args.golden_set)
+        request = _load_evaluation_request(args.golden_set)
         response_payload = _post_evaluation_request(
-            api_url=args.api_url,
-            payload=request_payload,
+            api_url=_resolve_api_url(args.api_url, args.api_base_url, request.kind),
+            payload=request.payload,
             timeout=args.timeout,
             headers=_request_headers(args.tenant_id, args.user_id),
         )
-        metrics = _extract_metrics(response_payload)
+        gate = _extract_gate_evaluation(response_payload)
         _write_json(response_payload, args.output)
     except EvaluationGateError as exc:
         print(f"評価 gate エラー: {exc}", file=sys.stderr)
         return exc.exit_code
 
-    if _gate_failed(metrics):
-        print(_gate_summary(metrics, passed=False), file=sys.stderr)
+    if _gate_failed(gate.metrics):
+        print(_gate_summary(gate, passed=False), file=sys.stderr)
         return 1
-    print(_gate_summary(metrics, passed=True), file=sys.stderr)
+    print(_gate_summary(gate, passed=True), file=sys.stderr)
     return 0
 
 
@@ -58,12 +84,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "golden_set",
         type=Path,
-        help="EvaluationRunRequest 形式の golden set JSON ファイル。",
+        help="EvaluationRunRequest または EvaluationCompareRequest 形式の JSON ファイル。",
     )
     parser.add_argument(
         "--api-url",
-        default=os.getenv("RAG_EVALUATION_API_URL", DEFAULT_EVALUATION_API_URL),
-        help=f"評価 API URL。既定値: {DEFAULT_EVALUATION_API_URL}",
+        default=None,
+        help=(
+            "評価 API URL。明示した場合は --api-base-url より優先します。"
+            "未指定時は入力形式に応じて "
+            f"{DEFAULT_EVALUATION_API_URL} または {DEFAULT_EVALUATION_COMPARE_API_URL}"
+        ),
+    )
+    parser.add_argument(
+        "--api-base-url",
+        default=os.getenv("RAG_EVALUATION_API_BASE_URL"),
+        help=(
+            "評価 API の base URL。入力形式に応じて /api/evaluation/run または "
+            "/api/evaluation/compare を付与します。"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -89,7 +127,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_evaluation_request(path: Path) -> dict[str, Any]:
+def _load_evaluation_request(path: Path) -> LoadedEvaluationRequest:
     """golden set JSON を読み、API request schema として検証する。"""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -101,13 +139,42 @@ def _load_evaluation_request(path: Path) -> dict[str, Any]:
         ) from exc
     if not isinstance(raw, dict):
         raise EvaluationGateError("評価ファイルの root は JSON object にしてください。")
+    kind: EvaluationRequestKind = "compare" if "experiments" in raw else "run"
+    schema = EvaluationCompareRequest if kind == "compare" else EvaluationRunRequest
     try:
-        request = EvaluationRunRequest.model_validate(raw)
+        request = schema.model_validate(raw)
     except ValidationError as exc:
         raise EvaluationGateError(
             "評価ファイルの形式が不正です: " + _safe_validation_error_summary(exc)
         ) from exc
-    return request.model_dump(mode="json")
+    return LoadedEvaluationRequest(kind=kind, payload=request.model_dump(mode="json"))
+
+
+def _resolve_api_url(
+    api_url: str | None,
+    api_base_url: str | None,
+    kind: EvaluationRequestKind,
+) -> str:
+    """明示 URL > env > base URL > request 種別の既定 URL の順で決める。"""
+    if api_url:
+        return api_url
+    if kind == "compare" and (compare_url := os.getenv("RAG_EVALUATION_COMPARE_API_URL")):
+        return compare_url
+    if kind == "run" and (run_url := os.getenv("RAG_EVALUATION_RUN_API_URL")):
+        return run_url
+    if env_url := os.getenv("RAG_EVALUATION_API_URL"):
+        return env_url
+    if api_base_url:
+        return _evaluation_url_from_base(api_base_url, kind)
+    if kind == "compare":
+        return DEFAULT_EVALUATION_COMPARE_API_URL
+    return DEFAULT_EVALUATION_API_URL
+
+
+def _evaluation_url_from_base(base_url: str, kind: EvaluationRequestKind) -> str:
+    """staging host の base URL から evaluation endpoint URL を作る。"""
+    suffix = "/api/evaluation/compare" if kind == "compare" else "/api/evaluation/run"
+    return f"{base_url.rstrip('/')}{suffix}"
 
 
 def _post_evaluation_request(
@@ -162,8 +229,8 @@ def _decode_json_response(raw_body: bytes) -> dict[str, Any]:
     return decoded
 
 
-def _extract_metrics(response_payload: Mapping[str, Any]) -> EvaluationMetrics:
-    """ApiResponse または metrics object から評価 metrics を取り出す。"""
+def _extract_gate_evaluation(response_payload: Mapping[str, Any]) -> GateEvaluation:
+    """ApiResponse から run metrics または compare best metrics を取り出す。"""
     data = response_payload.get("data", response_payload)
     if data is None:
         raise EvaluationGateError("評価 API レスポンスに data がありません。", exit_code=3)
@@ -171,13 +238,33 @@ def _extract_metrics(response_payload: Mapping[str, Any]) -> EvaluationMetrics:
         raise EvaluationGateError(
             "評価 API レスポンスの data が object ではありません。", exit_code=3
         )
+    if "results" in data:
+        try:
+            comparison = EvaluationCompareResponse.model_validate(data)
+        except ValidationError as exc:
+            raise EvaluationGateError(
+                "評価 API レスポンスの形式が不正です: "
+                + _safe_validation_error_summary(exc),
+                exit_code=3,
+            ) from exc
+        if not comparison.results:
+            raise EvaluationGateError(
+                "評価比較レスポンスに experiment results がありません。", exit_code=3
+            )
+        best = sorted(comparison.results, key=lambda result: result.rank)[0]
+        return GateEvaluation(
+            metrics=best.metrics,
+            best_experiment_id=comparison.best_experiment_id or best.experiment.id,
+            ranking_metric=comparison.ranking_metric,
+        )
     try:
-        return EvaluationMetrics.model_validate(data)
+        metrics = EvaluationMetrics.model_validate(data)
     except ValidationError as exc:
         raise EvaluationGateError(
             "評価 API レスポンスの形式が不正です: " + _safe_validation_error_summary(exc),
             exit_code=3,
         ) from exc
+    return GateEvaluation(metrics=metrics)
 
 
 def _write_json(payload: Mapping[str, Any], output_path: Path | None) -> None:
@@ -193,12 +280,20 @@ def _gate_failed(metrics: EvaluationMetrics) -> bool:
     return not metrics.passed or metrics.error_count > 0 or len(metrics.threshold_failures) > 0
 
 
-def _gate_summary(metrics: EvaluationMetrics, *, passed: bool) -> str:
+def _gate_summary(gate: GateEvaluation, *, passed: bool) -> str:
+    metrics = gate.metrics
     status = "passed" if passed else "failed"
+    prefix = f"評価 gate {status}"
+    if gate.best_experiment_id is not None:
+        prefix += f": best_experiment={gate.best_experiment_id}"
+        if gate.ranking_metric is not None:
+            prefix += f", ranking_metric={gate.ranking_metric}"
     return (
-        f"評価 gate {status}: cases={metrics.case_count}, errors={metrics.error_count}, "
+        f"{prefix}: "
+        f"cases={metrics.case_count}, errors={metrics.error_count}, "
         f"precision_at_k={metrics.precision_at_k}, recall_at_k={metrics.recall_at_k}, "
         f"mrr={metrics.mrr}, answer_keyword_hit_rate={metrics.answer_keyword_hit_rate}, "
+        f"groundedness_pass_rate={metrics.groundedness_pass_rate}, "
         f"threshold_failures={len(metrics.threshold_failures)}"
     )
 

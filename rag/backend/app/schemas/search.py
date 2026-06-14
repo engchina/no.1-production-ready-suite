@@ -5,8 +5,17 @@ from typing import Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-SUPPORTED_SEARCH_FILTER_KEYS = {"document_id", "file_name", "category_name", "status"}
-SUPPORTED_SEARCH_STATUS_FILTERS = {"UPLOADED", "ANALYZING", "ANALYZED", "REGISTERED", "ERROR"}
+SUPPORTED_SEARCH_FILTER_KEYS = {
+    "document_id",
+    "file_name",
+    "category_name",
+    "status",
+    "content_kind",
+    "section_title",
+    "section_path",
+}
+SUPPORTED_SEARCH_STATUS_FILTERS = {"UPLOADED", "INGESTING", "INDEXED", "ERROR"}
+SUPPORTED_CONTENT_KIND_FILTERS = {"text", "list", "table", "figure"}
 
 
 class SearchMode(StrEnum):
@@ -15,6 +24,13 @@ class SearchMode(StrEnum):
     HYBRID = "hybrid"
     VECTOR = "vector"
     KEYWORD = "keyword"
+
+
+class SelectAiAction(StrEnum):
+    """Oracle Select AI の安全に公開する action。"""
+
+    SHOWSQL = "showsql"
+    RUNSQL = "runsql"
 
 
 class SearchRequest(BaseModel):
@@ -67,9 +83,18 @@ class SearchDiagnostics(BaseModel):
     rerank_top_n: int = 0
     retrieved_count: int = 0
     reranked_count: int = 0
+    deduplicated_count: int = 0
+    context_diversified_count: int = 0
+    context_group_expanded_count: int = 0
+    context_expanded_count: int = 0
+    context_compressed_count: int = 0
+    context_compression_saved_chars: int = 0
     citation_count: int = 0
     context_chars: int = 0
     context_window_chars: int = 0
+    rrf_k: int = 0
+    query_variant_count: int = 1
+    oracle_vector_target_accuracy: int = 0
     filter_keys: list[str] = Field(default_factory=list)
     config_fingerprint: str = ""
 
@@ -83,6 +108,41 @@ class SearchResponse(BaseModel):
     guardrail_warnings: list[str] = Field(default_factory=list)
     elapsed_ms: float
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
+
+
+class SelectAiRequest(BaseModel):
+    """Oracle Select AI による自然言語 -> SQL / 結果取得リクエスト。"""
+
+    query: str = Field(..., min_length=1)
+    action: SelectAiAction = SelectAiAction.SHOWSQL
+    profile_name: str | None = Field(default=None, max_length=128)
+    max_result_chars: int | None = Field(default=None, ge=1000, le=200000)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, query: str) -> str:
+        """SearchRequest と同じ規則で query を正規化する。"""
+        return normalize_query_text(query)
+
+    @field_validator("profile_name")
+    @classmethod
+    def validate_profile_name(cls, profile_name: str | None) -> str | None:
+        """空 profile は未指定として扱う。"""
+        if profile_name is None:
+            return None
+        cleaned = profile_name.strip()
+        return cleaned or None
+
+
+class SelectAiResponse(BaseModel):
+    """Oracle Select AI の実行結果。"""
+
+    action: SelectAiAction
+    result_text: str
+    generated_sql: str | None = None
+    profile_name: str
+    query_chars: int
+    guardrail_warnings: list[str] = Field(default_factory=list)
 
 
 def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
@@ -100,6 +160,10 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
 
     if (status := normalized.get("status")) and status not in SUPPORTED_SEARCH_STATUS_FILTERS:
         raise ValueError(f"未対応のファイル状態フィルターです: {status}")
+    if (content_kind := normalized.get("content_kind")) and (
+        content_kind not in SUPPORTED_CONTENT_KIND_FILTERS
+    ):
+        raise ValueError(f"未対応の内容種別フィルターです: {content_kind}")
     return normalized
 
 

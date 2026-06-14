@@ -9,7 +9,7 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings, get_settings
 from app.rag.audit import record_rag_ingestion_audit
-from app.rag.chunking import Chunk, chunk_text
+from app.rag.chunking import Chunk, chunk_extraction
 from app.rag.observability import (
     TraceOutcome,
     elapsed_ms,
@@ -23,20 +23,29 @@ from app.schemas.document import DocumentDetail, FileStatus
 from app.schemas.extraction import StructuredExtraction
 
 INGESTION_INTERNAL_ERROR_MESSAGE = "取込処理に失敗しました。時間をおいて再実行してください。"
+# 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
-        "請求書",
-        "領収書",
-        "見積書",
-        "注文書",
-        "発注書",
-        "納品書",
-        "伝票",
-        "invoice",
-        "receipt",
-        "estimate",
-        "purchase_order",
-        "delivery_note",
+        "ドキュメント",
+        "文書",
+        "社内規程",
+        "マニュアル",
+        "FAQ",
+        "議事録",
+        "報告書",
+        "技術文書",
+        "仕様書",
+        "手順書",
+        "ナレッジ",
+        "policy",
+        "manual",
+        "faq",
+        "meeting_notes",
+        "report",
+        "guide",
+        "specification",
+        "procedure",
+        "knowledge_base",
     }
 )
 
@@ -58,24 +67,32 @@ class IngestionPipeline:
         settings: Settings | None = None,
     ) -> None:
         self._settings = settings or get_settings()
-        self._vlm = vlm or OciEnterpriseAiClient()
-        self._genai = genai or OciGenAiClient()
-        self._oracle = oracle or OracleClient()
+        self._vlm = vlm or OciEnterpriseAiClient(settings=self._settings)
+        self._genai = genai or OciGenAiClient(settings=self._settings)
+        self._oracle = oracle or OracleClient(settings=self._settings)
 
-    async def ingest(self, document_id: str, image_bytes: bytes, prompt: str) -> DocumentDetail:
-        """1 ドキュメントを取り込み、ベクトル索引まで行う。"""
+    async def ingest(
+        self,
+        document_id: str,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        content_type: str = "application/octet-stream",
+    ) -> DocumentDetail:
+        """1 ドキュメントを取込し、ベクトル索引まで行う。"""
         started_at = now()
         trace_id = new_trace_id()
-        await self._oracle.update_document_status(document_id, FileStatus.ANALYZING)
+        await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
         try:
             extracted = await _observe_ingestion_stage(
                 trace_id,
                 "vlm_extraction",
-                self._vlm.extract_with_vlm(image_bytes, prompt),
+                self._vlm.extract_with_vlm(image_bytes, prompt, mime_type=content_type),
                 attributes={
                     "adapter": self._settings.ai_service_adapter,
                     "model": self._settings.oci_enterprise_ai_vlm_model or "local",
                     "source_bytes": len(image_bytes),
+                    "content_type": _observability_content_type(content_type),
                     "prompt_chars": len(prompt),
                 },
                 result_attributes=_vlm_result_attributes,
@@ -87,15 +104,17 @@ class IngestionPipeline:
             chunks = _observe_sync_ingestion_stage(
                 trace_id,
                 "chunking",
-                lambda: chunk_text(
-                    text,
+                lambda: chunk_extraction(
+                    extraction,
                     chunk_size=self._settings.rag_chunk_size,
                     overlap=self._settings.rag_chunk_overlap,
                 ),
                 attributes={
+                    "chunk_profile": "structure_v1",
                     "chunk_size": self._settings.rag_chunk_size,
                     "chunk_overlap": self._settings.rag_chunk_overlap,
                     "input_chars": len(text),
+                    **_extraction_structure_attributes(extraction),
                 },
                 result_attributes=lambda result: {"chunk_count": len(result)},
             )
@@ -124,10 +143,9 @@ class IngestionPipeline:
                 attributes={
                     "chunk_count": len(chunks),
                     "vector_count": len(vectors),
-                    "field_count": len(extraction.fields),
                 },
             )
-            detail = await self._oracle.update_document_status(document_id, FileStatus.ANALYZED)
+            detail = await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
             record_ingestion("success", len(chunks))
             record_rag_ingestion_audit(
                 trace_id=trace_id,
@@ -136,7 +154,6 @@ class IngestionPipeline:
                 source_bytes=image_bytes,
                 document_type=_observability_document_type(extraction.document_type),
                 extraction_confidence=extraction.confidence,
-                field_count=len(extraction.fields),
                 chunk_count=len(chunks),
                 vector_count=len(vectors),
                 elapsed_ms=elapsed_ms(started_at),
@@ -166,7 +183,7 @@ class IngestionPipeline:
         chunks: list[Chunk],
         vectors: list[list[float]],
     ) -> None:
-        """抽出結果とチャンクを一貫した indexing stage として保存する。"""
+        """抽出本文とチャンクを一貫した indexing stage として保存する。"""
         await self._oracle.save_extraction(document_id, extraction)
         await self._oracle.save_chunks(document_id, chunks, vectors)
 
@@ -180,10 +197,7 @@ def _safe_persistent_error_message(error: Exception) -> str:
 
 def _text_for_chunking(extraction: StructuredExtraction) -> str:
     """抽出結果から索引用テキストを作る。"""
-    field_text = " ".join(
-        f"{key}: {value}" for key, value in extraction.fields.items() if value is not None
-    )
-    return "\n".join(part for part in [extraction.raw_text, field_text] if part).strip()
+    return extraction.raw_text.strip()
 
 
 async def _observe_ingestion_stage[T](
@@ -259,16 +273,49 @@ def _record_ingestion_stage(
 
 
 def _vlm_result_attributes(extracted: dict[str, object]) -> Mapping[str, object]:
-    """VLM 結果から本文や field 値を除いた安全な trace attribute を作る。"""
-    fields = extracted.get("fields")
+    """VLM 結果から本文値を除いた安全な trace attribute を作る。"""
     raw_text = extracted.get("raw_text")
     warnings = extracted.get("warnings")
     document_type = extracted.get("document_type")
     return {
         "document_type": _observability_document_type(document_type),
-        "field_count": len(fields) if isinstance(fields, dict) else 0,
         "raw_text_chars": len(raw_text) if isinstance(raw_text, str) else 0,
         "warning_count": len(warnings) if isinstance(warnings, list) else 0,
+        **_raw_extraction_structure_attributes(extracted),
+    }
+
+
+def _extraction_structure_attributes(extraction: StructuredExtraction) -> Mapping[str, object]:
+    """構造化抽出から非機密な件数だけを trace attribute にする。"""
+    pages = {
+        element.page_number for element in extraction.elements if element.page_number is not None
+    }
+    return {
+        "element_count": len(extraction.elements),
+        "table_count": sum(1 for element in extraction.elements if element.kind == "table"),
+        "page_count": len(pages),
+    }
+
+
+def _raw_extraction_structure_attributes(extracted: Mapping[str, object]) -> Mapping[str, object]:
+    """VLM 生 payload から本文を見ずに構造件数だけを読む。"""
+    elements = extracted.get("elements")
+    if not isinstance(elements, list):
+        return {"element_count": 0, "table_count": 0, "page_count": 0}
+    table_count = 0
+    pages: set[int] = set()
+    for item in elements:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("kind", "")).strip().casefold() == "table":
+            table_count += 1
+        page = item.get("page_number")
+        if isinstance(page, int) and not isinstance(page, bool) and page >= 1:
+            pages.add(page)
+    return {
+        "element_count": len(elements),
+        "table_count": table_count,
+        "page_count": len(pages),
     }
 
 
@@ -278,3 +325,24 @@ def _observability_document_type(value: object) -> str | None:
         return None
     normalized = value.strip()
     return normalized if normalized in OBSERVABILITY_DOCUMENT_TYPES else "other"
+
+
+def _observability_content_type(value: str) -> str:
+    """ログ・trace 用 MIME type を低 cardinality に正規化する。"""
+    normalized = value.split(";", maxsplit=1)[0].strip().lower()
+    if normalized in {
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/tiff",
+        "text/plain",
+        "application/octet-stream",
+    }:
+        return normalized
+    if normalized.startswith("image/"):
+        return "image/other"
+    if normalized.startswith("text/"):
+        return "text/other"
+    if normalized:
+        return "other"
+    return "application/octet-stream"

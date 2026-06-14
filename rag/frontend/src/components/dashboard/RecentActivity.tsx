@@ -28,7 +28,7 @@ export function RecentActivity({ activities }: { activities: DashboardActivity[]
               const typeLabel =
                 a.type === "UPLOAD"
                   ? t("dashboard.activity.type.upload")
-                  : t("dashboard.activity.type.registration");
+                  : t("dashboard.activity.type.indexing");
               return (
                 <li key={a.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
                   <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted">

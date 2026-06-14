@@ -12,3 +12,5 @@
 - IAM dynamic group / policy
 
 `main.tf` は意図を示す skeleton です。実テナンシーへ適用する前に compartment、network、database sizing、Vault policy を環境ごとに具体化してください。
+
+Oracle 26ai の table / vector index / audit table DDL は Terraform skeleton に直接埋め込まず、backend の `uv run python -m app.rag.oracle_schema --output ../artifacts/oracle-schema.sql --manifest-output ../artifacts/oracle-schema.manifest.json` で生成した artifact をレビューしてから、SQLcl または管理された migration 手順で適用します。

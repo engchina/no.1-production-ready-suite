@@ -1,19 +1,39 @@
 """RAG/HTTP の観測性ヘルパー。"""
 
 import logging
+import re
 from collections.abc import Iterable
+from contextlib import suppress
+from queue import Empty, Full, Queue
+from threading import Event, Thread
 from time import perf_counter
-from typing import Literal
+from typing import Literal, Protocol
 from uuid import uuid4
 
+import httpx
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field
 
+from app.config import Settings
 from app.rag.guardrails import GuardrailFinding
 
 trace_logger = logging.getLogger("app.trace")
 TraceOutcome = Literal["success", "error", "cancelled"]
 TraceAttribute = str | int | float | bool | None
+SAFE_TRACE_ATTRIBUTE_SUFFIXES = (
+    "_chars",
+    "_bytes",
+    "_count",
+    "_id",
+    "_ms",
+    "_seconds",
+    "_status",
+    "_type",
+)
+SENSITIVE_TRACE_ATTRIBUTE_PATTERN = re.compile(
+    r"(query|prompt|secret|context|raw_text|ocr|field_value|payload|content)",
+    re.IGNORECASE,
+)
 
 
 class TraceSpanEvent(BaseModel):
@@ -26,6 +46,112 @@ class TraceSpanEvent(BaseModel):
     duration_ms: float
     attributes: dict[str, TraceAttribute] = Field(default_factory=dict)
     error_type: str | None = None
+
+
+class TraceExporter(Protocol):
+    """脱機密化済み trace span event の export 先。"""
+
+    def export(self, event: TraceSpanEvent) -> None:
+        """event を外部 sink へ渡す。"""
+
+    def close(self) -> None:
+        """exporter の後始末を行う。"""
+
+
+class NoopTraceExporter:
+    """trace export 無効時の no-op exporter。"""
+
+    def export(self, event: TraceSpanEvent) -> None:
+        """何もしない。"""
+
+    def close(self) -> None:
+        """何もしない。"""
+
+
+class HttpTraceExporter:
+    """脱機密化済み trace span event を HTTP JSON で非同期 export する。"""
+
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        bearer_token: str = "",
+        timeout_seconds: float = 2.0,
+        queue_size: int = 1024,
+    ) -> None:
+        self._endpoint = endpoint
+        self._headers = {"content-type": "application/json", "accept": "application/json"}
+        if bearer_token.strip():
+            self._headers["authorization"] = f"Bearer {bearer_token.strip()}"
+        self._timeout_seconds = timeout_seconds
+        self._queue: Queue[TraceSpanEvent | None] = Queue(maxsize=queue_size)
+        self._closed = Event()
+        self._worker = Thread(
+            target=self._run,
+            name="rag-trace-exporter",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def export(self, event: TraceSpanEvent) -> None:
+        """event を queue に積む。満杯時は RAG 処理を止めず drop する。"""
+        if self._closed.is_set():
+            return
+        try:
+            self._queue.put_nowait(event)
+        except Full:
+            trace_logger.warning(
+                "rag_trace_export_dropped",
+                extra={
+                    "trace_export_event": {
+                        "event_type": "rag.trace_export",
+                        "outcome": "dropped",
+                        "reason": "queue_full",
+                    }
+                },
+            )
+
+    def close(self) -> None:
+        """worker を短時間だけ待って停止する。"""
+        if self._closed.is_set():
+            return
+        self._closed.set()
+        with suppress(Full):
+            self._queue.put_nowait(None)
+        self._worker.join(timeout=min(5.0, self._timeout_seconds + 1.0))
+
+    def _run(self) -> None:
+        with httpx.Client(timeout=self._timeout_seconds, follow_redirects=False) as client:
+            while not self._closed.is_set() or not self._queue.empty():
+                try:
+                    event = self._queue.get(timeout=0.2)
+                except Empty:
+                    continue
+                try:
+                    if event is None:
+                        return
+                    response = client.post(
+                        self._endpoint,
+                        json=event.model_dump(mode="json"),
+                        headers=self._headers,
+                    )
+                    response.raise_for_status()
+                except Exception as exc:
+                    trace_logger.warning(
+                        "rag_trace_export_failed",
+                        extra={
+                            "trace_export_event": {
+                                "event_type": "rag.trace_export",
+                                "outcome": "error",
+                                "error_type": type(exc).__name__,
+                            }
+                        },
+                    )
+                finally:
+                    self._queue.task_done()
+
+
+_TRACE_EXPORTER: TraceExporter = NoopTraceExporter()
 
 
 HTTP_REQUESTS = Counter(
@@ -187,6 +313,19 @@ def record_trace_span(
         "rag_trace_span",
         extra={"trace_event": event.model_dump(mode="json")},
     )
+    try:
+        _TRACE_EXPORTER.export(event)
+    except Exception as exc:
+        trace_logger.warning(
+            "rag_trace_export_failed",
+            extra={
+                "trace_export_event": {
+                    "event_type": "rag.trace_export",
+                    "outcome": "error",
+                    "error_type": type(exc).__name__,
+                }
+            },
+        )
     return event
 
 
@@ -194,8 +333,47 @@ def _safe_trace_attributes(attributes: dict[str, object]) -> dict[str, TraceAttr
     """trace attribute を低機密・低 cardinality な scalar に絞る。"""
     safe: dict[str, TraceAttribute] = {}
     for key, value in attributes.items():
+        if not _is_safe_trace_attribute_key(key):
+            continue
         if value is None or isinstance(value, bool | int | float):
             safe[key] = value
         elif isinstance(value, str):
             safe[key] = value[:200]
     return safe
+
+
+def _is_safe_trace_attribute_key(key: str) -> bool:
+    """本文系 key を落とし、件数・サイズなどの運用メタデータだけ通す。"""
+    normalized = key.strip().lower()
+    if not normalized:
+        return False
+    if normalized.endswith(SAFE_TRACE_ATTRIBUTE_SUFFIXES):
+        return True
+    return SENSITIVE_TRACE_ATTRIBUTE_PATTERN.search(normalized) is None
+
+
+def configure_trace_exporter(settings: Settings) -> None:
+    """設定に基づいて trace exporter を初期化する。"""
+    endpoint = settings.trace_export_http_endpoint.strip()
+    set_trace_exporter(
+        HttpTraceExporter(
+            endpoint=endpoint,
+            bearer_token=settings.trace_export_http_bearer_token,
+            timeout_seconds=settings.trace_export_timeout_seconds,
+            queue_size=settings.trace_export_queue_size,
+        )
+        if endpoint
+        else NoopTraceExporter()
+    )
+
+
+def set_trace_exporter(exporter: TraceExporter) -> None:
+    """テストや lifespan から trace exporter を差し替える。"""
+    global _TRACE_EXPORTER
+    _TRACE_EXPORTER.close()
+    _TRACE_EXPORTER = exporter
+
+
+def close_trace_exporter() -> None:
+    """現在の trace exporter を閉じ、no-op に戻す。"""
+    set_trace_exporter(NoopTraceExporter())

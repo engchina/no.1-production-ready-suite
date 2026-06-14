@@ -1,4 +1,4 @@
-import { ChevronRight, FileSearch, FileStack, Sparkles, Upload, type LucideIcon } from "lucide-react";
+import { ChevronRight, FileSearch, Sparkles, Upload, type LucideIcon } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -10,8 +10,7 @@ interface Step {
 
 const STEPS: Step[] = [
   { labelKey: "dashboard.workflow.step.upload", icon: Upload },
-  { labelKey: "dashboard.workflow.step.analyze", icon: Sparkles },
-  { labelKey: "dashboard.workflow.step.register", icon: FileStack },
+  { labelKey: "dashboard.workflow.step.ingest", icon: Sparkles },
   { labelKey: "dashboard.workflow.step.search", icon: FileSearch },
 ];
 

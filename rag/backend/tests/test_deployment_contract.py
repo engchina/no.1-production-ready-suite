@@ -5,22 +5,21 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_frontend_image_uses_reproducible_production_install() -> None:
-    """frontend runtime image は lockfile と production dependencies に限定する。"""
+def test_frontend_image_uses_reproducible_build_install() -> None:
+    """frontend build image は lockfile で再現可能に依存解決する。"""
     dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
 
     assert "RUN npm ci\n" in dockerfile
     assert "RUN npm install" not in dockerfile
-    assert "npm ci --omit=dev" in dockerfile
-    assert "NEXT_TELEMETRY_DISABLED=1" in dockerfile
 
 
-def test_frontend_image_runs_as_non_root_node_user() -> None:
-    """frontend runtime image は公式 node ユーザーで起動する。"""
+def test_frontend_image_serves_static_assets_with_unprivileged_nginx() -> None:
+    """frontend runtime image は非 root Nginx で静的 assets を配信する。"""
     dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "USER node" in dockerfile
-    assert "--chown=node:node" in dockerfile
+    assert "FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner" in dockerfile
+    assert "COPY --from=builder /app/dist /usr/share/nginx/html" in dockerfile
+    assert "COPY --from=builder /app/node_modules" not in dockerfile
 
 
 def test_backend_image_runs_as_non_root_app_user() -> None:
@@ -53,7 +52,8 @@ def test_docker_contexts_exclude_local_build_artifacts() -> None:
     backend_ignore = (REPO_ROOT / "backend" / ".dockerignore").read_text(encoding="utf-8")
 
     assert "node_modules" in frontend_ignore
-    assert ".next" in frontend_ignore
+    assert "dist" in frontend_ignore
+    assert "*.tsbuildinfo" in frontend_ignore
     assert ".env.*" in frontend_ignore
     assert ".venv" in backend_ignore
     assert "tests" in backend_ignore
@@ -68,5 +68,5 @@ def test_frontend_build_does_not_fetch_remote_fonts() -> None:
         if path.is_file() and path.suffix in {".css", ".ts", ".tsx"}
     )
 
-    assert "next/font/google" not in source_text
     assert "fonts.googleapis.com" not in source_text
+    assert "fonts.gstatic.com" not in source_text

@@ -73,7 +73,7 @@ async def test_rerank_accepts_and_sorts_valid_oci_results() -> None:
     """OCI rerank adapter の正しい結果は score 降順に正規化する。"""
     client = StubRerankClient(results=[(1, 0.25), (0, 0.75)])
 
-    assert await client.rerank("請求書", ["本文 A", "本文 B"], top_n=2) == [
+    assert await client.rerank("社内規程", ["本文 A", "本文 B"], top_n=2) == [
         (0, 0.75),
         (1, 0.25),
     ]
@@ -97,13 +97,13 @@ async def test_oci_rerank_uses_generative_ai_rerank_request() -> None:
         sdk_call_runner=_run_inline,
     )
 
-    results = await client.rerank("請求金額", ["本文 A", "本文 B"], top_n=2)
+    results = await client.rerank("承認条件", ["本文 A", "本文 B"], top_n=2)
 
     assert results == [(0, 0.75), (1, 0.25)]
     assert sdk.rerank_calls == 1
     request = sdk.last_rerank_request
     assert request is not None
-    assert request.input == "請求金額"
+    assert request.input == "承認条件"
     assert request.documents == ["本文 A", "本文 B"]
     assert request.compartment_id == "ocid1.compartment.oc1..example"
     assert request.serving_mode.model_id == "cohere.rerank-v4.0-fast"
@@ -114,7 +114,7 @@ async def test_rerank_returns_empty_without_oci_call_when_documents_are_empty() 
     """候補文書が空なら OCI rerank 呼び出しを行わない。"""
     client = StubRerankClient(results=[(0, 0.75)])
 
-    assert await client.rerank("請求書", [], top_n=1) == []
+    assert await client.rerank("社内規程", [], top_n=1) == []
     assert client.calls == 0
 
 
@@ -123,7 +123,7 @@ async def test_rerank_rejects_invalid_top_n() -> None:
     client = StubRerankClient(results=[])
 
     with pytest.raises(ValueError, match="rerank top_n は 1 以上"):
-        await client.rerank("請求書", ["本文"], top_n=0)
+        await client.rerank("社内規程", ["本文"], top_n=0)
 
 
 async def test_rerank_rejects_too_many_results() -> None:
@@ -131,7 +131,7 @@ async def test_rerank_rejects_too_many_results() -> None:
     client = StubRerankClient(results=[(0, 0.75), (1, 0.25)])
 
     with pytest.raises(ValueError, match="rerank の返却件数が不正です"):
-        await client.rerank("請求書", ["本文 A", "本文 B"], top_n=1)
+        await client.rerank("社内規程", ["本文 A", "本文 B"], top_n=1)
 
 
 async def test_rerank_rejects_duplicate_index() -> None:
@@ -139,7 +139,7 @@ async def test_rerank_rejects_duplicate_index() -> None:
     client = StubRerankClient(results=[(0, 0.75), (0, 0.25)])
 
     with pytest.raises(ValueError, match="rerank index が重複しています"):
-        await client.rerank("請求書", ["本文 A", "本文 B"], top_n=2)
+        await client.rerank("社内規程", ["本文 A", "本文 B"], top_n=2)
 
 
 async def test_rerank_rejects_out_of_range_index() -> None:
@@ -147,7 +147,7 @@ async def test_rerank_rejects_out_of_range_index() -> None:
     client = StubRerankClient(results=[(2, 0.75)])
 
     with pytest.raises(ValueError, match="rerank index が範囲外です"):
-        await client.rerank("請求書", ["本文 A", "本文 B"], top_n=2)
+        await client.rerank("社内規程", ["本文 A", "本文 B"], top_n=2)
 
 
 async def test_rerank_rejects_non_finite_score() -> None:
@@ -155,7 +155,7 @@ async def test_rerank_rejects_non_finite_score() -> None:
     client = StubRerankClient(results=[(0, float("nan"))])
 
     with pytest.raises(ValueError, match="rerank score が不正です"):
-        await client.rerank("請求書", ["本文"], top_n=1)
+        await client.rerank("社内規程", ["本文"], top_n=1)
 
 
 class StubEmbeddingClient(OciGenAiClient):

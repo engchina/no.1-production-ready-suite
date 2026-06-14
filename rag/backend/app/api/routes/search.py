@@ -8,17 +8,26 @@ from time import perf_counter
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.clients.oracle import OracleClient, SelectAiUnavailableError
 from app.config import get_settings
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.guardrails import GuardrailPolicy
 from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
 from app.rag.pipeline import RagPipeline
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
-from app.schemas.search import SearchRequest, SearchResponse
+from app.schemas.search import (
+    SearchRequest,
+    SearchResponse,
+    SelectAiAction,
+    SelectAiRequest,
+    SelectAiResponse,
+)
 
 router = APIRouter()
 SEARCH_TIMEOUT_MESSAGE = "検索処理がタイムアウトしました。条件を絞って再度お試しください。"
+SELECT_AI_BLOCKED_MESSAGE = "Select AI で実行できないクエリです。"
 
 
 @router.post("", response_model=ApiResponse[SearchResponse])
@@ -33,6 +42,42 @@ async def search(
     enforce_rate_limit("search", http_request)
     result = await _run_search_with_timeout(request)
     return ApiResponse(data=result)
+
+
+@router.post("/select-ai", response_model=ApiResponse[SelectAiResponse])
+async def select_ai(
+    http_request: Request,
+    request: SelectAiRequest,
+) -> ApiResponse[SelectAiResponse]:
+    """Oracle Select AI で自然言語から SQL または SQL 実行結果を取得する。"""
+    enforce_rate_limit("search", http_request)
+    guardrail = GuardrailPolicy().validate_query(request.query)
+    if not guardrail.allowed:
+        raise HTTPException(status_code=400, detail=guardrail.warnings or SELECT_AI_BLOCKED_MESSAGE)
+    if request.action == SelectAiAction.RUNSQL and any(
+        finding.code == "sql_mutation_intent" for finding in guardrail.findings
+    ):
+        raise HTTPException(status_code=400, detail=SELECT_AI_BLOCKED_MESSAGE)
+    try:
+        result_text = await OracleClient().select_ai(
+            guardrail.sanitized_text,
+            action=request.action,
+            profile_name=request.profile_name,
+            max_result_chars=request.max_result_chars,
+        )
+    except SelectAiUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    profile_name = request.profile_name or get_settings().oracle_select_ai_profile
+    return ApiResponse(
+        data=SelectAiResponse(
+            action=request.action,
+            result_text=result_text,
+            generated_sql=result_text if request.action == SelectAiAction.SHOWSQL else None,
+            profile_name=profile_name,
+            query_chars=len(guardrail.sanitized_text),
+            guardrail_warnings=guardrail.warnings,
+        )
+    )
 
 
 @router.post("/stream")

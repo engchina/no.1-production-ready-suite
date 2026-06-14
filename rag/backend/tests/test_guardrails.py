@@ -1,7 +1,7 @@
 """RAG guardrail policy のテスト。"""
 
 from app.config import Settings
-from app.rag.guardrails import GuardrailPolicy
+from app.rag.guardrails import GuardrailPolicy, evaluate_groundedness
 
 
 def test_validate_answer_blocks_secret_leakage() -> None:
@@ -38,6 +38,22 @@ def test_sensitive_identifier_masking_can_be_disabled() -> None:
     assert "1234567" in result.sanitized_text
 
 
+def test_validate_query_warns_for_japanese_sql_mutation_intent() -> None:
+    """日本語のデータ変更意図も Select AI runsql 用 warning として検出する。"""
+    result = GuardrailPolicy().validate_query("rag_documents の古い行を削除してください")
+
+    assert result.allowed is True
+    assert [finding.code for finding in result.findings] == ["sql_mutation_intent"]
+
+
+def test_validate_query_does_not_warn_for_japanese_mutation_word_as_question() -> None:
+    """削除件数の確認のような参照クエリは mutation intent として扱わない。"""
+    result = GuardrailPolicy().validate_query("削除件数をステータス別に教えてください")
+
+    assert result.allowed is True
+    assert result.findings == []
+
+
 def test_validate_answer_masks_sensitive_identifiers() -> None:
     """回答中の機微な識別子はブロックではなくマスクして warning にする。"""
     result = GuardrailPolicy().validate_answer(
@@ -55,7 +71,7 @@ def test_validate_answer_warns_when_grounding_overlap_is_low() -> None:
     """回答と citation context の重なりが少ない場合は warning を返す。"""
     result = GuardrailPolicy().validate_answer(
         "明日の天気は晴れです。",
-        context="[invoice.txt#doc-1:0]\n請求金額: 120000 円。クラウド利用料。",
+        context="[policy.txt#doc-1:0]\n承認条件: 120000 円。クラウド利用料。",
     )
 
     assert result.allowed is True
@@ -66,9 +82,35 @@ def test_validate_answer_warns_when_grounding_overlap_is_low() -> None:
 def test_validate_answer_accepts_grounded_numeric_answer() -> None:
     """金額や ID が citation context と一致する回答は warning なしで通す。"""
     result = GuardrailPolicy().validate_answer(
-        "請求金額は 120000 円です。",
-        context="[invoice.txt#doc-1:0]\n請求金額: 120000 円。クラウド利用料。",
+        "承認条件は 120000 円です。",
+        context="[policy.txt#doc-1:0]\n承認条件: 120000 円。クラウド利用料。",
     )
 
     assert result.allowed is True
     assert result.findings == []
+
+
+def test_evaluate_groundedness_returns_score_and_overlap_counts() -> None:
+    """評価 runner でも使える groundedness 診断値を返す。"""
+    result = evaluate_groundedness(
+        "承認条件は 120000 円です。",
+        "[policy.txt#doc-1:0]\n承認条件: 120000 円。クラウド利用料。",
+    )
+
+    assert result.grounded is True
+    assert result.score == 1.0
+    assert result.overlap_count >= 1
+    assert result.answer_feature_count >= 1
+    assert result.high_signal_overlap is True
+
+
+def test_evaluate_groundedness_fails_unrelated_answer_with_context() -> None:
+    """引用と無関係な回答は groundedness gate で検出できる。"""
+    result = evaluate_groundedness(
+        "明日の天気は晴れです。",
+        "[policy.txt#doc-1:0]\n経費申請は部門長の承認が必要です。",
+    )
+
+    assert result.grounded is False
+    assert result.score == 0.0
+    assert result.overlap_count == 0

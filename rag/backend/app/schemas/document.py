@@ -5,16 +5,17 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from app.schemas.extraction import ScalarValue
-
 
 class FileStatus(StrEnum):
-    """ファイル処理状態（参照実装の状態モデルを踏襲）。"""
+    """ファイル処理状態。
+
+    RAG はアップロード後に取込(抽出→チャンク→埋め込み→索引)し、
+    成功した文書を検索対象の INDEXED として扱う。
+    """
 
     UPLOADED = "UPLOADED"
-    ANALYZING = "ANALYZING"
-    ANALYZED = "ANALYZED"
-    REGISTERED = "REGISTERED"
+    INGESTING = "INGESTING"
+    INDEXED = "INDEXED"
     ERROR = "ERROR"
 
 
@@ -25,18 +26,19 @@ class DocumentSummary(BaseModel):
     file_name: str
     status: FileStatus
     category_name: str | None = None
+    content_type: str | None = None
     file_size_bytes: int | None = None
     content_sha256: str | None = None
     duplicate_of_document_id: str | None = None
     uploaded_at: datetime
-    registered_at: datetime | None = None
+    indexed_at: datetime | None = None
 
 
 class DocumentDetail(DocumentSummary):
-    """詳細表示用。VLM 抽出結果を含む。"""
+    """詳細表示用。VLM/LLM の抽出本文とメタデータを含む。"""
 
     object_storage_path: str | None = None
-    extracted_fields: dict[str, object] = Field(default_factory=dict)
+    extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
 
 
@@ -56,10 +58,3 @@ class DocumentStats(BaseModel):
 
     total: int
     by_status: dict[FileStatus, int]
-
-
-class ExtractedFieldsUpdate(BaseModel):
-    """抽出フィールドの編集リクエスト（分析後の修正）。"""
-
-    fields: dict[str, ScalarValue] = Field(default_factory=dict)
-    raw_text: str | None = None

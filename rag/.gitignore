@@ -16,6 +16,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+!frontend/src/lib/
+!frontend/src/lib/**
 parts/
 sdist/
 var/
@@ -223,3 +225,9 @@ node_modules/
 out/
 next-env.d.ts
 .env.local
+
+# Frontend build and test artifacts
+*.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
+frontend/.vite/

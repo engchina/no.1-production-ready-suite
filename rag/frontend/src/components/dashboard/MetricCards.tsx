@@ -1,4 +1,4 @@
-import { FileStack, FolderTree, Search, Upload, type LucideIcon } from "lucide-react";
+import { FileStack, Search, Upload, type LucideIcon } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -22,16 +22,10 @@ export function MetricCards({ stats }: { stats: DashboardStats }) {
       sub: t("dashboard.metric.thisMonth", { count: stats.uploads_this_month }),
     },
     {
-      labelKey: "dashboard.metric.totalRegistrations",
-      value: stats.total_registrations,
+      labelKey: "dashboard.metric.totalIndexed",
+      value: stats.total_indexed,
       icon: FileStack,
-      sub: t("dashboard.metric.thisMonth", { count: stats.registrations_this_month }),
-    },
-    {
-      labelKey: "dashboard.metric.totalCategories",
-      value: stats.total_categories,
-      icon: FolderTree,
-      sub: `有効 ${stats.active_categories}`,
+      sub: t("dashboard.metric.thisMonth", { count: stats.indexed_this_month }),
     },
     {
       labelKey: "dashboard.metric.searchableRows",
@@ -41,7 +35,7 @@ export function MetricCards({ stats }: { stats: DashboardStats }) {
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {metrics.map((m) => {
         const Icon = m.icon;
         return (

@@ -1,7 +1,7 @@
 """Oracle 26ai クライアント。
 
 AI Vector Search によるベクトル検索（VECTOR(1536, FLOAT32)）と
-Select AI による自然言語 → SQL を担う。外部ベクトル DB は使わない。
+Oracle Text による keyword retrieval を担う。外部ベクトル DB は使わない。
 """
 
 import asyncio
@@ -22,13 +22,16 @@ from app.rag.chunking import Chunk
 from app.rag.request_context import current_audit_request_context
 from app.schemas.document import DocumentDetail, DocumentStats, DocumentSummary, FileStatus
 from app.schemas.extraction import StructuredExtraction
-from app.schemas.search import RetrievedChunk, SearchMode
+from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
-SEARCHABLE_FILE_STATUSES = {FileStatus.ANALYZED, FileStatus.REGISTERED}
+SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
 type MetadataValue = str | int | float | bool | None
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 T = TypeVar("T")
+SELECT_AI_UNAVAILABLE_ERROR = (
+    "Select AI は OCI adapter と ORACLE_SELECT_AI_PROFILE の設定が必要です。"
+)
 
 
 class OracleCursorProtocol(Protocol):
@@ -93,8 +96,8 @@ class StoredDocument:
     duplicate_of_document_id: str | None = None
     tenant_id_hash: str | None = None
     category_name: str | None = None
-    registered_at: datetime | None = None
-    extracted_fields: dict[str, object] = field(default_factory=dict)
+    indexed_at: datetime | None = None
+    extraction: dict[str, object] = field(default_factory=dict)
     error_message: str | None = None
 
 
@@ -121,6 +124,12 @@ class LocalOracleStore:
 
 _LOCAL_STORE = LocalOracleStore()
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
+
+
+class SelectAiUnavailableError(RuntimeError):
+    """Select AI を実行できる Oracle 設定がない。"""
+
+    safe_for_user = True
 
 
 class OracleClient:
@@ -216,12 +225,16 @@ class OracleClient:
         retrieval_metadata: dict[str, dict[str, MetadataValue]] = {}
         for rank, hit in enumerate(vector_hits, start=1):
             fused[hit.chunk_id] = hit
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(rank)
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(
+                rank, self._settings.rag_rrf_k
+            )
             retrieval_metadata.setdefault(hit.chunk_id, {})["vector_rank"] = rank
             retrieval_metadata[hit.chunk_id]["vector_score"] = hit.score
         for rank, hit in enumerate(keyword_hits, start=1):
             fused[hit.chunk_id] = hit
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(rank)
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(
+                rank, self._settings.rag_rrf_k
+            )
             retrieval_metadata.setdefault(hit.chunk_id, {})["keyword_rank"] = rank
             retrieval_metadata[hit.chunk_id]["keyword_score"] = hit.score
         ranked_ids = sorted(
@@ -235,37 +248,136 @@ class OracleClient:
             _with_retrieval_metadata(
                 fused[chunk_id].model_copy(update={"score": round(scores[chunk_id], 6)}),
                 retrieval_mode=_hybrid_retrieval_mode(retrieval_metadata[chunk_id]),
+                rrf_k=self._settings.rag_rrf_k,
                 rrf_score=round(scores[chunk_id], 6),
                 **retrieval_metadata[chunk_id],
             )
             for chunk_id in ranked_ids
         ]
 
-    async def select_ai(
-        self, natural_language: str, limit: int | None = None
-    ) -> list[dict[str, object]]:
-        """Select AI で自然言語を SQL に変換して実行する。"""
+    async def context_neighbors(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        window: int,
+    ) -> list[RetrievedChunk]:
+        """rerank 済み anchor chunk の前後を LLM context 補完用に取得する。"""
+        if window <= 0 or not anchors:
+            return []
         if self._settings.ai_service_adapter == "oci":
-            return await self._select_ai_with_oracle(natural_language, limit)
-        documents = sorted(
-            _LOCAL_STORE.documents.values(),
-            key=lambda document: document.uploaded_at,
-            reverse=True,
-        )
-        documents = [
-            document for document in documents if _document_matches_current_tenant(document)
-        ]
-        if limit is not None:
-            documents = documents[:limit]
-        return [
+            return await self._context_neighbors_with_oracle(anchors, window=window)
+
+        neighbors: list[RetrievedChunk] = []
+        for anchor in anchors:
+            anchor_index = _chunk_index_from_retrieved(anchor)
+            if anchor_index is None:
+                continue
+            for offset in _context_neighbor_offsets(window):
+                candidate_index = anchor_index + offset
+                candidate = next(
+                    (
+                        chunk
+                        for chunk in _LOCAL_STORE.chunks.values()
+                        if chunk.document_id == anchor.document_id
+                        and chunk.chunk_index == candidate_index
+                    ),
+                    None,
+                )
+                if candidate is None or candidate.id == anchor.chunk_id:
+                    continue
+                if not _chunk_matches_filters(candidate, {"document_id": anchor.document_id}):
+                    continue
+                neighbors.append(
+                    _with_context_neighbor_metadata(
+                        self._to_retrieved_chunk(candidate, anchor.score),
+                        anchor=anchor,
+                        distance=offset,
+                    )
+                )
+        return neighbors
+
+    async def context_group_siblings(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+    ) -> list[RetrievedChunk]:
+        """rerank 済み anchor と同じ親 chunk group の sibling を取得する。"""
+        if max_chunks_per_group <= 0 or not anchors:
+            return []
+        if self._settings.ai_service_adapter == "oci":
+            return await self._context_group_siblings_with_oracle(
+                anchors,
+                max_chunks_per_group=max_chunks_per_group,
+            )
+
+        siblings: list[RetrievedChunk] = []
+        for anchor in anchors:
+            group_id = _chunk_group_id_from_retrieved(anchor)
+            anchor_index = _chunk_index_from_retrieved(anchor)
+            if group_id is None or anchor_index is None:
+                continue
+            candidates = [
+                chunk
+                for chunk in _LOCAL_STORE.chunks.values()
+                if chunk.document_id == anchor.document_id
+                and chunk.id != anchor.chunk_id
+                and _chunk_group_id_from_metadata(chunk.metadata) == group_id
+                and _chunk_matches_filters(chunk, {"document_id": anchor.document_id})
+            ]
+            for candidate in sorted(
+                candidates,
+                key=lambda chunk: (
+                    abs(chunk.chunk_index - anchor_index),
+                    chunk.chunk_index - anchor_index,
+                    chunk.chunk_index,
+                    chunk.id,
+                ),
+            )[:max_chunks_per_group]:
+                siblings.append(
+                    _with_context_group_metadata(
+                        self._to_retrieved_chunk(candidate, anchor.score),
+                        anchor=anchor,
+                        group_id=group_id,
+                        distance=candidate.chunk_index - anchor_index,
+                    )
+                )
+        return siblings
+
+    async def select_ai(
+        self,
+        query: str,
+        *,
+        action: SelectAiAction = SelectAiAction.SHOWSQL,
+        profile_name: str | None = None,
+        max_result_chars: int | None = None,
+    ) -> str:
+        """Oracle Select AI profile で自然言語 query を SQL/結果へ変換する。"""
+        if self._settings.ai_service_adapter != "oci":
+            raise SelectAiUnavailableError(SELECT_AI_UNAVAILABLE_ERROR)
+        resolved_profile = (profile_name or self._settings.oracle_select_ai_profile).strip()
+        if not resolved_profile:
+            raise SelectAiUnavailableError(SELECT_AI_UNAVAILABLE_ERROR)
+        result_limit = max_result_chars or self._settings.oracle_select_ai_max_result_chars
+        row = await self._fetch_one(
+            """
+            SELECT DBMS_CLOUD_AI.GENERATE(
+                prompt       => :prompt,
+                profile_name => :profile_name,
+                action       => :action
+            ) AS result_text
+            FROM dual
+            """,
             {
-                "document_id": document.id,
-                "file_name": document.file_name,
-                "status": document.status.value,
-                "uploaded_at": document.uploaded_at.isoformat(),
-            }
-            for document in documents
-        ]
+                "prompt": query,
+                "profile_name": resolved_profile,
+                "action": action.value,
+            },
+        )
+        if row is None:
+            return ""
+        result = row.get("result_text")
+        return str(result or "")[:result_limit]
 
     async def create_document(
         self,
@@ -339,6 +451,12 @@ class OracleClient:
         sliced = documents[offset : offset + limit] if limit is not None else documents[offset:]
         return [_to_document_summary(document) for document in sliced]
 
+    async def list_document_extractions(self) -> list[dict[str, object]]:
+        """アクセス可能な document の extraction JSON だけを返す。"""
+        if self._settings.ai_service_adapter == "oci":
+            return await self._list_document_extractions_with_oracle()
+        return [dict(document.extraction) for document in _filtered_documents()]
+
     async def count_documents(
         self,
         status: FileStatus | None = None,
@@ -356,6 +474,16 @@ class OracleClient:
         return sum(
             1 for chunk in _LOCAL_STORE.chunks.values() if _chunk_matches_filters(chunk, None)
         )
+
+    async def list_chunk_metadata(self) -> list[dict[str, MetadataValue]]:
+        """検索対象 chunk の metadata JSON だけを返す。"""
+        if self._settings.ai_service_adapter == "oci":
+            return await self._list_chunk_metadata_with_oracle()
+        return [
+            dict(chunk.metadata)
+            for chunk in _LOCAL_STORE.chunks.values()
+            if _chunk_matches_filters(chunk, None)
+        ]
 
     async def count_document_chunks(self, document_id: str) -> int:
         """指定 document の検索可能なチャンク行数を返す。"""
@@ -387,6 +515,17 @@ class OracleClient:
             return None
         return _to_document_detail(document)
 
+    async def delete_document(self, document_id: str) -> bool:
+        """ドキュメントと関連 chunk/index 行を削除する。"""
+        if self._settings.ai_service_adapter == "oci":
+            return await self._delete_document_with_oracle(document_id)
+        document = _LOCAL_STORE.documents.get(document_id)
+        if document is None or not _document_matches_current_tenant(document):
+            return False
+        _delete_document_chunks(document_id)
+        del _LOCAL_STORE.documents[document_id]
+        return True
+
     async def update_document_status(
         self,
         document_id: str,
@@ -403,21 +542,21 @@ class OracleClient:
         document = _require_document(document_id)
         document.status = status
         document.error_message = error_message
-        if status in (FileStatus.ANALYZING, FileStatus.ERROR):
+        if status in (FileStatus.INGESTING, FileStatus.ERROR):
             _delete_document_chunks(document_id)
-            document.extracted_fields = {}
-        if status == FileStatus.REGISTERED and document.registered_at is None:
-            document.registered_at = datetime.now(UTC)
+            document.extraction = {}
+        if status == FileStatus.INDEXED and document.indexed_at is None:
+            document.indexed_at = datetime.now(UTC)
         return _to_document_detail(document)
 
     async def save_extraction(
         self, document_id: str, extraction: StructuredExtraction
     ) -> DocumentDetail:
-        """VLM 構造化抽出結果を保存する。"""
+        """VLM/LLM の抽出本文を保存する。"""
         if self._settings.ai_service_adapter == "oci":
             return await self._save_extraction_with_oracle(document_id, extraction)
         document = _require_document(document_id)
-        document.extracted_fields = extraction.to_document_fields()
+        document.extraction = extraction.to_document_payload()
         return _to_document_detail(document)
 
     async def save_chunks(
@@ -450,6 +589,7 @@ class OracleClient:
                     "chunk_index": chunk.index,
                     "start_offset": chunk.start_offset,
                     "end_offset": chunk.end_offset,
+                    **chunk.metadata,
                 },
             )
             _LOCAL_STORE.chunks[chunk_id] = stored
@@ -464,36 +604,38 @@ class OracleClient:
         binds.update(
             {
                 "embedding": embedding,
-                "top_k": top_k,
                 "min_similarity": self._settings.rag_min_similarity,
             }
+        )
+        fetch_clause = _oracle_vector_fetch_clause(
+            top_k=top_k,
+            target_accuracy=self._settings.oracle_vector_target_accuracy,
         )
         rows = await self._fetch_all(
             _render_sql(
                 """
-            SELECT *
-            FROM (
-                SELECT
-                    c.document_id,
-                    c.chunk_id,
-                    c.chunk_text,
-                    c.metadata_json,
-                    d.file_name,
-                    d.category_name,
-                    1 - VECTOR_DISTANCE(c.embedding, :embedding, COSINE) AS score
-                FROM rag_chunks c
-                JOIN rag_documents d ON d.document_id = c.document_id
-                WHERE {where_sql}
-                  AND 1 - VECTOR_DISTANCE(c.embedding, :embedding, COSINE) >= :min_similarity
-                ORDER BY
-                    VECTOR_DISTANCE(c.embedding, :embedding, COSINE) ASC,
-                    c.document_id ASC,
-                    c.chunk_index ASC,
-                    c.chunk_id ASC
-            )
-            WHERE ROWNUM <= :top_k
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index,
+                d.file_name,
+                d.category_name,
+                1 - VECTOR_DISTANCE(c.embedding, :embedding, COSINE) AS score
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND 1 - VECTOR_DISTANCE(c.embedding, :embedding, COSINE) >= :min_similarity
+            ORDER BY
+                VECTOR_DISTANCE(c.embedding, :embedding, COSINE) ASC,
+                c.document_id ASC,
+                c.chunk_index ASC,
+                c.chunk_id ASC
+            {fetch_clause}
             """,
                 where_sql=where_sql,
+                fetch_clause=fetch_clause,
             ),
             binds,
         )
@@ -523,6 +665,7 @@ class OracleClient:
                     c.chunk_id,
                     c.chunk_text,
                     c.metadata_json,
+                    c.chunk_index,
                     d.file_name,
                     d.category_name,
                     SCORE(1) / 100 AS score
@@ -552,40 +695,133 @@ class OracleClient:
             for rank, row in enumerate(rows, start=1)
         ]
 
-    async def _select_ai_with_oracle(
-        self, natural_language: str, limit: int | None
-    ) -> list[dict[str, object]]:
-        """Oracle Select AI で自然言語参照を実行する。"""
-        bounded_prompt = (
-            f"{natural_language}\n最大 {limit} 行で返してください。"
-            if limit is not None
-            else natural_language
-        )
-        profile = self._settings.oracle_select_ai_profile.strip()
-        if profile:
-            rows = await self._fetch_all(
-                """
-                SELECT DBMS_CLOUD_AI.GENERATE(
-                    prompt => :prompt,
-                    profile_name => :profile_name,
-                    action => 'runsql'
-                ) AS result
-                FROM dual
-                """,
-                {"prompt": bounded_prompt, "profile_name": profile},
+    async def _context_neighbors_with_oracle(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        window: int,
+    ) -> list[RetrievedChunk]:
+        """Oracle から同一 document の隣接 chunk を取得する。"""
+        neighbors: list[RetrievedChunk] = []
+        for anchor in anchors:
+            anchor_index = _chunk_index_from_retrieved(anchor)
+            if anchor_index is None:
+                continue
+            where_sql, binds = _oracle_retrieval_where({"document_id": anchor.document_id})
+            binds.update(
+                {
+                    "anchor_index": anchor_index,
+                    "anchor_chunk_id": anchor.chunk_id,
+                    "start_index": anchor_index - window,
+                    "end_index": anchor_index + window,
+                }
             )
-        else:
             rows = await self._fetch_all(
-                """
-                SELECT DBMS_CLOUD_AI.GENERATE(
-                    prompt => :prompt,
-                    action => 'runsql'
-                ) AS result
-                FROM dual
+                _render_sql(
+                    """
+                SELECT
+                    c.document_id,
+                    c.chunk_id,
+                    c.chunk_text,
+                    c.metadata_json,
+                    c.chunk_index,
+                    d.file_name,
+                    d.category_name,
+                    0 AS score
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND c.chunk_index BETWEEN :start_index AND :end_index
+                  AND c.chunk_id <> :anchor_chunk_id
+                ORDER BY
+                    ABS(c.chunk_index - :anchor_index) ASC,
+                    c.chunk_index ASC,
+                    c.chunk_id ASC
                 """,
-                {"prompt": bounded_prompt},
+                    where_sql=where_sql,
+                ),
+                binds,
             )
-        return _select_ai_rows(rows, limit)
+            for row in rows:
+                neighbor = _retrieved_chunk_from_row(row).model_copy(update={"score": anchor.score})
+                neighbor_index = _chunk_index_from_retrieved(neighbor)
+                if neighbor_index is None:
+                    continue
+                neighbors.append(
+                    _with_context_neighbor_metadata(
+                        neighbor,
+                        anchor=anchor,
+                        distance=neighbor_index - anchor_index,
+                    )
+                )
+        return neighbors
+
+    async def _context_group_siblings_with_oracle(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+    ) -> list[RetrievedChunk]:
+        """Oracle から同一 parent chunk group の sibling を取得する。"""
+        siblings: list[RetrievedChunk] = []
+        for anchor in anchors:
+            group_id = _chunk_group_id_from_retrieved(anchor)
+            anchor_index = _chunk_index_from_retrieved(anchor)
+            if group_id is None or anchor_index is None:
+                continue
+            where_sql, binds = _oracle_retrieval_where({"document_id": anchor.document_id})
+            binds.update(
+                {
+                    "chunk_group_id": group_id,
+                    "anchor_index": anchor_index,
+                    "anchor_chunk_id": anchor.chunk_id,
+                    "max_chunks_per_group": max_chunks_per_group,
+                }
+            )
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT *
+                FROM (
+                    SELECT
+                        c.document_id,
+                        c.chunk_id,
+                        c.chunk_text,
+                        c.metadata_json,
+                        c.chunk_index,
+                        d.file_name,
+                        d.category_name,
+                        0 AS score
+                    FROM rag_chunks c
+                    JOIN rag_documents d ON d.document_id = c.document_id
+                    WHERE {where_sql}
+                      AND JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id
+                      AND c.chunk_id <> :anchor_chunk_id
+                    ORDER BY
+                        ABS(c.chunk_index - :anchor_index) ASC,
+                        c.chunk_index ASC,
+                        c.chunk_id ASC
+                )
+                WHERE ROWNUM <= :max_chunks_per_group
+                """,
+                    where_sql=where_sql,
+                ),
+                binds,
+            )
+            for row in rows:
+                sibling = _retrieved_chunk_from_row(row).model_copy(update={"score": anchor.score})
+                sibling_index = _chunk_index_from_retrieved(sibling)
+                if sibling_index is None:
+                    continue
+                siblings.append(
+                    _with_context_group_metadata(
+                        sibling,
+                        anchor=anchor,
+                        group_id=group_id,
+                        distance=sibling_index - anchor_index,
+                    )
+                )
+        return siblings
 
     async def _create_document_with_oracle(
         self,
@@ -668,10 +904,10 @@ class OracleClient:
                     file_size_bytes,
                     content_sha256,
                     duplicate_of_document_id,
-                    extracted_fields,
+                    extraction,
                     error_message,
                     uploaded_at,
-                    registered_at
+                    indexed_at
                 FROM rag_documents
                 WHERE {where_sql}
                   AND content_sha256 = :content_sha256
@@ -716,10 +952,10 @@ class OracleClient:
                 file_size_bytes,
                 content_sha256,
                 duplicate_of_document_id,
-                extracted_fields,
+                extraction,
                 error_message,
                 uploaded_at,
-                registered_at
+                indexed_at
             FROM rag_documents
             WHERE {where_sql}
             ORDER BY uploaded_at DESC
@@ -731,6 +967,22 @@ class OracleClient:
             binds,
         )
         return [_to_document_summary(_stored_document_from_row(row)) for row in rows]
+
+    async def _list_document_extractions_with_oracle(self) -> list[dict[str, object]]:
+        """Oracle document table から extraction JSON だけを取得する。"""
+        where_sql, binds = _oracle_document_where()
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT extraction
+            FROM rag_documents
+            WHERE {where_sql}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return [_json_loads(row.get("extraction")) for row in rows]
 
     async def _count_documents_with_oracle(
         self,
@@ -764,6 +1016,23 @@ class OracleClient:
             binds,
         )
         return _row_count_value(row)
+
+    async def _list_chunk_metadata_with_oracle(self) -> list[dict[str, MetadataValue]]:
+        """Oracle chunk table から検索対象 chunk の metadata JSON だけを取得する。"""
+        where_sql, binds = _oracle_retrieval_where({})
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT c.metadata_json
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return [_metadata_from_json(row.get("metadata_json")) for row in rows]
 
     async def _count_document_chunks_with_oracle(self, document_id: str) -> int:
         """Oracle chunk/vector table の document 別検索可能件数を取得する。"""
@@ -828,15 +1097,15 @@ class OracleClient:
                 file_size_bytes,
                 content_sha256,
                 duplicate_of_document_id,
-                extracted_fields,
+                extraction,
                 error_message,
                 uploaded_at,
-                registered_at
+                indexed_at
             FROM rag_documents
             WHERE document_id = :document_id
-              AND {tenant_predicate}
+              AND {access_predicate}
             """,
-                tenant_predicate=_oracle_tenant_predicate(),
+                access_predicate=_oracle_access_predicate_sql(),
             ),
             _with_tenant_bind({"document_id": document_id}),
         )
@@ -851,7 +1120,10 @@ class OracleClient:
         """Oracle document table の状態を更新する。"""
 
         def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            if status in (FileStatus.ANALYZING, FileStatus.ERROR):
+            existing = _select_document(connection, document_id)
+            if existing is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            if status in (FileStatus.INGESTING, FileStatus.ERROR):
                 _execute(
                     connection,
                     """
@@ -868,11 +1140,11 @@ class OracleClient:
                     SET
                         status = :status,
                         error_message = :error_message,
-                        extracted_fields = NULL
+                        extraction = NULL
                     WHERE document_id = :document_id
-                      AND {tenant_predicate}
+                      AND {access_predicate}
                     """,
-                        tenant_predicate=_oracle_tenant_predicate(),
+                        access_predicate=_oracle_access_predicate_sql(),
                     ),
                     _with_tenant_bind(
                         {
@@ -882,7 +1154,7 @@ class OracleClient:
                         }
                     ),
                 )
-            elif status == FileStatus.REGISTERED:
+            elif status == FileStatus.INDEXED:
                 _execute(
                     connection,
                     _render_sql(
@@ -891,11 +1163,11 @@ class OracleClient:
                     SET
                         status = :status,
                         error_message = :error_message,
-                        registered_at = COALESCE(registered_at, SYSTIMESTAMP)
+                        indexed_at = COALESCE(indexed_at, SYSTIMESTAMP)
                     WHERE document_id = :document_id
-                      AND {tenant_predicate}
+                      AND {access_predicate}
                     """,
-                        tenant_predicate=_oracle_tenant_predicate(),
+                        access_predicate=_oracle_access_predicate_sql(),
                     ),
                     _with_tenant_bind(
                         {
@@ -915,9 +1187,9 @@ class OracleClient:
                         status = :status,
                         error_message = :error_message
                     WHERE document_id = :document_id
-                      AND {tenant_predicate}
+                      AND {access_predicate}
                     """,
-                        tenant_predicate=_oracle_tenant_predicate(),
+                        access_predicate=_oracle_access_predicate_sql(),
                     ),
                     _with_tenant_bind(
                         {
@@ -934,6 +1206,37 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def _delete_document_with_oracle(self, document_id: str) -> bool:
+        """Oracle document table と chunk/vector table から指定 document を削除する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> bool:
+            existing = _select_document(connection, document_id)
+            if existing is None:
+                return False
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunks
+                WHERE document_id = :document_id
+                """,
+                {"document_id": document_id},
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_documents
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            return True
+
+        return await self._run_transaction(operation)
+
     async def _save_extraction_with_oracle(
         self,
         document_id: str,
@@ -947,16 +1250,16 @@ class OracleClient:
                 _render_sql(
                     """
                 UPDATE rag_documents
-                SET extracted_fields = :extracted_fields
+                SET extraction = :extraction
                 WHERE document_id = :document_id
-                  AND {tenant_predicate}
+                  AND {access_predicate}
                 """,
-                    tenant_predicate=_oracle_tenant_predicate(),
+                    access_predicate=_oracle_access_predicate_sql(),
                 ),
                 _with_tenant_bind(
                     {
                         "document_id": document_id,
-                        "extracted_fields": _json_dumps(extraction.to_document_fields()),
+                        "extraction": _json_dumps(extraction.to_document_payload()),
                     }
                 ),
             )
@@ -999,6 +1302,7 @@ class OracleClient:
                             "chunk_index": chunk.index,
                             "start_offset": chunk.start_offset,
                             "end_offset": chunk.end_offset,
+                            **chunk.metadata,
                         }
                     ),
                     "embedding": embedding,
@@ -1109,8 +1413,8 @@ class OracleClient:
         }
         if self._settings.oracle_password.strip():
             pool_kwargs["password"] = self._settings.oracle_password
-        wallet_dir = self._settings.oracle_wallet_dir.strip()
-        if wallet_dir:
+        wallet_dir = self._settings.resolved_oracle_wallet_dir.strip()
+        if wallet_dir and Path(wallet_dir).expanduser().is_dir():
             wallet_path = str(Path(wallet_dir).expanduser())
             pool_kwargs["config_dir"] = wallet_path
             pool_kwargs["wallet_location"] = wallet_path
@@ -1208,15 +1512,15 @@ def _select_document(
             file_size_bytes,
             content_sha256,
             duplicate_of_document_id,
-            extracted_fields,
+            extraction,
             error_message,
             uploaded_at,
-            registered_at
+            indexed_at
         FROM rag_documents
         WHERE document_id = :document_id
-          AND {tenant_predicate}
+          AND {access_predicate}
         """,
-            tenant_predicate=_oracle_tenant_predicate(),
+            access_predicate=_oracle_access_predicate_sql(),
         ),
         _with_tenant_bind({"document_id": document_id}),
     )
@@ -1267,7 +1571,7 @@ def _oracle_document_where(
     status: FileStatus | None = None,
     query: str | None = None,
 ) -> tuple[str, dict[str, object]]:
-    clauses = [_oracle_tenant_predicate()]
+    clauses = _oracle_access_predicates()
     binds = _with_tenant_bind({})
     if status is not None:
         clauses.append("status = :status")
@@ -1282,7 +1586,7 @@ def _oracle_document_where(
 
 
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
-    clauses = ["d.status IN ('ANALYZED', 'REGISTERED')", _oracle_tenant_predicate(alias="d")]
+    clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
     for key, value in filters.items():
         cleaned = value.strip()
@@ -1300,9 +1604,41 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         elif key == "category_name":
             clauses.append("LOWER(d.category_name) LIKE :filter_category_name ESCAPE '\\'")
             binds["filter_category_name"] = _like_pattern(cleaned)
+        elif key == "content_kind":
+            clauses.append(
+                "LOWER(JSON_VALUE(c.metadata_json, '$.content_kind')) = :filter_content_kind"
+            )
+            binds["filter_content_kind"] = cleaned.casefold()
+        elif key == "section_title":
+            clauses.append(
+                "LOWER(JSON_VALUE(c.metadata_json, '$.section_title')) "
+                "LIKE :filter_section_title ESCAPE '\\'"
+            )
+            binds["filter_section_title"] = _like_pattern(cleaned)
+        elif key == "section_path":
+            clauses.append(
+                "LOWER(JSON_VALUE(c.metadata_json, '$.section_path')) "
+                "LIKE :filter_section_path ESCAPE '\\'"
+            )
+            binds["filter_section_path"] = _like_pattern(cleaned)
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
     return " AND ".join(clauses), binds
+
+
+def _oracle_vector_fetch_clause(*, top_k: int, target_accuracy: int) -> str:
+    """Oracle AI Vector Search の approximate top-k 句を安全な整数 literal で返す。"""
+    top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=1000)
+    target_accuracy_literal = _bounded_int_literal(
+        target_accuracy,
+        name="oracle_vector_target_accuracy",
+        minimum=1,
+        maximum=100,
+    )
+    return (
+        f"FETCH APPROX FIRST {top_k_literal} ROWS ONLY "
+        f"WITH TARGET ACCURACY {target_accuracy_literal}"
+    )
 
 
 def _oracle_tenant_predicate(*, alias: str | None = None) -> str:
@@ -1313,6 +1649,38 @@ def _oracle_tenant_predicate(*, alias: str | None = None) -> str:
     return f"{column} = :tenant_id_hash"
 
 
+def _oracle_access_predicates(*, alias: str | None = None) -> list[str]:
+    """tenant と認可済み document/category scope を SQL predicate にする。"""
+    context = current_audit_request_context()
+    predicates = [_oracle_tenant_predicate(alias=alias)]
+    document_column = f"{alias}.document_id" if alias else "document_id"
+    if context.allowed_document_ids is not None:
+        if not context.allowed_document_ids:
+            predicates.append("1 = 0")
+        else:
+            placeholders = ", ".join(
+                f":access_document_id_{index}"
+                for index, _ in enumerate(sorted(context.allowed_document_ids))
+            )
+            predicates.append(f"{document_column} IN ({placeholders})")
+    category_column = f"{alias}.category_name" if alias else "category_name"
+    if context.allowed_category_names is not None:
+        if not context.allowed_category_names:
+            predicates.append("1 = 0")
+        else:
+            placeholders = ", ".join(
+                f":access_category_name_{index}"
+                for index, _ in enumerate(sorted(context.allowed_category_names))
+            )
+            predicates.append(f"LOWER({category_column}) IN ({placeholders})")
+    return predicates
+
+
+def _oracle_access_predicate_sql(*, alias: str | None = None) -> str:
+    """tenant と認可 scope の predicate を AND で結合する。"""
+    return " AND ".join(_oracle_access_predicates(alias=alias))
+
+
 def _with_tenant_bind(
     binds: Mapping[str, object],
     *,
@@ -1320,9 +1688,15 @@ def _with_tenant_bind(
 ) -> dict[str, object]:
     del alias
     resolved = dict(binds)
-    tenant_id_hash = _current_tenant_id_hash()
-    if tenant_id_hash is not None:
-        resolved["tenant_id_hash"] = tenant_id_hash
+    context = current_audit_request_context()
+    if context.tenant_id_hash is not None:
+        resolved["tenant_id_hash"] = context.tenant_id_hash
+    if context.allowed_document_ids is not None:
+        for index, document_id in enumerate(sorted(context.allowed_document_ids)):
+            resolved[f"access_document_id_{index}"] = document_id
+    if context.allowed_category_names is not None:
+        for index, category_name in enumerate(sorted(context.allowed_category_names)):
+            resolved[f"access_category_name_{index}"] = category_name
     return resolved
 
 
@@ -1359,13 +1733,17 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         duplicate_of_document_id=_optional_str(row.get("duplicate_of_document_id")),
         tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
         category_name=_optional_str(row.get("category_name")),
-        registered_at=_optional_datetime(row.get("registered_at")),
-        extracted_fields=_json_loads(row.get("extracted_fields")),
+        indexed_at=_optional_datetime(row.get("indexed_at")),
+        extraction=_json_loads(row.get("extraction")),
         error_message=_optional_str(row.get("error_message")),
     )
 
 
 def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
+    metadata = _metadata_from_json(row.get("metadata_json"))
+    chunk_index = row.get("chunk_index")
+    if "chunk_index" not in metadata and chunk_index is not None:
+        metadata["chunk_index"] = _int_value(chunk_index)
     return RetrievedChunk(
         document_id=str(row["document_id"]),
         chunk_id=str(row["chunk_id"]),
@@ -1373,7 +1751,7 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
         score=round(_float_value(row.get("score", 0.0)), 6),
         file_name=_optional_str(row.get("file_name")),
         category_name=_optional_str(row.get("category_name")),
-        metadata=_metadata_from_json(row.get("metadata_json")),
+        metadata=metadata,
     )
 
 
@@ -1404,40 +1782,6 @@ def _json_loads(value: object) -> dict[str, object]:
     if isinstance(decoded, Mapping):
         return {str(key): item for key, item in decoded.items()}
     return {}
-
-
-def _select_ai_rows(rows: list[dict[str, object]], limit: int | None) -> list[dict[str, object]]:
-    if len(rows) != 1 or "result" not in rows[0]:
-        return _limit_rows(rows, limit)
-
-    result = rows[0].get("result")
-    if result is None:
-        return []
-    decoded = _decode_select_ai_result(result)
-    return _limit_rows(decoded, limit)
-
-
-def _decode_select_ai_result(result: object) -> list[dict[str, object]]:
-    if isinstance(result, list):
-        return [_dict_from_mapping(item) for item in result if isinstance(item, Mapping)]
-    if isinstance(result, Mapping):
-        if isinstance(result.get("rows"), list):
-            rows = result["rows"]
-            return [_dict_from_mapping(item) for item in rows if isinstance(item, Mapping)]
-        return [_dict_from_mapping(result)]
-
-    text = str(result).strip()
-    if not text:
-        return []
-    try:
-        decoded = json.loads(text)
-    except json.JSONDecodeError:
-        return [{"result": text}]
-    return _decode_select_ai_result(decoded)
-
-
-def _limit_rows(rows: list[dict[str, object]], limit: int | None) -> list[dict[str, object]]:
-    return rows[:limit] if limit is not None else rows
 
 
 def _row_count_value(row: Mapping[str, object] | None) -> int:
@@ -1479,10 +1823,6 @@ def _optional_datetime(value: object) -> datetime | None:
     return _datetime_value(value)
 
 
-def _dict_from_mapping(value: Mapping[object, object]) -> dict[str, object]:
-    return {str(key): item for key, item in value.items()}
-
-
 def _float_value(value: object) -> float:
     if value is None:
         return 0.0
@@ -1509,6 +1849,15 @@ def _int_value(value: object) -> int:
     raise ValueError(f"整数に変換できない値です: {value!r}")
 
 
+def _bounded_int_literal(value: int, *, name: str, minimum: int, maximum: int) -> str:
+    """SQL grammar position に使う整数 literal を範囲検証して返す。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} は整数で指定してください。")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} は {minimum} から {maximum} の範囲で指定してください。")
+    return str(value)
+
+
 def reset_local_store() -> None:
     """テスト用にローカルストアを初期化する。"""
     _LOCAL_STORE.documents.clear()
@@ -1524,8 +1873,49 @@ def close_oracle_pool() -> None:
     _SHARED_ORACLE_POOL = None
 
 
+async def test_oracle_connection(
+    settings: Settings | None = None,
+    db_call_runner: DbCallRunner | None = None,
+) -> None:
+    """Oracle へ 1 回だけ接続し、最小クエリで疎通を確認する。"""
+    effective_settings = settings or get_settings()
+    if effective_settings.ai_service_adapter == "local":
+        return
+    runner = db_call_runner or _run_db_call_in_thread
+    await runner(lambda: _test_oracle_connection_sync(effective_settings))
+
+
+def _test_oracle_connection_sync(settings: Settings) -> None:
+    """同期 SDK で Oracle 接続を検証する。"""
+    oracledb = importlib.import_module("oracledb")
+    connect_kwargs: dict[str, object] = {
+        "user": settings.oracle_user,
+        "dsn": settings.oracle_dsn,
+    }
+    if settings.oracle_password.strip():
+        connect_kwargs["password"] = settings.oracle_password
+    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
+    if wallet_dir and Path(wallet_dir).expanduser().is_dir():
+        wallet_path = str(Path(wallet_dir).expanduser())
+        connect_kwargs["config_dir"] = wallet_path
+        connect_kwargs["wallet_location"] = wallet_path
+    if settings.oracle_wallet_password.strip():
+        connect_kwargs["wallet_password"] = settings.oracle_wallet_password
+
+    connection = oracledb.connect(**connect_kwargs)
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT 1 FROM DUAL")
+            cursor.fetchone()
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
-    """Oracle 26ai VECTOR(1536, FLOAT32) の DDL 例を返す。"""
+    """Oracle 26ai VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
     return f"""
 CREATE TABLE {table_name} (
     chunk_id        VARCHAR2(128) PRIMARY KEY,
@@ -1538,17 +1928,23 @@ CREATE TABLE {table_name} (
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 
-CREATE VECTOR INDEX {table_name}_embedding_idx
+CREATE VECTOR INDEX {table_name}_embedding_hnsw_idx
     ON {table_name} (embedding)
-    ORGANIZATION NEIGHBOR PARTITIONS
-    DISTANCE COSINE;
+    ORGANIZATION INMEMORY NEIGHBOR GRAPH
+    DISTANCE COSINE
+    WITH TARGET ACCURACY 95
+    PARAMETERS (
+        TYPE HNSW,
+        NEIGHBORS 32,
+        EFCONSTRUCTION 500
+    );
 
 CREATE INDEX {table_name}_text_idx
     ON {table_name} (chunk_text)
     INDEXTYPE IS CTXSYS.CONTEXT;
 
 CREATE INDEX {table_name}_tenant_document_idx
-    ON {table_name} (tenant_id_hash, document_id);
+    ON {table_name} (tenant_id_hash, document_id, chunk_index);
 """.strip()
 
 
@@ -1566,12 +1962,12 @@ CREATE TABLE {table_name} (
     file_size_bytes          NUMBER(19),
     content_sha256           CHAR(64),
     duplicate_of_document_id VARCHAR2(64),
-    extracted_fields         JSON,
+    extraction               JSON,
     error_message            VARCHAR2(2000),
     uploaded_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    registered_at            TIMESTAMP WITH TIME ZONE,
+    indexed_at               TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
-        CHECK (status IN ('UPLOADED', 'ANALYZING', 'ANALYZED', 'REGISTERED', 'ERROR')),
+        CHECK (status IN ('UPLOADED', 'INGESTING', 'INDEXED', 'ERROR')),
     CONSTRAINT {table_name}_duplicate_fk
         FOREIGN KEY (duplicate_of_document_id) REFERENCES {table_name} (document_id)
 );
@@ -1604,10 +2000,17 @@ CREATE TABLE {table_name} (
     filter_keys           JSON,
     top_k                 NUMBER(10),
     rerank_top_n          NUMBER(10),
+    query_variant_count   NUMBER(10) DEFAULT 1 NOT NULL,
     guardrail_codes       JSON,
     guardrail_severities  JSON,
     retrieved_count       NUMBER(10) DEFAULT 0 NOT NULL,
     reranked_count        NUMBER(10) DEFAULT 0 NOT NULL,
+    deduplicated_count    NUMBER(10) DEFAULT 0 NOT NULL,
+    context_diversified_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_group_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_compressed_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_compression_saved_chars NUMBER(10) DEFAULT 0 NOT NULL,
     citation_count        NUMBER(10) DEFAULT 0 NOT NULL,
     context_chars         NUMBER(10) DEFAULT 0 NOT NULL,
     context_window_chars  NUMBER(10),
@@ -1657,7 +2060,6 @@ CREATE TABLE {table_name} (
     source_bytes           NUMBER(19) NOT NULL,
     document_type          VARCHAR2(128),
     extraction_confidence  NUMBER(6, 5),
-    field_count            NUMBER(10) DEFAULT 0 NOT NULL,
     chunk_count            NUMBER(10) DEFAULT 0 NOT NULL,
     vector_count           NUMBER(10) DEFAULT 0 NOT NULL,
     elapsed_ms             NUMBER(12, 3) NOT NULL,
@@ -1763,7 +2165,41 @@ def _chunk_matches_filters(chunk: StoredChunk, filters: dict[str, str] | None) -
             return False
         if category_name.casefold() not in document.category_name.casefold():
             return False
+    if (content_kind := filters.get("content_kind")) and not _metadata_value_equals(
+        chunk.metadata,
+        "content_kind",
+        content_kind,
+    ):
+        return False
+    if (section_title := filters.get("section_title")) and not _metadata_value_contains(
+        chunk.metadata,
+        "section_title",
+        section_title,
+    ):
+        return False
+    if section_path := filters.get("section_path"):
+        return _metadata_value_contains(chunk.metadata, "section_path", section_path)
     return True
+
+
+def _metadata_value_equals(
+    metadata: Mapping[str, MetadataValue],
+    key: str,
+    expected: str,
+) -> bool:
+    """chunk metadata の文字列値を case-insensitive に完全一致で見る。"""
+    value = metadata.get(key)
+    return isinstance(value, str) and value.casefold() == expected.casefold()
+
+
+def _metadata_value_contains(
+    metadata: Mapping[str, MetadataValue],
+    key: str,
+    expected: str,
+) -> bool:
+    """chunk metadata の文字列値を case-insensitive に部分一致で見る。"""
+    value = metadata.get(key)
+    return isinstance(value, str) and expected.casefold() in value.casefold()
 
 
 def _current_tenant_id_hash() -> str | None:
@@ -1772,11 +2208,17 @@ def _current_tenant_id_hash() -> str | None:
 
 
 def _document_matches_current_tenant(document: StoredDocument) -> bool:
-    """tenant context がある場合は同一 tenant の document だけ許可する。"""
-    tenant_id_hash = _current_tenant_id_hash()
-    if tenant_id_hash is None:
-        return True
-    return document.tenant_id_hash == tenant_id_hash
+    """tenant と認可済み access scope に一致する document だけ許可する。"""
+    context = current_audit_request_context()
+    if context.tenant_id_hash is not None and document.tenant_id_hash != context.tenant_id_hash:
+        return False
+    if context.allowed_document_ids is not None and document.id not in context.allowed_document_ids:
+        return False
+    if context.allowed_category_names is not None:
+        category_name = document.category_name.casefold() if document.category_name else ""
+        if category_name not in context.allowed_category_names:
+            return False
+    return True
 
 
 def _stored_chunk_score_sort_key(item: tuple[StoredChunk, float]) -> tuple[float, str, int, str]:
@@ -1803,6 +2245,84 @@ def _with_retrieval_metadata(
     return chunk.model_copy(update={"metadata": {**chunk.metadata, **metadata}})
 
 
+def _chunk_index_from_retrieved(chunk: RetrievedChunk) -> int | None:
+    """RetrievedChunk metadata から安全に chunk_index を読む。"""
+    value = chunk.metadata.get("chunk_index")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned and cleaned.lstrip("-").isdigit():
+            return int(cleaned)
+    return None
+
+
+def _chunk_group_id_from_retrieved(chunk: RetrievedChunk) -> str | None:
+    """RetrievedChunk metadata から chunk_group_id を読む。"""
+    return _chunk_group_id_from_metadata(chunk.metadata)
+
+
+def _chunk_group_id_from_metadata(metadata: Mapping[str, MetadataValue]) -> str | None:
+    """metadata の chunk_group_id を空白除去済み文字列として読む。"""
+    value = metadata.get("chunk_group_id")
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _context_neighbor_offsets(window: int) -> list[int]:
+    """近い順に前後 offset を返す。"""
+    return sorted(
+        (offset for offset in range(-window, window + 1) if offset != 0),
+        key=lambda offset: (abs(offset), offset),
+    )
+
+
+def _with_context_neighbor_metadata(
+    chunk: RetrievedChunk,
+    *,
+    anchor: RetrievedChunk,
+    distance: int,
+) -> RetrievedChunk:
+    """隣接 context と anchor の対応を citation metadata に残す。"""
+    return chunk.model_copy(
+        update={
+            "metadata": {
+                **chunk.metadata,
+                "context_expanded": True,
+                "context_anchor_chunk_id": anchor.chunk_id,
+                "context_neighbor_distance": distance,
+            }
+        }
+    )
+
+
+def _with_context_group_metadata(
+    chunk: RetrievedChunk,
+    *,
+    anchor: RetrievedChunk,
+    group_id: str,
+    distance: int,
+) -> RetrievedChunk:
+    """同一 group context と anchor の対応を citation metadata に残す。"""
+    return chunk.model_copy(
+        update={
+            "metadata": {
+                **chunk.metadata,
+                "context_group_expanded": True,
+                "context_anchor_chunk_id": anchor.chunk_id,
+                "context_group_id": group_id,
+                "context_group_distance": distance,
+            }
+        }
+    )
+
+
 def _hybrid_retrieval_mode(metadata: dict[str, MetadataValue]) -> str:
     """hybrid 検索結果がどの検索経路から来たかを返す。"""
     has_vector = "vector_rank" in metadata
@@ -1820,11 +2340,12 @@ def _to_document_summary(document: StoredDocument) -> DocumentSummary:
         file_name=document.file_name,
         status=document.status,
         category_name=document.category_name,
+        content_type=document.content_type,
         file_size_bytes=document.file_size_bytes,
         content_sha256=document.content_sha256,
         duplicate_of_document_id=document.duplicate_of_document_id,
         uploaded_at=document.uploaded_at,
-        registered_at=document.registered_at,
+        indexed_at=document.indexed_at,
     )
 
 
@@ -1834,13 +2355,14 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         file_name=document.file_name,
         status=document.status,
         category_name=document.category_name,
+        content_type=document.content_type,
         file_size_bytes=document.file_size_bytes,
         content_sha256=document.content_sha256,
         duplicate_of_document_id=document.duplicate_of_document_id,
         uploaded_at=document.uploaded_at,
-        registered_at=document.registered_at,
+        indexed_at=document.indexed_at,
         object_storage_path=document.object_storage_path,
-        extracted_fields=document.extracted_fields,
+        extraction=document.extraction,
         error_message=document.error_message,
     )
 

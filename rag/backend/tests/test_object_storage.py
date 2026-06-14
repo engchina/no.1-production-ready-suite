@@ -17,21 +17,34 @@ async def test_local_put_get_roundtrip_and_sanitizes_key(tmp_path: Path) -> None
         settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
     )
 
-    uri = await client.put("uploaded/../invoice 001.txt", b"invoice body", "text/plain")
+    uri = await client.put("uploaded/../policy 001.txt", b"policy body", "text/plain")
 
-    assert uri == "local://uploaded/invoice_001.txt"
-    assert await client.get(uri) == b"invoice body"
+    assert uri == "local://uploaded/policy_001.txt"
+    assert await client.get(uri) == b"policy body"
     assert not list((tmp_path / "objects" / "uploaded").glob("*.tmp"))
 
 
-async def test_local_get_rejects_non_local_uri(tmp_path: Path) -> None:
-    """local adapter は OCI URI を local key として扱わない。"""
+async def test_local_get_rejects_unknown_uri(tmp_path: Path) -> None:
+    """local 保存先は未知の URI scheme を local key として扱わない。"""
     client = ObjectStorageClient(
         settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
     )
 
     with pytest.raises(ValueError, match="local:// URI"):
-        await client.get("oci://namespace/bucket/key.txt")
+        await client.get("s3://bucket/key.txt")
+
+
+async def test_local_delete_removes_object_and_is_idempotent(tmp_path: Path) -> None:
+    """local adapter は保存済み object を削除し、再削除は missing として扱う。"""
+    client = ObjectStorageClient(
+        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+    )
+    uri = await client.put("uploaded/policy.txt", b"policy body", "text/plain")
+
+    assert await client.delete(uri) is True
+    assert await client.delete(uri) is False
+    with pytest.raises(FileNotFoundError):
+        await client.get(uri)
 
 
 async def test_local_get_rejects_relative_path_segments(tmp_path: Path) -> None:
@@ -41,7 +54,7 @@ async def test_local_get_rejects_relative_path_segments(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="相対パス要素"):
-        await client.get("local://uploaded/../invoice.txt")
+        await client.get("local://uploaded/../policy.txt")
 
 
 async def test_local_put_rejects_empty_key(tmp_path: Path) -> None:
@@ -105,23 +118,39 @@ async def test_oci_put_uses_object_storage_sdk_and_returns_uri() -> None:
         sdk_call_runner=_run_inline,
     )
 
-    uri = await client.put("uploaded/invoice 001.txt", b"invoice body", "text/plain")
+    uri = await client.put("uploaded/policy 001.txt", b"policy body", "text/plain")
 
-    assert uri == "oci://example-namespace/rag-originals/uploaded/invoice_001.txt"
+    assert uri == "oci://example-namespace/rag-originals/uploaded/policy_001.txt"
     assert sdk.put_calls == 1
     assert sdk.last_put_request == {
         "namespace_name": "example-namespace",
         "bucket_name": "rag-originals",
-        "object_name": "uploaded/invoice_001.txt",
-        "put_object_body": b"invoice body",
+        "object_name": "uploaded/policy_001.txt",
+        "put_object_body": b"policy body",
         "kwargs": {"content_type": "text/plain"},
     }
+
+
+async def test_upload_storage_backend_can_use_oci_with_local_ai_adapter() -> None:
+    """AI adapter が local でもアップロード保存先だけ OCI にできる。"""
+    sdk = FakeObjectStorageSdkClient()
+    settings = _oci_settings().model_copy(update={"ai_service_adapter": "local"})
+    client = ObjectStorageClient(
+        settings=settings,
+        storage_client=sdk,
+        sdk_call_runner=_run_inline,
+    )
+
+    uri = await client.put("uploaded/policy.txt", b"policy body", "text/plain")
+
+    assert uri == "oci://example-namespace/rag-originals/uploaded/policy.txt"
+    assert sdk.put_calls == 1
 
 
 async def test_oci_get_uses_object_storage_sdk_for_matching_uri() -> None:
     """OCI adapter は返却 URI から object key を復元して bytes を取得する。"""
     sdk = FakeObjectStorageSdkClient(
-        get_response=SimpleNamespace(data=SimpleNamespace(content=b"invoice body"))
+        get_response=SimpleNamespace(data=SimpleNamespace(content=b"policy body"))
     )
     client = ObjectStorageClient(
         settings=_oci_settings(),
@@ -129,15 +158,71 @@ async def test_oci_get_uses_object_storage_sdk_for_matching_uri() -> None:
         sdk_call_runner=_run_inline,
     )
 
-    body = await client.get("oci://example-namespace/rag-originals/uploaded/invoice.txt")
+    body = await client.get("oci://example-namespace/rag-originals/uploaded/policy.txt")
 
-    assert body == b"invoice body"
+    assert body == b"policy body"
     assert sdk.get_calls == 1
     assert sdk.last_get_request == {
         "namespace_name": "example-namespace",
         "bucket_name": "rag-originals",
-        "object_name": "uploaded/invoice.txt",
+        "object_name": "uploaded/policy.txt",
     }
+
+
+async def test_oci_delete_uses_object_storage_sdk_for_matching_uri() -> None:
+    """OCI adapter は返却 URI から object key を復元して削除する。"""
+    sdk = FakeObjectStorageSdkClient()
+    client = ObjectStorageClient(
+        settings=_oci_settings(),
+        storage_client=sdk,
+        sdk_call_runner=_run_inline,
+    )
+
+    deleted = await client.delete("oci://example-namespace/rag-originals/uploaded/policy.txt")
+
+    assert deleted is True
+    assert sdk.delete_calls == 1
+    assert sdk.last_delete_request == {
+        "namespace_name": "example-namespace",
+        "bucket_name": "rag-originals",
+        "object_name": "uploaded/policy.txt",
+    }
+
+
+async def test_get_oci_uri_uses_oci_even_when_upload_storage_is_local() -> None:
+    """保存先を local に切り替えた後も、既存 OCI URI は取得できる。"""
+    sdk = FakeObjectStorageSdkClient(
+        get_response=SimpleNamespace(data=SimpleNamespace(content=b"policy body"))
+    )
+    client = ObjectStorageClient(
+        settings=_oci_settings().model_copy(
+            update={"ai_service_adapter": "local", "upload_storage_backend": "local"}
+        ),
+        storage_client=sdk,
+        sdk_call_runner=_run_inline,
+    )
+
+    body = await client.get("oci://example-namespace/rag-originals/uploaded/policy.txt")
+
+    assert body == b"policy body"
+    assert sdk.get_calls == 1
+
+
+async def test_get_local_uri_uses_local_even_when_upload_storage_is_oci(tmp_path: Path) -> None:
+    """保存先を OCI に切り替えた後も、既存 local URI は取得できる。"""
+    settings = _oci_settings().model_copy(update={"local_storage_dir": str(tmp_path)})
+    client = ObjectStorageClient(
+        settings=settings,
+        storage_client=FakeObjectStorageSdkClient(),
+        sdk_call_runner=_run_inline,
+    )
+    local_uri = await ObjectStorageClient(
+        settings=settings.model_copy(update={"upload_storage_backend": "local"})
+    ).put("uploaded/policy.txt", b"policy body", "text/plain")
+
+    body = await client.get(local_uri)
+
+    assert body == b"policy body"
 
 
 async def test_oci_get_rejects_foreign_namespace_or_bucket() -> None:
@@ -150,13 +235,13 @@ async def test_oci_get_rejects_foreign_namespace_or_bucket() -> None:
     )
 
     with pytest.raises(ValueError, match="設定と一致しません"):
-        await client.get("oci://other-namespace/rag-originals/uploaded/invoice.txt")
+        await client.get("oci://other-namespace/rag-originals/uploaded/policy.txt")
 
     assert sdk.get_calls == 0
 
 
-async def test_oci_get_rejects_non_oci_uri() -> None:
-    """OCI adapter の取得は oci:// URI または plain key に限定する。"""
+async def test_oci_get_rejects_unknown_uri() -> None:
+    """OCI 保存先は未知の URI scheme を OCI key として扱わない。"""
     client = ObjectStorageClient(
         settings=_oci_settings(),
         storage_client=FakeObjectStorageSdkClient(),
@@ -164,7 +249,7 @@ async def test_oci_get_rejects_non_oci_uri() -> None:
     )
 
     with pytest.raises(ValueError, match="oci:// URI"):
-        await client.get("local://uploaded/invoice.txt")
+        await client.get("s3://bucket/policy.txt")
 
 
 async def test_oci_adapter_requires_namespace_and_bucket() -> None:
@@ -172,6 +257,7 @@ async def test_oci_adapter_requires_namespace_and_bucket() -> None:
     client = ObjectStorageClient(
         settings=Settings.model_construct(
             ai_service_adapter="oci",
+            upload_storage_backend="oci",
             object_storage_namespace="",
             object_storage_bucket="",
         ),
@@ -180,7 +266,44 @@ async def test_oci_adapter_requires_namespace_and_bucket() -> None:
     )
 
     with pytest.raises(ValueError, match="namespace / bucket"):
-        await client.put("uploaded/invoice.txt", b"body", "text/plain")
+        await client.put("uploaded/policy.txt", b"body", "text/plain")
+
+
+def test_oci_client_prefers_object_storage_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Object Storage SDK client は専用リージョンを OCI 共通リージョンより優先する。"""
+    captured_config: dict[str, object] = {}
+
+    class CapturingObjectStorageSdkClient(FakeObjectStorageSdkClient):
+        def __init__(self, config: dict[str, object]) -> None:
+            super().__init__()
+            captured_config.update(config)
+
+    def fake_import_module(name: str) -> object:
+        if name == "oci.config":
+            return SimpleNamespace(
+                from_file=lambda path, profile: {
+                    "path": path,
+                    "profile": profile,
+                    "region": "ap-tokyo-1",
+                }
+            )
+        if name == "oci.object_storage":
+            return SimpleNamespace(ObjectStorageClient=CapturingObjectStorageSdkClient)
+        raise AssertionError(f"unexpected module import: {name}")
+
+    monkeypatch.setattr("app.clients.object_storage.importlib.import_module", fake_import_module)
+    client = ObjectStorageClient(
+        settings=_oci_settings().model_copy(
+            update={
+                "oci_region": "us-chicago-1",
+                "object_storage_region": "ap-osaka-1",
+            }
+        )
+    )
+
+    assert isinstance(client._client(), CapturingObjectStorageSdkClient)
+    assert captured_config["region"] == "ap-osaka-1"
+    assert captured_config["profile"] == "DEFAULT"
 
 
 class FakeObjectStorageSdkClient:
@@ -190,8 +313,10 @@ class FakeObjectStorageSdkClient:
         self._get_response = get_response or SimpleNamespace(data=SimpleNamespace(content=b""))
         self.put_calls = 0
         self.get_calls = 0
+        self.delete_calls = 0
         self.last_put_request: dict[str, object] | None = None
         self.last_get_request: dict[str, object] | None = None
+        self.last_delete_request: dict[str, object] | None = None
 
     def put_object(
         self,
@@ -225,13 +350,29 @@ class FakeObjectStorageSdkClient:
         }
         return self._get_response
 
+    def delete_object(
+        self,
+        namespace_name: str,
+        bucket_name: str,
+        object_name: str,
+    ) -> object:
+        self.delete_calls += 1
+        self.last_delete_request = {
+            "namespace_name": namespace_name,
+            "bucket_name": bucket_name,
+            "object_name": object_name,
+        }
+        return SimpleNamespace(data=None)
+
 
 def _oci_settings() -> Settings:
     return Settings.model_construct(
         ai_service_adapter="oci",
+        upload_storage_backend="oci",
         oci_config_file="~/.oci/config",
         oci_config_profile="DEFAULT",
         oci_region="ap-osaka-1",
+        object_storage_region="ap-osaka-1",
         object_storage_namespace="example-namespace",
         object_storage_bucket="rag-originals",
     )

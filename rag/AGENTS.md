@@ -1,14 +1,14 @@
-# AGENTS.md — no.1-production-ready-rag
+# AGENTS.md — Production Ready RAG
 
 > このファイルは **Claude Code と Codex の両方が参照する正本(single source of truth)** です。
 > `CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイルを編集**してください。
 
 ## プロジェクト概要
 
-請求書・伝票を AI で処理する **production-ready RAG** システム。
+**A production-ready RAG reference implementation covering data ingestion, chunking, indexing, hybrid retrieval, reranking, evaluation, observability, guardrails, and deployment best practices.**
 
-パイプライン: ドキュメント取込 → VLM による OCR/構造化 → 分類 → 埋め込み → ベクトル索引 → ハイブリッド検索 → リランク → LLM 回答生成。
-重点領域: data ingestion / chunking / indexing / hybrid retrieval / reranking / evaluation / observability / guardrails / deployment。
+本プロジェクトは特定業務ドメインに固定せず、RAG システムを本番品質で構築するための参照実装を目標とする。
+パイプライン: ドキュメント取込 → OCR/構造化 → チャンク分割 → 埋め込み → ベクトル索引 → ハイブリッド検索 → リランク → LLM 回答生成 → 評価・観測・ガードレール・デプロイ。
 
 ### 参考プロジェクトカタログ
 
@@ -36,7 +36,6 @@
 
 ### データ層(Oracle 集約)
 - **Oracle 26ai** — AI Vector Search でベクトル検索を DB 内に一体化。**外部ベクトル DB(pgvector/Qdrant 等)は提案・導入しない。** ベクトル列は埋め込みに合わせ **`VECTOR(1536, FLOAT32)`**。
-- **Select AI** — 自然言語 → SQL 検索。
 - **OCI Object Storage** — 原本ファイル保管(処理状態別バケット)。
 
 ### バックエンド
@@ -47,34 +46,36 @@
 - 依存管理: **uv**。
 
 ### フロントエンド
-- **Next.js 15 (App Router) + TypeScript**。
+- **Vite + React Router + TypeScript**。
 - **Tailwind CSS + shadcn/ui**。
 - 通信: REST + **SSE/WebSocket**(回答ストリーミング)。
 - 状態管理: TanStack Query + Zustand。
 
 ### 横断
 - 観測性: **Langfuse**(LLM トレース/コスト)+ Prometheus + OpenTelemetry。
-- 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit。
+- 品質: pytest / pytest-cov / ruff / black / mypy / bandit / pip-audit / Vitest / Playwright。
 - インフラ: Docker Compose(開発)→ OKE / Container Instances(本番)、Terraform(OCI Resource Manager)。
 
 ## UI/UX 開発ルール
 
 - **UI/UX に関する作業(設計・実装・レビュー・改善)は必ず `ui-ux-pro-max` skill を使う。** 画面・コンポーネント・スタイル・配色・タイポグラフィ・アクセシビリティはこの skill の知見に従うこと。
 - デザインは日本語 UI 前提でレイアウト(行高・禁則・フォント)を検証する。
+- UI/UX に関わる機能追加・修正は、**必ず Playwright で実画面を表示して確認・テストする**。主要導線、レスポンシブ表示、キーボード操作、アクセシビリティ上の破綻がないことを確認する。
+- UI/UX 変更ごとに Playwright テスト(e2e / interaction / 必要に応じた visual check)を追加・更新し、完了前に実行する。
 
 ### UI/UX 構造
 
 **基本原則:**
 - **レイアウト/UI 構造**(情報設計・画面構成・ナビ導線・状態遷移・文言設計)は、本プロジェクト内の `frontend/src` と `src/lib/i18n` / `src/lib/routes` を正本として継続的に整備する。
-- **技術選定は本 AGENTS.md の確定スタックを正とする。** フロントエンドのフレームワーク・ライブラリ・パターンは Next.js + TypeScript + Tailwind + shadcn/ui + TanStack Query + Zustand を採用する。
+- **技術選定は本 AGENTS.md の確定スタックを正とする。** フロントエンドのフレームワーク・ライブラリ・パターンは Vite + React Router + TypeScript + Tailwind + shadcn/ui + TanStack Query + Zustand を採用する。
 
 **ナビゲーション/画面構成**:
-- 折りたたみ可能な**サイドナビ**。セクション: 「伝票登録」(アップロード/本登録用伝票)・「データ参照」(検索/テーブルブラウザ)・「設定」(OCI 認証/モデル/Object Storage/DB/プロンプト)。
+- 折りたたみ可能な**サイドナビ**。セクション: 「データ取込」(ダッシュボード/アップロード/文書インデックス)・「RAG」(検索)・「設定」(OCI 認証/モデル/Object Storage/DB/プロンプト)。
 - レイアウト構成要素: header / footer / breadcrumb / sideTabBar / tabs。
-- 主要画面: ダッシュボード(主要機能ハブ + メトリクスカード + 業務フロー + 最近のアクティビティ + システム情報)、アップロード、ファイル一覧、分析、登録、カテゴリ(サンプル/管理)、検索、テーブルブラウザ、各種設定、**文書プレビュー作業領域(DocumentPreviewWorkspace)**。
+- 主要画面: ダッシュボード(主要機能ハブ + メトリクスカード + RAG フロー + 最近のアクティビティ + システム情報)、アップロード、文書インデックス、RAG 検索、各種設定、**文書プレビュー作業領域(DocumentPreviewWorkspace)**。
 
 **状態モデル / UX パターン**:
-- ファイル状態: `UPLOADED → ANALYZING → ANALYZED → REGISTERED`(+ `ERROR`)を **StatusBadge** で可視化。
+- ファイル状態: `UPLOADED → INGESTING → INDEXED`(+ `ERROR`)を **StatusBadge** で可視化。人手の帳票項目修正・登録確認ゲートは設けず、RAG 取込成功時点で検索対象にする。
 - ページネーション、確認ダイアログ、トースト通知、一括選択(全選択/選択件数表示)を共通コンポーネント化。
 - データ取得・通知・ページングは hooks に集約する。状態管理は TanStack Query + Zustand を使う。
 
@@ -91,15 +92,17 @@ backend/                  FastAPI アプリ
     main.py               エントリ（CORS, ルーター, lifespan）
     config.py             設定（pydantic-settings）
     logging_config.py     JSON 構造化ログ
-    api/routes/           health / documents / categories / search
+    api/routes/           health / dashboard / documents / search / evaluation
     clients/              oci_enterprise_ai(LLM/VLM) / oci_genai(embed,rerank)
                           / oracle(26ai) / object_storage
     rag/                  chunking / ingestion / pipeline
     schemas/              common / document / search
   tests/                  pytest
   pyproject.toml          uv 管理、ruff/black/mypy/pytest 設定
-frontend/                 Next.js 15 (App Router) + Tailwind v4 + shadcn/ui
-  src/app/                dashboard / upload / file-list / search / category / settings ...
+frontend/                 Vite + React Router + Tailwind v4 + shadcn/ui
+  src/main.tsx            Vite エントリ
+  src/App.tsx             React Router ルート定義
+  src/globals.css         Tailwind v4 / shadcn/ui theme tokens
   src/components/         layout/Sidebar, StatusBadge, PageHeader, providers
   src/lib/                routes / i18n(ja) / utils
 docker-compose.yml        backend + frontend
@@ -132,6 +135,12 @@ npm run dev
 npm run lint && npm run build
 ```
 
+## テスト/検証方針
+
+- 開発時は実装と同時に対応するテストコードを追加・更新する。バックエンドは pytest、フロントエンドのロジックは Vitest、UI/UX とユーザー操作は Playwright を基本とする。
+- 変更後は該当範囲の lint・型チェック・テストを実行し、完了報告に実行結果を明記する。実行できない場合は理由と代替確認を明記する。
+- UI/UX に関わるすべての機能は、Playwright でブラウザ表示を確認し、少なくとも主要ユーザーフロー、モバイル幅(例: 375px)、デスクトップ幅、重要な空/読込/エラー状態を検証する。
+
 ## コーディング規約・重要ルール
 
 1. **LLM/VLM 呼び出しは OCI Enterprise AI 経由のみ**。OCI Generative AI の chat API を LLM/VLM に使わない。
@@ -140,5 +149,7 @@ npm run lint && npm run build
 4. シークレット(OCI 認証・DB 接続)は `.env` / OCI Vault 経由。**ハードコード禁止**、コミットしない。
 5. LLM 出力は Pydantic スキーマで検証してから DB 保存する。
 6. UI 作業は `ui-ux-pro-max` skill を使用。
-7. 変更後は該当範囲の lint・型チェック・テストを実行してから完了とする。
-8. このスタックから外れる提案(別 LLM プロバイダ、別 DB 等)をする場合は、必ず理由を添えてユーザに確認する。
+7. 機能開発では、実装と同時にテストコードを追加・更新する。
+8. 変更後は該当範囲の lint・型チェック・テストを実行してから完了とする。
+9. UI/UX に関わる変更は Playwright で画面確認とテストを実施してから完了とする。
+10. このスタックから外れる提案(別 LLM プロバイダ、別 DB 等)をする場合は、必ず理由を添えてユーザに確認する。

@@ -4,6 +4,8 @@ import asyncio
 import logging
 from typing import Any, cast
 
+import pytest
+from pydantic import ValidationError
 from pytest import LogCaptureFixture, MonkeyPatch
 
 from app.api.routes import search as search_route
@@ -23,7 +25,7 @@ def test_search_api_returns_504_when_pipeline_times_out(
     _force_search_timeout(monkeypatch)
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        response = client.post("/api/search", json={"query": "INV-SECRET の請求金額"})
+        response = client.post("/api/search", json={"query": "INV-SECRET の承認条件"})
 
     assert response.status_code == 504
     body = response.json()
@@ -49,7 +51,7 @@ def test_stream_search_api_returns_504_when_pipeline_times_out(monkeypatch: Monk
     """SSE 検索も pipeline timeout 時は stream 開始前に 504 を返す。"""
     _force_search_timeout(monkeypatch)
 
-    response = client.post("/api/search/stream", json={"query": "請求金額"})
+    response = client.post("/api/search/stream", json={"query": "承認条件"})
 
     assert response.status_code == 504
     body = response.json()
@@ -64,7 +66,7 @@ def test_search_api_hashes_tenant_and_user_headers_into_audit(
     with caplog.at_level(logging.INFO, logger="app.audit"):
         response = client.post(
             "/api/search",
-            json={"query": "存在しない請求書"},
+            json={"query": "存在しない社内規程"},
             headers={
                 "X-Tenant-ID": "tenant-a",
                 "X-User-ID": "user@example.com",
@@ -79,6 +81,109 @@ def test_search_api_hashes_tenant_and_user_headers_into_audit(
     assert len(audit_event["user_id_hash"]) == 64
     assert "tenant-a" not in str(audit_event)
     assert "user@example.com" not in str(audit_event)
+
+
+def test_select_ai_api_returns_showsql_with_sanitized_query(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Select AI API は query を脱敏して adapter へ渡し、showsql を返す。"""
+    fake = CapturingSelectAiClient()
+    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
+
+    response = client.post(
+        "/api/search/select-ai",
+        json={
+            "query": "口座番号: 1234567 の文書件数を SQL にして",
+            "profile_name": "rag_select_ai",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["action"] == "showsql"
+    assert data["generated_sql"] == "SELECT COUNT(*) FROM rag_documents"
+    assert data["result_text"] == "SELECT COUNT(*) FROM rag_documents"
+    assert data["profile_name"] == "rag_select_ai"
+    assert data["guardrail_warnings"] == [
+        "個人番号や口座番号などの機微な識別子をマスクしました。"
+    ]
+    assert fake.calls[0]["query"] == "口座番号: [機微情報] の文書件数を SQL にして"
+    assert "1234567" not in str(fake.calls)
+
+
+def test_select_ai_runsql_blocks_sql_mutation_intent() -> None:
+    """runsql はデータ変更意図を含む自然言語を拒否する。"""
+    response = client.post(
+        "/api/search/select-ai",
+        json={
+            "query": "delete from rag_documents を実行して",
+            "action": "runsql",
+            "profile_name": "rag_select_ai",
+        },
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["data"] is None
+    assert body["error_messages"] == [search_route.SELECT_AI_BLOCKED_MESSAGE]
+
+
+def test_select_ai_runsql_blocks_japanese_mutation_intent(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """runsql は日本語のデータ変更意図も拒否し、Oracle へ送らない。"""
+    fake = CapturingSelectAiClient()
+    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
+
+    response = client.post(
+        "/api/search/select-ai",
+        json={
+            "query": "古い評価ログを削除してください",
+            "action": "runsql",
+            "profile_name": "rag_select_ai",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_messages"] == [search_route.SELECT_AI_BLOCKED_MESSAGE]
+    assert fake.calls == []
+
+
+def test_select_ai_api_returns_503_when_unavailable() -> None:
+    """local adapter では Select AI endpoint は 503 を返す。"""
+    response = client.post(
+        "/api/search/select-ai",
+        json={"query": "索引済み文書数を SQL にして"},
+    )
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["data"] is None
+    assert "Select AI" in body["error_messages"][0]
+
+
+def test_search_request_accepts_chunk_metadata_filters() -> None:
+    """構造化 chunk metadata filter は検索リクエストとして受け付ける。"""
+    request = SearchRequest(
+        query="料金表",
+        filters={
+            "content_kind": "figure",
+            "section_title": "料金",
+            "section_path": "経費申請",
+        },
+    )
+
+    assert request.filters == {
+        "content_kind": "figure",
+        "section_title": "料金",
+        "section_path": "経費申請",
+    }
+
+
+def test_search_request_rejects_unknown_content_kind_filter() -> None:
+    """未知の content_kind は空振りではなく 422 相当の検証エラーにする。"""
+    with pytest.raises(ValidationError, match="未対応の内容種別フィルターです"):
+        SearchRequest(query="料金表", filters={"content_kind": "chart"})
 
 
 def _force_search_timeout(monkeypatch: MonkeyPatch) -> None:
@@ -99,3 +204,14 @@ class SlowPipeline:
         assert trace_id
         await asyncio.sleep(1)
         raise AssertionError("timeout 前に完了しない")
+
+
+class CapturingSelectAiClient:
+    """Select AI API テスト用の fake Oracle client。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def select_ai(self, query: str, **kwargs: object) -> str:
+        self.calls.append({"query": query, **kwargs})
+        return "SELECT COUNT(*) FROM rag_documents"

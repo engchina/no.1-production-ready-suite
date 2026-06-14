@@ -12,12 +12,12 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.search import RetrievedChunk, SearchMode
+from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchMode
 
 
 def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
     """監査ログは query 本文を出さず、hash とメタデータだけを残す。"""
-    query = "請求書番号 INV-001 の金額を教えて"
+    query = "社内規程番号 INV-001 の金額を教えて"
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
         event = record_rag_search_audit(
@@ -25,7 +25,7 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
             outcome="success",
             mode=SearchMode.HYBRID,
             sanitized_query=query,
-            filters={"status": "REGISTERED", "file_name": "invoice"},
+            filters={"status": "INDEXED", "file_name": "policy"},
             findings=[
                 GuardrailFinding(
                     code="sql_mutation_intent",
@@ -55,6 +55,13 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
                 ),
             ],
             elapsed_ms=12.3,
+            diagnostics=SearchDiagnostics(
+                context_diversified_count=1,
+                context_group_expanded_count=3,
+                context_expanded_count=2,
+                context_compressed_count=1,
+                context_compression_saved_chars=120,
+            ),
         )
 
     assert event.query_chars == len(query)
@@ -62,6 +69,11 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
     assert event.query_hash != query
     assert event.filter_keys == ["file_name", "status"]
     assert event.guardrail_codes == ["sql_mutation_intent"]
+    assert event.context_diversified_count == 1
+    assert event.context_group_expanded_count == 3
+    assert event.context_expanded_count == 2
+    assert event.context_compressed_count == 1
+    assert event.context_compression_saved_chars == 120
     assert event.document_ids == ["doc-a", "doc-b"]
 
     record = next(item for item in caplog.records if item.message == "rag_search_audit")
@@ -75,7 +87,7 @@ def test_rag_search_audit_records_error_type_without_error_message(
     caplog: LogCaptureFixture,
 ) -> None:
     """検索失敗時も例外本文を出さず、stage/type だけを残す。"""
-    query = "秘密の請求書番号 INV-SECRET"
+    query = "秘密の社内規程番号 INV-SECRET"
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
         event = record_rag_search_audit(
@@ -121,7 +133,7 @@ def test_rag_search_audit_includes_hashed_request_context(
                 trace_id="trace-context",
                 outcome="no_results",
                 mode=SearchMode.HYBRID,
-                sanitized_query="請求書",
+                sanitized_query="社内規程",
                 filters={},
                 findings=[],
                 retrieved_count=0,
@@ -159,7 +171,7 @@ def test_rag_ingestion_audit_includes_hashed_request_context(
                 trace_id="trace-ingestion",
                 document_id="doc-1",
                 outcome="success",
-                source_bytes=b"invoice bytes",
+                source_bytes=b"policy bytes",
                 elapsed_ms=2.0,
             )
     finally:

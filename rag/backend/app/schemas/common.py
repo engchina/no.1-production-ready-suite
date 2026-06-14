@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class ApiResponse[T](BaseModel):
-    """API 共通レスポンス形（参照: denpyo の ApiResponse）。"""
+    """API 共通レスポンス形。"""
 
     data: T | None = None
     error_messages: list[str] = Field(default_factory=list)

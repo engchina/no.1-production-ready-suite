@@ -1,26 +1,17 @@
 # syntax=docker/dockerfile:1
 FROM node:22-slim AS deps
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM node:22-slim AS builder
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:22-slim AS runner
-WORKDIR /app
-ENV NODE_ENV=production \
-    NEXT_TELEMETRY_DISABLED=1
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev \
-    && npm cache clean --force
-COPY --from=builder --chown=node:node /app/.next ./.next
-COPY --from=builder --chown=node:node /app/public ./public
-USER node
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner
+ENV BACKEND_URL=http://backend:8000
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=builder /app/dist /usr/share/nginx/html
 EXPOSE 3000
-CMD ["npm", "start"]

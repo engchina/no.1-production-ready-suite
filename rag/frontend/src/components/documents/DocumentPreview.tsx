@@ -29,7 +29,6 @@ export function DocumentPreview({
 
   if (kind === "image") {
     return (
-      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={url}
         alt={fileName}

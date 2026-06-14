@@ -31,10 +31,17 @@ class RagSearchAuditEvent(BaseModel):
     filter_keys: list[str] = Field(default_factory=list)
     top_k: int | None = None
     rerank_top_n: int | None = None
+    query_variant_count: int = 1
     guardrail_codes: list[str] = Field(default_factory=list)
     guardrail_severities: list[str] = Field(default_factory=list)
     retrieved_count: int = 0
     reranked_count: int = 0
+    deduplicated_count: int = 0
+    context_diversified_count: int = 0
+    context_group_expanded_count: int = 0
+    context_expanded_count: int = 0
+    context_compressed_count: int = 0
+    context_compression_saved_chars: int = 0
     citation_count: int = 0
     context_chars: int = 0
     context_window_chars: int | None = None
@@ -60,7 +67,6 @@ class RagIngestionAuditEvent(BaseModel):
     source_bytes: int
     document_type: str | None = None
     extraction_confidence: float | None = None
-    field_count: int = 0
     chunk_count: int = 0
     vector_count: int = 0
     elapsed_ms: float
@@ -97,10 +103,27 @@ def record_rag_search_audit(
         filter_keys=sorted(filters),
         top_k=diagnostics.top_k if diagnostics is not None else None,
         rerank_top_n=diagnostics.rerank_top_n if diagnostics is not None else None,
+        query_variant_count=diagnostics.query_variant_count if diagnostics is not None else 1,
         guardrail_codes=[finding.code for finding in findings],
         guardrail_severities=[finding.severity for finding in findings],
         retrieved_count=retrieved_count,
         reranked_count=diagnostics.reranked_count if diagnostics is not None else 0,
+        deduplicated_count=diagnostics.deduplicated_count if diagnostics is not None else 0,
+        context_diversified_count=(
+            diagnostics.context_diversified_count if diagnostics is not None else 0
+        ),
+        context_group_expanded_count=(
+            diagnostics.context_group_expanded_count if diagnostics is not None else 0
+        ),
+        context_expanded_count=(
+            diagnostics.context_expanded_count if diagnostics is not None else 0
+        ),
+        context_compressed_count=(
+            diagnostics.context_compressed_count if diagnostics is not None else 0
+        ),
+        context_compression_saved_chars=(
+            diagnostics.context_compression_saved_chars if diagnostics is not None else 0
+        ),
         citation_count=len(citations),
         context_chars=diagnostics.context_chars if diagnostics is not None else 0,
         context_window_chars=(
@@ -129,7 +152,6 @@ def record_rag_ingestion_audit(
     elapsed_ms: float,
     document_type: str | None = None,
     extraction_confidence: float | None = None,
-    field_count: int = 0,
     chunk_count: int = 0,
     vector_count: int = 0,
     error: Exception | None = None,
@@ -147,7 +169,6 @@ def record_rag_ingestion_audit(
         source_bytes=len(source_bytes),
         document_type=document_type,
         extraction_confidence=extraction_confidence,
-        field_count=field_count,
         chunk_count=chunk_count,
         vector_count=vector_count,
         elapsed_ms=elapsed_ms,

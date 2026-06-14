@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { Link } from "react-router-dom";
 import { Search as SearchIcon, Sparkles, X } from "lucide-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError, type DocumentSummary, type FileStatus } from "@/lib/api";
-import { useAnalyzeDocument, useDocuments, useRegisterDocument } from "@/lib/queries";
+import { useDocuments, useIngestDocument } from "@/lib/queries";
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
@@ -20,10 +20,10 @@ import { cn } from "@/lib/utils";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 
 const LIMIT = 20;
-const FILTERS: (FileStatus | "ALL")[] = ["ALL", "UPLOADED", "ANALYZED", "REGISTERED", "ERROR"];
-const ANALYZABLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
+const FILTERS: (FileStatus | "ALL")[] = ["ALL", "UPLOADED", "INGESTING", "INDEXED", "ERROR"];
+const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
 
-/** 本登録用伝票の一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
+/** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
 export function FileListClient() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<FileStatus | "ALL">("ALL");
@@ -36,15 +36,14 @@ export function FileListClient() {
   const status = filter === "ALL" ? undefined : filter;
   const query = useDocuments({ status, q: q || undefined, limit: LIMIT, offset });
 
-  const analyze = useAnalyzeDocument();
-  const register = useRegisterDocument();
+  const ingest = useIngestDocument();
 
   const page = query.data;
   const items = page?.items ?? [];
   const pageIds = items.map((d) => d.id);
   const allSelected = pageIds.length > 0 && selection.count === pageIds.length;
-  const analyzableSelected = items.filter(
-    (d) => selection.isSelected(d.id) && ANALYZABLE.has(d.status)
+  const ingestibleSelected = items.filter(
+    (d) => selection.isSelected(d.id) && INGESTIBLE.has(d.status)
   );
 
   const resetView = (fn: () => void) => {
@@ -53,13 +52,13 @@ export function FileListClient() {
     selection.clear();
   };
 
-  const runBulkAnalyze = async () => {
-    const targets = analyzableSelected.map((d) => d.id);
+  const runBulkIngest = async () => {
+    const targets = ingestibleSelected.map((d) => d.id);
     if (targets.length === 0) return;
     setBulk({ done: 0, total: targets.length });
     for (const [index, id] of targets.entries()) {
       try {
-        await api.analyzeDocument(id);
+        await api.ingestDocument(id);
       } catch {
         // 個別失敗は継続。状態は再取得で反映される。
       }
@@ -125,14 +124,14 @@ export function FileListClient() {
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
-                onClick={() => void runBulkAnalyze()}
+                onClick={() => void runBulkIngest()}
                 loading={bulk !== null}
-                disabled={analyzableSelected.length === 0}
+                disabled={ingestibleSelected.length === 0}
               >
                 <Sparkles size={14} aria-hidden />
                 {bulk
                   ? t("fileList.bulkRunning", { done: bulk.done, total: bulk.total })
-                  : `${t("fileList.bulkAnalyze")} (${analyzableSelected.length})`}
+                  : `${t("fileList.bulkIngest")} (${ingestibleSelected.length})`}
               </Button>
               <Button variant="ghost" size="sm" onClick={selection.clear}>
                 <X size={14} aria-hidden />
@@ -179,10 +178,8 @@ export function FileListClient() {
                       doc={doc}
                       selected={selection.isSelected(doc.id)}
                       onToggle={() => selection.toggle(doc.id)}
-                      onAnalyze={(force) => analyze.mutate({ id: doc.id, force })}
-                      onRegister={() => register.mutate(doc.id)}
-                      analyzing={analyze.isPending && analyze.variables?.id === doc.id}
-                      registering={register.isPending && register.variables === doc.id}
+                      onIngest={(force) => ingest.mutate({ id: doc.id, force })}
+                      ingesting={ingest.isPending && ingest.variables?.id === doc.id}
                     />
                   ))}
                 </tbody>
@@ -240,18 +237,14 @@ function Row({
   doc,
   selected,
   onToggle,
-  onAnalyze,
-  onRegister,
-  analyzing,
-  registering,
+  onIngest,
+  ingesting,
 }: {
   doc: DocumentSummary;
   selected: boolean;
   onToggle: () => void;
-  onAnalyze: (force: boolean) => void;
-  onRegister: () => void;
-  analyzing: boolean;
-  registering: boolean;
+  onIngest: (force: boolean) => void;
+  ingesting: boolean;
 }) {
   return (
     <tr className={cn("border-t border-border", selected && "bg-info-bg/30")}>
@@ -266,7 +259,7 @@ function Row({
       </td>
       <td className="max-w-[260px] px-4 py-3">
         <Link
-          href={`${APP_ROUTES.documents}/${doc.id}`}
+          to={`${APP_ROUTES.documents}/${doc.id}`}
           className="block truncate font-medium text-primary hover:underline"
           title={doc.file_name}
         >
@@ -282,13 +275,8 @@ function Row({
       <td className="px-4 py-3">
         <div className="flex justify-end gap-2">
           {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
-            <Button size="sm" loading={analyzing} onClick={() => onAnalyze(false)}>
-              {t("action.analyze")}
-            </Button>
-          )}
-          {doc.status === "ANALYZED" && (
-            <Button size="sm" loading={registering} onClick={onRegister}>
-              {t("action.register")}
+            <Button size="sm" loading={ingesting} onClick={() => onIngest(false)}>
+              {t("action.ingest")}
             </Button>
           )}
         </div>
