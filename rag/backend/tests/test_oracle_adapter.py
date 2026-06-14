@@ -34,9 +34,7 @@ from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
 
-IN_MEMORY_ORACLE_REMOVED = pytest.mark.skip(
-    reason="in-memory Oracle fallback was removed"
-)
+IN_MEMORY_ORACLE_REMOVED = pytest.mark.skip(reason="in-memory Oracle fallback was removed")
 
 
 def setup_function() -> None:
@@ -616,9 +614,7 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     assert all(chunk.score == 0.91 for chunk in siblings)
     assert all(chunk.metadata["context_group_expanded"] is True for chunk in siblings)
     call = pool.connection.calls[0]
-    assert "JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id" in (
-        call.statement
-    )
+    assert "JSON_VALUE(c.metadata_json, '$.chunk_group_id') = :chunk_group_id" in (call.statement)
     assert "c.chunk_id <> :anchor_chunk_id" in call.statement
     assert "ABS(c.chunk_index - :anchor_index)" in call.statement
     assert "ROWNUM <= :max_chunks_per_group" in call.statement
@@ -685,9 +681,7 @@ async def test_oci_delete_document_removes_chunks_and_document_with_access_scope
 
 async def test_oci_select_ai_uses_dbms_cloud_ai_generate_with_binds() -> None:
     """Select AI は DBMS_CLOUD_AI.GENERATE を bind 付きで呼び出す。"""
-    pool = FakeOraclePool(
-        execute_results=[[{"result_text": "SELECT COUNT(*) FROM rag_documents"}]]
-    )
+    pool = FakeOraclePool(execute_results=[[{"result_text": "SELECT COUNT(*) FROM rag_documents"}]])
     settings = _oci_settings()
     settings.oracle_select_ai_profile = "rag_select_ai"
     client = OracleClient(settings=settings, pool=pool, db_call_runner=_run_inline)

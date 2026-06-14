@@ -147,9 +147,7 @@ def chunk_extraction(
     for span in spans:
         if span.content_kind == "table":
             flush_buffer()
-            chunks.extend(
-                _chunk_table_span(span, chunk_size=chunk_size, start_index=len(chunks))
-            )
+            chunks.extend(_chunk_table_span(span, chunk_size=chunk_size, start_index=len(chunks)))
             continue
         if not buffer:
             buffer = [span]
@@ -606,9 +604,7 @@ def _section_segments(text: str) -> list[_SectionSegment]:
             current_start = offset
             current_level = level
             current_title = title
-            current_path = tuple(
-                path_by_level[level_key] for level_key in sorted(path_by_level)
-            )
+            current_path = tuple(path_by_level[level_key] for level_key in sorted(path_by_level))
         else:
             if not current_lines:
                 current_start = offset

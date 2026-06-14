@@ -105,6 +105,7 @@ class EnterpriseAiModelSettings(BaseModel):
             raise ValueError("response path は / で始まる JSON Pointer で入力してください。")
         return value
 
+
 class GenerativeAiModelSettings(BaseModel):
     """OCI Generative AI（embedding/rerank）モデル設定。"""
 
@@ -250,6 +251,7 @@ class UploadStorageSettingsUpdate(BaseModel):
                 "Object Storage の値は英数字、ハイフン、アンダースコア、ドットで入力してください。"
             )
         return value
+
 
 class OciConfigReadRequest(BaseModel):
     """バックエンドから OCI config file の指定 profile を読み取る request。"""

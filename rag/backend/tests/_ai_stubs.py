@@ -73,9 +73,7 @@ class DeterministicGenAi(OciGenAiClient):
     ) -> list[list[float]]:
         return [[1.0] + [0.0] * 1535 for _ in texts]
 
-    async def rerank(
-        self, query: str, documents: list[str], top_n: int
-    ) -> list[tuple[int, float]]:
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
         count = min(top_n, len(documents))
         return [(index, 1.0 - index * 1e-3) for index in range(count)]
 

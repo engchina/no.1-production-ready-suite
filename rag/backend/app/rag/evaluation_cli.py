@@ -243,8 +243,7 @@ def _extract_gate_evaluation(response_payload: Mapping[str, Any]) -> GateEvaluat
             comparison = EvaluationCompareResponse.model_validate(data)
         except ValidationError as exc:
             raise EvaluationGateError(
-                "評価 API レスポンスの形式が不正です: "
-                + _safe_validation_error_summary(exc),
+                "評価 API レスポンスの形式が不正です: " + _safe_validation_error_summary(exc),
                 exit_code=3,
             ) from exc
         if not comparison.results:

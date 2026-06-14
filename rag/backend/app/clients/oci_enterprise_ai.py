@@ -197,9 +197,7 @@ class OciEnterpriseAiClient:
     ) -> EnterpriseAiRequestPreview:
         """VLM endpoint request の非機密プレビューを返す。"""
         file_id = (
-            ""
-            if self._settings.oci_enterprise_ai_vlm_payload_template.strip()
-            else "file_preview"
+            "" if self._settings.oci_enterprise_ai_vlm_payload_template.strip() else "file_preview"
         )
         payload = _build_vlm_payload(
             self._settings,

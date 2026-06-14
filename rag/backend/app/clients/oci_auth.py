@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR = (
+OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR = (  # nosec B105 - パスワードではなくエラーメッセージ定数
     "OCI API 秘密鍵 PEM が暗号化されています。"
     " pass_phrase を OCI config に設定するか、パスフレーズなしの秘密鍵 PEM を使用してください。"
 )

@@ -537,9 +537,7 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
                     rerank_top_n=request.rerank_top_n,
                     rrf_k=self.settings.rag_rrf_k,
                     context_window_chars=self.settings.rag_context_window_chars,
-                    oracle_vector_target_accuracy=(
-                        self.settings.oracle_vector_target_accuracy
-                    ),
+                    oracle_vector_target_accuracy=(self.settings.oracle_vector_target_accuracy),
                     query_variant_count=(
                         self.settings.rag_query_expansion_max_variants
                         if self.settings.rag_query_expansion_enabled

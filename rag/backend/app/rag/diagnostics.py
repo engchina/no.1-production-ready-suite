@@ -60,9 +60,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "context_window_chars": resolved_settings.rag_context_window_chars,
         "context_neighbor_window": resolved_settings.rag_context_neighbor_window,
         "context_diversity_lambda": resolved_settings.rag_context_diversity_lambda,
-        "context_group_expansion_enabled": (
-            resolved_settings.rag_context_group_expansion_enabled
-        ),
+        "context_group_expansion_enabled": (resolved_settings.rag_context_group_expansion_enabled),
         "context_group_max_chunks": resolved_settings.rag_context_group_max_chunks,
         "context_compression_enabled": resolved_settings.rag_context_compression_enabled,
         "context_compression_max_sentences": (

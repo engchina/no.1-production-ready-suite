@@ -138,9 +138,7 @@ def test_dashboard_summary_reflects_documents_and_indexed_chunks(
 
     activities = data["recent_activities"]
     assert {activity["id"] for activity in activities} == {"doc-indexed", "doc-uploaded"}
-    indexed_activity = next(
-        activity for activity in activities if activity["id"] == "doc-indexed"
-    )
+    indexed_activity = next(activity for activity in activities if activity["id"] == "doc-indexed")
     assert indexed_activity["type"] == "INDEXING"
     assert indexed_activity["status"] == "INDEXED"
     uploaded_activity = next(

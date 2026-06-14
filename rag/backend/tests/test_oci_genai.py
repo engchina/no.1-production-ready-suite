@@ -1,6 +1,7 @@
 """OCI Generative AI adapter 境界のテスト。"""
 
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,7 +14,7 @@ from app.config import Settings
 
 def test_oci_genai_client_refuses_encrypted_private_key_without_prompt(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     """OCI SDK client 作成前に暗号化 PEM の pass phrase 要求を止める。"""
     key_file = tmp_path / "encrypted.pem"

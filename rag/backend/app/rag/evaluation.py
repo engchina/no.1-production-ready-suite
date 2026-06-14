@@ -132,9 +132,7 @@ class EvaluationRunner:
                     elapsed=elapsed,
                     error=exc,
                 )
-                _accumulate_failure_reasons(
-                    failure_reason_counts, error_result.failure_reasons
-                )
+                _accumulate_failure_reasons(failure_reason_counts, error_result.failure_reasons)
                 case_results.append(error_result)
                 error_count += 1
                 continue
@@ -155,9 +153,7 @@ class EvaluationRunner:
                     elapsed=elapsed,
                     error=exc,
                 )
-                _accumulate_failure_reasons(
-                    failure_reason_counts, error_result.failure_reasons
-                )
+                _accumulate_failure_reasons(failure_reason_counts, error_result.failure_reasons)
                 case_results.append(error_result)
                 error_count += 1
                 continue
@@ -306,12 +302,8 @@ def _settings_with_rag_overrides(
         "context_group_expansion_enabled": "rag_context_group_expansion_enabled",
         "context_group_max_chunks": "rag_context_group_max_chunks",
         "context_compression_enabled": "rag_context_compression_enabled",
-        "context_compression_max_sentences": (
-            "rag_context_compression_max_sentences"
-        ),
-        "context_compression_max_chars_per_chunk": (
-            "rag_context_compression_max_chars_per_chunk"
-        ),
+        "context_compression_max_sentences": ("rag_context_compression_max_sentences"),
+        "context_compression_max_chars_per_chunk": ("rag_context_compression_max_chars_per_chunk"),
         "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
     }
     return settings.model_copy(

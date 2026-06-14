@@ -269,10 +269,7 @@ def infer_document_elements(text: str) -> list[DocumentElement]:
             continue
 
         line_kind = _line_kind(stripped)
-        if (
-            pending_kind is not None
-            and (pending_kind != line_kind or pending_page != current_page)
-        ):
+        if pending_kind is not None and (pending_kind != line_kind or pending_page != current_page):
             flush_pending(line_start)
         if pending_kind is None:
             pending_kind = line_kind

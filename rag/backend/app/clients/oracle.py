@@ -41,7 +41,9 @@ def _to_vector_bind(embedding: Sequence[float]) -> "array[float]":
     array('f', ...) として渡す必要がある。
     """
     return array("f", (float(value) for value in embedding))
-WALLET_PASSWORD_REQUIRED_ERROR = (
+
+
+WALLET_PASSWORD_REQUIRED_ERROR = (  # nosec B105 - パスワードではなくエラーメッセージ定数
     "Oracle Wallet に自動ログイン用の cwallet.sso がないため、Wallet パスワードが必要です。"
     " Wallet パスワードを入力するか、cwallet.sso を含む Wallet ZIP をアップロードしてください。"
 )

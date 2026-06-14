@@ -208,9 +208,7 @@ class RagPipeline:
                     self._expand_context_group_siblings(packed_chunks),
                     attributes={
                         "input_count": len(packed_chunks),
-                        "max_chunks_per_group": (
-                            self._settings.rag_context_group_max_chunks
-                        ),
+                        "max_chunks_per_group": (self._settings.rag_context_group_max_chunks),
                     },
                     result_attributes=lambda item: {
                         "expanded_count": item[1],
@@ -249,9 +247,7 @@ class RagPipeline:
                     ),
                     attributes={
                         "input_count": len(packed_chunks),
-                        "max_sentences": (
-                            self._settings.rag_context_compression_max_sentences
-                        ),
+                        "max_sentences": (self._settings.rag_context_compression_max_sentences),
                         "max_chars_per_chunk": (
                             self._settings.rag_context_compression_max_chars_per_chunk
                         ),
@@ -428,9 +424,7 @@ class RagPipeline:
             chunks,
             query=query,
             max_sentences=self._settings.rag_context_compression_max_sentences,
-            max_chars_per_chunk=(
-                self._settings.rag_context_compression_max_chars_per_chunk
-            ),
+            max_chars_per_chunk=(self._settings.rag_context_compression_max_chars_per_chunk),
         )
 
     async def _retrieve_with_query_variants(
@@ -442,9 +436,7 @@ class RagPipeline:
     ) -> list[RetrievedChunk]:
         """query expansion variants で検索し、chunk 単位で融合する。"""
         if len(query_variants) != len(vectors):
-            raise ValueError(
-                "query variants と query embeddings の件数が一致しません。"
-            )
+            raise ValueError("query variants と query embeddings の件数が一致しません。")
         if not query_variants:
             return []
         if len(query_variants) == 1:
@@ -623,8 +615,7 @@ def _query_match_features(query: str) -> set[str]:
         if len(compact) < ngram_size:
             continue
         features.extend(
-            compact[index : index + ngram_size]
-            for index in range(len(compact) - ngram_size + 1)
+            compact[index : index + ngram_size] for index in range(len(compact) - ngram_size + 1)
         )
     return set(_dedupe_strings(features)[:80])
 
@@ -824,8 +815,7 @@ def _with_context_diversity_metadata(
 def _normalized_relevance_scores(chunks: list[RetrievedChunk]) -> list[float]:
     """rerank/retrieval score を 0.0-1.0 へ正規化する。"""
     raw_scores = [
-        chunk.rerank_score if chunk.rerank_score is not None else chunk.score
-        for chunk in chunks
+        chunk.rerank_score if chunk.rerank_score is not None else chunk.score for chunk in chunks
     ]
     minimum = min(raw_scores)
     maximum = max(raw_scores)
@@ -849,9 +839,7 @@ def _mmr_score(
             _jaccard_similarity(features[index], features[selected_index])
             for selected_index in selected_indices
         )
-    return (lambda_weight * relevance_scores[index]) - (
-        (1.0 - lambda_weight) * novelty_penalty
-    )
+    return (lambda_weight * relevance_scores[index]) - ((1.0 - lambda_weight) * novelty_penalty)
 
 
 def _context_diversity_features(text: str) -> set[str]:

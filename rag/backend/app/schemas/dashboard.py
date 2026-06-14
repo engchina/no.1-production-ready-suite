@@ -58,8 +58,6 @@ class DashboardSummary(BaseModel):
     """ダッシュボード初期表示に必要な情報。"""
 
     stats: DashboardStats
-    ingestion_quality: DashboardIngestionQuality = Field(
-        default_factory=DashboardIngestionQuality
-    )
+    ingestion_quality: DashboardIngestionQuality = Field(default_factory=DashboardIngestionQuality)
     recent_activities: list[DashboardActivity] = Field(default_factory=list)
     system: DashboardSystemInfo

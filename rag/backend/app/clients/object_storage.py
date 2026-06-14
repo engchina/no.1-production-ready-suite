@@ -186,6 +186,7 @@ class ObjectStorageClient:
             and self._settings.object_storage_bucket.strip()
         )
 
+
 def _safe_key(key: str, *, reject_relative_segments: bool = False) -> str:
     """Object Storage キーとして扱える文字だけに正規化する。"""
     normalized = key.strip().replace("\\", "/")

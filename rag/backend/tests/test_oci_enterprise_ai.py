@@ -106,8 +106,7 @@ async def test_oci_vlm_accepts_json_string_payload() -> None:
     transport = FakeEnterpriseAiTransport(
         {
             "output": (
-                '{"raw_text":"本文","document_type":"マニュアル",'
-                '"confidence":0.8,"warnings":[]}'
+                '{"raw_text":"本文","document_type":"マニュアル",' '"confidence":0.8,"warnings":[]}'
             )
         }
     )
@@ -549,11 +548,7 @@ async def test_oci_generate_accepts_tool_call_answer_payload() -> None:
                 {
                     "message": {
                         "tool_calls": [
-                            {
-                                "function": {
-                                    "arguments": '{"answer":"tool call 由来の回答です。"}'
-                                }
-                            }
+                            {"function": {"arguments": '{"answer":"tool call 由来の回答です。"}'}}
                         ]
                     }
                 }
@@ -572,13 +567,7 @@ async def test_oci_generate_uses_configured_response_path() -> None:
     settings = _oci_settings()
     settings.oci_enterprise_ai_llm_response_path = "/payload/results/0/generated/text"
     transport = FakeEnterpriseAiTransport(
-        {
-            "payload": {
-                "results": [
-                    {"generated": {"text": "深い envelope 由来の回答です。"}}
-                ]
-            }
-        }
+        {"payload": {"results": [{"generated": {"text": "深い envelope 由来の回答です。"}}]}}
     )
     client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 

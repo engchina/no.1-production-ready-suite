@@ -744,8 +744,7 @@ def _model_test_troubleshooting(
         )
     if any(token in lowered for token in ("401", "unauthorized", "authentication")):
         tips.append(
-            "認証エラーです。API key / OCI config の資格情報を"
-            "再発行または再保存してください。"
+            "認証エラーです。API key / OCI config の資格情報を" "再発行または再保存してください。"
         )
     if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
         tips.append(
@@ -888,13 +887,11 @@ def _database_connection_troubleshooting(
         tips.append("Wallet サービス名が ADB の接続文字列として有効か確認してください。")
     if "ora-12541" in combined or "dpy-6005" in combined or "dpy-6000" in combined:
         tips.append(
-            "データベースが停止していないか、ADB の listener に"
-            "到達できるか確認してください。"
+            "データベースが停止していないか、ADB の listener に" "到達できるか確認してください。"
         )
     if "wallet" in combined or "dpy-4011" in combined:
         tips.append(
-            "Wallet ZIP の内容、Wallet パスワード、"
-            "ORACLE_CLIENT_LIB_DIR を確認してください。"
+            "Wallet ZIP の内容、Wallet パスワード、" "ORACLE_CLIENT_LIB_DIR を確認してください。"
         )
     if "dpi-1047" in combined or "dpi-1072" in combined:
         tips.append(
@@ -1636,8 +1633,7 @@ def _oci_config_has_private_key_pass_phrase(content: str, profile: str) -> bool:
     else:
         return False
     return any(
-        str(entries.get(key, "")).strip()
-        for key in ("pass_phrase", "passphrase", "key_password")
+        str(entries.get(key, "")).strip() for key in ("pass_phrase", "passphrase", "key_password")
     )
 
 

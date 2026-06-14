@@ -196,9 +196,7 @@ async def test_get_oci_uri_uses_oci_even_when_upload_storage_is_local() -> None:
         get_response=SimpleNamespace(data=SimpleNamespace(content=b"policy body"))
     )
     client = ObjectStorageClient(
-        settings=_oci_settings().model_copy(
-            update={"upload_storage_backend": "local"}
-        ),
+        settings=_oci_settings().model_copy(update={"upload_storage_backend": "local"}),
         storage_client=sdk,
         sdk_call_runner=_run_inline,
     )

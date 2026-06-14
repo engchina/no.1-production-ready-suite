@@ -11,6 +11,8 @@ from pytest import LogCaptureFixture, MonkeyPatch
 from app.api.routes import search as search_route
 from app.config import get_settings
 from app.main import app
+from app.rag.audit import record_rag_search_audit
+from app.rag.diagnostics import build_search_diagnostics
 from app.schemas.search import SearchRequest, SearchResponse
 from tests.support import AsgiTestClient
 
@@ -107,9 +109,7 @@ def test_select_ai_api_returns_showsql_with_sanitized_query(
     assert data["generated_sql"] == "SELECT COUNT(*) FROM rag_documents"
     assert data["result_text"] == "SELECT COUNT(*) FROM rag_documents"
     assert data["profile_name"] == "rag_select_ai"
-    assert data["guardrail_warnings"] == [
-        "個人番号や口座番号などの機微な識別子をマスクしました。"
-    ]
+    assert data["guardrail_warnings"] == ["個人番号や口座番号などの機微な識別子をマスクしました。"]
     assert fake.calls[0]["query"] == "口座番号: [機微情報] の文書件数を SQL にして"
     assert "1234567" not in str(fake.calls)
 
@@ -218,11 +218,11 @@ class AuditingPipeline:
         trace_id: str | None = None,
     ) -> SearchResponse:
         assert trace_id
-        diagnostics = search_route.build_search_diagnostics(
+        diagnostics = build_search_diagnostics(
             request,
             settings=get_settings(),
         )
-        search_route.record_rag_search_audit(
+        record_rag_search_audit(
             trace_id=trace_id,
             outcome="no_results",
             mode=request.mode,

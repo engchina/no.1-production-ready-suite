@@ -44,6 +44,4 @@ def test_compare_example_matches_evaluation_compare_schema() -> None:
     assert len(experiment_ids) == len(set(experiment_ids))
     assert any(experiment.mode == SearchMode.HYBRID for experiment in request.experiments)
     assert any(experiment.rag_overrides is not None for experiment in request.experiments)
-    assert all(
-        experiment.rerank_top_n <= experiment.top_k for experiment in request.experiments
-    )
+    assert all(experiment.rerank_top_n <= experiment.top_k for experiment in request.experiments)

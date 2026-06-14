@@ -1152,9 +1152,7 @@ def test_upload_oci_private_key_rejects_encrypted_content(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     pem = (
-        b"-----BEGIN ENCRYPTED PRIVATE KEY-----\n"
-        b"abc\n"
-        b"-----END ENCRYPTED PRIVATE KEY-----\n"
+        b"-----BEGIN ENCRYPTED PRIVATE KEY-----\n" b"abc\n" b"-----END ENCRYPTED PRIVATE KEY-----\n"
     )
 
     resp = client.post(

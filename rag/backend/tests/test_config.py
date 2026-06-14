@@ -41,9 +41,10 @@ def test_relative_model_settings_file_resolves_from_backend_root(
     backend_root = tmp_path / "backend"
     monkeypatch.setattr(config_module, "BACKEND_ROOT", backend_root)
 
-    assert resolve_model_settings_file("model-settings.json") == (
-        backend_root / "model-settings.json"
-    ).resolve()
+    assert (
+        resolve_model_settings_file("model-settings.json")
+        == (backend_root / "model-settings.json").resolve()
+    )
 
 
 def test_enterprise_ai_max_retries_defaults_to_three_and_is_bounded() -> None:
@@ -65,8 +66,9 @@ def test_enterprise_ai_response_paths_default_to_auto_detection() -> None:
     assert settings.oci_enterprise_ai_llm_response_path == ""
     assert settings.oci_enterprise_ai_vlm_response_path == ""
     assert (
-        Settings(oci_enterprise_ai_llm_response_path="/data/text")
-        .oci_enterprise_ai_llm_response_path
+        Settings(
+            oci_enterprise_ai_llm_response_path="/data/text"
+        ).oci_enterprise_ai_llm_response_path
         == "/data/text"
     )
 
@@ -123,8 +125,9 @@ def test_oracle_connection_timeouts_are_bounded() -> None:
     assert settings.oracle_tcp_connect_timeout_seconds == 10.0
     assert settings.oracle_db_test_timeout_seconds == 15.0
     assert (
-        Settings(oracle_tcp_connect_timeout_seconds=5, oracle_db_test_timeout_seconds=20)
-        .oracle_db_test_timeout_seconds
+        Settings(
+            oracle_tcp_connect_timeout_seconds=5, oracle_db_test_timeout_seconds=20
+        ).oracle_db_test_timeout_seconds
         == 20
     )
 

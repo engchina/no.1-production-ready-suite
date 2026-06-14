@@ -34,9 +34,7 @@ async def test_staging_smoke_uses_unique_marker_query_and_document_filter(
     monkeypatch.setattr(staging_smoke, "RagPipeline", FakeRagPipeline)
     monkeypatch.setattr(staging_smoke, "close_oracle_pool", close_pool)
 
-    result = await staging_smoke.run_staging_smoke(
-        settings=_complete_oci_settings()
-    )
+    result = await staging_smoke.run_staging_smoke(settings=_complete_oci_settings())
 
     assert result.ok is True
     assert result.document_id == "doc-smoke"
@@ -98,9 +96,7 @@ async def test_staging_smoke_requires_answer_marker_for_default_query(
     monkeypatch.setattr(staging_smoke, "close_oracle_pool", lambda: None)
 
     try:
-        await staging_smoke.run_staging_smoke(
-            settings=_complete_oci_settings()
-        )
+        await staging_smoke.run_staging_smoke(settings=_complete_oci_settings())
     except staging_smoke.StagingSmokeError as exc:
         assert exc.stage == "rag_answer_marker"
         assert exc.cause_type == "RuntimeError"

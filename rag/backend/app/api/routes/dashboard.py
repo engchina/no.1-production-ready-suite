@@ -127,9 +127,7 @@ def _dashboard_stats(
         uploads_this_month=sum(
             1 for document in documents if _same_month(document.uploaded_at, now)
         ),
-        total_indexed=sum(
-            1 for document in documents if document.status == FileStatus.INDEXED
-        ),
+        total_indexed=sum(1 for document in documents if document.status == FileStatus.INDEXED),
         indexed_this_month=sum(
             1
             for document in documents

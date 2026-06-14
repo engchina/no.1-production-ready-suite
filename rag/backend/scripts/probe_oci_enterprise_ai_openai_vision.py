@@ -15,7 +15,7 @@ import base64
 import os
 import sys
 
-from openai import OpenAI
+from openai import OpenAI  # type: ignore[import-not-found]
 
 TEST_IMAGE_JPEG_BASE64 = (
     "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsO"

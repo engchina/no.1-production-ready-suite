@@ -489,10 +489,7 @@ def reload_persisted_model_settings_if_changed(settings: Settings) -> None:
     """別 worker が保存したモデル設定を次回リクエストで取り込む。"""
     path = resolve_model_settings_file(settings.model_settings_file)
     mtime_ns = _model_settings_mtime_ns(path)
-    if (
-        _MODEL_SETTINGS_STATE["path"] == str(path)
-        and _MODEL_SETTINGS_STATE["mtime_ns"] == mtime_ns
-    ):
+    if _MODEL_SETTINGS_STATE["path"] == str(path) and _MODEL_SETTINGS_STATE["mtime_ns"] == mtime_ns:
         return
     if mtime_ns is None:
         _remember_model_settings_file(path, None)

@@ -54,13 +54,11 @@ def test_chunk_text_adds_section_and_content_metadata() -> None:
 
 def test_structured_extraction_infers_elements_from_raw_text() -> None:
     """raw_text だけでも title/list/table 要素へ軽量正規化する。"""
-    extraction = StructuredExtraction(
-        raw_text="""# 経費申請
+    extraction = StructuredExtraction(raw_text="""# 経費申請
 - 部門長が承認します。
 |項目|条件|
 |期限|月末|
-"""
-    )
+""")
 
     assert [element.kind for element in extraction.elements] == ["title", "list", "table"]
     assert extraction.elements[1].section_path == ["経費申請"]
