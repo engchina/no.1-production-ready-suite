@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, type RefObject } from "react";
 import {
   Link,
   Navigate,
@@ -5,6 +6,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigationType,
   useParams,
 } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
@@ -74,6 +76,10 @@ export function App() {
 function ProtectedLayout() {
   const auth = useAuth();
   const location = useLocation();
+  const navigationType = useNavigationType();
+  const mainRef = useRef<HTMLElement | null>(null);
+  useMainScrollRestoration(mainRef, location, navigationType);
+
   if (auth.authRequired && !auth.isAuthenticated) {
     const from = `${location.pathname}${location.search}${location.hash}`;
     return <Navigate to={APP_ROUTES.login} state={{ from }} replace />;
@@ -82,11 +88,93 @@ function ProtectedLayout() {
   return (
     <div className="flex">
       <Sidebar />
-      <main className="h-screen flex-1 overflow-y-auto" aria-label="メイン領域">
+      <main
+        ref={mainRef}
+        className="h-screen flex-1 overflow-y-auto focus:outline-none"
+        aria-label="メイン領域"
+        tabIndex={-1}
+      >
         <Outlet />
       </main>
     </div>
   );
+}
+
+type RouterLocation = ReturnType<typeof useLocation>;
+type RouterNavigationType = ReturnType<typeof useNavigationType>;
+
+const mainScrollPositions = new Map<string, number>();
+
+function useMainScrollRestoration(
+  mainRef: RefObject<HTMLElement | null>,
+  location: RouterLocation,
+  navigationType: RouterNavigationType
+) {
+  const pathnameRef = useRef(location.pathname);
+  const hashRef = useRef(location.hash);
+  const scrollKey = mainScrollPositionKey(location);
+
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+
+    const save = () => {
+      mainScrollPositions.set(scrollKey, main.scrollTop);
+    };
+    main.addEventListener("scroll", save, { passive: true });
+
+    return () => {
+      main.removeEventListener("scroll", save);
+    };
+  }, [mainRef, scrollKey]);
+
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+
+    const pathnameChanged = pathnameRef.current !== location.pathname;
+    const hashChanged = hashRef.current !== location.hash;
+    pathnameRef.current = location.pathname;
+    hashRef.current = location.hash;
+
+    if (!pathnameChanged && !hashChanged && navigationType !== "POP") return;
+
+    const nextTop =
+      navigationType === "POP" ? mainScrollPositions.get(scrollKey) ?? 0 : 0;
+    const scroll = () => {
+      if (location.hash && scrollHashTargetIntoView(location.hash)) return;
+      main.scrollTo({ top: nextTop, left: 0, behavior: "auto" });
+    };
+
+    if (pathnameChanged) main.focus({ preventScroll: true });
+    scroll();
+    const animationFrame = window.requestAnimationFrame(scroll);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [location.hash, location.pathname, mainRef, navigationType, scrollKey]);
+}
+
+function mainScrollPositionKey(location: RouterLocation) {
+  return `${location.pathname}${location.search}${location.hash}`;
+}
+
+function scrollHashTargetIntoView(hash: string) {
+  const id = decodeHashId(hash);
+  if (!id) return false;
+
+  const target = document.getElementById(id);
+  if (!target) return false;
+
+  target.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
+  return true;
+}
+
+function decodeHashId(hash: string) {
+  const id = hash.slice(1);
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
 }
 
 function LoginRoute() {

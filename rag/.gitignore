@@ -159,6 +159,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local model settings saved by the backend UI
+backend/model-settings.json
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -231,3 +234,10 @@ next-env.d.ts
 frontend/test-results/
 frontend/playwright-report/
 frontend/.vite/
+
+# Local agent memory / workspace notes
+HEARTBEAT.md
+IDENTITY.md
+SOUL.md
+TOOLS.md
+USER.md

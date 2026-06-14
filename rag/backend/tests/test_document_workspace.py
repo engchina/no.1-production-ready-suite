@@ -1,14 +1,111 @@
 """文書プレビュー（原本配信）と抽出本文表示用 API のテスト。"""
 
-from app.clients.oracle import reset_local_store
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import pytest
+
+from app.api.routes import documents as documents_route
 from app.main import app
+from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
 
 
-def setup_function() -> None:
-    reset_local_store()
+class FakeWorkspaceOracle:
+    """文書 workspace API テスト用のインメモリ Oracle fake。"""
+
+    def __init__(self) -> None:
+        self.documents: dict[str, DocumentDetail] = {}
+
+    async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
+        for detail in self.documents.values():
+            if detail.content_sha256 == content_sha256:
+                return DocumentSummary.model_validate(detail.model_dump())
+        return None
+
+    async def create_document(
+        self,
+        *,
+        file_name: str,
+        object_storage_path: str,
+        content_type: str | None,
+        file_size_bytes: int | None,
+        content_sha256: str | None,
+        duplicate_of_document_id: str | None,
+    ) -> DocumentDetail:
+        document_id = uuid4().hex
+        detail = DocumentDetail(
+            id=document_id,
+            file_name=file_name,
+            status=FileStatus.UPLOADED,
+            object_storage_path=object_storage_path,
+            content_type=content_type,
+            file_size_bytes=file_size_bytes,
+            content_sha256=content_sha256,
+            duplicate_of_document_id=duplicate_of_document_id,
+            uploaded_at=datetime.now(UTC),
+        )
+        self.documents[document_id] = detail
+        return detail
+
+    async def get_document(self, document_id: str) -> DocumentDetail | None:
+        return self.documents.get(document_id)
+
+    async def update_document_status(
+        self,
+        document_id: str,
+        status: FileStatus,
+        error_message: str | None = None,
+    ) -> DocumentDetail:
+        detail = self.documents[document_id]
+        indexed_at = datetime.now(UTC) if status == FileStatus.INDEXED else detail.indexed_at
+        updated = detail.model_copy(
+            update={
+                "status": status,
+                "indexed_at": indexed_at,
+                "error_message": error_message,
+            }
+        )
+        self.documents[document_id] = updated
+        return updated
+
+
+class FakeWorkspaceIngestionPipeline:
+    """取込 API テストで外部 AI/embedding を呼ばずに抽出結果を保存する fake。"""
+
+    def __init__(self, *, oracle: FakeWorkspaceOracle) -> None:
+        self._oracle = oracle
+
+    async def ingest(
+        self,
+        document_id: str,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        content_type: str = "application/octet-stream",
+    ) -> DocumentDetail:
+        detail = await self._oracle.get_document(document_id)
+        assert detail is not None
+        raw_text = image_bytes.decode("utf-8", errors="replace")
+        self._oracle.documents[document_id] = detail.model_copy(
+            update={
+                "extraction": {
+                    "document_type": "社内規程",
+                    "raw_text": raw_text,
+                    "confidence": 0.9,
+                }
+            }
+        )
+        return await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
+
+
+@pytest.fixture(autouse=True)
+def fake_document_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_oracle = FakeWorkspaceOracle()
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: fake_oracle)
+    monkeypatch.setattr(documents_route, "IngestionPipeline", FakeWorkspaceIngestionPipeline)
 
 
 def _upload(file_name: str, body: bytes, content_type: str) -> str:

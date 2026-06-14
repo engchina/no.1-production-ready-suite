@@ -45,7 +45,6 @@ class EnterpriseAiProbeReport:
     """Enterprise AI probe CLI の JSON 出力。"""
 
     ok: bool
-    adapter: str
     results: list[EnterpriseAiProbeResult]
 
 
@@ -122,14 +121,12 @@ async def run_enterprise_ai_probe(
             vlm_prompt=vlm_prompt,
             vlm_text=vlm_text,
             mime_type=mime_type,
-            settings=resolved_settings,
             client=resolved_client,
         )
         for target in surfaces
     ]
     return EnterpriseAiProbeReport(
         ok=all(result.ok for result in results),
-        adapter=resolved_settings.ai_service_adapter,
         results=results,
     )
 
@@ -143,19 +140,9 @@ async def _probe_surface(
     vlm_prompt: str,
     vlm_text: str,
     mime_type: str,
-    settings: Settings,
     client: OciEnterpriseAiClient,
 ) -> EnterpriseAiProbeResult:
     """1 surface の preview と任意の実 endpoint 呼び出しを行う。"""
-    if settings.ai_service_adapter != "oci":
-        return EnterpriseAiProbeResult(
-            ok=False,
-            surface=surface,
-            dry_run=dry_run,
-            stage="preflight",
-            error_type="AdapterNotOci",
-        )
-
     try:
         request = _request_preview(
             surface,

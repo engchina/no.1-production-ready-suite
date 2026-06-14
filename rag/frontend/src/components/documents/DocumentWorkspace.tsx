@@ -1,11 +1,12 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
 
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentExtraction } from "./DocumentExtraction";
 import { FlowStepper } from "@/components/upload/FlowStepper";
 import { StatusBadge } from "@/components/StatusBadge";
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState } from "@/components/StateViews";
@@ -51,10 +52,7 @@ export function DocumentWorkspace({ documentId }: { documentId: string }) {
       </CardHeader>
       <CardContent className="space-y-5">
         {doc.duplicate_of_document_id ? (
-          <div className="flex items-start gap-2 rounded-md bg-warning-bg/60 px-3 py-2 text-sm text-warning">
-            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
-            {t("upload.duplicate")}
-          </div>
+          <Banner severity="warning">{t("upload.duplicate")}</Banner>
         ) : null}
 
         <FlowStepper status={doc.status} />
@@ -80,15 +78,9 @@ export function DocumentWorkspace({ documentId }: { documentId: string }) {
           </div>
         </dl>
 
-        {doc.error_message ? (
-          <div className="rounded-md bg-danger-bg/50 px-3 py-2 text-sm text-danger" role="alert">
-            {doc.error_message}
-          </div>
-        ) : null}
+        {doc.error_message ? <Banner severity="danger">{doc.error_message}</Banner> : null}
         {ingest.isError ? (
-          <div className="rounded-md bg-danger-bg/50 px-3 py-2 text-sm text-danger" role="alert">
-            {errorMessage(ingest.error, t("flow.ingestFailed"))}
-          </div>
+          <Banner severity="danger">{errorMessage(ingest.error, t("flow.ingestFailed"))}</Banner>
         ) : null}
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
@@ -105,10 +97,7 @@ export function DocumentWorkspace({ documentId }: { documentId: string }) {
         </div>
 
         {doc.status === "INDEXED" ? (
-          <div className="flex items-center gap-2 rounded-md bg-success-bg/60 px-3 py-2 text-sm font-medium text-success">
-            <CheckCircle2 size={16} aria-hidden />
-            {t("flow.indexed")}
-          </div>
+          <Banner severity="success">{t("flow.indexed")}</Banner>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">

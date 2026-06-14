@@ -5,12 +5,15 @@ import re
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
-from app.config import AiServiceAdapter, UploadStorageBackend
+from app.config import UploadStorageBackend
 
 ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
-DatabaseConnectionTestStatus = Literal["success", "failed", "skipped"]
+ModelSettingsTestStatus = Literal["success", "failed"]
+ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
+DatabaseConnectionTestStatus = Literal["success", "failed"]
+OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 
 
@@ -65,27 +68,19 @@ class EnterpriseAiModelSettings(BaseModel):
     @field_validator("endpoint")
     @classmethod
     def validate_endpoint(cls, value: str) -> str:
-        """endpoint は未設定または HTTP(S) URL に限定する。"""
-        if value and not value.startswith(("http://", "https://")):
-            raise ValueError("endpoint は http:// または https:// で始めてください。")
+        """endpoint の readiness 判定は保存後のチェックへ委譲する。"""
         return value
 
     @field_validator("project_ocid")
     @classmethod
     def validate_project_ocid(cls, value: str) -> str:
-        """OpenAI-compatible API の project は Generative AI project OCID を使う。"""
-        if value and not value.startswith("ocid1.generativeaiproject."):
-            raise ValueError("project OCID は ocid1.generativeaiproject. で始めてください。")
+        """project OCID の readiness 判定は保存後のチェックへ委譲する。"""
         return value
 
     @field_validator("api_path")
     @classmethod
     def validate_api_path(cls, value: str) -> str:
-        """Enterprise AI の呼び出し先は相対 path または HTTP(S) URL に限定する。"""
-        if not value:
-            raise ValueError("API パスを入力してください。")
-        if not value.startswith(("/", "http://", "https://")):
-            raise ValueError("API パスは / または http(s):// で始めてください。")
+        """API path の readiness 判定は保存後のチェックへ委譲する。"""
         return value
 
     @field_validator("text_payload_template", "vision_payload_template")
@@ -109,15 +104,6 @@ class EnterpriseAiModelSettings(BaseModel):
         if value and not value.startswith("/"):
             raise ValueError("response path は / で始まる JSON Pointer で入力してください。")
         return value
-
-    @model_validator(mode="after")
-    def validate_model_catalog(self) -> "EnterpriseAiModelSettings":
-        """モデル ID の重複を拒否する。"""
-        model_ids = [model.model_id for model in self.models if model.model_id]
-        if len(model_ids) != len(set(model_ids)):
-            raise ValueError("Enterprise AI の model ID は重複できません。")
-        return self
-
 
 class GenerativeAiModelSettings(BaseModel):
     """OCI Generative AI（embedding/rerank）モデル設定。"""
@@ -150,13 +136,43 @@ class ModelSettingsData(BaseModel):
 
     settings: ModelSettingsPayload
     checks: dict[str, ModelSettingsCheckStatus]
+    model_settings_file: str
     source: Literal["runtime"]
+
+
+class ModelSettingsTestRequest(BaseModel):
+    """保存前のモデル設定で特定モデルを実 API に対してテストする request。"""
+
+    settings: ModelSettingsPayload
+    target_type: ModelSettingsTestTargetType
+    model_id: str = Field(default="", max_length=256)
+    vision_enabled: bool = False
+
+    @field_validator("model_id")
+    @classmethod
+    def strip_model_id(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+
+class ModelSettingsTestResult(BaseModel):
+    """モデル単位の実接続テスト結果。"""
+
+    status: ModelSettingsTestStatus
+    target_type: ModelSettingsTestTargetType
+    model_id: str
+    message: str
+    troubleshooting: list[str] = Field(default_factory=list)
+    raw_error: str | None = None
+    error_type: str | None = None
+    elapsed_ms: int
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 
 class DatabaseSettingsData(BaseModel):
     """Oracle 26ai 接続設定の表示用データ。"""
 
-    adapter: AiServiceAdapter
     user: str
     dsn: str
     wallet_dir: str
@@ -174,6 +190,7 @@ class DatabaseSettingsUpdate(BaseModel):
     """Oracle 26ai 接続設定の更新 payload。
 
     password / wallet_password は未指定または空文字なら既存値を保持する。
+    clear_* が true の場合だけ保存済み secret を削除する。
     """
 
     user: str = Field(default="", max_length=256)
@@ -181,6 +198,8 @@ class DatabaseSettingsUpdate(BaseModel):
     wallet_dir: str = Field(default="", max_length=1024)
     password: str | None = Field(default=None, max_length=4096)
     wallet_password: str | None = Field(default=None, max_length=4096)
+    clear_password: bool = False
+    clear_wallet_password: bool = False
 
     @field_validator("user", "dsn", "wallet_dir")
     @classmethod
@@ -193,7 +212,6 @@ class UploadStorageSettingsData(BaseModel):
     """アップロード原本保存先の表示用データ。"""
 
     backend: UploadStorageBackend
-    ai_service_adapter: AiServiceAdapter
     local_storage_dir: str
     object_storage_region: str
     object_storage_namespace: str
@@ -232,16 +250,6 @@ class UploadStorageSettingsUpdate(BaseModel):
                 "Object Storage の値は英数字、ハイフン、アンダースコア、ドットで入力してください。"
             )
         return value
-
-    @model_validator(mode="after")
-    def validate_selected_backend(self) -> "UploadStorageSettingsUpdate":
-        """選択した保存先に必要な値を確認する。"""
-        if self.backend == "local" and not self.local_storage_dir:
-            raise ValueError("local_storage_dir を入力してください。")
-        if self.backend == "oci" and not self.object_storage_bucket:
-            raise ValueError("OCI Object Storage の bucket を入力してください。")
-        return self
-
 
 class OciConfigReadRequest(BaseModel):
     """バックエンドから OCI config file の指定 profile を読み取る request。"""
@@ -285,6 +293,53 @@ class OciConfigReadData(BaseModel):
     applied_fields: list[OciConfigField] = Field(default_factory=list)
 
 
+class OciSettingsUpdate(BaseModel):
+    """OCI SDK config の DEFAULT profile へ保存する認証設定。"""
+
+    user: str = Field(default="", max_length=512)
+    fingerprint: str = Field(default="", max_length=128)
+    tenancy: str = Field(default="", max_length=512)
+    region: str = Field(default="", max_length=128)
+
+    @field_validator("user", "fingerprint", "tenancy", "region")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+    @field_validator("user")
+    @classmethod
+    def validate_user_ocid(cls, value: str) -> str:
+        """OCI user OCID は入力時だけ形式を確認する。"""
+        if value and not value.startswith("ocid1.user."):
+            raise ValueError("ユーザー OCID は ocid1.user. で始めてください。")
+        return value
+
+    @field_validator("fingerprint")
+    @classmethod
+    def validate_fingerprint(cls, value: str) -> str:
+        """API key fingerprint は入力時だけ OCI 形式を確認する。"""
+        if value and not re.fullmatch(r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2})+", value):
+            raise ValueError("fingerprint は 16 進数をコロン区切りで入力してください。")
+        return value
+
+    @field_validator("tenancy")
+    @classmethod
+    def validate_tenancy_ocid(cls, value: str) -> str:
+        """OCI tenancy OCID は入力時だけ形式を確認する。"""
+        if value and not value.startswith("ocid1.tenancy."):
+            raise ValueError("テナンシ OCID は ocid1.tenancy. で始めてください。")
+        return value
+
+    @field_validator("region")
+    @classmethod
+    def validate_region(cls, value: str) -> str:
+        """リージョン名は入力時だけ OCI region identifier として確認する。"""
+        if value and not re.fullmatch(r"[a-z0-9-]+", value):
+            raise ValueError("リージョンは英小文字、数字、ハイフンで入力してください。")
+        return value
+
+
 class OciSettingsData(BaseModel):
     """OCI 認証設定画面の初期表示用 runtime データ。"""
 
@@ -298,6 +353,56 @@ class OciSettingsData(BaseModel):
     key_file_exists: bool = False
     config_file_exists: bool = False
     config_source: Literal["runtime"]
+
+
+class OciObjectStorageSettingsUpdate(BaseModel):
+    """OCI Object Storage 共通設定の更新 payload。"""
+
+    object_storage_region: str = Field(default="", max_length=128)
+    object_storage_namespace: str = Field(default="", max_length=256)
+
+    @field_validator("object_storage_region", "object_storage_namespace")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+    @field_validator("object_storage_region")
+    @classmethod
+    def validate_region(cls, value: str) -> str:
+        """Object Storage region は入力時だけ OCI region identifier として確認する。"""
+        if value and not re.fullmatch(r"[a-z0-9-]+", value):
+            raise ValueError("リージョンは英小文字、数字、ハイフンで入力してください。")
+        return value
+
+    @field_validator("object_storage_namespace")
+    @classmethod
+    def validate_namespace(cls, value: str) -> str:
+        """Object Storage namespace は入力時だけ危険な文字を拒否する。"""
+        if value and not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            raise ValueError(
+                "Object Storage の値は英数字、ハイフン、アンダースコア、ドットで入力してください。"
+            )
+        return value
+
+
+class OciConfigTestResult(BaseModel):
+    """保存済み OCI SDK config の検証結果。"""
+
+    status: OciConfigTestStatus
+    profile: str
+    config_file: str
+    key_file: str
+    config_file_exists: bool
+    key_file_exists: bool
+    missing_fields: list[OciConfigField] = Field(default_factory=list)
+    permission_issues: list[str] = Field(default_factory=list)
+    oci_directory_mode: str | None = None
+    config_file_mode: str | None = None
+    key_file_mode: str | None = None
+    message: str
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    error_type: str | None = None
 
 
 class OciObjectStorageNamespaceRequest(BaseModel):
@@ -358,5 +463,8 @@ class DatabaseConnectionTestResult(BaseModel):
     status: DatabaseConnectionTestStatus
     readiness: str
     message: str
+    elapsed_ms: int = 0
+    troubleshooting: list[str] = Field(default_factory=list)
+    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     error_type: str | None = None

@@ -1,16 +1,21 @@
 """Oracle adapter 境界のテスト。"""
 
 import json
+from array import array
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from app.clients.oracle import (
     OracleClient,
+    OracleWalletPasswordRequiredError,
     SelectAiUnavailableError,
+    _test_oracle_connection_sync,
     oracle_audit_schema_sql,
     oracle_document_schema_sql,
     oracle_ingestion_audit_schema_sql,
@@ -29,14 +34,172 @@ from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
 
+IN_MEMORY_ORACLE_REMOVED = pytest.mark.skip(
+    reason="in-memory Oracle fallback was removed"
+)
+
 
 def setup_function() -> None:
-    """テストごとにローカル store を初期化する。"""
+    """テストごとにテスト補助 store を初期化する。"""
     reset_local_store()
 
 
-async def test_oci_adapter_does_not_fall_back_to_local_document_store() -> None:
-    """OCI mode では document persistence が local store に落ちないこと。"""
+def test_oracle_connection_refuses_password_wallet_without_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """パスワード必須 Wallet は SDK の対話入力へ進む前に止める。"""
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text("ragdb_high = ...", encoding="utf-8")
+    (wallet_dir / "sqlnet.ora").write_text("WALLET_LOCATION = ...", encoding="utf-8")
+    (wallet_dir / "ewallet.p12").write_bytes(b"encrypted-wallet")
+    called = False
+
+    def fake_connect(**kwargs: object) -> object:
+        nonlocal called
+        called = True
+        return FakeOracleConnection([[{"ok": 1}]])
+
+    monkeypatch.setattr(
+        "app.clients.oracle.importlib.import_module",
+        lambda name: SimpleNamespace(connect=fake_connect),
+    )
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir=str(wallet_dir),
+        oracle_wallet_password="",
+    )
+
+    with pytest.raises(OracleWalletPasswordRequiredError, match="Wallet パスワード"):
+        _test_oracle_connection_sync(settings)
+
+    assert called is False
+
+
+def test_oracle_connection_uses_auto_login_wallet_without_wallet_password(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """cwallet.sso がある Wallet は Wallet パスワードなしで接続 kwargs を作る。"""
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text("ragdb_high = ...", encoding="utf-8")
+    (wallet_dir / "sqlnet.ora").write_text("WALLET_LOCATION = ...", encoding="utf-8")
+    (wallet_dir / "cwallet.sso").write_bytes(b"auto-login-wallet")
+    captured: dict[str, object] = {}
+
+    def fake_connect(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return FakeOracleConnection([[{"ok": 1}]])
+
+    monkeypatch.setattr(
+        "app.clients.oracle.importlib.import_module",
+        lambda name: SimpleNamespace(connect=fake_connect),
+    )
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir=str(wallet_dir),
+        oracle_wallet_password="",
+    )
+
+    _test_oracle_connection_sync(settings)
+
+    assert captured["config_dir"] == str(wallet_dir)
+    assert captured["wallet_location"] == str(wallet_dir)
+    assert captured["tcp_connect_timeout"] == 10.0
+    assert "wallet_password" not in captured
+
+
+def test_oracle_connection_uses_database_password_as_wallet_password(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Wallet パスワード未入力時は DB password を wallet_password に使う。"""
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text("ragdb_high = ...", encoding="utf-8")
+    (wallet_dir / "sqlnet.ora").write_text("WALLET_LOCATION = ...", encoding="utf-8")
+    (wallet_dir / "cwallet.sso").write_bytes(b"auto-login-wallet")
+    (wallet_dir / "ewallet.pem").write_text(
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n-----END ENCRYPTED PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_connect(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return FakeOracleConnection([[{"ok": 1}]])
+
+    monkeypatch.setattr(
+        "app.clients.oracle.importlib.import_module",
+        lambda name: SimpleNamespace(connect=fake_connect),
+    )
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="db-secret",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir=str(wallet_dir),
+        oracle_wallet_password="",
+    )
+
+    _test_oracle_connection_sync(settings)
+
+    assert captured["wallet_password"] == "db-secret"
+    assert captured["tcp_connect_timeout"] == 10.0
+
+
+def test_oracle_connection_test_strips_wallet_retry_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """接続テストは ADB Wallet alias の長い retry 設定を外して即時診断しやすくする。"""
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text(
+        "ragdb_high = (description=(retry_count=20)(retry_delay=3)"
+        "(address=(protocol=tcps)(port=1522)(host=adb.example.com))"
+        "(connect_data=(service_name=ragdb_high.adb.oraclecloud.com)))",
+        encoding="utf-8",
+    )
+    (wallet_dir / "sqlnet.ora").write_text("WALLET_LOCATION = ...", encoding="utf-8")
+    (wallet_dir / "cwallet.sso").write_bytes(b"auto-login-wallet")
+    captured: dict[str, object] = {}
+
+    def fake_connect(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return FakeOracleConnection([[{"ok": 1}]])
+
+    monkeypatch.setattr(
+        "app.clients.oracle.importlib.import_module",
+        lambda name: SimpleNamespace(connect=fake_connect),
+    )
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="db-secret",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir=str(wallet_dir),
+        oracle_wallet_password="",
+    )
+
+    _test_oracle_connection_sync(settings)
+
+    assert "(retry_count=" not in str(captured["dsn"]).lower()
+    assert "(retry_delay=" not in str(captured["dsn"]).lower()
+    assert captured["retry_count"] == 0
+    assert captured["retry_delay"] == 0
+
+
+async def test_oracle_client_persists_documents_through_pool() -> None:
+    """document persistence は Oracle pool 経由で実行される。"""
     pool = FakeOraclePool()
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
@@ -49,7 +212,6 @@ async def test_oci_adapter_does_not_fall_back_to_local_document_store() -> None:
     assert detail.file_name == "policy.txt"
     assert pool.connection.commits == 1
     assert "INSERT INTO rag_documents" in pool.connection.calls[0].statement
-    assert await OracleClient().list_documents() == []
 
 
 async def test_oci_vector_search_uses_ai_vector_search_sql() -> None:
@@ -85,7 +247,7 @@ async def test_oci_vector_search_uses_ai_vector_search_sql() -> None:
     assert "VECTOR_DISTANCE" in call.statement
     assert "d.status = 'INDEXED'" in call.statement
     assert "FETCH APPROX FIRST 3 ROWS ONLY WITH TARGET ACCURACY 90" in call.statement
-    assert call.parameters["embedding"] == [1.0, 0.0, 0.0]
+    assert call.parameters["embedding"] == array("f", [1.0, 0.0, 0.0])
     assert "top_k" not in call.parameters
     assert call.parameters["filter_document_id"] == "doc-1"
 
@@ -161,18 +323,18 @@ async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> N
     assert pool.connection.many_calls
     inserted = pool.connection.many_calls[0].rows[0]
     assert inserted["chunk_id"] == "doc-1:0"
-    assert inserted["embedding"] == [1.0, 0.0, 0.0]
+    assert inserted["embedding"] == array("f", [1.0, 0.0, 0.0])
     metadata = json.loads(str(inserted["metadata_json"]))
     assert metadata["chunk_index"] == 0
     assert metadata["section_path"] == "経費申請 > 承認"
     assert metadata["content_kind"] == "text"
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_local_retrieval_filters_by_chunk_metadata() -> None:
     """local reference store でも chunk metadata filter を検索前に適用する。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -228,11 +390,11 @@ async def test_local_retrieval_filters_by_chunk_metadata() -> None:
     assert hits[0].metadata["section_title"] == "料金表"
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_local_context_neighbors_returns_searchable_adjacent_chunks() -> None:
     """local store の隣接 context は同一 document の検索可能 chunk だけを返す。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -274,11 +436,11 @@ async def test_local_context_neighbors_returns_searchable_adjacent_chunks() -> N
         assert neighbor.metadata["context_anchor_chunk_id"] == anchor.chunk_id
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_local_context_group_siblings_returns_same_group_chunks() -> None:
     """local store の同一 group context は lineage metadata で sibling を返す。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -548,8 +710,8 @@ async def test_oci_select_ai_uses_dbms_cloud_ai_generate_with_binds() -> None:
     assert pool.connection.commits == 0
 
 
-async def test_local_select_ai_is_unavailable() -> None:
-    """local adapter では Select AI を実行しない。"""
+async def test_select_ai_without_profile_is_unavailable() -> None:
+    """profile 未設定では Select AI を実行しない。"""
     with pytest.raises(SelectAiUnavailableError):
         await OracleClient().select_ai("索引済み文書数を教えて")
 
@@ -578,6 +740,7 @@ async def test_oci_retrieval_applies_request_access_scope_predicates() -> None:
     assert call.parameters["access_category_name_0"] == "社内規程".casefold()
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_local_update_missing_document_raises_key_error() -> None:
     """存在しない document の状態更新は明示的に失敗する。"""
     client = OracleClient()
@@ -586,11 +749,11 @@ async def test_local_update_missing_document_raises_key_error() -> None:
         await client.update_document_status("missing", FileStatus.INGESTING)
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_local_delete_document_removes_chunks_and_is_idempotent() -> None:
     """local reference store でも document 削除時に関連 chunk を消す。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -614,6 +777,7 @@ async def test_local_delete_document_removes_chunks_and_is_idempotent() -> None:
     assert await client.count_chunks() == 0
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_local_find_document_by_content_hash_prefers_original_document() -> None:
     """重複検索は重複行ではなく最初の原本ドキュメントを返す。"""
     client = OracleClient()
@@ -742,6 +906,7 @@ async def test_vector_search_rejects_wrong_embedding_dimension() -> None:
         await client.vector_search([1.0, 0.0], top_k=1)
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_save_chunks_rejects_wrong_embedding_dimension() -> None:
     """保存 embedding が Oracle VECTOR 幅と違う場合は明示的に拒否する。"""
     client = OracleClient(settings=Settings.model_construct(oci_genai_embedding_dim=3))
@@ -759,11 +924,11 @@ async def test_save_chunks_rejects_wrong_embedding_dimension() -> None:
         )
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_non_searchable_status_clears_existing_chunks() -> None:
     """ERROR / INGESTING 状態へ移ると古い index chunk を検索対象から外す。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -790,11 +955,11 @@ async def test_non_searchable_status_clears_existing_chunks() -> None:
     assert await client.vector_search([1.0, 0.0, 0.0], top_k=1) == []
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_count_document_chunks_returns_searchable_rows_for_one_document() -> None:
     """document 別の索引件数は検索可能状態の当該 document だけを数える。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -836,11 +1001,11 @@ async def test_count_document_chunks_returns_searchable_rows_for_one_document() 
     assert await client.count_document_chunks(second.id) == 1
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_keyword_score_uses_unique_query_terms_and_is_bounded() -> None:
     """同じ query token の繰り返しで keyword score を 1 超にしない。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -866,11 +1031,11 @@ async def test_keyword_score_uses_unique_query_terms_and_is_bounded() -> None:
     assert hits[0].metadata["keyword_score"] == 1.0
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_vector_search_exposes_retrieval_metadata() -> None:
     """vector search は rank/score を citation metadata に残す。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -895,11 +1060,11 @@ async def test_vector_search_exposes_retrieval_metadata() -> None:
     assert hits[0].metadata["vector_score"] == 1.0
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_keyword_search_tie_breaks_by_document_and_chunk() -> None:
     """同点の keyword hit は document_id / chunk_index で安定順にする。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -936,11 +1101,11 @@ async def test_keyword_search_tie_breaks_by_document_and_chunk() -> None:
     assert [(hit.document_id, hit.metadata["chunk_index"]) for hit in hits] == expected
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_hybrid_search_tie_breaks_rrf_scores_stably() -> None:
     """RRF 同点も document_id / chunk_index で安定順にする。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -986,11 +1151,11 @@ async def test_hybrid_search_tie_breaks_rrf_scores_stably() -> None:
         assert hit.metadata["rrf_score"] == hit.score
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_hybrid_search_uses_configured_rrf_k() -> None:
     """Hybrid 検索の RRF 定数は Settings から変更できる。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
             rag_rrf_k=10,
@@ -1021,11 +1186,11 @@ async def test_hybrid_search_uses_configured_rrf_k() -> None:
     assert hits[0].metadata["rrf_score"] == hits[0].score
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_hybrid_search_marks_vector_only_results() -> None:
     """hybrid 検索でも片側だけの hit は検索経路を区別できる。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -1055,9 +1220,10 @@ async def test_hybrid_search_marks_vector_only_results() -> None:
     assert "keyword_rank" not in hits[0].metadata
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_non_searchable_status_clears_extraction() -> None:
     """ERROR / INGESTING 状態へ移ると古い抽出結果も表示対象から外す。"""
-    client = OracleClient(settings=Settings.model_construct(ai_service_adapter="local"))
+    client = OracleClient(settings=Settings.model_construct())
     document = await client.create_document(
         file_name="policy.txt",
         object_storage_path="local://uploaded/policy.txt",
@@ -1086,11 +1252,11 @@ async def test_non_searchable_status_clears_extraction() -> None:
     assert errored.extraction == {}
 
 
+@IN_MEMORY_ORACLE_REMOVED
 async def test_analyzing_status_removes_stale_chunks_during_reindex() -> None:
     """再分析中は旧 chunk を残さず、検索対象にも数えない。"""
     client = OracleClient(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             oci_genai_embedding_dim=3,
             rag_min_similarity=0.0,
         )
@@ -1213,7 +1379,6 @@ class FakeOracleCursor:
 
 def _oci_settings() -> Settings:
     return Settings.model_construct(
-        ai_service_adapter="oci",
         oci_genai_embedding_dim=3,
         rag_min_similarity=0.05,
         oracle_vector_target_accuracy=90,

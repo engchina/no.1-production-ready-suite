@@ -47,7 +47,6 @@ async def dashboard_summary() -> ApiResponse[DashboardSummary]:
             system=DashboardSystemInfo(
                 status="online" if readiness_checks_are_ok(checks) else "degraded",
                 version=settings.app_version,
-                adapter=settings.ai_service_adapter,
                 searchable_rows=searchable_rows,
                 checks=checks,
             ),

@@ -37,10 +37,6 @@ export function SystemInfo({ info }: { info: DashboardSystemInfo }) {
             </dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-muted">{t("dashboard.system.adapter")}</dt>
-            <dd className="font-medium text-foreground">{info.adapter}</dd>
-          </div>
-          <div className="flex items-center justify-between">
             <dt className="text-muted">{t("dashboard.system.version")}</dt>
             <dd className="tnum font-medium text-foreground">v{info.version}</dd>
           </div>

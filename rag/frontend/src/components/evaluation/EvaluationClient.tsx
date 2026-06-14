@@ -1,5 +1,4 @@
 import {
-  AlertCircle,
   BarChart3,
   CheckCircle2,
   FlaskConical,
@@ -10,6 +9,7 @@ import { type FormEvent, useMemo, useState } from "react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/StateViews";
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
@@ -254,9 +254,8 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
       <MetricGrid metrics={metrics} />
 
       {metrics.threshold_failures.length ? (
-        <div className="rounded-md border border-warning/30 bg-warning-bg/60 p-4 text-sm text-warning">
-          <p className="font-medium">{t("evaluation.thresholdFailures")}</p>
-          <ul className="mt-2 space-y-1">
+        <Banner severity="warning" title={t("evaluation.thresholdFailures")}>
+          <ul className="space-y-1">
             {metrics.threshold_failures.map((failure) => (
               <li key={failure.metric}>
                 {metricLabel(failure.metric)}: {formatPercent(failure.actual)} /{" "}
@@ -264,7 +263,7 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
               </li>
             ))}
           </ul>
-        </div>
+        </Banner>
       ) : null}
 
       {Object.keys(metrics.failure_reason_counts).length ? (
@@ -453,21 +452,11 @@ function JsonField({
 }
 
 function ValidationNotice({ message }: { message: string }) {
-  return (
-    <div className="flex items-start gap-2 rounded-md bg-warning-bg/60 px-3 py-2 text-sm text-warning">
-      <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
-      <span>{message}</span>
-    </div>
-  );
+  return <Banner severity="warning">{message}</Banner>;
 }
 
 function ErrorNotice({ message }: { message: string }) {
-  return (
-    <div className="flex items-start gap-2 rounded-md bg-danger-bg/50 px-3 py-2 text-sm text-danger">
-      <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
-      <span>{message}</span>
-    </div>
-  );
+  return <Banner severity="danger">{message}</Banner>;
 }
 
 function StatusBadge({ passed, compact = false }: { passed: boolean; compact?: boolean }) {

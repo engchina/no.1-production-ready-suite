@@ -4,6 +4,7 @@ import { Eye, EyeOff, LockKeyhole, LogIn } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -87,14 +88,7 @@ export function LoginPage() {
         </div>
 
         <form className="space-y-4" onSubmit={handleSubmit}>
-          {error ? (
-            <div
-              className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger"
-              role="alert"
-            >
-              {error}
-            </div>
-          ) : null}
+          {error ? <Banner severity="danger">{error}</Banner> : null}
 
           <div className="space-y-2">
             <label htmlFor="login-username" className="text-sm font-medium text-foreground">

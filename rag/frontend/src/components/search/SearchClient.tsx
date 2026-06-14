@@ -5,9 +5,11 @@ import { type FormEvent, useRef, useState } from "react";
 
 import { CitationCard } from "./CitationCard";
 import { PageHeader } from "@/components/PageHeader";
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
+import { ToggleChip } from "@/components/ui/toggle-chip";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { ApiError, type RetrievedChunk, type SearchMode, type SelectAiAction } from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
@@ -171,21 +173,11 @@ export function SearchClient() {
             </div>
 
             {/* モード切替 */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1" role="group" aria-label={t("search.pipeline")}>
               {MODES.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMode(m)}
-                  aria-pressed={mode === m}
-                  className={
-                    mode === m
-                      ? "cursor-pointer rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground"
-                      : "cursor-pointer rounded-full border border-border bg-card px-3 py-1 text-xs text-muted hover:bg-background"
-                  }
-                >
+                <ToggleChip key={m} selected={mode === m} onClick={() => setMode(m)}>
                   {t(MODE_LABEL[m])}
-                </button>
+                </ToggleChip>
               ))}
             </div>
             <p className="text-xs text-muted">{t("search.pipeline")}</p>
@@ -265,13 +257,10 @@ export function SearchClient() {
             <>
               {/* ガードレール警告 */}
               {meta?.guardrail_warnings.length ? (
-                <div
-                  className="rounded-md bg-warning-bg/60 px-3 py-2 text-sm text-warning"
-                  role="alert"
-                >
+                <Banner severity="warning">
                   <span className="font-medium">{t("search.guardrail")}: </span>
                   {meta.guardrail_warnings.join(" / ")}
-                </div>
+                </Banner>
               ) : null}
 
               {phase === "cancelled" ? (
@@ -475,11 +464,7 @@ function SelectAiPanel() {
         </CardContent>
       </Card>
 
-      {errorText ? (
-        <div className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger" role="alert">
-          {errorText}
-        </div>
-      ) : null}
+      {errorText ? <Banner severity="danger">{errorText}</Banner> : null}
 
       {result ? (
         <Card>
@@ -488,13 +473,10 @@ function SelectAiPanel() {
           </CardHeader>
           <CardContent className="space-y-3">
             {result.guardrail_warnings.length ? (
-              <div
-                className="rounded-md bg-warning-bg/60 px-3 py-2 text-xs text-warning"
-                role="alert"
-              >
+              <Banner severity="warning" className="text-xs">
                 <span className="font-medium">{t("search.guardrail")}: </span>
                 {result.guardrail_warnings.join(" / ")}
-              </div>
+              </Banner>
             ) : null}
             <pre className="max-h-[420px] overflow-auto rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-foreground">
               <code>{result.result_text}</code>

@@ -5,8 +5,8 @@ services:
       - path: ./backend/.env
         required: false
     environment:
-      - AI_SERVICE_ADAPTER=${AI_SERVICE_ADAPTER:-local}
-      - LOCAL_STORAGE_DIR=/tmp/production-ready-rag
+      - LOCAL_STORAGE_DIR=/u01/production-ready-rag
+      - MODEL_SETTINGS_FILE=model-settings.json
       - OCI_CONFIG_FILE=/home/appuser/.oci/config
       - WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
       - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-60}
@@ -15,7 +15,7 @@ services:
     # OCI 設定 / Oracle wallet をマウント
     volumes:
       - ~/.oci:/home/appuser/.oci:ro
-      - backend-local-storage:/tmp/production-ready-rag
+      - backend-local-storage:/u01/production-ready-rag
     healthcheck:
       test:
         - CMD

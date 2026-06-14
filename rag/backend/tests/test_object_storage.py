@@ -1,4 +1,4 @@
-"""Object Storage adapter のローカル実装テスト。"""
+"""Object Storage 保存先 client のテスト。"""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -8,13 +8,14 @@ from typing import Any
 import pytest
 
 from app.clients.object_storage import ObjectStorageClient
+from app.clients.oci_auth import OciPrivateKeyPassPhraseRequiredError
 from app.config import Settings
 
 
 async def test_local_put_get_roundtrip_and_sanitizes_key(tmp_path: Path) -> None:
-    """local adapter は安全化したキーで保存・取得できる。"""
+    """local upload storage backend は安全化したキーで保存・取得できる。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
 
     uri = await client.put("uploaded/../policy 001.txt", b"policy body", "text/plain")
@@ -27,7 +28,7 @@ async def test_local_put_get_roundtrip_and_sanitizes_key(tmp_path: Path) -> None
 async def test_local_get_rejects_unknown_uri(tmp_path: Path) -> None:
     """local 保存先は未知の URI scheme を local key として扱わない。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
 
     with pytest.raises(ValueError, match="local:// URI"):
@@ -35,9 +36,9 @@ async def test_local_get_rejects_unknown_uri(tmp_path: Path) -> None:
 
 
 async def test_local_delete_removes_object_and_is_idempotent(tmp_path: Path) -> None:
-    """local adapter は保存済み object を削除し、再削除は missing として扱う。"""
+    """local upload storage backend は保存済み object を削除する。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
     uri = await client.put("uploaded/policy.txt", b"policy body", "text/plain")
 
@@ -50,7 +51,7 @@ async def test_local_delete_removes_object_and_is_idempotent(tmp_path: Path) -> 
 async def test_local_get_rejects_relative_path_segments(tmp_path: Path) -> None:
     """保存済み参照の取得時は相対パス要素を拒否する。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
 
     with pytest.raises(ValueError, match="相対パス要素"):
@@ -60,7 +61,7 @@ async def test_local_get_rejects_relative_path_segments(tmp_path: Path) -> None:
 async def test_local_put_rejects_empty_key(tmp_path: Path) -> None:
     """空の Object Storage key は保存しない。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
 
     with pytest.raises(ValueError, match="空"):
@@ -68,9 +69,9 @@ async def test_local_put_rejects_empty_key(tmp_path: Path) -> None:
 
 
 async def test_local_put_rejects_uri_key(tmp_path: Path) -> None:
-    """local adapter の保存 key に URI は受け付けない。"""
+    """local upload storage backend の保存 key に URI は受け付けない。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
 
     with pytest.raises(ValueError, match="URI"):
@@ -80,7 +81,7 @@ async def test_local_put_rejects_uri_key(tmp_path: Path) -> None:
 async def test_local_put_rejects_too_deep_key(tmp_path: Path) -> None:
     """異常に深い Object Storage key は保存しない。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
     too_deep_key = "/".join(f"part-{index}" for index in range(17))
 
@@ -91,7 +92,7 @@ async def test_local_put_rejects_too_deep_key(tmp_path: Path) -> None:
 async def test_local_put_rejects_too_long_key_part(tmp_path: Path) -> None:
     """単一要素が長すぎる Object Storage key は保存しない。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
 
     with pytest.raises(ValueError, match="255"):
@@ -101,7 +102,7 @@ async def test_local_put_rejects_too_long_key_part(tmp_path: Path) -> None:
 async def test_local_put_rejects_too_long_key(tmp_path: Path) -> None:
     """全体が長すぎる Object Storage key は保存しない。"""
     client = ObjectStorageClient(
-        settings=Settings(ai_service_adapter="local", local_storage_dir=str(tmp_path))
+        settings=Settings(upload_storage_backend="local", local_storage_dir=str(tmp_path))
     )
     too_long_key = "/".join(["a" * 70 for _ in range(15)])
 
@@ -110,7 +111,7 @@ async def test_local_put_rejects_too_long_key(tmp_path: Path) -> None:
 
 
 async def test_oci_put_uses_object_storage_sdk_and_returns_uri() -> None:
-    """OCI adapter は Object Storage SDK へ安全化済み key と content-type を渡す。"""
+    """OCI backend は Object Storage SDK へ安全化済み key と content-type を渡す。"""
     sdk = FakeObjectStorageSdkClient()
     client = ObjectStorageClient(
         settings=_oci_settings(),
@@ -131,10 +132,10 @@ async def test_oci_put_uses_object_storage_sdk_and_returns_uri() -> None:
     }
 
 
-async def test_upload_storage_backend_can_use_oci_with_local_ai_adapter() -> None:
-    """AI adapter が local でもアップロード保存先だけ OCI にできる。"""
+async def test_upload_storage_backend_uses_oci_storage_client() -> None:
+    """アップロード保存先を OCI にすると Object Storage SDK を使う。"""
     sdk = FakeObjectStorageSdkClient()
-    settings = _oci_settings().model_copy(update={"ai_service_adapter": "local"})
+    settings = _oci_settings()
     client = ObjectStorageClient(
         settings=settings,
         storage_client=sdk,
@@ -148,7 +149,7 @@ async def test_upload_storage_backend_can_use_oci_with_local_ai_adapter() -> Non
 
 
 async def test_oci_get_uses_object_storage_sdk_for_matching_uri() -> None:
-    """OCI adapter は返却 URI から object key を復元して bytes を取得する。"""
+    """OCI backend は返却 URI から object key を復元して bytes を取得する。"""
     sdk = FakeObjectStorageSdkClient(
         get_response=SimpleNamespace(data=SimpleNamespace(content=b"policy body"))
     )
@@ -170,7 +171,7 @@ async def test_oci_get_uses_object_storage_sdk_for_matching_uri() -> None:
 
 
 async def test_oci_delete_uses_object_storage_sdk_for_matching_uri() -> None:
-    """OCI adapter は返却 URI から object key を復元して削除する。"""
+    """OCI backend は返却 URI から object key を復元して削除する。"""
     sdk = FakeObjectStorageSdkClient()
     client = ObjectStorageClient(
         settings=_oci_settings(),
@@ -196,7 +197,7 @@ async def test_get_oci_uri_uses_oci_even_when_upload_storage_is_local() -> None:
     )
     client = ObjectStorageClient(
         settings=_oci_settings().model_copy(
-            update={"ai_service_adapter": "local", "upload_storage_backend": "local"}
+            update={"upload_storage_backend": "local"}
         ),
         storage_client=sdk,
         sdk_call_runner=_run_inline,
@@ -252,11 +253,10 @@ async def test_oci_get_rejects_unknown_uri() -> None:
         await client.get("s3://bucket/policy.txt")
 
 
-async def test_oci_adapter_requires_namespace_and_bucket() -> None:
-    """OCI adapter は namespace/bucket の未設定を fail fast する。"""
+async def test_oci_backend_requires_namespace_and_bucket() -> None:
+    """OCI backend は namespace/bucket の未設定を fail fast する。"""
     client = ObjectStorageClient(
         settings=Settings.model_construct(
-            ai_service_adapter="oci",
             upload_storage_backend="oci",
             object_storage_namespace="",
             object_storage_bucket="",
@@ -304,6 +304,44 @@ def test_oci_client_prefers_object_storage_region(monkeypatch: pytest.MonkeyPatc
     assert isinstance(client._client(), CapturingObjectStorageSdkClient)
     assert captured_config["region"] == "ap-osaka-1"
     assert captured_config["profile"] == "DEFAULT"
+
+
+def test_oci_client_refuses_encrypted_private_key_without_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """暗号化 OCI API key は Object Storage SDK client 作成前に止める。"""
+    key_file = tmp_path / "encrypted.pem"
+    key_file.write_text(
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n-----END ENCRYPTED PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+    initialized = False
+
+    class CapturingObjectStorageSdkClient(FakeObjectStorageSdkClient):
+        def __init__(self, config: dict[str, object]) -> None:
+            nonlocal initialized
+            initialized = True
+            super().__init__()
+
+    def fake_import_module(name: str) -> object:
+        if name == "oci.config":
+            return SimpleNamespace(
+                from_file=lambda path, profile: {"key_file": str(key_file), "region": "ap-tokyo-1"}
+            )
+        if name == "oci.object_storage":
+            return SimpleNamespace(ObjectStorageClient=CapturingObjectStorageSdkClient)
+        raise AssertionError(f"unexpected module import: {name}")
+
+    monkeypatch.setattr("app.clients.object_storage.importlib.import_module", fake_import_module)
+    client = ObjectStorageClient(
+        settings=_oci_settings().model_copy(update={"oci_config_file": str(tmp_path / "config")})
+    )
+
+    with pytest.raises(OciPrivateKeyPassPhraseRequiredError, match="pass_phrase"):
+        client._client()
+
+    assert initialized is False
 
 
 class FakeObjectStorageSdkClient:
@@ -367,7 +405,6 @@ class FakeObjectStorageSdkClient:
 
 def _oci_settings() -> Settings:
     return Settings.model_construct(
-        ai_service_adapter="oci",
         upload_storage_backend="oci",
         oci_config_file="~/.oci/config",
         oci_config_profile="DEFAULT",

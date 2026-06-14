@@ -142,7 +142,6 @@ export function buildOciEnvFile(draft: OciSettingsDraft): string {
     [
       "OCI 共通",
       [
-        ["AI_SERVICE_ADAPTER", "oci"],
         ["OCI_CONFIG_FILE", normalized.configFile],
         ["OCI_CONFIG_PROFILE", normalized.configProfile],
         ["OCI_REGION", normalized.region],

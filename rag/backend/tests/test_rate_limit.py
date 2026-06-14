@@ -1,5 +1,6 @@
 """高コスト API の rate limit テスト。"""
 
+import pytest
 from pytest import MonkeyPatch
 
 from app.config import get_settings
@@ -8,6 +9,9 @@ from app.rag.rate_limit import RATE_LIMIT_MESSAGE
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+
+# 検索・アップロードエンドポイント経由のため実 Oracle + 決定論 AI スタブを使う。
+pytestmark = pytest.mark.usefixtures("oracle_db")
 
 
 def test_search_rate_limit_returns_429_with_retry_headers(monkeypatch: MonkeyPatch) -> None:

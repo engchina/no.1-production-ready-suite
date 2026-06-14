@@ -24,9 +24,15 @@ export type EvaluationMetricName =
   | "answer_keyword_hit_rate"
   | "groundedness_pass_rate";
 export type ModelSettingsCheckStatus = "ok" | "missing" | "invalid";
-export type AiServiceAdapter = "local" | "oci";
+export type ModelSettingsTestStatus = "success" | "failed";
+export type ModelSettingsTestTargetType =
+  | "enterprise_text"
+  | "enterprise_vision"
+  | "embedding"
+  | "rerank";
 export type UploadStorageBackend = "local" | "oci";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
+export type OciConfigTestStatus = "success" | "failed";
 
 export interface ApiResponse<T> {
   data: T | null;
@@ -95,7 +101,6 @@ export interface DashboardActivity {
 export interface DashboardSystemInfo {
   status: "online" | "degraded" | "offline";
   version: string;
-  adapter: string;
   searchable_rows: number;
   checks: Record<string, string>;
 }
@@ -388,12 +393,32 @@ export interface ModelSettingsPayload {
 export interface ModelSettingsData {
   settings: ModelSettingsPayload;
   checks: Record<"enterprise_ai" | "generative_ai" | "embedding_dim", ModelSettingsCheckStatus>;
+  model_settings_file: string;
   source: "runtime";
+}
+
+export interface ModelSettingsTestRequest {
+  settings: ModelSettingsPayload;
+  target_type: ModelSettingsTestTargetType;
+  model_id: string;
+  vision_enabled: boolean;
+}
+
+export interface ModelSettingsTestResult {
+  status: ModelSettingsTestStatus;
+  target_type: ModelSettingsTestTargetType;
+  model_id: string;
+  message: string;
+  troubleshooting: string[];
+  raw_error: string | null;
+  error_type: string | null;
+  elapsed_ms: number;
+  checked_at: string;
+  details: Record<string, string | number | boolean | null>;
 }
 
 // --- 設定: データベース ---
 export interface DatabaseSettingsData {
-  adapter: AiServiceAdapter;
   user: string;
   dsn: string;
   wallet_dir: string;
@@ -413,12 +438,17 @@ export interface DatabaseSettingsUpdate {
   wallet_dir: string;
   password?: string;
   wallet_password?: string;
+  clear_password?: boolean;
+  clear_wallet_password?: boolean;
 }
 
 export interface DatabaseConnectionTestResult {
   status: DatabaseConnectionTestStatus;
   readiness: string;
   message: string;
+  elapsed_ms: number;
+  troubleshooting: string[];
+  details: Record<string, string | number | boolean | null>;
   checked_at: string;
   error_type: string | null;
 }
@@ -426,7 +456,6 @@ export interface DatabaseConnectionTestResult {
 // --- 設定: アップロード保存先 ---
 export interface UploadStorageSettingsData {
   backend: UploadStorageBackend;
-  ai_service_adapter: AiServiceAdapter;
   local_storage_dir: string;
   object_storage_region: string;
   object_storage_namespace: string;
@@ -466,6 +495,13 @@ export interface OciConfigReadData {
   applied_fields: OciConfigField[];
 }
 
+export interface OciSettingsUpdate {
+  user: string;
+  fingerprint: string;
+  tenancy: string;
+  region: string;
+}
+
 export interface OciSettingsData {
   config_file: string;
   profile: string;
@@ -477,6 +513,28 @@ export interface OciSettingsData {
   key_file_exists: boolean;
   config_file_exists: boolean;
   config_source: "runtime";
+}
+
+export interface OciObjectStorageSettingsUpdate {
+  object_storage_region: string;
+  object_storage_namespace: string;
+}
+
+export interface OciConfigTestResult {
+  status: OciConfigTestStatus;
+  profile: string;
+  config_file: string;
+  key_file: string;
+  config_file_exists: boolean;
+  key_file_exists: boolean;
+  missing_fields: OciConfigField[];
+  permission_issues: string[];
+  oci_directory_mode: string | null;
+  config_file_mode: string | null;
+  key_file_mode: string | null;
+  message: string;
+  checked_at: string;
+  error_type: string | null;
 }
 
 export interface OciObjectStorageNamespaceRequest {
@@ -610,6 +668,8 @@ export const api = {
     }),
   checkModelSettings: (body: ModelSettingsPayload) =>
     request<ModelSettingsData>("/api/settings/model/check", jsonBody(body)),
+  testModelSettings: (body: ModelSettingsTestRequest) =>
+    request<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
 
   // 設定: データベース
   getDatabaseSettings: () => request<DatabaseSettingsData>("/api/settings/database"),
@@ -642,8 +702,22 @@ export const api = {
 
   // 設定: OCI config
   getOciSettings: () => request<OciSettingsData>("/api/settings/oci"),
+  updateOciSettings: (body: OciSettingsUpdate) =>
+    request<OciSettingsData>("/api/settings/oci", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateOciObjectStorageSettings: (body: OciObjectStorageSettingsUpdate) =>
+    request<UploadStorageSettingsData>("/api/settings/oci/object-storage", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   readOciConfig: (body: OciConfigReadRequest) =>
     request<OciConfigReadData>("/api/settings/oci/config/read", jsonBody(body)),
+  testOciConfig: () =>
+    request<OciConfigTestResult>("/api/settings/oci/config/test", { method: "POST" }),
   readOciObjectStorageNamespace: (body: OciObjectStorageNamespaceRequest) =>
     request<OciObjectStorageNamespaceData>(
       "/api/settings/oci/object-storage/namespace",

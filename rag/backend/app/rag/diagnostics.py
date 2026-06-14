@@ -26,7 +26,6 @@ def build_search_diagnostics(
     """検索実行の再現・調査に使う非機密メタデータを作る。"""
     resolved_settings = settings or get_settings()
     return SearchDiagnostics(
-        adapter=resolved_settings.ai_service_adapter,
         mode=request.mode.value,
         top_k=request.top_k,
         rerank_top_n=request.rerank_top_n,
@@ -53,7 +52,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
     """RAG 設定の非機密 fingerprint を返す。"""
     resolved_settings = settings or get_settings()
     payload = {
-        "adapter": resolved_settings.ai_service_adapter,
         "embedding_dim": resolved_settings.oci_genai_embedding_dim,
         "embedding_model": resolved_settings.oci_genai_embedding_model,
         "rerank_model": resolved_settings.oci_genai_rerank_model,

@@ -2,12 +2,29 @@
 
 from pytest import MonkeyPatch
 
+from app.api.routes import dashboard as dashboard_route
 from app.auth import AUTH_CONFIG_ERROR_MESSAGE
 from app.config import get_settings
 from app.main import app
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+
+
+class FakeProtectedDashboardOracle:
+    """認証テストで保護 API が外部 DB へ接続しないようにする fake。"""
+
+    async def list_documents(self, *, limit: int | None = None) -> list[object]:
+        return []
+
+    async def count_chunks(self) -> int:
+        return 0
+
+    async def list_document_extractions(self) -> list[dict[str, object]]:
+        return []
+
+    async def list_chunk_metadata(self) -> list[dict[str, object]]:
+        return []
 
 
 def test_auth_me_local_mode_is_authenticated_without_login(monkeypatch: MonkeyPatch) -> None:
@@ -38,6 +55,7 @@ def test_production_login_sets_cookie_and_logout_clears_session(
     monkeypatch: MonkeyPatch,
 ) -> None:
     _configure_auth(monkeypatch)
+    _configure_protected_dashboard(monkeypatch)
 
     login_resp = client.post(
         "/api/auth/login",
@@ -112,3 +130,12 @@ def _configure_auth(monkeypatch: MonkeyPatch, timeout_seconds: int = 60 * 60) ->
     monkeypatch.setattr(settings, "auth_session_secret", "test-session-secret")
     monkeypatch.setattr(settings, "auth_session_timeout_seconds", timeout_seconds)
     monkeypatch.setattr(settings, "auth_cookie_secure", False)
+
+
+def _configure_protected_dashboard(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        dashboard_route,
+        "OracleClient",
+        lambda settings: FakeProtectedDashboardOracle(),
+    )
+    monkeypatch.setattr(dashboard_route, "readiness_checks", lambda settings: {"oracle": "ok"})

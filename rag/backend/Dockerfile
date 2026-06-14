@@ -12,10 +12,11 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /tmp/production-ready-rag /tmp/uv-cache \
-    && chown -R appuser:appuser /tmp/production-ready-rag /tmp/uv-cache
+    && mkdir -p /u01/production-ready-rag /tmp/uv-cache \
+    && chown -R appuser:appuser /u01/production-ready-rag /tmp/uv-cache
 
 COPY --chown=appuser:appuser app ./app
+RUN chown appuser:appuser /app
 
 EXPOSE 8000
 USER appuser

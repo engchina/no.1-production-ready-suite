@@ -25,4 +25,4 @@ provider "oci" {
 }
 
 # 実運用では network、OKE/Container Instances、Object Storage、Oracle 26ai、
-# Vault、Logging/Monitoring を環境別 module として分割する。
+# Logging/Monitoring を環境別 module として分割する。

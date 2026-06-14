@@ -77,6 +77,8 @@
 **状態モデル / UX パターン**:
 - ファイル状態: `UPLOADED → INGESTING → INDEXED`(+ `ERROR`)を **StatusBadge** で可視化。人手の帳票項目修正・登録確認ゲートは設けず、RAG 取込成功時点で検索対象にする。
 - ページネーション、確認ダイアログ、トースト通知、一括選択(全選択/選択件数表示)を共通コンポーネント化。
+- **メッセージ機構(通知・成功/エラー・フォーム検証・確認ダイアログ・空/読込/エラー状態)は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) を正本とする。** 関連 UI を新規実装・改修するときは必ず同 spec の 6 チャネル / 4 トーン / i18n 規約に従うこと。
+- **ボタン(大きさ・スタイル・配置・命名)は [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) を正本とする。** アクションは共通 `<Button>` を使い、size(sm/md/lg)・variant(primary/secondary/ghost/danger)・配置・aria-label/文言キー規則を揃える。類似機能は同じ size・variant にすること。
 - データ取得・通知・ページングは hooks に集約する。状態管理は TanStack Query + Zustand を使う。
 
 **タイポグラフィ/デザイン原則**:
@@ -146,7 +148,7 @@ npm run lint && npm run build
 1. **LLM/VLM 呼び出しは OCI Enterprise AI 経由のみ**。OCI Generative AI の chat API を LLM/VLM に使わない。
 2. **embedding/rerank は OCI Generative AI(Cohere)経由**。
 3. **ベクトル検索は Oracle 26ai AI Vector Search**。外部ベクトル DB を導入しない。
-4. シークレット(OCI 認証・DB 接続)は `.env` / OCI Vault 経由。**ハードコード禁止**、コミットしない。
+4. シークレット(OCI 認証・DB 接続)は `.env` 経由。**ハードコード禁止**、コミットしない。
 5. LLM 出力は Pydantic スキーマで検証してから DB 保存する。
 6. UI 作業は `ui-ux-pro-max` skill を使用。
 7. 機能開発では、実装と同時にテストコードを追加・更新する。

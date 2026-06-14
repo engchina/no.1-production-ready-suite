@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ToggleChip } from "@/components/ui/toggle-chip";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError, type DocumentSummary, type FileStatus } from "@/lib/api";
@@ -76,22 +77,15 @@ export function FileListClient() {
       <div className="space-y-4 p-8">
         {/* フィルタ + 検索 */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("fileList.filterAll")}>
             {FILTERS.map((f) => (
-              <button
+              <ToggleChip
                 key={f}
-                type="button"
+                selected={filter === f}
                 onClick={() => resetView(() => setFilter(f))}
-                aria-pressed={filter === f}
-                className={cn(
-                  "cursor-pointer rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                  filter === f
-                    ? "bg-primary text-primary-foreground"
-                    : "border border-border bg-card text-muted hover:bg-background"
-                )}
               >
                 {f === "ALL" ? t("fileList.filterAll") : t(`status.${f}`)}
-              </button>
+              </ToggleChip>
             ))}
           </div>
           <div className="relative">

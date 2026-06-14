@@ -23,11 +23,7 @@ def readiness_checks_are_ok(checks: Mapping[str, str]) -> bool:
 
 
 def readiness_checks(settings: Settings) -> dict[str, str]:
-    """adapter mode ごとの readiness check を実行する。"""
-    if settings.ai_service_adapter == "local":
-        checks = _upload_storage_checks(settings)
-        checks.update(_production_safety_checks(settings))
-        return checks
+    """OCI / Oracle 前提の readiness check を実行する。"""
     checks = {
         "oci_common": _required_values_check(
             settings.oci_region,
@@ -57,9 +53,6 @@ def _production_safety_checks(settings: Settings) -> dict[str, str]:
     if not _is_production(settings):
         return {}
     return {
-        "deployment_adapter": (
-            READINESS_OK if settings.ai_service_adapter == "oci" else READINESS_INVALID
-        ),
         "audit_context_salt": (
             READINESS_OK if _is_present(settings.audit_context_hash_salt) else READINESS_MISSING
         ),
@@ -67,7 +60,7 @@ def _production_safety_checks(settings: Settings) -> dict[str, str]:
 
 
 def _local_storage_check(settings: Settings) -> str:
-    """local adapter の保存先が作成・書き込み可能か確認する。"""
+    """アップロード原本の local 保存先が作成・書き込み可能か確認する。"""
     try:
         root = Path(settings.local_storage_dir).expanduser()
         root.mkdir(parents=True, exist_ok=True)

@@ -50,7 +50,6 @@ class DashboardSystemInfo(BaseModel):
 
     status: SystemStatus
     version: str
-    adapter: str
     searchable_rows: int = 0
     checks: dict[str, str] = Field(default_factory=dict)
 

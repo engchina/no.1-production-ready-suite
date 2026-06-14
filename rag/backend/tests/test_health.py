@@ -40,44 +40,8 @@ def test_unsafe_request_id_header_is_not_reflected() -> None:
     assert " " not in resp.headers["x-request-id"]
 
 
-def test_readiness_local_adapter(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "ai_service_adapter", "local")
-    monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path / "storage"))
-
-    resp = client.get("/api/ready")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["data"]["status"] == "ok"
-    assert body["data"]["checks"] == {"local_storage": "ok"}
-
-
-def test_readiness_production_local_adapter_is_degraded(
-    monkeypatch: MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "production")
-    monkeypatch.setattr(settings, "ai_service_adapter", "local")
-    monkeypatch.setattr(settings, "local_storage_dir", str(tmp_path / "storage"))
-    monkeypatch.setattr(settings, "audit_context_hash_salt", "")
-
-    resp = client.get("/api/ready")
-
-    assert resp.status_code == 503
-    body = resp.json()
-    assert body["data"]["status"] == "degraded"
-    assert body["data"]["checks"] == {
-        "local_storage": "ok",
-        "deployment_adapter": "invalid",
-        "audit_context_salt": "missing",
-    }
-
-
 def test_readiness_oci_missing_config_is_degraded(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "ai_service_adapter", "oci")
     monkeypatch.setattr(settings, "upload_storage_backend", "oci")
     for field in (
         "oci_region",
@@ -132,7 +96,7 @@ def test_readiness_oci_complete_config_is_ok(monkeypatch: MonkeyPatch) -> None:
     assert "super-secret-password" not in str(body)
 
 
-def test_readiness_oci_adapter_with_local_upload_storage_checks_local_storage(
+def test_readiness_with_local_upload_storage_checks_local_storage(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -186,7 +150,6 @@ def test_readiness_production_oci_requires_audit_salt(monkeypatch: MonkeyPatch) 
         "genai": "ok",
         "oracle": "ok",
         "object_storage": "ok",
-        "deployment_adapter": "ok",
         "audit_context_salt": "missing",
     }
 
@@ -209,7 +172,6 @@ def test_readiness_production_oci_complete_config_is_ok(monkeypatch: MonkeyPatch
         "genai": "ok",
         "oracle": "ok",
         "object_storage": "ok",
-        "deployment_adapter": "ok",
         "audit_context_salt": "ok",
     }
     assert "production-audit-salt" not in str(body)
@@ -339,7 +301,6 @@ def _configure_oci_readiness(
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", environment)
-    monkeypatch.setattr(settings, "ai_service_adapter", "oci")
     monkeypatch.setattr(settings, "upload_storage_backend", "oci")
     monkeypatch.setattr(settings, "oci_region", "ap-osaka-1")
     monkeypatch.setattr(settings, "oci_compartment_id", "ocid1.compartment.oc1..example")

@@ -89,7 +89,7 @@ RAG 検索レスポンスには `trace_id` を含める。OCI Enterprise AI、Op
 
 検索・取込 pipeline は `app.trace` logger へ `rag_trace_span` イベントも出す。payload は `trace_event` に入り、`trace_id`、`span_name`、`outcome`、`duration_ms`、低 cardinality の attributes、`error_type` だけを含む。検索 stage は `embedding`、`retrieval`、`rerank`、`context_diversity`、`context_group_expansion`、`context_expansion`、`context_compression`、`generation`、取込 stage は `vlm_extraction`、`chunking`、`embedding`、`indexing` を使う。`context_diversity` は `RAG_CONTEXT_DIVERSITY_LAMBDA < 1.0`、`context_group_expansion` は `RAG_CONTEXT_GROUP_EXPANSION_ENABLED=true`、`context_expansion` は `RAG_CONTEXT_NEIGHBOR_WINDOW > 0`、`context_compression` は `RAG_CONTEXT_COMPRESSION_ENABLED=true` の場合だけ記録する。query 本文、context 本文、OCR 原文、prompt、例外 message、tenant/user id の raw 値は含めない。この構造化ログは OpenTelemetry span や Langfuse trace へ橋渡しするための境界であり、Prometheus の aggregate metrics では追えない単一 request の遅延・失敗箇所を調査するために使う。`TRACE_EXPORT_HTTP_ENDPOINT` を設定すると、同じ脱機密化済み event を非同期 HTTP JSON で collector / gateway へ送信する。queue が満杯または送信失敗しても request は失敗させず、`rag_trace_export_dropped` / `rag_trace_export_failed` を `app.trace` logger に残す。
 
-検索レスポンスと評価ケース結果には `diagnostics` も含める。これは `top_k`、`rerank_top_n`、query variant 件数、retrieval/rerank/去重/context diversity/context group expansion/context expansion/context compression/citation 件数、context compression の節約文字数、context 文字数、context window、hybrid retrieval の RRF 定数、Oracle ベクトル検索の目標精度、filter key、adapter、RAG 設定 fingerprint だけで構成し、query 本文や secret は含めない。no-results、低召回、重複 chunk による context window 消費、context window からの引用落ち、query expansion / context diversity / 同一 group context expansion / 隣接 context expansion / context compression 設定変更による品質回帰を trace id と合わせて調査するために使う。
+検索レスポンスと評価ケース結果には `diagnostics` も含める。これは `top_k`、`rerank_top_n`、query variant 件数、retrieval/rerank/去重/context diversity/context group expansion/context expansion/context compression/citation 件数、context compression の節約文字数、context 文字数、context window、hybrid retrieval の RRF 定数、Oracle ベクトル検索の目標精度、filter key、RAG 設定 fingerprint だけで構成し、query 本文や secret は含めない。no-results、低召回、重複 chunk による context window 消費、context window からの引用落ち、query expansion / context diversity / 同一 group context expansion / 隣接 context expansion / context compression 設定変更による品質回帰を trace id と合わせて調査するために使う。
 
 citation の `metadata` には `section_title`、`section_path`、`section_level`、`content_kind`、`chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count`、`text_sha256`、`text_chars` と、`retrieval_mode`、`vector_rank`、`keyword_rank`、`vector_score`、`keyword_score`、`rrf_score`、`query_fusion_score`、`query_variant_count`、`matched_query_variant_count`、`context_diversified`、`context_original_rank`、`context_diversified_rank`、`context_group_expanded`、`context_group_id`、`context_group_distance`、`context_expanded`、`context_anchor_chunk_id`、`context_neighbor_distance`、`context_compressed`、`context_original_chars`、`context_compressed_chars` を入れられる場合だけ含める。query 本文や OCR 原文は含めず、hybrid 検索で vector 側の召回漏れか keyword 側の語彙不一致か、また複雑文書のどの章節・親要素・query variant / context diversity / 同一 group context / 隣接 context / context compression が根拠を拾ったかを per-case に確認する。
 
@@ -97,7 +97,7 @@ citation の `metadata` には `section_title`、`section_path`、`section_level
 
 ### 監査ログ
 
-RAG 検索ごとに `app.audit` logger へ `rag_search_audit` イベントを出す。payload は `audit_event` に入り、`trace_id`、`request_id`、`outcome`、検索モード、filter key、guardrail code、retrieval/rerank/context diversity/context group expansion/context expansion/context compression/citation 件数、context compression の節約文字数、context 文字数、設定 fingerprint、引用 document id、経過時間を含む。`X-Tenant-ID` / `X-User-ID` がある場合は raw 値ではなく `tenant_id_hash` / `user_id_hash` として保存する。`AUDIT_CONTEXT_HASH_SALT` は production で OCI Vault から注入する。
+RAG 検索ごとに `app.audit` logger へ `rag_search_audit` イベントを出す。payload は `audit_event` に入り、`trace_id`、`request_id`、`outcome`、検索モード、filter key、guardrail code、retrieval/rerank/context diversity/context group expansion/context expansion/context compression/citation 件数、context compression の節約文字数、context 文字数、設定 fingerprint、引用 document id、経過時間を含む。`X-Tenant-ID` / `X-User-ID` がある場合は raw 値ではなく `tenant_id_hash` / `user_id_hash` として保存する。`AUDIT_CONTEXT_HASH_SALT` は production で `.env` から注入する。
 
 `outcome` は `success`、`blocked`、`no_results`、`error` を使う。`no_results` は citation が 0 件で LLM 生成をスキップしたことを示す。embedding / retrieval / rerank / generation / answer guardrail の例外は `error` として記録し、API timeout は `error_stage=timeout` として記録する。監査ログには `error_stage` と `error_type` だけを残す。例外 message は query や回答本文を含む可能性があるため検索監査ログへ出さない。
 
@@ -105,7 +105,7 @@ RAG 検索ごとに `app.audit` logger へ `rag_search_audit` イベントを出
 
 監査ログには query、回答本文、OCR 原文、tenant/user id の raw 値を出さない。query と原本は SHA-256 hash とメタデータのみ、tenant/user id は hash のみを保存し、契約番号・金額・取引先名などの機密業務データをログへ漏らさない。
 
-`X-Tenant-ID` がある request では、document / chunk の `tenant_id_hash` と照合して一覧、詳細、重複判定、retrieval を同一 tenant に限定する。tenant header がない local/CI 実行では全体を参照できる。認証ゲートウェイやアプリケーション権限層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、その request の一覧、詳細、chunk count、retrieval も指定 scope に閉じる。scope header が存在するが有効値が 0 件の場合は deny-all とし、未指定の場合だけ制限なしとして扱う。これらの raw scope 値は監査ログへ出さない。
+`X-Tenant-ID` がある request では、document / chunk の `tenant_id_hash` と照合して一覧、詳細、重複判定、retrieval を同一 tenant に限定する。tenant header がない場合は全体を参照できる。認証ゲートウェイやアプリケーション権限層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、その request の一覧、詳細、chunk count、retrieval も指定 scope に閉じる。scope header が存在するが有効値が 0 件の場合は deny-all とし、未指定の場合だけ制限なしとして扱う。これらの raw scope 値は監査ログへ出さない。
 
 ## ガードレール
 
@@ -127,4 +127,4 @@ RAG 検索ごとに `app.audit` logger へ `rag_search_audit` イベントを出
 
 - 業務固有の個人情報分類器や DLP サービスによる追加マスキング。
 - citation がある回答に対する LLM-as-judge / RAGAS 等の追加 groundedness 評価。
-- 権限・ロール情報を hash context へ追加する場合は、raw 値を出さず Vault 管理の salt または HMAC key で相関する。
+- 権限・ロール情報を hash context へ追加する場合は、raw 値を出さず環境変数で管理する salt または HMAC key で相関する。

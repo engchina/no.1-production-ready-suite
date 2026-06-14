@@ -1,12 +1,12 @@
 # RAG アーキテクチャ
 
-このリポジトリは、data ingestion、chunking、indexing、hybrid retrieval、reranking、evaluation、observability、guardrails、deployment best practices をカバーする production-ready RAG reference implementation です。クラウド接続なしで動く `AI_SERVICE_ADAPTER=local` を既定にし、同じ抽象境界を `AI_SERVICE_ADAPTER=oci` で OCI Enterprise AI / OCI Generative AI / Oracle 26ai へ差し替える構成です。
+このリポジトリは、data ingestion、chunking、indexing、hybrid retrieval、reranking、evaluation、observability、guardrails、deployment best practices をカバーする production-ready RAG reference implementation です。Backend は OCI Enterprise AI / OCI Generative AI / Oracle 26ai を直接使い、local / oci の実行モード切り替えは持ちません。
 
 ## パイプライン
 
 1. ドキュメントアップロード
    - API: `POST /api/documents/upload`
-   - 原本は Object Storage 境界へ保存する。local では `local://...` として `LOCAL_STORAGE_DIR` 配下に保存し、OCI では Object Storage SDK で `oci://namespace/bucket/key` として保存する。
+   - 原本は Object Storage 境界へ保存する。`UPLOAD_STORAGE_BACKEND=local` では `local://...` として `LOCAL_STORAGE_DIR` 配下に保存し、`UPLOAD_STORAGE_BACKEND=oci` では Object Storage SDK で `oci://namespace/bucket/key` として保存する。
    - `MAX_UPLOAD_BYTES` と `ALLOWED_UPLOAD_CONTENT_TYPES` でサイズ・MIME type を制限する。
    - 原本 bytes から SHA-256 とサイズを計算し、`content_sha256` / `file_size_bytes` として文書行へ保存する。
    - 同一 `content_sha256` の既存文書がある場合は `duplicate_of_document_id` に最初の原本文書 ID を保存する。
@@ -19,7 +19,7 @@
    - サイズまたは SHA-256 が一致しない場合は `ERROR` にし、409 で拒否する。
    - VLM 出力は `StructuredExtraction` で Pydantic 検証してから保存する。`raw_text` に加えて `elements`（`title` / `text` / `list` / `table` / `figure` / `header` / `footer` 等）を持ち、page number、bbox、section path、confidence、parser metadata を保存できる。
    - `elements` が欠落した旧形式の抽出結果は `raw_text` から軽量推定し、`raw_text` が欠落した構造化結果は検索可能 element から本文を合成する。
-   - Docling / Marker / Unstructured / RAGFlow DeepDoc の「ページ・読み順・表・章節を要素として残す」ベストプラクティスは、外部 parser 依存を追加せず OCI Enterprise AI の structured output schema と local fallback に再実装する。
+   - Docling / Marker / Unstructured / RAGFlow DeepDoc の「ページ・読み順・表・章節を要素として残す」ベストプラクティスは、外部 parser 依存を追加せず OCI Enterprise AI の structured output schema と軽量な raw text element 推定に再実装する。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - `python -m app.rag.enterprise_ai_probe` で LLM/VLM endpoint の request preview と実 response parsing を Oracle / Object Storage から切り離して確認できる。probe 出力には raw prompt、context、OCR 本文、回答本文を含めず、payload shape と parse summary だけを残す。
    - `UPLOADED` / `ERROR` を取込対象にし、`INGESTING` は二重実行防止で 409 にする。
@@ -40,15 +40,14 @@
    - 実装: `backend/app/clients/oci_genai.py`
    - 本番は OCI Generative AI Inference の `embed_text` で Cohere Embed v4、1536 次元を使う。
    - query embedding は `SEARCH_QUERY`、文書 chunk embedding は `SEARCH_DOCUMENT` の input type を使う。
-   - local は deterministic hashing embedding を使い、CI でも同じ結果になる。
-   - adapter の返却件数と 1536 次元幅を検証し、不一致なら Oracle へ渡す前に fail fast する。
+   - OCI embedding の返却件数と 1536 次元幅を検証し、不一致なら Oracle へ渡す前に fail fast する。
 
 5. 索引
    - 実装: `backend/app/clients/oracle.py`
    - 本番は Oracle 26ai AI Vector Search。ベクトル列は `VECTOR(1536, FLOAT32)`。
    - スキーマ成果物は HNSW 索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)を作成する。
-   - OCI adapter のベクトル検索は `FETCH APPROX ... WITH TARGET ACCURACY` を使い、問い合わせ側の精度は `ORACLE_VECTOR_TARGET_ACCURACY` で調整する。
-   - OCI adapter は python-oracledb の共有 pool を遅延初期化し、document/chunk の永続化、集計、状態更新を Oracle table に対して実行する。
+   - ベクトル検索は `FETCH APPROX ... WITH TARGET ACCURACY` を使い、問い合わせ側の精度は `ORACLE_VECTOR_TARGET_ACCURACY` で調整する。
+   - python-oracledb の共有 pool を遅延初期化し、document/chunk の永続化、集計、状態更新を Oracle table に対して実行する。
    - chunk 保存と vector search の入口でも embedding 幅を再検証する。
    - 検索対象の chunk は `INDEXED` の文書に限定する。
    - `OracleClient.count_document_chunks()` で document 単位の索引済み chunk 数を確認できる。
@@ -68,16 +67,15 @@
 
 7. Oracle Select AI
    - API: `POST /api/search/select-ai`
-   - `AI_SERVICE_ADAPTER=oci` と `ORACLE_SELECT_AI_PROFILE` が設定されている場合だけ有効化する。local adapter では 503 を返す。
+   - `ORACLE_SELECT_AI_PROFILE` が設定されている場合だけ有効化する。未設定時は 503 を返す。
    - 既定 action は `showsql` で、自然言語から生成 SQL を返すだけにする。`runsql` は明示指定時のみ許可し、データ変更意図を含む query は guardrail で拒否する。
    - `DBMS_CLOUD_AI.GENERATE` 呼び出しでは prompt、profile、action をすべて bind し、自然言語 query や profile 名を SQL 文字列へ連結しない。
    - Vector/keyword RAG とは独立した構造化問い合わせ境界として扱い、Select AI profile 作成・権限・対象 schema 制御は Oracle 側の運用手順で管理する。
 
 8. リランク
    - 本番は OCI Generative AI Cohere Rerank v4 fast。
-   - local は語彙一致スコアで deterministic に並べ替える。
    - `rerank_top_n` は `top_k` 以下に制限し、retrieval 候補数を超える無意味な rerank 指定を拒否する。
-   - adapter の返却 index は候補範囲内・重複なし、返却件数は `top_n` 以内、score は finite number であることを検証し、不正な rerank 結果は fail fast する。
+   - OCI rerank の返却 index は候補範囲内・重複なし、返却件数は `top_n` 以内、score は finite number であることを検証し、不正な rerank 結果は fail fast する。
    - rerank 後、context へ入れる前に `text_sha256` または正規化本文 hash で同一本文 chunk を除外し、重複根拠が context window を消費しないようにする。去重件数は diagnostics / audit の `deduplicated_count` にだけ残し、本文はログへ出さない。
    - `RAG_CONTEXT_DIVERSITY_LAMBDA` が 1.0 未満の場合は、rerank anchor を MMR 風に重排し、同質 chunk だけが先に context window を消費しないようにする。既定は 1.0 で無効。重排件数は `context_diversified_count`、順位が変わった citation は `context_diversified` / `context_original_rank` / `context_diversified_rank` に残す。
    - `RAG_CONTEXT_GROUP_EXPANSION_ENABLED=true` の場合は、rerank anchor の `chunk_group_id` と同じ sibling chunk を Oracle から取得し、分割された表・箇条書き・章節の前後文脈を生成 context へ低優先で追加する。既定は無効。anchor ごとの追加上限は `RAG_CONTEXT_GROUP_MAX_CHUNKS`、追加件数は `context_group_expanded_count`、citation metadata は `context_group_expanded` / `context_anchor_chunk_id` / `context_group_id` / `context_group_distance` で追跡する。
@@ -94,13 +92,13 @@
    - `/api/search` と `/api/search/stream` は `RAG_SEARCH_TIMEOUT_SECONDS` で pipeline 実行時間を制限し、timeout 時は 504 を返して `rag_search_audit.error_stage=timeout` を残す。
    - embedding / retrieval / rerank / generation は `rag_search_stage_duration_seconds` で stage 別 latency を記録する。
    - レスポンスには `trace_id`、`citations`、`guardrail_warnings`、`diagnostics`、`elapsed_ms` を含める。
-   - `POST /api/search/stream` は SSE で `metadata`、`delta`、`citations`、`done` を返す。local adapter は生成済み回答を分割し、本番 adapter は Enterprise AI のストリーミングに差し替える。
+   - `POST /api/search/stream` は SSE で `metadata`、`delta`、`citations`、`done` を返す。Enterprise AI のストリーミングに接続しても同じイベント契約を維持する。
 
 ## ダッシュボード集計
 
 - API: `GET /api/dashboard/summary`
 - 文書件数、月次アップロード/索引済み件数、検索可能チャンク数、最近の活動、readiness check をまとめて返す。
-- local adapter は in-memory document/chunk store から算出する。OCI adapter は Oracle document/chunk table の集計 SQL を使う。
+- Oracle document/chunk table の集計 SQL を使う。
 
 ## Oracle 26ai DDL 例
 
@@ -188,7 +186,6 @@ CREATE TABLE rag_search_audit (
     context_chars         NUMBER(10) DEFAULT 0 NOT NULL,
     context_window_chars  NUMBER(10),
     document_ids          JSON,
-    adapter               VARCHAR2(16),
     config_fingerprint    CHAR(64),
     elapsed_ms            NUMBER(12, 3) NOT NULL,
     error_stage           VARCHAR2(64),
@@ -218,7 +215,7 @@ CREATE TABLE rag_ingestion_audit (
 );
 ```
 
-document / chunk table には `tenant_id_hash` を持たせる。HTTP header `X-Tenant-ID` がある場合、raw tenant id は保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる。tenant header がない local/CI 実行では全体を参照できる。認証済みの上位層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle 26ai vector search、Oracle Text keyword search の SQL predicate と local adapter filter の両方に適用する。scope header が存在するが有効値がない場合は deny-all とする。
+document / chunk table には `tenant_id_hash` を持たせる。HTTP header `X-Tenant-ID` がある場合、raw tenant id は保存せず hash 化し、一覧・詳細・重複判定・retrieval を同一 tenant に閉じる。tenant header がない場合は全体を参照できる。認証済みの上位層が `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、document id / category name scope を request context に保持し、document 一覧、詳細、chunk count、Oracle 26ai vector search、Oracle Text keyword search の SQL predicate に適用する。scope header が存在するが有効値がない場合は deny-all とする。
 
 監査 table は query 本文、OCR 原文、tenant/user id の raw 値を保存しない。検索は `query_hash` と `query_chars`、retrieval/rerank/context diversity/context group expansion/context expansion/context compression/citation 件数、context 文字数、RAG 設定 fingerprint を保存する。tenant/user id は `tenant_id_hash` / `user_id_hash` として保存する。取込は `source_sha256` と `source_bytes` を保存し、trace id / request id でアプリログ・Langfuse・Prometheus と相関する。
 

@@ -60,9 +60,12 @@ def test_stream_search_api_returns_504_when_pipeline_times_out(monkeypatch: Monk
 
 
 def test_search_api_hashes_tenant_and_user_headers_into_audit(
+    monkeypatch: MonkeyPatch,
     caplog: LogCaptureFixture,
 ) -> None:
     """HTTP header の tenant/user id は hash として RAG 監査へ相関される。"""
+    monkeypatch.setattr(search_route, "RagPipeline", AuditingPipeline)
+
     with caplog.at_level(logging.INFO, logger="app.audit"):
         response = client.post(
             "/api/search",
@@ -86,7 +89,7 @@ def test_search_api_hashes_tenant_and_user_headers_into_audit(
 def test_select_ai_api_returns_showsql_with_sanitized_query(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """Select AI API は query を脱敏して adapter へ渡し、showsql を返す。"""
+    """Select AI API は query を脱敏して Oracle client へ渡し、showsql を返す。"""
     fake = CapturingSelectAiClient()
     monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
 
@@ -150,7 +153,7 @@ def test_select_ai_runsql_blocks_japanese_mutation_intent(
 
 
 def test_select_ai_api_returns_503_when_unavailable() -> None:
-    """local adapter では Select AI endpoint は 503 を返す。"""
+    """Select AI profile 未設定では endpoint は 503 を返す。"""
     response = client.post(
         "/api/search/select-ai",
         json={"query": "索引済み文書数を SQL にして"},
@@ -204,6 +207,40 @@ class SlowPipeline:
         assert trace_id
         await asyncio.sleep(1)
         raise AssertionError("timeout 前に完了しない")
+
+
+class AuditingPipeline:
+    """監査ログだけを記録して空検索結果を返すテスト用 pipeline。"""
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+    ) -> SearchResponse:
+        assert trace_id
+        diagnostics = search_route.build_search_diagnostics(
+            request,
+            settings=get_settings(),
+        )
+        search_route.record_rag_search_audit(
+            trace_id=trace_id,
+            outcome="no_results",
+            mode=request.mode,
+            sanitized_query=request.query,
+            filters=request.filters,
+            findings=[],
+            retrieved_count=0,
+            citations=[],
+            elapsed_ms=1.0,
+            diagnostics=diagnostics,
+        )
+        return SearchResponse(
+            answer="該当する文書は見つかりませんでした。",
+            citations=[],
+            trace_id=trace_id,
+            elapsed_ms=1.0,
+            diagnostics=diagnostics,
+        )
 
 
 class CapturingSelectAiClient:

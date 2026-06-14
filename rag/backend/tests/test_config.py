@@ -1,9 +1,17 @@
 """設定値の安全な制約テスト。"""
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from app.config import Settings
+from app import config as config_module
+from app.config import (
+    DEFAULT_LOCAL_STORAGE_DIR,
+    DEFAULT_MODEL_SETTINGS_FILE,
+    Settings,
+    resolve_model_settings_file,
+)
 
 
 def test_embedding_dimension_is_fixed_to_oracle_vector_width() -> None:
@@ -12,6 +20,30 @@ def test_embedding_dimension_is_fixed_to_oracle_vector_width() -> None:
 
     with pytest.raises(ValidationError):
         Settings(oci_genai_embedding_dim=1024)
+
+
+def test_model_settings_file_defaults_to_relative_env_sibling_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MODEL_SETTINGS_FILE は .env と同じ階層の相対 JSON を既定にする。"""
+    monkeypatch.delenv("MODEL_SETTINGS_FILE", raising=False)
+
+    settings = Settings(model_settings_file="")
+
+    assert settings.model_settings_file == DEFAULT_MODEL_SETTINGS_FILE
+
+
+def test_relative_model_settings_file_resolves_from_backend_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """相対 MODEL_SETTINGS_FILE は backend/.env と同じ階層を基準にする。"""
+    backend_root = tmp_path / "backend"
+    monkeypatch.setattr(config_module, "BACKEND_ROOT", backend_root)
+
+    assert resolve_model_settings_file("model-settings.json") == (
+        backend_root / "model-settings.json"
+    ).resolve()
 
 
 def test_enterprise_ai_max_retries_defaults_to_three_and_is_bounded() -> None:
@@ -62,6 +94,12 @@ def test_upload_storage_backend_is_local_or_oci() -> None:
         Settings(upload_storage_backend="s3")
 
 
+def test_local_storage_dir_defaults_to_u01_persistent_path() -> None:
+    """local 保存の既定ディレクトリは /u01 配下の永続化想定パスにする。"""
+    assert Settings().local_storage_dir == DEFAULT_LOCAL_STORAGE_DIR
+    assert DEFAULT_LOCAL_STORAGE_DIR == "/u01/production-ready-rag"
+
+
 def test_max_upload_bytes_defaults_to_200_mib_and_is_positive() -> None:
     """アップロードサイズ上限は既定 200 MiB、正の値に制限する。"""
     assert Settings().max_upload_bytes == 200 * 1024 * 1024
@@ -76,6 +114,24 @@ def test_search_timeout_is_positive() -> None:
 
     with pytest.raises(ValidationError):
         Settings(rag_search_timeout_seconds=0)
+
+
+def test_oracle_connection_timeouts_are_bounded() -> None:
+    """Oracle 接続テストは UI を長時間待たせない短い timeout を持つ。"""
+    settings = Settings()
+
+    assert settings.oracle_tcp_connect_timeout_seconds == 10.0
+    assert settings.oracle_db_test_timeout_seconds == 15.0
+    assert (
+        Settings(oracle_tcp_connect_timeout_seconds=5, oracle_db_test_timeout_seconds=20)
+        .oracle_db_test_timeout_seconds
+        == 20
+    )
+
+    with pytest.raises(ValidationError):
+        Settings(oracle_tcp_connect_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(oracle_db_test_timeout_seconds=0)
 
 
 def test_oracle_vector_target_accuracy_is_bounded() -> None:
@@ -179,8 +235,8 @@ def test_sensitive_identifier_masking_is_enabled_by_default() -> None:
 def test_audit_context_hash_salt_is_optional() -> None:
     """監査 context hash salt は任意で、既定では空にする。"""
     assert Settings().audit_context_hash_salt == ""
-    assert Settings(audit_context_hash_salt="vault-provided-salt").audit_context_hash_salt == (
-        "vault-provided-salt"
+    assert Settings(audit_context_hash_salt="env-provided-salt").audit_context_hash_salt == (
+        "env-provided-salt"
     )
 
 

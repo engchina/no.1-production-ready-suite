@@ -1,5 +1,4 @@
 import {
-  AlertCircle,
   BookOpen,
   FileText,
   Layers3,
@@ -8,6 +7,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+import { Banner } from "@/components/ui/banner";
 import type { DocumentElement } from "@/lib/api";
 import {
   parseStructuredExtraction,
@@ -60,14 +60,13 @@ export function DocumentExtraction({ extraction }: { extraction: Record<string, 
       </dl>
 
       {parsed.warnings.length > 0 ? (
-        <div className="space-y-1 rounded-md bg-warning-bg/60 px-3 py-2 text-sm text-warning">
-          {parsed.warnings.map((warning) => (
-            <p key={warning} className="flex items-start gap-2">
-              <AlertCircle size={15} className="mt-0.5 shrink-0" aria-hidden />
-              <span>{warning}</span>
-            </p>
-          ))}
-        </div>
+        <Banner severity="warning">
+          <ul className="space-y-1">
+            {parsed.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        </Banner>
       ) : null}
 
       {parsed.elements.length > 0 ? (

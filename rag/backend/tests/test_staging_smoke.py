@@ -44,7 +44,6 @@ async def test_staging_smoke_uses_unique_marker_query_and_document_filter(
     assert result.marker in result.query
     assert result.marker.encode() in FakeObjectStorageClient.put_body
     assert result.answer_contains_marker is True
-    assert result.diagnostics["adapter"] == "oci"
     assert result.cleanup == {"document": "skipped", "object": "skipped"}
     assert closed is True
     assert FakeObjectStorageClient.deleted_objects == []
@@ -153,14 +152,22 @@ def test_staging_smoke_preflight_reports_missing_oci_config_without_secrets() ->
     """preflight は未設定グループだけを返し、secret 値は出さない。"""
     result = staging_smoke.staging_smoke_preflight(
         settings=Settings(
-            ai_service_adapter="oci",
+            oci_compartment_id="",
+            oci_enterprise_ai_endpoint="",
+            oci_enterprise_ai_project_ocid="",
+            oci_enterprise_ai_api_key="",
+            oci_enterprise_ai_models=[],
+            oci_enterprise_ai_default_model="",
+            oracle_user="",
+            oracle_dsn="",
+            object_storage_namespace="",
+            object_storage_bucket="",
             upload_storage_backend="oci",
             oracle_password="super-secret-password",
         )
     )
 
     assert result.ok is False
-    assert result.adapter == "oci"
     assert result.checks == {
         "oci_common": "missing",
         "enterprise_ai": "missing",
@@ -187,18 +194,6 @@ def test_staging_smoke_preflight_requires_oci_object_storage_for_real_smoke(
     assert result.checks["smoke_object_storage_backend"] == "invalid"
 
 
-def test_staging_smoke_preflight_allows_local_when_requested(tmp_path: Path) -> None:
-    """開発用 allow-local では local adapter の smoke 動作確認を許可する。"""
-    result = staging_smoke.staging_smoke_preflight(
-        settings=Settings(local_storage_dir=str(tmp_path / "storage")),
-        allow_local=True,
-    )
-
-    assert result.ok is True
-    assert result.adapter == "local"
-    assert result.checks == {"local_storage": "ok"}
-
-
 async def test_staging_smoke_stops_before_external_clients_when_preflight_fails(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -212,9 +207,9 @@ async def test_staging_smoke_stops_before_external_clients_when_preflight_fails(
     try:
         await staging_smoke.run_staging_smoke(settings=Settings())
     except staging_smoke.StagingSmokePreflightError as exc:
-        assert exc.preflight.checks["adapter"] == "invalid"
+        assert exc.preflight.ok is False
     else:
-        raise AssertionError("AI_SERVICE_ADAPTER=local は実 staging smoke 前に失敗する")
+        raise AssertionError("設定不足は実 staging smoke 前に失敗する")
 
 
 def test_error_payload_includes_failed_stage_without_raw_message() -> None:
@@ -239,7 +234,6 @@ def test_error_payload_includes_preflight_checks_without_raw_values() -> None:
     """preflight 失敗 payload は安全な check status だけを含める。"""
     preflight = staging_smoke.SmokePreflightResult(
         ok=False,
-        adapter="oci",
         checks={"oracle": "missing_credentials"},
         message="staging smoke preflight failed; fix checks before running external smoke",
     )
@@ -250,7 +244,6 @@ def test_error_payload_includes_preflight_checks_without_raw_values() -> None:
     assert payload == {
         "ok": False,
         "error_type": "StagingSmokePreflightError",
-        "adapter": "oci",
         "checks": {"oracle": "missing_credentials"},
         "message": "staging smoke preflight failed; fix checks before running external smoke",
     }
@@ -259,7 +252,6 @@ def test_error_payload_includes_preflight_checks_without_raw_values() -> None:
 def _complete_oci_settings(**overrides: Any) -> Settings:
     """staging smoke preflight を通す OCI 設定を作る。"""
     values: dict[str, Any] = {
-        "ai_service_adapter": "oci",
         "oci_region": "ap-osaka-1",
         "oci_compartment_id": "ocid1.compartment.oc1..example",
         "oci_enterprise_ai_endpoint": "https://enterprise-ai.example.com",
@@ -373,5 +365,5 @@ class FakeRagPipeline:
             ],
             trace_id="trace-smoke",
             elapsed_ms=12.0,
-            diagnostics=SearchDiagnostics(adapter="oci", retrieved_count=1, citation_count=1),
+            diagnostics=SearchDiagnostics(retrieved_count=1, citation_count=1),
         )

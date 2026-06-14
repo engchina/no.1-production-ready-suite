@@ -89,8 +89,7 @@ class IngestionPipeline:
                 "vlm_extraction",
                 self._vlm.extract_with_vlm(image_bytes, prompt, mime_type=content_type),
                 attributes={
-                    "adapter": self._settings.ai_service_adapter,
-                    "model": enterprise_ai_vision_model_id(self._settings) or "local",
+                    "model": enterprise_ai_vision_model_id(self._settings),
                     "source_bytes": len(image_bytes),
                     "content_type": _observability_content_type(content_type),
                     "prompt_chars": len(prompt),
@@ -130,7 +129,6 @@ class IngestionPipeline:
                 "embedding",
                 self._genai.embed([chunk.text for chunk in chunks]),
                 attributes={
-                    "adapter": self._settings.ai_service_adapter,
                     "model": self._settings.oci_genai_embedding_model,
                     "input_count": len(chunks),
                 },

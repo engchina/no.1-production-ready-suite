@@ -9,7 +9,9 @@ import importlib
 import json
 import math
 import re
+from array import array
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -29,8 +31,19 @@ SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
 type MetadataValue = str | int | float | bool | None
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 T = TypeVar("T")
-SELECT_AI_UNAVAILABLE_ERROR = (
-    "Select AI は OCI adapter と ORACLE_SELECT_AI_PROFILE の設定が必要です。"
+SELECT_AI_UNAVAILABLE_ERROR = "Select AI は ORACLE_SELECT_AI_PROFILE の設定が必要です。"
+
+
+def _to_vector_bind(embedding: Sequence[float]) -> "array[float]":
+    """embedding を Oracle VECTOR(FLOAT32) へバインド可能な float32 配列に変換する。
+
+    python-oracledb は VECTOR 列に list を渡すと配列バインドと誤認するため、
+    array('f', ...) として渡す必要がある。
+    """
+    return array("f", (float(value) for value in embedding))
+WALLET_PASSWORD_REQUIRED_ERROR = (
+    "Oracle Wallet に自動ログイン用の cwallet.sso がないため、Wallet パスワードが必要です。"
+    " Wallet パスワードを入力するか、cwallet.sso を含む Wallet ZIP をアップロードしてください。"
 )
 
 
@@ -83,7 +96,7 @@ class OraclePoolProtocol(Protocol):
 
 @dataclass
 class StoredDocument:
-    """ローカル参照実装で使うドキュメント行。"""
+    """テスト補助で使うドキュメント行。"""
 
     id: str
     file_name: str
@@ -103,7 +116,7 @@ class StoredDocument:
 
 @dataclass
 class StoredChunk:
-    """ローカル参照実装で使うチャンク行。"""
+    """テスト補助で使うチャンク行。"""
 
     id: str
     document_id: str
@@ -116,7 +129,7 @@ class StoredChunk:
 
 @dataclass
 class LocalOracleStore:
-    """プロセス内の Oracle 代替ストア。CI と開発用。"""
+    """Oracle row 変換などの単体テストで使う補助ストア。"""
 
     documents: dict[str, StoredDocument] = field(default_factory=dict)
     chunks: dict[str, StoredChunk] = field(default_factory=dict)
@@ -124,10 +137,23 @@ class LocalOracleStore:
 
 _LOCAL_STORE = LocalOracleStore()
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
+_DB_TEST_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="oracle_db_test_")
 
 
 class SelectAiUnavailableError(RuntimeError):
     """Select AI を実行できる Oracle 設定がない。"""
+
+    safe_for_user = True
+
+
+class OracleWalletPasswordRequiredError(RuntimeError):
+    """パスワード必須 Wallet を対話プロンプトなしで止める。"""
+
+    safe_for_user = True
+
+
+class OracleConnectionTimeoutError(TimeoutError):
+    """Oracle 接続テストが所定時間内に終わらないときのユーザー向けエラー。"""
 
     safe_for_user = True
 
@@ -156,25 +182,7 @@ class OracleClient:
         例: SELECT ... ORDER BY VECTOR_DISTANCE(embedding, :v, COSINE) FETCH FIRST :k ROWS ONLY
         """
         self._validate_embedding_width(embedding, "query embedding")
-        if self._settings.ai_service_adapter == "oci":
-            return await self._vector_search_with_oracle(embedding, top_k, filters or {})
-        scored: list[tuple[StoredChunk, float]] = []
-        for chunk in _LOCAL_STORE.chunks.values():
-            if not _chunk_matches_filters(chunk, filters):
-                continue
-            score = _cosine_similarity(embedding, chunk.embedding)
-            if score >= self._settings.rag_min_similarity:
-                scored.append((chunk, score))
-        ranked = sorted(scored, key=_stored_chunk_score_sort_key)[:top_k]
-        return [
-            _with_retrieval_metadata(
-                self._to_retrieved_chunk(chunk, score),
-                retrieval_mode="vector",
-                vector_rank=rank,
-                vector_score=round(score, 6),
-            )
-            for rank, (chunk, score) in enumerate(ranked, start=1)
-        ]
+        return await self._vector_search_with_oracle(embedding, top_k, filters or {})
 
     async def keyword_search(
         self,
@@ -183,26 +191,7 @@ class OracleClient:
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
         """Oracle Text 相当のキーワード検索を行う。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._keyword_search_with_oracle(query, top_k, filters or {})
-        query_tokens = _tokens(query)
-        scored: list[tuple[StoredChunk, float]] = []
-        for chunk in _LOCAL_STORE.chunks.values():
-            if not _chunk_matches_filters(chunk, filters):
-                continue
-            score = _keyword_score(query_tokens, _tokens(chunk.text))
-            if score > 0.0:
-                scored.append((chunk, score))
-        ranked = sorted(scored, key=_stored_chunk_score_sort_key)[:top_k]
-        return [
-            _with_retrieval_metadata(
-                self._to_retrieved_chunk(chunk, score),
-                retrieval_mode="keyword",
-                keyword_rank=rank,
-                keyword_score=round(score, 6),
-            )
-            for rank, (chunk, score) in enumerate(ranked, start=1)
-        ]
+        return await self._keyword_search_with_oracle(query, top_k, filters or {})
 
     async def hybrid_search(
         self,
@@ -264,37 +253,7 @@ class OracleClient:
         """rerank 済み anchor chunk の前後を LLM context 補完用に取得する。"""
         if window <= 0 or not anchors:
             return []
-        if self._settings.ai_service_adapter == "oci":
-            return await self._context_neighbors_with_oracle(anchors, window=window)
-
-        neighbors: list[RetrievedChunk] = []
-        for anchor in anchors:
-            anchor_index = _chunk_index_from_retrieved(anchor)
-            if anchor_index is None:
-                continue
-            for offset in _context_neighbor_offsets(window):
-                candidate_index = anchor_index + offset
-                candidate = next(
-                    (
-                        chunk
-                        for chunk in _LOCAL_STORE.chunks.values()
-                        if chunk.document_id == anchor.document_id
-                        and chunk.chunk_index == candidate_index
-                    ),
-                    None,
-                )
-                if candidate is None or candidate.id == anchor.chunk_id:
-                    continue
-                if not _chunk_matches_filters(candidate, {"document_id": anchor.document_id}):
-                    continue
-                neighbors.append(
-                    _with_context_neighbor_metadata(
-                        self._to_retrieved_chunk(candidate, anchor.score),
-                        anchor=anchor,
-                        distance=offset,
-                    )
-                )
-        return neighbors
+        return await self._context_neighbors_with_oracle(anchors, window=window)
 
     async def context_group_siblings(
         self,
@@ -305,44 +264,10 @@ class OracleClient:
         """rerank 済み anchor と同じ親 chunk group の sibling を取得する。"""
         if max_chunks_per_group <= 0 or not anchors:
             return []
-        if self._settings.ai_service_adapter == "oci":
-            return await self._context_group_siblings_with_oracle(
-                anchors,
-                max_chunks_per_group=max_chunks_per_group,
-            )
-
-        siblings: list[RetrievedChunk] = []
-        for anchor in anchors:
-            group_id = _chunk_group_id_from_retrieved(anchor)
-            anchor_index = _chunk_index_from_retrieved(anchor)
-            if group_id is None or anchor_index is None:
-                continue
-            candidates = [
-                chunk
-                for chunk in _LOCAL_STORE.chunks.values()
-                if chunk.document_id == anchor.document_id
-                and chunk.id != anchor.chunk_id
-                and _chunk_group_id_from_metadata(chunk.metadata) == group_id
-                and _chunk_matches_filters(chunk, {"document_id": anchor.document_id})
-            ]
-            for candidate in sorted(
-                candidates,
-                key=lambda chunk: (
-                    abs(chunk.chunk_index - anchor_index),
-                    chunk.chunk_index - anchor_index,
-                    chunk.chunk_index,
-                    chunk.id,
-                ),
-            )[:max_chunks_per_group]:
-                siblings.append(
-                    _with_context_group_metadata(
-                        self._to_retrieved_chunk(candidate, anchor.score),
-                        anchor=anchor,
-                        group_id=group_id,
-                        distance=candidate.chunk_index - anchor_index,
-                    )
-                )
-        return siblings
+        return await self._context_group_siblings_with_oracle(
+            anchors,
+            max_chunks_per_group=max_chunks_per_group,
+        )
 
     async def select_ai(
         self,
@@ -353,8 +278,6 @@ class OracleClient:
         max_result_chars: int | None = None,
     ) -> str:
         """Oracle Select AI profile で自然言語 query を SQL/結果へ変換する。"""
-        if self._settings.ai_service_adapter != "oci":
-            raise SelectAiUnavailableError(SELECT_AI_UNAVAILABLE_ERROR)
         resolved_profile = (profile_name or self._settings.oracle_select_ai_profile).strip()
         if not resolved_profile:
             raise SelectAiUnavailableError(SELECT_AI_UNAVAILABLE_ERROR)
@@ -389,48 +312,18 @@ class OracleClient:
         duplicate_of_document_id: str | None = None,
     ) -> DocumentDetail:
         """ドキュメント行を作成する。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._create_document_with_oracle(
-                file_name=file_name,
-                object_storage_path=object_storage_path,
-                content_type=content_type,
-                file_size_bytes=file_size_bytes,
-                content_sha256=content_sha256,
-                duplicate_of_document_id=duplicate_of_document_id,
-            )
-        document_id = uuid4().hex
-        document = StoredDocument(
-            id=document_id,
+        return await self._create_document_with_oracle(
             file_name=file_name,
-            status=FileStatus.UPLOADED,
-            uploaded_at=datetime.now(UTC),
             object_storage_path=object_storage_path,
             content_type=content_type,
             file_size_bytes=file_size_bytes,
             content_sha256=content_sha256,
             duplicate_of_document_id=duplicate_of_document_id,
-            tenant_id_hash=_current_tenant_id_hash(),
         )
-        _LOCAL_STORE.documents[document_id] = document
-        return _to_document_detail(document)
 
     async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
         """同一 content hash の既存ドキュメントを返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._find_document_by_content_hash_with_oracle(content_sha256)
-        documents = sorted(
-            _LOCAL_STORE.documents.values(),
-            key=lambda document: (
-                document.duplicate_of_document_id is not None,
-                document.uploaded_at,
-            ),
-        )
-        for document in documents:
-            if not _document_matches_current_tenant(document):
-                continue
-            if document.content_sha256 == content_sha256:
-                return _to_document_summary(document)
-        return None
+        return await self._find_document_by_content_hash_with_oracle(content_sha256)
 
     async def list_documents(
         self,
@@ -440,22 +333,16 @@ class OracleClient:
         offset: int = 0,
     ) -> list[DocumentSummary]:
         """ドキュメント一覧を返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._list_documents_with_oracle(
-                status=status,
-                query=query,
-                limit=limit,
-                offset=offset,
-            )
-        documents = _filtered_documents(status=status, query=query)
-        sliced = documents[offset : offset + limit] if limit is not None else documents[offset:]
-        return [_to_document_summary(document) for document in sliced]
+        return await self._list_documents_with_oracle(
+            status=status,
+            query=query,
+            limit=limit,
+            offset=offset,
+        )
 
     async def list_document_extractions(self) -> list[dict[str, object]]:
         """アクセス可能な document の extraction JSON だけを返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._list_document_extractions_with_oracle()
-        return [dict(document.extraction) for document in _filtered_documents()]
+        return await self._list_document_extractions_with_oracle()
 
     async def count_documents(
         self,
@@ -463,68 +350,31 @@ class OracleClient:
         query: str | None = None,
     ) -> int:
         """条件に一致するドキュメント数を返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._count_documents_with_oracle(status=status, query=query)
-        return len(_filtered_documents(status=status, query=query))
+        return await self._count_documents_with_oracle(status=status, query=query)
 
     async def count_chunks(self) -> int:
         """検索可能なチャンク行数を返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._count_chunks_with_oracle()
-        return sum(
-            1 for chunk in _LOCAL_STORE.chunks.values() if _chunk_matches_filters(chunk, None)
-        )
+        return await self._count_chunks_with_oracle()
 
     async def list_chunk_metadata(self) -> list[dict[str, MetadataValue]]:
         """検索対象 chunk の metadata JSON だけを返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._list_chunk_metadata_with_oracle()
-        return [
-            dict(chunk.metadata)
-            for chunk in _LOCAL_STORE.chunks.values()
-            if _chunk_matches_filters(chunk, None)
-        ]
+        return await self._list_chunk_metadata_with_oracle()
 
     async def count_document_chunks(self, document_id: str) -> int:
         """指定 document の検索可能なチャンク行数を返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._count_document_chunks_with_oracle(document_id)
-        return sum(
-            1
-            for chunk in _LOCAL_STORE.chunks.values()
-            if chunk.document_id == document_id and _chunk_matches_filters(chunk, None)
-        )
+        return await self._count_document_chunks_with_oracle(document_id)
 
     async def document_stats(self) -> DocumentStats:
         """ドキュメント状態別の集計を返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._document_stats_with_oracle()
-        counts = {status: 0 for status in FileStatus}
-        for document in _LOCAL_STORE.documents.values():
-            if not _document_matches_current_tenant(document):
-                continue
-            counts[document.status] += 1
-        return DocumentStats(total=sum(counts.values()), by_status=counts)
+        return await self._document_stats_with_oracle()
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         """ドキュメント詳細を返す。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._get_document_with_oracle(document_id)
-        document = _LOCAL_STORE.documents.get(document_id)
-        if document is None or not _document_matches_current_tenant(document):
-            return None
-        return _to_document_detail(document)
+        return await self._get_document_with_oracle(document_id)
 
     async def delete_document(self, document_id: str) -> bool:
         """ドキュメントと関連 chunk/index 行を削除する。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._delete_document_with_oracle(document_id)
-        document = _LOCAL_STORE.documents.get(document_id)
-        if document is None or not _document_matches_current_tenant(document):
-            return False
-        _delete_document_chunks(document_id)
-        del _LOCAL_STORE.documents[document_id]
-        return True
+        return await self._delete_document_with_oracle(document_id)
 
     async def update_document_status(
         self,
@@ -533,31 +383,17 @@ class OracleClient:
         error_message: str | None = None,
     ) -> DocumentDetail:
         """ドキュメント状態を更新する。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._update_document_status_with_oracle(
-                document_id=document_id,
-                status=status,
-                error_message=error_message,
-            )
-        document = _require_document(document_id)
-        document.status = status
-        document.error_message = error_message
-        if status in (FileStatus.INGESTING, FileStatus.ERROR):
-            _delete_document_chunks(document_id)
-            document.extraction = {}
-        if status == FileStatus.INDEXED and document.indexed_at is None:
-            document.indexed_at = datetime.now(UTC)
-        return _to_document_detail(document)
+        return await self._update_document_status_with_oracle(
+            document_id=document_id,
+            status=status,
+            error_message=error_message,
+        )
 
     async def save_extraction(
         self, document_id: str, extraction: StructuredExtraction
     ) -> DocumentDetail:
         """VLM/LLM の抽出本文を保存する。"""
-        if self._settings.ai_service_adapter == "oci":
-            return await self._save_extraction_with_oracle(document_id, extraction)
-        document = _require_document(document_id)
-        document.extraction = extraction.to_document_payload()
-        return _to_document_detail(document)
+        return await self._save_extraction_with_oracle(document_id, extraction)
 
     async def save_chunks(
         self,
@@ -570,31 +406,7 @@ class OracleClient:
             raise ValueError("chunks と embeddings の件数が一致しません。")
         for index, embedding in enumerate(embeddings):
             self._validate_embedding_width(embedding, f"chunk embedding[{index}]")
-        if self._settings.ai_service_adapter == "oci":
-            return await self._save_chunks_with_oracle(document_id, chunks, embeddings)
-        document = _require_document(document_id)
-        _delete_document_chunks(document_id)
-
-        saved: list[RetrievedChunk] = []
-        for chunk, embedding in zip(chunks, embeddings, strict=True):
-            chunk_id = f"{document_id}:{chunk.index}"
-            stored = StoredChunk(
-                id=chunk_id,
-                document_id=document_id,
-                tenant_id_hash=document.tenant_id_hash,
-                chunk_index=chunk.index,
-                text=chunk.text,
-                embedding=embedding,
-                metadata={
-                    "chunk_index": chunk.index,
-                    "start_offset": chunk.start_offset,
-                    "end_offset": chunk.end_offset,
-                    **chunk.metadata,
-                },
-            )
-            _LOCAL_STORE.chunks[chunk_id] = stored
-            saved.append(self._to_retrieved_chunk(stored, score=1.0, document=document))
-        return saved
+        return await self._save_chunks_with_oracle(document_id, chunks, embeddings)
 
     async def _vector_search_with_oracle(
         self, embedding: list[float], top_k: int, filters: dict[str, str]
@@ -603,7 +415,7 @@ class OracleClient:
         where_sql, binds = _oracle_retrieval_where(filters)
         binds.update(
             {
-                "embedding": embedding,
+                "embedding": _to_vector_bind(embedding),
                 "min_similarity": self._settings.rag_min_similarity,
             }
         )
@@ -1305,7 +1117,7 @@ class OracleClient:
                             **chunk.metadata,
                         }
                     ),
-                    "embedding": embedding,
+                    "embedding": _to_vector_bind(embedding),
                 }
                 for chunk, embedding in zip(chunks, embeddings, strict=True)
             ]
@@ -1404,22 +1216,14 @@ class OracleClient:
             return _SHARED_ORACLE_POOL
 
         oracledb = importlib.import_module("oracledb")
-        pool_kwargs: dict[str, object] = {
-            "user": self._settings.oracle_user,
-            "dsn": self._settings.oracle_dsn,
-            "min": 1,
-            "max": 4,
-            "increment": 1,
-        }
-        if self._settings.oracle_password.strip():
-            pool_kwargs["password"] = self._settings.oracle_password
-        wallet_dir = self._settings.resolved_oracle_wallet_dir.strip()
-        if wallet_dir and Path(wallet_dir).expanduser().is_dir():
-            wallet_path = str(Path(wallet_dir).expanduser())
-            pool_kwargs["config_dir"] = wallet_path
-            pool_kwargs["wallet_location"] = wallet_path
-        if self._settings.oracle_wallet_password.strip():
-            pool_kwargs["wallet_password"] = self._settings.oracle_wallet_password
+        pool_kwargs = _oracle_connect_kwargs(
+            self._settings,
+            extra={
+                "min": 1,
+                "max": 4,
+                "increment": 1,
+            },
+        )
         _SHARED_ORACLE_POOL = oracledb.create_pool(**pool_kwargs)
         return _SHARED_ORACLE_POOL
 
@@ -1453,6 +1257,12 @@ class OracleClient:
 async def _run_db_call_in_thread(operation: Callable[[], Any]) -> Any:
     """同期 python-oracledb 呼び出しを event loop 外で実行する。"""
     return await asyncio.to_thread(operation)
+
+
+async def _run_db_test_call_in_thread(operation: Callable[[], Any]) -> Any:
+    """接続テスト専用の小さい thread pool で DB 呼び出しを実行する。"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_DB_TEST_EXECUTOR, operation)
 
 
 def _fetch_all(
@@ -1757,10 +1567,21 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
 
 def _metadata_from_json(value: object) -> dict[str, MetadataValue]:
     decoded = _json_loads(value)
-    return {
-        str(key): item if isinstance(item, str | int | float | bool) or item is None else str(item)
-        for key, item in decoded.items()
-    }
+    return {str(key): _coerce_metadata_value(item) for key, item in decoded.items()}
+
+
+def _coerce_metadata_value(item: object) -> MetadataValue:
+    """JSON 由来の値を MetadataValue へ正規化する。
+
+    Oracle の JSON 列は数値を Decimal で返すため、int/float に戻す。
+    """
+    if item is None or isinstance(item, bool):
+        return item
+    if isinstance(item, Decimal):
+        return int(item) if item == item.to_integral_value() else float(item)
+    if isinstance(item, str | int | float):
+        return item
+    return str(item)
 
 
 def _json_dumps(value: Mapping[str, object]) -> str:
@@ -1879,28 +1700,31 @@ async def test_oracle_connection(
 ) -> None:
     """Oracle へ 1 回だけ接続し、最小クエリで疎通を確認する。"""
     effective_settings = settings or get_settings()
-    if effective_settings.ai_service_adapter == "local":
-        return
-    runner = db_call_runner or _run_db_call_in_thread
-    await runner(lambda: _test_oracle_connection_sync(effective_settings))
+    runner = db_call_runner or _run_db_test_call_in_thread
+    timeout_seconds = float(getattr(effective_settings, "oracle_db_test_timeout_seconds", 15.0))
+    try:
+        await asyncio.wait_for(
+            runner(lambda: _test_oracle_connection_sync(effective_settings)),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError as exc:
+        raise OracleConnectionTimeoutError(
+            f"Oracle 26ai 接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
+            "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
+        ) from exc
 
 
 def _test_oracle_connection_sync(settings: Settings) -> None:
     """同期 SDK で Oracle 接続を検証する。"""
     oracledb = importlib.import_module("oracledb")
-    connect_kwargs: dict[str, object] = {
-        "user": settings.oracle_user,
-        "dsn": settings.oracle_dsn,
-    }
-    if settings.oracle_password.strip():
-        connect_kwargs["password"] = settings.oracle_password
-    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
-    if wallet_dir and Path(wallet_dir).expanduser().is_dir():
-        wallet_path = str(Path(wallet_dir).expanduser())
-        connect_kwargs["config_dir"] = wallet_path
-        connect_kwargs["wallet_location"] = wallet_path
-    if settings.oracle_wallet_password.strip():
-        connect_kwargs["wallet_password"] = settings.oracle_wallet_password
+    connect_kwargs = _oracle_connect_kwargs(
+        settings,
+        extra={
+            "dsn": _oracle_connection_test_dsn(settings),
+            "retry_count": 0,
+            "retry_delay": 0,
+        },
+    )
 
     connection = oracledb.connect(**connect_kwargs)
     try:
@@ -1912,6 +1736,133 @@ def _test_oracle_connection_sync(settings: Settings) -> None:
             cursor.close()
     finally:
         connection.close()
+
+
+def _oracle_connect_kwargs(
+    settings: Settings,
+    *,
+    extra: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """python-oracledb connect/create_pool に渡す共通 kwargs を作る。"""
+    kwargs: dict[str, object] = {
+        "user": settings.oracle_user,
+        "dsn": settings.oracle_dsn,
+    }
+    if extra:
+        kwargs.update(extra)
+    tcp_connect_timeout = float(getattr(settings, "oracle_tcp_connect_timeout_seconds", 10.0))
+    if tcp_connect_timeout > 0:
+        kwargs["tcp_connect_timeout"] = tcp_connect_timeout
+    if settings.oracle_password.strip():
+        kwargs["password"] = settings.oracle_password
+    _add_wallet_kwargs(settings, kwargs)
+    return kwargs
+
+
+def _oracle_connection_test_dsn(settings: Settings) -> str:
+    """接続テストでは Wallet alias の長い retry 設定を外した descriptor を使う。"""
+    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
+    if not wallet_dir:
+        return settings.oracle_dsn
+    descriptor = _tns_alias_descriptor(Path(wallet_dir).expanduser(), settings.oracle_dsn)
+    if not descriptor:
+        return settings.oracle_dsn
+    return _strip_tns_retry_settings(descriptor)
+
+
+def _tns_alias_descriptor(wallet_path: Path, alias: str) -> str | None:
+    """tnsnames.ora から指定 alias の connect descriptor を抜き出す。"""
+    tnsnames = wallet_path / "tnsnames.ora"
+    if not alias.strip() or not tnsnames.is_file():
+        return None
+    try:
+        content = tnsnames.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    for match in re.finditer(r"(?im)^\s*([A-Za-z0-9_.-]+)\s*=\s*", content):
+        if match.group(1).lower() != alias.lower():
+            continue
+        descriptor_start = content.find("(", match.end())
+        if descriptor_start < 0:
+            return None
+        return _balanced_parenthesized_text(content, descriptor_start)
+    return None
+
+
+def _balanced_parenthesized_text(content: str, start: int) -> str | None:
+    """start 位置から始まる括弧式を top-level まで読み取る。"""
+    depth = 0
+    for index in range(start, len(content)):
+        char = content[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return content[start : index + 1]
+        if depth < 0:
+            return None
+    return None
+
+
+def _strip_tns_retry_settings(descriptor: str) -> str:
+    """ADB Wallet の長い retry 設定を接続テスト用に取り除く。"""
+    without_retry_count = re.sub(r"\(\s*retry_count\s*=\s*\d+\s*\)", "", descriptor, flags=re.I)
+    return re.sub(r"\(\s*retry_delay\s*=\s*\d+\s*\)", "", without_retry_count, flags=re.I)
+
+
+def _add_wallet_kwargs(settings: Settings, kwargs: dict[str, object]) -> None:
+    """Wallet 設定を kwargs に追加する。パスワード要求プロンプトは事前に防ぐ。"""
+    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
+    if not wallet_dir:
+        return
+
+    wallet_path = Path(wallet_dir).expanduser()
+    if not wallet_path.is_dir():
+        return
+
+    wallet_password = _oracle_wallet_password(settings)
+    if not wallet_password and _wallet_requires_password(wallet_path):
+        raise OracleWalletPasswordRequiredError(WALLET_PASSWORD_REQUIRED_ERROR)
+
+    resolved_wallet_path = str(wallet_path)
+    kwargs["config_dir"] = resolved_wallet_path
+    kwargs["wallet_location"] = resolved_wallet_path
+    if wallet_password:
+        kwargs["wallet_password"] = wallet_password
+
+
+def _oracle_wallet_password(settings: Settings) -> str:
+    """Wallet password は専用値がなければ DB password を使う。"""
+    return settings.oracle_wallet_password.strip() or settings.oracle_password.strip()
+
+
+def _wallet_requires_password(wallet_path: Path) -> bool:
+    """自動ログイン Wallet がなく、秘密鍵が暗号化されていればパスワード必須。"""
+    try:
+        files = [path for path in wallet_path.iterdir() if path.is_file()]
+    except OSError:
+        return False
+    names = {path.name.lower() for path in files}
+    if "ewallet.p12" in names:
+        return True
+    encrypted_pem_exists = any(
+        path.suffix.lower() == ".pem" and _pem_file_is_encrypted(path) for path in files
+    )
+    if encrypted_pem_exists:
+        return True
+    return "cwallet.sso" not in names
+
+
+def _pem_file_is_encrypted(path: Path) -> bool:
+    """暗号化 PEM の代表的な marker だけを少量読み取って判定する。"""
+    try:
+        head = path.read_bytes()[:4096]
+    except OSError:
+        return False
+    text = head.decode("utf-8", errors="ignore").upper()
+    return "BEGIN ENCRYPTED PRIVATE KEY" in text or "PROC-TYPE: 4,ENCRYPTED" in text
 
 
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
@@ -2015,7 +1966,6 @@ CREATE TABLE {table_name} (
     context_chars         NUMBER(10) DEFAULT 0 NOT NULL,
     context_window_chars  NUMBER(10),
     document_ids          JSON,
-    adapter               VARCHAR2(16),
     config_fingerprint    CHAR(64),
     elapsed_ms            NUMBER(12, 3) NOT NULL,
     error_stage           VARCHAR2(64),

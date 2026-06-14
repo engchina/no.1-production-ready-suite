@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from app.clients.oci_auth import load_oci_config_without_prompt
 from app.config import Settings, get_settings
 
 MAX_OBJECT_KEY_LENGTH = 1024
@@ -159,15 +160,14 @@ class ObjectStorageClient:
 
         oci_config = importlib.import_module("oci.config")
         object_storage = importlib.import_module("oci.object_storage")
-        config = oci_config.from_file(
-            str(Path(self._settings.oci_config_file).expanduser()),
-            self._settings.oci_config_profile,
-        )
         object_storage_region = self._settings.object_storage_region.strip()
-        if object_storage_region:
-            config["region"] = object_storage_region
-        elif self._settings.oci_region.strip():
-            config["region"] = self._settings.oci_region
+        region = object_storage_region or self._settings.oci_region.strip() or None
+        config = load_oci_config_without_prompt(
+            oci_config,
+            self._settings.oci_config_file,
+            self._settings.oci_config_profile,
+            region=region,
+        )
         self._storage_client = object_storage.ObjectStorageClient(config)
         return self._storage_client
 
@@ -206,21 +206,21 @@ def _safe_key(key: str, *, reject_relative_segments: bool = False) -> str:
 
 
 def _local_object_key(key: str) -> str:
-    """local adapter で扱える Object Storage 参照だけをキー化する。"""
+    """local upload storage backend で扱える参照だけをキー化する。"""
     if "://" in key and not key.startswith("local://"):
         raise ValueError("ローカルモードでは local:// URI のみ取得できます。")
     return _safe_key(key.removeprefix("local://"), reject_relative_segments=True)
 
 
 def _local_storage_key(key: str) -> str:
-    """local adapter の保存キーとして扱える値だけをキー化する。"""
+    """local upload storage backend の保存キーとして扱える値だけをキー化する。"""
     if "://" in key:
         raise ValueError("保存先キーに URI は指定できません。")
     return _safe_key(key)
 
 
 def _oci_object_key(reference: str, *, namespace: str, bucket: str) -> str:
-    """OCI adapter で取得対象にできる object key を取り出す。"""
+    """OCI Object Storage で取得対象にできる object key を取り出す。"""
     normalized = reference.strip()
     if normalized.startswith("oci://"):
         parts = normalized.removeprefix("oci://").split("/", 2)

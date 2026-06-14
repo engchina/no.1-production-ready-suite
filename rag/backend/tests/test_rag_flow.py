@@ -5,6 +5,7 @@ import hashlib
 import logging
 from typing import Any, cast
 
+import pytest
 from pytest import LogCaptureFixture, MonkeyPatch
 
 from app.clients.object_storage import ObjectStorageClient
@@ -18,6 +19,9 @@ from app.schemas.document import FileStatus
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+
+# 実 Oracle 26ai + OCI を用いる統合テスト（DB 未到達環境では自動 skip）。
+pytestmark = pytest.mark.usefixtures("oracle_db")
 
 
 def setup_function() -> None:
@@ -1031,8 +1035,8 @@ def test_ingest_rejects_source_hash_mismatch() -> None:
     assert stored.error_message == "原本ファイルの SHA-256 がアップロード時と一致しません。"
 
 
-def test_ingest_rejects_non_local_uri_in_local_adapter() -> None:
-    """local adapter では OCI URI をローカルキーとして誤解釈しない。"""
+def test_ingest_rejects_non_local_uri_in_local_upload_storage_backend() -> None:
+    """local upload storage backend では OCI URI をローカルキーとして誤解釈しない。"""
     detail = asyncio.run(
         OracleClient().create_document(
             file_name="external.txt",

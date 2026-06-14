@@ -1,6 +1,6 @@
 """OCI / Oracle staging 用の RAG smoke test CLI。
 
-CI では実行せず、staging 環境で `AI_SERVICE_ADAPTER=oci` と実接続情報を設定してから
+CI では実行せず、staging 環境で実接続情報を設定してから
 `python -m app.rag.staging_smoke` として実行する。
 """
 
@@ -50,7 +50,6 @@ class SmokePreflightResult:
     """staging smoke 実行前の非機密 preflight 結果。"""
 
     ok: bool
-    adapter: str
     checks: dict[str, str]
     message: str
 
@@ -83,11 +82,6 @@ def main() -> int:
     """CLI entrypoint。"""
     parser = argparse.ArgumentParser(description="Run OCI / Oracle RAG staging smoke test.")
     parser.add_argument(
-        "--allow-local",
-        action="store_true",
-        help="local adapter でも実行する（開発時の CLI 動作確認用）。",
-    )
-    parser.add_argument(
         "--query",
         default=DEFAULT_SMOKE_QUERY_TEMPLATE,
         help="検索クエリ。{marker} は今回作成した一意な smoke marker に置換されます。",
@@ -105,7 +99,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.preflight_only:
-        preflight = staging_smoke_preflight(settings=get_settings(), allow_local=args.allow_local)
+        preflight = staging_smoke_preflight(settings=get_settings())
         print(json.dumps(asdict(preflight), ensure_ascii=False))
         return 0 if preflight.ok else 1
 
@@ -113,7 +107,6 @@ def main() -> int:
         result = asyncio.run(
             run_staging_smoke(
                 query=args.query,
-                allow_local=args.allow_local,
                 cleanup=args.cleanup,
             )
         )
@@ -128,13 +121,12 @@ def main() -> int:
 async def run_staging_smoke(
     *,
     query: str = DEFAULT_SMOKE_QUERY_TEMPLATE,
-    allow_local: bool = False,
     cleanup: bool = False,
     settings: Settings | None = None,
 ) -> SmokeResult:
     """staging で RAG の主要外部依存を 1 回ずつ通す。"""
     resolved_settings = settings or get_settings()
-    preflight = staging_smoke_preflight(settings=resolved_settings, allow_local=allow_local)
+    preflight = staging_smoke_preflight(settings=resolved_settings)
     if not preflight.ok:
         raise StagingSmokePreflightError(preflight)
 
@@ -257,16 +249,11 @@ async def run_staging_smoke(
 def staging_smoke_preflight(
     *,
     settings: Settings | None = None,
-    allow_local: bool = False,
 ) -> SmokePreflightResult:
     """staging smoke 前に設定だけを検証する。"""
     resolved_settings = settings or get_settings()
     checks = readiness_checks(resolved_settings)
-    if resolved_settings.ai_service_adapter != "oci" and not allow_local:
-        checks = {"adapter": READINESS_INVALID, **checks}
-    if resolved_settings.ai_service_adapter == "oci" and (
-        resolved_settings.upload_storage_backend != "oci"
-    ):
+    if resolved_settings.upload_storage_backend != "oci":
         checks = {**checks, "smoke_object_storage_backend": READINESS_INVALID}
 
     ok = readiness_checks_are_ok(checks)
@@ -277,7 +264,6 @@ def staging_smoke_preflight(
     )
     return SmokePreflightResult(
         ok=ok,
-        adapter=resolved_settings.ai_service_adapter,
         checks=checks,
         message=message,
     )

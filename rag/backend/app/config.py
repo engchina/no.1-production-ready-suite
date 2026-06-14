@@ -3,17 +3,19 @@
 環境変数 / `.env` から読み込む。シークレットはコードにハードコードしない。
 """
 
+import json
 from functools import lru_cache
 from pathlib import Path
-from tempfile import gettempdir
 from typing import Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-AiServiceAdapter = Literal["local", "oci"]
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
+DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
 
 
 class EnterpriseAiConfiguredModel(BaseModel):
@@ -30,6 +32,75 @@ class EnterpriseAiConfiguredModel(BaseModel):
         return value.strip()
 
 
+class _PersistedEnterpriseAiSettings(BaseModel):
+    """UI から保存された Enterprise AI モデル設定。"""
+
+    endpoint: str = Field(default="", max_length=2048)
+    project_ocid: str = Field(default="", max_length=512)
+    api_key: str = Field(default="", max_length=4096)
+    models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
+    default_model_id: str = Field(default="", max_length=256)
+    api_path: str = Field(default="/responses", max_length=512)
+    text_payload_template: str = Field(default="", max_length=20000)
+    vision_payload_template: str = Field(default="", max_length=20000)
+    text_response_path: str = Field(default="", max_length=1024)
+    vision_response_path: str = Field(default="", max_length=1024)
+    timeout_seconds: float = Field(default=60.0, gt=0.0, le=600.0)
+    max_retries: int = Field(default=3, ge=0, le=5)
+
+    @field_validator(
+        "endpoint",
+        "project_ocid",
+        "api_key",
+        "default_model_id",
+        "api_path",
+        "text_payload_template",
+        "vision_payload_template",
+        "text_response_path",
+        "vision_response_path",
+    )
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_model_catalog(self) -> "_PersistedEnterpriseAiSettings":
+        """保存済み catalog の重複と default 参照を検証する。"""
+        model_ids = [model.model_id for model in self.models if model.model_id]
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("Enterprise AI の model ID は重複できません。")
+        if self.default_model_id and self.default_model_id not in model_ids:
+            raise ValueError("Enterprise AI default model は catalog 内から選択してください。")
+        return self
+
+
+class _PersistedGenerativeAiSettings(BaseModel):
+    """UI から保存された OCI Generative AI embedding/rerank 設定。"""
+
+    embedding_model: str = Field(default="cohere.embed-v4.0", max_length=256)
+    embedding_dim: int = Field(default=1536, ge=1536, le=1536)
+    rerank_model: str = Field(default="cohere.rerank-v4.0-fast", max_length=256)
+
+    @field_validator("embedding_model", "rerank_model")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+
+class _PersistedModelSettings(BaseModel):
+    """UI 保存用のモデル設定ファイル schema。"""
+
+    version: Literal[1] = 1
+    enterprise_ai: _PersistedEnterpriseAiSettings = Field(
+        default_factory=_PersistedEnterpriseAiSettings
+    )
+    generative_ai: _PersistedGenerativeAiSettings = Field(
+        default_factory=_PersistedGenerativeAiSettings
+    )
+
+
 class Settings(BaseSettings):
     """環境変数ベースの設定。"""
 
@@ -40,10 +111,6 @@ class Settings(BaseSettings):
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
     app_version: str = Field(default="0.1.0")
-    ai_service_adapter: AiServiceAdapter = Field(
-        default="local",
-        description=("local は開発・CI 用の deterministic 実装。oci は実 OCI/Oracle 接続用。"),
-    )
     auth_mode: AuthMode = Field(
         default="local",
         description="local では認証を無効化し、production ではログインを必須にする。",
@@ -54,6 +121,10 @@ class Settings(BaseSettings):
     auth_session_timeout_seconds: int = Field(default=24 * 60 * 60, ge=60, le=30 * 24 * 60 * 60)
     auth_cookie_name: str = Field(default="production_ready_rag_session")
     auth_cookie_secure: bool = Field(default=False)
+    model_settings_file: str = Field(
+        default=DEFAULT_MODEL_SETTINGS_FILE,
+        description="UI から保存したモデル設定 JSON。存在する場合は .env より優先する。",
+    )
     # CORS 許可オリジン（フロントエンド）
     cors_origins: list[str] = Field(default=["http://localhost:3000"])
 
@@ -124,9 +195,21 @@ class Settings(BaseSettings):
         description=("互換用。Wallet 配置先は ORACLE_CLIENT_LIB_DIR/network/admin へ固定する。"),
     )
     oracle_wallet_password: str = Field(default="")
+    oracle_tcp_connect_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0.0,
+        le=120.0,
+        description="Oracle TCP 接続の待機秒数。ADB/Wallet 疎通確認を長時間ブロックしない。",
+    )
+    oracle_db_test_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0.0,
+        le=180.0,
+        description="Oracle 接続テスト API 全体の待機秒数。",
+    )
     oracle_select_ai_profile: str = Field(
         default="",
-        description="Oracle Select AI で使う DBMS_CLOUD_AI profile 名。Vault/DB 側で管理する。",
+        description="Oracle Select AI で使う DBMS_CLOUD_AI profile 名。DB 側で管理する。",
     )
     oracle_select_ai_max_result_chars: int = Field(default=20000, ge=1000, le=200000)
     oracle_vector_target_accuracy: int = Field(
@@ -147,10 +230,8 @@ class Settings(BaseSettings):
         ),
     )
 
-    # --- ローカル参照実装 ---
-    local_storage_dir: str = Field(
-        default_factory=lambda: str(Path(gettempdir()) / "production-ready-rag")
-    )
+    # --- ローカルアップロード保存先 ---
+    local_storage_dir: str = Field(default=DEFAULT_LOCAL_STORAGE_DIR)
     max_upload_bytes: int = Field(default=200 * 1024 * 1024, ge=1)
     allowed_upload_content_types: list[str] = Field(
         default=[
@@ -245,7 +326,7 @@ class Settings(BaseSettings):
     # --- 監査 ---
     audit_context_hash_salt: str = Field(
         default="",
-        description="tenant/user id を監査ログへ hash 化するときの任意 salt。Vault 注入を推奨。",
+        description="tenant/user id を監査ログへ hash 化するときの任意 salt。.env から注入する。",
     )
 
     # --- Trace export（OpenTelemetry / Langfuse gateway 連携用）---
@@ -253,6 +334,12 @@ class Settings(BaseSettings):
     trace_export_http_bearer_token: str = Field(default="")
     trace_export_timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)
     trace_export_queue_size: int = Field(default=1024, ge=1, le=100000)
+
+    @field_validator("model_settings_file")
+    @classmethod
+    def normalize_model_settings_file(cls, value: str) -> str:
+        """空指定は backend/.env と同じ階層の既定ファイルへ戻す。"""
+        return value.strip() or DEFAULT_MODEL_SETTINGS_FILE
 
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:
@@ -268,6 +355,9 @@ class Settings(BaseSettings):
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
         return self.oracle_wallet_dir.strip()
+
+
+_MODEL_SETTINGS_STATE: dict[str, int | str | None] = {"path": None, "mtime_ns": None}
 
 
 def enterprise_ai_model_catalog(settings: Settings) -> list[EnterpriseAiConfiguredModel]:
@@ -347,6 +437,123 @@ def _legacy_enterprise_ai_model_catalog(settings: Settings) -> list[EnterpriseAi
 
 
 @lru_cache
+def _settings_singleton() -> Settings:
+    """環境変数/.env と永続化ファイルから初期 Settings を作る。"""
+    settings = Settings()
+    load_persisted_model_settings(settings)
+    return settings
+
+
 def get_settings() -> Settings:
-    """設定のシングルトンを返す。"""
-    return Settings()
+    """設定のシングルトンを返す。永続化ファイルの更新があれば再読込する。"""
+    settings = _settings_singleton()
+    reload_persisted_model_settings_if_changed(settings)
+    return settings
+
+
+def reset_settings_cache() -> None:
+    """テストや明示的な再初期化のため Settings singleton を破棄する。"""
+    _settings_singleton.cache_clear()
+    _MODEL_SETTINGS_STATE["path"] = None
+    _MODEL_SETTINGS_STATE["mtime_ns"] = None
+
+
+def resolve_model_settings_file(path_value: str) -> Path:
+    """MODEL_SETTINGS_FILE を backend/.env と同じディレクトリ基準で解決する。"""
+    raw_path = path_value.strip() or DEFAULT_MODEL_SETTINGS_FILE
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    return (BACKEND_ROOT / path).resolve()
+
+
+def load_persisted_model_settings(settings: Settings) -> None:
+    """UI 保存済みのモデル設定 JSON があれば Settings へ上書き適用する。"""
+    path = resolve_model_settings_file(settings.model_settings_file)
+    if not path.is_file():
+        _remember_model_settings_file(path, None)
+        return
+
+    try:
+        stat_result = path.stat()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        persisted = _PersistedModelSettings.model_validate(data)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"モデル設定ファイルを読み込めません: {path}") from exc
+
+    _apply_persisted_model_settings(settings, persisted)
+    _remember_model_settings_file(path, stat_result.st_mtime_ns)
+
+
+def reload_persisted_model_settings_if_changed(settings: Settings) -> None:
+    """別 worker が保存したモデル設定を次回リクエストで取り込む。"""
+    path = resolve_model_settings_file(settings.model_settings_file)
+    mtime_ns = _model_settings_mtime_ns(path)
+    if (
+        _MODEL_SETTINGS_STATE["path"] == str(path)
+        and _MODEL_SETTINGS_STATE["mtime_ns"] == mtime_ns
+    ):
+        return
+    if mtime_ns is None:
+        _remember_model_settings_file(path, None)
+        return
+    load_persisted_model_settings(settings)
+
+
+def _apply_persisted_model_settings(
+    settings: Settings,
+    persisted: _PersistedModelSettings,
+) -> None:
+    """永続化 schema を既存 Settings フィールドへ再マッピングする。"""
+    enterprise_ai = persisted.enterprise_ai
+    generative_ai = persisted.generative_ai
+    models = [model for model in enterprise_ai.models if model.model_id]
+    default_model = enterprise_ai.default_model_id or (models[0].model_id if models else "")
+
+    settings.oci_enterprise_ai_endpoint = enterprise_ai.endpoint
+    settings.oci_enterprise_ai_project_ocid = enterprise_ai.project_ocid
+    settings.oci_enterprise_ai_api_key = enterprise_ai.api_key
+    settings.oci_enterprise_ai_models = models
+    settings.oci_enterprise_ai_default_model = default_model
+    settings.oci_enterprise_ai_llm_model = default_model
+    settings.oci_enterprise_ai_vlm_model = _persisted_vision_model_id(models, default_model)
+    settings.oci_enterprise_ai_llm_path = enterprise_ai.api_path
+    settings.oci_enterprise_ai_vlm_path = enterprise_ai.api_path
+    settings.oci_enterprise_ai_llm_payload_template = enterprise_ai.text_payload_template
+    settings.oci_enterprise_ai_vlm_payload_template = enterprise_ai.vision_payload_template
+    settings.oci_enterprise_ai_llm_response_path = enterprise_ai.text_response_path
+    settings.oci_enterprise_ai_vlm_response_path = enterprise_ai.vision_response_path
+    settings.oci_enterprise_ai_timeout_seconds = enterprise_ai.timeout_seconds
+    settings.oci_enterprise_ai_max_retries = enterprise_ai.max_retries
+
+    settings.oci_genai_embedding_model = generative_ai.embedding_model
+    settings.oci_genai_embedding_dim = generative_ai.embedding_dim
+    settings.oci_genai_rerank_model = generative_ai.rerank_model
+
+
+def _persisted_vision_model_id(
+    models: list[EnterpriseAiConfiguredModel],
+    default_model: str,
+) -> str:
+    """Vision/OCR 用 model を default 優先で選ぶ。"""
+    for model in models:
+        if model.model_id == default_model and model.vision_enabled:
+            return model.model_id
+    for model in models:
+        if model.vision_enabled:
+            return model.model_id
+    return ""
+
+
+def _model_settings_mtime_ns(path: Path) -> int | None:
+    """モデル設定ファイルの mtime を nanosecond で返す。存在しなければ None。"""
+    try:
+        return path.stat().st_mtime_ns if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _remember_model_settings_file(path: Path, mtime_ns: int | None) -> None:
+    """現在プロセスが最後に取り込んだ設定ファイル情報を記録する。"""
+    _MODEL_SETTINGS_STATE["path"] = str(path)
+    _MODEL_SETTINGS_STATE["mtime_ns"] = mtime_ns

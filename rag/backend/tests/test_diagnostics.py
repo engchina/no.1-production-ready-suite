@@ -8,7 +8,6 @@ from app.schemas.search import SearchMode, SearchRequest
 def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
     """検索 diagnostics は実行形状を示し、secret 値を含めない。"""
     settings = Settings(
-        ai_service_adapter="oci",
         oracle_password="super-secret-password",
         rag_context_window_chars=4096,
         rag_rrf_k=30,
@@ -36,7 +35,6 @@ def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
         context_chars=812,
     )
 
-    assert diagnostics.adapter == "oci"
     assert diagnostics.mode == "keyword"
     assert diagnostics.top_k == 7
     assert diagnostics.rerank_top_n == 3

@@ -21,9 +21,9 @@ cp backend/.env.example backend/.env
 docker compose up --build
 ```
 
-backend は `AI_SERVICE_ADAPTER=local` で起動し、`/tmp/production-ready-rag` を永続ボリュームにする。
-コンテナ healthcheck は `/api/ready` を使う。local adapter では保存先の書き込み可否、OCI adapter では `oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
-`ENVIRONMENT=production` では `deployment_adapter` と `audit_context_salt` も確認し、`AI_SERVICE_ADAPTER=oci` と `AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+backend は OCI / Oracle 接続情報を前提に起動し、`/u01/production-ready-rag` を永続ボリュームにする。
+コンテナ healthcheck は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
+`ENVIRONMENT=production` では `audit_context_salt` も確認し、`AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
 ## 本番構成
 
@@ -36,8 +36,8 @@ backend は `AI_SERVICE_ADAPTER=local` で起動し、`/tmp/production-ready-rag
 - LLM/VLM: OCI Enterprise AI。
 - Embedding/Rerank: OCI Generative AI。
 - Observability: Prometheus、OpenTelemetry、Langfuse gateway。`TRACE_EXPORT_HTTP_ENDPOINT` を設定すると、脱機密化済み RAG span event を非同期 HTTP JSON で転送する。
-- Secret: OCI Vault から環境変数または workload identity で注入。
-- Audit: `app.audit` の `rag_search_audit` / `rag_ingestion_audit` 構造化ログをログ基盤へ転送し、必要に応じて Oracle audit table に永続化する。`X-Tenant-ID` / `X-User-ID` は raw 値を保存せず hash 化し、`AUDIT_CONTEXT_HASH_SALT` は OCI Vault から注入する。
+- Secret: `.env` から環境変数として注入。
+- Audit: `app.audit` の `rag_search_audit` / `rag_ingestion_audit` 構造化ログをログ基盤へ転送し、必要に応じて Oracle audit table に永続化する。`X-Tenant-ID` / `X-User-ID` は raw 値を保存せず hash 化し、`AUDIT_CONTEXT_HASH_SALT` は `.env` から注入する。
 
 backend container は production entrypoint として Gunicorn + `uvicorn.workers.UvicornWorker` を使う。worker 数と timeout は `WEB_CONCURRENCY`、`GUNICORN_TIMEOUT`、`GUNICORN_GRACEFUL_TIMEOUT`、`GUNICORN_KEEP_ALIVE`、listen port は `PORT` で調整する。local 開発だけ `uvicorn app.main:app --reload` を使い、本番では `/api/ready` と golden set gate で昇格判定する。
 
@@ -140,7 +140,7 @@ uv run python -m app.rag.evaluation_cli \
 3. `OracleClient` の python-oracledb pool、vector search、keyword search、document/chunk persistence、隣接 context 取得を有効化する。`ORACLE_USER` / `ORACLE_DSN` / `ORACLE_PASSWORD` または `ORACLE_CLIENT_LIB_DIR/network/admin` に配置した wallet を設定する。`INGESTING` / `ERROR` への状態遷移では該当 document の chunk/index 行と古い抽出結果を削除し、検索対象は `INDEXED` に限定する。staging では `VECTOR_DISTANCE`、`FETCH APPROX ... WITH TARGET ACCURACY`、Oracle Text `CONTAINS`、document 別 chunk count、`chunk_index` window による同一 document 前後 chunk 取得、`INDEXED` 文書が hybrid search の citation に含まれることを確認する。Select AI を有効にする場合は `ORACLE_SELECT_AI_PROFILE` を設定し、`/api/search/select-ai` の `showsql` が bind 付き `DBMS_CLOUD_AI.GENERATE` 経由で生成 SQL を返すこと、`runsql` が guardrail でデータ変更意図を拒否することを確認する。
 4. `OciGenAiClient` の embedding / rerank は OCI Generative AI Inference SDK 実装を使う。staging では `OCI_CONFIG_FILE` / profile / region / compartment / model id、Cohere Embed v4 の 1536 次元、Cohere Rerank v4 fast の返却件数・候補 index 範囲・index 重複なし・finite score を確認する。
 5. `OciEnterpriseAiClient` は `OCI_ENTERPRISE_AI_ENDPOINT`、`OCI_ENTERPRISE_AI_API_KEY`、`OCI_ENTERPRISE_AI_LLM_MODEL`、`OCI_ENTERPRISE_AI_VLM_MODEL`、`OCI_ENTERPRISE_AI_LLM_PATH`、`OCI_ENTERPRISE_AI_VLM_PATH` を使って Enterprise AI endpoint を呼び出す。標準 payload で合わない model deployment / gateway は `OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で request shape を差し替え、response envelope が独自の場合は `OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH` で候補 node を指定する。staging ではまず `uv run python -m app.rag.enterprise_ai_probe --surface both --dry-run` で URL、template 使用有無、response path 使用有無、payload key / shape、JSON byte 数を確認し、その後 `uv run python -m app.rag.enterprise_ai_probe --surface both` で LLM/VLM を直接呼び出す。probe は回答本文や OCR 本文を出さず、text 文字数・element 件数だけを artifact に残す。ここで Bearer 認証、timeout/retry、VLM の MIME type / 構造化抽出 JSON schema、LLM の citation-grounded 生成 payload、response parsing を実 endpoint で確認する。VLM response は `StructuredExtraction` へ検証し、LLM response は空 text を fail fast する。
-6. `AI_SERVICE_ADAPTER=oci` で staging にデプロイし、`/api/ready` の checks がすべて `ok` になることを確認する。production 昇格時は `ENVIRONMENT=production` にして、追加 checks の `deployment_adapter` と `audit_context_salt` も `ok` にする。Oracle は `ORACLE_USER` / `ORACLE_DSN` に加えて `ORACLE_PASSWORD` または `ORACLE_CLIENT_LIB_DIR/network/admin` に存在する Wallet が必要。
-7. staging 環境でまず `uv run python -m app.rag.staging_smoke --preflight-only` を実行する。`AI_SERVICE_ADAPTER=oci`、OCI/Oracle 接続設定、Enterprise AI LLM/VLM 設定、Cohere embedding/rerank 設定、`UPLOAD_STORAGE_BACKEND=oci`、Object Storage namespace/bucket がそろっていることを JSON の `checks` で確認する。preflight 失敗時は外部依存へ接続せず、secret 値も出力しない。
+6. staging にデプロイし、`/api/ready` の checks がすべて `ok` になることを確認する。production 昇格時は `ENVIRONMENT=production` にして、追加 checks の `audit_context_salt` も `ok` にする。Oracle は `ORACLE_USER` / `ORACLE_DSN` に加えて `ORACLE_PASSWORD` または `ORACLE_CLIENT_LIB_DIR/network/admin` に存在する Wallet が必要。
+7. staging 環境でまず `uv run python -m app.rag.staging_smoke --preflight-only` を実行する。OCI/Oracle 接続設定、Enterprise AI LLM/VLM 設定、Cohere embedding/rerank 設定、`UPLOAD_STORAGE_BACKEND=oci`、Object Storage namespace/bucket がそろっていることを JSON の `checks` で確認する。preflight 失敗時は外部依存へ接続せず、secret 値も出力しない。
 8. preflight が `ok=true` なら `uv run python -m app.rag.staging_smoke` を実行する。Object Storage put/get、Oracle document 作成、Enterprise AI VLM、chunking、embedding、Oracle indexing、hybrid search、Enterprise AI LLM 生成を 1 回通し、作成した smoke document が citation に含まれることを確認する。既定 query は一意な `SMOKE-...` marker の原文引用を要求し、検索は新規 `document_id` に限定される。既定 query では LLM 回答にも marker が含まれない場合に `stage=rag_answer_marker` で失敗する。JSON 出力の `ok`、`marker`、`query`、`answer_contains_marker`、`trace_id`、`chunk_count`、`citation_count`、`cleanup`、`diagnostics.oracle_vector_target_accuracy`、必要に応じて `diagnostics.context_diversified_count` / `diagnostics.context_group_expanded_count` / `diagnostics.context_expanded_count` / `diagnostics.context_compressed_count` / `diagnostics.context_compression_saved_chars` を保存し、staging gate の artifact にする。既定では evidence として作成物を保持し、`cleanup` は `skipped` になる。DB/Object Storage を汚したくない一時確認では `uv run python -m app.rag.staging_smoke --cleanup` を使い、成功・失敗どちらでも作成済み Oracle document/chunk と Object Storage object の削除 status を確認する。失敗時は preflight の `checks` または本実行の `stage` / `cause_type` を見て、Object Storage、Oracle、VLM、embedding、retrieval、context diversity、context group expansion、context expansion、context compression、generation のどこで止まったかを切り分ける。query を変える場合は `--query "確認用キーワード {marker} を要約してください"` のように `{marker}` placeholder を残す。
 9. golden set 評価と負荷試験を通してから production へ昇格する。

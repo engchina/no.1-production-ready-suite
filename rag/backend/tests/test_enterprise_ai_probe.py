@@ -28,12 +28,11 @@ async def test_enterprise_ai_probe_dry_run_redacts_payload_values() -> None:
     assert result.stage == "preview"
     assert result.request["surface"] == "llm"
     assert result.request["payload_keys"] == [
-        "compartment_id",
-        "language",
-        "messages",
+        "input",
+        "instructions",
+        "max_output_tokens",
         "model",
-        "parameters",
-        "task",
+        "temperature",
     ]
     assert result.request["response_path_set"] is False
     assert transport.calls == []
@@ -87,21 +86,6 @@ async def test_enterprise_ai_probe_invokes_vlm_and_summarizes_extraction() -> No
     assert transport.calls[0]["url"] == "https://enterprise-ai.example/vlm/extract"
 
 
-async def test_enterprise_ai_probe_requires_oci_adapter_before_endpoint_call() -> None:
-    """local adapter では Enterprise AI probe を実行せず preflight 失敗にする。"""
-    settings = Settings()
-    transport = FakeEnterpriseAiTransport({"answer": "unused"})
-    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
-
-    report = await run_enterprise_ai_probe(surface="llm", settings=settings, client=client)
-
-    assert report.ok is False
-    result = report.results[0]
-    assert result.stage == "preflight"
-    assert result.error_type == "AdapterNotOci"
-    assert transport.calls == []
-
-
 async def test_enterprise_ai_probe_reports_payload_errors_without_transport_call() -> None:
     """endpoint/template 不備は transport 呼び出し前に payload stage で返す。"""
     settings = _oci_settings()
@@ -124,6 +108,8 @@ class FakeEnterpriseAiTransport:
     def __init__(self, response: dict[str, Any]) -> None:
         self._response = response
         self.calls: list[dict[str, Any]] = []
+        self.uploads: list[dict[str, Any]] = []
+        self.deletes: list[dict[str, Any]] = []
 
     async def post_json(
         self,
@@ -143,11 +129,44 @@ class FakeEnterpriseAiTransport:
         )
         return self._response
 
+    async def upload_file(
+        self,
+        url: str,
+        file_name: str,
+        content: bytes,
+        *,
+        mime_type: str,
+        purpose: str,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        self.uploads.append(
+            {
+                "url": url,
+                "file_name": file_name,
+                "content": content,
+                "mime_type": mime_type,
+                "purpose": purpose,
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        return {"id": "file-test"}
+
+    async def delete(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        self.deletes.append({"url": url, "headers": dict(headers), "timeout": timeout})
+        return {"id": "file-test", "deleted": True}
+
 
 def _oci_settings() -> Settings:
     """Enterprise AI probe 用の OCI 設定を返す。"""
     return Settings.model_construct(
-        ai_service_adapter="oci",
         oci_region="ap-osaka-1",
         oci_compartment_id="ocid1.compartment.oc1..example",
         oci_enterprise_ai_endpoint="https://enterprise-ai.example",

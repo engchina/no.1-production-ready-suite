@@ -39,6 +39,7 @@ def test_build_context_keeps_truncated_first_chunk_when_window_is_small() -> Non
     assert context == "[policy.txt#doc-"
 
 
+@pytest.mark.usefixtures("oracle_db")
 async def test_pipeline_returns_no_results_without_llm_call(
     caplog: LogCaptureFixture,
 ) -> None:

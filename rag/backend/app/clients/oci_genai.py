@@ -5,16 +5,15 @@
 """
 
 import asyncio
-import hashlib
 import importlib
 import math
 import re
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from numbers import Real
-from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from app.clients.oci_auth import load_oci_config_without_prompt
 from app.config import Settings, get_settings
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
@@ -57,12 +56,7 @@ class OciGenAiClient:
         """テキストを 1536 次元ベクトルに埋め込む（Cohere Embed v4）。"""
         if input_type not in EMBEDDING_INPUT_TYPES:
             raise ValueError(f"embedding input_type が不正です。input_type={input_type}")
-        if self._settings.ai_service_adapter == "oci":
-            vectors = await self._embed_with_oci(texts, input_type=input_type)
-        else:
-            vectors = [
-                _local_embedding(text, self._settings.oci_genai_embedding_dim) for text in texts
-            ]
+        vectors = await self._embed_with_oci(texts, input_type=input_type)
         _validate_embedding_batch(
             vectors,
             expected_count=len(texts),
@@ -76,15 +70,7 @@ class OciGenAiClient:
             raise ValueError(f"rerank top_n は 1 以上である必要があります。actual={top_n}")
         if not documents:
             return []
-        if self._settings.ai_service_adapter == "oci":
-            results = await self._rerank_with_oci(query, documents, top_n)
-        else:
-            query_tokens = _tokens(query)
-            scored = [
-                (idx, _lexical_relevance(query_tokens, _tokens(document), query, document))
-                for idx, document in enumerate(documents)
-            ]
-            results = sorted(scored, key=lambda item: item[1], reverse=True)[:top_n]
+        results = await self._rerank_with_oci(query, documents, top_n)
         return _validate_rerank_results(results, document_count=len(documents), top_n=top_n)
 
     async def _embed_with_oci(
@@ -141,39 +127,14 @@ class OciGenAiClient:
 
         oci_config = importlib.import_module("oci.config")
         genai = importlib.import_module("oci.generative_ai_inference")
-        config = oci_config.from_file(
-            str(Path(self._settings.oci_config_file).expanduser()),
+        config = load_oci_config_without_prompt(
+            oci_config,
+            self._settings.oci_config_file,
             self._settings.oci_config_profile,
+            region=self._settings.oci_region.strip() or None,
         )
-        if self._settings.oci_region.strip():
-            config["region"] = self._settings.oci_region
         self._inference_client = genai.GenerativeAiInferenceClient(config)
         return self._inference_client
-
-
-def _local_embedding(text: str, dimensions: int) -> list[float]:
-    """CI/ローカル用の deterministic embedding。
-
-    1536 次元の契約を保ちつつ、外部 API なしで近い語が近くなるように
-    token hashing と文字 n-gram を組み合わせる。
-    """
-    vector = [0.0] * dimensions
-    features = _tokens(text)
-    features.extend(_char_ngrams(text, n=3))
-    if not features:
-        return vector
-
-    for token in features:
-        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
-        hashed = int.from_bytes(digest, byteorder="big", signed=False)
-        index = hashed % dimensions
-        sign = 1.0 if hashed & 1 else -1.0
-        vector[index] += sign
-
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm == 0.0:
-        return vector
-    return [round(value / norm, 8) for value in vector]
 
 
 async def _run_sdk_call_in_thread(operation: Callable[[], Any]) -> Any:
@@ -238,14 +199,6 @@ def _validate_rerank_results(
 def _tokens(text: str) -> list[str]:
     """日本語・英数字の簡易トークン化。"""
     return [match.group(0).lower() for match in TOKEN_PATTERN.finditer(text)]
-
-
-def _char_ngrams(text: str, n: int) -> list[str]:
-    """空白を除いた文字 n-gram。日本語 OCR テキストの近さを拾う。"""
-    normalized = re.sub(r"\s+", "", text.lower())
-    if len(normalized) < n:
-        return [normalized] if normalized else []
-    return [normalized[index : index + n] for index in range(len(normalized) - n + 1)]
 
 
 def _lexical_relevance(

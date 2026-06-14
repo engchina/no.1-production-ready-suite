@@ -173,7 +173,6 @@ describe("buildOciEnvFile", () => {
       configProfile: "RAG_PROD",
     });
 
-    expect(env).toContain("AI_SERVICE_ADAPTER=oci");
     expect(env).toContain("OCI_CONFIG_FILE=~/.oci/config");
     expect(env).not.toContain("OCI_CONFIG_FILE=/opt/oci/config");
     expect(env).toContain("OCI_CONFIG_PROFILE=DEFAULT");

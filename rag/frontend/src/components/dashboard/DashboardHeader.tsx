@@ -2,6 +2,7 @@
 
 import { RefreshCw } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
@@ -29,15 +30,16 @@ export function DashboardHeader({
               {t("dashboard.lastUpdated")} {formatDateTime(updatedAt)}
             </span>
           ) : null}
-          <button
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
             onClick={onRefresh}
             disabled={isRefreshing}
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-background disabled:opacity-50"
           >
             <RefreshCw size={14} className={cn(isRefreshing && "animate-spin")} aria-hidden />
             {t("dashboard.refresh")}
-          </button>
+          </Button>
         </div>
       </div>
     </header>

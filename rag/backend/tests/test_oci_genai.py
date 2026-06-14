@@ -6,8 +6,46 @@ from typing import Any
 
 import pytest
 
+from app.clients.oci_auth import OciPrivateKeyPassPhraseRequiredError
 from app.clients.oci_genai import OciGenAiClient
 from app.config import Settings
+
+
+def test_oci_genai_client_refuses_encrypted_private_key_without_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """OCI SDK client 作成前に暗号化 PEM の pass phrase 要求を止める。"""
+    key_file = tmp_path / "encrypted.pem"
+    key_file.write_text(
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n-----END ENCRYPTED PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+    initialized = False
+
+    class FakeGenerativeAiInferenceClient:
+        def __init__(self, config: dict[str, object]) -> None:
+            nonlocal initialized
+            initialized = True
+
+    def fake_import_module(name: str) -> object:
+        if name == "oci.config":
+            return SimpleNamespace(
+                from_file=lambda path, profile: {"key_file": str(key_file), "region": "ap-osaka-1"}
+            )
+        if name == "oci.generative_ai_inference":
+            return SimpleNamespace(GenerativeAiInferenceClient=FakeGenerativeAiInferenceClient)
+        raise AssertionError(f"unexpected module import: {name}")
+
+    monkeypatch.setattr("app.clients.oci_genai.importlib.import_module", fake_import_module)
+    client = OciGenAiClient(
+        settings=_oci_settings().model_copy(update={"oci_config_file": str(tmp_path / "config")})
+    )
+
+    with pytest.raises(OciPrivateKeyPassPhraseRequiredError, match="pass_phrase"):
+        client._client()
+
+    assert initialized is False
 
 
 async def test_embed_validates_oci_embedding_count() -> None:
@@ -159,11 +197,10 @@ async def test_rerank_rejects_non_finite_score() -> None:
 
 
 class StubEmbeddingClient(OciGenAiClient):
-    """OCI adapter の戻り値だけを差し替えるテスト用 client。"""
+    """OCI embedding の戻り値だけを差し替えるテスト用 client。"""
 
     def __init__(self, vectors: list[list[float]]) -> None:
         settings = Settings.model_construct(
-            ai_service_adapter="oci",
             oci_genai_embedding_dim=3,
         )
         super().__init__(settings=settings)
@@ -179,11 +216,10 @@ class StubEmbeddingClient(OciGenAiClient):
 
 
 class StubRerankClient(OciGenAiClient):
-    """OCI rerank adapter の戻り値だけを差し替えるテスト用 client。"""
+    """OCI rerank の戻り値だけを差し替えるテスト用 client。"""
 
     def __init__(self, results: list[tuple[int, float]]) -> None:
         settings = Settings.model_construct(
-            ai_service_adapter="oci",
             oci_genai_embedding_dim=3,
         )
         super().__init__(settings=settings)
@@ -229,7 +265,6 @@ class FakeGenAiInferenceClient:
 
 def _oci_settings() -> Settings:
     return Settings.model_construct(
-        ai_service_adapter="oci",
         oci_region="ap-osaka-1",
         oci_compartment_id="ocid1.compartment.oc1..example",
         oci_genai_embedding_model="cohere.embed-v4.0",

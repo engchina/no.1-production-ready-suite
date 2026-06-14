@@ -111,7 +111,6 @@ class RagPipeline:
                 "embedding",
                 self._genai.embed(query_variants, input_type="SEARCH_QUERY"),
                 attributes={
-                    "adapter": self._settings.ai_service_adapter,
                     "model": self._settings.oci_genai_embedding_model,
                     "input_type": "SEARCH_QUERY",
                     "input_count": query_variant_count,
@@ -289,8 +288,7 @@ class RagPipeline:
                 "generation",
                 self._llm.generate(query_guardrail.sanitized_text, context),
                 attributes={
-                    "adapter": self._settings.ai_service_adapter,
-                    "model": enterprise_ai_default_model_id(self._settings) or "local",
+                    "model": enterprise_ai_default_model_id(self._settings),
                     "context_chars": len(context),
                     "citation_count": len(context_citations),
                 },
@@ -370,6 +368,8 @@ class RagPipeline:
         """検索候補を rerank し、上位だけ返す。"""
         if not chunks:
             return []
+        # OCI Rerank は top_n <= documents 数を要求するため候補数でクランプする。
+        top_n = min(top_n, len(chunks))
         reranked = await self._genai.rerank(query, [chunk.text for chunk in chunks], top_n)
         by_index = {index: score for index, score in reranked}
         ranked = [

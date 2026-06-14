@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Any, cast
 
+import pytest
 from pytest import LogCaptureFixture, MonkeyPatch
 
 from app.config import Settings, get_settings
@@ -550,7 +551,6 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
     monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
     runner = EvaluationRunner(
         settings=Settings.model_construct(
-            ai_service_adapter="local",
             rag_search_timeout_seconds=30.0,
             rag_rrf_k=60,
             rag_context_window_chars=12000,
@@ -834,6 +834,7 @@ def test_evaluation_api_rejects_blank_case_query() -> None:
     assert body["error_messages"]
 
 
+@pytest.mark.usefixtures("oracle_db")
 def test_evaluation_api_runs_against_local_pipeline() -> None:
     """API 経由でも golden set 評価メトリクスを返す。"""
     response = client.post(

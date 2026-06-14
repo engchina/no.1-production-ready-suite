@@ -11,6 +11,7 @@ import {
   type EvaluationRunRequestBody,
   type FileStatus,
   type ModelSettingsPayload,
+  type ModelSettingsTestRequest,
   type SelectAiRequestBody,
   type UploadStorageSettingsUpdate,
 } from "./api";
@@ -131,6 +132,13 @@ export function useUpdateModelSettings() {
 export function useCheckModelSettings() {
   return useMutation({
     mutationFn: (payload: ModelSettingsPayload) => api.checkModelSettings(payload),
+  });
+}
+
+/** モデル単位の実 API テスト。 */
+export function useTestModelSettings() {
+  return useMutation({
+    mutationFn: (payload: ModelSettingsTestRequest) => api.testModelSettings(payload),
   });
 }
 

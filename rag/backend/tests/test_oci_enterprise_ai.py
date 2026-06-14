@@ -4,9 +4,10 @@ import base64
 from collections.abc import Mapping
 from typing import Any
 
+import httpx
 import pytest
 
-from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+from app.clients.oci_enterprise_ai import OciEnterpriseAiClient, _raise_for_status_with_body
 from app.config import EnterpriseAiConfiguredModel, Settings
 
 
@@ -35,22 +36,69 @@ async def test_oci_vlm_posts_structured_extraction_payload() -> None:
     assert result["elements"]
     assert "fields" not in result
     assert result["confidence"] == 0.91
+    assert transport.uploads[0]["url"] == "https://enterprise-ai.example/files"
+    assert transport.uploads[0]["file_name"] == "enterprise-ai-input.pdf"
+    assert transport.uploads[0]["content"] == b"policy-bytes"
+    assert transport.uploads[0]["mime_type"] == "application/pdf"
+    assert transport.uploads[0]["purpose"] == "user_data"
+    assert "content-type" not in transport.uploads[0]["headers"]
     assert transport.calls[0]["url"] == "https://enterprise-ai.example/vlm/extract"
     payload = transport.calls[0]["payload"]
     assert payload["model"] == "enterprise-vlm"
-    assert payload["task"] == "structured_document_extraction"
-    assert payload["language"] == "ja"
-    assert payload["prompt"] == "抽出してください"
-    assert payload["compartment_id"] == "ocid1.compartment.oc1..example"
-    input_payload = payload["input"]
-    assert isinstance(input_payload, dict)
-    assert input_payload["mime_type"] == "application/pdf"
-    assert base64.b64decode(input_payload["data_base64"]) == b"policy-bytes"
-    response_format = payload["response_format"]
-    assert isinstance(response_format, dict)
-    assert response_format["type"] == "json_schema"
-    assert "elements" in response_format["schema"]["properties"]
     assert payload["instructions"]
+    input_payload = payload["input"]
+    assert isinstance(input_payload, list)
+    content = input_payload[0]["content"]
+    assert content[0] == {"type": "input_file", "file_id": "file-test"}
+    assert content[1] == {"type": "input_text", "text": "抽出してください"}
+    text_format = payload["text"]["format"]
+    assert text_format["type"] == "json_schema"
+    assert text_format["name"] == "structured_extraction"
+    assert "elements" in text_format["schema"]["properties"]
+    assert transport.deletes[0]["url"] == "https://enterprise-ai.example/files/file-test"
+
+
+async def test_oci_vlm_posts_image_data_url_without_files_api() -> None:
+    """画像入力は OpenAI Responses の base64 data URL として送る。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "data": {
+                "raw_text": "PNG OCR",
+                "document_type": "画像",
+                "confidence": 0.9,
+                "warnings": [],
+            }
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    await client.extract_with_vlm(b"png-bytes", "OCR", mime_type="image/png")
+
+    assert transport.uploads == []
+    content = transport.calls[0]["payload"]["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "OCR"}
+    image_url = content[1]["image_url"]
+    assert content[1]["type"] == "input_image"
+    assert image_url.startswith("data:image/png;base64,")
+    assert base64.b64decode(image_url.split(",", maxsplit=1)[1]) == b"png-bytes"
+
+
+async def test_oci_vision_smoke_test_uses_minimal_openai_image_payload() -> None:
+    """Vision 接続確認は JSON schema なしの最小 OpenAI image payload を使う。"""
+    transport = FakeEnterpriseAiTransport({"output_text": "画像を確認しました。"})
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    result = await client.generate_from_image(b"png-bytes", "画像を確認", mime_type="image/png")
+
+    assert result == "画像を確認しました。"
+    assert transport.uploads == []
+    payload = transport.calls[0]["payload"]
+    assert payload["model"] == "enterprise-vlm"
+    assert "text" not in payload
+    content = payload["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "画像を確認"}
+    assert content[1]["type"] == "input_image"
+    assert content[1]["image_url"].startswith("data:image/png;base64,")
 
 
 async def test_oci_vlm_accepts_json_string_payload() -> None:
@@ -238,6 +286,8 @@ async def test_oci_vlm_uses_configured_payload_template() -> None:
     assert base64.b64decode(payload["inputs"][0]["bytes"]) == b"pdf"
     assert payload["schema"]["title"] == "StructuredExtraction"
     assert payload["prompt"] == "OCR"
+    assert transport.uploads == []
+    assert transport.deletes == []
 
 
 async def test_oci_generate_posts_rag_generation_payload() -> None:
@@ -253,15 +303,15 @@ async def test_oci_generate_posts_rag_generation_payload() -> None:
     assert transport.calls[0]["url"] == "https://enterprise-ai.example/llm/generate"
     payload = transport.calls[0]["payload"]
     assert payload["model"] == "enterprise-llm"
-    assert payload["task"] == "rag_answer_generation"
-    assert payload["language"] == "ja"
-    assert payload["parameters"] == {"temperature": 0.0, "max_output_tokens": 1200}
-    messages = payload["messages"]
-    assert isinstance(messages, list)
-    assert messages[0]["role"] == "system"
-    assert "OCI Generative AI" not in str(messages)
-    assert "承認条件は？" in messages[1]["content"]
-    assert "[policy.txt#doc-1:0]" in messages[1]["content"]
+    assert payload["instructions"]
+    assert payload["temperature"] == 0.0
+    assert payload["max_output_tokens"] == 1200
+    input_items = payload["input"]
+    assert isinstance(input_items, list)
+    assert input_items[0]["role"] == "user"
+    assert "OCI Generative AI" not in str(input_items)
+    assert "承認条件は？" in input_items[0]["content"]
+    assert "[policy.txt#doc-1:0]" in input_items[0]["content"]
 
 
 async def test_oci_generate_uses_configured_default_model() -> None:
@@ -392,6 +442,103 @@ async def test_oci_generate_accepts_inference_response_content_parts() -> None:
     answer = await client.generate("質問", "根拠")
 
     assert answer == "根拠1に基づく回答です。\n補足は根拠2です。"
+
+
+async def test_oci_generate_accepts_openai_responses_output_text() -> None:
+    """標準 OpenAI Responses object は top-level text ではなく output から本文を読む。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "id": "resp_test",
+            "object": "response",
+            "status": "completed",
+            "text": {"format": {"type": "text"}},
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Responses API 由来の回答です。",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    answer = await client.generate("質問", "根拠")
+
+    assert answer == "Responses API 由来の回答です。"
+
+
+async def test_oci_vlm_accepts_openai_responses_output_json() -> None:
+    """標準 Responses object の output_text JSON を StructuredExtraction として読む。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "id": "resp_vlm",
+            "object": "response",
+            "status": "completed",
+            "text": {"format": {"type": "json_schema"}},
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                '{"raw_text":"Responses OCR 本文",'
+                                '"document_type":"画像",'
+                                '"confidence":0.82,"warnings":[]}'
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    result = await client.extract_with_vlm(b"image", "OCR")
+
+    assert result["raw_text"] == "Responses OCR 本文"
+    assert result["document_type"] == "画像"
+
+
+async def test_oci_generate_reports_openai_responses_error_before_empty_text() -> None:
+    """Responses API の failed status/error は空 text ではなく実エラーとして返す。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "id": "resp_failed",
+            "object": "response",
+            "status": "failed",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Unsupported request field: parameters",
+            },
+            "output": [],
+            "text": {"format": {"type": "text"}},
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    with pytest.raises(ValueError, match="Unsupported request field"):
+        await client.generate("質問", "根拠")
+
+
+def test_oci_http_status_error_includes_response_body() -> None:
+    """HTTP 400 は OCI の response body を含む例外にする。"""
+    request = httpx.Request("POST", "https://enterprise-ai.example/responses")
+    response = httpx.Response(
+        400,
+        text='{"error":{"message":"image input must be uploaded with Files API"}}',
+        request=request,
+    )
+
+    with pytest.raises(httpx.HTTPStatusError, match="Files API"):
+        _raise_for_status_with_body(response, "OCI Enterprise AI endpoint")
 
 
 async def test_oci_generate_accepts_tool_call_answer_payload() -> None:
@@ -530,6 +677,8 @@ class FakeEnterpriseAiTransport:
     def __init__(self, response: Mapping[str, Any]) -> None:
         self._response = response
         self.calls: list[dict[str, Any]] = []
+        self.uploads: list[dict[str, Any]] = []
+        self.deletes: list[dict[str, Any]] = []
 
     async def post_json(
         self,
@@ -549,10 +698,43 @@ class FakeEnterpriseAiTransport:
         )
         return self._response
 
+    async def upload_file(
+        self,
+        url: str,
+        file_name: str,
+        content: bytes,
+        *,
+        mime_type: str,
+        purpose: str,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        self.uploads.append(
+            {
+                "url": url,
+                "file_name": file_name,
+                "content": content,
+                "mime_type": mime_type,
+                "purpose": purpose,
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        return {"id": "file-test"}
+
+    async def delete(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        self.deletes.append({"url": url, "headers": dict(headers), "timeout": timeout})
+        return {"id": "file-test", "deleted": True}
+
 
 def _oci_settings() -> Settings:
     return Settings.model_construct(
-        ai_service_adapter="oci",
         oci_region="ap-osaka-1",
         oci_compartment_id="ocid1.compartment.oc1..example",
         oci_enterprise_ai_endpoint="https://enterprise-ai.example",

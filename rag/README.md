@@ -53,7 +53,7 @@ docker compose up --build
 
 `evaluation/golden-set.example.json` は評価 API のテンプレートです。実データ投入後に `evaluation/golden-set.json` へコピーして document id と期待キーワードを調整し、CI / staging gate で使います。
 
-既定の `AI_SERVICE_ADAPTER=local` は deterministic なローカル実装です。OCI 接続なしで API・テスト・Docker Compose を動かせます。本番では `AI_SERVICE_ADAPTER=oci` とし、OCI Enterprise AI、OCI Generative AI、Oracle 26ai、Object Storage の adapter を使います。
+Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle 26ai を前提に動作します。開発・staging・本番のいずれも OCI / Oracle 接続情報を `.env` または設定画面から注入してください。
 
 ## ドキュメント
 

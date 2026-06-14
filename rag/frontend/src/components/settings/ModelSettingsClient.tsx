@@ -2,18 +2,14 @@
 
 import {
   AlertCircle,
-  ChevronDown,
   CheckCircle2,
   Cpu,
   Database,
   Eye,
   EyeOff,
   Plus,
-  RefreshCw,
-  RotateCcw,
   Save,
-  ShieldCheck,
-  SlidersHorizontal,
+  TestTube2,
   Trash2,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
@@ -21,9 +17,17 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
+import { Banner } from "@/components/ui/banner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import {
+  SETTINGS_DETAIL_GRID_CLASS,
+  SettingsSupplementalPanels,
+  formatSettingsEnvValue,
+  formatSettingsJson,
+} from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
   type EnterpriseAiConfiguredModel,
@@ -32,13 +36,17 @@ import {
   type ModelSettingsCheckStatus,
   type ModelSettingsData,
   type ModelSettingsPayload,
+  type ModelSettingsTestRequest,
+  type ModelSettingsTestResult,
+  type ModelSettingsTestTargetType,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
-import { useCheckModelSettings, useModelSettings, useUpdateModelSettings } from "@/lib/queries";
+import { useModelSettings, useTestModelSettings, useUpdateModelSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
 type CheckKey = keyof ModelSettingsData["checks"];
 type NoticeTone = "success" | "info" | "error";
+type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
 
 const CHECK_LABEL_KEYS: Record<CheckKey, I18nKey> = {
   enterprise_ai: "settings.model.status.enterprise",
@@ -71,12 +79,14 @@ const STATUS_LABEL_KEYS: Record<ModelSettingsCheckStatus, I18nKey> = {
 };
 
 const CHECK_KEYS: CheckKey[] = ["enterprise_ai", "generative_ai", "embedding_dim"];
+const DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json";
 
 /** モデル設定画面。既存 Settings のランタイム値を編集する。 */
 export function ModelSettingsClient() {
   const query = useModelSettings();
   const updateMutation = useUpdateModelSettings();
-  const checkMutation = useCheckModelSettings();
+  const testMutation = useTestModelSettings();
+  const confirm = useConfirm();
 
   const [draft, setDraft] = useState<ModelSettingsPayload | null>(null);
   const [baseline, setBaseline] = useState<ModelSettingsPayload | null>(null);
@@ -85,6 +95,8 @@ export function ModelSettingsClient() {
   const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
   const [errorText, setErrorText] = useState("");
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
+  const [testResults, setTestResults] = useState<Partial<Record<ModelTestKey, ModelSettingsTestResult>>>({});
 
   useEffect(() => {
     if (!query.data || draft) return;
@@ -105,11 +117,14 @@ export function ModelSettingsClient() {
   );
 
   const activeChecks = checkData?.checks ?? baselineData?.checks;
-  const canSubmit = Boolean(draft && validationMessages.length === 0);
-  const hasCustomPayloadTemplate = Boolean(
-    draft?.enterprise_ai.text_payload_template.trim() ||
-      draft?.enterprise_ai.vision_payload_template.trim()
-  );
+  const canSubmit = Boolean(draft);
+  const modelSettingsFile =
+    checkData?.model_settings_file ??
+    baselineData?.model_settings_file ??
+    query.data?.model_settings_file ??
+    DEFAULT_MODEL_SETTINGS_FILE;
+  const envPreview = buildModelEnvFile(modelSettingsFile);
+  const jsonPreview = draft ? buildModelSettingsJsonPreview(draft) : "";
 
   const updateEnterprise = <K extends keyof EnterpriseAiModelSettings>(
     key: K,
@@ -124,6 +139,7 @@ export function ModelSettingsClient() {
         : current
     );
     setCheckData(baselineData);
+    setTestResults({});
     setNotice(null);
     setErrorText("");
   };
@@ -141,6 +157,7 @@ export function ModelSettingsClient() {
         : current
     );
     setCheckData(baselineData);
+    setTestResults((current) => ({ ...current, embedding: undefined, rerank: undefined }));
     setNotice(null);
     setErrorText("");
   };
@@ -159,6 +176,7 @@ export function ModelSettingsClient() {
         : current
     );
     setCheckData(baselineData);
+    setTestResults({});
     setNotice(null);
     setErrorText("");
   };
@@ -191,6 +209,7 @@ export function ModelSettingsClient() {
       };
     });
     setCheckData(baselineData);
+    setTestResults((current) => ({ ...current, [`enterprise:${index}`]: undefined }));
     setNotice(null);
     setErrorText("");
   };
@@ -211,11 +230,22 @@ export function ModelSettingsClient() {
         : current
     );
     setCheckData(baselineData);
+    setTestResults({});
     setNotice(null);
     setErrorText("");
   };
 
-  const removeEnterpriseModel = (index: number) => {
+  const removeEnterpriseModel = async (index: number) => {
+    const target = draft?.enterprise_ai.models[index]?.model_id?.trim();
+    const ok = await confirm({
+      title: t("settings.model.enterprise.removeConfirm.title"),
+      description: target
+        ? t("settings.model.enterprise.removeConfirm.description", { model: target })
+        : t("settings.model.enterprise.removeConfirm.descriptionUnnamed"),
+      confirmLabel: t("common.delete"),
+      tone: "danger",
+    });
+    if (!ok) return;
     setDraft((current) => {
       if (!current) return current;
       const removedModelId = current.enterprise_ai.models[index]?.model_id ?? "";
@@ -234,34 +264,36 @@ export function ModelSettingsClient() {
       };
     });
     setCheckData(baselineData);
+    setTestResults({});
     setNotice(null);
     setErrorText("");
   };
 
-  const handleReset = () => {
-    if (!baseline) return;
-    setDraft(cloneSettings(baseline));
-    setCheckData(baselineData);
-    setNotice({ tone: "info", message: t("settings.model.resetDone") });
-    setErrorText("");
-  };
-
-  const handleCheck = async () => {
-    if (!draft || validationMessages.length > 0) return;
+  const handleTestModel = async (
+    key: ModelTestKey,
+    target: Omit<ModelSettingsTestRequest, "settings">
+  ) => {
+    if (!draft) return;
     setErrorText("");
     setNotice(null);
+    setTestingKey(key);
     try {
-      const data = await checkMutation.mutateAsync(draft);
-      setCheckData(data);
-      setNotice({ tone: "success", message: t("settings.model.checked") });
+      const result = await testMutation.mutateAsync({ ...target, settings: draft });
+      setTestResults((current) => ({ ...current, [key]: result }));
     } catch (error) {
-      setErrorText(error instanceof ApiError ? error.message : t("settings.model.loadError"));
+      const message = error instanceof ApiError ? error.message : t("settings.model.test.apiFailed");
+      setTestResults((current) => ({
+        ...current,
+        [key]: buildClientSideTestFailure(target, message),
+      }));
+    } finally {
+      setTestingKey(null);
     }
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!draft || validationMessages.length > 0) return;
+    if (!draft) return;
     setErrorText("");
     setNotice(null);
     try {
@@ -336,26 +368,14 @@ export function ModelSettingsClient() {
           ))}
         </section>
 
-        {notice ? <Notice tone={notice.tone} message={notice.message} /> : null}
-        {errorText ? <Notice tone="error" message={errorText} /> : null}
-
-        {validationMessages.length > 0 ? (
-          <div
-            role="alert"
-            className="rounded-lg border border-warning/30 bg-warning-bg/60 px-4 py-3 text-sm text-warning"
-          >
-            <div className="flex items-start gap-2">
-              <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden />
-              <ul className="space-y-1">
-                {validationMessages.map((message) => (
-                  <li key={message}>{message}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
+        {notice ? (
+          <Banner severity={notice.tone === "error" ? "danger" : notice.tone}>
+            {notice.message}
+          </Banner>
         ) : null}
+        {errorText ? <Banner severity="danger">{errorText}</Banner> : null}
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className={SETTINGS_DETAIL_GRID_CLASS}>
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -415,10 +435,13 @@ export function ModelSettingsClient() {
                 <ModelCatalogEditor
                   models={draft.enterprise_ai.models}
                   defaultModelId={draft.enterprise_ai.default_model_id}
+                  testingKey={testingKey}
+                  testResults={testResults}
                   onDefaultChange={(modelId) => updateEnterprise("default_model_id", modelId)}
                   onModelChange={updateEnterpriseModel}
                   onAdd={addEnterpriseModel}
                   onRemove={removeEnterpriseModel}
+                  onTest={(key, target) => void handleTestModel(key, target)}
                 />
                 <TextField
                   id="enterprise-api-path"
@@ -446,73 +469,6 @@ export function ModelSettingsClient() {
                   value={draft.enterprise_ai.max_retries}
                   onChange={(value) => updateEnterprise("max_retries", value)}
                 />
-                <div className="md:col-span-2">
-                  <details className="group rounded-md border border-dashed border-border bg-background/70">
-                    <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-4 py-3 outline-none transition-colors hover:bg-info-bg/30 focus-visible:ring-2 focus-visible:ring-primary [&::-webkit-details-marker]:hidden">
-                      <span className="flex min-w-0 items-start gap-3">
-                        <SlidersHorizontal
-                          size={16}
-                          className="mt-0.5 shrink-0 text-primary"
-                          aria-hidden
-                        />
-                        <span className="min-w-0">
-                          <span className="block text-sm font-semibold text-foreground">
-                            {t("settings.model.enterprise.advancedPayloadTitle")}
-                          </span>
-                          <span className="mt-1 block text-xs leading-relaxed text-muted">
-                            {t("settings.model.enterprise.advancedPayloadDescription")}
-                          </span>
-                        </span>
-                      </span>
-                      <span className="flex shrink-0 items-center gap-2">
-                        <span
-                          className={cn(
-                            "rounded-full px-2 py-0.5 text-[11px] font-medium",
-                            hasCustomPayloadTemplate
-                              ? "bg-warning-bg text-warning"
-                              : "bg-success-bg text-success"
-                          )}
-                        >
-                          {hasCustomPayloadTemplate
-                            ? t("settings.model.enterprise.advancedPayloadConfigured")
-                            : t("settings.model.enterprise.advancedPayloadStandard")}
-                        </span>
-                        <ChevronDown
-                          size={16}
-                          className="text-muted transition-transform group-open:rotate-180"
-                          aria-hidden
-                        />
-                      </span>
-                    </summary>
-                    <div className="border-t border-border px-4 pb-4 pt-4">
-                      <p className="mb-4 rounded-md bg-info-bg/50 px-3 py-2 text-xs leading-relaxed text-info">
-                        {t("settings.model.enterprise.advancedPayloadNotice")}
-                      </p>
-                      <div className="grid gap-5 md:grid-cols-2">
-                        <TextAreaField
-                          id="enterprise-text-payload-template"
-                          label={t("settings.model.enterprise.textPayloadTemplate")}
-                          value={draft.enterprise_ai.text_payload_template}
-                          placeholder={t("settings.model.placeholder.textPayloadTemplate")}
-                          helper={t("settings.model.enterprise.payloadTemplateHelp")}
-                          rows={6}
-                          onChange={(value) => updateEnterprise("text_payload_template", value)}
-                          className="md:col-span-2"
-                        />
-                        <TextAreaField
-                          id="enterprise-vision-payload-template"
-                          label={t("settings.model.enterprise.visionPayloadTemplate")}
-                          value={draft.enterprise_ai.vision_payload_template}
-                          placeholder={t("settings.model.placeholder.visionPayloadTemplate")}
-                          helper={t("settings.model.enterprise.payloadTemplateHelp")}
-                          rows={6}
-                          onChange={(value) => updateEnterprise("vision_payload_template", value)}
-                          className="md:col-span-2"
-                        />
-                      </div>
-                    </div>
-                  </details>
-                </div>
               </CardContent>
             </Card>
 
@@ -524,98 +480,110 @@ export function ModelSettingsClient() {
                 </CardTitle>
                 <CardDescription>{t("settings.model.genai.description")}</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-5 md:grid-cols-2">
-                <TextField
-                  id="genai-embedding-model"
-                  label={t("settings.model.genai.embeddingModel")}
-                  value={draft.generative_ai.embedding_model}
-                  placeholder={t("settings.model.placeholder.embeddingModel")}
-                  onChange={(value) => updateGenerative("embedding_model", value)}
-                />
-                <NumberField
-                  id="genai-embedding-dim"
-                  label={t("settings.model.genai.embeddingDim")}
-                  badge={t("settings.model.fixed")}
-                  value={draft.generative_ai.embedding_dim}
-                  min={1536}
-                  max={1536}
-                  step={1}
-                  readOnly
-                  helper={t("settings.model.genai.embeddingDimHelp")}
-                  onChange={(value) => updateGenerative("embedding_dim", value)}
-                />
-                <TextField
-                  id="genai-rerank-model"
-                  label={t("settings.model.genai.rerankModel")}
-                  value={draft.generative_ai.rerank_model}
-                  placeholder={t("settings.model.placeholder.rerankModel")}
-                  onChange={(value) => updateGenerative("rerank_model", value)}
-                  className="md:col-span-2"
+              <CardContent className="space-y-5">
+                <div className="grid gap-5 md:grid-cols-2">
+                  <TestableTextField
+                    id="genai-embedding-model"
+                    label={t("settings.model.genai.embeddingModel")}
+                    value={draft.generative_ai.embedding_model}
+                    placeholder={t("settings.model.placeholder.embeddingModel")}
+                    onChange={(value) => updateGenerative("embedding_model", value)}
+                    testResult={testResults.embedding}
+                    testing={testingKey === "embedding"}
+                    onTest={() =>
+                      void handleTestModel("embedding", {
+                        target_type: "embedding",
+                        model_id: draft.generative_ai.embedding_model,
+                        vision_enabled: false,
+                      })
+                    }
+                  />
+                  <NumberField
+                    id="genai-embedding-dim"
+                    label={t("settings.model.genai.embeddingDim")}
+                    badge={t("settings.model.fixed")}
+                    value={draft.generative_ai.embedding_dim}
+                    min={1536}
+                    max={1536}
+                    step={1}
+                    readOnly
+                    helper={t("settings.model.genai.embeddingDimHelp")}
+                    onChange={(value) => updateGenerative("embedding_dim", value)}
+                  />
+                  <TestableTextField
+                    id="genai-rerank-model"
+                    label={t("settings.model.genai.rerankModel")}
+                    value={draft.generative_ai.rerank_model}
+                    placeholder={t("settings.model.placeholder.rerankModel")}
+                    onChange={(value) => updateGenerative("rerank_model", value)}
+                    className="md:col-span-2"
+                    testResult={testResults.rerank}
+                    testing={testingKey === "rerank"}
+                    onTest={() =>
+                      void handleTestModel("rerank", {
+                        target_type: "rerank",
+                        model_id: draft.generative_ai.rerank_model,
+                        vision_enabled: false,
+                      })
+                    }
+                  />
+                </div>
+                <ModelFormActions
+                  canSubmit={canSubmit}
+                  saving={updateMutation.isPending}
                 />
               </CardContent>
             </Card>
           </div>
 
-          <aside className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <ShieldCheck size={16} className="text-primary" aria-hidden />
-                  {t("settings.model.ops.title")}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ul className="space-y-3 text-sm text-muted">
-                  <OperationNote>{t("settings.model.ops.enterpriseOnly")}</OperationNote>
-                  <OperationNote>{t("settings.model.ops.genaiOnly")}</OperationNote>
-                  <OperationNote>{t("settings.model.ops.vectorDim")}</OperationNote>
-                </ul>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <SlidersHorizontal size={16} className="text-primary" aria-hidden />
-                  {t("settings.model.status.title")}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <Button
-                  type="submit"
-                  className="w-full"
-                  disabled={!canSubmit}
-                  loading={updateMutation.isPending}
-                >
-                  <Save size={15} aria-hidden />
-                  {updateMutation.isPending ? t("settings.model.saving") : t("settings.model.save")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="w-full"
-                  disabled={!canSubmit}
-                  loading={checkMutation.isPending}
-                  onClick={() => void handleCheck()}
-                >
-                  <RefreshCw size={15} aria-hidden />
-                  {checkMutation.isPending ? t("settings.model.checking") : t("settings.model.check")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="w-full"
-                  disabled={!isDirty || updateMutation.isPending || checkMutation.isPending}
-                  onClick={handleReset}
-                >
-                  <RotateCcw size={15} aria-hidden />
-                  {t("settings.model.reset")}
-                </Button>
-              </CardContent>
-            </Card>
-          </aside>
+          <SettingsSupplementalPanels
+            env={{
+              description: t("settings.model.env.description"),
+              value: envPreview,
+            }}
+            json={{
+              description: t("settings.model.json.description"),
+              value: jsonPreview,
+            }}
+            operation={{
+              description: t("settings.model.ops.description"),
+              notes: [
+                t("settings.model.ops.nonBlockingSave"),
+                t("settings.model.ops.enterpriseOnly"),
+                t("settings.model.ops.genaiOnly"),
+                t("settings.model.ops.vectorDim"),
+              ],
+              warnings: validationMessages,
+            }}
+          />
         </div>
       </form>
+    </div>
+  );
+}
+
+function ModelFormActions({
+  canSubmit,
+  saving,
+}: {
+  canSubmit: boolean;
+  saving: boolean;
+}) {
+  const saveLabel = saving ? t("settings.model.saving") : t("settings.model.save");
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+      <Button
+        type="submit"
+        size="lg"
+        className="whitespace-nowrap"
+        aria-label={`${t("nav.settingsModel")}: ${saveLabel}`}
+        disabled={!canSubmit}
+        loading={saving}
+      >
+        {!saving ? <Save size={15} aria-hidden /> : null}
+        {saveLabel}
+      </Button>
     </div>
   );
 }
@@ -661,17 +629,26 @@ function CheckCard({ checkKey, status }: { checkKey: CheckKey; status: ModelSett
 function ModelCatalogEditor({
   models,
   defaultModelId,
+  testingKey,
+  testResults,
   onDefaultChange,
   onModelChange,
   onAdd,
   onRemove,
+  onTest,
 }: {
   models: EnterpriseAiConfiguredModel[];
   defaultModelId: string;
+  testingKey: ModelTestKey | null;
+  testResults: Partial<Record<ModelTestKey, ModelSettingsTestResult>>;
   onDefaultChange: (modelId: string) => void;
   onModelChange: (index: number, patch: Partial<EnterpriseAiConfiguredModel>) => void;
   onAdd: () => void;
   onRemove: (index: number) => void;
+  onTest: (
+    key: ModelTestKey,
+    target: Omit<ModelSettingsTestRequest, "settings">
+  ) => void;
 }) {
   return (
     <div className="space-y-3 md:col-span-2">
@@ -696,20 +673,25 @@ function ModelCatalogEditor({
         id="enterprise-model-catalog"
         className="overflow-hidden rounded-md border border-border bg-background"
       >
-        <div className="hidden border-b border-border bg-card px-3 py-2 text-xs font-medium text-muted md:grid md:grid-cols-[78px_minmax(0,1.2fr)_minmax(0,1fr)_96px_44px] md:gap-3">
+        <div className="hidden border-b border-border bg-card px-3 py-2 text-xs font-medium text-muted md:grid md:grid-cols-[64px_minmax(0,1.2fr)_minmax(0,1fr)_84px_96px_44px] md:gap-3">
           <span>{t("settings.model.enterprise.default")}</span>
           <span>{t("settings.model.enterprise.modelId")}</span>
           <span>{t("settings.model.enterprise.displayName")}</span>
           <span>{t("settings.model.enterprise.vision")}</span>
+          <span>{t("settings.model.test.action")}</span>
           <span aria-hidden />
         </div>
         {models.map((model, index) => {
           const modelNumber = index + 1;
           const trimmedModelId = model.model_id.trim();
+          const testKey: ModelTestKey = `enterprise:${index}`;
+          const targetType: ModelSettingsTestTargetType = model.vision_enabled
+            ? "enterprise_vision"
+            : "enterprise_text";
           return (
             <div
               key={index}
-              className="grid gap-3 border-b border-border p-3 last:border-b-0 md:grid-cols-[78px_minmax(0,1.2fr)_minmax(0,1fr)_96px_44px] md:items-start"
+              className="grid gap-3 border-b border-border p-3 last:border-b-0 md:grid-cols-[64px_minmax(0,1.2fr)_minmax(0,1fr)_84px_96px_44px] md:items-start"
             >
               <label className="flex min-h-10 items-center gap-2 text-sm text-foreground">
                 <input
@@ -745,6 +727,24 @@ function ModelCatalogEditor({
                   }
                 />
               </div>
+              <div className="flex min-h-10 items-center">
+                <span className="mr-2 text-xs font-medium text-muted md:sr-only">
+                  {t("settings.model.test.action")}
+                </span>
+                <TestButton
+                  modelId={trimmedModelId}
+                  fallbackLabel={`${t("settings.model.enterprise.modelId")} ${modelNumber}`}
+                  testing={testingKey === testKey}
+                  disabled={!trimmedModelId}
+                  onClick={() =>
+                    onTest(testKey, {
+                      target_type: targetType,
+                      model_id: model.model_id,
+                      vision_enabled: model.vision_enabled,
+                    })
+                  }
+                />
+              </div>
               <Button
                 type="button"
                 variant="ghost"
@@ -755,6 +755,10 @@ function ModelCatalogEditor({
               >
                 <Trash2 size={15} aria-hidden />
               </Button>
+              <ModelTestResultPanel
+                result={testResults[testKey]}
+                className="md:col-span-5 md:col-start-2"
+              />
             </div>
           );
         })}
@@ -786,6 +790,165 @@ function CompactTextInput({
         className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
       />
     </label>
+  );
+}
+
+function TestableTextField({
+  id,
+  label,
+  value,
+  placeholder,
+  helper,
+  badge,
+  className,
+  testResult,
+  testing,
+  onChange,
+  onTest,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  placeholder?: string;
+  helper?: string;
+  badge?: string;
+  className?: string;
+  testResult?: ModelSettingsTestResult;
+  testing: boolean;
+  onChange: (value: string) => void;
+  onTest: () => void;
+}) {
+  return (
+    <div className={cn("space-y-1.5", className)}>
+      <FieldLabel htmlFor={id} label={label} badge={badge} />
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <input
+          id={id}
+          type="text"
+          value={value}
+          placeholder={placeholder}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+        />
+        <TestButton
+          modelId={value.trim()}
+          fallbackLabel={label}
+          testing={testing}
+          disabled={!value.trim()}
+          onClick={onTest}
+        />
+      </div>
+      {helper ? <p className="text-xs leading-relaxed text-muted">{helper}</p> : null}
+      <ModelTestResultPanel result={testResult} />
+    </div>
+  );
+}
+
+function TestButton({
+  modelId,
+  fallbackLabel,
+  testing,
+  disabled,
+  onClick,
+}: {
+  modelId: string;
+  fallbackLabel: string;
+  testing: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  const label = testing ? t("settings.model.test.testing") : t("settings.model.test.action");
+  return (
+    <Button
+      type="button"
+      variant="secondary"
+      size="md"
+      className="w-full whitespace-nowrap md:w-auto"
+      aria-label={t("settings.model.test.aria", { model: modelId || fallbackLabel })}
+      disabled={disabled}
+      loading={testing}
+      onClick={onClick}
+    >
+      {!testing ? <TestTube2 size={15} aria-hidden /> : null}
+      {label}
+    </Button>
+  );
+}
+
+function ModelTestResultPanel({
+  result,
+  className,
+}: {
+  result?: ModelSettingsTestResult;
+  className?: string;
+}) {
+  if (!result) return null;
+  const isSuccess = result.status === "success";
+  const Icon = isSuccess ? CheckCircle2 : AlertCircle;
+  const detailEntries = Object.entries(result.details);
+
+  return (
+    <div
+      role={isSuccess ? "status" : "alert"}
+      className={cn(
+        "rounded-md border px-3 py-2.5 text-sm",
+        isSuccess ? "border-success/30 bg-success-bg" : "border-danger/30 bg-danger-bg",
+        className
+      )}
+    >
+      <div className="flex items-start gap-2.5">
+        <Icon
+          size={16}
+          className={cn("mt-0.5 shrink-0", isSuccess ? "text-success" : "text-danger")}
+          aria-hidden
+        />
+        <div className="min-w-0 flex-1 space-y-2">
+          <div>
+            <p className="font-medium text-foreground">{result.message}</p>
+            <p className="mt-0.5 text-xs text-muted">
+              {t("settings.model.test.elapsed")}: {result.elapsed_ms} ms
+            </p>
+          </div>
+          {detailEntries.length > 0 ? (
+            <dl className="grid gap-1 text-xs text-muted sm:grid-cols-2">
+              {detailEntries.map(([key, value]) => (
+                <div key={key} className="min-w-0">
+                  <dt className="font-medium text-foreground">{key}</dt>
+                  <dd className="break-words">{String(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {!isSuccess && result.troubleshooting.length > 0 ? (
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-foreground">
+                {t("settings.model.test.troubleshooting")}
+              </p>
+              <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-foreground/90">
+                {result.troubleshooting.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {!isSuccess ? (
+            <details className="text-xs text-foreground">
+              <summary className="cursor-pointer font-semibold">
+                {t("settings.model.test.rawError")}
+              </summary>
+              {result.error_type ? (
+                <p className="mt-1 text-muted">
+                  {t("settings.model.test.errorType")}: {result.error_type}
+                </p>
+              ) : null}
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-card p-2 text-[11px] leading-relaxed text-foreground">
+                {result.raw_error || t("settings.model.test.noDetails")}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -938,43 +1101,6 @@ function NumberField({
   );
 }
 
-function TextAreaField({
-  id,
-  label,
-  value,
-  placeholder,
-  helper,
-  badge,
-  className,
-  rows = 5,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  placeholder?: string;
-  helper?: string;
-  badge?: string;
-  className?: string;
-  rows?: number;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className={cn("space-y-1.5", className)}>
-      <FieldLabel htmlFor={id} label={label} badge={badge} />
-      <textarea
-        id={id}
-        value={value}
-        placeholder={placeholder}
-        rows={rows}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
-      />
-      {helper ? <p className="text-xs leading-relaxed text-muted">{helper}</p> : null}
-    </div>
-  );
-}
-
 function FieldLabel({
   htmlFor,
   label,
@@ -998,31 +1124,48 @@ function FieldLabel({
   );
 }
 
-function Notice({ tone, message }: { tone: NoticeTone; message: string }) {
-  const Icon = tone === "success" ? CheckCircle2 : tone === "info" ? ShieldCheck : AlertCircle;
-  return (
-    <div
-      role={tone === "error" ? "alert" : "status"}
-      className={cn(
-        "flex items-start gap-2 rounded-lg border px-4 py-3 text-sm",
-        tone === "success" && "border-success/30 bg-success-bg/50 text-success",
-        tone === "info" && "border-info/30 bg-info-bg/50 text-info",
-        tone === "error" && "border-danger/30 bg-danger-bg/50 text-danger"
-      )}
-    >
-      <Icon size={16} className="mt-0.5 shrink-0" aria-hidden />
-      <span>{message}</span>
-    </div>
-  );
+function buildModelEnvFile(modelSettingsFile: string): string {
+  return [
+    "# モデル設定",
+    `MODEL_SETTINGS_FILE=${formatSettingsEnvValue(modelSettingsFile)}`,
+  ].join("\n");
 }
 
-function OperationNote({ children }: { children: string }) {
-  return (
-    <li className="flex gap-2">
-      <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-success" aria-hidden />
-      <span className="leading-relaxed">{children}</span>
-    </li>
-  );
+function buildModelSettingsJsonPreview(draft: ModelSettingsPayload): string {
+  return formatSettingsJson({
+    version: 1,
+    enterprise_ai: {
+      endpoint: draft.enterprise_ai.endpoint,
+      project_ocid: draft.enterprise_ai.project_ocid,
+      api_key: modelApiKeyPreview(draft.enterprise_ai),
+      models: draft.enterprise_ai.models
+        .filter((model) => model.model_id.trim())
+        .map((model) => ({
+          model_id: model.model_id,
+          display_name: model.display_name,
+          vision_enabled: model.vision_enabled,
+        })),
+      default_model_id: draft.enterprise_ai.default_model_id,
+      api_path: draft.enterprise_ai.api_path,
+      text_payload_template: draft.enterprise_ai.text_payload_template,
+      vision_payload_template: draft.enterprise_ai.vision_payload_template,
+      text_response_path: draft.enterprise_ai.text_response_path,
+      vision_response_path: draft.enterprise_ai.vision_response_path,
+      timeout_seconds: draft.enterprise_ai.timeout_seconds,
+      max_retries: draft.enterprise_ai.max_retries,
+    },
+    generative_ai: {
+      embedding_model: draft.generative_ai.embedding_model,
+      embedding_dim: draft.generative_ai.embedding_dim,
+      rerank_model: draft.generative_ai.rerank_model,
+    },
+  });
+}
+
+function modelApiKeyPreview(settings: EnterpriseAiModelSettings): string {
+  if (settings.clear_api_key) return "";
+  if (settings.api_key.trim()) return t("settings.preview.secret.entered");
+  return settings.has_api_key ? t("settings.preview.secret.saved") : "";
 }
 
 function validateDraft(draft: ModelSettingsPayload): string[] {
@@ -1081,14 +1224,6 @@ function validateDraft(draft: ModelSettingsPayload): string[] {
   if (draft.generative_ai.embedding_dim !== 1536) {
     messages.push(t("settings.model.validation.embeddingDim"));
   }
-  for (const template of [
-    draft.enterprise_ai.text_payload_template,
-    draft.enterprise_ai.vision_payload_template,
-  ]) {
-    if (template.trim() && !isJsonObject(template)) {
-      messages.push(t("settings.model.validation.payloadTemplate"));
-    }
-  }
   return [...new Set(messages)];
 }
 
@@ -1100,13 +1235,22 @@ function isApiPath(value: string) {
   return value.startsWith("/") || isHttpUrl(value);
 }
 
-function isJsonObject(value: string) {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
-  } catch {
-    return false;
-  }
+function buildClientSideTestFailure(
+  target: Omit<ModelSettingsTestRequest, "settings">,
+  rawError: string
+): ModelSettingsTestResult {
+  return {
+    status: "failed",
+    target_type: target.target_type,
+    model_id: target.model_id,
+    message: t("settings.model.test.failed"),
+    troubleshooting: [t("settings.model.test.apiFailed")],
+    raw_error: rawError,
+    error_type: "ApiError",
+    elapsed_ms: 0,
+    checked_at: new Date().toISOString(),
+    details: {},
+  };
 }
 
 function cloneSettings(settings: ModelSettingsPayload): ModelSettingsPayload {

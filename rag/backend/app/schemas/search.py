@@ -77,7 +77,6 @@ class RetrievedChunk(BaseModel):
 class SearchDiagnostics(BaseModel):
     """検索実行時の非機密診断情報。"""
 
-    adapter: str = ""
     mode: str = ""
     top_k: int = 0
     rerank_top_n: int = 0

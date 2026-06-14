@@ -4,19 +4,25 @@ import {
   AlertCircle,
   CheckCircle2,
   Cloud,
-  Clipboard,
   HardDrive,
   RefreshCw,
   Save,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { FieldError } from "@/components/ui/field-error";
+import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  SETTINGS_DETAIL_GRID_CLASS,
+  SettingsSupplementalPanels,
+  formatSettingsEnvValue,
+} from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
   type UploadStorageBackend,
@@ -32,8 +38,6 @@ import {
 import { readStoredOciSettingsDraft } from "@/lib/oci-settings";
 import { cn } from "@/lib/utils";
 
-type CopyState = "idle" | "success" | "error";
-
 interface UploadStorageForm {
   backend: UploadStorageBackend;
   localStorageDir: string;
@@ -48,6 +52,7 @@ const EMPTY_FORM: UploadStorageForm = {
   objectStorageBucket: "",
 };
 
+const DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag";
 const OBJECT_STORAGE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /** ドキュメントアップロード原本の保存先設定。 */
@@ -58,7 +63,6 @@ export function UploadStorageSettingsClient() {
   const [objectStorageNamespace, setObjectStorageNamespace] = useState("");
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saved, setSaved] = useState(false);
-  const [copyState, setCopyState] = useState<CopyState>("idle");
 
   useEffect(() => {
     if (query.data) {
@@ -66,7 +70,6 @@ export function UploadStorageSettingsClient() {
       setObjectStorageNamespace(resolveObjectStorageNamespace(query.data));
       setErrors({});
       setSaved(false);
-      setCopyState("idle");
     }
   }, [query.data]);
 
@@ -81,15 +84,11 @@ export function UploadStorageSettingsClient() {
       return next;
     });
     setSaved(false);
-    setCopyState("idle");
     save.reset();
   }
 
   function submit() {
-    const validation = validateForm(form, objectStorageNamespace);
-    setErrors(validation);
-    if (Object.keys(validation).length > 0) return;
-
+    setErrors({});
     save.mutate(payloadFromForm(form, objectStorageNamespace), {
       onSuccess: (data) => {
         setForm(formFromSettings(data));
@@ -100,16 +99,10 @@ export function UploadStorageSettingsClient() {
     });
   }
 
-  async function copyEnv() {
-    try {
-      await navigator.clipboard.writeText(
-        buildUploadStorageEnvFile(form, objectStorageNamespace)
-      );
-      setCopyState("success");
-    } catch {
-      setCopyState("error");
-    }
-  }
+  const operationWarnings = useMemo(
+    () => Object.values(validateForm(form, objectStorageNamespace)),
+    [form, objectStorageNamespace]
+  );
 
   if (query.isPending) {
     return (
@@ -140,10 +133,11 @@ export function UploadStorageSettingsClient() {
 
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.uploadStorage.saveError");
+  const envPreview = buildUploadStorageEnvFile(form, objectStorageNamespace, settings);
 
   return (
     <div className="space-y-5 p-8">
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className={SETTINGS_DETAIL_GRID_CLASS}>
         <form
           className="space-y-5"
           onSubmit={(event) => {
@@ -203,7 +197,7 @@ export function UploadStorageSettingsClient() {
                   value={form.localStorageDir}
                   onChange={(value) => updateForm({ localStorageDir: value })}
                   helper={t("settings.uploadStorage.helper.localStorageDir")}
-                  placeholder="/tmp/production-ready-rag"
+                  placeholder={DEFAULT_LOCAL_STORAGE_DIR}
                   error={errors.localStorageDir}
                 />
               ) : (
@@ -217,11 +211,11 @@ export function UploadStorageSettingsClient() {
                     placeholder="rag-originals"
                     error={errors.objectStorageBucket}
                   />
-                  {errors.objectStorageNamespace ? (
-                    <p className="mt-2 text-xs text-danger" role="alert">
-                      {errors.objectStorageNamespace}
-                    </p>
-                  ) : null}
+                  <FieldError
+                    id="uploadStorage-objectStorageNamespace-error"
+                    className="mt-2"
+                    message={errors.objectStorageNamespace}
+                  />
                 </div>
               )}
             </CardContent>
@@ -247,27 +241,29 @@ export function UploadStorageSettingsClient() {
               {t("settings.uploadStorage.actions.reload")}
             </Button>
             {saved ? (
-              <p className="text-sm font-medium text-success" role="status">
-                {t("settings.uploadStorage.actions.saved")}
-              </p>
+              <FormStatus tone="success" message={t("settings.uploadStorage.actions.saved")} />
             ) : null}
-            {save.isError ? (
-              <p className="text-sm font-medium text-danger" role="alert">
-                {saveError}
-              </p>
-            ) : null}
+            {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
           </div>
         </form>
 
-        <aside className="space-y-5">
-          <StatusPanel settings={settings} />
-          <EnvPreviewPanel
-            envPreview={buildUploadStorageEnvFile(form, objectStorageNamespace)}
-            copyState={copyState}
-            onCopy={() => void copyEnv()}
-          />
-          <OperationPanel />
-        </aside>
+        <SettingsSupplementalPanels
+          status={<StatusPanel settings={settings} />}
+          env={{
+            description: t("settings.uploadStorage.env.description"),
+            value: envPreview,
+          }}
+          operation={{
+            description: t("settings.uploadStorage.ops.description"),
+            notes: [
+              t("settings.uploadStorage.ops.nonBlockingSave"),
+              t("settings.uploadStorage.ops.runtime"),
+              t("settings.uploadStorage.ops.local"),
+              t("settings.uploadStorage.ops.oci"),
+            ],
+            warnings: operationWarnings,
+          }}
+        />
       </div>
     </div>
   );
@@ -361,11 +357,7 @@ function TextField({
       <p id={hintId} className="text-xs leading-relaxed text-muted">
         {helper}
       </p>
-      {error ? (
-        <p id={errorId} className="text-xs text-danger" role="alert">
-          {error}
-        </p>
-      ) : null}
+      <FieldError id={errorId} message={error} />
     </div>
   );
 }
@@ -375,8 +367,8 @@ function StatusPanel({ settings }: { settings: UploadStorageSettingsData }) {
     <Card>
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-success-bg text-success">
-            <ShieldCheck size={20} aria-hidden />
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+            <ShieldCheck size={18} aria-hidden />
           </div>
           <div>
             <CardTitle>{t("settings.uploadStorage.status.title")}</CardTitle>
@@ -389,10 +381,6 @@ function StatusPanel({ settings }: { settings: UploadStorageSettingsData }) {
         <MetadataRow
           label={t("settings.uploadStorage.status.backend")}
           value={backendLabel(settings.backend)}
-        />
-        <MetadataRow
-          label={t("settings.uploadStorage.status.aiAdapter")}
-          value={settings.ai_service_adapter}
         />
         <MetadataRow
           label={t("settings.uploadStorage.status.source")}
@@ -414,74 +402,6 @@ function StatusPanel({ settings }: { settings: UploadStorageSettingsData }) {
               : "—"
           }
         />
-      </CardContent>
-    </Card>
-  );
-}
-
-function EnvPreviewPanel({
-  envPreview,
-  copyState,
-  onCopy,
-}: {
-  envPreview: string;
-  copyState: CopyState;
-  onCopy: () => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
-          <div className="min-w-0 space-y-1">
-            <CardTitle>{t("settings.uploadStorage.env.title")}</CardTitle>
-            <CardDescription className="leading-relaxed">
-              {t("settings.uploadStorage.env.description")}
-            </CardDescription>
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            className="min-h-10 w-full shrink-0 whitespace-nowrap sm:w-auto"
-            onClick={onCopy}
-          >
-            <Clipboard size={14} aria-hidden />
-            {copyState === "success"
-              ? t("settings.uploadStorage.env.copied")
-              : t("settings.uploadStorage.env.copy")}
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <textarea
-          readOnly
-          value={envPreview}
-          aria-label={t("settings.uploadStorage.env.title")}
-          className="h-40 w-full resize-none rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed text-foreground outline-none focus-visible:border-primary"
-        />
-        {copyState === "error" ? (
-          <p className="text-xs text-danger" role="alert">
-            {t("settings.uploadStorage.env.copyFailed")}
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function OperationPanel() {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("settings.uploadStorage.ops.title")}</CardTitle>
-        <CardDescription>{t("settings.uploadStorage.ops.description")}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ul className="space-y-2 text-sm leading-relaxed text-muted">
-          <li>{t("settings.uploadStorage.ops.runtime")}</li>
-          <li>{t("settings.uploadStorage.ops.local")}</li>
-          <li>{t("settings.uploadStorage.ops.oci")}</li>
-        </ul>
       </CardContent>
     </Card>
   );
@@ -543,26 +463,21 @@ function payloadFromForm(
 
 function buildUploadStorageEnvFile(
   form: UploadStorageForm,
-  objectStorageNamespace: string
+  objectStorageNamespace: string,
+  settings: UploadStorageSettingsData
 ): string {
   const entries: [string, string][] = [["UPLOAD_STORAGE_BACKEND", form.backend]];
   if (form.backend === "local") {
     entries.push(["LOCAL_STORAGE_DIR", form.localStorageDir]);
   } else {
+    entries.push(["OBJECT_STORAGE_REGION", settings.object_storage_region]);
     entries.push(["OBJECT_STORAGE_NAMESPACE", objectStorageNamespace]);
     entries.push(["OBJECT_STORAGE_BUCKET", form.objectStorageBucket]);
   }
   return [
     "# アップロード保存先",
-    ...entries.map(([key, value]) => `${key}=${formatEnvValue(value)}`),
+    ...entries.map(([key, value]) => `${key}=${formatSettingsEnvValue(value)}`),
   ].join("\n");
-}
-
-function formatEnvValue(value: string): string {
-  const normalized = value.trim();
-  if (!normalized) return "";
-  if (/[\s#"']/u.test(normalized)) return JSON.stringify(normalized);
-  return normalized;
 }
 
 function validateForm(

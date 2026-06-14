@@ -10,6 +10,8 @@ import {
 
 import { cn } from "@/lib/utils";
 
+import { FieldError } from "./field-error";
+
 export interface SelectFieldOption<T extends string = string> {
   value: T;
   label: string;
@@ -262,11 +264,7 @@ export function SelectField<T extends string>({
           {helper}
         </p>
       ) : null}
-      {error ? (
-        <p id={errorId} className="text-xs text-danger" role="alert">
-          {error}
-        </p>
-      ) : null}
+      <FieldError id={errorId} message={error} />
     </div>
   );
 }

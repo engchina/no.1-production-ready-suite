@@ -155,7 +155,6 @@ function dashboardSummary() {
     system: {
       status: "online",
       version: "0.1.0",
-      adapter: "local",
       searchable_rows: 8,
       checks: { local_storage: "ok" },
     },
