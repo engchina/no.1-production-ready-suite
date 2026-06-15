@@ -49,13 +49,161 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.listDocuments({ status: "UPLOADED", q: "invoice", limit: 20, offset: 40 });
+    await api.listDocuments({
+      status: "UPLOADED",
+      q: "invoice",
+      knowledge_base_id: "kb-1",
+      limit: 20,
+      offset: 40,
+    });
 
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain("status=UPLOADED");
     expect(url).toContain("q=invoice");
+    expect(url).toContain("knowledge_base_id=kb-1");
     expect(url).toContain("limit=20");
     expect(url).toContain("offset=40");
+  });
+
+  it("uploadDocument は knowledge_base_ids と ingestion_mode を multipart に含める", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          id: "doc-1",
+          file_name: "policy.txt",
+          status: "UPLOADED",
+          file_size_bytes: 4,
+          content_sha256: "a".repeat(64),
+          duplicate_of_document_id: null,
+          knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.uploadDocument(new File(["test"], "policy.txt"), ["kb-1", "kb-2"], "auto");
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/upload");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    const form = init.body as FormData;
+    expect(form.getAll("knowledge_base_ids")).toEqual(["kb-1", "kb-2"]);
+    expect(form.get("ingestion_mode")).toBe("auto");
+  });
+
+  it("knowledge base API は CRUD endpoint を呼び分ける", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          id: "kb-1",
+          name: "社内規程",
+          description: null,
+          status: "ACTIVE",
+          default_search_mode: "hybrid",
+          document_count: 0,
+          indexed_document_count: 0,
+          error_document_count: 0,
+          searchable_chunk_count: 0,
+          retrieval_config: {},
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          archived_at: null,
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.listKnowledgeBases({ status: "ACTIVE", q: "規程", limit: 20, offset: 0 });
+    await api.createKnowledgeBase({ name: "社内規程", description: null });
+    await api.archiveKnowledgeBase("kb-1");
+    await api.assignDocumentsToKnowledgeBase("kb-1", { document_ids: ["doc-1"] });
+    await api.removeDocumentFromKnowledgeBase("kb-1", "doc-1");
+
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/knowledge-bases?");
+    expect(fetchMock.mock.calls[0][0]).toContain("status=ACTIVE");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/knowledge-bases");
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/knowledge-bases/kb-1/archive");
+    expect(fetchMock.mock.calls[3][0]).toBe("/api/knowledge-bases/kb-1/documents");
+    expect(fetchMock.mock.calls[4][0]).toBe("/api/knowledge-bases/kb-1/documents/doc-1");
+  });
+
+  it("document knowledge base API は所属取得と置換 endpoint を呼ぶ", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [{ id: "kb-1", name: "社内規程" }],
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.listDocumentKnowledgeBases("doc-1");
+    await api.replaceDocumentKnowledgeBases("doc-1", {
+      knowledge_base_ids: ["kb-1", "kb-2"],
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/knowledge-bases");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc-1/knowledge-bases");
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      method: "PUT",
+      body: JSON.stringify({ knowledge_base_ids: ["kb-1", "kb-2"] }),
+    });
+  });
+
+  it("ingestion job API は status filter と queue 操作 endpoint を呼ぶ", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          id: "job-1",
+          document_id: "doc-1",
+          status: "QUEUED",
+          parser_profile: "enterprise_ai_text_structure",
+          quality_warnings: [],
+          skip_reason: null,
+          error_message: null,
+          attempt_count: 0,
+          max_attempts: 3,
+          queued_at: "2026-06-15T00:00:00Z",
+          started_at: null,
+          finished_at: null,
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.enqueueDocumentIngestionJob("doc-1", true);
+    await api.getIngestionJob("job-1");
+    await api.retryIngestionJob("job-1");
+    await api.drainIngestionJobs(25);
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: { items: [], total: 0, limit: 10, offset: 0, has_next: false },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    await api.listIngestionJobs({ status: "FAILED", limit: 10, offset: 20 });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/documents/doc-1/ingestion-jobs?force=true"
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/ingestion-jobs/job-1");
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/documents/ingestion-jobs/job-1/retry");
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/ingestion-jobs/drain?limit=25");
+    expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[4][0]).toContain("status=FAILED");
+    expect(fetchMock.mock.calls[4][0]).toContain("limit=10");
+    expect(fetchMock.mock.calls[4][0]).toContain("offset=20");
   });
 
   it("getReadiness は 503 の degraded envelope も data として返す", async () => {

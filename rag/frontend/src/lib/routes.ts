@@ -4,6 +4,7 @@ export const APP_ROUTES = {
   dashboard: "/dashboard",
   upload: "/upload",
   fileList: "/file-list",
+  knowledgeBases: "/knowledge-bases",
   documents: "/documents",
   search: "/search",
   evaluation: "/evaluation",

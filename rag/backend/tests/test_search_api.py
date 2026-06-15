@@ -88,6 +88,30 @@ def test_search_api_hashes_tenant_and_user_headers_into_audit(
     assert "user@example.com" not in str(audit_event)
 
 
+def test_search_api_records_knowledge_base_scope_in_audit(
+    monkeypatch: MonkeyPatch,
+    caplog: LogCaptureFixture,
+) -> None:
+    """検索 API の KB スコープは diagnostics と audit に残る。"""
+    monkeypatch.setattr(search_route, "RagPipeline", AuditingPipeline)
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = client.post(
+            "/api/search",
+            json={
+                "query": "存在しない社内規程",
+                "knowledge_base_ids": ["kb-1", "kb-2"],
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["diagnostics"]["knowledge_base_count"] == 2
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["knowledge_base_ids"] == ["kb-1", "kb-2"]
+
+
 def test_select_ai_api_returns_showsql_with_sanitized_query(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -187,6 +211,38 @@ def test_search_request_rejects_unknown_content_kind_filter() -> None:
     """未知の content_kind は空振りではなく 422 相当の検証エラーにする。"""
     with pytest.raises(ValidationError, match="未対応の内容種別フィルターです"):
         SearchRequest(query="料金表", filters={"content_kind": "chart"})
+
+
+def test_search_request_normalizes_knowledge_base_ids() -> None:
+    """knowledge_base_ids は重複排除され、既存 filters 経路にも同期される。"""
+    request = SearchRequest(
+        query="料金表",
+        knowledge_base_ids=[" kb-1 ", "kb-2", "kb-1"],
+    )
+
+    assert request.knowledge_base_ids == ["kb-1", "kb-2"]
+    assert request.filters["knowledge_base_id"] == "kb-1,kb-2"
+
+
+def test_search_request_accepts_legacy_knowledge_base_filter() -> None:
+    """既存 filters.knowledge_base_id 指定も新しい配列 field へ反映する。"""
+    request = SearchRequest(
+        query="料金表",
+        filters={"knowledge_base_id": "kb-1, kb-2"},
+    )
+
+    assert request.knowledge_base_ids == ["kb-1", "kb-2"]
+    assert request.filters["knowledge_base_id"] == "kb-1,kb-2"
+
+
+def test_search_request_rejects_conflicting_knowledge_base_scope() -> None:
+    """配列 field と legacy filter が食い違う場合は曖昧に検索しない。"""
+    with pytest.raises(ValidationError, match="knowledge_base_ids"):
+        SearchRequest(
+            query="料金表",
+            filters={"knowledge_base_id": "kb-1"},
+            knowledge_base_ids=["kb-2"],
+        )
 
 
 def _force_search_timeout(monkeypatch: MonkeyPatch) -> None:

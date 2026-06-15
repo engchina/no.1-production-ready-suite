@@ -3,6 +3,7 @@ import {
   FlaskConical,
   FileSearch,
   FileStack,
+  Library,
   Cloud,
   KeyRound,
   LayoutDashboard,
@@ -39,6 +40,7 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: Upload,
       },
       { href: APP_ROUTES.fileList, labelKey: "nav.fileList", icon: FileStack },
+      { href: APP_ROUTES.knowledgeBases, labelKey: "nav.knowledgeBases", icon: Library },
     ],
   },
   {

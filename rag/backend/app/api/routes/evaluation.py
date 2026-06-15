@@ -28,6 +28,7 @@ async def run_evaluation(
         rerank_top_n=request.rerank_top_n,
         mode=request.mode,
         filters=request.filters,
+        knowledge_base_ids=request.knowledge_base_ids,
         thresholds=request.thresholds,
         rag_overrides=request.rag_overrides,
     )

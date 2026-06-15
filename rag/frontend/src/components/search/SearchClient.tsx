@@ -4,6 +4,7 @@ import { DatabaseZap, Search as SearchIcon, SlidersHorizontal, Sparkles, X } fro
 import { type FormEvent, useRef, useState } from "react";
 
 import { CitationCard } from "./CitationCard";
+import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { PageHeader } from "@/components/PageHeader";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
@@ -62,9 +63,13 @@ export function SearchClient() {
   const [contentKind, setContentKind] = useState<ContentKindFilter>("");
   const [sectionTitle, setSectionTitle] = useState("");
   const [sectionPath, setSectionPath] = useState("");
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const hasFilters =
-    Boolean(contentKind) || Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
+    Boolean(contentKind) ||
+    Boolean(sectionTitle.trim()) ||
+    Boolean(sectionPath.trim()) ||
+    knowledgeBaseIds.length > 0;
 
   const submit = async () => {
     const trimmed = query.trim();
@@ -88,6 +93,7 @@ export function SearchClient() {
           mode,
           top_k: 20,
           rerank_top_n: 5,
+          ...(knowledgeBaseIds.length ? { knowledge_base_ids: knowledgeBaseIds } : {}),
           ...(Object.keys(filters).length ? { filters } : {}),
         },
         {
@@ -130,6 +136,7 @@ export function SearchClient() {
     setContentKind("");
     setSectionTitle("");
     setSectionPath("");
+    setKnowledgeBaseIds([]);
   };
 
   const noResults = phase === "done" && citations.length === 0;
@@ -189,6 +196,14 @@ export function SearchClient() {
                   {t("search.filters.title")}
                 </span>
               </legend>
+
+              <KnowledgeBaseScopePicker
+                selectedIds={knowledgeBaseIds}
+                onChange={setKnowledgeBaseIds}
+                disabled={isStreaming}
+                helper={t("search.filters.knowledgeBaseHelper")}
+                className="sm:col-span-4"
+              />
 
               <SelectField
                 id="search-content-kind"

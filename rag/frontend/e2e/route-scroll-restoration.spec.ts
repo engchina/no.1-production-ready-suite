@@ -76,7 +76,7 @@ test("sidebar route changes reset the main pane while browser back restores it",
   await page.goto("/settings/oci");
 
   const main = page.getByRole("main", { name: "メイン領域" });
-  await expect(page.getByRole("heading", { name: "OCI 認証設定" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "OCI 認証設定", level: 1 })).toBeVisible();
 
   const ociScrollTop = await main.evaluate((element) => {
     element.scrollTo({
@@ -95,13 +95,15 @@ test("sidebar route changes reset the main pane while browser back restores it",
     .click();
 
   await expect(page).toHaveURL(/\/settings\/upload-storage$/);
-  await expect(page.getByRole("heading", { name: "アップロード保存先" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "アップロード保存先", level: 1 })
+  ).toBeVisible();
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0);
 
   await page.goBack();
 
   await expect(page).toHaveURL(/\/settings\/oci$/);
-  await expect(page.getByRole("heading", { name: "OCI 認証設定" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "OCI 認証設定", level: 1 })).toBeVisible();
   await expect
     .poll(() => main.evaluate((element) => element.scrollTop))
     .toBeGreaterThanOrEqual(ociScrollTop - 1);

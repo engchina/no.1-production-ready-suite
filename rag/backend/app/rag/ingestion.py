@@ -1,15 +1,22 @@
 """取込: VLM 抽出 -> チャンク分割 -> 埋め込み -> Oracle 26ai へ索引。"""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from time import perf_counter
 
-from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+from app.clients.oci_enterprise_ai import (
+    EnterpriseAiIncompleteResponseError,
+    EnterpriseAiTimeoutError,
+    OciEnterpriseAiClient,
+)
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings, enterprise_ai_vision_model_id, get_settings
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction
+from app.rag.ingestion_quality import build_ingestion_quality_report
+from app.rag.ingestion_strategy import extraction_strategy_for_source
 from app.rag.observability import (
     TraceOutcome,
     elapsed_ms,
@@ -19,8 +26,9 @@ from app.rag.observability import (
     record_ingestion_stage,
     record_trace_span,
 )
-from app.schemas.document import DocumentDetail, FileStatus
-from app.schemas.extraction import StructuredExtraction
+from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
+from app.schemas.document import DocumentDetail, FileStatus, SourceProfile
+from app.schemas.extraction import DocumentElement, StructuredExtraction
 
 INGESTION_INTERNAL_ERROR_MESSAGE = "取込処理に失敗しました。時間をおいて再実行してください。"
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
@@ -56,6 +64,18 @@ class IngestionUserError(ValueError):
     safe_for_user = True
 
 
+class IngestionTimeoutError(IngestionUserError):
+    """上流 AI 処理の timeout により再実行または設定変更が必要な取込エラー。"""
+
+
+@dataclass(frozen=True)
+class _SegmentExtraction:
+    """PDF segment とその抽出結果。"""
+
+    segment: PdfPageSegment
+    extraction: StructuredExtraction
+
+
 class IngestionPipeline:
     """ドキュメント取込パイプライン。"""
 
@@ -78,25 +98,36 @@ class IngestionPipeline:
         prompt: str,
         *,
         content_type: str = "application/octet-stream",
+        source_profile: SourceProfile | None = None,
     ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う。"""
         started_at = now()
         trace_id = new_trace_id()
+        strategy = extraction_strategy_for_source(
+            source_profile=source_profile,
+            base_prompt=prompt,
+        )
         await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
         try:
-            extracted = await _observe_ingestion_stage(
-                trace_id,
-                "vlm_extraction",
-                self._vlm.extract_with_vlm(image_bytes, prompt, mime_type=content_type),
-                attributes={
-                    "model": enterprise_ai_vision_model_id(self._settings),
-                    "source_bytes": len(image_bytes),
-                    "content_type": _observability_content_type(content_type),
-                    "prompt_chars": len(prompt),
-                },
-                result_attributes=_vlm_result_attributes,
-            )
+            try:
+                extracted = await self._extract_with_vlm(
+                    trace_id=trace_id,
+                    source_bytes=image_bytes,
+                    prompt=strategy.prompt,
+                    content_type=content_type,
+                    parser_profile=strategy.parser_profile,
+                )
+            except EnterpriseAiTimeoutError as exc:
+                raise IngestionTimeoutError(str(exc)) from exc
+            except EnterpriseAiIncompleteResponseError as exc:
+                raise IngestionUserError(str(exc)) from exc
             extraction = StructuredExtraction.model_validate(extracted)
+            quality_report = build_ingestion_quality_report(
+                extraction,
+                source_profile=source_profile,
+                parser_profile=strategy.parser_profile,
+            )
+            extraction = extraction.model_copy(update={"quality_report": quality_report})
             text = _text_for_chunking(extraction)
             if not text:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
@@ -113,6 +144,8 @@ class IngestionPipeline:
                     "chunk_size": self._settings.rag_chunk_size,
                     "chunk_overlap": self._settings.rag_chunk_overlap,
                     "input_chars": len(text),
+                    "parser_profile": strategy.parser_profile,
+                    "quality_risk_level": quality_report.risk_level,
                     **_extraction_structure_attributes(extraction),
                 },
                 result_attributes=lambda result: {"chunk_count": len(result)},
@@ -174,6 +207,142 @@ class IngestionPipeline:
             )
             raise
 
+    async def _extract_with_vlm(
+        self,
+        *,
+        trace_id: str,
+        source_bytes: bytes,
+        prompt: str,
+        content_type: str,
+        parser_profile: str,
+    ) -> dict[str, object]:
+        """必要なら PDF を segment に分けて VLM 抽出する。"""
+        segments = _pdf_segments_for_ingestion(
+            source_bytes,
+            content_type=content_type,
+            max_pages_per_segment=self._settings.rag_pdf_max_pages_per_segment,
+            max_segments=self._settings.rag_pdf_max_segments,
+            enabled=self._settings.rag_pdf_segmentation_enabled,
+        )
+        if not segments or (len(segments) == 1 and segments[0].page_count <= 1):
+            return await self._extract_single_vlm_input(
+                trace_id=trace_id,
+                source_bytes=source_bytes,
+                prompt=prompt,
+                content_type=content_type,
+                parser_profile=parser_profile,
+                stage="vlm_extraction",
+                extra_attributes={"pdf_segmented": False},
+            )
+
+        segment_extractions: list[_SegmentExtraction] = []
+        for segment in segments:
+            segment_extractions.extend(
+                await self._extract_pdf_segment(
+                    trace_id=trace_id,
+                    segment=segment,
+                    prompt=prompt,
+                    parser_profile=parser_profile,
+                    original_source_bytes=len(source_bytes),
+                    segment_total=len(segments),
+                )
+            )
+        return _merge_pdf_segment_extractions(segment_extractions).to_document_payload()
+
+    async def _extract_pdf_segment(
+        self,
+        *,
+        trace_id: str,
+        segment: PdfPageSegment,
+        prompt: str,
+        parser_profile: str,
+        original_source_bytes: int,
+        segment_total: int,
+    ) -> list[_SegmentExtraction]:
+        """PDF segment を抽出し、出力上限に当たった場合は単ページへ分割して再試行する。"""
+        segment_prompt = _pdf_segment_prompt(prompt, segment)
+        try:
+            extracted = await self._extract_single_vlm_input(
+                trace_id=trace_id,
+                source_bytes=segment.content,
+                prompt=segment_prompt,
+                content_type="application/pdf",
+                parser_profile=parser_profile,
+                stage="vlm_extraction",
+                extra_attributes={
+                    "pdf_segmented": True,
+                    "pdf_segment_index": segment.index,
+                    "pdf_segment_total": segment_total,
+                    "pdf_page_start": segment.page_start,
+                    "pdf_page_end": segment.page_end,
+                    "pdf_page_count": segment.page_count,
+                    "source_bytes": original_source_bytes,
+                    "segment_bytes": len(segment.content),
+                },
+            )
+            return [
+                _SegmentExtraction(
+                    segment=segment,
+                    extraction=StructuredExtraction.model_validate(extracted),
+                )
+            ]
+        except EnterpriseAiIncompleteResponseError:
+            if segment.page_count <= 1:
+                raise
+            page_segments = split_pdf_page_segments(
+                segment.content,
+                max_pages_per_segment=1,
+                page_number_offset=segment.page_start - 1,
+            )
+            if len(page_segments) <= 1:
+                raise
+            results: list[_SegmentExtraction] = []
+            for page_segment in page_segments:
+                results.extend(
+                    await self._extract_pdf_segment(
+                        trace_id=trace_id,
+                        segment=page_segment,
+                        prompt=prompt,
+                        parser_profile=parser_profile,
+                        original_source_bytes=original_source_bytes,
+                        segment_total=segment_total,
+                    )
+                )
+            return results
+
+    async def _extract_single_vlm_input(
+        self,
+        *,
+        trace_id: str,
+        source_bytes: bytes,
+        prompt: str,
+        content_type: str,
+        parser_profile: str,
+        stage: str,
+        extra_attributes: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """単一入力を VLM に渡し、trace span を記録する。"""
+        attributes = {
+            "model": enterprise_ai_vision_model_id(self._settings),
+            "source_bytes": len(source_bytes),
+            "content_type": _observability_content_type(content_type),
+            "parser_profile": parser_profile,
+            "prompt_chars": len(prompt),
+        }
+        attributes.update(extra_attributes or {})
+        return await _observe_ingestion_stage(
+            trace_id,
+            stage,
+            self._vlm.extract_with_vlm(
+                source_bytes,
+                prompt,
+                mime_type=content_type,
+                parser_profile=parser_profile,
+            ),
+            attributes=attributes,
+            result_attributes=_vlm_result_attributes,
+        )
+
     async def _save_index(
         self,
         document_id: str,
@@ -196,6 +365,132 @@ def _safe_persistent_error_message(error: Exception) -> str:
 def _text_for_chunking(extraction: StructuredExtraction) -> str:
     """抽出結果から索引用テキストを作る。"""
     return extraction.raw_text.strip()
+
+
+def _pdf_segments_for_ingestion(
+    source_bytes: bytes,
+    *,
+    content_type: str,
+    max_pages_per_segment: int,
+    max_segments: int,
+    enabled: bool,
+) -> list[PdfPageSegment]:
+    """取込対象 PDF を segment 化する。PDF でなければ空 list。"""
+    if not enabled or _observability_content_type(content_type) != "application/pdf":
+        return []
+    segments = split_pdf_page_segments(
+        source_bytes,
+        max_pages_per_segment=max_pages_per_segment,
+    )
+    if len(segments) > max_segments:
+        raise IngestionUserError(
+            "PDF のページ分割数が上限を超えています。"
+            f"max_segments={max_segments}, actual={len(segments)}"
+        )
+    return segments
+
+
+def _pdf_segment_prompt(prompt: str, segment: PdfPageSegment) -> str:
+    """元 PDF 上の page range を VLM へ明示する。"""
+    if segment.page_start == segment.page_end:
+        page_range = f"{segment.page_start}"
+    else:
+        page_range = f"{segment.page_start}-{segment.page_end}"
+    return (
+        f"{prompt}\n\n"
+        "PDF 分割抽出指示:\n"
+        f"- この入力は元 PDF の page {page_range} だけを含みます。\n"
+        "- page_number を出力する場合は、分割後 PDF 内の番号ではなく"
+        "元 PDF のページ番号で返してください。\n"
+        "- raw_text には読み順の本文だけを入れ、前後の別ページを推測しないでください。"
+    )
+
+
+def _merge_pdf_segment_extractions(
+    segment_extractions: Sequence[_SegmentExtraction],
+) -> StructuredExtraction:
+    """複数 PDF segment の抽出結果を 1 つの StructuredExtraction へ統合する。"""
+    if not segment_extractions:
+        return StructuredExtraction()
+
+    raw_parts: list[str] = []
+    elements: list[DocumentElement] = []
+    warnings: list[str] = ["pdf_segmented_extraction"]
+    confidence_values: list[float] = []
+    document_type = "ドキュメント"
+    next_order = 0
+
+    for segment_extraction in segment_extractions:
+        segment = segment_extraction.segment
+        extraction = segment_extraction.extraction
+        if extraction.document_type and extraction.document_type != "ドキュメント":
+            document_type = extraction.document_type
+        confidence_values.append(extraction.confidence)
+        warnings.extend(extraction.warnings)
+        text = extraction.raw_text.strip()
+        if text:
+            raw_parts.append(f"{_page_marker(segment)}\n{text}")
+        for element in extraction.elements:
+            adjusted = _element_with_absolute_page(element, segment, order=next_order)
+            elements.append(adjusted)
+            next_order += 1
+
+    confidence = (
+        sum(confidence_values) / len(confidence_values)
+        if confidence_values
+        else 0.0
+    )
+    return StructuredExtraction(
+        raw_text="\n\n".join(raw_parts),
+        document_type=document_type,
+        confidence=confidence,
+        warnings=_dedupe_text(warnings),
+        elements=elements,
+    )
+
+
+def _page_marker(segment: PdfPageSegment) -> str:
+    """raw_text に入れる page marker。infer_document_elements が解釈できる形にする。"""
+    return f"--- page {segment.page_start} ---"
+
+
+def _element_with_absolute_page(
+    element: DocumentElement,
+    segment: PdfPageSegment,
+    *,
+    order: int,
+) -> DocumentElement:
+    """segment 内 page_number を元 PDF の絶対ページ番号へ寄せる。"""
+    return element.model_copy(
+        update={
+            "order": order,
+            "page_number": _absolute_page_number(element.page_number, segment),
+        }
+    )
+
+
+def _absolute_page_number(page_number: int | None, segment: PdfPageSegment) -> int:
+    """VLM が返す local/absolute page_number を元 PDF ページ番号へ正規化する。"""
+    if page_number is None:
+        return segment.page_start
+    if segment.page_start <= page_number <= segment.page_end:
+        return page_number
+    if 1 <= page_number <= segment.page_count:
+        return segment.page_start + page_number - 1
+    return page_number
+
+
+def _dedupe_text(values: Sequence[str]) -> list[str]:
+    """空文字を落として順序を保ったまま重複排除する。"""
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
 
 
 async def _observe_ingestion_stage[T](

@@ -12,6 +12,7 @@ TENANT_ID_HEADER = "x-tenant-id"
 USER_ID_HEADER = "x-user-id"
 ALLOWED_DOCUMENT_IDS_HEADER = "x-rag-allowed-document-ids"
 ALLOWED_CATEGORY_NAMES_HEADER = "x-rag-allowed-category-names"
+ALLOWED_KNOWLEDGE_BASE_IDS_HEADER = "x-rag-allowed-knowledge-base-ids"
 MAX_CONTEXT_VALUE_CHARS = 256
 MAX_ACCESS_SCOPE_VALUES = 200
 DOCUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -26,6 +27,7 @@ class AuditRequestContext:
     user_id_hash: str | None = None
     allowed_document_ids: frozenset[str] | None = field(default=None, repr=False)
     allowed_category_names: frozenset[str] | None = field(default=None, repr=False)
+    allowed_knowledge_base_ids: frozenset[str] | None = field(default=None, repr=False)
 
 
 _AUDIT_REQUEST_CONTEXT: ContextVar[AuditRequestContext | None] = ContextVar(
@@ -53,6 +55,10 @@ def audit_request_context_from_headers(
         allowed_category_names=_access_scope_values(
             headers.get(ALLOWED_CATEGORY_NAMES_HEADER),
             normalizer=_normalize_category_name,
+        ),
+        allowed_knowledge_base_ids=_access_scope_values(
+            headers.get(ALLOWED_KNOWLEDGE_BASE_IDS_HEADER),
+            normalizer=_normalize_knowledge_base_id,
         ),
     )
 
@@ -113,6 +119,13 @@ def _access_scope_values(
 
 
 def _normalize_document_id(value: str) -> str | None:
+    normalized = _normalize_context_value(value)
+    if normalized is None or not DOCUMENT_ID_PATTERN.fullmatch(normalized):
+        return None
+    return normalized
+
+
+def _normalize_knowledge_base_id(value: str) -> str | None:
     normalized = _normalize_context_value(value)
     if normalized is None or not DOCUMENT_ID_PATTERN.fullmatch(normalized):
         return None

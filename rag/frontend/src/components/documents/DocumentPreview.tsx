@@ -4,6 +4,7 @@ import { FileQuestion } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
+import { charsetFromContentType, decodeText } from "@/lib/text-decode";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type Kind = "image" | "pdf" | "text" | "other";
@@ -68,9 +69,10 @@ function TextPreview({ url }: { url: string }) {
     setText(null);
     setError(false);
     fetch(url, { signal: controller.signal })
-      .then((res) => {
+      .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
-        return res.text();
+        const charset = charsetFromContentType(res.headers.get("Content-Type"));
+        return decodeText(await res.arrayBuffer(), charset);
       })
       .then(setText)
       .catch((e: unknown) => {

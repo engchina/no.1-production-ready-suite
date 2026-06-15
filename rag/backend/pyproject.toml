@@ -19,6 +19,8 @@ dependencies = [
     "oracledb>=3.4",
     "python-json-logger>=4.0",
     "prometheus-client>=0.24",
+    "charset-normalizer>=3.4,<4",
+    "pypdf>=6.4,<7",
 ]
 
 [dependency-groups]

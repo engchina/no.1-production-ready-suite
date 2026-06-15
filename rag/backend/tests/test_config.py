@@ -59,6 +59,41 @@ def test_enterprise_ai_max_retries_defaults_to_three_and_is_bounded() -> None:
         Settings(oci_enterprise_ai_max_retries=6)
 
 
+def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:
+    """PDF/VLM 取込は 60 秒を超えることがあるため既定 timeout を長めにする。"""
+    assert Settings().oci_enterprise_ai_timeout_seconds == 600.0
+
+    with pytest.raises(ValidationError):
+        Settings(oci_enterprise_ai_timeout_seconds=0)
+
+
+def test_enterprise_ai_output_token_limits_are_bounded() -> None:
+    """VLM は大きめ、LLM は短めの既定出力上限を持つ。"""
+    settings = Settings()
+
+    assert settings.oci_enterprise_ai_llm_max_output_tokens == 1200
+    assert settings.oci_enterprise_ai_vlm_max_output_tokens == 65536
+
+    with pytest.raises(ValidationError):
+        Settings(oci_enterprise_ai_vlm_max_output_tokens=0)
+    with pytest.raises(ValidationError):
+        Settings(oci_enterprise_ai_vlm_max_output_tokens=65537)
+
+
+def test_pdf_segmentation_defaults_are_bounded() -> None:
+    """大 PDF は VLM 前に小さな page segment へ分割する。"""
+    settings = Settings()
+
+    assert settings.rag_pdf_segmentation_enabled is True
+    assert settings.rag_pdf_max_pages_per_segment == 3
+    assert settings.rag_pdf_max_segments == 300
+
+    with pytest.raises(ValidationError):
+        Settings(rag_pdf_max_pages_per_segment=0)
+    with pytest.raises(ValidationError):
+        Settings(rag_pdf_max_segments=0)
+
+
 def test_enterprise_ai_response_paths_default_to_auto_detection() -> None:
     """Enterprise AI response path は既定で空にし、既知 envelope 自動判定を使う。"""
     settings = Settings()

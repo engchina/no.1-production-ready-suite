@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
+from charset_normalizer import from_bytes
 
 from app.config import (
     Settings,
@@ -29,6 +30,18 @@ DEFAULT_VLM_PATH = "/responses"
 DEFAULT_MIME_TYPE = "application/octet-stream"
 JSON_HEADERS = {"accept": "application/json", "content-type": "application/json"}
 IMAGE_MIME_TYPES = frozenset({"image/gif", "image/jpeg", "image/jpg", "image/png", "image/webp"})
+# 既にテキストの文書は OCR(VLM)不要。バイト列を直接本文として扱う。
+TEXT_MIME_TYPES = frozenset(
+    {
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "text/tab-separated-values",
+    }
+)
+# 日本語テキストでよく使われる encoding を順に試す。
+# UTF-8(BOM 付き含む)を最優先で試す。それ以外は charset 検出に委ねる。
+TEXT_DECODE_ENCODINGS = ("utf-8-sig", "utf-8")
 FILE_EXTENSION_BY_MIME_TYPE = {
     "application/pdf": ".pdf",
     "image/gif": ".gif",
@@ -70,10 +83,20 @@ LLM_SYSTEM_PROMPT = (
 )
 STRUCTURED_EXTRACTION_INSTRUCTIONS = (
     "文書を日本語優先で OCR し、raw_text に読み順の本文全体を入れてください。"
-    "elements にはページ順・読み順で title/text/list/table/figure/header/footer 等の"
-    "構造要素を返し、"
-    "表は table として他要素から分離してください。"
-    "page_number、section_path、confidence、bbox が分かる場合は付与してください。"
+    "ページ境界が分かる場合は raw_text に「--- page N ---」形式の行を入れてください。"
+    "raw_text を最優先し、本文段落を elements に重複出力しないでください。"
+    "elements は任意で、見出し・表・図キャプションなど検索補助に必要な"
+    "短い要素だけをページ順・読み順で返してください。"
+    "bbox、polygon、座標、低レベル metadata は出力しないでください。"
+    "page_number と section_path だけを必要最小限で付与してください。"
+)
+STRUCTURED_EXTRACTION_JSON_CONTRACT = (
+    "出力は説明文なしの JSON object のみ返してください。"
+    "必須キー: raw_text。任意キー: document_type, confidence, warnings, elements。"
+    "confidence は 0.0 から 1.0 の数値、warnings は文字列配列、"
+    "elements は kind, text, order, page_number, section_path を持つ object 配列です。"
+    "elements.kind は title, list, table, figure, figure_caption, header, footer, other "
+    "のいずれかにしてください。"
 )
 
 
@@ -113,6 +136,28 @@ class EnterpriseAiHttpTransport(Protocol):
         """Enterprise AI endpoint の resource を削除し、JSON object response を返す。"""
 
 
+class EnterpriseAiTimeoutError(TimeoutError):
+    """OCI Enterprise AI 呼び出しの timeout を利用者向けに正規化したエラー。"""
+
+    def __init__(self, operation: str, timeout_seconds: float) -> None:
+        self.operation = operation
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            f"{operation} の応答待ちが {timeout_seconds:g} 秒を超えてタイムアウトしました。"
+            "モデル設定の timeout_seconds を増やすか、PDF のページ数/サイズを減らして"
+            "再実行してください。"
+        )
+
+
+class EnterpriseAiIncompleteResponseError(ValueError):
+    """OCI Enterprise AI が不完全な response を返したことを表すエラー。"""
+
+    safe_for_user = True
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class EnterpriseAiRequestPreview:
     """Enterprise AI request の非機密プレビュー。"""
@@ -145,9 +190,37 @@ class OciEnterpriseAiClient:
         prompt: str,
         *,
         mime_type: str = DEFAULT_MIME_TYPE,
+        parser_profile: str = "enterprise_ai_generic",
     ) -> dict[str, object]:
-        """VLM で画像から構造化データを抽出する（OCR）。"""
-        return await self._extract_with_enterprise_ai(image_bytes, prompt, mime_type=mime_type)
+        """VLM で画像から構造化データを抽出する（OCR）。
+
+        既にテキストの文書（text/plain 等）は OCR せず、バイト列を直接デコードして
+        構造化抽出にする。VLM へ送ると無駄な推論・タイムアウトの原因になるため。
+        """
+        if _normalized_mime_type(mime_type) in TEXT_MIME_TYPES:
+            return _extract_from_plain_text(image_bytes)
+        return await self._extract_with_enterprise_ai(
+            image_bytes,
+            prompt,
+            mime_type=mime_type,
+            parser_profile=parser_profile,
+        )
+
+    async def extract_with_vlm_endpoint(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = DEFAULT_MIME_TYPE,
+        parser_profile: str = "enterprise_ai_generic",
+    ) -> dict[str, object]:
+        """VLM endpoint 契約確認用に text/plain 最適化を通さず抽出する。"""
+        return await self._extract_with_enterprise_ai(
+            image_bytes,
+            prompt,
+            mime_type=mime_type,
+            parser_profile=parser_profile,
+        )
 
     async def generate(self, prompt: str, context: str) -> str:
         """LLM で回答を生成する。"""
@@ -221,6 +294,7 @@ class OciEnterpriseAiClient:
         prompt: str,
         *,
         mime_type: str,
+        parser_profile: str,
     ) -> dict[str, object]:
         """OCI Enterprise AI VLM endpoint を呼び出し、構造化抽出を検証する。"""
         uploaded_file_id = ""
@@ -237,6 +311,7 @@ class OciEnterpriseAiClient:
                 prompt,
                 mime_type=mime_type,
                 file_id=uploaded_file_id,
+                parser_profile=parser_profile,
             )
             response = await self._post_enterprise_ai(
                 self._settings.oci_enterprise_ai_vlm_path,
@@ -263,15 +338,19 @@ class OciEnterpriseAiClient:
             "OCI Enterprise AI endpoint",
         )
         normalized_mime_type = _normalized_mime_type(mime_type)
-        response = await self._http_transport.upload_file(
-            _join_endpoint_path(endpoint, "/files"),
-            _uploaded_file_name(normalized_mime_type),
-            image_bytes,
-            mime_type=normalized_mime_type,
-            purpose=_upload_file_purpose(normalized_mime_type),
-            headers=_enterprise_ai_headers(self._settings, json_content_type=False),
-            timeout=self._settings.oci_enterprise_ai_timeout_seconds,
-        )
+        timeout = self._settings.oci_enterprise_ai_timeout_seconds
+        try:
+            response = await self._http_transport.upload_file(
+                _join_endpoint_path(endpoint, "/files"),
+                _uploaded_file_name(normalized_mime_type),
+                image_bytes,
+                mime_type=normalized_mime_type,
+                purpose=_upload_file_purpose(normalized_mime_type),
+                headers=_enterprise_ai_headers(self._settings, json_content_type=False),
+                timeout=timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise EnterpriseAiTimeoutError("OCI Enterprise AI Files API", timeout) from exc
         return _uploaded_file_id(response)
 
     async def _delete_uploaded_file(self, file_id: str) -> None:
@@ -312,12 +391,16 @@ class OciEnterpriseAiClient:
             "OCI Enterprise AI endpoint",
         )
         url = _join_endpoint_path(endpoint, path)
-        return await self._http_transport.post_json(
-            url,
-            payload,
-            headers=_enterprise_ai_headers(self._settings),
-            timeout=self._settings.oci_enterprise_ai_timeout_seconds,
-        )
+        timeout = self._settings.oci_enterprise_ai_timeout_seconds
+        try:
+            return await self._http_transport.post_json(
+                url,
+                payload,
+                headers=_enterprise_ai_headers(self._settings),
+                timeout=timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise EnterpriseAiTimeoutError("OCI Enterprise AI endpoint", timeout) from exc
 
 
 class _DefaultEnterpriseAiTransport:
@@ -400,6 +483,65 @@ def _rag_user_message(prompt: str, context: str) -> str:
     )
 
 
+def _llm_max_output_tokens(settings: Settings) -> int:
+    """RAG 回答生成の出力 token 上限を返す。"""
+    return int(getattr(settings, "oci_enterprise_ai_llm_max_output_tokens", 1200))
+
+
+def _vlm_max_output_tokens(settings: Settings) -> int:
+    """OCR/構造化抽出の出力 token 上限を返す。"""
+    return int(getattr(settings, "oci_enterprise_ai_vlm_max_output_tokens", 65536))
+
+
+def _vlm_structured_extraction_schema() -> dict[str, Any]:
+    """VLM に渡す token 節約版 StructuredExtraction schema。"""
+    element_schema: dict[str, Any] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": [
+                    "title",
+                    "list",
+                    "table",
+                    "figure",
+                    "figure_caption",
+                    "header",
+                    "footer",
+                    "other",
+                ],
+            },
+            "text": {"type": "string", "maxLength": 4000},
+            "order": {"type": "integer", "minimum": 0},
+            "page_number": {"type": ["integer", "null"], "minimum": 1},
+            "section_path": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": 80},
+                "maxItems": 8,
+            },
+        },
+        "required": ["kind", "text"],
+    }
+    return {
+        "title": "StructuredExtraction",
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "raw_text": {"type": "string"},
+            "document_type": {"type": "string", "default": "ドキュメント"},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.0},
+            "warnings": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": 200},
+                "maxItems": 20,
+            },
+            "elements": {"type": "array", "items": element_schema, "maxItems": 120},
+        },
+        "required": ["raw_text"],
+    }
+
+
 def _build_vlm_payload(
     settings: Settings,
     image_bytes: bytes,
@@ -407,13 +549,15 @@ def _build_vlm_payload(
     *,
     mime_type: str,
     file_id: str = "",
+    parser_profile: str = "enterprise_ai_generic",
 ) -> dict[str, Any]:
     """VLM endpoint へ送る payload を標準形または template から作る。"""
     model_id = enterprise_ai_vision_model_id(settings)
     data_base64 = base64.b64encode(image_bytes).decode("ascii")
+    extraction_schema = _vlm_structured_extraction_schema()
     response_format = {
         "type": "json_schema",
-        "schema": StructuredExtraction.model_json_schema(),
+        "schema": extraction_schema,
     }
     values = {
         "model": model_id,
@@ -422,15 +566,17 @@ def _build_vlm_payload(
         "compartment_id": settings.oci_compartment_id,
         "task": "structured_document_extraction",
         "language": "ja",
+        "parser_profile": parser_profile,
         "prompt": prompt,
         "structure_instructions": STRUCTURED_EXTRACTION_INSTRUCTIONS,
         "mime_type": _normalized_mime_type(mime_type),
         "data_base64": data_base64,
         "file_id": file_id,
+        "max_output_tokens": _vlm_max_output_tokens(settings),
         "response_format": response_format,
-        "structured_extraction_schema": StructuredExtraction.model_json_schema(),
+        "structured_extraction_schema": extraction_schema,
         "structured_extraction_schema_json": json.dumps(
-            StructuredExtraction.model_json_schema(),
+            extraction_schema,
             ensure_ascii=False,
         ),
     }
@@ -450,39 +596,68 @@ def _build_vlm_payload(
     text_format = {
         "type": "json_schema",
         "name": "structured_extraction",
-        "schema": StructuredExtraction.model_json_schema(),
+        "schema": extraction_schema,
     }
+    use_text_format = _supports_responses_json_schema(model_id)
+    instructions = _structured_extraction_instructions(use_text_format=use_text_format)
+    user_prompt = _structured_extraction_prompt(prompt, use_text_format=use_text_format)
     if file_id:
         uploaded_file_content = _responses_uploaded_file_content(values["mime_type"], file_id)
         if uploaded_file_content["type"] == "input_image":
             content = [
-                {"type": "input_text", "text": prompt},
+                {"type": "input_text", "text": user_prompt},
                 uploaded_file_content,
             ]
         else:
             content = [
                 uploaded_file_content,
-                {"type": "input_text", "text": prompt},
+                {"type": "input_text", "text": user_prompt},
             ]
     else:
         content = [
-            {"type": "input_text", "text": prompt},
+            {"type": "input_text", "text": user_prompt},
             {
                 "type": "input_image",
                 "image_url": f"data:{values['mime_type']};base64,{data_base64}",
             },
         ]
-    return {
+    payload: dict[str, Any] = {
         "model": model_id,
-        "instructions": STRUCTURED_EXTRACTION_INSTRUCTIONS,
+        "instructions": instructions,
         "input": [
             {
                 "role": "user",
                 "content": content,
             }
         ],
-        "text": {"format": text_format},
+        "max_output_tokens": _vlm_max_output_tokens(settings),
     }
+    if use_text_format:
+        payload["text"] = {"format": text_format}
+    return payload
+
+
+def _supports_responses_json_schema(model_id: str) -> bool:
+    """Responses の text.format JSON Schema を安全に使える model か判定する。"""
+    normalized = model_id.strip().casefold()
+    # OCI の OpenAI-compatible gateway で Gemini provider へ JSON Schema を渡すと、
+    # provider 側の schema サブセットに合わず INVALID_ARGUMENT になる場合がある。
+    return "gemini" not in normalized
+
+
+def _structured_extraction_instructions(*, use_text_format: bool) -> str:
+    """VLM へ渡す構造化抽出 instructions を provider 互換にする。"""
+    if use_text_format:
+        return STRUCTURED_EXTRACTION_INSTRUCTIONS
+    return f"{STRUCTURED_EXTRACTION_INSTRUCTIONS}{STRUCTURED_EXTRACTION_JSON_CONTRACT}"
+
+
+def _structured_extraction_prompt(prompt: str, *, use_text_format: bool) -> str:
+    """JSON Schema を使わない provider 向けに prompt へ出力契約を補う。"""
+    cleaned = prompt.strip()
+    if use_text_format:
+        return cleaned
+    return "\n".join(part for part in [cleaned, STRUCTURED_EXTRACTION_JSON_CONTRACT] if part)
 
 
 def _build_vision_text_payload(
@@ -524,7 +699,7 @@ def _build_llm_payload(settings: Settings, prompt: str, context: str) -> dict[st
     ]
     parameters = {
         "temperature": 0.0,
-        "max_output_tokens": 1200,
+        "max_output_tokens": _llm_max_output_tokens(settings),
     }
     values = {
         "model": model_id,
@@ -614,6 +789,37 @@ def _normalized_mime_type(value: str) -> str:
     """MIME type を Enterprise AI payload 用に正規化する。"""
     cleaned = value.split(";", maxsplit=1)[0].strip().lower()
     return cleaned or DEFAULT_MIME_TYPE
+
+
+def _decode_text_bytes(data: bytes) -> str:
+    """テキスト文書のバイト列をデコードする。
+
+    UTF-8(BOM 付き含む)を最優先し、それ以外は charset 検出で日本語/中国語など
+    マルチバイト encoding を判定する(Shift_JIS / EUC-JP / GB18030 等に対応)。
+    固定候補だけを順に試すと、別 encoding のバイト列を cp932 等が例外を出さずに
+    誤デコードして文字化けするため、検出器(charset-normalizer)を用いる。
+    """
+    if not data:
+        return ""
+    for encoding in TEXT_DECODE_ENCODINGS:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    match = from_bytes(data).best()
+    if match is not None:
+        return str(match)
+    return data.decode("utf-8", errors="replace")
+
+
+def _extract_from_plain_text(data: bytes) -> dict[str, object]:
+    """テキスト文書を VLM を介さず直接 StructuredExtraction にする。"""
+    extraction = StructuredExtraction(
+        raw_text=_decode_text_bytes(data),
+        document_type="ドキュメント",
+        confidence=1.0,
+    )
+    return extraction.to_document_payload()
 
 
 def _upload_file_purpose(mime_type: str) -> str:
@@ -766,15 +972,13 @@ def _parse_structured_extraction(
         response_path,
         "OCI Enterprise AI VLM response path",
     )
-    if error_message := _response_error_message(candidate):
-        raise ValueError(error_message)
+    _raise_for_response_error(candidate)
     text = _extract_text_candidate(candidate)
     if text:
         candidate = _json_string_to_object(text)
         return StructuredExtraction.model_validate(dict(candidate))
     candidate = _unwrap_response_payload(candidate)
-    if error_message := _response_error_message(candidate):
-        raise ValueError(error_message)
+    _raise_for_response_error(candidate)
     if isinstance(candidate, str):
         candidate = _json_string_to_object(candidate)
     elif not isinstance(candidate, Mapping):
@@ -797,14 +1001,12 @@ def _parse_generated_text(
         response_path,
         "OCI Enterprise AI LLM response path",
     )
-    if error_message := _response_error_message(candidate):
-        raise ValueError(error_message)
+    _raise_for_response_error(candidate)
     text = _extract_text_candidate(candidate)
     if text.strip():
         return text.strip()
     candidate = _unwrap_response_payload(candidate)
-    if error_message := _response_error_message(candidate):
-        raise ValueError(error_message)
+    _raise_for_response_error(candidate)
     text = _extract_text_candidate(candidate)
     if not text.strip():
         raise ValueError("OCI Enterprise AI LLM response に回答 text がありません。")
@@ -962,6 +1164,33 @@ def _response_error_message(payload: object) -> str:
         )
         return detail
     return ""
+
+
+def _raise_for_response_error(payload: object) -> None:
+    """OpenAI Responses 互換の error/status を適切な例外へ変換する。"""
+    error_message = _response_error_message(payload)
+    if not error_message:
+        return
+    if _is_max_output_incomplete_response(payload):
+        raise EnterpriseAiIncompleteResponseError(
+            "OCI Enterprise AI の出力が max_output_tokens 上限で途中終了しました。"
+            "モデル設定の VLM max output tokens を増やすか、PDF を分割して再実行してください。"
+        )
+    raise ValueError(error_message)
+
+
+def _is_max_output_incomplete_response(payload: object) -> bool:
+    """Responses API の max_output_tokens による incomplete を判定する。"""
+    if not isinstance(payload, Mapping):
+        return False
+    status = str(payload.get("status", "")).strip().lower()
+    if status != "incomplete":
+        return False
+    details = payload.get("incomplete_details")
+    if not isinstance(details, Mapping):
+        return False
+    reason = str(details.get("reason", "")).strip().lower()
+    return reason == "max_output_tokens"
 
 
 def _format_response_error(value: object, prefix: str) -> str:

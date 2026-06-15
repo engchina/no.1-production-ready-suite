@@ -19,6 +19,8 @@ from app.clients.oracle import (
     oracle_audit_schema_sql,
     oracle_document_schema_sql,
     oracle_ingestion_audit_schema_sql,
+    oracle_ingestion_job_schema_sql,
+    oracle_knowledge_base_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_vector_schema_sql,
     reset_local_store,
@@ -30,8 +32,9 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.document import FileStatus
+from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus
 from app.schemas.extraction import StructuredExtraction
+from app.schemas.knowledge_base import KnowledgeBaseStatus
 from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
 
 IN_MEMORY_ORACLE_REMOVED = pytest.mark.skip(reason="in-memory Oracle fallback was removed")
@@ -198,7 +201,7 @@ def test_oracle_connection_test_strips_wallet_retry_descriptor(
 
 async def test_oracle_client_persists_documents_through_pool() -> None:
     """document persistence は Oracle pool 経由で実行される。"""
-    pool = FakeOraclePool()
+    pool = FakeOraclePool(execute_results=[[]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     detail = await client.create_document(
@@ -208,8 +211,338 @@ async def test_oracle_client_persists_documents_through_pool() -> None:
     )
 
     assert detail.file_name == "policy.txt"
+    assert detail.knowledge_bases[0].name == "既定ナレッジベース"
     assert pool.connection.commits == 1
-    assert "INSERT INTO rag_documents" in pool.connection.calls[0].statement
+    statements = [call.statement for call in pool.connection.calls]
+    assert any("INSERT INTO rag_knowledge_bases" in statement for statement in statements)
+    assert any("INSERT INTO rag_documents" in statement for statement in statements)
+    assert pool.connection.many_calls
+    assert "INSERT INTO rag_document_knowledge_bases" in pool.connection.many_calls[0].statement
+
+
+async def test_oracle_client_assigns_uploaded_document_to_selected_knowledge_base() -> None:
+    """upload 時の KB 指定は既定 KB ではなく指定先 membership を作る。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    detail = await client.create_document(
+        file_name="policy.txt",
+        object_storage_path="oci://bucket/policy.txt",
+        content_type="text/plain",
+        knowledge_base_ids=["kb-1"],
+    )
+
+    assert len(detail.knowledge_bases) == 1
+    assert detail.knowledge_bases[0].id == "kb-1"
+    statements = [call.statement for call in pool.connection.calls]
+    assert not any("INSERT INTO rag_knowledge_bases" in statement for statement in statements)
+    assert pool.connection.many_calls[0].rows[0]["knowledge_base_id"] == "kb-1"
+
+
+async def test_oracle_client_persists_ingestion_job() -> None:
+    """取込 job は Oracle queue table へ保存する。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    job = IngestionJob(
+        id="job-1",
+        document_id="doc-1",
+        status=IngestionJobStatus.QUEUED,
+        parser_profile="enterprise_ai_pdf_layout",
+        quality_warnings=["table_structure_review"],
+        queued_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    created = await client.create_ingestion_job(job)
+
+    assert created == job
+    statements = [call.statement for call in pool.connection.calls]
+    assert any("INSERT INTO rag_ingestion_jobs" in statement for statement in statements)
+    insert_call = next(
+        call for call in pool.connection.calls if "INSERT INTO rag_ingestion_jobs" in call.statement
+    )
+    assert insert_call.parameters["job_id"] == "job-1"
+    assert insert_call.parameters["parser_profile"] == "enterprise_ai_pdf_layout"
+    assert insert_call.parameters["quality_warnings"] == '["table_structure_review"]'
+    assert insert_call.parameters["attempt_count"] == 0
+    assert insert_call.parameters["max_attempts"] == 3
+
+
+async def test_oracle_client_persists_ingestion_job_without_max_attempts_column() -> None:
+    """旧 queue table では max_attempts 列を省いて取込 job を保存する。"""
+    pool = FakeOraclePool(
+        execute_results=[[_oracle_document_row()]],
+        missing_ingestion_job_max_attempts=True,
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    job = IngestionJob(
+        id="job-1",
+        document_id="doc-1",
+        status=IngestionJobStatus.QUEUED,
+        parser_profile="enterprise_ai_pdf_layout",
+        queued_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    created = await client.create_ingestion_job(job)
+
+    assert created == job
+    insert_calls = [
+        call for call in pool.connection.calls if "INSERT INTO rag_ingestion_jobs" in call.statement
+    ]
+    assert len(insert_calls) == 2
+    assert "max_attempts" in insert_calls[0].statement
+    assert "max_attempts" not in insert_calls[1].statement
+
+
+async def test_oracle_client_lists_and_counts_ingestion_jobs() -> None:
+    """取込 job 一覧は document access predicate 付きで取得する。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_ingestion_job_row()],
+            [{"count_value": 1}],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    jobs = await client.list_ingestion_jobs(
+        status=IngestionJobStatus.QUEUED,
+        limit=10,
+        offset=0,
+    )
+    count = await client.count_ingestion_jobs(status=IngestionJobStatus.QUEUED)
+
+    assert count == 1
+    assert len(jobs) == 1
+    assert jobs[0].id == "job-1"
+    assert jobs[0].status == IngestionJobStatus.QUEUED
+    assert jobs[0].quality_warnings == ["table_structure_review"]
+    list_call = pool.connection.calls[0]
+    assert "FROM rag_ingestion_jobs j" in list_call.statement
+    assert "JOIN rag_documents d" in list_call.statement
+    assert "j.status = :ingestion_job_status" in list_call.statement
+    assert "FETCH NEXT :limit ROWS ONLY" in list_call.statement
+    assert list_call.parameters["ingestion_job_status"] == "QUEUED"
+    assert list_call.parameters["limit"] == 10
+    count_call = pool.connection.calls[1]
+    assert "j.status = :ingestion_job_status" in count_call.statement
+    assert count_call.parameters["ingestion_job_status"] == "QUEUED"
+
+
+async def test_oracle_client_updates_ingestion_job_status() -> None:
+    """取込 job 状態更新後に最新行を返す。"""
+    started_at = datetime(2026, 1, 2, 0, 1, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_ingestion_job_row(status="RUNNING", started_at=started_at)],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.update_ingestion_job(
+        "job-1",
+        status=IngestionJobStatus.RUNNING,
+        attempt_count=1,
+        started_at=started_at,
+    )
+
+    assert updated is not None
+    assert updated.status == IngestionJobStatus.RUNNING
+    assert updated.started_at == started_at
+    update_call = pool.connection.calls[0]
+    assert "UPDATE rag_ingestion_jobs" in update_call.statement
+    assert "EXISTS (" in update_call.statement
+    assert update_call.parameters["status"] == "RUNNING"
+    assert update_call.parameters["attempt_count"] == 1
+    assert update_call.parameters["started_at"] == started_at
+
+
+async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
+    """stale RUNNING job は試行回数に応じて再キューまたは失敗へ戻す。"""
+    stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                _oracle_ingestion_job_row(
+                    status="RUNNING",
+                    attempt_count=1,
+                    max_attempts=3,
+                    started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+                ),
+                _oracle_ingestion_job_row(
+                    job_id="job-maxed",
+                    status="RUNNING",
+                    attempt_count=3,
+                    max_attempts=3,
+                    started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+                ),
+            ],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    recovered = await client.recover_stale_ingestion_jobs(stale_before=stale_at, limit=10)
+
+    assert [job.id for job in recovered] == ["job-1", "job-maxed"]
+    assert pool.connection.commits == 1
+    select_call = pool.connection.calls[0]
+    assert "j.status = 'RUNNING'" in select_call.statement
+    assert "COALESCE(j.started_at, j.queued_at) < :stale_before" in select_call.statement
+    assert select_call.parameters["stale_before"] == stale_at
+    assert select_call.parameters["limit"] == 10
+    update_statements = [call.statement for call in pool.connection.calls[1:]]
+    assert any("SET status = 'QUEUED'" in statement for statement in update_statements)
+    assert any("SET status = 'FAILED'" in statement for statement in update_statements)
+
+
+async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_column() -> None:
+    """旧 queue table では既定 max_attempts を補って stale job を回復する。"""
+    stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    key: value
+                    for key, value in _oracle_ingestion_job_row(
+                        status="RUNNING",
+                        attempt_count=1,
+                        started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+                    ).items()
+                    if key != "max_attempts"
+                }
+            ],
+        ],
+        missing_ingestion_job_max_attempts=True,
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    recovered = await client.recover_stale_ingestion_jobs(stale_before=stale_at, limit=10)
+
+    assert [job.id for job in recovered] == ["job-1"]
+    assert recovered[0].max_attempts == 3
+    select_calls = [
+        call for call in pool.connection.calls if "FROM rag_ingestion_jobs j" in call.statement
+    ]
+    assert "j.max_attempts" in select_calls[0].statement
+    assert ":default_max_attempts AS max_attempts" in select_calls[1].statement
+    assert select_calls[1].parameters["default_max_attempts"] == 3
+    update_statements = [call.statement for call in pool.connection.calls]
+    assert any("SET status = 'QUEUED'" in statement for statement in update_statements)
+
+
+async def test_oracle_client_claims_ingestion_job_with_row_lock() -> None:
+    """取込 job 実行前に QUEUED 行を row lock 付きで claim する。"""
+    started_at = datetime(2026, 1, 2, 0, 2, tzinfo=UTC)
+    pool = FakeOraclePool(execute_results=[[_oracle_ingestion_job_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    claimed = await client.claim_ingestion_job("job-1", started_at=started_at)
+
+    assert claimed is not None
+    assert claimed.status == IngestionJobStatus.RUNNING
+    assert claimed.attempt_count == 1
+    assert claimed.started_at == started_at
+    select_call = pool.connection.calls[0]
+    update_call = pool.connection.calls[1]
+    assert "FOR UPDATE SKIP LOCKED" in select_call.statement
+    assert "j.status = 'QUEUED'" in select_call.statement
+    assert "SET status = 'RUNNING'" in update_call.statement
+    assert update_call.parameters["attempt_count"] == 1
+    assert update_call.parameters["started_at"] == started_at
+
+
+async def test_oracle_client_persists_knowledge_bases_through_pool() -> None:
+    """knowledge base persistence は Oracle pool 経由で実行される。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    detail = await client.create_knowledge_base(
+        name="社内規程",
+        description="規程文書",
+        default_search_mode=SearchMode.HYBRID,
+        retrieval_config={"top_k": 20},
+    )
+
+    assert detail.name == "社内規程"
+    assert detail.status == KnowledgeBaseStatus.ACTIVE
+    assert detail.retrieval_config == {"top_k": 20}
+    assert pool.connection.commits == 1
+    call = pool.connection.calls[0]
+    assert "INSERT INTO rag_knowledge_bases" in call.statement
+    assert call.parameters["name"] == "社内規程"
+    assert call.parameters["default_search_mode"] == "hybrid"
+
+
+async def test_oracle_client_lists_knowledge_bases_with_counts() -> None:
+    """knowledge base 一覧は集計列を含む SQL で取得する。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row(document_count=3)]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    items = await client.list_knowledge_bases(status=KnowledgeBaseStatus.ACTIVE, query="規程")
+
+    assert len(items) == 1
+    assert items[0].id == "kb-1"
+    assert items[0].document_count == 3
+    call = pool.connection.calls[0]
+    assert "FROM rag_knowledge_bases kb" in call.statement
+    assert "LEFT JOIN rag_document_knowledge_bases dkb" in call.statement
+    assert "kb.status = :knowledge_base_status" in call.statement
+    assert call.parameters["knowledge_base_status"] == "ACTIVE"
+    assert call.parameters["knowledge_base_query"] == "%規程%"
+
+
+async def test_oracle_client_updates_knowledge_base_metadata() -> None:
+    """knowledge base 更新は既存行を確認してから UPDATE する。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.update_knowledge_base(
+        "kb-1",
+        name="更新済み",
+        description=None,
+        update_fields={"name", "description"},
+    )
+
+    assert updated.name == "更新済み"
+    assert updated.description is None
+    statements = [call.statement for call in pool.connection.calls]
+    assert any(
+        "SELECT" in statement and "rag_knowledge_bases" in statement for statement in statements
+    )
+    assert any("UPDATE rag_knowledge_bases" in statement for statement in statements)
+
+
+async def test_oracle_client_assigns_documents_to_knowledge_base() -> None:
+    """membership 追加は active knowledge base と document を確認して MERGE する。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_knowledge_base_row()],
+            [_oracle_document_row()],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    detail = await client.assign_documents_to_knowledge_base("kb-1", ["doc-1"])
+
+    assert detail.id == "kb-1"
+    assert pool.connection.many_calls
+    many_call = pool.connection.many_calls[0]
+    assert "MERGE INTO rag_document_knowledge_bases" in many_call.statement
+    assert many_call.rows[0]["knowledge_base_id"] == "kb-1"
+    assert many_call.rows[0]["document_id"] == "doc-1"
+
+
+async def test_oracle_client_rejects_assignment_to_archived_knowledge_base() -> None:
+    """アーカイブ済み knowledge base へ文書は追加できない。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_knowledge_base_row(status="ARCHIVED")],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with pytest.raises(ValueError, match="アーカイブ済み"):
+        await client.assign_documents_to_knowledge_base("kb-1", ["doc-1"])
+
+    assert not pool.connection.many_calls
 
 
 async def test_oci_vector_search_uses_ai_vector_search_sql() -> None:
@@ -711,7 +1044,7 @@ async def test_select_ai_without_profile_is_unavailable() -> None:
 
 
 async def test_oci_retrieval_applies_request_access_scope_predicates() -> None:
-    """OCI retrieval SQL は request context の認可済み document/category scope を必ず含める。"""
+    """OCI retrieval SQL は request context の認可済み scope を必ず含める。"""
     pool = FakeOraclePool()
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     token = set_audit_request_context(
@@ -719,6 +1052,7 @@ async def test_oci_retrieval_applies_request_access_scope_predicates() -> None:
             request_id="request-1",
             allowed_document_ids=frozenset({"doc-allowed"}),
             allowed_category_names=frozenset({"社内規程".casefold()}),
+            allowed_knowledge_base_ids=frozenset({"kb-allowed"}),
         )
     )
     try:
@@ -730,8 +1064,33 @@ async def test_oci_retrieval_applies_request_access_scope_predicates() -> None:
     call = pool.connection.calls[0]
     assert "d.document_id IN (:access_document_id_0)" in call.statement
     assert "LOWER(d.category_name) IN (:access_category_name_0)" in call.statement
+    assert "rag_document_knowledge_bases dkb" in call.statement
+    assert "kb.knowledge_base_id IN (:access_knowledge_base_id_0)" in call.statement
     assert call.parameters["access_document_id_0"] == "doc-allowed"
     assert call.parameters["access_category_name_0"] == "社内規程".casefold()
+    assert call.parameters["access_knowledge_base_id_0"] == "kb-allowed"
+
+
+async def test_oci_retrieval_applies_multiple_knowledge_base_filters() -> None:
+    """OCI retrieval SQL は複数 KB filter を bind 付き IN 条件で適用する。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    hits = await client.keyword_search(
+        "社内規程",
+        top_k=3,
+        filters={"knowledge_base_id": "kb-1,kb-2"},
+    )
+
+    assert hits == []
+    call = pool.connection.calls[0]
+    assert "rag_document_knowledge_bases dkb" in call.statement
+    assert (
+        "dkb.knowledge_base_id IN "
+        "(:filter_knowledge_base_id_0, :filter_knowledge_base_id_1)"
+    ) in call.statement
+    assert call.parameters["filter_knowledge_base_id_0"] == "kb-1"
+    assert call.parameters["filter_knowledge_base_id_1"] == "kb-2"
 
 
 @IN_MEMORY_ORACLE_REMOVED
@@ -812,6 +1171,35 @@ def test_oracle_document_schema_includes_ingestion_metadata_columns() -> None:
     assert "rag_documents_tenant_status_uploaded_idx" in ddl
 
 
+def test_oracle_knowledge_base_schema_includes_membership_tables() -> None:
+    """Oracle knowledge base DDL 例は KB と membership table を含む。"""
+    ddl = oracle_knowledge_base_schema_sql()
+
+    assert "CREATE TABLE rag_knowledge_bases" in ddl
+    assert "CREATE TABLE rag_document_knowledge_bases" in ddl
+    assert "knowledge_base_id     VARCHAR2(64) PRIMARY KEY" in ddl
+    assert "default_search_mode   VARCHAR2(16) DEFAULT 'hybrid' NOT NULL" in ddl
+    assert "rag_knowledge_bases_tenant_name_uidx" in ddl
+    assert "FOREIGN KEY (document_id)" in ddl
+    assert "REFERENCES rag_documents (document_id)" in ddl
+
+
+def test_oracle_ingestion_job_schema_includes_queue_table() -> None:
+    """Oracle ingestion job DDL 例は永続 queue table を含む。"""
+    ddl = oracle_ingestion_job_schema_sql()
+
+    assert "CREATE TABLE rag_ingestion_jobs" in ddl
+    assert "job_id           VARCHAR2(64) PRIMARY KEY" in ddl
+    assert "document_id      VARCHAR2(64) NOT NULL" in ddl
+    assert "quality_warnings JSON" in ddl
+    assert "attempt_count    NUMBER(5) DEFAULT 0 NOT NULL" in ddl
+    assert "max_attempts     NUMBER(5) DEFAULT 3 NOT NULL" in ddl
+    assert "CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED'))" in ddl
+    assert "CHECK (attempt_count >= 0 AND max_attempts >= 1)" in ddl
+    assert "REFERENCES rag_documents (document_id)" in ddl
+    assert "ON rag_ingestion_jobs (tenant_id_hash, status, queued_at DESC)" in ddl
+
+
 def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     """chunk/vector DDL 例は tenant filter 用の列と索引を含む。"""
     ddl = oracle_vector_schema_sql()
@@ -854,6 +1242,7 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
     assert "context_chars         number(10) default 0 not null" in normalized
     assert "config_fingerprint    char(64)" in normalized
     assert "document_ids          json" in normalized
+    assert "knowledge_base_ids    json" in normalized
     assert "check (outcome in ('success', 'blocked', 'no_results', 'error'))" in normalized
     assert "rag_search_audit_created_outcome_idx" in ddl
     assert "rag_search_audit_tenant_created_idx" in ddl
@@ -1296,8 +1685,12 @@ class FakeOraclePool:
     def __init__(
         self,
         execute_results: list[list[dict[str, object]]] | None = None,
+        missing_ingestion_job_max_attempts: bool = False,
     ) -> None:
-        self.connection = FakeOracleConnection(execute_results or [])
+        self.connection = FakeOracleConnection(
+            execute_results or [],
+            missing_ingestion_job_max_attempts=missing_ingestion_job_max_attempts,
+        )
         self.acquire_calls = 0
         self.close_calls = 0
 
@@ -1312,8 +1705,14 @@ class FakeOraclePool:
 class FakeOracleConnection:
     """python-oracledb connection の fake。"""
 
-    def __init__(self, execute_results: list[list[dict[str, object]]]) -> None:
+    def __init__(
+        self,
+        execute_results: list[list[dict[str, object]]],
+        *,
+        missing_ingestion_job_max_attempts: bool = False,
+    ) -> None:
         self._execute_results = execute_results
+        self.missing_ingestion_job_max_attempts = missing_ingestion_job_max_attempts
         self.calls: list[SqlCall] = []
         self.many_calls: list[SqlManyCall] = []
         self.commits = 0
@@ -1350,6 +1749,12 @@ class FakeOracleCursor:
 
     def execute(self, statement: str, parameters: Mapping[str, object] | None = None) -> None:
         self._connection.calls.append(SqlCall(statement, dict(parameters or {})))
+        if self._connection.missing_ingestion_job_max_attempts and (
+            "j.max_attempts" in statement
+            or ("INSERT INTO rag_ingestion_jobs" in statement and "max_attempts" in statement)
+            or ("UPDATE rag_ingestion_jobs" in statement and "max_attempts" in statement)
+        ):
+            raise RuntimeError('ORA-00904: "J"."MAX_ATTEMPTS": invalid identifier')
         self._rows = self._connection.next_rows() if statement.startswith("SELECT") else []
 
     def executemany(
@@ -1402,6 +1807,54 @@ def _oracle_document_row(
         "error_message": None,
         "uploaded_at": datetime(2026, 1, 1, tzinfo=UTC),
         "indexed_at": None,
+    }
+
+
+def _oracle_knowledge_base_row(
+    *,
+    status: str = "ACTIVE",
+    document_count: int = 0,
+) -> dict[str, object]:
+    return {
+        "knowledge_base_id": "kb-1",
+        "tenant_id_hash": None,
+        "name": "社内規程",
+        "description": "規程文書",
+        "status": status,
+        "default_search_mode": "hybrid",
+        "retrieval_config": '{"top_k":20}',
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2026, 1, 2, tzinfo=UTC),
+        "archived_at": None,
+        "document_count": document_count,
+        "indexed_document_count": 1 if document_count else 0,
+        "error_document_count": 0,
+        "searchable_chunk_count": 5 if document_count else 0,
+    }
+
+
+def _oracle_ingestion_job_row(
+    *,
+    job_id: str = "job-1",
+    status: str = "QUEUED",
+    attempt_count: int = 0,
+    max_attempts: int = 3,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> dict[str, object]:
+    return {
+        "job_id": job_id,
+        "document_id": "doc-1",
+        "status": status,
+        "parser_profile": "enterprise_ai_pdf_layout",
+        "quality_warnings": '["table_structure_review"]',
+        "skip_reason": None,
+        "error_message": None,
+        "attempt_count": attempt_count,
+        "max_attempts": max_attempts,
+        "queued_at": datetime(2026, 1, 2, tzinfo=UTC),
+        "started_at": started_at,
+        "finished_at": finished_at,
     }
 
 

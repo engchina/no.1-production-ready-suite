@@ -1,9 +1,10 @@
 """FastAPI アプリケーションのエントリポイント。"""
 
+import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
@@ -43,11 +44,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     configure_trace_exporter(settings)
+    recovery_task: asyncio.Task[None] | None = None
+    if settings.ingestion_queue_startup_recovery_enabled:
+        recovery_task = asyncio.create_task(_recover_ingestion_jobs_on_startup(settings))
     try:
         yield
     finally:
+        if recovery_task is not None and not recovery_task.done():
+            recovery_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await recovery_task
         close_trace_exporter()
         close_oracle_pool()
+
+
+async def _recover_ingestion_jobs_on_startup(settings: Any) -> None:
+    """起動時に永続化済み取込 job を回復する。失敗しても API 起動は止めない。"""
+    try:
+        from app.api.routes.documents import recover_and_drain_ingestion_jobs
+
+        jobs = await recover_and_drain_ingestion_jobs(
+            limit=settings.ingestion_queue_startup_drain_limit,
+            stale_running_seconds=settings.ingestion_queue_stale_running_seconds,
+            concurrency=settings.ingestion_queue_worker_concurrency,
+        )
+        if jobs:
+            logger.info(
+                "ingestion_jobs_startup_drained",
+                extra={"job_count": len(jobs)},
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("ingestion_jobs_startup_recovery_failed")
 
 
 def _route_path(request: Request) -> str:

@@ -119,6 +119,82 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert pipeline.requests[0].filters == {"status": "INDEXED"}
 
 
+async def test_evaluation_runner_passes_knowledge_base_scope_to_search_request() -> None:
+    """評価 runner は KB スコープを SearchRequest へ伝播する。"""
+    pipeline = StubPipeline()
+    runner = EvaluationRunner(pipeline=pipeline)
+
+    await runner.run(
+        cases=[EvaluationCase(id="case-1", query="承認条件")],
+        top_k=5,
+        rerank_top_n=3,
+        knowledge_base_ids=["kb-1", "kb-2"],
+    )
+
+    request = pipeline.requests[0]
+    assert request.knowledge_base_ids == ["kb-1", "kb-2"]
+    assert request.filters["knowledge_base_id"] == "kb-1,kb-2"
+
+
+class QualitySource:
+    """評価 runner に保存済み取込品質レポートを渡す fake。"""
+
+    async def list_document_extractions(self) -> list[dict[str, object]]:
+        return [
+            {
+                "quality_report": {
+                    "parser_profile": "enterprise_ai_pdf_layout",
+                    "risk_level": "medium",
+                    "page_count": 4,
+                    "table_count": 2,
+                    "figure_count": 0,
+                    "element_count": 12,
+                    "long_document": False,
+                    "quality_warnings": ["table_structure_review"],
+                }
+            },
+            {
+                "quality_report": {
+                    "parser_profile": "enterprise_ai_image_ocr",
+                    "risk_level": "high",
+                    "page_count": 35,
+                    "table_count": 0,
+                    "figure_count": 3,
+                    "element_count": 40,
+                    "long_document": True,
+                    "quality_warnings": ["figure_ocr_review", "long_document"],
+                }
+            },
+        ]
+
+
+async def test_evaluation_runner_includes_ingestion_quality_summary() -> None:
+    """評価結果に表・画像・長文書の取込品質サマリを含める。"""
+    runner = EvaluationRunner(pipeline=StubPipeline(), quality_source=QualitySource())
+
+    metrics = await runner.run(
+        cases=[EvaluationCase(id="case-quality", query="承認条件")],
+        top_k=5,
+        rerank_top_n=3,
+    )
+
+    quality = metrics.ingestion_quality
+    assert quality.document_count == 2
+    assert quality.table_document_count == 1
+    assert quality.figure_document_count == 1
+    assert quality.long_document_count == 1
+    assert quality.warning_counts == {
+        "table_structure_review": 1,
+        "figure_ocr_review": 1,
+        "long_document": 1,
+    }
+    assert quality.risk_counts == {"low": 0, "medium": 1, "high": 1}
+    assert quality.parser_profile_counts == {
+        "enterprise_ai_pdf_layout": 1,
+        "enterprise_ai_image_ocr": 1,
+    }
+
+
 class DuplicateChunkPipeline:
     """同じ document の複数 chunk を返す pipeline。"""
 

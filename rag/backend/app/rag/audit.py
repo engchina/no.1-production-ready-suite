@@ -8,7 +8,12 @@ from pydantic import BaseModel, Field
 
 from app.rag.guardrails import GuardrailFinding
 from app.rag.request_context import current_audit_request_context
-from app.schemas.search import RetrievedChunk, SearchDiagnostics, SearchMode
+from app.schemas.search import (
+    RetrievedChunk,
+    SearchDiagnostics,
+    SearchMode,
+    parse_search_id_filter,
+)
 
 logger = logging.getLogger("app.audit")
 
@@ -46,6 +51,7 @@ class RagSearchAuditEvent(BaseModel):
     context_chars: int = 0
     context_window_chars: int | None = None
     document_ids: list[str] = Field(default_factory=list)
+    knowledge_base_ids: list[str] = Field(default_factory=list)
     config_fingerprint: str | None = None
     elapsed_ms: float
     error_stage: str | None = None
@@ -129,6 +135,7 @@ def record_rag_search_audit(
             diagnostics.context_window_chars if diagnostics is not None else None
         ),
         document_ids=_unique_document_ids(citations),
+        knowledge_base_ids=parse_search_id_filter(filters.get("knowledge_base_id")),
         config_fingerprint=(diagnostics.config_fingerprint if diagnostics is not None else None),
         elapsed_ms=elapsed_ms,
         error_stage=error_stage,

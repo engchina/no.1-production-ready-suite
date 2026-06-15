@@ -9,13 +9,17 @@ import pytest
 from pytest import LogCaptureFixture, MonkeyPatch
 
 from app.clients.object_storage import ObjectStorageClient
-from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+from app.clients.oci_enterprise_ai import (
+    EnterpriseAiIncompleteResponseError,
+    EnterpriseAiTimeoutError,
+    OciEnterpriseAiClient,
+)
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, reset_local_store
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipeline
-from app.schemas.document import FileStatus
+from app.schemas.document import FileStatus, SourceModality, SourceProfile
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -161,13 +165,61 @@ async def test_ingestion_records_trace_spans_without_payload_text(
     assert isinstance(vlm_attributes, dict)
     assert vlm_attributes["source_bytes"] == 4
     assert vlm_attributes["content_type"] == "application/octet-stream"
-    assert vlm_attributes["prompt_chars"] == len("秘密の規程を抽出する prompt")
+    assert vlm_attributes["parser_profile"] == "enterprise_ai_generic"
+    assert vlm_attributes["prompt_chars"] >= len("秘密の規程を抽出する prompt")
     assert vlm_attributes["document_type"] == "社内規程"
     assert vlm_attributes["raw_text_chars"] > 0
     indexing_attributes = observed[-1]["attributes"]
     assert isinstance(indexing_attributes, dict)
     assert indexing_attributes["chunk_count"] >= 1
     assert indexing_attributes["vector_count"] == indexing_attributes["chunk_count"]
+
+
+async def test_ingestion_passes_source_parser_profile_to_extraction_strategy() -> None:
+    """source profile の parser profile を抽出 strategy と VLM 呼び出しへ渡す。"""
+    oracle = OracleClient()
+    document = await oracle.create_document(
+        file_name="layout.pdf",
+        object_storage_path="local://uploaded/layout.pdf",
+        content_type="application/pdf",
+        file_size_bytes=7,
+        content_sha256=hashlib.sha256(b"pdfdata").hexdigest(),
+    )
+    vlm = CapturingStrategyVlm()
+    pipeline = IngestionPipeline(
+        vlm=vlm,
+        genai=StubEmbeddingClient(),
+        oracle=oracle,
+    )
+    source_profile = SourceProfile(
+        original_file_name="layout.pdf",
+        sanitized_file_name="layout.pdf",
+        extension=".pdf",
+        content_type="application/pdf",
+        inferred_content_type="application/pdf",
+        file_size_bytes=7,
+        content_sha256=hashlib.sha256(b"pdfdata").hexdigest(),
+        modality=SourceModality.PDF,
+        parser_profile="enterprise_ai_pdf_layout",
+        quality_warnings=[],
+    )
+
+    detail = await pipeline.ingest(
+        document.id,
+        b"pdfdata",
+        "本文を抽出してください。",
+        content_type="application/pdf",
+        source_profile=source_profile,
+    )
+
+    assert detail.status == FileStatus.INDEXED
+    assert vlm.parser_profile == "enterprise_ai_pdf_layout"
+    assert vlm.mime_type == "application/pdf"
+    assert "PDF レイアウト解析方針" in vlm.prompt
+    saved = await oracle.get_document(document.id)
+    assert saved is not None
+    quality_report = cast(dict[str, object], saved.extraction["quality_report"])
+    assert quality_report["parser_profile"] == "enterprise_ai_pdf_layout"
 
 
 async def test_ingestion_records_error_trace_span_without_error_message(
@@ -361,7 +413,9 @@ class LongTextVlm(OciEnterpriseAiClient):
         prompt: str,
         *,
         mime_type: str = "application/octet-stream",
+        parser_profile: str = "enterprise_ai_generic",
     ) -> dict[str, object]:
+        _ = image_bytes, prompt, mime_type, parser_profile
         return {
             "raw_text": "社内規程です。" + ("経費申請の手順です。" * 120),
             "document_type": "社内規程",
@@ -379,7 +433,9 @@ class ShortTextVlm(OciEnterpriseAiClient):
         prompt: str,
         *,
         mime_type: str = "application/octet-stream",
+        parser_profile: str = "enterprise_ai_generic",
     ) -> dict[str, object]:
+        _ = image_bytes, prompt, mime_type, parser_profile
         return {
             "raw_text": "秘密の規程本文です。部門長が承認します。",
             "document_type": "社内規程",
@@ -397,12 +453,50 @@ class SensitiveDocumentTypeVlm(OciEnterpriseAiClient):
         prompt: str,
         *,
         mime_type: str = "application/octet-stream",
+        parser_profile: str = "enterprise_ai_generic",
     ) -> dict[str, object]:
+        _ = image_bytes, prompt, mime_type, parser_profile
         return {
             "raw_text": "社内規程本文です。",
             "document_type": "社内規程 SECRET",
             "confidence": 0.9,
             "warnings": [],
+        }
+
+
+class CapturingStrategyVlm(OciEnterpriseAiClient):
+    """抽出 strategy が VLM 呼び出しに反映されたか確認する fake。"""
+
+    parser_profile: str | None = None
+    mime_type: str | None = None
+    prompt: str = ""
+
+    async def extract_with_vlm(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = "application/octet-stream",
+        parser_profile: str = "enterprise_ai_generic",
+    ) -> dict[str, object]:
+        _ = image_bytes
+        self.parser_profile = parser_profile
+        self.mime_type = mime_type
+        self.prompt = prompt
+        return {
+            "raw_text": "PDF 規程本文です。\n| 項目 | 値 |\n| 承認 | 部門長 |",
+            "document_type": "社内規程",
+            "confidence": 0.92,
+            "warnings": [],
+            "elements": [
+                {"kind": "text", "text": "PDF 規程本文です。", "order": 1, "page_number": 1},
+                {
+                    "kind": "table",
+                    "text": "| 項目 | 値 |\n| 承認 | 部門長 |",
+                    "order": 2,
+                    "page_number": 1,
+                },
+            ],
         }
 
 
@@ -960,6 +1054,68 @@ def test_ingest_marks_document_error_when_local_extraction_is_empty(
     assert audit_event["vector_count"] == 0
 
 
+def test_ingest_returns_504_when_enterprise_ai_times_out(
+    monkeypatch: MonkeyPatch,
+    caplog: LogCaptureFixture,
+) -> None:
+    """VLM timeout は未処理 500 ではなく 504 と文書 ERROR 状態にする。"""
+    monkeypatch.setattr("app.rag.ingestion.OciEnterpriseAiClient", TimeoutEnterpriseAi)
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("slow-layout.pdf", b"%PDF slow", "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    document_id = upload_resp.json()["data"]["id"]
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+
+    assert ingest_resp.status_code == 504
+    assert "タイムアウト" in ingest_resp.json()["error_messages"][0]
+    stored = asyncio.run(OracleClient().get_document(document_id))
+    assert stored is not None
+    assert stored.status == FileStatus.ERROR
+    assert "timeout_seconds" in (stored.error_message or "")
+    audit_record = next(
+        record for record in caplog.records if record.message == "rag_ingestion_audit"
+    )
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["document_id"] == document_id
+    assert audit_event["outcome"] == "error"
+    assert audit_event["error_type"] == "IngestionTimeoutError"
+
+
+def test_ingest_returns_422_when_enterprise_ai_output_is_incomplete(
+    monkeypatch: MonkeyPatch,
+    caplog: LogCaptureFixture,
+) -> None:
+    """VLM の max_output_tokens incomplete は 422 と文書 ERROR 状態にする。"""
+    monkeypatch.setattr("app.rag.ingestion.OciEnterpriseAiClient", IncompleteEnterpriseAi)
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("large-layout.pdf", b"%PDF large", "application/pdf")},
+    )
+    assert upload_resp.status_code == 200
+    document_id = upload_resp.json()["data"]["id"]
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+
+    assert ingest_resp.status_code == 422
+    assert "max_output_tokens" in ingest_resp.json()["error_messages"][0]
+    stored = asyncio.run(OracleClient().get_document(document_id))
+    assert stored is not None
+    assert stored.status == FileStatus.ERROR
+    assert "max_output_tokens" in (stored.error_message or "")
+    audit_record = next(
+        record for record in caplog.records if record.message == "rag_ingestion_audit"
+    )
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["document_id"] == document_id
+    assert audit_event["outcome"] == "error"
+    assert audit_event["error_type"] == "IngestionUserError"
+
+
 def test_ingest_marks_document_error_when_source_object_is_missing() -> None:
     """原本ファイルが消えている場合は説明可能な 409 と ERROR 状態にする。"""
     detail = asyncio.run(
@@ -1053,3 +1209,35 @@ def test_ingest_rejects_non_local_uri_in_local_upload_storage_backend() -> None:
     assert stored is not None
     assert stored.status == FileStatus.ERROR
     assert stored.error_message == "ローカルモードでは local:// URI のみ取得できます。"
+
+
+class TimeoutEnterpriseAi(OciEnterpriseAiClient):
+    """取込 API の timeout 変換を確認するための VLM スタブ。"""
+
+    async def extract_with_vlm(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = "application/octet-stream",
+        parser_profile: str = "enterprise_ai_generic",
+    ) -> dict[str, object]:
+        _ = image_bytes, prompt, mime_type, parser_profile
+        raise EnterpriseAiTimeoutError("OCI Enterprise AI endpoint", 600.0)
+
+
+class IncompleteEnterpriseAi(OciEnterpriseAiClient):
+    """取込 API の incomplete 変換を確認するための VLM スタブ。"""
+
+    async def extract_with_vlm(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = "application/octet-stream",
+        parser_profile: str = "enterprise_ai_generic",
+    ) -> dict[str, object]:
+        _ = image_bytes, prompt, mime_type, parser_profile
+        raise EnterpriseAiIncompleteResponseError(
+            "OCI Enterprise AI の出力が max_output_tokens 上限で途中終了しました。"
+        )

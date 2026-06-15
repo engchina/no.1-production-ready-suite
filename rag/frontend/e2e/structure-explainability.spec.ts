@@ -54,6 +54,23 @@ test("文書詳細で構造化抽出要素と raw text を確認できる", asyn
   await expectNoHorizontalOverflow(page);
 });
 
+test("文書詳細で所属知識ベースを更新できる", async ({ page }) => {
+  const state = await mockDocumentDetail(page);
+
+  await page.goto("/documents/doc-1");
+
+  await expect(page.getByRole("heading", { name: "所属知識ベース" })).toBeVisible();
+  await expect(page.getByLabel(/社内規程/)).toBeChecked();
+  await page.getByLabel(/FAQ/).check();
+  await page.getByRole("button", { name: "保存" }).click();
+
+  await expect
+    .poll(() => state.lastReplacePayload)
+    .toEqual({ knowledge_base_ids: ["kb-1", "kb-2"] });
+  await expect(page.getByText("所属知識ベースを保存しました。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 test("検索引用で構造 metadata chip を確認できる", async ({ page }) => {
   await page.route("**/api/search/stream", async (route) => {
     await route.fulfill({
@@ -77,6 +94,50 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
 });
 
 async function mockDocumentDetail(page: Page) {
+  const catalog = [
+    knowledgeBase("kb-1", "社内規程", 1),
+    knowledgeBase("kb-2", "FAQ", 0),
+  ];
+  let membership: { id: string; name: string }[] = [{ id: "kb-1", name: "社内規程" }];
+  const state: { lastReplacePayload: { knowledge_base_ids: string[] } | null } = {
+    lastReplacePayload: null,
+  };
+
+  await page.route("**/api/knowledge-bases**", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          items: catalog,
+          total: catalog.length,
+          limit: 50,
+          offset: 0,
+          has_next: false,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/knowledge-bases", async (route) => {
+    if (route.request().method() === "PUT") {
+      state.lastReplacePayload = route.request().postDataJSON() as {
+        knowledge_base_ids: string[];
+      };
+      membership = catalog
+        .filter((knowledgeBase) =>
+          state.lastReplacePayload?.knowledge_base_ids.includes(knowledgeBase.id)
+        )
+        .map(({ id, name }) => ({ id, name }));
+    }
+
+    await route.fulfill({
+      json: {
+        data: membership,
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
   await page.route("**/api/documents/doc-1", async (route) => {
     await route.fulfill({
       json: {
@@ -89,6 +150,7 @@ async function mockDocumentDetail(page: Page) {
           file_size_bytes: 120,
           content_sha256: "a".repeat(64),
           duplicate_of_document_id: null,
+          knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
           uploaded_at: "2026-06-14T00:00:00Z",
           indexed_at: "2026-06-14T00:01:00Z",
           object_storage_path: "local://policy.txt",
@@ -130,6 +192,24 @@ async function mockDocumentDetail(page: Page) {
       body: "# 経費申請\n| 項目 | 金額 |",
     });
   });
+  return state;
+}
+
+function knowledgeBase(id: string, name: string, documentCount: number) {
+  return {
+    id,
+    name,
+    description: null,
+    status: "ACTIVE",
+    default_search_mode: "hybrid",
+    document_count: documentCount,
+    indexed_document_count: documentCount,
+    error_document_count: 0,
+    searchable_chunk_count: documentCount * 2,
+    created_at: "2026-06-14T00:00:00Z",
+    updated_at: "2026-06-14T00:00:00Z",
+    archived_at: null,
+  };
 }
 
 function dashboardSummary() {

@@ -16,6 +16,7 @@ import { DashboardClient } from "@/components/dashboard/DashboardClient";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
 import { FileListClient } from "@/components/file-list/FileListClient";
+import { KnowledgeBaseManagementClient } from "@/components/knowledge-bases/KnowledgeBaseManagementClient";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { SearchClient } from "@/components/search/SearchClient";
@@ -56,6 +57,7 @@ export function App() {
         <Route path={APP_ROUTES.dashboard} element={<DashboardClient />} />
         <Route path={APP_ROUTES.upload} element={<UploadWorkspace />} />
         <Route path={APP_ROUTES.fileList} element={<FileListClient />} />
+        <Route path={APP_ROUTES.knowledgeBases} element={<KnowledgeBaseManagementClient />} />
         <Route path={`${APP_ROUTES.documents}/:id`} element={<DocumentDetailRoute />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationClient />} />
@@ -90,7 +92,7 @@ function ProtectedLayout() {
       <Sidebar />
       <main
         ref={mainRef}
-        className="h-screen flex-1 overflow-y-auto focus:outline-none"
+        className="h-screen min-w-0 flex-1 overflow-y-auto focus:outline-none"
         aria-label="メイン領域"
         tabIndex={-1}
       >

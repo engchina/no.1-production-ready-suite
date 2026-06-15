@@ -2,18 +2,20 @@
 
 import { Link } from "react-router-dom";
 import { Search as SearchIcon, Sparkles, X } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { PageHeader } from "@/components/PageHeader";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Banner } from "@/components/ui/banner";
+import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { ToggleChip } from "@/components/ui/toggle-chip";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, ApiError, type DocumentSummary, type FileStatus } from "@/lib/api";
-import { useDocuments, useIngestDocument } from "@/lib/queries";
+import { api, ApiError, type DocumentSummary, type FileStatus, type KnowledgeBaseRef } from "@/lib/api";
+import { useDocuments, useEnqueueDocumentIngestionJob, useKnowledgeBases } from "@/lib/queries";
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
@@ -30,14 +32,22 @@ export function FileListClient() {
   const [filter, setFilter] = useState<FileStatus | "ALL">("ALL");
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState("ALL");
   const [offset, setOffset] = useState(0);
   const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
 
   const selection = useSelection<string>();
   const status = filter === "ALL" ? undefined : filter;
-  const query = useDocuments({ status, q: q || undefined, limit: LIMIT, offset });
+  const query = useDocuments({
+    status,
+    q: q || undefined,
+    knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId,
+    limit: LIMIT,
+    offset,
+  });
+  const knowledgeBases = useKnowledgeBases({ status: "ACTIVE", limit: 100, offset: 0 });
 
-  const ingest = useIngestDocument();
+  const enqueueIngestion = useEnqueueDocumentIngestionJob();
 
   const page = query.data;
   const items = page?.items ?? [];
@@ -45,6 +55,19 @@ export function FileListClient() {
   const allSelected = pageIds.length > 0 && selection.count === pageIds.length;
   const ingestibleSelected = items.filter(
     (d) => selection.isSelected(d.id) && INGESTIBLE.has(d.status)
+  );
+  const knowledgeBaseOptions = useMemo<SelectFieldOption<string>[]>(
+    () => [
+      { value: "ALL", label: t("fileList.knowledgeBaseFilter.all") },
+      ...((knowledgeBases.data?.items ?? []).map((knowledgeBase) => ({
+        value: knowledgeBase.id,
+        label: knowledgeBase.name,
+        description: t("knowledgeBaseScope.documentCount", {
+          count: knowledgeBase.document_count,
+        }),
+      })) satisfies SelectFieldOption<string>[]),
+    ],
+    [knowledgeBases.data?.items]
   );
 
   const resetView = (fn: () => void) => {
@@ -59,7 +82,7 @@ export function FileListClient() {
     setBulk({ done: 0, total: targets.length });
     for (const [index, id] of targets.entries()) {
       try {
-        await api.ingestDocument(id);
+        await api.enqueueDocumentIngestionJob(id);
       } catch {
         // 個別失敗は継続。状態は再取得で反映される。
       }
@@ -68,6 +91,7 @@ export function FileListClient() {
     setBulk(null);
     selection.clear();
     qc.invalidateQueries({ queryKey: ["documents"] });
+    qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     qc.invalidateQueries({ queryKey: ["dashboard", "summary"] });
   };
 
@@ -76,7 +100,7 @@ export function FileListClient() {
       <PageHeader title={t("nav.fileList")} subtitle={t("fileList.subtitle")} />
       <div className="space-y-4 p-8">
         {/* フィルタ + 検索 */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("fileList.filterAll")}>
             {FILTERS.map((f) => (
               <ToggleChip
@@ -88,26 +112,47 @@ export function FileListClient() {
               </ToggleChip>
             ))}
           </div>
-          <div className="relative">
-            <SearchIcon
-              size={15}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
-              aria-hidden
+          <div className="flex flex-wrap items-end gap-3">
+            <SelectField
+              id="file-list-knowledge-base"
+              label={t("fileList.knowledgeBaseFilter.label")}
+              value={knowledgeBaseId}
+              options={knowledgeBaseOptions}
+              onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
+              className="w-60 [&_label]:text-xs"
+              buttonClassName="bg-card"
             />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") resetView(() => setQ(search.trim()));
-              }}
-              onBlur={() => resetView(() => setQ(search.trim()))}
-              placeholder={t("fileList.searchPlaceholder")}
-              aria-label={t("fileList.searchPlaceholder")}
-              className="w-56 rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-primary"
-            />
+            <div className="relative">
+              <SearchIcon
+                size={15}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+                aria-hidden
+              />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") resetView(() => setQ(search.trim()));
+                }}
+                onBlur={() => resetView(() => setQ(search.trim()))}
+                placeholder={t("fileList.searchPlaceholder")}
+                aria-label={t("fileList.searchPlaceholder")}
+                className="h-10 w-56 rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-primary"
+              />
+            </div>
           </div>
         </div>
+
+        {knowledgeBases.isError ? (
+          <Banner severity="warning" title={t("knowledgeBaseScope.loadWarning")}>
+            <p>
+              {knowledgeBases.error instanceof ApiError
+                ? knowledgeBases.error.message
+                : t("knowledgeBaseScope.loadWarningHint")}
+            </p>
+          </Banner>
+        ) : null}
 
         {/* 一括操作バー */}
         {selection.count > 0 ? (
@@ -122,10 +167,10 @@ export function FileListClient() {
                 loading={bulk !== null}
                 disabled={ingestibleSelected.length === 0}
               >
-                <Sparkles size={14} aria-hidden />
+                {bulk === null ? <Sparkles size={14} aria-hidden /> : null}
                 {bulk
-                  ? t("fileList.bulkRunning", { done: bulk.done, total: bulk.total })
-                  : `${t("fileList.bulkIngest")} (${ingestibleSelected.length})`}
+                  ? t("fileList.bulkQueueRunning", { done: bulk.done, total: bulk.total })
+                  : `${t("fileList.bulkQueue")} (${ingestibleSelected.length})`}
               </Button>
               <Button variant="ghost" size="sm" onClick={selection.clear}>
                 <X size={14} aria-hidden />
@@ -145,7 +190,8 @@ export function FileListClient() {
         ) : items.length > 0 ? (
           <>
             <Card className="overflow-hidden">
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto">
+              <table className="min-w-[980px] w-full text-sm">
                 <thead className="bg-background text-left text-muted">
                   <tr>
                     <th className="w-10 px-4 py-3">
@@ -158,6 +204,7 @@ export function FileListClient() {
                       />
                     </th>
                     <th className="px-4 py-3 font-medium">{t("fileList.col.fileName")}</th>
+                    <th className="px-4 py-3 font-medium">{t("fileList.col.knowledgeBases")}</th>
                     <th className="px-4 py-3 font-medium">{t("fileList.col.category")}</th>
                     <th className="px-4 py-3 font-medium">{t("fileList.col.status")}</th>
                     <th className="px-4 py-3 text-right font-medium">{t("fileList.col.size")}</th>
@@ -172,12 +219,18 @@ export function FileListClient() {
                       doc={doc}
                       selected={selection.isSelected(doc.id)}
                       onToggle={() => selection.toggle(doc.id)}
-                      onIngest={(force) => ingest.mutate({ id: doc.id, force })}
-                      ingesting={ingest.isPending && ingest.variables?.id === doc.id}
+                      onIngest={(force) =>
+                        enqueueIngestion.mutate({ id: doc.id, force })
+                      }
+                      ingesting={
+                        enqueueIngestion.isPending &&
+                        enqueueIngestion.variables?.id === doc.id
+                      }
                     />
                   ))}
                 </tbody>
               </table>
+              </div>
             </Card>
 
             {/* ページネーション */}
@@ -260,6 +313,9 @@ function Row({
           {doc.file_name}
         </Link>
       </td>
+      <td className="max-w-[240px] px-4 py-3">
+        <KnowledgeBaseChips knowledgeBases={doc.knowledge_bases ?? []} />
+      </td>
       <td className="px-4 py-3 text-muted">{doc.category_name ?? "—"}</td>
       <td className="px-4 py-3">
         <StatusBadge status={doc.status} />
@@ -270,11 +326,32 @@ function Row({
         <div className="flex justify-end gap-2">
           {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
             <Button size="sm" loading={ingesting} onClick={() => onIngest(false)}>
-              {t("action.ingest")}
+              {!ingesting ? <Sparkles size={14} aria-hidden /> : null}
+              {t("action.enqueueIngestion")}
             </Button>
           )}
         </div>
       </td>
     </tr>
+  );
+}
+
+function KnowledgeBaseChips({ knowledgeBases }: { knowledgeBases: KnowledgeBaseRef[] }) {
+  if (knowledgeBases.length === 0) {
+    return <span className="text-muted">—</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {knowledgeBases.map((knowledgeBase) => (
+        <span
+          key={knowledgeBase.id}
+          className="max-w-[12rem] truncate rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium text-foreground"
+          title={knowledgeBase.name}
+        >
+          {knowledgeBase.name}
+        </span>
+      ))}
+    </div>
   );
 }

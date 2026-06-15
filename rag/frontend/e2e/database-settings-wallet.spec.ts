@@ -11,6 +11,8 @@ interface DatabaseSettingsData {
   readiness: string;
   embedding_dimension: number;
   vector_column: string;
+  adb_ocid: string;
+  region: string;
   config_source: "runtime";
 }
 
@@ -36,6 +38,8 @@ const databaseSettings: DatabaseSettingsData = {
   readiness: "missing_credentials",
   embedding_dimension: 1536,
   vector_column: "VECTOR(1536, FLOAT32)",
+  adb_ocid: "",
+  region: "ap-osaka-1",
   config_source: "runtime",
 };
 
@@ -225,6 +229,27 @@ async function mockDatabaseSettings(
 ) {
   await page.route("**/api/settings/database**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname.startsWith("/api/settings/database/adb")) {
+      await route.fulfill({
+        json: {
+          data: {
+            status: "not_configured",
+            message: "ADB OCID が設定されていません。",
+            id: null,
+            display_name: null,
+            lifecycle_state: null,
+            db_name: null,
+            cpu_core_count: null,
+            data_storage_size_in_tbs: null,
+            region: "ap-osaka-1",
+          },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+
     if (url.pathname === "/api/settings/database/wallet") {
       await onWalletUpload?.();
       await route.fulfill({

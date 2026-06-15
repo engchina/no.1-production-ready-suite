@@ -1,13 +1,16 @@
 """RAG 評価ランナー。"""
 
 import asyncio
+from collections.abc import Sequence
 from time import perf_counter
 from typing import Protocol
 
+from app.clients.oracle import OracleClient
 from app.config import Settings, get_settings
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.guardrails import evaluate_groundedness
+from app.rag.ingestion_quality import summarize_ingestion_quality
 from app.rag.observability import (
     elapsed_ms,
     new_trace_id,
@@ -22,6 +25,7 @@ from app.schemas.evaluation import (
     EvaluationExperiment,
     EvaluationExperimentResult,
     EvaluationFailureReason,
+    EvaluationIngestionQualitySummary,
     EvaluationMetricName,
     EvaluationMetrics,
     EvaluationRagOverrides,
@@ -47,16 +51,29 @@ class SearchPipeline(Protocol):
         """検索を実行する。"""
 
 
+class IngestionQualitySource(Protocol):
+    """評価 runner が corpus の取込品質を読むための最小インターフェース。"""
+
+    async def list_document_extractions(self) -> list[dict[str, object]]:
+        """保存済み extraction JSON 一覧を返す。"""
+
+
 class EvaluationRunner:
     """小規模な golden set を使って検索・回答品質を評価する。"""
 
     def __init__(
         self,
         pipeline: SearchPipeline | None = None,
+        quality_source: IngestionQualitySource | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._pipeline = pipeline
+        self._quality_source = (
+            quality_source
+            if quality_source is not None
+            else (OracleClient(settings=self._settings) if pipeline is None else None)
+        )
 
     async def run(
         self,
@@ -65,6 +82,7 @@ class EvaluationRunner:
         rerank_top_n: int,
         mode: SearchMode = SearchMode.HYBRID,
         filters: dict[str, str] | None = None,
+        knowledge_base_ids: Sequence[str] | None = None,
         thresholds: EvaluationThresholds | None = None,
         rag_overrides: EvaluationRagOverrides | None = None,
     ) -> EvaluationMetrics:
@@ -87,6 +105,7 @@ class EvaluationRunner:
                 passed=not threshold_failures,
                 threshold_failures=threshold_failures,
                 case_results=[],
+                ingestion_quality=await _ingestion_quality_summary(self._quality_source),
                 **aggregate_values,
             )
 
@@ -107,6 +126,7 @@ class EvaluationRunner:
                 rerank_top_n=rerank_top_n,
                 mode=mode,
                 filters=filters or {},
+                knowledge_base_ids=list(knowledge_base_ids or []),
             )
             trace_id = new_trace_id()
             case_started_at = perf_counter()
@@ -239,6 +259,7 @@ class EvaluationRunner:
             threshold_failures=threshold_failures,
             failure_reason_counts=failure_reason_counts,
             case_results=case_results,
+            ingestion_quality=await _ingestion_quality_summary(self._quality_source),
             **aggregate_values,
         )
 
@@ -259,6 +280,7 @@ class EvaluationRunner:
                 rerank_top_n=experiment.rerank_top_n,
                 mode=experiment.mode,
                 filters=experiment.filters,
+                knowledge_base_ids=experiment.knowledge_base_ids,
                 thresholds=thresholds,
                 rag_overrides=experiment.rag_overrides,
             )
@@ -308,6 +330,17 @@ def _settings_with_rag_overrides(
     }
     return settings.model_copy(
         update={mapping[key]: value for key, value in override_values.items()}
+    )
+
+
+async def _ingestion_quality_summary(
+    source: IngestionQualitySource | None,
+) -> EvaluationIngestionQualitySummary:
+    """取込品質 source がある場合だけ評価結果へ集計を添付する。"""
+    if source is None:
+        return EvaluationIngestionQualitySummary()
+    return EvaluationIngestionQualitySummary.model_validate(
+        summarize_ingestion_quality(await source.list_document_extractions())
     )
 
 

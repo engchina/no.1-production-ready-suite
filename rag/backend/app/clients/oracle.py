@@ -12,7 +12,7 @@ import re
 from array import array
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -22,8 +22,22 @@ from uuid import uuid4
 from app.config import Settings, get_settings
 from app.rag.chunking import Chunk
 from app.rag.request_context import current_audit_request_context
-from app.schemas.document import DocumentDetail, DocumentStats, DocumentSummary, FileStatus
+from app.rag.source_profile import build_source_profile
+from app.schemas.document import (
+    DocumentDetail,
+    DocumentStats,
+    DocumentSummary,
+    FileStatus,
+    IngestionJob,
+    IngestionJobStatus,
+)
 from app.schemas.extraction import StructuredExtraction
+from app.schemas.knowledge_base import (
+    KnowledgeBaseDetail,
+    KnowledgeBaseRef,
+    KnowledgeBaseStatus,
+    KnowledgeBaseSummary,
+)
 from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
@@ -31,7 +45,9 @@ SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
 type MetadataValue = str | int | float | bool | None
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 T = TypeVar("T")
+DocumentT = TypeVar("DocumentT", bound=DocumentSummary)
 SELECT_AI_UNAVAILABLE_ERROR = "Select AI は ORACLE_SELECT_AI_PROFILE の設定が必要です。"
+DEFAULT_KNOWLEDGE_BASE_NAME = "既定ナレッジベース"
 
 
 def _to_vector_bind(embedding: Sequence[float]) -> "array[float]":
@@ -130,11 +146,34 @@ class StoredChunk:
 
 
 @dataclass
+class StoredKnowledgeBase:
+    """ナレッジベース行。"""
+
+    id: str
+    name: str
+    status: KnowledgeBaseStatus
+    created_at: datetime
+    updated_at: datetime
+    tenant_id_hash: str | None = None
+    description: str | None = None
+    default_search_mode: SearchMode = SearchMode.HYBRID
+    retrieval_config: dict[str, object] = field(default_factory=dict)
+    archived_at: datetime | None = None
+    document_count: int = 0
+    indexed_document_count: int = 0
+    error_document_count: int = 0
+    searchable_chunk_count: int = 0
+
+
+@dataclass
 class LocalOracleStore:
     """Oracle row 変換などの単体テストで使う補助ストア。"""
 
     documents: dict[str, StoredDocument] = field(default_factory=dict)
     chunks: dict[str, StoredChunk] = field(default_factory=dict)
+    knowledge_bases: dict[str, StoredKnowledgeBase] = field(default_factory=dict)
+    document_knowledge_bases: set[tuple[str, str]] = field(default_factory=set)
+    ingestion_jobs: dict[str, IngestionJob] = field(default_factory=dict)
 
 
 _LOCAL_STORE = LocalOracleStore()
@@ -312,6 +351,7 @@ class OracleClient:
         file_size_bytes: int | None = None,
         content_sha256: str | None = None,
         duplicate_of_document_id: str | None = None,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> DocumentDetail:
         """ドキュメント行を作成する。"""
         return await self._create_document_with_oracle(
@@ -321,6 +361,196 @@ class OracleClient:
             file_size_bytes=file_size_bytes,
             content_sha256=content_sha256,
             duplicate_of_document_id=duplicate_of_document_id,
+            knowledge_base_ids=knowledge_base_ids,
+        )
+
+    async def create_knowledge_base(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        default_search_mode: SearchMode = SearchMode.HYBRID,
+        retrieval_config: Mapping[str, object] | None = None,
+    ) -> KnowledgeBaseDetail:
+        """ナレッジベースを作成する。"""
+        return await self._create_knowledge_base_with_oracle(
+            name=name,
+            description=description,
+            default_search_mode=default_search_mode,
+            retrieval_config=dict(retrieval_config or {}),
+        )
+
+    async def ensure_default_knowledge_base(
+        self,
+        *,
+        name: str = DEFAULT_KNOWLEDGE_BASE_NAME,
+    ) -> KnowledgeBaseDetail:
+        """tenant ごとの既定ナレッジベースを取得または作成する。"""
+        existing = await self._find_knowledge_base_by_name_with_oracle(name)
+        if existing is not None:
+            return existing
+        return await self.create_knowledge_base(name=name)
+
+    async def list_knowledge_bases(
+        self,
+        *,
+        status: KnowledgeBaseStatus | None = None,
+        query: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[KnowledgeBaseSummary]:
+        """ナレッジベース一覧を返す。"""
+        return await self._list_knowledge_bases_with_oracle(
+            status=status,
+            query=query,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_knowledge_bases(
+        self,
+        *,
+        status: KnowledgeBaseStatus | None = None,
+        query: str | None = None,
+    ) -> int:
+        """条件に一致するナレッジベース数を返す。"""
+        return await self._count_knowledge_bases_with_oracle(status=status, query=query)
+
+    async def get_knowledge_base(
+        self,
+        knowledge_base_id: str,
+    ) -> KnowledgeBaseDetail | None:
+        """ナレッジベース詳細を返す。"""
+        return await self._get_knowledge_base_with_oracle(knowledge_base_id)
+
+    async def update_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        default_search_mode: SearchMode | None = None,
+        retrieval_config: Mapping[str, object] | None = None,
+        update_fields: set[str] | None = None,
+    ) -> KnowledgeBaseDetail:
+        """ナレッジベースの基本情報を更新する。"""
+        return await self._update_knowledge_base_with_oracle(
+            knowledge_base_id=knowledge_base_id,
+            name=name,
+            description=description,
+            default_search_mode=default_search_mode,
+            retrieval_config=dict(retrieval_config) if retrieval_config is not None else None,
+            update_fields=update_fields,
+        )
+
+    async def archive_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail:
+        """ナレッジベースをアーカイブする。文書・chunk は削除しない。"""
+        return await self._archive_knowledge_base_with_oracle(knowledge_base_id)
+
+    async def assign_documents_to_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        document_ids: Sequence[str],
+    ) -> KnowledgeBaseDetail:
+        """既存文書をナレッジベースへ追加する。"""
+        return await self._assign_documents_to_knowledge_base_with_oracle(
+            knowledge_base_id,
+            document_ids,
+        )
+
+    async def remove_document_from_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        document_id: str,
+    ) -> KnowledgeBaseDetail:
+        """文書をナレッジベースから外す。文書自体は削除しない。"""
+        return await self._remove_document_from_knowledge_base_with_oracle(
+            knowledge_base_id,
+            document_id,
+        )
+
+    async def replace_document_knowledge_bases(
+        self,
+        document_id: str,
+        knowledge_base_ids: Sequence[str],
+    ) -> list[KnowledgeBaseRef]:
+        """文書の所属ナレッジベースを指定リストへ置換する。"""
+        return await self._replace_document_knowledge_bases_with_oracle(
+            document_id,
+            knowledge_base_ids,
+        )
+
+    async def list_document_knowledge_bases(self, document_id: str) -> list[KnowledgeBaseRef]:
+        """文書の所属ナレッジベース一覧を返す。"""
+        return await self._list_document_knowledge_bases_with_oracle(document_id)
+
+    async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
+        """取込 job を永続化する。"""
+        return await self._create_ingestion_job_with_oracle(job)
+
+    async def get_ingestion_job(self, job_id: str) -> IngestionJob | None:
+        """取込 job の現在状態を返す。"""
+        return await self._get_ingestion_job_with_oracle(job_id)
+
+    async def list_ingestion_jobs(
+        self,
+        *,
+        status: IngestionJobStatus | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[IngestionJob]:
+        """直近の取込 job 一覧を返す。"""
+        return await self._list_ingestion_jobs_with_oracle(
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_ingestion_jobs(self, *, status: IngestionJobStatus | None = None) -> int:
+        """アクセス可能な取込 job 件数を返す。"""
+        return await self._count_ingestion_jobs_with_oracle(status=status)
+
+    async def recover_stale_ingestion_jobs(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int,
+    ) -> list[IngestionJob]:
+        """stale RUNNING job を再キューまたは失敗へ戻し、対象 job を返す。"""
+        return await self._recover_stale_ingestion_jobs_with_oracle(
+            stale_before=stale_before,
+            limit=limit,
+        )
+
+    async def claim_ingestion_job(
+        self,
+        job_id: str,
+        *,
+        started_at: datetime,
+    ) -> IngestionJob | None:
+        """QUEUED job を row lock 付きで RUNNING へ遷移し、実行権を獲得する。"""
+        return await self._claim_ingestion_job_with_oracle(job_id, started_at=started_at)
+
+    async def update_ingestion_job(
+        self,
+        job_id: str,
+        *,
+        status: IngestionJobStatus | None = None,
+        error_message: str | None = None,
+        attempt_count: int | None = None,
+        max_attempts: int | None = None,
+        started_at: datetime | None = None,
+        finished_at: datetime | None = None,
+    ) -> IngestionJob | None:
+        """取込 job の状態を更新する。"""
+        return await self._update_ingestion_job_with_oracle(
+            job_id,
+            status=status,
+            error_message=error_message,
+            attempt_count=attempt_count,
+            max_attempts=max_attempts,
+            started_at=started_at,
+            finished_at=finished_at,
         )
 
     async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
@@ -333,6 +563,7 @@ class OracleClient:
         query: str | None = None,
         limit: int | None = None,
         offset: int = 0,
+        knowledge_base_id: str | None = None,
     ) -> list[DocumentSummary]:
         """ドキュメント一覧を返す。"""
         return await self._list_documents_with_oracle(
@@ -340,6 +571,7 @@ class OracleClient:
             query=query,
             limit=limit,
             offset=offset,
+            knowledge_base_id=knowledge_base_id,
         )
 
     async def list_document_extractions(self) -> list[dict[str, object]]:
@@ -350,9 +582,14 @@ class OracleClient:
         self,
         status: FileStatus | None = None,
         query: str | None = None,
+        knowledge_base_id: str | None = None,
     ) -> int:
         """条件に一致するドキュメント数を返す。"""
-        return await self._count_documents_with_oracle(status=status, query=query)
+        return await self._count_documents_with_oracle(
+            status=status,
+            query=query,
+            knowledge_base_id=knowledge_base_id,
+        )
 
     async def count_chunks(self) -> int:
         """検索可能なチャンク行数を返す。"""
@@ -645,6 +882,7 @@ class OracleClient:
         file_size_bytes: int | None,
         content_sha256: str | None,
         duplicate_of_document_id: str | None,
+        knowledge_base_ids: Sequence[str] | None,
     ) -> DocumentDetail:
         """Oracle document table へ文書行を作成する。"""
         document_id = uuid4().hex
@@ -661,8 +899,17 @@ class OracleClient:
             duplicate_of_document_id=duplicate_of_document_id,
             tenant_id_hash=_current_tenant_id_hash(),
         )
+        requested_knowledge_base_ids = _unique_optional_sequence(knowledge_base_ids or [])
 
         def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            knowledge_bases = (
+                [
+                    _require_active_knowledge_base(connection, knowledge_base_id)
+                    for knowledge_base_id in requested_knowledge_base_ids
+                ]
+                if requested_knowledge_base_ids
+                else [_ensure_default_knowledge_base(connection, DEFAULT_KNOWLEDGE_BASE_NAME)]
+            )
             _execute(
                 connection,
                 """
@@ -692,7 +939,1044 @@ class OracleClient:
                 """,
                 _document_binds(document),
             )
-            return _to_document_detail(document)
+            _insert_document_knowledge_base_rows(
+                connection,
+                document_id=document.id,
+                knowledge_base_ids=[knowledge_base.id for knowledge_base in knowledge_bases],
+            )
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": [
+                        _to_knowledge_base_ref(knowledge_base)
+                        for knowledge_base in knowledge_bases
+                    ]
+                }
+            )
+
+        return await self._run_transaction(operation)
+
+    async def _create_knowledge_base_with_oracle(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        default_search_mode: SearchMode,
+        retrieval_config: dict[str, object],
+    ) -> KnowledgeBaseDetail:
+        """Oracle knowledge base table へ行を作成する。"""
+        now = datetime.now(UTC)
+        knowledge_base = StoredKnowledgeBase(
+            id=uuid4().hex,
+            tenant_id_hash=_current_tenant_id_hash(),
+            name=name,
+            description=description,
+            status=KnowledgeBaseStatus.ACTIVE,
+            default_search_mode=default_search_mode,
+            retrieval_config=retrieval_config,
+            created_at=now,
+            updated_at=now,
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_knowledge_bases (
+                    knowledge_base_id,
+                    tenant_id_hash,
+                    name,
+                    description,
+                    status,
+                    default_search_mode,
+                    retrieval_config,
+                    created_at,
+                    updated_at,
+                    archived_at
+                ) VALUES (
+                    :knowledge_base_id,
+                    :tenant_id_hash,
+                    :name,
+                    :description,
+                    :status,
+                    :default_search_mode,
+                    :retrieval_config,
+                    :created_at,
+                    :updated_at,
+                    :archived_at
+                )
+                """,
+                _knowledge_base_binds(knowledge_base),
+            )
+            return _to_knowledge_base_detail(knowledge_base)
+
+        return await self._run_transaction(operation)
+
+    async def _find_knowledge_base_by_name_with_oracle(
+        self,
+        name: str,
+    ) -> KnowledgeBaseDetail | None:
+        """tenant 内のナレッジベースを名前で探す。"""
+        where_sql, binds = _oracle_knowledge_base_where(query=None)
+        binds["knowledge_base_name"] = name.casefold()
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                kb.knowledge_base_id,
+                kb.tenant_id_hash,
+                kb.name,
+                kb.description,
+                kb.status,
+                kb.default_search_mode,
+                kb.retrieval_config,
+                kb.created_at,
+                kb.updated_at,
+                kb.archived_at,
+                0 AS document_count,
+                0 AS indexed_document_count,
+                0 AS error_document_count,
+                0 AS searchable_chunk_count
+            FROM rag_knowledge_bases kb
+            WHERE {where_sql}
+              AND LOWER(kb.name) = :knowledge_base_name
+            ORDER BY kb.created_at ASC
+            FETCH FIRST 1 ROWS ONLY
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        if not rows:
+            return None
+        return _to_knowledge_base_detail(_stored_knowledge_base_from_row(rows[0]))
+
+    async def _list_knowledge_bases_with_oracle(
+        self,
+        *,
+        status: KnowledgeBaseStatus | None,
+        query: str | None,
+        limit: int | None,
+        offset: int,
+    ) -> list[KnowledgeBaseSummary]:
+        """Oracle knowledge base table から一覧取得する。"""
+        where_sql, binds = _oracle_knowledge_base_where(status=status, query=query)
+        binds["offset"] = offset
+        if limit is not None:
+            binds["limit"] = limit
+            paging_sql = "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
+        else:
+            paging_sql = "OFFSET :offset ROWS"
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                kb.knowledge_base_id,
+                kb.tenant_id_hash,
+                kb.name,
+                kb.description,
+                kb.status,
+                kb.default_search_mode,
+                kb.retrieval_config,
+                kb.created_at,
+                kb.updated_at,
+                kb.archived_at,
+                COUNT(DISTINCT dkb.document_id) AS document_count,
+                COUNT(DISTINCT CASE WHEN d.status = 'INDEXED' THEN d.document_id END)
+                    AS indexed_document_count,
+                COUNT(DISTINCT CASE WHEN d.status = 'ERROR' THEN d.document_id END)
+                    AS error_document_count,
+                COUNT(c.chunk_id) AS searchable_chunk_count
+            FROM rag_knowledge_bases kb
+            LEFT JOIN rag_document_knowledge_bases dkb
+                ON dkb.knowledge_base_id = kb.knowledge_base_id
+            LEFT JOIN rag_documents d
+                ON d.document_id = dkb.document_id
+               AND {document_access_sql}
+            LEFT JOIN rag_chunks c
+                ON c.document_id = d.document_id
+               AND d.status = 'INDEXED'
+            WHERE {where_sql}
+            GROUP BY
+                kb.knowledge_base_id,
+                kb.tenant_id_hash,
+                kb.name,
+                kb.description,
+                kb.status,
+                kb.default_search_mode,
+                kb.retrieval_config,
+                kb.created_at,
+                kb.updated_at,
+                kb.archived_at
+            ORDER BY kb.updated_at DESC, kb.name ASC
+            {paging_sql}
+            """,
+                where_sql=where_sql,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                paging_sql=paging_sql,
+            ),
+            binds,
+        )
+        return [_to_knowledge_base_summary(_stored_knowledge_base_from_row(row)) for row in rows]
+
+    async def _count_knowledge_bases_with_oracle(
+        self,
+        *,
+        status: KnowledgeBaseStatus | None,
+        query: str | None,
+    ) -> int:
+        """Oracle knowledge base table の件数を取得する。"""
+        where_sql, binds = _oracle_knowledge_base_where(status=status, query=query)
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT COUNT(*) AS count_value
+            FROM rag_knowledge_bases kb
+            WHERE {where_sql}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return _row_count_value(row)
+
+    async def _get_knowledge_base_with_oracle(
+        self,
+        knowledge_base_id: str,
+    ) -> KnowledgeBaseDetail | None:
+        """Oracle knowledge base table から詳細取得する。"""
+        rows = await self._fetch_all(
+            """
+            SELECT
+                kb.knowledge_base_id,
+                kb.tenant_id_hash,
+                kb.name,
+                kb.description,
+                kb.status,
+                kb.default_search_mode,
+                kb.retrieval_config,
+                kb.created_at,
+                kb.updated_at,
+                kb.archived_at,
+                COUNT(DISTINCT dkb.document_id) AS document_count,
+                COUNT(DISTINCT CASE WHEN d.status = 'INDEXED' THEN d.document_id END)
+                    AS indexed_document_count,
+                COUNT(DISTINCT CASE WHEN d.status = 'ERROR' THEN d.document_id END)
+                    AS error_document_count,
+                COUNT(c.chunk_id) AS searchable_chunk_count
+            FROM rag_knowledge_bases kb
+            LEFT JOIN rag_document_knowledge_bases dkb
+                ON dkb.knowledge_base_id = kb.knowledge_base_id
+            LEFT JOIN rag_documents d
+                ON d.document_id = dkb.document_id
+               AND {document_access_sql}
+            LEFT JOIN rag_chunks c
+                ON c.document_id = d.document_id
+               AND d.status = 'INDEXED'
+            WHERE kb.knowledge_base_id = :knowledge_base_id
+              AND {knowledge_base_access_sql}
+            GROUP BY
+                kb.knowledge_base_id,
+                kb.tenant_id_hash,
+                kb.name,
+                kb.description,
+                kb.status,
+                kb.default_search_mode,
+                kb.retrieval_config,
+                kb.created_at,
+                kb.updated_at,
+                kb.archived_at
+            """.format(
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind({"knowledge_base_id": knowledge_base_id}),
+        )
+        if not rows:
+            return None
+        return _to_knowledge_base_detail(_stored_knowledge_base_from_row(rows[0]))
+
+    async def _update_knowledge_base_with_oracle(
+        self,
+        *,
+        knowledge_base_id: str,
+        name: str | None,
+        description: str | None,
+        default_search_mode: SearchMode | None,
+        retrieval_config: dict[str, object] | None,
+        update_fields: set[str] | None,
+    ) -> KnowledgeBaseDetail:
+        """Oracle knowledge base table を更新する。"""
+        fields = update_fields or {
+            field_name
+            for field_name, value in {
+                "name": name,
+                "description": description,
+                "default_search_mode": default_search_mode,
+                "retrieval_config": retrieval_config,
+            }.items()
+            if value is not None
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
+            existing = _select_knowledge_base(connection, knowledge_base_id)
+            if existing is None:
+                raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
+            updated = existing
+            now = datetime.now(UTC)
+            if fields:
+                updated = existing
+                if "name" in fields and name is not None:
+                    updated = updated_copy_knowledge_base(updated, name=name)
+                if "description" in fields:
+                    updated = updated_copy_knowledge_base(updated, description=description)
+                if "default_search_mode" in fields and default_search_mode is not None:
+                    updated = updated_copy_knowledge_base(
+                        updated,
+                        default_search_mode=default_search_mode,
+                    )
+                if "retrieval_config" in fields:
+                    updated = updated_copy_knowledge_base(
+                        updated,
+                        retrieval_config=retrieval_config or {},
+                    )
+                updated = updated_copy_knowledge_base(updated, updated_at=now)
+                _execute(
+                    connection,
+                    _render_sql(
+                        """
+                    UPDATE rag_knowledge_bases
+                    SET
+                        name = :name,
+                        description = :description,
+                        default_search_mode = :default_search_mode,
+                        retrieval_config = :retrieval_config,
+                        updated_at = :updated_at
+                    WHERE knowledge_base_id = :knowledge_base_id
+                      AND {knowledge_base_access_sql}
+                    """,
+                        knowledge_base_access_sql=(_oracle_knowledge_base_access_predicate_sql()),
+                    ),
+                    _knowledge_base_binds(updated),
+                )
+            return _to_knowledge_base_detail(updated)
+
+        return await self._run_transaction(operation)
+
+    async def _archive_knowledge_base_with_oracle(
+        self,
+        knowledge_base_id: str,
+    ) -> KnowledgeBaseDetail:
+        """Oracle knowledge base table の status を ARCHIVED にする。"""
+
+        def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
+            existing = _select_knowledge_base(connection, knowledge_base_id)
+            if existing is None:
+                raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
+            now = datetime.now(UTC)
+            archived = updated_copy_knowledge_base(
+                existing,
+                status=KnowledgeBaseStatus.ARCHIVED,
+                updated_at=now,
+                archived_at=now,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_knowledge_bases
+                SET
+                    status = :status,
+                    updated_at = :updated_at,
+                    archived_at = :archived_at
+                WHERE knowledge_base_id = :knowledge_base_id
+                  AND {knowledge_base_access_sql}
+                """,
+                    knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(),
+                ),
+                _knowledge_base_binds(archived),
+            )
+            return _to_knowledge_base_detail(archived)
+
+        return await self._run_transaction(operation)
+
+    async def _assign_documents_to_knowledge_base_with_oracle(
+        self,
+        knowledge_base_id: str,
+        document_ids: Sequence[str],
+    ) -> KnowledgeBaseDetail:
+        """Oracle membership table へ文書所属を追加する。"""
+        unique_document_ids = _unique_sequence(document_ids)
+
+        def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
+            knowledge_base = _require_active_knowledge_base(connection, knowledge_base_id)
+            for document_id in unique_document_ids:
+                if _select_document(connection, document_id) is None:
+                    raise KeyError(f"document_id={document_id} は存在しません。")
+            _executemany(
+                connection,
+                """
+                MERGE INTO rag_document_knowledge_bases target
+                USING (
+                    SELECT
+                        :knowledge_base_id AS knowledge_base_id,
+                        :document_id AS document_id
+                    FROM dual
+                ) source
+                ON (
+                    target.knowledge_base_id = source.knowledge_base_id
+                    AND target.document_id = source.document_id
+                )
+                WHEN NOT MATCHED THEN
+                    INSERT (
+                        knowledge_base_id,
+                        document_id,
+                        tenant_id_hash,
+                        assigned_at,
+                        assigned_by_user_id_hash
+                    ) VALUES (
+                        :knowledge_base_id,
+                        :document_id,
+                        :tenant_id_hash,
+                        :assigned_at,
+                        :assigned_by_user_id_hash
+                    )
+                """,
+                [
+                    _document_knowledge_base_binds(
+                        knowledge_base_id=knowledge_base_id,
+                        document_id=document_id,
+                    )
+                    for document_id in unique_document_ids
+                ],
+            )
+            return _to_knowledge_base_detail(knowledge_base)
+
+        return await self._run_transaction(operation)
+
+    async def _remove_document_from_knowledge_base_with_oracle(
+        self,
+        knowledge_base_id: str,
+        document_id: str,
+    ) -> KnowledgeBaseDetail:
+        """Oracle membership table から文書所属を削除する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
+            knowledge_base = _select_knowledge_base(connection, knowledge_base_id)
+            if knowledge_base is None:
+                raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
+            if _select_document(connection, document_id) is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_document_knowledge_bases
+                WHERE knowledge_base_id = :knowledge_base_id
+                  AND document_id = :document_id
+                  AND {knowledge_base_membership_access_sql}
+                """,
+                    knowledge_base_membership_access_sql=(
+                        _oracle_membership_access_predicate_sql()
+                    ),
+                ),
+                _with_tenant_bind(
+                    {
+                        "knowledge_base_id": knowledge_base_id,
+                        "document_id": document_id,
+                    }
+                ),
+            )
+            return _to_knowledge_base_detail(knowledge_base)
+
+        return await self._run_transaction(operation)
+
+    async def _replace_document_knowledge_bases_with_oracle(
+        self,
+        document_id: str,
+        knowledge_base_ids: Sequence[str],
+    ) -> list[KnowledgeBaseRef]:
+        """Oracle membership table の文書所属を置換する。"""
+        unique_knowledge_base_ids = _unique_sequence(knowledge_base_ids)
+
+        def operation(connection: OracleConnectionProtocol) -> list[KnowledgeBaseRef]:
+            if _select_document(connection, document_id) is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            knowledge_bases = [
+                _require_active_knowledge_base(connection, knowledge_base_id)
+                for knowledge_base_id in unique_knowledge_base_ids
+            ]
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_document_knowledge_bases
+                WHERE document_id = :document_id
+                  AND {knowledge_base_membership_access_sql}
+                """,
+                    knowledge_base_membership_access_sql=(
+                        _oracle_membership_access_predicate_sql()
+                    ),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _executemany(
+                connection,
+                """
+                INSERT INTO rag_document_knowledge_bases (
+                    knowledge_base_id,
+                    document_id,
+                    tenant_id_hash,
+                    assigned_at,
+                    assigned_by_user_id_hash
+                ) VALUES (
+                    :knowledge_base_id,
+                    :document_id,
+                    :tenant_id_hash,
+                    :assigned_at,
+                    :assigned_by_user_id_hash
+                )
+                """,
+                [
+                    _document_knowledge_base_binds(
+                        knowledge_base_id=knowledge_base_id,
+                        document_id=document_id,
+                    )
+                    for knowledge_base_id in unique_knowledge_base_ids
+                ],
+            )
+            return [_to_knowledge_base_ref(knowledge_base) for knowledge_base in knowledge_bases]
+
+        return await self._run_transaction(operation)
+
+    async def _list_document_knowledge_bases_with_oracle(
+        self,
+        document_id: str,
+    ) -> list[KnowledgeBaseRef]:
+        """Oracle membership table から文書所属を取得する。"""
+        rows = await self._fetch_all(
+            """
+            SELECT
+                kb.knowledge_base_id,
+                kb.name
+            FROM rag_document_knowledge_bases dkb
+            JOIN rag_knowledge_bases kb
+                ON kb.knowledge_base_id = dkb.knowledge_base_id
+            JOIN rag_documents d
+                ON d.document_id = dkb.document_id
+            WHERE dkb.document_id = :document_id
+              AND {document_access_sql}
+              AND {knowledge_base_access_sql}
+            ORDER BY kb.name ASC, kb.knowledge_base_id ASC
+            """.format(
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        return [
+            KnowledgeBaseRef(id=str(row["knowledge_base_id"]), name=str(row["name"]))
+            for row in rows
+        ]
+
+    async def _document_knowledge_base_refs_by_document_id_with_oracle(
+        self,
+        document_ids: Sequence[str],
+    ) -> dict[str, list[KnowledgeBaseRef]]:
+        """複数 document の所属ナレッジベースをまとめて取得する。"""
+        unique_document_ids = _unique_optional_sequence(document_ids)
+        if not unique_document_ids:
+            return {}
+        document_filter_sql, document_binds = _oracle_in_predicate(
+            "dkb.document_id",
+            "document_id",
+            unique_document_ids,
+        )
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                dkb.document_id,
+                kb.knowledge_base_id,
+                kb.name
+            FROM rag_document_knowledge_bases dkb
+            JOIN rag_knowledge_bases kb
+              ON kb.knowledge_base_id = dkb.knowledge_base_id
+            WHERE {document_filter_sql}
+              AND {knowledge_base_access_sql}
+            ORDER BY dkb.document_id ASC, kb.name ASC, kb.knowledge_base_id ASC
+            """,
+                document_filter_sql=document_filter_sql,
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind(document_binds),
+        )
+        refs_by_document_id: dict[str, list[KnowledgeBaseRef]] = {
+            document_id: [] for document_id in unique_document_ids
+        }
+        for row in rows:
+            document_id = str(row["document_id"])
+            refs_by_document_id.setdefault(document_id, []).append(
+                KnowledgeBaseRef(id=str(row["knowledge_base_id"]), name=str(row["name"]))
+            )
+        return refs_by_document_id
+
+    async def _attach_knowledge_base_refs_to_documents(
+        self,
+        documents: Sequence[DocumentT],
+    ) -> list[DocumentT]:
+        """DocumentSummary/Detail へ所属 KB 参照を付与する。"""
+        if not documents:
+            return []
+        refs_by_document_id = await self._document_knowledge_base_refs_by_document_id_with_oracle(
+            [document.id for document in documents]
+        )
+        return [
+            document.model_copy(
+                update={"knowledge_bases": refs_by_document_id.get(document.id, [])}
+            )
+            for document in documents
+        ]
+
+    async def _create_ingestion_job_with_oracle(self, job: IngestionJob) -> IngestionJob:
+        """Oracle ingestion job table へ job を作成する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> IngestionJob:
+            if _select_document(connection, job.document_id) is None:
+                raise KeyError(f"document_id={job.document_id} は存在しません。")
+            _execute_ingestion_job_insert(
+                connection,
+                """
+                INSERT INTO rag_ingestion_jobs (
+                    job_id,
+                    document_id,
+                    tenant_id_hash,
+                    status,
+                    parser_profile,
+                    quality_warnings,
+                    skip_reason,
+                    error_message,
+                    attempt_count,
+                    max_attempts,
+                    queued_at,
+                    started_at,
+                    finished_at
+                ) VALUES (
+                    :job_id,
+                    :document_id,
+                    :tenant_id_hash,
+                    :status,
+                    :parser_profile,
+                    :quality_warnings,
+                    :skip_reason,
+                    :error_message,
+                    :attempt_count,
+                    :max_attempts,
+                    :queued_at,
+                    :started_at,
+                    :finished_at
+                )
+                """,
+                _ingestion_job_binds(job),
+            )
+            return job
+
+        return await self._run_transaction(operation)
+
+    async def _get_ingestion_job_with_oracle(self, job_id: str) -> IngestionJob | None:
+        """Oracle ingestion job table から job を取得する。"""
+        rows = await self._fetch_ingestion_job_rows(
+            _render_sql(
+                """
+            SELECT
+                j.job_id,
+                j.document_id,
+                j.status,
+                j.parser_profile,
+                j.quality_warnings,
+                j.skip_reason,
+                j.error_message,
+                j.attempt_count,
+                j.max_attempts,
+                j.queued_at,
+                j.started_at,
+                j.finished_at
+            FROM rag_ingestion_jobs j
+            JOIN rag_documents d
+              ON d.document_id = j.document_id
+            WHERE j.job_id = :job_id
+              AND {document_access_sql}
+            """,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"job_id": job_id}),
+        )
+        return None if not rows else _ingestion_job_from_row(rows[0])
+
+    async def _list_ingestion_jobs_with_oracle(
+        self,
+        *,
+        status: IngestionJobStatus | None,
+        limit: int | None,
+        offset: int,
+    ) -> list[IngestionJob]:
+        """Oracle ingestion job table から直近 job を取得する。"""
+        binds: dict[str, object] = {"offset": offset}
+        status_clause = ""
+        if status is not None:
+            binds["ingestion_job_status"] = status.value
+            status_clause = "AND j.status = :ingestion_job_status"
+        limit_clause = "OFFSET :offset ROWS"
+        if limit is not None:
+            binds["limit"] = limit
+            limit_clause += " FETCH NEXT :limit ROWS ONLY"
+        rows = await self._fetch_ingestion_job_rows(
+            _render_sql(
+                """
+            SELECT
+                j.job_id,
+                j.document_id,
+                j.status,
+                j.parser_profile,
+                j.quality_warnings,
+                j.skip_reason,
+                j.error_message,
+                j.attempt_count,
+                j.max_attempts,
+                j.queued_at,
+                j.started_at,
+                j.finished_at
+            FROM rag_ingestion_jobs j
+            JOIN rag_documents d
+              ON d.document_id = j.document_id
+            WHERE {document_access_sql}
+              {status_clause}
+            ORDER BY j.queued_at DESC, j.job_id DESC
+            {limit_clause}
+            """,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                status_clause=status_clause,
+                limit_clause=limit_clause,
+            ),
+            _with_tenant_bind(binds),
+        )
+        return [_ingestion_job_from_row(row) for row in rows]
+
+    async def _count_ingestion_jobs_with_oracle(
+        self,
+        *,
+        status: IngestionJobStatus | None,
+    ) -> int:
+        """Oracle ingestion job table の件数を取得する。"""
+        binds: dict[str, object] = {}
+        status_clause = ""
+        if status is not None:
+            binds["ingestion_job_status"] = status.value
+            status_clause = "AND j.status = :ingestion_job_status"
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT COUNT(*) AS count_value
+            FROM rag_ingestion_jobs j
+            JOIN rag_documents d
+              ON d.document_id = j.document_id
+            WHERE {document_access_sql}
+              {status_clause}
+            """,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                status_clause=status_clause,
+            ),
+            _with_tenant_bind(binds),
+        )
+        return _row_count_value(row)
+
+    async def _recover_stale_ingestion_jobs_with_oracle(
+        self,
+        *,
+        stale_before: datetime,
+        limit: int,
+    ) -> list[IngestionJob]:
+        """stale RUNNING job を QUEUED/FAILED へ戻す。"""
+        now = datetime.now(UTC)
+        stale_error_message = "取込ジョブが規定回数を超えて停止しました。"
+
+        def operation(connection: OracleConnectionProtocol) -> list[IngestionJob]:
+            rows = _fetch_ingestion_job_rows(
+                connection,
+                _render_sql(
+                    """
+                SELECT
+                    j.job_id,
+                    j.document_id,
+                    j.status,
+                    j.parser_profile,
+                    j.quality_warnings,
+                    j.skip_reason,
+                    j.error_message,
+                    j.attempt_count,
+                    j.max_attempts,
+                    j.queued_at,
+                    j.started_at,
+                    j.finished_at
+                FROM rag_ingestion_jobs j
+                JOIN rag_documents d
+                  ON d.document_id = j.document_id
+                WHERE j.status = 'RUNNING'
+                  AND COALESCE(j.started_at, j.queued_at) < :stale_before
+                  AND {document_access_sql}
+                ORDER BY COALESCE(j.started_at, j.queued_at) ASC, j.job_id ASC
+                FETCH FIRST :limit ROWS ONLY
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"stale_before": stale_before, "limit": limit}),
+                default_max_attempts=self._settings.ingestion_job_max_attempts,
+            )
+            stale_jobs = [_ingestion_job_from_row(row) for row in rows]
+            for job in stale_jobs:
+                if job.attempt_count >= job.max_attempts:
+                    _execute(
+                        connection,
+                        _render_sql(
+                            """
+                        UPDATE rag_ingestion_jobs
+                        SET status = 'FAILED',
+                            error_message = :error_message,
+                            finished_at = :finished_at
+                        WHERE job_id = :job_id
+                          AND EXISTS (
+                              SELECT 1
+                              FROM rag_documents d
+                              WHERE d.document_id = rag_ingestion_jobs.document_id
+                                AND {document_access_sql}
+                          )
+                        """,
+                            document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                        ),
+                        _with_tenant_bind(
+                            {
+                                "job_id": job.id,
+                                "error_message": stale_error_message,
+                                "finished_at": now,
+                            }
+                        ),
+                    )
+                    continue
+                _execute(
+                    connection,
+                    _render_sql(
+                        """
+                    UPDATE rag_ingestion_jobs
+                    SET status = 'QUEUED',
+                        error_message = NULL,
+                        started_at = NULL,
+                        finished_at = NULL
+                    WHERE job_id = :job_id
+                      AND EXISTS (
+                          SELECT 1
+                          FROM rag_documents d
+                          WHERE d.document_id = rag_ingestion_jobs.document_id
+                            AND {document_access_sql}
+                      )
+                    """,
+                        document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                    ),
+                    _with_tenant_bind({"job_id": job.id}),
+                )
+            return stale_jobs
+
+        return await self._run_transaction(operation)
+
+    async def _claim_ingestion_job_with_oracle(
+        self,
+        job_id: str,
+        *,
+        started_at: datetime,
+    ) -> IngestionJob | None:
+        """QUEUED job をロックして RUNNING へ遷移する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
+            rows = _fetch_ingestion_job_rows(
+                connection,
+                _render_sql(
+                    """
+                SELECT
+                    j.job_id,
+                    j.document_id,
+                    j.status,
+                    j.parser_profile,
+                    j.quality_warnings,
+                    j.skip_reason,
+                    j.error_message,
+                    j.attempt_count,
+                    j.max_attempts,
+                    j.queued_at,
+                    j.started_at,
+                    j.finished_at
+                FROM rag_ingestion_jobs j
+                JOIN rag_documents d
+                  ON d.document_id = j.document_id
+                WHERE j.job_id = :job_id
+                  AND j.status = 'QUEUED'
+                  AND {document_access_sql}
+                FOR UPDATE SKIP LOCKED
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"job_id": job_id}),
+                default_max_attempts=self._settings.ingestion_job_max_attempts,
+            )
+            if not rows:
+                return None
+            job = _ingestion_job_from_row(rows[0])
+            attempt_count = job.attempt_count + 1
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_ingestion_jobs
+                SET status = 'RUNNING',
+                    attempt_count = :attempt_count,
+                    started_at = :started_at,
+                    error_message = NULL,
+                    finished_at = NULL
+                WHERE job_id = :job_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_ingestion_jobs.document_id
+                        AND {document_access_sql}
+                  )
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind(
+                    {
+                        "job_id": job_id,
+                        "attempt_count": attempt_count,
+                        "started_at": started_at,
+                    }
+                ),
+            )
+            return job.model_copy(
+                update={
+                    "status": IngestionJobStatus.RUNNING,
+                    "attempt_count": attempt_count,
+                    "started_at": started_at,
+                    "error_message": None,
+                    "finished_at": None,
+                }
+            )
+
+        return await self._run_transaction(operation)
+
+    async def _update_ingestion_job_with_oracle(
+        self,
+        job_id: str,
+        *,
+        status: IngestionJobStatus | None,
+        error_message: str | None,
+        attempt_count: int | None,
+        max_attempts: int | None,
+        started_at: datetime | None,
+        finished_at: datetime | None,
+    ) -> IngestionJob | None:
+        """Oracle ingestion job table の状態を更新する。"""
+        updates: dict[str, object] = {}
+        if status is not None:
+            updates["status"] = status.value
+        if error_message is not None:
+            updates["error_message"] = error_message
+        if attempt_count is not None:
+            updates["attempt_count"] = attempt_count
+        if max_attempts is not None:
+            updates["max_attempts"] = max_attempts
+        if started_at is not None:
+            updates["started_at"] = started_at
+        if finished_at is not None:
+            updates["finished_at"] = finished_at
+        if not updates:
+            return await self.get_ingestion_job(job_id)
+        set_sql = ", ".join(f"{column} = :{column}" for column in updates)
+        binds = {"job_id": job_id, **updates}
+
+        def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
+            update_sql = _render_sql(
+                """
+            UPDATE rag_ingestion_jobs
+            SET {set_sql}
+            WHERE job_id = :job_id
+              AND EXISTS (
+                  SELECT 1
+                  FROM rag_documents d
+                  WHERE d.document_id = rag_ingestion_jobs.document_id
+                    AND {document_access_sql}
+              )
+            """,
+                set_sql=set_sql,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            )
+            try:
+                _execute(connection, update_sql, _with_tenant_bind(binds))
+            except Exception as exc:
+                is_missing_max_attempts = _is_missing_ingestion_job_max_attempts_error(exc)
+                if "max_attempts" not in updates or not is_missing_max_attempts:
+                    raise
+                legacy_updates = {
+                    column: value for column, value in updates.items() if column != "max_attempts"
+                }
+                if legacy_updates:
+                    legacy_set_sql = ", ".join(
+                        f"{column} = :{column}" for column in legacy_updates
+                    )
+                    legacy_binds = {"job_id": job_id, **legacy_updates}
+                    _execute(
+                        connection,
+                        _render_sql(
+                            """
+                        UPDATE rag_ingestion_jobs
+                        SET {set_sql}
+                        WHERE job_id = :job_id
+                          AND EXISTS (
+                              SELECT 1
+                              FROM rag_documents d
+                              WHERE d.document_id = rag_ingestion_jobs.document_id
+                                AND {document_access_sql}
+                          )
+                        """,
+                            set_sql=legacy_set_sql,
+                            document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                        ),
+                        _with_tenant_bind(legacy_binds),
+                    )
+            rows = _fetch_ingestion_job_rows(
+                connection,
+                _render_sql(
+                    """
+                SELECT
+                    j.job_id,
+                    j.document_id,
+                    j.status,
+                    j.parser_profile,
+                    j.quality_warnings,
+                    j.skip_reason,
+                    j.error_message,
+                    j.attempt_count,
+                    j.max_attempts,
+                    j.queued_at,
+                    j.started_at,
+                    j.finished_at
+                FROM rag_ingestion_jobs j
+                JOIN rag_documents d
+                  ON d.document_id = j.document_id
+                WHERE j.job_id = :job_id
+                  AND {document_access_sql}
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"job_id": job_id}),
+                default_max_attempts=self._settings.ingestion_job_max_attempts,
+            )
+            return None if not rows else _ingestion_job_from_row(rows[0])
 
         return await self._run_transaction(operation)
 
@@ -737,7 +2021,10 @@ class OracleClient:
         )
         if not rows:
             return None
-        return _to_document_summary(_stored_document_from_row(rows[0]))
+        summaries = await self._attach_knowledge_base_refs_to_documents(
+            [_to_document_summary(_stored_document_from_row(rows[0]))]
+        )
+        return summaries[0]
 
     async def _list_documents_with_oracle(
         self,
@@ -745,12 +2032,18 @@ class OracleClient:
         query: str | None,
         limit: int | None,
         offset: int,
+        knowledge_base_id: str | None,
     ) -> list[DocumentSummary]:
         """Oracle document table から一覧取得する。"""
-        where_sql, binds = _oracle_document_where(status=status, query=query)
-        binds.update({"offset": offset, "limit": limit})
+        where_sql, binds = _oracle_document_where(
+            status=status,
+            query=query,
+            knowledge_base_id=knowledge_base_id,
+        )
+        binds["offset"] = offset
         limit_clause = "OFFSET :offset ROWS"
         if limit is not None:
+            binds["limit"] = limit
             limit_clause += " FETCH NEXT :limit ROWS ONLY"
         rows = await self._fetch_all(
             _render_sql(
@@ -780,7 +2073,8 @@ class OracleClient:
             ),
             binds,
         )
-        return [_to_document_summary(_stored_document_from_row(row)) for row in rows]
+        summaries = [_to_document_summary(_stored_document_from_row(row)) for row in rows]
+        return await self._attach_knowledge_base_refs_to_documents(summaries)
 
     async def _list_document_extractions_with_oracle(self) -> list[dict[str, object]]:
         """Oracle document table から extraction JSON だけを取得する。"""
@@ -802,9 +2096,14 @@ class OracleClient:
         self,
         status: FileStatus | None,
         query: str | None,
+        knowledge_base_id: str | None,
     ) -> int:
         """Oracle document table の件数を取得する。"""
-        where_sql, binds = _oracle_document_where(status=status, query=query)
+        where_sql, binds = _oracle_document_where(
+            status=status,
+            query=query,
+            knowledge_base_id=knowledge_base_id,
+        )
         row = await self._fetch_one(
             _render_sql(
                 "SELECT COUNT(*) AS count_value FROM rag_documents WHERE {where_sql}",
@@ -923,7 +2222,12 @@ class OracleClient:
             ),
             _with_tenant_bind({"document_id": document_id}),
         )
-        return None if row is None else _to_document_detail(_stored_document_from_row(row))
+        if row is None:
+            return None
+        details = await self._attach_knowledge_base_refs_to_documents(
+            [_to_document_detail(_stored_document_from_row(row))]
+        )
+        return details[0]
 
     async def _update_document_status_with_oracle(
         self,
@@ -1016,7 +2320,14 @@ class OracleClient:
             document = _select_document(connection, document_id)
             if document is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document)
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
 
         return await self._run_transaction(operation)
 
@@ -1080,7 +2391,14 @@ class OracleClient:
             document = _select_document(connection, document_id)
             if document is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document)
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
 
         return await self._run_transaction(operation)
 
@@ -1182,6 +2500,24 @@ class OracleClient:
             ),
         )
 
+    async def _fetch_ingestion_job_rows(
+        self, statement: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        """max_attempts 列が未適用の旧 queue table でも ingestion job 行を取得する。"""
+        try:
+            return await self._fetch_all(statement, binds)
+        except Exception as exc:
+            if not _is_missing_ingestion_job_max_attempts_error(exc):
+                raise
+            legacy_binds = _with_default_max_attempts_bind(
+                binds or {},
+                self._settings.ingestion_job_max_attempts,
+            )
+            return await self._fetch_all(
+                _legacy_ingestion_job_max_attempts_select_sql(statement),
+                legacy_binds,
+            )
+
     async def _run_transaction(self, operation: Callable[[OracleConnectionProtocol], T]) -> T:
         """Oracle transaction を同期 SDK thread で実行する。"""
         return cast(T, await self._db_call_runner(lambda: self._run_transaction_sync(operation)))
@@ -1274,7 +2610,8 @@ def _fetch_all(
 ) -> list[dict[str, object]]:
     cursor = connection.cursor()
     try:
-        cursor.execute(_normalize_sql(statement), dict(binds))
+        normalized = _normalize_sql(statement)
+        cursor.execute(normalized, _binds_for_sql(normalized, binds))
         rows = cursor.fetchall()
         return [_row_to_dict(row, cursor.description) for row in rows]
     finally:
@@ -1288,7 +2625,8 @@ def _execute(
 ) -> None:
     cursor = connection.cursor()
     try:
-        cursor.execute(_normalize_sql(statement), dict(binds))
+        normalized = _normalize_sql(statement)
+        cursor.execute(normalized, _binds_for_sql(normalized, binds))
     finally:
         cursor.close()
 
@@ -1303,6 +2641,86 @@ def _executemany(
         cursor.executemany(_normalize_sql(statement), rows)
     finally:
         cursor.close()
+
+
+def _fetch_ingestion_job_rows(
+    connection: OracleConnectionProtocol,
+    statement: str,
+    binds: Mapping[str, object],
+    *,
+    default_max_attempts: int,
+) -> list[dict[str, object]]:
+    """max_attempts 列がない旧 ingestion job table では既定値列として読み替える。"""
+    try:
+        return _fetch_all(connection, statement, binds)
+    except Exception as exc:
+        if not _is_missing_ingestion_job_max_attempts_error(exc):
+            raise
+        return _fetch_all(
+            connection,
+            _legacy_ingestion_job_max_attempts_select_sql(statement),
+            _with_default_max_attempts_bind(binds, default_max_attempts),
+        )
+
+
+def _execute_ingestion_job_insert(
+    connection: OracleConnectionProtocol,
+    statement: str,
+    binds: Mapping[str, object],
+) -> None:
+    """max_attempts 列がない旧 ingestion job table では該当列を省いて INSERT する。"""
+    try:
+        _execute(connection, statement, binds)
+    except Exception as exc:
+        if not _is_missing_ingestion_job_max_attempts_error(exc):
+            raise
+        _execute(
+            connection,
+            _legacy_ingestion_job_max_attempts_insert_sql(statement),
+            binds,
+        )
+
+
+def _is_missing_ingestion_job_max_attempts_error(exc: Exception) -> bool:
+    message = str(exc).upper()
+    return "ORA-00904" in message and "MAX_ATTEMPTS" in message
+
+
+def _legacy_ingestion_job_max_attempts_select_sql(statement: str) -> str:
+    return _replace_exact_sql_line(
+        statement,
+        "j.max_attempts,",
+        ":default_max_attempts AS max_attempts,",
+    )
+
+
+def _legacy_ingestion_job_max_attempts_insert_sql(statement: str) -> str:
+    return _remove_exact_sql_lines(statement, {"max_attempts,", ":max_attempts,"})
+
+
+def _with_default_max_attempts_bind(
+    binds: Mapping[str, object],
+    default_max_attempts: int,
+) -> dict[str, object]:
+    return {**binds, "default_max_attempts": default_max_attempts}
+
+
+def _replace_exact_sql_line(statement: str, old: str, new: str) -> str:
+    lines = []
+    for line in statement.splitlines():
+        if line.strip() == old:
+            indent = line[: len(line) - len(line.lstrip())]
+            lines.append(f"{indent}{new}")
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _remove_exact_sql_lines(statement: str, stripped_lines: set[str]) -> str:
+    lines = [
+        line for line in statement.splitlines() if line.strip() not in stripped_lines
+    ]
+    return "\n".join(lines)
 
 
 def _select_document(
@@ -1339,6 +2757,210 @@ def _select_document(
     return None if not rows else _stored_document_from_row(rows[0])
 
 
+def _select_knowledge_base(
+    connection: OracleConnectionProtocol,
+    knowledge_base_id: str,
+) -> StoredKnowledgeBase | None:
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            knowledge_base_id,
+            tenant_id_hash,
+            name,
+            description,
+            status,
+            default_search_mode,
+            retrieval_config,
+            created_at,
+            updated_at,
+            archived_at,
+            0 AS document_count,
+            0 AS indexed_document_count,
+            0 AS error_document_count,
+            0 AS searchable_chunk_count
+        FROM rag_knowledge_bases
+        WHERE knowledge_base_id = :knowledge_base_id
+          AND {knowledge_base_access_sql}
+        """,
+            knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(),
+        ),
+        _with_tenant_bind({"knowledge_base_id": knowledge_base_id}),
+    )
+    return None if not rows else _stored_knowledge_base_from_row(rows[0])
+
+
+def _select_knowledge_base_by_name(
+    connection: OracleConnectionProtocol,
+    name: str,
+) -> StoredKnowledgeBase | None:
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            knowledge_base_id,
+            tenant_id_hash,
+            name,
+            description,
+            status,
+            default_search_mode,
+            retrieval_config,
+            created_at,
+            updated_at,
+            archived_at,
+            0 AS document_count,
+            0 AS indexed_document_count,
+            0 AS error_document_count,
+            0 AS searchable_chunk_count
+        FROM rag_knowledge_bases
+        WHERE LOWER(name) = :knowledge_base_name
+          AND {knowledge_base_access_sql}
+        """,
+            knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(),
+        ),
+        _with_tenant_bind({"knowledge_base_name": name.casefold()}),
+    )
+    return None if not rows else _stored_knowledge_base_from_row(rows[0])
+
+
+def _insert_knowledge_base(
+    connection: OracleConnectionProtocol,
+    knowledge_base: StoredKnowledgeBase,
+) -> None:
+    _execute(
+        connection,
+        """
+        INSERT INTO rag_knowledge_bases (
+            knowledge_base_id,
+            tenant_id_hash,
+            name,
+            description,
+            status,
+            default_search_mode,
+            retrieval_config,
+            created_at,
+            updated_at,
+            archived_at
+        ) VALUES (
+            :knowledge_base_id,
+            :tenant_id_hash,
+            :name,
+            :description,
+            :status,
+            :default_search_mode,
+            :retrieval_config,
+            :created_at,
+            :updated_at,
+            :archived_at
+        )
+        """,
+        _knowledge_base_binds(knowledge_base),
+    )
+
+
+def _ensure_default_knowledge_base(
+    connection: OracleConnectionProtocol,
+    name: str,
+) -> StoredKnowledgeBase:
+    existing = _select_knowledge_base_by_name(connection, name)
+    if existing is not None:
+        if existing.status != KnowledgeBaseStatus.ACTIVE:
+            raise ValueError("既定ナレッジベースがアーカイブ済みです。")
+        return existing
+    now = datetime.now(UTC)
+    knowledge_base = StoredKnowledgeBase(
+        id=uuid4().hex,
+        tenant_id_hash=_current_tenant_id_hash(),
+        name=name,
+        description=None,
+        status=KnowledgeBaseStatus.ACTIVE,
+        default_search_mode=SearchMode.HYBRID,
+        retrieval_config={},
+        created_at=now,
+        updated_at=now,
+    )
+    _insert_knowledge_base(connection, knowledge_base)
+    return knowledge_base
+
+
+def _require_active_knowledge_base(
+    connection: OracleConnectionProtocol,
+    knowledge_base_id: str,
+) -> StoredKnowledgeBase:
+    knowledge_base = _select_knowledge_base(connection, knowledge_base_id)
+    if knowledge_base is None:
+        raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
+    if knowledge_base.status != KnowledgeBaseStatus.ACTIVE:
+        raise ValueError("アーカイブ済みナレッジベースは変更できません。")
+    return knowledge_base
+
+
+def _insert_document_knowledge_base_rows(
+    connection: OracleConnectionProtocol,
+    *,
+    document_id: str,
+    knowledge_base_ids: Sequence[str],
+) -> None:
+    unique_knowledge_base_ids = _unique_optional_sequence(knowledge_base_ids)
+    if not unique_knowledge_base_ids:
+        return
+    _executemany(
+        connection,
+        """
+        INSERT INTO rag_document_knowledge_bases (
+            knowledge_base_id,
+            document_id,
+            tenant_id_hash,
+            assigned_at,
+            assigned_by_user_id_hash
+        ) VALUES (
+            :knowledge_base_id,
+            :document_id,
+            :tenant_id_hash,
+            :assigned_at,
+            :assigned_by_user_id_hash
+        )
+        """,
+        [
+            _document_knowledge_base_binds(
+                knowledge_base_id=knowledge_base_id,
+                document_id=document_id,
+            )
+            for knowledge_base_id in unique_knowledge_base_ids
+        ],
+    )
+
+
+def _select_document_knowledge_base_refs(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> list[KnowledgeBaseRef]:
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            kb.knowledge_base_id,
+            kb.name
+        FROM rag_document_knowledge_bases dkb
+        JOIN rag_knowledge_bases kb
+          ON kb.knowledge_base_id = dkb.knowledge_base_id
+        WHERE dkb.document_id = :document_id
+          AND {knowledge_base_access_sql}
+        ORDER BY kb.name ASC, kb.knowledge_base_id ASC
+        """,
+            knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    return [
+        KnowledgeBaseRef(id=str(row["knowledge_base_id"]), name=str(row["name"]))
+        for row in rows
+    ]
+
+
 def _row_to_dict(row: object, description: Sequence[Sequence[Any]] | None) -> dict[str, object]:
     if isinstance(row, Mapping):
         return {str(key).lower(): _read_db_value(value) for key, value in row.items()}
@@ -1370,6 +2992,21 @@ def _normalize_sql(statement: str) -> str:
     return re.sub(r"\s+", " ", statement).strip()
 
 
+_BIND_NAME_RE = re.compile(r":([a-zA-Z_]\w*)")
+
+
+def _binds_for_sql(statement: str, binds: Mapping[str, object]) -> dict[str, object]:
+    """SQL text に現れる placeholder のバインドだけを残す。
+
+    アクセス scope のバインド(tenant / document / category / knowledge base)は
+    `_with_tenant_bind` が予防的に superset で付与するため、特定クエリで使われない
+    placeholder が混ざる。oracledb thin モードは未使用の bind を渡すと DPY-4008 を出す
+    ので、実行直前に SQL に現れる名前だけへ絞り込む。
+    """
+    referenced = set(_BIND_NAME_RE.findall(statement))
+    return {name: value for name, value in binds.items() if name in referenced}
+
+
 def _render_sql(template: str, **parts: str) -> str:
     """内部生成した SQL 断片だけを template へ埋め込む。bind 値はここに渡さない。"""
     rendered = template
@@ -1382,6 +3019,7 @@ def _oracle_document_where(
     *,
     status: FileStatus | None = None,
     query: str | None = None,
+    knowledge_base_id: str | None = None,
 ) -> tuple[str, dict[str, object]]:
     clauses = _oracle_access_predicates()
     binds = _with_tenant_bind({})
@@ -1394,12 +3032,102 @@ def _oracle_document_where(
             "OR LOWER(category_name) LIKE :query ESCAPE '\\')"
         )
         binds["query"] = _like_pattern(query)
+    knowledge_base_ids = _filter_id_values(knowledge_base_id)
+    if knowledge_base_ids:
+        knowledge_base_filter_sql, knowledge_base_binds = _oracle_in_predicate(
+            "dkb.knowledge_base_id",
+            "filter_knowledge_base_id",
+            knowledge_base_ids,
+        )
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM rag_document_knowledge_bases dkb
+                JOIN rag_knowledge_bases kb
+                  ON kb.knowledge_base_id = dkb.knowledge_base_id
+                WHERE dkb.document_id = rag_documents.document_id
+                  AND {knowledge_base_filter_sql}
+                  AND kb.status = 'ACTIVE'
+                  AND {knowledge_base_access_sql}
+            )
+            """.format(
+                knowledge_base_filter_sql=knowledge_base_filter_sql,
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb")
+            )
+        )
+        binds.update(knowledge_base_binds)
+    return " AND ".join(clauses), binds
+
+
+def _oracle_in_predicate(
+    column: str,
+    bind_prefix: str,
+    values: Sequence[str],
+) -> tuple[str, dict[str, object]]:
+    """可変長 IN 条件を bind 付きで生成する。"""
+    unique_values = _unique_sequence(values)
+    binds: dict[str, object] = {
+        f"{bind_prefix}_{index}": value
+        for index, value in enumerate(unique_values)
+    }
+    placeholders = ", ".join(f":{key}" for key in binds)
+    return f"{column} IN ({placeholders})", binds
+
+
+def _oracle_knowledge_base_where(
+    *,
+    status: KnowledgeBaseStatus | None = None,
+    query: str | None = None,
+) -> tuple[str, dict[str, object]]:
+    clauses = _oracle_knowledge_base_access_predicates(alias="kb")
+    binds = _with_tenant_bind({})
+    if status is not None:
+        clauses.append("kb.status = :knowledge_base_status")
+        binds["knowledge_base_status"] = status.value
+    if query and query.strip():
+        clauses.append(
+            "(LOWER(kb.name) LIKE :knowledge_base_query ESCAPE '\\' "
+            "OR LOWER(kb.description) LIKE :knowledge_base_query ESCAPE '\\')"
+        )
+        binds["knowledge_base_query"] = _like_pattern(query)
     return " AND ".join(clauses), binds
 
 
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
+    knowledge_base_ids = _filter_id_values(filters.get("knowledge_base_id"))
+    knowledge_base_filter_sql = ""
+    if knowledge_base_ids:
+        knowledge_base_filter_sql, knowledge_base_binds = _oracle_in_predicate(
+            "dkb.knowledge_base_id",
+            "filter_knowledge_base_id",
+            knowledge_base_ids,
+        )
+        binds.update(knowledge_base_binds)
+        knowledge_base_filter_sql = f"AND {knowledge_base_filter_sql}"
+    if (
+        knowledge_base_ids
+        or current_audit_request_context().allowed_knowledge_base_ids is not None
+    ):
+        clauses.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM rag_document_knowledge_bases dkb
+                JOIN rag_knowledge_bases kb
+                  ON kb.knowledge_base_id = dkb.knowledge_base_id
+                WHERE dkb.document_id = d.document_id
+                  AND kb.status = 'ACTIVE'
+                  AND {knowledge_base_access_sql}
+                  {knowledge_base_filter_sql}
+            )
+            """.format(
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+                knowledge_base_filter_sql=knowledge_base_filter_sql,
+            )
+        )
     for key, value in filters.items():
         cleaned = value.strip()
         if not cleaned:
@@ -1416,6 +3144,8 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         elif key == "category_name":
             clauses.append("LOWER(d.category_name) LIKE :filter_category_name ESCAPE '\\'")
             binds["filter_category_name"] = _like_pattern(cleaned)
+        elif key == "knowledge_base_id":
+            continue
         elif key == "content_kind":
             clauses.append(
                 "LOWER(JSON_VALUE(c.metadata_json, '$.content_kind')) = :filter_content_kind"
@@ -1493,6 +3223,44 @@ def _oracle_access_predicate_sql(*, alias: str | None = None) -> str:
     return " AND ".join(_oracle_access_predicates(alias=alias))
 
 
+def _oracle_knowledge_base_access_predicates(*, alias: str | None = None) -> list[str]:
+    """tenant と認可済み knowledge base scope を SQL predicate にする。"""
+    context = current_audit_request_context()
+    predicates = [_oracle_tenant_predicate(alias=alias)]
+    knowledge_base_column = f"{alias}.knowledge_base_id" if alias else "knowledge_base_id"
+    if context.allowed_knowledge_base_ids is not None:
+        if not context.allowed_knowledge_base_ids:
+            predicates.append("1 = 0")
+        else:
+            placeholders = ", ".join(
+                f":access_knowledge_base_id_{index}"
+                for index, _ in enumerate(sorted(context.allowed_knowledge_base_ids))
+            )
+            predicates.append(f"{knowledge_base_column} IN ({placeholders})")
+    return predicates
+
+
+def _oracle_knowledge_base_access_predicate_sql(*, alias: str | None = None) -> str:
+    """tenant と knowledge base scope の predicate を AND で結合する。"""
+    return " AND ".join(_oracle_knowledge_base_access_predicates(alias=alias))
+
+
+def _oracle_membership_access_predicate_sql() -> str:
+    """membership table に対する tenant / knowledge base scope predicate。"""
+    predicates = [_oracle_tenant_predicate()]
+    context = current_audit_request_context()
+    if context.allowed_knowledge_base_ids is not None:
+        if not context.allowed_knowledge_base_ids:
+            predicates.append("1 = 0")
+        else:
+            placeholders = ", ".join(
+                f":access_knowledge_base_id_{index}"
+                for index, _ in enumerate(sorted(context.allowed_knowledge_base_ids))
+            )
+            predicates.append(f"knowledge_base_id IN ({placeholders})")
+    return " AND ".join(predicates)
+
+
 def _with_tenant_bind(
     binds: Mapping[str, object],
     *,
@@ -1509,12 +3277,40 @@ def _with_tenant_bind(
     if context.allowed_category_names is not None:
         for index, category_name in enumerate(sorted(context.allowed_category_names)):
             resolved[f"access_category_name_{index}"] = category_name
+    if context.allowed_knowledge_base_ids is not None:
+        for index, knowledge_base_id in enumerate(sorted(context.allowed_knowledge_base_ids)):
+            resolved[f"access_knowledge_base_id_{index}"] = knowledge_base_id
     return resolved
 
 
 def _like_pattern(value: str) -> str:
     escaped = value.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
+
+
+def _unique_sequence(values: Sequence[str]) -> list[str]:
+    unique_values = _unique_optional_sequence(values)
+    if not unique_values:
+        raise ValueError("ID を 1 件以上指定してください。")
+    return unique_values
+
+
+def _unique_optional_sequence(values: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    unique_values: list[str] = []
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique_values.append(cleaned)
+    return unique_values
+
+
+def _filter_id_values(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    return _unique_optional_sequence(value.split(","))
 
 
 def _document_binds(document: StoredDocument) -> dict[str, object]:
@@ -1529,6 +3325,54 @@ def _document_binds(document: StoredDocument) -> dict[str, object]:
         "content_sha256": document.content_sha256,
         "duplicate_of_document_id": document.duplicate_of_document_id,
         "uploaded_at": document.uploaded_at,
+    }
+
+
+def _knowledge_base_binds(knowledge_base: StoredKnowledgeBase) -> dict[str, object]:
+    return {
+        "knowledge_base_id": knowledge_base.id,
+        "tenant_id_hash": knowledge_base.tenant_id_hash,
+        "name": knowledge_base.name,
+        "description": knowledge_base.description,
+        "status": knowledge_base.status.value,
+        "default_search_mode": knowledge_base.default_search_mode.value,
+        "retrieval_config": _json_dumps(knowledge_base.retrieval_config),
+        "created_at": knowledge_base.created_at,
+        "updated_at": knowledge_base.updated_at,
+        "archived_at": knowledge_base.archived_at,
+    }
+
+
+def _document_knowledge_base_binds(
+    *,
+    knowledge_base_id: str,
+    document_id: str,
+) -> dict[str, object]:
+    now = datetime.now(UTC)
+    return {
+        "knowledge_base_id": knowledge_base_id,
+        "document_id": document_id,
+        "tenant_id_hash": _current_tenant_id_hash(),
+        "assigned_at": now,
+        "assigned_by_user_id_hash": current_audit_request_context().user_id_hash,
+    }
+
+
+def _ingestion_job_binds(job: IngestionJob) -> dict[str, object]:
+    return {
+        "job_id": job.id,
+        "document_id": job.document_id,
+        "tenant_id_hash": _current_tenant_id_hash(),
+        "status": job.status.value,
+        "parser_profile": job.parser_profile,
+        "quality_warnings": _json_dumps(job.quality_warnings),
+        "skip_reason": job.skip_reason,
+        "error_message": job.error_message,
+        "attempt_count": job.attempt_count,
+        "max_attempts": job.max_attempts,
+        "queued_at": job.queued_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
     }
 
 
@@ -1548,6 +3392,42 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         indexed_at=_optional_datetime(row.get("indexed_at")),
         extraction=_json_loads(row.get("extraction")),
         error_message=_optional_str(row.get("error_message")),
+    )
+
+
+def _stored_knowledge_base_from_row(row: Mapping[str, object]) -> StoredKnowledgeBase:
+    return StoredKnowledgeBase(
+        id=str(row["knowledge_base_id"]),
+        tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
+        name=str(row["name"]),
+        description=_optional_str(row.get("description")),
+        status=_knowledge_base_status(row.get("status")),
+        default_search_mode=_search_mode(row.get("default_search_mode")),
+        retrieval_config=_json_loads(row.get("retrieval_config")),
+        created_at=_datetime_value(row.get("created_at")),
+        updated_at=_datetime_value(row.get("updated_at")),
+        archived_at=_optional_datetime(row.get("archived_at")),
+        document_count=_int_value(row.get("document_count")),
+        indexed_document_count=_int_value(row.get("indexed_document_count")),
+        error_document_count=_int_value(row.get("error_document_count")),
+        searchable_chunk_count=_int_value(row.get("searchable_chunk_count")),
+    )
+
+
+def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:
+    return IngestionJob(
+        id=str(row["job_id"]),
+        document_id=str(row["document_id"]),
+        status=_ingestion_job_status(row.get("status")),
+        parser_profile=str(row.get("parser_profile") or "enterprise_ai_generic"),
+        quality_warnings=_json_string_list(row.get("quality_warnings")),
+        skip_reason=_optional_str(row.get("skip_reason")),
+        error_message=_optional_str(row.get("error_message")),
+        attempt_count=_int_value(row.get("attempt_count")),
+        max_attempts=max(1, _int_value(row.get("max_attempts")) or 3),
+        queued_at=_datetime_value(row.get("queued_at")),
+        started_at=_optional_datetime(row.get("started_at")),
+        finished_at=_optional_datetime(row.get("finished_at")),
     )
 
 
@@ -1586,7 +3466,7 @@ def _coerce_metadata_value(item: object) -> MetadataValue:
     return str(item)
 
 
-def _json_dumps(value: Mapping[str, object]) -> str:
+def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -1607,6 +3487,23 @@ def _json_loads(value: object) -> dict[str, object]:
     return {}
 
 
+def _json_string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [str(item) for item in value]
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(decoded, Sequence) and not isinstance(decoded, str | bytes | bytearray):
+        return [str(item) for item in decoded]
+    return []
+
+
 def _row_count_value(row: Mapping[str, object] | None) -> int:
     if row is None:
         return 0
@@ -1618,6 +3515,24 @@ def _file_status(value: object) -> FileStatus:
     if isinstance(value, FileStatus):
         return value
     return FileStatus(str(value))
+
+
+def _ingestion_job_status(value: object) -> IngestionJobStatus:
+    if isinstance(value, IngestionJobStatus):
+        return value
+    return IngestionJobStatus(str(value or IngestionJobStatus.QUEUED.value))
+
+
+def _knowledge_base_status(value: object) -> KnowledgeBaseStatus:
+    if isinstance(value, KnowledgeBaseStatus):
+        return value
+    return KnowledgeBaseStatus(str(value or KnowledgeBaseStatus.ACTIVE.value))
+
+
+def _search_mode(value: object) -> SearchMode:
+    if isinstance(value, SearchMode):
+        return value
+    return SearchMode(str(value or SearchMode.HYBRID.value))
 
 
 def _optional_str(value: object) -> str | None:
@@ -1685,6 +3600,9 @@ def reset_local_store() -> None:
     """テスト用にローカルストアを初期化する。"""
     _LOCAL_STORE.documents.clear()
     _LOCAL_STORE.chunks.clear()
+    _LOCAL_STORE.knowledge_bases.clear()
+    _LOCAL_STORE.document_knowledge_bases.clear()
+    _LOCAL_STORE.ingestion_jobs.clear()
 
 
 def close_oracle_pool() -> None:
@@ -1867,6 +3785,102 @@ def _pem_file_is_encrypted(path: Path) -> bool:
     return "BEGIN ENCRYPTED PRIVATE KEY" in text or "PROC-TYPE: 4,ENCRYPTED" in text
 
 
+def oracle_knowledge_base_schema_sql(
+    knowledge_base_table: str = "rag_knowledge_bases",
+    membership_table: str = "rag_document_knowledge_bases",
+    document_table: str = "rag_documents",
+) -> str:
+    """Oracle knowledge base / document membership table の DDL 例を返す。"""
+    return f"""
+CREATE TABLE {knowledge_base_table} (
+    knowledge_base_id     VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash        CHAR(64),
+    name                  VARCHAR2(256) NOT NULL,
+    description           VARCHAR2(2000),
+    status                VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
+    default_search_mode   VARCHAR2(16) DEFAULT 'hybrid' NOT NULL,
+    retrieval_config      JSON,
+    created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    archived_at           TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT {knowledge_base_table}_status_ck
+        CHECK (status IN ('ACTIVE', 'ARCHIVED')),
+    CONSTRAINT {knowledge_base_table}_mode_ck
+        CHECK (default_search_mode IN ('hybrid', 'vector', 'keyword'))
+);
+
+CREATE UNIQUE INDEX {knowledge_base_table}_tenant_name_uidx
+    ON {knowledge_base_table} (
+        NVL(tenant_id_hash, '__GLOBAL__'),
+        LOWER(name)
+    );
+
+CREATE INDEX {knowledge_base_table}_tenant_status_idx
+    ON {knowledge_base_table} (tenant_id_hash, status, updated_at DESC);
+
+CREATE TABLE {membership_table} (
+    knowledge_base_id        VARCHAR2(64) NOT NULL,
+    document_id              VARCHAR2(64) NOT NULL,
+    tenant_id_hash           CHAR(64),
+    assigned_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    assigned_by_user_id_hash CHAR(64),
+    PRIMARY KEY (knowledge_base_id, document_id),
+    CONSTRAINT {membership_table}_kb_fk
+        FOREIGN KEY (knowledge_base_id)
+        REFERENCES {knowledge_base_table} (knowledge_base_id)
+        ON DELETE CASCADE,
+    CONSTRAINT {membership_table}_doc_fk
+        FOREIGN KEY (document_id)
+        REFERENCES {document_table} (document_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX {membership_table}_document_idx
+    ON {membership_table} (document_id, knowledge_base_id);
+
+CREATE INDEX {membership_table}_tenant_kb_idx
+    ON {membership_table} (tenant_id_hash, knowledge_base_id, assigned_at DESC);
+""".strip()
+
+
+def oracle_ingestion_job_schema_sql(
+    table_name: str = "rag_ingestion_jobs",
+    document_table: str = "rag_documents",
+) -> str:
+    """Oracle ingestion job table の DDL 例を返す。"""
+    return f"""
+CREATE TABLE {table_name} (
+    job_id           VARCHAR2(64) PRIMARY KEY,
+    document_id      VARCHAR2(64) NOT NULL,
+    tenant_id_hash   CHAR(64),
+    status           VARCHAR2(32) NOT NULL,
+    parser_profile   VARCHAR2(80) NOT NULL,
+    quality_warnings JSON,
+    skip_reason      VARCHAR2(256),
+    error_message    VARCHAR2(2000),
+    attempt_count    NUMBER(5) DEFAULT 0 NOT NULL,
+    max_attempts     NUMBER(5) DEFAULT 3 NOT NULL,
+    queued_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    started_at       TIMESTAMP WITH TIME ZONE,
+    finished_at      TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT {table_name}_status_ck
+        CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED')),
+    CONSTRAINT {table_name}_attempts_ck
+        CHECK (attempt_count >= 0 AND max_attempts >= 1),
+    CONSTRAINT {table_name}_document_fk
+        FOREIGN KEY (document_id)
+        REFERENCES {document_table} (document_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX {table_name}_tenant_queued_idx
+    ON {table_name} (tenant_id_hash, status, queued_at DESC);
+
+CREATE INDEX {table_name}_document_idx
+    ON {table_name} (document_id, queued_at DESC);
+""".strip()
+
+
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
     """Oracle 26ai VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
     return f"""
@@ -1968,6 +3982,7 @@ CREATE TABLE {table_name} (
     context_chars         NUMBER(10) DEFAULT 0 NOT NULL,
     context_window_chars  NUMBER(10),
     document_ids          JSON,
+    knowledge_base_ids    JSON,
     config_fingerprint    CHAR(64),
     elapsed_ms            NUMBER(12, 3) NOT NULL,
     error_stage           VARCHAR2(64),
@@ -2117,6 +4132,12 @@ def _chunk_matches_filters(chunk: StoredChunk, filters: dict[str, str] | None) -
             return False
         if category_name.casefold() not in document.category_name.casefold():
             return False
+    knowledge_base_ids = _filter_id_values(filters.get("knowledge_base_id"))
+    if knowledge_base_ids and not any(
+        (knowledge_base_id, document.id) in _LOCAL_STORE.document_knowledge_bases
+        for knowledge_base_id in knowledge_base_ids
+    ):
+        return False
     if (content_kind := filters.get("content_kind")) and not _metadata_value_equals(
         chunk.metadata,
         "content_kind",
@@ -2169,6 +4190,14 @@ def _document_matches_current_tenant(document: StoredDocument) -> bool:
     if context.allowed_category_names is not None:
         category_name = document.category_name.casefold() if document.category_name else ""
         if category_name not in context.allowed_category_names:
+            return False
+    if context.allowed_knowledge_base_ids is not None:
+        document_knowledge_base_ids = {
+            knowledge_base_id
+            for knowledge_base_id, document_id in _LOCAL_STORE.document_knowledge_bases
+            if document_id == document.id
+        }
+        if not (document_knowledge_base_ids & set(context.allowed_knowledge_base_ids)):
             return False
     return True
 
@@ -2298,6 +4327,14 @@ def _to_document_summary(document: StoredDocument) -> DocumentSummary:
         duplicate_of_document_id=document.duplicate_of_document_id,
         uploaded_at=document.uploaded_at,
         indexed_at=document.indexed_at,
+        source_profile=build_source_profile(
+            original_file_name=document.file_name,
+            sanitized_file_name=document.file_name,
+            content_type=document.content_type,
+            file_size_bytes=document.file_size_bytes,
+            content_sha256=document.content_sha256,
+            duplicate_of_document_id=document.duplicate_of_document_id,
+        ),
     )
 
 
@@ -2316,7 +4353,52 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         object_storage_path=document.object_storage_path,
         extraction=document.extraction,
         error_message=document.error_message,
+        source_profile=build_source_profile(
+            original_file_name=document.file_name,
+            sanitized_file_name=document.file_name,
+            content_type=document.content_type,
+            file_size_bytes=document.file_size_bytes,
+            content_sha256=document.content_sha256,
+            duplicate_of_document_id=document.duplicate_of_document_id,
+        ),
     )
+
+
+def _to_knowledge_base_ref(knowledge_base: StoredKnowledgeBase) -> KnowledgeBaseRef:
+    return KnowledgeBaseRef(id=knowledge_base.id, name=knowledge_base.name)
+
+
+def _to_knowledge_base_summary(
+    knowledge_base: StoredKnowledgeBase,
+) -> KnowledgeBaseSummary:
+    return KnowledgeBaseSummary(
+        id=knowledge_base.id,
+        name=knowledge_base.name,
+        description=knowledge_base.description,
+        status=knowledge_base.status,
+        default_search_mode=knowledge_base.default_search_mode,
+        document_count=knowledge_base.document_count,
+        indexed_document_count=knowledge_base.indexed_document_count,
+        error_document_count=knowledge_base.error_document_count,
+        searchable_chunk_count=knowledge_base.searchable_chunk_count,
+        created_at=knowledge_base.created_at,
+        updated_at=knowledge_base.updated_at,
+        archived_at=knowledge_base.archived_at,
+    )
+
+
+def _to_knowledge_base_detail(knowledge_base: StoredKnowledgeBase) -> KnowledgeBaseDetail:
+    return KnowledgeBaseDetail(
+        **_to_knowledge_base_summary(knowledge_base).model_dump(),
+        retrieval_config=knowledge_base.retrieval_config,
+    )
+
+
+def updated_copy_knowledge_base(
+    knowledge_base: StoredKnowledgeBase,
+    **changes: object,
+) -> StoredKnowledgeBase:
+    return replace(knowledge_base, **cast(Any, changes))
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib
+from contextlib import suppress
 from functools import lru_cache
 from typing import Any
 
@@ -20,6 +21,7 @@ _REAL_SETTINGS = Settings()
 
 # 既存（テスト開始前から存在する）ドキュメント ID。実運用データを誤って消さない基準。
 _BASELINE_DOCUMENT_IDS: set[str] = set()
+_BASELINE_KNOWLEDGE_BASE_IDS: set[str] = set()
 
 # 冪等適用で無視できる Oracle エラーコード（既に存在 / 列が既に索引済み）。
 _IDEMPOTENT_DDL_CODES = {955, 1408}
@@ -107,6 +109,13 @@ def capture_baseline() -> None:
         cursor.execute("SELECT document_id FROM rag_documents")
         _BASELINE_DOCUMENT_IDS.clear()
         _BASELINE_DOCUMENT_IDS.update(row[0] for row in cursor.fetchall())
+        try:
+            cursor.execute("SELECT knowledge_base_id FROM rag_knowledge_bases")
+        except Exception:
+            _BASELINE_KNOWLEDGE_BASE_IDS.clear()
+        else:
+            _BASELINE_KNOWLEDGE_BASE_IDS.clear()
+            _BASELINE_KNOWLEDGE_BASE_IDS.update(row[0] for row in cursor.fetchall())
     finally:
         connection.close()
 
@@ -120,7 +129,21 @@ def cleanup_to_baseline() -> None:
     connection = _connect()
     try:
         cursor = connection.cursor()
+        kb_baseline = tuple(_BASELINE_KNOWLEDGE_BASE_IDS)
         baseline = tuple(_BASELINE_DOCUMENT_IDS)
+        if kb_baseline:
+            kb_placeholders = ", ".join(f":kb{i}" for i in range(len(kb_baseline)))
+            kb_params = {f"kb{i}": value for i, value in enumerate(kb_baseline)}
+            cursor.execute(
+                f"""
+                DELETE FROM rag_document_knowledge_bases
+                WHERE knowledge_base_id NOT IN ({kb_placeholders})
+                """,
+                kb_params,
+            )
+        else:
+            with suppress(Exception):
+                cursor.execute("DELETE FROM rag_document_knowledge_bases")
         if baseline:
             placeholders = ", ".join(f":b{i}" for i in range(len(baseline)))
             params = {f"b{i}": value for i, value in enumerate(baseline)}
@@ -135,6 +158,19 @@ def cleanup_to_baseline() -> None:
         else:
             cursor.execute("DELETE FROM rag_chunks")
             cursor.execute("DELETE FROM rag_documents")
+        if kb_baseline:
+            kb_placeholders = ", ".join(f":kb{i}" for i in range(len(kb_baseline)))
+            kb_params = {f"kb{i}": value for i, value in enumerate(kb_baseline)}
+            cursor.execute(
+                f"""
+                DELETE FROM rag_knowledge_bases
+                WHERE knowledge_base_id NOT IN ({kb_placeholders})
+                """,
+                kb_params,
+            )
+        else:
+            with suppress(Exception):
+                cursor.execute("DELETE FROM rag_knowledge_bases")
         connection.commit()
     finally:
         connection.close()

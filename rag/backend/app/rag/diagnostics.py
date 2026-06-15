@@ -44,6 +44,7 @@ def build_search_diagnostics(
         query_variant_count=query_variant_count,
         oracle_vector_target_accuracy=resolved_settings.oracle_vector_target_accuracy,
         filter_keys=sorted(request.filters),
+        knowledge_base_count=len(request.knowledge_base_ids),
         config_fingerprint=rag_config_fingerprint(resolved_settings),
     )
 

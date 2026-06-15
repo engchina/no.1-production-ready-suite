@@ -234,7 +234,7 @@ async def _invoke_surface(
     if surface == "llm":
         answer = await client.generate(prompt, context)
         return {"text_chars": len(answer)}
-    extraction = await client.extract_with_vlm(
+    extraction = await client.extract_with_vlm_endpoint(
         vlm_text.encode("utf-8"),
         vlm_prompt,
         mime_type=mime_type,

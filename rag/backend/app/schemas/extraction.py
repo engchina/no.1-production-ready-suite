@@ -2,7 +2,8 @@
 
 import math
 import re
-from typing import Self
+from collections.abc import Mapping, Sequence
+from typing import Self, TypeGuard
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -89,15 +90,22 @@ class DocumentElement(BaseModel):
         """要素本文の改行だけ正規化し、表・リストの構造は残す。"""
         return value.replace("\r\n", "\n").replace("\r", "\n").strip()
 
-    @field_validator("bbox")
+    @field_validator("bbox", mode="before")
     @classmethod
-    def validate_bbox(cls, value: list[float] | None) -> list[float] | None:
-        """bbox は x1,y1,x2,y2 の 4 値だけを保存する。"""
+    def validate_bbox(cls, value: object) -> list[float] | None:
+        """bbox は x1,y1,x2,y2 の 4 値へ正規化して保存する。"""
         if value is None:
             return None
-        if len(value) != 4 or not all(math.isfinite(item) for item in value):
-            raise ValueError("bbox は有限数 4 個で指定してください。")
-        return [float(item) for item in value]
+        coords = _bbox_coordinates(value)
+        if coords is None or not coords or not all(math.isfinite(item) for item in coords):
+            return None
+        if len(coords) == 4:
+            return coords
+        if len(coords) >= 6 and len(coords) % 2 == 0:
+            xs = coords[0::2]
+            ys = coords[1::2]
+            return [min(xs), min(ys), max(xs), max(ys)]
+        return None
 
     @field_validator("section_path")
     @classmethod
@@ -124,6 +132,26 @@ class DocumentElement(BaseModel):
         return self.model_dump(exclude_none=True)
 
 
+class IngestionQualityReport(BaseModel):
+    """取込後に評価へ渡す非機密な文書品質レポート。"""
+
+    parser_profile: str = "enterprise_ai_generic"
+    risk_level: str = "low"
+    page_count: int = 0
+    table_count: int = 0
+    figure_count: int = 0
+    element_count: int = 0
+    long_document: bool = False
+    quality_warnings: list[str] = Field(default_factory=list)
+
+    @field_validator("risk_level")
+    @classmethod
+    def normalize_risk_level(cls, value: str) -> str:
+        """評価 UI で扱う低 cardinality の risk level に寄せる。"""
+        normalized = value.strip().casefold()
+        return normalized if normalized in {"low", "medium", "high"} else "low"
+
+
 class StructuredExtraction(BaseModel):
     """OCI Enterprise AI の VLM/LLM 出力を検証して保存するための正規化形。"""
 
@@ -132,6 +160,7 @@ class StructuredExtraction(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     warnings: list[str] = Field(default_factory=list)
     elements: list[DocumentElement] = Field(default_factory=list)
+    quality_report: IngestionQualityReport | None = None
 
     @model_validator(mode="after")
     def normalize_structure(self) -> Self:
@@ -154,6 +183,11 @@ class StructuredExtraction(BaseModel):
             "confidence": self.confidence,
             "warnings": self.warnings,
             "elements": [element.to_payload() for element in self.elements],
+            "quality_report": (
+                self.quality_report.model_dump(exclude_none=True)
+                if self.quality_report is not None
+                else None
+            ),
         }
 
 
@@ -201,6 +235,100 @@ def normalize_document_elements(
             )
         )
     return normalized
+
+
+def _bbox_coordinates(value: object) -> list[float] | None:
+    """VLM/parser ごとの bbox 表現を数値列へ寄せる。"""
+    if isinstance(value, Mapping):
+        return _bbox_coordinates_from_mapping(value)
+    if not _is_bbox_sequence(value):
+        return None
+    items = list(value)
+    numeric_coords: list[float] = []
+    for item in items:
+        number = _number(item)
+        if number is None:
+            break
+        numeric_coords.append(number)
+    else:
+        return numeric_coords
+    point_coords: list[float] = []
+    for item in items:
+        point = _bbox_point(item)
+        if point is None:
+            return None
+        point_coords.extend(point)
+    return point_coords
+
+
+def _bbox_coordinates_from_mapping(value: Mapping[object, object]) -> list[float] | None:
+    """dict 形式の bbox / polygon / point list を数値列へ変換する。"""
+    lowered = {str(key).strip().casefold(): item for key, item in value.items()}
+    for key in ("bbox", "bounding_box", "boundingbox", "polygon", "points", "vertices"):
+        if key in lowered:
+            return _bbox_coordinates(lowered[key])
+    if all(key in lowered for key in ("x", "y", "width", "height")):
+        x = _number(lowered["x"])
+        y = _number(lowered["y"])
+        width = _number(lowered["width"])
+        height = _number(lowered["height"])
+        if x is not None and y is not None and width is not None and height is not None:
+            return [x, y, x + width, y + height]
+    if all(key in lowered for key in ("x1", "y1", "x2", "y2")):
+        coords: list[float] = []
+        for key in ("x1", "y1", "x2", "y2"):
+            coord = _number(lowered[key])
+            if coord is None:
+                return None
+            coords.append(coord)
+        return coords
+    return _bbox_point(lowered)
+
+
+def _bbox_point(value: object) -> list[float] | None:
+    """1 点を x,y の 2 値として取り出す。"""
+    if isinstance(value, Mapping):
+        lowered = {str(key).strip().casefold(): item for key, item in value.items()}
+        if "x" in lowered and "y" in lowered:
+            x = _number(lowered["x"])
+            y = _number(lowered["y"])
+            if x is not None and y is not None:
+                return [x, y]
+        return None
+    if not _is_bbox_sequence(value):
+        return None
+    items = list(value)
+    if len(items) < 2:
+        return None
+    x = _number(items[0])
+    y = _number(items[1])
+    if x is None or y is None:
+        return None
+    return [x, y]
+
+
+def _is_bbox_sequence(value: object) -> TypeGuard[Sequence[object]]:
+    """文字列以外の sequence かどうかを判定する。"""
+    return isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray)
+
+
+def _is_number(value: object) -> TypeGuard[int | float]:
+    """bool を除外した数値判定。"""
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _number(value: object) -> float | None:
+    """bbox 用の数値へ変換できなければ None を返す。"""
+    if isinstance(value, str):
+        try:
+            result = float(value.strip())
+        except ValueError:
+            return None
+        return result if math.isfinite(result) else None
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        result = float(value)
+        return result if math.isfinite(result) else None
+    return None
 
 
 def infer_document_elements(text: str) -> list[DocumentElement]:

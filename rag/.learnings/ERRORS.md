@@ -28,6 +28,102 @@ Use a writable cache directory for verification commands, for example `uv --cach
 
 ---
 
+## [ERR-20260615-004] oci_vlm_incomplete_max_output_tokens
+
+**Logged**: 2026-06-15T21:50:00+09:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+OCI OpenAI-compatible Responses can return HTTP 200 with `status=incomplete` and `incomplete_details.reason=max_output_tokens` for PDF VLM extraction, causing ingestion to fail after a successful response.
+
+### Error
+```text
+ValueError: OCI Enterprise AI response status=incomplete: max_output_tokens
+```
+
+### Context
+- The Files API upload and delete succeeded.
+- `/openai/v1/responses` returned HTTP 200, but the model output JSON was truncated by output-token limits.
+- The application previously treated this as an unhandled `ValueError`, returning HTTP 500.
+
+### Suggested Fix
+Set a larger VLM-specific `max_output_tokens` in the Responses payload and map `status=incomplete` / `reason=max_output_tokens` to a user-visible ingestion error instead of a 500.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/clients/oci_enterprise_ai.py, backend/app/rag/ingestion.py
+
+### Resolution
+- **Resolved**: 2026-06-15T21:50:00+09:00
+- **Notes**: Added `OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS` default 32768, kept LLM default 1200, and added regression tests for client parsing and ingestion API response.
+
+---
+
+## [ERR-20260615-003] oci_vlm_polygon_bbox_validation_error
+
+**Logged**: 2026-06-15T20:50:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Summary
+OCI OpenAI-compatible VLM extraction can return polygon-style bbox values with 8 coordinates, while the local `StructuredExtraction` schema originally accepted only 4-value rectangles.
+
+### Error
+```text
+pydantic_core._pydantic_core.ValidationError: elements.N.bbox
+Value error, bbox は有限数 4 個で指定してください。
+input_value=[755, 17, 765, 66, 755, 964, 765, 970]
+```
+
+### Context
+- Endpoint returned `POST /openai/v1/responses` with HTTP 200.
+- Ingestion failed while validating VLM output, after successful file upload and cleanup.
+
+### Suggested Fix
+Normalize bbox metadata from polygon/list/dict forms to `[min_x, min_y, max_x, max_y]` before Pydantic validation rejects the extraction payload.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/schemas/extraction.py, backend/tests/test_oci_enterprise_ai.py
+
+### Resolution
+- **Resolved**: 2026-06-15T20:50:00+09:00
+- **Notes**: Added bbox normalization and a regression test covering OpenAI Responses `output_text` JSON with 8-coordinate bbox values.
+
+---
+
+## [ERR-20260615-002] oracle_schema_lock_during_parallel_pytest
+
+**Logged**: 2026-06-15T20:45:00+09:00
+**Priority**: medium
+**Status**: pending
+**Area**: tests
+
+### Summary
+Running backend pytest processes concurrently can make the autouse Oracle schema setup fail with ORA-00054 because another session holds a DML/table lock.
+
+### Error
+```text
+oracledb.exceptions.DatabaseError: ORA-00054: Failed to acquire a lock
+(Type: "TM", Name: "DML", Description: "Synchronizes accesses to an object")
+```
+
+### Context
+- Commands attempted in parallel: targeted `uv run pytest` for unit tests and `tests/test_rag_flow.py`.
+- The `test_rag_flow.py` process was using the shared Oracle test schema while another pytest process started schema initialization.
+
+### Suggested Fix
+Avoid running Oracle-backed pytest processes in parallel against the same schema, or isolate schemas per worker before enabling parallel backend test runs.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/conftest.py, backend/tests/_oracle_test_db.py
+
+---
+
 ## [ERR-20260614-019] uv_cache_readonly_root
 
 **Logged**: 2026-06-14T13:11:46+09:00
@@ -794,5 +890,39 @@ For this endpoint, keep `_read_object_storage_namespace()` synchronous inside th
 ### Resolution
 - **Resolved**: 2026-06-14T13:00:00+09:00
 - **Notes**: Replaced the threadpool call with direct `_read_object_storage_namespace(payload)` and reran backend full pytest successfully.
+
+---
+
+## [ERR-20260615-001] uv_cache_sandbox_readonly
+
+**Logged**: 2026-06-15T18:52:08+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+`uv run pytest` failed inside the managed filesystem sandbox because uv could not create a temporary lock file under `/root/.cache/uv`.
+
+### Error
+```text
+error: Could not acquire lock
+  Caused by: Could not create temporary file
+  Caused by: Read-only file system (os error 30) at path "/root/.cache/uv/.tmprH2J6c"
+```
+
+### Context
+- Command attempted: `uv run pytest tests/test_document_workspace.py tests/test_knowledge_bases_api.py -q`
+- The same command succeeded after rerunning with sandbox escalation.
+
+### Suggested Fix
+When `uv` needs its default cache under `/root/.cache/uv` in this environment, rerun the test command with approved sandbox escalation, or use a writable uv cache path if appropriate.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pyproject.toml
+
+### Resolution
+- **Resolved**: 2026-06-15T18:52:08+09:00
+- **Notes**: Reran the same backend pytest subset with sandbox escalation; 11 tests passed.
 
 ---

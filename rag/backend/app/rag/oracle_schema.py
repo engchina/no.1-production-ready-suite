@@ -16,12 +16,15 @@ from typing import Any
 from app.clients.oracle import (
     oracle_document_schema_sql,
     oracle_ingestion_audit_schema_sql,
+    oracle_ingestion_job_schema_sql,
+    oracle_knowledge_base_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_vector_schema_sql,
 )
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
+MIGRATION_ARTIFACT_VERSION = "20260615_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -48,6 +51,16 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="documents",
             table_name="rag_documents",
             sql=oracle_document_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="knowledge_bases",
+            table_name="rag_knowledge_bases",
+            sql=oracle_knowledge_base_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="ingestion_jobs",
+            table_name="rag_ingestion_jobs",
+            sql=oracle_ingestion_job_schema_sql(),
         ),
         OracleSchemaSection(
             name="chunks",
@@ -78,6 +91,31 @@ def oracle_schema_sql(sections: Sequence[OracleSchemaSection] | None = None) -> 
     )
 
 
+def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
+    """既存 Oracle schema を現行 DDL 契約へ寄せる migration section を返す。"""
+    return [
+        OracleSchemaSection(
+            name="20260615_001_ingestion_jobs_attempt_counters",
+            table_name="rag_ingestion_jobs",
+            sql=_ingestion_jobs_attempt_counters_migration_sql(),
+        )
+    ]
+
+
+def oracle_schema_migration_sql(
+    sections: Sequence[OracleSchemaSection] | None = None,
+) -> str:
+    """SQLcl 等で適用できる Oracle schema migration artifact を返す。"""
+    resolved_sections = list(sections or oracle_schema_migration_sections())
+    return (
+        "\n\n".join(
+            f"-- migration: {section.name}\n{section.sql.rstrip()}"
+            for section in resolved_sections
+        )
+        + "\n"
+    )
+
+
 def oracle_schema_manifest(sections: Sequence[OracleSchemaSection] | None = None) -> dict[str, Any]:
     """schema artifact の監査用 manifest を返す。"""
     resolved_sections = list(sections or oracle_schema_sections())
@@ -101,15 +139,59 @@ def oracle_schema_manifest(sections: Sequence[OracleSchemaSection] | None = None
     }
 
 
+def oracle_schema_migration_manifest(
+    sections: Sequence[OracleSchemaSection] | None = None,
+) -> dict[str, Any]:
+    """schema migration artifact の監査用 manifest を返す。"""
+    resolved_sections = list(sections or oracle_schema_migration_sections())
+    sql = oracle_schema_migration_sql(resolved_sections)
+    return {
+        "schema_name": SCHEMA_NAME,
+        "schema_version": SCHEMA_VERSION,
+        "artifact_type": "migration",
+        "migration_artifact_version": MIGRATION_ARTIFACT_VERSION,
+        "sha256": _sha256(sql),
+        "statement_count": len(split_sql_statements(sql)),
+        "migrations": [
+            {
+                "name": section.name,
+                "table_name": section.table_name,
+                "sha256": _sha256(section.sql),
+                "statement_count": len(split_sql_statements(section.sql)),
+            }
+            for section in resolved_sections
+        ],
+    }
+
+
 def split_sql_statements(sql: str) -> list[str]:
-    """単純な DDL artifact をセミコロン終端ごとの statement に分割する。"""
+    """SQL artifact を statement ごとに分割する。
+
+    通常 DDL はセミコロン終端で分割する。SQLcl 向け PL/SQL block は
+    行単独の `/` までを 1 statement として扱う。
+    """
     statements: list[str] = []
     current: list[str] = []
+    in_plsql_block = False
     for line in sql.splitlines():
         if not line.strip():
             continue
+        stripped = line.strip()
+        if (
+            not in_plsql_block
+            and not _current_statement_has_sql(current)
+            and _starts_plsql_block(stripped)
+        ):
+            in_plsql_block = True
+        if in_plsql_block and stripped == "/":
+            statement = "\n".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            in_plsql_block = False
+            continue
         current.append(line.rstrip())
-        if line.rstrip().endswith(";"):
+        if not in_plsql_block and line.rstrip().endswith(";"):
             statement = "\n".join(current).strip()
             statements.append(statement.removesuffix(";").rstrip())
             current = []
@@ -118,18 +200,134 @@ def split_sql_statements(sql: str) -> list[str]:
     return statements
 
 
+def _ingestion_jobs_attempt_counters_migration_sql() -> str:
+    """rag_ingestion_jobs の試行回数列を現行 DDL 契約へ合わせる migration SQL。"""
+    return """
+DECLARE
+    v_column_count NUMBER;
+    v_nullable VARCHAR2(1);
+BEGIN
+    SELECT COUNT(*)
+    INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND column_name = 'ATTEMPT_COUNT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_jobs ADD '
+            || '(attempt_count NUMBER(5) DEFAULT 0 NOT NULL)';
+    ELSE
+        SELECT nullable
+        INTO v_nullable
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_INGESTION_JOBS'
+          AND column_name = 'ATTEMPT_COUNT';
+
+        EXECUTE IMMEDIATE
+            'UPDATE rag_ingestion_jobs SET attempt_count = 0 '
+            || 'WHERE attempt_count IS NULL';
+        IF v_nullable = 'Y' THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_ingestion_jobs MODIFY '
+                || '(attempt_count DEFAULT 0 NOT NULL)';
+        ELSE
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_ingestion_jobs MODIFY '
+                || '(attempt_count DEFAULT 0)';
+        END IF;
+    END IF;
+END;
+/
+
+DECLARE
+    v_column_count NUMBER;
+    v_nullable VARCHAR2(1);
+BEGIN
+    SELECT COUNT(*)
+    INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND column_name = 'MAX_ATTEMPTS';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_jobs ADD '
+            || '(max_attempts NUMBER(5) DEFAULT 3 NOT NULL)';
+    ELSE
+        SELECT nullable
+        INTO v_nullable
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_INGESTION_JOBS'
+          AND column_name = 'MAX_ATTEMPTS';
+
+        EXECUTE IMMEDIATE
+            'UPDATE rag_ingestion_jobs SET max_attempts = 3 '
+            || 'WHERE max_attempts IS NULL';
+        IF v_nullable = 'Y' THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_ingestion_jobs MODIFY '
+                || '(max_attempts DEFAULT 3 NOT NULL)';
+        ELSE
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_ingestion_jobs MODIFY '
+                || '(max_attempts DEFAULT 3)';
+        END IF;
+    END IF;
+END;
+/
+
+DECLARE
+    v_constraint_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND constraint_name = 'RAG_INGESTION_JOBS_ATTEMPTS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_jobs DROP CONSTRAINT '
+            || 'rag_ingestion_jobs_attempts_ck';
+    END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_ingestion_jobs ADD CONSTRAINT '
+        || 'rag_ingestion_jobs_attempts_ck CHECK '
+        || '(attempt_count >= 0 AND max_attempts >= 1)';
+END;
+/
+""".strip()
+
+
+def _current_statement_has_sql(lines: Sequence[str]) -> bool:
+    return any(line.strip() and not line.strip().startswith("--") for line in lines)
+
+
+def _starts_plsql_block(stripped_line: str) -> bool:
+    upper = stripped_line.upper()
+    return upper == "DECLARE" or upper == "BEGIN" or upper.startswith(("DECLARE ", "BEGIN "))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint。"""
     parser = _build_parser()
     args = parser.parse_args(argv)
-    sections = oracle_schema_sections()
-    manifest = oracle_schema_manifest(sections)
+    if args.migration:
+        sections = oracle_schema_migration_sections()
+        sql = oracle_schema_migration_sql(sections)
+        manifest = oracle_schema_migration_manifest(sections)
+    else:
+        sections = oracle_schema_sections()
+        sql = oracle_schema_sql(sections)
+        manifest = oracle_schema_manifest(sections)
 
     if args.manifest_only:
         _write_json(manifest, args.manifest_output)
         return 0
 
-    _write_text(oracle_schema_sql(sections), args.output)
+    _write_text(sql, args.output)
     if args.manifest_output is not None:
         _write_json(manifest, args.manifest_output)
     return 0
@@ -154,6 +352,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--manifest-only",
         action="store_true",
         help="SQL ではなく manifest JSON だけを出力します。",
+    )
+    parser.add_argument(
+        "--migration",
+        action="store_true",
+        help="新規 schema DDL ではなく既存 schema 用 migration SQL を出力します。",
     )
     return parser
 

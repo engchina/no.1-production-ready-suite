@@ -42,7 +42,9 @@ class DeterministicEnterpriseAi(OciEnterpriseAiClient):
         prompt: str,
         *,
         mime_type: str = "application/octet-stream",
+        parser_profile: str = "enterprise_ai_generic",
     ) -> dict[str, object]:
+        _ = parser_profile
         text = _decode(image_bytes)
         extraction = StructuredExtraction(
             raw_text=text,

@@ -78,12 +78,27 @@ def test_audit_context_parses_access_scope_headers_without_repr_leakage() -> Non
     assert "契約書" not in repr(context)
 
 
+def test_audit_context_parses_allowed_knowledge_base_ids_without_repr_leakage() -> None:
+    """ナレッジベース scope header も request 内 filter として保持する。"""
+    context = audit_request_context_from_headers(
+        {
+            "x-rag-allowed-knowledge-base-ids": "kb-1, kb_2, bad id",
+        },
+        request_id="request-1",
+        settings=Settings(),
+    )
+
+    assert context.allowed_knowledge_base_ids == frozenset({"kb-1", "kb_2"})
+    assert "kb-1" not in repr(context)
+
+
 def test_audit_context_empty_access_scope_header_means_deny_all_scope() -> None:
     """アクセス範囲 header が存在するが有効値なしなら空 scope として扱う。"""
     context = audit_request_context_from_headers(
         {
             "x-rag-allowed-document-ids": "bad id, \n",
             "x-rag-allowed-category-names": "  ",
+            "x-rag-allowed-knowledge-base-ids": "bad id",
         },
         request_id="request-1",
         settings=Settings(),
@@ -91,6 +106,7 @@ def test_audit_context_empty_access_scope_header_means_deny_all_scope() -> None:
 
     assert context.allowed_document_ids == frozenset()
     assert context.allowed_category_names == frozenset()
+    assert context.allowed_knowledge_base_ids == frozenset()
 
 
 def test_audit_request_context_is_scoped_to_current_context() -> None:

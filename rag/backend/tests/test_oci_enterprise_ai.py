@@ -2,12 +2,17 @@
 
 import base64
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 
-from app.clients.oci_enterprise_ai import OciEnterpriseAiClient, _raise_for_status_with_body
+from app.clients.oci_enterprise_ai import (
+    EnterpriseAiIncompleteResponseError,
+    EnterpriseAiTimeoutError,
+    OciEnterpriseAiClient,
+    _raise_for_status_with_body,
+)
 from app.config import EnterpriseAiConfiguredModel, Settings
 
 
@@ -55,7 +60,66 @@ async def test_oci_vlm_posts_structured_extraction_payload() -> None:
     assert text_format["type"] == "json_schema"
     assert text_format["name"] == "structured_extraction"
     assert "elements" in text_format["schema"]["properties"]
+    elements_schema = text_format["schema"]["properties"]["elements"]
+    assert elements_schema["maxItems"] == 120
+    element_properties = elements_schema["items"]["properties"]
+    assert "text" not in element_properties["kind"]["enum"]
+    assert "bbox" not in element_properties
+    assert "metadata" not in element_properties
+    assert payload["max_output_tokens"] == 65536
     assert transport.deletes[0]["url"] == "https://enterprise-ai.example/files/file-test"
+
+
+async def test_oci_vlm_decodes_text_documents_without_calling_vlm() -> None:
+    """text/plain 等は OCR(VLM)を呼ばず、バイト列を直接本文にする。"""
+    transport = FakeEnterpriseAiTransport({})
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    result = await client.extract_with_vlm(
+        "社内規程\nクラウド利用料は申請が必要です。".encode(),
+        "OCR",
+        mime_type="text/plain; charset=utf-8",
+    )
+
+    assert result["raw_text"] == "社内規程\nクラウド利用料は申請が必要です。"
+    assert result["confidence"] == 1.0
+    assert result["elements"]
+    # VLM endpoint / Files API には一切アクセスしない。
+    assert transport.calls == []
+    assert transport.uploads == []
+    assert transport.deletes == []
+
+
+async def test_oci_vlm_decodes_cp932_text_documents() -> None:
+    """UTF-8 で復号できない日本語テキストも cp932 で復号する。"""
+    transport = FakeEnterpriseAiTransport({})
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    result = await client.extract_with_vlm(
+        "経費精算メモ".encode("cp932"),
+        "OCR",
+        mime_type="text/plain",
+    )
+
+    assert result["raw_text"] == "経費精算メモ"
+    assert transport.calls == []
+
+
+async def test_oci_vlm_decodes_gb18030_text_documents() -> None:
+    """GB18030 で保存された日本語テキストも文字コード検出で復号する。"""
+    transport = FakeEnterpriseAiTransport({})
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    # 中国語環境などで GB18030 保存された日本語本文。固定候補(cp932)では誤デコードされる。
+    plain = "昭和三十年代の日本の農村を舞台に、姉妹とトトロの交流を描いたアニメーション映画である。"
+    result = await client.extract_with_vlm(
+        (plain * 4).encode("gb18030"),
+        "OCR",
+        mime_type="text/plain",
+    )
+
+    assert result["raw_text"] == plain * 4
+    assert transport.calls == []
 
 
 async def test_oci_vlm_posts_image_data_url_without_files_api() -> None:
@@ -81,6 +145,40 @@ async def test_oci_vlm_posts_image_data_url_without_files_api() -> None:
     assert content[1]["type"] == "input_image"
     assert image_url.startswith("data:image/png;base64,")
     assert base64.b64decode(image_url.split(",", maxsplit=1)[1]) == b"png-bytes"
+
+
+async def test_oci_vlm_omits_json_schema_for_gemini_provider() -> None:
+    """Gemini provider には Responses JSON Schema ではなく prompt 契約で JSON 出力させる。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_vlm_model = "google.gemini-2.5-flash"
+    transport = FakeEnterpriseAiTransport(
+        {
+            "output": (
+                '{"raw_text":"PDF OCR 本文","document_type":"ドキュメント",'
+                '"confidence":0.8,"warnings":[]}'
+            )
+        }
+    )
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    result = await client.extract_with_vlm(
+        b"pdf-bytes",
+        "OCR してください",
+        mime_type="application/pdf",
+    )
+
+    assert result["raw_text"] == "PDF OCR 本文"
+    assert transport.uploads[0]["purpose"] == "user_data"
+    payload = transport.calls[0]["payload"]
+    assert payload["model"] == "google.gemini-2.5-flash"
+    assert "text" not in payload
+    assert "説明文なしの JSON object" in payload["instructions"]
+    content = payload["input"][0]["content"]
+    assert content[0] == {"type": "input_file", "file_id": "file-test"}
+    assert content[1]["type"] == "input_text"
+    assert "OCR してください" in content[1]["text"]
+    assert "必須キー: raw_text" in content[1]["text"]
+    assert transport.deletes[0]["url"] == "https://enterprise-ai.example/files/file-test"
 
 
 async def test_oci_vision_smoke_test_uses_minimal_openai_image_payload() -> None:
@@ -418,6 +516,21 @@ async def test_oci_adapter_requires_api_key_before_endpoint_call() -> None:
     assert transport.calls == []
 
 
+async def test_oci_adapter_wraps_read_timeout_and_deletes_uploaded_file() -> None:
+    """Responses の ReadTimeout は利用者向け timeout エラーへ正規化する。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_timeout_seconds = 600.0
+    transport = TimeoutEnterpriseAiTransport({})
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    with pytest.raises(EnterpriseAiTimeoutError, match="600 秒"):
+        await client.extract_with_vlm(b"pdf-bytes", "OCR", mime_type="application/pdf")
+
+    assert transport.uploads
+    assert transport.calls
+    assert transport.deletes[0]["url"] == "https://enterprise-ai.example/files/file-test"
+
+
 async def test_oci_generate_accepts_inference_response_content_parts() -> None:
     """LLM response は inference_response / content parts 形式も text として解釈する。"""
     transport = FakeEnterpriseAiTransport(
@@ -490,7 +603,9 @@ async def test_oci_vlm_accepts_openai_responses_output_json() -> None:
                             "text": (
                                 '{"raw_text":"Responses OCR 本文",'
                                 '"document_type":"画像",'
-                                '"confidence":0.82,"warnings":[]}'
+                                '"confidence":0.82,"warnings":[],'
+                                '"elements":[{"kind":"text","text":"Responses OCR 本文",'
+                                '"bbox":[755,17,765,66,755,964,765,970]}]}'
                             ),
                         }
                     ],
@@ -504,6 +619,25 @@ async def test_oci_vlm_accepts_openai_responses_output_json() -> None:
 
     assert result["raw_text"] == "Responses OCR 本文"
     assert result["document_type"] == "画像"
+    elements = cast(list[dict[str, object]], result["elements"])
+    assert elements[0]["bbox"] == [755.0, 17.0, 765.0, 970.0]
+
+
+async def test_oci_vlm_reports_incomplete_max_output_tokens() -> None:
+    """Responses API の max_output_tokens incomplete は専用エラーにする。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "id": "resp_incomplete",
+            "object": "response",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [],
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    with pytest.raises(EnterpriseAiIncompleteResponseError, match="max_output_tokens"):
+        await client.extract_with_vlm(b"pdf-bytes", "OCR", mime_type="application/pdf")
 
 
 async def test_oci_generate_reports_openai_responses_error_before_empty_text() -> None:
@@ -720,6 +854,28 @@ class FakeEnterpriseAiTransport:
     ) -> Mapping[str, Any]:
         self.deletes.append({"url": url, "headers": dict(headers), "timeout": timeout})
         return {"id": "file-test", "deleted": True}
+
+
+class TimeoutEnterpriseAiTransport(FakeEnterpriseAiTransport):
+    """JSON POST だけ ReadTimeout を返す fake。"""
+
+    async def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        self.calls.append(
+            {
+                "url": url,
+                "payload": dict(payload),
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        raise httpx.ReadTimeout("read timed out")
 
 
 def _oci_settings() -> Settings:

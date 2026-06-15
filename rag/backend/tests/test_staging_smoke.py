@@ -328,7 +328,9 @@ class FakeIngestionPipeline:
         prompt: str,
         *,
         content_type: str = "application/octet-stream",
+        source_profile: object | None = None,
     ) -> SimpleNamespace:
+        _ = source_profile
         assert document_id == "doc-smoke"
         assert image_bytes == FakeObjectStorageClient.put_body
         assert "OCR" in prompt

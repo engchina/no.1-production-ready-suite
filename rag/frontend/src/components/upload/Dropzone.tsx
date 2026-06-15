@@ -8,10 +8,10 @@ import { t } from "@/lib/i18n";
 
 /** ドラッグ＆ドロップ + クリック選択のファイル入力。 */
 export function Dropzone({
-  onFile,
+  onFiles,
   disabled,
 }: {
-  onFile: (file: File) => void;
+  onFiles: (files: File[]) => void;
   disabled?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -21,8 +21,8 @@ export function Dropzone({
     e.preventDefault();
     setDragOver(false);
     if (disabled) return;
-    const file = e.dataTransfer.files?.[0];
-    if (file) onFile(file);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length) onFiles(files);
   };
 
   return (
@@ -55,12 +55,13 @@ export function Dropzone({
       <input
         ref={inputRef}
         type="file"
+        multiple
         className="hidden"
         accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.txt,application/pdf,image/*,text/plain"
         disabled={disabled}
         onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) onFile(file);
+          const files = Array.from(e.target.files ?? []);
+          if (files.length) onFiles(files);
           e.target.value = "";
         }}
       />

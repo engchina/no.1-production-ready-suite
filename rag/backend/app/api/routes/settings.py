@@ -10,7 +10,7 @@ import shutil
 import stat
 import time
 from pathlib import Path, PurePosixPath
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
@@ -21,6 +21,7 @@ from app.clients.oci_auth import (
     pem_file_is_encrypted,
     resolve_oci_key_file,
 )
+from app.clients.oci_database import AutonomousDatabaseInfo, OciDatabaseClient
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import close_oracle_pool, test_oracle_connection
@@ -35,6 +36,9 @@ from app.config import (
 from app.readiness import READINESS_OK, oracle_readiness_check, upload_storage_readiness_checks
 from app.schemas.common import ApiResponse
 from app.schemas.settings import (
+    AdbInfoData,
+    AdbOperationStatus,
+    AdbSettingsUpdate,
     DatabaseConnectionTestResult,
     DatabaseSettingsData,
     DatabaseSettingsUpdate,
@@ -294,6 +298,33 @@ async def test_database_settings(
     )
 
 
+@router.get("/database/adb", response_model=ApiResponse[AdbInfoData])
+async def get_adb_info() -> ApiResponse[AdbInfoData]:
+    """Autonomous Database の現在情報を取得する。"""
+    return ApiResponse(data=await _load_adb_info(get_settings()))
+
+
+@router.post("/database/adb/settings", response_model=ApiResponse[AdbInfoData])
+async def update_adb_settings(payload: AdbSettingsUpdate) -> ApiResponse[AdbInfoData]:
+    """ADB 操作対象 OCID と region を保存し、最新情報を返す。"""
+    settings = get_settings()
+    _apply_adb_settings(settings, payload)
+    _persist_adb_settings(settings)
+    return ApiResponse(data=await _load_adb_info(settings))
+
+
+@router.post("/database/adb/start", response_model=ApiResponse[AdbInfoData])
+async def start_adb() -> ApiResponse[AdbInfoData]:
+    """Autonomous Database を起動する。"""
+    return ApiResponse(data=await _control_adb(get_settings(), action="start"))
+
+
+@router.post("/database/adb/stop", response_model=ApiResponse[AdbInfoData])
+async def stop_adb() -> ApiResponse[AdbInfoData]:
+    """Autonomous Database を停止する。"""
+    return ApiResponse(data=await _control_adb(get_settings(), action="stop"))
+
+
 @router.get("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
 async def get_upload_storage_settings() -> ApiResponse[UploadStorageSettingsData]:
     """現在のアップロード原本保存先設定を返す。"""
@@ -415,6 +446,8 @@ def _payload_from_settings(settings: Settings) -> ModelSettingsPayload:
             vision_response_path=settings.oci_enterprise_ai_vlm_response_path,
             timeout_seconds=settings.oci_enterprise_ai_timeout_seconds,
             max_retries=settings.oci_enterprise_ai_max_retries,
+            llm_max_output_tokens=settings.oci_enterprise_ai_llm_max_output_tokens,
+            vlm_max_output_tokens=settings.oci_enterprise_ai_vlm_max_output_tokens,
         ),
         generative_ai=GenerativeAiModelSettings(
             embedding_model=settings.oci_genai_embedding_model,
@@ -472,6 +505,8 @@ def _apply_model_settings(settings: Settings, request: ModelSettingsPayload) -> 
     settings.oci_enterprise_ai_vlm_response_path = enterprise_ai.vision_response_path
     settings.oci_enterprise_ai_timeout_seconds = enterprise_ai.timeout_seconds
     settings.oci_enterprise_ai_max_retries = enterprise_ai.max_retries
+    settings.oci_enterprise_ai_llm_max_output_tokens = enterprise_ai.llm_max_output_tokens
+    settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise_ai.vlm_max_output_tokens
 
     settings.oci_genai_embedding_model = generative_ai.embedding_model
     settings.oci_genai_embedding_dim = generative_ai.embedding_dim
@@ -550,6 +585,8 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]
             "vision_response_path": enterprise_ai.vision_response_path,
             "timeout_seconds": enterprise_ai.timeout_seconds,
             "max_retries": enterprise_ai.max_retries,
+            "llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
+            "vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
         },
         "generative_ai": {
             "embedding_model": generative_ai.embedding_model,
@@ -942,6 +979,8 @@ def _database_settings_data(settings: Settings) -> DatabaseSettingsData:
         readiness=oracle_readiness_check(settings),
         embedding_dimension=settings.oci_genai_embedding_dim,
         vector_column=f"VECTOR({settings.oci_genai_embedding_dim}, FLOAT32)",
+        adb_ocid=settings.oracle_adb_ocid,
+        region=settings.oci_region,
         config_source="runtime",
     )
 
@@ -1007,6 +1046,139 @@ def _persist_database_settings(settings: Settings) -> None:
         values,
         section_comment="# Oracle 26ai",
         error_detail="Oracle 26ai 接続設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _apply_adb_settings(settings: Settings, payload: AdbSettingsUpdate) -> None:
+    """ADB 操作対象 OCID と region を現在プロセスへ反映する。"""
+    settings.oracle_adb_ocid = payload.adb_ocid
+    if payload.region:
+        settings.oci_region = payload.region
+
+
+def _persist_adb_settings(settings: Settings) -> None:
+    """ADB 操作対象 OCID と region を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "ORACLE_ADB_OCID": settings.oracle_adb_ocid,
+            "OCI_REGION": settings.oci_region,
+        },
+        section_comment="# Oracle Autonomous Database 管理",
+        error_detail="ADB 設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _adb_info_data(
+    status: AdbOperationStatus,
+    message: str,
+    info: AutonomousDatabaseInfo,
+    region: str | None,
+    *,
+    lifecycle_override: str | None = None,
+) -> AdbInfoData:
+    """ADB 情報スナップショットを表示用データへ変換する。"""
+    return AdbInfoData(
+        status=status,
+        message=message,
+        id=info.id,
+        display_name=info.display_name,
+        lifecycle_state=lifecycle_override or info.lifecycle_state,
+        db_name=info.db_name,
+        cpu_core_count=info.cpu_core_count,
+        data_storage_size_in_tbs=info.data_storage_size_in_tbs,
+        region=region,
+    )
+
+
+async def _load_adb_info(settings: Settings) -> AdbInfoData:
+    """ADB の情報を取得する。設定不足や OCI エラーは status へ載せて返す。"""
+    region = settings.oci_region.strip() or None
+    adb_ocid = settings.oracle_adb_ocid.strip()
+    if not adb_ocid:
+        return AdbInfoData(
+            status="not_configured",
+            message="ADB OCID が設定されていません。",
+            region=region,
+        )
+    try:
+        info = await OciDatabaseClient(settings=settings).get_autonomous_database(adb_ocid)
+    except Exception as exc:  # noqa: BLE001 - OCI SDK の多様な例外を表示用に握る
+        return AdbInfoData(
+            status="error",
+            message=f"データベース情報の取得に失敗しました: {exc}",
+            id=adb_ocid,
+            region=region,
+        )
+    return _adb_info_data("success", "データベース情報を取得しました。", info, region)
+
+
+async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) -> AdbInfoData:
+    """ADB を起動 / 停止する。現在状態を確認してから制御リクエストを送る。"""
+    region = settings.oci_region.strip() or None
+    adb_ocid = settings.oracle_adb_ocid.strip()
+    if not adb_ocid:
+        return AdbInfoData(
+            status="not_configured",
+            message="ADB OCID が設定されていません。",
+            region=region,
+        )
+
+    client = OciDatabaseClient(settings=settings)
+    try:
+        info = await client.get_autonomous_database(adb_ocid)
+    except Exception as exc:  # noqa: BLE001 - OCI SDK の多様な例外を表示用に握る
+        return AdbInfoData(
+            status="error",
+            message=f"データベース情報の取得に失敗しました: {exc}",
+            id=adb_ocid,
+            region=region,
+        )
+
+    state = info.lifecycle_state
+    if action == "start":
+        if state == "AVAILABLE":
+            return _adb_info_data(
+                "already_available", "データベースは既に起動しています。", info, region
+            )
+        if state not in ("STOPPED", "UNAVAILABLE"):
+            return _adb_info_data(
+                "cannot_start",
+                f"データベースの現在の状態 ({state}) では起動できません。",
+                info,
+                region,
+            )
+        try:
+            await client.start_autonomous_database(adb_ocid)
+        except Exception as exc:  # noqa: BLE001 - OCI SDK の多様な例外を表示用に握る
+            return _adb_info_data("error", f"データベースの起動に失敗しました: {exc}", info, region)
+        return _adb_info_data(
+            "accepted",
+            f"データベース '{info.display_name}' の起動を開始しました。",
+            info,
+            region,
+            lifecycle_override="STARTING",
+        )
+
+    if state == "STOPPED":
+        return _adb_info_data("already_stopped", "データベースは既に停止しています。", info, region)
+    if state != "AVAILABLE":
+        return _adb_info_data(
+            "cannot_stop",
+            f"データベースの現在の状態 ({state}) では停止できません。",
+            info,
+            region,
+        )
+    try:
+        await client.stop_autonomous_database(adb_ocid)
+    except Exception as exc:  # noqa: BLE001 - OCI SDK の多様な例外を表示用に握る
+        return _adb_info_data("error", f"データベースの停止に失敗しました: {exc}", info, region)
+    return _adb_info_data(
+        "accepted",
+        f"データベース '{info.display_name}' の停止を開始しました。",
+        info,
+        region,
+        lifecycle_override="STOPPING",
     )
 
 

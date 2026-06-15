@@ -45,8 +45,10 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     vision_payload_template: str = Field(default="", max_length=20000)
     text_response_path: str = Field(default="", max_length=1024)
     vision_response_path: str = Field(default="", max_length=1024)
-    timeout_seconds: float = Field(default=60.0, gt=0.0, le=600.0)
+    timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
     max_retries: int = Field(default=3, ge=0, le=5)
+    llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
+    vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
 
     @field_validator(
         "endpoint",
@@ -172,8 +174,10 @@ class Settings(BaseSettings):
             "空なら既知 envelope を自動判定する。"
         ),
     )
-    oci_enterprise_ai_timeout_seconds: float = Field(default=60.0, gt=0.0, le=600.0)
+    oci_enterprise_ai_timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
     oci_enterprise_ai_max_retries: int = Field(default=3, ge=0, le=5)
+    oci_enterprise_ai_llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
+    oci_enterprise_ai_vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
 
     # --- OCI Generative AI（埋め込み / リランク）---
     oci_genai_embedding_model: str = Field(default="cohere.embed-v4.0")
@@ -195,6 +199,13 @@ class Settings(BaseSettings):
         description=("互換用。Wallet 配置先は ORACLE_CLIENT_LIB_DIR/network/admin へ固定する。"),
     )
     oracle_wallet_password: str = Field(default="")
+    oracle_adb_ocid: str = Field(
+        default="",
+        description=(
+            "Autonomous Database 操作対象の OCID。起動 / 停止 / 情報取得に使う。"
+            "ベクトル検索とは別経路の OCI Database 制御プレーン操作用。"
+        ),
+    )
     oracle_tcp_connect_timeout_seconds: float = Field(
         default=10.0,
         gt=0.0,
@@ -243,6 +254,16 @@ class Settings(BaseSettings):
             "application/octet-stream",
         ]
     )
+
+    # --- 取込 queue ---
+    ingestion_queue_startup_recovery_enabled: bool = Field(
+        default=True,
+        description="起動時に永続化済み QUEUED job と stale RUNNING job を自動回復する。",
+    )
+    ingestion_queue_startup_drain_limit: int = Field(default=50, ge=1, le=500)
+    ingestion_queue_stale_running_seconds: float = Field(default=3600.0, gt=0.0, le=86400.0)
+    ingestion_queue_worker_concurrency: int = Field(default=2, ge=1, le=16)
+    ingestion_job_max_attempts: int = Field(default=3, ge=1, le=20)
 
     # --- RAG ---
     rag_chunk_size: int = Field(default=800, ge=200, le=4000)
@@ -309,6 +330,12 @@ class Settings(BaseSettings):
         description="query expansion で retrieval に使う query variant 数の上限。",
     )
     rag_search_timeout_seconds: float = Field(default=30.0, gt=0.0, le=300.0)
+    rag_pdf_segmentation_enabled: bool = Field(
+        default=True,
+        description="PDF を VLM へ送る前にページ単位の小さな PDF segment へ分割する。",
+    )
+    rag_pdf_max_pages_per_segment: int = Field(default=3, ge=1, le=50)
+    rag_pdf_max_segments: int = Field(default=300, ge=1, le=2000)
 
     # --- レート制限（高コスト API の保護）---
     rate_limit_enabled: bool = Field(default=True)
@@ -522,6 +549,8 @@ def _apply_persisted_model_settings(
     settings.oci_enterprise_ai_vlm_response_path = enterprise_ai.vision_response_path
     settings.oci_enterprise_ai_timeout_seconds = enterprise_ai.timeout_seconds
     settings.oci_enterprise_ai_max_retries = enterprise_ai.max_retries
+    settings.oci_enterprise_ai_llm_max_output_tokens = enterprise_ai.llm_max_output_tokens
+    settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise_ai.vlm_max_output_tokens
 
     settings.oci_genai_embedding_model = generative_ai.embedding_model
     settings.oci_genai_embedding_dim = generative_ai.embedding_dim

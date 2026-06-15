@@ -7,7 +7,11 @@ import {
   Eye,
   EyeOff,
   PlugZap,
+  Power,
+  PowerOff,
+  RefreshCw,
   Save,
+  Server,
   ShieldCheck,
   Upload,
   XCircle,
@@ -28,15 +32,20 @@ import {
 } from "@/components/settings/SettingsPreviewPanels";
 import {
   ApiError,
+  type AdbInfoData,
   type DatabaseConnectionTestResult,
   type DatabaseSettingsData,
   type DatabaseSettingsUpdate,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import {
+  useAdbInfo,
   useDatabaseSettings,
+  useStartAdb,
+  useStopAdb,
   useTestDatabaseSettings,
+  useUpdateAdbSettings,
   useUpdateDatabaseSettings,
   useUploadDatabaseWallet,
 } from "@/lib/queries";
@@ -202,6 +211,7 @@ export function DatabaseSettingsClient() {
   return (
     <div className="p-8">
       <div className={SETTINGS_DETAIL_GRID_CLASS}>
+        <div className="space-y-6">
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -300,6 +310,9 @@ export function DatabaseSettingsClient() {
           </Card>
         </form>
 
+          <AdbManagementCard settings={settings} />
+        </div>
+
         <SettingsSupplementalPanels
           status={<StatusPanel settings={settings} />}
           env={{
@@ -319,6 +332,301 @@ export function DatabaseSettingsClient() {
       </div>
     </div>
   );
+}
+
+interface AdbOperationLogEntry {
+  status: AdbInfoData["status"];
+  message: string;
+  timestamp: string;
+}
+
+/** OCI 認証設定と揃えたリージョン候補。 */
+const ADB_REGION_OPTIONS = [
+  { value: "ap-tokyo-1", label: "ap-tokyo-1" },
+  { value: "ap-osaka-1", label: "ap-osaka-1" },
+  { value: "us-chicago-1", label: "us-chicago-1" },
+] satisfies SelectFieldOption<string>[];
+
+const ADB_DEFAULT_REGION = "ap-osaka-1";
+
+const ADB_LIFECYCLE_LABEL_KEYS: Record<string, I18nKey> = {
+  AVAILABLE: "settings.adb.lifecycle.AVAILABLE",
+  STARTING: "settings.adb.lifecycle.STARTING",
+  STOPPING: "settings.adb.lifecycle.STOPPING",
+  STOPPED: "settings.adb.lifecycle.STOPPED",
+  UNAVAILABLE: "settings.adb.lifecycle.UNAVAILABLE",
+  PROVISIONING: "settings.adb.lifecycle.PROVISIONING",
+  TERMINATING: "settings.adb.lifecycle.TERMINATING",
+  TERMINATED: "settings.adb.lifecycle.TERMINATED",
+  FAILED: "settings.adb.lifecycle.FAILED",
+  UPDATING: "settings.adb.lifecycle.UPDATING",
+  RESTORING: "settings.adb.lifecycle.RESTORING",
+  BACKUP_IN_PROGRESS: "settings.adb.lifecycle.BACKUP_IN_PROGRESS",
+  MAINTENANCE_IN_PROGRESS: "settings.adb.lifecycle.MAINTENANCE_IN_PROGRESS",
+  ROLE_CHANGE_IN_PROGRESS: "settings.adb.lifecycle.ROLE_CHANGE_IN_PROGRESS",
+  UPGRADING: "settings.adb.lifecycle.UPGRADING",
+  INACCESSIBLE: "settings.adb.lifecycle.INACCESSIBLE",
+  STANDBY: "settings.adb.lifecycle.STANDBY",
+};
+
+/** Autonomous Database の情報取得・起動・停止を行う運用パネル。 */
+function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
+  const infoQuery = useAdbInfo();
+  const saveSettings = useUpdateAdbSettings();
+  const start = useStartAdb();
+  const stop = useStopAdb();
+
+  // ADB OCID は backend/.env を正本とする読み取り専用値。
+  const ocid = settings.adb_ocid;
+  const [region, setRegion] = useState(settings.region || ADB_DEFAULT_REGION);
+  const [log, setLog] = useState<AdbOperationLogEntry[]>([]);
+
+  useEffect(() => {
+    setRegion(settings.region || ADB_DEFAULT_REGION);
+  }, [settings.region]);
+
+  const info = infoQuery.data;
+  const busy =
+    infoQuery.isFetching || saveSettings.isPending || start.isPending || stop.isPending;
+
+  function appendLog(result: AdbInfoData) {
+    setLog((current) =>
+      [
+        {
+          status: result.status,
+          message: result.message,
+          timestamp: formatDateTime(new Date().toISOString()),
+        },
+        ...current,
+      ].slice(0, 3)
+    );
+  }
+
+  async function persist(): Promise<boolean> {
+    if (!ocid.trim()) return false;
+    try {
+      await saveSettings.mutateAsync({ adb_ocid: ocid.trim(), region: region.trim() });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function handleRefresh() {
+    const saved = await persist();
+    if (!saved) return;
+    if (saveSettings.data) appendLog(saveSettings.data);
+  }
+
+  async function handleStart() {
+    if (!(await persist())) return;
+    try {
+      const result = await start.mutateAsync();
+      appendLog(result);
+    } catch {
+      /* mutation error surface は下部の FormStatus が担う */
+    }
+  }
+
+  async function handleStop() {
+    if (!(await persist())) return;
+    try {
+      const result = await stop.mutateAsync();
+      appendLog(result);
+    } catch {
+      /* mutation error surface は下部の FormStatus が担う */
+    }
+  }
+
+  const actionError =
+    saveSettings.error instanceof ApiError
+      ? saveSettings.error.message
+      : start.error instanceof ApiError
+        ? start.error.message
+        : stop.error instanceof ApiError
+          ? stop.error.message
+          : start.isError || stop.isError || saveSettings.isError
+            ? t("settings.adb.notify.actionFailed")
+            : null;
+
+  return (
+    <Card className="rounded-md">
+      <CardHeader className="p-6 pb-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-5">
+          <div className="flex items-center gap-2">
+            <Server size={18} aria-hidden />
+            <CardTitle className="text-lg">{t("settings.adb.title")}</CardTitle>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            loading={infoQuery.isFetching || saveSettings.isPending}
+            disabled={busy}
+            onClick={() => void handleRefresh()}
+          >
+            <RefreshCw size={15} aria-hidden />
+            {infoQuery.isFetching || saveSettings.isPending
+              ? t("settings.adb.action.refreshing")
+              : t("settings.adb.action.refresh")}
+          </Button>
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-5 p-6">
+        <p className="text-sm leading-relaxed text-muted">{t("settings.adb.description")}</p>
+
+        <div className="space-y-4">
+          <SelectField
+            id="adb-region"
+            label={t("settings.adb.field.region")}
+            value={region}
+            options={ADB_REGION_OPTIONS}
+            onValueChange={setRegion}
+            buttonClassName="h-11"
+          />
+          <div className="space-y-1.5">
+            <label htmlFor="adb-ocid" className="text-sm font-medium text-foreground">
+              {t("settings.adb.field.ocid")}
+            </label>
+            <input
+              id="adb-ocid"
+              type="text"
+              value={ocid}
+              readOnly
+              aria-readonly="true"
+              placeholder={t("settings.adb.placeholder.ocidEmpty")}
+              className="h-11 w-full cursor-not-allowed rounded-md border border-border bg-background px-3 text-sm text-muted outline-none placeholder:text-muted/70"
+            />
+            <p className="text-xs leading-relaxed text-muted">
+              {t("settings.adb.helper.ocidReadonly")}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+          <Button
+            type="button"
+            size="lg"
+            loading={start.isPending}
+            disabled={busy || !ocid.trim()}
+            onClick={() => void handleStart()}
+          >
+            <Power size={16} aria-hidden />
+            {start.isPending
+              ? t("settings.adb.action.starting")
+              : t("settings.adb.action.start")}
+          </Button>
+          <Button
+            type="button"
+            size="lg"
+            variant="secondary"
+            loading={stop.isPending}
+            disabled={busy || !ocid.trim()}
+            onClick={() => void handleStop()}
+          >
+            <PowerOff size={16} aria-hidden />
+            {stop.isPending ? t("settings.adb.action.stopping") : t("settings.adb.action.stop")}
+          </Button>
+          {actionError ? <FormStatus tone="danger" message={actionError} /> : null}
+        </div>
+
+        {info && info.lifecycle_state ? <AdbInfoPanel info={info} /> : null}
+
+        {log.length > 0 ? <AdbOperationLog entries={log} /> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AdbInfoPanel({ info }: { info: AdbInfoData }) {
+  const known = info.status === "success" || info.status === "accepted";
+  // ReadinessBadge と同様、自己完結したステータスバーを余分なパネルで囲まない。
+  return (
+    <div className="space-y-2">
+      <AdbLifecycleBadge state={info.lifecycle_state} />
+      {!known ? <FormStatus tone="warning" className="text-xs" message={info.message} /> : null}
+    </div>
+  );
+}
+
+function AdbLifecycleBadge({ state }: { state: string | null }) {
+  const tone = adbLifecycleTone(state);
+  const Icon = tone === "ok" ? CheckCircle2 : tone === "danger" ? XCircle : AlertCircle;
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
+        tone === "ok" && "border-success/30 bg-success-bg/50 text-success",
+        tone === "danger" && "border-danger/30 bg-danger-bg/50 text-danger",
+        tone === "warning" && "border-warning/30 bg-warning-bg/60 text-warning",
+        tone === "muted" && "border-border bg-card text-muted"
+      )}
+    >
+      <Icon size={16} aria-hidden />
+      <span>
+        {t("settings.adb.field.status")}: {adbLifecycleLabel(state)}
+      </span>
+    </div>
+  );
+}
+
+function AdbOperationLog({ entries }: { entries: AdbOperationLogEntry[] }) {
+  return (
+    <div className="space-y-2">
+      <span className="block text-sm font-medium text-foreground">
+        {t("settings.adb.operationResult.title")}
+      </span>
+      <ul className="space-y-1.5">
+        {entries.map((entry, index) => (
+          <li
+            key={`${entry.timestamp}-${index}`}
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-card px-3 py-2 text-xs"
+          >
+            <span className="text-muted">{entry.timestamp}</span>
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 font-medium",
+                adbStatusBadgeClass(entry.status)
+              )}
+            >
+              {entry.status}
+            </span>
+            <span className="text-foreground">{entry.message}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function adbLifecycleLabel(state: string | null): string {
+  if (!state) return t("settings.adb.statusUnknown");
+  const key = ADB_LIFECYCLE_LABEL_KEYS[state];
+  return key ? t(key) : state;
+}
+
+function adbLifecycleTone(state: string | null): "ok" | "danger" | "warning" | "muted" {
+  if (state === "AVAILABLE") return "ok";
+  if (state === "FAILED" || state === "TERMINATED" || state === "INACCESSIBLE") return "danger";
+  if (state === "STOPPED" || state === "UNAVAILABLE" || state === "STANDBY") return "muted";
+  if (!state) return "muted";
+  return "warning";
+}
+
+function adbStatusBadgeClass(status: AdbInfoData["status"]): string {
+  switch (status) {
+    case "success":
+    case "accepted":
+      return "bg-success-bg text-success";
+    case "already_available":
+    case "already_stopped":
+      return "bg-info-bg text-info";
+    case "error":
+      return "bg-danger-bg text-danger";
+    default:
+      return "bg-warning-bg text-warning";
+  }
 }
 
 function WalletServiceField({

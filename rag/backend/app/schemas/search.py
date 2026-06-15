@@ -1,5 +1,6 @@
 """検索（RAG）関連スキーマ。"""
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Self
 
@@ -7,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 SUPPORTED_SEARCH_FILTER_KEYS = {
     "document_id",
+    "knowledge_base_id",
     "file_name",
     "category_name",
     "status",
@@ -41,6 +43,7 @@ class SearchRequest(BaseModel):
     rerank_top_n: int = Field(default=5, ge=1, le=50)
     mode: SearchMode = SearchMode.HYBRID
     filters: dict[str, str] = Field(default_factory=dict)
+    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
 
     @field_validator("query")
     @classmethod
@@ -54,10 +57,34 @@ class SearchRequest(BaseModel):
         """対応済み filter key のみ許可し、値を正規化する。"""
         return normalize_search_filters(filters)
 
+    @field_validator("knowledge_base_ids")
+    @classmethod
+    def validate_knowledge_base_ids(cls, values: list[str]) -> list[str]:
+        """検索対象のナレッジベース ID を重複排除する。"""
+        return normalize_search_id_list(values)
+
     @model_validator(mode="after")
-    def validate_rerank_depth(self) -> Self:
-        """rerank は retrieval で取得した候補数以内に制限する。"""
+    def validate_search_options(self) -> Self:
+        """rerank 深さとナレッジベース指定の整合性を検証する。"""
         validate_rerank_top_n(self.top_k, self.rerank_top_n)
+        filter_knowledge_base_ids = parse_search_id_filter(
+            self.filters.get("knowledge_base_id")
+        )
+        if (
+            self.knowledge_base_ids
+            and filter_knowledge_base_ids
+            and self.knowledge_base_ids != filter_knowledge_base_ids
+        ):
+            raise ValueError(
+                "knowledge_base_ids と filters.knowledge_base_id は同じ値を指定してください。"
+            )
+        resolved_knowledge_base_ids = self.knowledge_base_ids or filter_knowledge_base_ids
+        if resolved_knowledge_base_ids:
+            self.knowledge_base_ids = resolved_knowledge_base_ids
+            self.filters = {
+                **self.filters,
+                "knowledge_base_id": format_search_id_filter(resolved_knowledge_base_ids),
+            }
         return self
 
 
@@ -95,6 +122,7 @@ class SearchDiagnostics(BaseModel):
     query_variant_count: int = 1
     oracle_vector_target_accuracy: int = 0
     filter_keys: list[str] = Field(default_factory=list)
+    knowledge_base_count: int = 0
     config_fingerprint: str = ""
 
 
@@ -155,7 +183,14 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
         cleaned = value.strip()
         if not cleaned:
             continue
-        normalized[key] = cleaned.upper() if key == "status" else cleaned
+        if key == "status":
+            normalized[key] = cleaned.upper()
+        elif key == "knowledge_base_id":
+            formatted_ids = format_search_id_filter(parse_search_id_filter(cleaned))
+            if formatted_ids:
+                normalized[key] = formatted_ids
+        else:
+            normalized[key] = cleaned
 
     if (status := normalized.get("status")) and status not in SUPPORTED_SEARCH_STATUS_FILTERS:
         raise ValueError(f"未対応のファイル状態フィルターです: {status}")
@@ -164,6 +199,31 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
     ):
         raise ValueError(f"未対応の内容種別フィルターです: {content_kind}")
     return normalized
+
+
+def normalize_search_id_list(values: Sequence[str]) -> list[str]:
+    """ID リストの前後空白と重複を取り除く。"""
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
+def parse_search_id_filter(value: str | None) -> list[str]:
+    """カンマ区切り filter 値を ID リストへ戻す。"""
+    if value is None:
+        return []
+    return normalize_search_id_list(value.split(","))
+
+
+def format_search_id_filter(values: Sequence[str]) -> str:
+    """ID リストを既存 filters 経路へ渡すための表現へ変換する。"""
+    return ",".join(normalize_search_id_list(values))
 
 
 def normalize_query_text(query: str) -> str:

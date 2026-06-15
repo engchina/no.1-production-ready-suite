@@ -46,8 +46,10 @@ class EnterpriseAiModelSettings(BaseModel):
     vision_payload_template: str = Field(default="", max_length=20000)
     text_response_path: str = Field(default="", max_length=1024)
     vision_response_path: str = Field(default="", max_length=1024)
-    timeout_seconds: float = Field(default=60.0, gt=0.0, le=600.0)
+    timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
     max_retries: int = Field(default=3, ge=0, le=5)
+    llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
+    vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
 
     @field_validator(
         "endpoint",
@@ -184,7 +186,48 @@ class DatabaseSettingsData(BaseModel):
     readiness: str
     embedding_dimension: int
     vector_column: str
+    adb_ocid: str
+    region: str
     config_source: Literal["runtime"]
+
+
+AdbOperationStatus = Literal[
+    "success",
+    "not_configured",
+    "error",
+    "accepted",
+    "already_available",
+    "already_stopped",
+    "cannot_start",
+    "cannot_stop",
+]
+
+
+class AdbSettingsUpdate(BaseModel):
+    """Autonomous Database 操作対象の OCID と region の更新 payload。"""
+
+    adb_ocid: str = Field(default="", max_length=512)
+    region: str = Field(default="", max_length=128)
+
+    @field_validator("adb_ocid", "region")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+
+class AdbInfoData(BaseModel):
+    """Autonomous Database の情報 / 操作結果の表示用データ。"""
+
+    status: AdbOperationStatus
+    message: str
+    id: str | None = None
+    display_name: str | None = None
+    lifecycle_state: str | None = None
+    db_name: str | None = None
+    cpu_core_count: int | None = None
+    data_storage_size_in_tbs: float | None = None
+    region: str | None = None
 
 
 class DatabaseSettingsUpdate(BaseModel):

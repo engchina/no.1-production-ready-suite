@@ -1,6 +1,8 @@
 import {
+  AlertTriangle,
   BarChart3,
   CheckCircle2,
+  FileSearch,
   FlaskConical,
   GitCompare,
   XCircle,
@@ -9,6 +11,7 @@ import { type FormEvent, useMemo, useState } from "react";
 
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/StateViews";
+import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -91,6 +94,7 @@ export function EvaluationClient() {
   const [requestJson, setRequestJson] = useState(SAMPLE_REQUEST);
   const [experimentsJson, setExperimentsJson] = useState(SAMPLE_EXPERIMENTS);
   const [rankingMetric, setRankingMetric] = useState<EvaluationMetricName>("mrr");
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
   const [runError, setRunError] = useState("");
   const [compareError, setCompareError] = useState("");
 
@@ -105,7 +109,9 @@ export function EvaluationClient() {
     setRunError("");
     runMutation.reset();
     try {
-      await runMutation.mutateAsync(parsedRequest.value);
+      await runMutation.mutateAsync(
+        applyRequestKnowledgeBaseScope(parsedRequest.value, knowledgeBaseIds)
+      );
     } catch (error) {
       setRunError(error instanceof ApiError ? error.message : t("evaluation.error.run"));
     }
@@ -120,7 +126,7 @@ export function EvaluationClient() {
       await compareMutation.mutateAsync({
         cases: parsedRequest.value.cases,
         thresholds: parsedRequest.value.thresholds ?? null,
-        experiments: parsedExperiments.value,
+        experiments: applyExperimentKnowledgeBaseScope(parsedExperiments.value, knowledgeBaseIds),
         ranking_metric: rankingMetric,
       });
     } catch (error) {
@@ -135,8 +141,19 @@ export function EvaluationClient() {
     <div>
       <PageHeader title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
       <div className="space-y-6 p-8">
+        <Card className="min-w-0">
+          <CardContent className="pt-5">
+            <KnowledgeBaseScopePicker
+              selectedIds={knowledgeBaseIds}
+              onChange={setKnowledgeBaseIds}
+              disabled={runMutation.isPending || compareMutation.isPending}
+              helper={t("evaluation.knowledgeBaseScope.helper")}
+            />
+          </CardContent>
+        </Card>
+
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <Card>
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FlaskConical size={16} className="text-primary" aria-hidden />
@@ -178,7 +195,7 @@ export function EvaluationClient() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <GitCompare size={16} className="text-primary" aria-hidden />
@@ -244,7 +261,7 @@ export function EvaluationClient() {
 
 function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
   return (
-    <section className="space-y-4" aria-labelledby="evaluation-result-title">
+    <section className="min-w-0 space-y-4" aria-labelledby="evaluation-result-title">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id="evaluation-result-title" className="text-base font-semibold text-foreground">
           {t("evaluation.result.title")}
@@ -252,6 +269,7 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
         <StatusBadge passed={metrics.passed} />
       </div>
       <MetricGrid metrics={metrics} />
+      <IngestionQualityPanel metrics={metrics} />
 
       {metrics.threshold_failures.length ? (
         <Banner severity="warning" title={t("evaluation.thresholdFailures")}>
@@ -284,6 +302,110 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
 
       <CaseTable metrics={metrics} />
     </section>
+  );
+}
+
+function IngestionQualityPanel({ metrics }: { metrics: EvaluationMetrics }) {
+  const quality = metrics.ingestion_quality;
+  const warningEntries = Object.entries(quality.warning_counts);
+  const parserEntries = Object.entries(quality.parser_profile_counts);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <FileSearch size={16} className="text-primary" aria-hidden />
+          {t("evaluation.ingestionQuality.title")}
+        </CardTitle>
+        <CardDescription>{t("evaluation.ingestionQuality.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <QualityStat
+            label={t("evaluation.ingestionQuality.documents")}
+            value={quality.document_count}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.tables")}
+            value={quality.table_document_count}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.figures")}
+            value={quality.figure_document_count}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.longDocuments")}
+            value={quality.long_document_count}
+          />
+        </div>
+
+        {quality.risk_counts.high || quality.risk_counts.medium ? (
+          <Banner severity="warning" title={t("evaluation.ingestionQuality.riskTitle")}>
+            <p>
+              {t("evaluation.ingestionQuality.riskSummary", {
+                high: quality.risk_counts.high ?? 0,
+                medium: quality.risk_counts.medium ?? 0,
+              })}
+            </p>
+          </Banner>
+        ) : null}
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <QualityChipGroup
+            title={t("evaluation.ingestionQuality.warnings")}
+            emptyText={t("evaluation.ingestionQuality.noWarnings")}
+            entries={warningEntries}
+            icon="warning"
+          />
+          <QualityChipGroup
+            title={t("evaluation.ingestionQuality.parserProfiles")}
+            emptyText={t("evaluation.ingestionQuality.noParserProfiles")}
+            entries={parserEntries}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function QualityStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-border bg-background p-3">
+      <p className="text-xs text-muted">{label}</p>
+      <p className="tnum mt-1 text-xl font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function QualityChipGroup({
+  title,
+  emptyText,
+  entries,
+  icon,
+}: {
+  title: string;
+  emptyText: string;
+  entries: [string, number][];
+  icon?: "warning";
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background p-3">
+      <p className="text-sm font-medium text-foreground">{title}</p>
+      {entries.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {entries.map(([name, count]) => (
+            <span
+              key={name}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-muted"
+            >
+              {icon === "warning" ? <AlertTriangle size={13} aria-hidden /> : null}
+              {qualityLabel(name)}: {count}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-sm text-muted">{emptyText}</p>
+      )}
+    </div>
   );
 }
 
@@ -320,6 +442,28 @@ function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
   );
 }
 
+function qualityLabel(value: string) {
+  const map: Record<string, string> = {
+    table_structure_review: t("evaluation.ingestionQuality.warning.table"),
+    figure_ocr_review: t("evaluation.ingestionQuality.warning.figure"),
+    long_document: t("evaluation.ingestionQuality.warning.longDocument"),
+    low_extraction_confidence: t("evaluation.ingestionQuality.warning.lowConfidence"),
+    no_structured_elements: t("evaluation.ingestionQuality.warning.noElements"),
+    content_type_missing: t("evaluation.ingestionQuality.warning.contentTypeMissing"),
+    content_type_extension_mismatch: t("evaluation.ingestionQuality.warning.contentTypeMismatch"),
+    unknown_modality: t("evaluation.ingestionQuality.warning.unknownModality"),
+    duplicate_content: t("evaluation.ingestionQuality.warning.duplicate"),
+    large_file: t("evaluation.ingestionQuality.warning.largeFile"),
+    enterprise_ai_pdf_layout: t("sourceProfile.parser.pdf"),
+    enterprise_ai_image_ocr: t("sourceProfile.parser.image"),
+    enterprise_ai_text_structure: t("sourceProfile.parser.text"),
+    enterprise_ai_office_structure: t("sourceProfile.parser.office"),
+    enterprise_ai_generic: t("sourceProfile.parser.generic"),
+    legacy: t("evaluation.ingestionQuality.parser.legacy"),
+  };
+  return map[value] ?? value;
+}
+
 function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
   return (
     <section aria-labelledby="evaluation-cases-title">
@@ -328,32 +472,32 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
       </h3>
       <div className="overflow-hidden rounded-lg border border-border bg-card">
         <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
+          <table className="w-full min-w-[680px] text-left text-sm">
             <thead className="bg-background text-xs text-muted">
               <tr>
-                <th className="px-4 py-3 font-medium">{t("evaluation.case.id")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.metric.precision")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.metric.recall")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.metric.mrr")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.case.hit")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.case.failures")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.case.trace")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.case.id")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.precision")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.recall")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.metric.mrr")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.case.hit")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.case.failures")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium lg:table-cell sm:px-4 sm:py-3">{t("evaluation.case.trace")}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {metrics.case_results.map((result) => (
                 <tr key={result.case_id}>
-                  <td className="px-4 py-3 font-medium text-foreground">{result.case_id}</td>
-                  <td className="tnum px-4 py-3">{formatPercent(result.precision_at_k)}</td>
-                  <td className="tnum px-4 py-3">{formatPercent(result.recall_at_k)}</td>
-                  <td className="tnum px-4 py-3">{formatPercent(result.reciprocal_rank)}</td>
-                  <td className="px-4 py-3">
+                  <td className="break-words px-3 py-2 font-medium text-foreground sm:px-4 sm:py-3">{result.case_id}</td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 sm:table-cell sm:px-4 sm:py-3">{formatPercent(result.precision_at_k)}</td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 sm:table-cell sm:px-4 sm:py-3">{formatPercent(result.recall_at_k)}</td>
+                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{formatPercent(result.reciprocal_rank)}</td>
+                  <td className="px-3 py-2 sm:px-4 sm:py-3">
                     <BooleanIcon value={result.answer_keyword_hit && result.groundedness_passed} />
                   </td>
-                  <td className="px-4 py-3 text-xs text-muted">
+                  <td className="hidden break-words px-3 py-2 text-xs text-muted md:table-cell sm:px-4 sm:py-3">
                     {result.failure_reasons.length ? result.failure_reasons.join(", ") : "-"}
                   </td>
-                  <td className="tnum px-4 py-3 text-xs text-muted">
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 text-xs text-muted lg:table-cell sm:px-4 sm:py-3">
                     {result.trace_id.slice(0, 12)}
                   </td>
                 </tr>
@@ -368,7 +512,7 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
 
 function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }) {
   return (
-    <section className="space-y-3" aria-labelledby="evaluation-compare-title">
+    <section className="min-w-0 space-y-3" aria-labelledby="evaluation-compare-title">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id="evaluation-compare-title" className="text-base font-semibold text-foreground">
           {t("evaluation.compare.title")}
@@ -381,32 +525,34 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
       </div>
       <div className="overflow-hidden rounded-lg border border-border bg-card">
         <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
+          <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="bg-background text-xs text-muted">
               <tr>
-                <th className="px-4 py-3 font-medium">{t("evaluation.compare.rank")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.compare.experiment")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.compare.score")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.metric.precision")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.metric.recall")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.metric.mrr")}</th>
-                <th className="px-4 py-3 font-medium">{t("evaluation.status.passed")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.rank")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.experiment")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.score")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.precision")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.recall")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.mrr")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">
+                  <span className="sr-only">{t("evaluation.status.passed")}</span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {comparison.results.map((result) => (
                 <tr key={result.experiment.id}>
-                  <td className="tnum px-4 py-3">{result.rank}</td>
-                  <td className="px-4 py-3 font-medium text-foreground">
+                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{result.rank}</td>
+                  <td className="break-words px-3 py-2 font-medium text-foreground sm:px-4 sm:py-3">
                     {result.experiment.id}
                   </td>
-                  <td className="tnum px-4 py-3">{formatPercent(result.ranking_score)}</td>
-                  <td className="tnum px-4 py-3">
+                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{formatPercent(result.ranking_score)}</td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">
                     {formatPercent(result.metrics.precision_at_k)}
                   </td>
-                  <td className="tnum px-4 py-3">{formatPercent(result.metrics.recall_at_k)}</td>
-                  <td className="tnum px-4 py-3">{formatPercent(result.metrics.mrr)}</td>
-                  <td className="px-4 py-3">
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">{formatPercent(result.metrics.recall_at_k)}</td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">{formatPercent(result.metrics.mrr)}</td>
+                  <td className="px-3 py-2 sm:px-4 sm:py-3">
                     <StatusBadge passed={result.metrics.passed} compact />
                   </td>
                 </tr>
@@ -445,7 +591,7 @@ function JsonField({
         rows={rows}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+        className="min-w-0 w-full resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
       />
     </div>
   );
@@ -457,6 +603,39 @@ function ValidationNotice({ message }: { message: string }) {
 
 function ErrorNotice({ message }: { message: string }) {
   return <Banner severity="danger">{message}</Banner>;
+}
+
+function applyRequestKnowledgeBaseScope(
+  request: EvaluationRunRequestBody,
+  knowledgeBaseIds: string[]
+): EvaluationRunRequestBody {
+  if (knowledgeBaseIds.length === 0) return request;
+  return {
+    ...request,
+    filters: stripKnowledgeBaseFilter(request.filters) ?? {},
+    knowledge_base_ids: knowledgeBaseIds,
+  };
+}
+
+function applyExperimentKnowledgeBaseScope(
+  experiments: EvaluationExperiment[],
+  knowledgeBaseIds: string[]
+): EvaluationExperiment[] {
+  if (knowledgeBaseIds.length === 0) return experiments;
+  return experiments.map((experiment) => ({
+    ...experiment,
+    filters: stripKnowledgeBaseFilter(experiment.filters) ?? {},
+    knowledge_base_ids: knowledgeBaseIds,
+  }));
+}
+
+function stripKnowledgeBaseFilter(
+  filters: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  if (!filters) return undefined;
+  const next = { ...filters };
+  delete next.knowledge_base_id;
+  return Object.keys(next).length ? next : undefined;
 }
 
 function StatusBadge({ passed, compact = false }: { passed: boolean; compact?: boolean }) {

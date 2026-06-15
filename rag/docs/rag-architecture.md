@@ -10,6 +10,10 @@
    - `MAX_UPLOAD_BYTES` と `ALLOWED_UPLOAD_CONTENT_TYPES` でサイズ・MIME type を制限する。
    - 原本 bytes から SHA-256 とサイズを計算し、`content_sha256` / `file_size_bytes` として文書行へ保存する。
    - 同一 `content_sha256` の既存文書がある場合は `duplicate_of_document_id` に最初の原本文書 ID を保存する。
+   - upload レスポンスには `source_profile` を含める。`source_profile` は原本ファイル名、正規化後ファイル名、拡張子、保存 MIME type、拡張子から推定した MIME type、サイズ、SHA-256、重複元、原本 modality、推奨 parser profile、テキスト charset、品質警告を返す。
+   - Dify Knowledge Pipeline / RAGFlow / R2R の「取込前にデータソース品質・処理方針・重複を明示する」ベストプラクティスは、外部 parser や別 storage を追加せず、この `source_profile` と既存の Oracle document metadata に再マップする。
+   - `ingestion_mode=manual|auto` を multipart form で指定できる。`manual` は保存のみ、`auto` は upload レスポンス後にバックグラウンドで既存の取込パイプラインを開始する。重複原本は embedding コストと重複根拠を増やさないため auto 取込を開始せず、`source_profile.quality_warnings` による確認対象として返す。UI は auto 指定時に文書状態をポーリングし、`UPLOADED → INGESTING → INDEXED|ERROR` を表示する。
+   - 自動取込でも、原本取得後のサイズ・SHA-256 整合性検証、`INGESTING` 二重実行防止、`INDEXED` の force なし早期 return、`ERROR` 時の古い chunk / extraction 削除は手動取込と同じ helper を使う。
 
 2. OCR・本文抽出と索引
    - API: `POST /api/documents/{document_id}/ingest`

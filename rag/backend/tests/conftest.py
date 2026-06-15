@@ -64,6 +64,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.object_storage_bucket = ""
     settings.oracle_client_lib_dir = str(tmp_path / "instantclient_23_26")
     settings.oracle_wallet_dir = ""
+    settings.oracle_adb_ocid = ""
     settings.local_storage_dir = str(tmp_path / "storage")
     settings.max_upload_bytes = 200 * 1024 * 1024
     settings.rate_limit_enabled = True
@@ -87,8 +88,13 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_enterprise_ai_vlm_payload_template = ""
     settings.oci_enterprise_ai_llm_response_path = ""
     settings.oci_enterprise_ai_vlm_response_path = ""
-    settings.oci_enterprise_ai_timeout_seconds = 60.0
+    settings.oci_enterprise_ai_timeout_seconds = 600.0
     settings.oci_enterprise_ai_max_retries = 3
+    settings.oci_enterprise_ai_llm_max_output_tokens = 1200
+    settings.oci_enterprise_ai_vlm_max_output_tokens = 65536
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536
     settings.oci_genai_rerank_model = "cohere.rerank-v4.0-fast"
+    settings.rag_pdf_segmentation_enabled = True
+    settings.rag_pdf_max_pages_per_segment = 3
+    settings.rag_pdf_max_segments = 300

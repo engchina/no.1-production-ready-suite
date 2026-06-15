@@ -8,7 +8,11 @@
 
 export type FileStatus = "UPLOADED" | "INGESTING" | "INDEXED" | "ERROR";
 export type SearchMode = "hybrid" | "vector" | "keyword";
+export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
 export type SelectAiAction = "showsql" | "runsql";
+export type UploadIngestionMode = "manual" | "auto";
+export type SourceModality = "pdf" | "image" | "text" | "office" | "unknown";
+export type IngestionJobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
 export type EvaluationFailureReason =
   | "retrieval_miss"
   | "partial_recall"
@@ -121,6 +125,42 @@ export interface HealthData {
 }
 
 // --- ドキュメント ---
+export interface KnowledgeBaseRef {
+  id: string;
+  name: string;
+}
+
+export interface SourceProfile {
+  original_file_name: string;
+  sanitized_file_name: string;
+  extension: string | null;
+  content_type: string;
+  inferred_content_type: string | null;
+  file_size_bytes: number;
+  content_sha256: string;
+  modality: SourceModality;
+  parser_profile: string;
+  text_charset: string | null;
+  duplicate_of_document_id: string | null;
+  quality_status: "ready" | "warning" | string;
+  quality_warnings: string[];
+}
+
+export interface IngestionJob {
+  id: string;
+  document_id: string;
+  status: IngestionJobStatus;
+  parser_profile: string;
+  quality_warnings: string[];
+  skip_reason: string | null;
+  error_message: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  queued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 export interface DocumentSummary {
   id: string;
   file_name: string;
@@ -132,6 +172,8 @@ export interface DocumentSummary {
   duplicate_of_document_id: string | null;
   uploaded_at: string;
   indexed_at: string | null;
+  knowledge_bases: KnowledgeBaseRef[];
+  source_profile: SourceProfile | null;
 }
 
 export interface DocumentElement {
@@ -166,11 +208,63 @@ export interface UploadResult {
   file_size_bytes: number;
   content_sha256: string;
   duplicate_of_document_id: string | null;
+  knowledge_bases: KnowledgeBaseRef[];
+  source_profile: SourceProfile;
+  ingestion_started: boolean;
+  ingestion_job: IngestionJob | null;
 }
 
 export interface DocumentStats {
   total: number;
   by_status: Partial<Record<FileStatus, number>>;
+}
+
+export interface BatchUploadResult {
+  items: UploadResult[];
+  total_count: number;
+  uploaded_count: number;
+  queued_count: number;
+  skipped_count: number;
+}
+
+// --- ナレッジベース ---
+export interface KnowledgeBaseSummary extends KnowledgeBaseRef {
+  description: string | null;
+  status: KnowledgeBaseStatus;
+  default_search_mode: SearchMode;
+  document_count: number;
+  indexed_document_count: number;
+  error_document_count: number;
+  searchable_chunk_count: number;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
+  retrieval_config: Record<string, unknown>;
+}
+
+export interface KnowledgeBaseCreateRequest {
+  name: string;
+  description?: string | null;
+  default_search_mode?: SearchMode;
+  retrieval_config?: Record<string, unknown>;
+}
+
+export interface KnowledgeBaseUpdateRequest {
+  name?: string | null;
+  description?: string | null;
+  default_search_mode?: SearchMode | null;
+  retrieval_config?: Record<string, unknown> | null;
+}
+
+export interface KnowledgeBaseDocumentAssignmentRequest {
+  document_ids: string[];
+}
+
+export interface DocumentKnowledgeBaseReplaceRequest {
+  knowledge_base_ids: string[];
 }
 
 // --- 検索 ---
@@ -180,6 +274,7 @@ export interface SearchRequestBody {
   rerank_top_n?: number;
   mode?: SearchMode;
   filters?: Record<string, string>;
+  knowledge_base_ids?: string[];
 }
 
 export interface RetrievedChunk {
@@ -213,6 +308,7 @@ export interface SearchDiagnostics {
   query_variant_count: number;
   oracle_vector_target_accuracy: number;
   filter_keys: string[];
+  knowledge_base_count: number;
   config_fingerprint: string;
 }
 
@@ -263,6 +359,7 @@ export interface EvaluationRunRequestBody {
   rerank_top_n?: number;
   mode?: SearchMode;
   filters?: Record<string, string>;
+  knowledge_base_ids?: string[];
   thresholds?: EvaluationThresholds | null;
   rag_overrides?: EvaluationRagOverrides | null;
 }
@@ -309,6 +406,17 @@ export interface EvaluationMetrics {
   threshold_failures: EvaluationThresholdFailure[];
   failure_reason_counts: Partial<Record<EvaluationFailureReason, number>>;
   case_results: EvaluationCaseResult[];
+  ingestion_quality: EvaluationIngestionQualitySummary;
+}
+
+export interface EvaluationIngestionQualitySummary {
+  document_count: number;
+  table_document_count: number;
+  figure_document_count: number;
+  long_document_count: number;
+  warning_counts: Record<string, number>;
+  risk_counts: Record<string, number>;
+  parser_profile_counts: Record<string, number>;
 }
 
 export interface EvaluationRagOverrides {
@@ -332,6 +440,7 @@ export interface EvaluationExperiment {
   rerank_top_n: number;
   mode: SearchMode;
   filters: Record<string, string>;
+  knowledge_base_ids?: string[];
   rag_overrides?: EvaluationRagOverrides | null;
 }
 
@@ -429,7 +538,36 @@ export interface DatabaseSettingsData {
   readiness: string;
   embedding_dimension: number;
   vector_column: string;
+  adb_ocid: string;
+  region: string;
   config_source: "runtime";
+}
+
+export type AdbOperationStatus =
+  | "success"
+  | "not_configured"
+  | "error"
+  | "accepted"
+  | "already_available"
+  | "already_stopped"
+  | "cannot_start"
+  | "cannot_stop";
+
+export interface AdbInfoData {
+  status: AdbOperationStatus;
+  message: string;
+  id: string | null;
+  display_name: string | null;
+  lifecycle_state: string | null;
+  db_name: string | null;
+  cpu_core_count: number | null;
+  data_storage_size_in_tbs: number | null;
+  region: string | null;
+}
+
+export interface AdbSettingsUpdate {
+  adb_ocid: string;
+  region: string;
 }
 
 export interface DatabaseSettingsUpdate {
@@ -621,6 +759,100 @@ export const api = {
   listDocuments: (params: {
     status?: FileStatus;
     q?: string;
+    knowledge_base_id?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.q) search.set("q", params.q);
+    if (params.knowledge_base_id) search.set("knowledge_base_id", params.knowledge_base_id);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return request<Page<DocumentSummary>>(`/api/documents${qs ? `?${qs}` : ""}`);
+  },
+  getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  getDocumentStats: () => request<DocumentStats>("/api/documents/stats"),
+  listDocumentKnowledgeBases: (id: string) =>
+    request<KnowledgeBaseRef[]>(`/api/documents/${encodeURIComponent(id)}/knowledge-bases`),
+  replaceDocumentKnowledgeBases: (id: string, body: DocumentKnowledgeBaseReplaceRequest) =>
+    request<KnowledgeBaseRef[]>(`/api/documents/${encodeURIComponent(id)}/knowledge-bases`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  uploadDocument: (
+    file: File,
+    knowledgeBaseIds: string[] = [],
+    ingestionMode: UploadIngestionMode = "manual"
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    for (const id of knowledgeBaseIds) {
+      form.append("knowledge_base_ids", id);
+    }
+    form.append("ingestion_mode", ingestionMode);
+    return request<UploadResult>("/api/documents/upload", { method: "POST", body: form });
+  },
+  batchUploadDocuments: (
+    files: File[],
+    knowledgeBaseIds: string[] = [],
+    ingestionMode: UploadIngestionMode = "manual"
+  ) => {
+    const form = new FormData();
+    for (const file of files) {
+      form.append("files", file);
+    }
+    for (const id of knowledgeBaseIds) {
+      form.append("knowledge_base_ids", id);
+    }
+    form.append("ingestion_mode", ingestionMode);
+    return request<BatchUploadResult>("/api/documents/batch-upload", {
+      method: "POST",
+      body: form,
+    });
+  },
+  ingestDocument: (id: string, force = false) =>
+    request<DocumentDetail>(
+      `/api/documents/${encodeURIComponent(id)}/ingest${force ? "?force=true" : ""}`,
+      { method: "POST" }
+    ),
+  enqueueDocumentIngestionJob: (id: string, force = false) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs${force ? "?force=true" : ""}`,
+      { method: "POST" }
+    ),
+  listIngestionJobs: (params: {
+    status?: IngestionJobStatus;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return request<Page<IngestionJob>>(`/api/documents/ingestion-jobs${qs ? `?${qs}` : ""}`);
+  },
+  getIngestionJob: (id: string) =>
+    request<IngestionJob>(`/api/documents/ingestion-jobs/${encodeURIComponent(id)}`),
+  drainIngestionJobs: (limit = 50) =>
+    request<IngestionJob[]>(`/api/documents/ingestion-jobs/drain?limit=${limit}`, {
+      method: "POST",
+    }),
+  retryIngestionJob: (id: string, force = false) =>
+    request<IngestionJob>(
+      `/api/documents/ingestion-jobs/${encodeURIComponent(id)}/retry${force ? "?force=true" : ""}`,
+      { method: "POST" }
+    ),
+  /** 原本ファイルの配信 URL（プレビュー用）。 */
+  documentContentUrl: (id: string) => `/api/documents/${encodeURIComponent(id)}/content`,
+
+  // ナレッジベース
+  listKnowledgeBases: (params: {
+    status?: KnowledgeBaseStatus;
+    q?: string;
     limit?: number;
     offset?: number;
   } = {}) => {
@@ -630,22 +862,37 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return request<Page<DocumentSummary>>(`/api/documents${qs ? `?${qs}` : ""}`);
+    return request<Page<KnowledgeBaseSummary>>(
+      `/api/knowledge-bases${qs ? `?${qs}` : ""}`
+    );
   },
-  getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
-  getDocumentStats: () => request<DocumentStats>("/api/documents/stats"),
-  uploadDocument: (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return request<UploadResult>("/api/documents/upload", { method: "POST", body: form });
-  },
-  ingestDocument: (id: string, force = false) =>
-    request<DocumentDetail>(
-      `/api/documents/${encodeURIComponent(id)}/ingest${force ? "?force=true" : ""}`,
-      { method: "POST" }
+  createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
+    request<KnowledgeBaseDetail>("/api/knowledge-bases", jsonBody(body)),
+  updateKnowledgeBase: (id: string, body: KnowledgeBaseUpdateRequest) =>
+    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  archiveKnowledgeBase: (id: string) =>
+    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+    }),
+  assignDocumentsToKnowledgeBase: (
+    id: string,
+    body: KnowledgeBaseDocumentAssignmentRequest
+  ) =>
+    request<KnowledgeBaseDetail>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/documents`,
+      jsonBody(body)
     ),
-  /** 原本ファイルの配信 URL（プレビュー用）。 */
-  documentContentUrl: (id: string) => `/api/documents/${encodeURIComponent(id)}/content`,
+  removeDocumentFromKnowledgeBase: (knowledgeBaseId: string, documentId: string) =>
+    request<KnowledgeBaseDetail>(
+      `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(
+        documentId
+      )}`,
+      { method: "DELETE" }
+    ),
 
   // 検索
   search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
@@ -689,6 +936,13 @@ export const api = {
   },
   testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     request<DatabaseConnectionTestResult>("/api/settings/database/test", jsonBody(body)),
+
+  // 設定: Autonomous Database 管理
+  getAdbInfo: () => request<AdbInfoData>("/api/settings/database/adb"),
+  updateAdbSettings: (body: AdbSettingsUpdate) =>
+    request<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
+  startAdb: () => request<AdbInfoData>("/api/settings/database/adb/start", { method: "POST" }),
+  stopAdb: () => request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
 
   // 設定: アップロード保存先
   getUploadStorageSettings: () =>

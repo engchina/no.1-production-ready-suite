@@ -7,8 +7,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.schemas.search import (
     SearchDiagnostics,
     SearchMode,
+    format_search_id_filter,
     normalize_query_text,
     normalize_search_filters,
+    normalize_search_id_list,
+    parse_search_id_filter,
     validate_rerank_top_n,
 )
 
@@ -53,6 +56,21 @@ class EvaluationMetrics(BaseModel):
     threshold_failures: list["EvaluationThresholdFailure"] = Field(default_factory=list)
     failure_reason_counts: dict[EvaluationFailureReason, int] = Field(default_factory=dict)
     case_results: list["EvaluationCaseResult"] = Field(default_factory=list)
+    ingestion_quality: "EvaluationIngestionQualitySummary" = Field(
+        default_factory=lambda: EvaluationIngestionQualitySummary()
+    )
+
+
+class EvaluationIngestionQualitySummary(BaseModel):
+    """評価対象 corpus の取込品質サマリ。"""
+
+    document_count: int = 0
+    table_document_count: int = 0
+    figure_document_count: int = 0
+    long_document_count: int = 0
+    warning_counts: dict[str, int] = Field(default_factory=dict)
+    risk_counts: dict[str, int] = Field(default_factory=lambda: {"low": 0, "medium": 0, "high": 0})
+    parser_profile_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class EvaluationCaseResult(BaseModel):
@@ -136,6 +154,7 @@ class EvaluationExperiment(BaseModel):
     rerank_top_n: int = Field(default=5, ge=1, le=50)
     mode: SearchMode = SearchMode.HYBRID
     filters: dict[str, str] = Field(default_factory=dict)
+    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     rag_overrides: EvaluationRagOverrides | None = None
 
     @field_validator("id")
@@ -153,10 +172,20 @@ class EvaluationExperiment(BaseModel):
         """検索評価に使う filters を SearchRequest と同じ規則で正規化する。"""
         return normalize_search_filters(filters)
 
+    @field_validator("knowledge_base_ids")
+    @classmethod
+    def validate_knowledge_base_ids(cls, values: list[str]) -> list[str]:
+        """評価 experiment のナレッジベース ID を重複排除する。"""
+        return normalize_search_id_list(values)
+
     @model_validator(mode="after")
-    def validate_rerank_depth(self) -> Self:
-        """SearchRequest と同じ rerank 深さ制約を適用する。"""
+    def validate_search_options(self) -> Self:
+        """SearchRequest と同じ rerank 深さと KB 指定制約を適用する。"""
         validate_rerank_top_n(self.top_k, self.rerank_top_n)
+        self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
+            self.filters,
+            self.knowledge_base_ids,
+        )
         return self
 
 
@@ -205,6 +234,7 @@ class EvaluationRunRequest(BaseModel):
     rerank_top_n: int = Field(default=5, ge=1, le=50)
     mode: SearchMode = SearchMode.HYBRID
     filters: dict[str, str] = Field(default_factory=dict)
+    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     thresholds: EvaluationThresholds | None = None
     rag_overrides: EvaluationRagOverrides | None = None
 
@@ -214,8 +244,44 @@ class EvaluationRunRequest(BaseModel):
         """検索評価に使う filters を SearchRequest と同じ規則で正規化する。"""
         return normalize_search_filters(filters)
 
+    @field_validator("knowledge_base_ids")
+    @classmethod
+    def validate_knowledge_base_ids(cls, values: list[str]) -> list[str]:
+        """評価実行のナレッジベース ID を重複排除する。"""
+        return normalize_search_id_list(values)
+
     @model_validator(mode="after")
-    def validate_rerank_depth(self) -> Self:
-        """SearchRequest と同じ rerank 深さ制約を適用する。"""
+    def validate_search_options(self) -> Self:
+        """SearchRequest と同じ rerank 深さと KB 指定制約を適用する。"""
         validate_rerank_top_n(self.top_k, self.rerank_top_n)
+        self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
+            self.filters,
+            self.knowledge_base_ids,
+        )
         return self
+
+
+def _sync_knowledge_base_filter(
+    filters: dict[str, str],
+    knowledge_base_ids: list[str],
+) -> tuple[dict[str, str], list[str]]:
+    """評価 request の明示 KB 指定を既存 filters 経路へ同期する。"""
+    filter_knowledge_base_ids = parse_search_id_filter(filters.get("knowledge_base_id"))
+    if (
+        knowledge_base_ids
+        and filter_knowledge_base_ids
+        and knowledge_base_ids != filter_knowledge_base_ids
+    ):
+        raise ValueError(
+            "knowledge_base_ids と filters.knowledge_base_id は同じ値を指定してください。"
+        )
+    resolved_knowledge_base_ids = knowledge_base_ids or filter_knowledge_base_ids
+    if not resolved_knowledge_base_ids:
+        return filters, []
+    return (
+        {
+            **filters,
+            "knowledge_base_id": format_search_id_filter(resolved_knowledge_base_ids),
+        },
+        resolved_knowledge_base_ids,
+    )

@@ -51,6 +51,10 @@ class AsgiTestClient:
         """PATCH リクエストを実行する。"""
         return self.request("PATCH", url, **kwargs)
 
+    def put(self, url: str, **kwargs: Any) -> httpx.Response:
+        """PUT リクエストを実行する。"""
+        return self.request("PUT", url, **kwargs)
+
     def delete(self, url: str, **kwargs: Any) -> httpx.Response:
         """DELETE リクエストを実行する。"""
         return self.request("DELETE", url, **kwargs)
