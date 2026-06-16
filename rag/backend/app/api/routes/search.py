@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from time import perf_counter
 
 from fastapi import APIRouter, HTTPException, Request
@@ -14,7 +15,7 @@ from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
-from app.rag.pipeline import RagPipeline
+from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
@@ -28,6 +29,7 @@ from app.schemas.search import (
 
 router = APIRouter()
 SEARCH_TIMEOUT_MESSAGE = "検索処理がタイムアウトしました。条件を絞って再度お試しください。"
+STREAM_ERROR_MESSAGE = "検索処理中にエラーが発生しました。"
 SELECT_AI_BLOCKED_MESSAGE = "Select AI で実行できないクエリです。"
 
 
@@ -110,9 +112,8 @@ async def stream_search(
 ) -> StreamingResponse:
     """RAG 検索結果を SSE 形式でストリーミングする。"""
     enforce_rate_limit("search", http_request)
-    result = await _run_search_with_timeout(request)
     return StreamingResponse(
-        _search_events(result),
+        _stream_search_events_with_timeout(request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -150,6 +151,107 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
             error_stage="timeout",
         )
         raise HTTPException(status_code=504, detail=SEARCH_TIMEOUT_MESSAGE) from exc
+
+
+async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIterator[str]:
+    """stage progress を即時 SSE で返しながら検索 pipeline を実行する。"""
+    settings = get_settings()
+    timeout = settings.rag_search_timeout_seconds
+    started_at = perf_counter()
+    trace_id = new_trace_id()
+    queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
+    stage_timings: dict[str, float] = {}
+
+    async def emit_progress(progress: SearchStageProgress) -> None:
+        if progress.outcome != "started":
+            stage_timings[progress.stage] = progress.elapsed_ms
+        await queue.put(
+            (
+                "stage",
+                {
+                    "trace_id": progress.trace_id,
+                    "stage": progress.stage,
+                    "outcome": progress.outcome,
+                    "elapsed_ms": progress.elapsed_ms,
+                    "attributes": dict(progress.attributes),
+                },
+            )
+        )
+
+    async def produce() -> None:
+        try:
+            result = await asyncio.wait_for(
+                RagPipeline().run(
+                    request,
+                    trace_id=trace_id,
+                    progress_callback=emit_progress,
+                ),
+                timeout=timeout,
+            )
+            await queue.put(("result", result))
+        except TimeoutError as exc:
+            elapsed = elapsed_ms(started_at)
+            diagnostics = build_search_diagnostics(
+                request,
+                settings=settings,
+                stream_stage_timings=stage_timings,
+            )
+            record_rag_request(request.mode.value, "error", elapsed / 1000, 0)
+            record_rag_search_audit(
+                trace_id=trace_id,
+                outcome="error",
+                mode=request.mode,
+                sanitized_query=request.query,
+                filters=request.filters,
+                findings=[],
+                retrieved_count=0,
+                citations=[],
+                elapsed_ms=elapsed,
+                diagnostics=diagnostics,
+                error=exc,
+                error_stage="timeout",
+            )
+            await queue.put(
+                (
+                    "error",
+                    {
+                        "trace_id": trace_id,
+                        "message": SEARCH_TIMEOUT_MESSAGE,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+            )
+        except Exception as exc:
+            await queue.put(
+                (
+                    "error",
+                    {
+                        "trace_id": trace_id,
+                        "message": STREAM_ERROR_MESSAGE,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+            )
+        finally:
+            await queue.put(None)
+
+    producer = asyncio.create_task(produce())
+    try:
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            event_name, payload = event
+            if event_name == "result" and isinstance(payload, SearchResponse):
+                async for item in _search_events(payload):
+                    yield item
+                continue
+            yield _sse_event(event_name, payload)
+    finally:
+        if not producer.done():
+            producer.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer
 
 
 async def _search_events(result: SearchResponse) -> AsyncIterator[str]:

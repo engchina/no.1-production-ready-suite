@@ -602,10 +602,15 @@ def test_stream_search_returns_sse_events() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     body = response.text
+    assert "event: stage" in body
     assert "event: metadata" in body
     assert "event: delta" in body
     assert "event: citations" in body
     assert "event: done" in body
+    assert body.index("event: stage") < body.index("event: metadata")
+    assert '"stage": "embedding"' in body
+    assert '"outcome": "started"' in body
+    assert '"stream_stage_timings"' in body
     assert document_id in body
 
 

@@ -14,6 +14,7 @@ from app.rag.pipeline import (
     NO_RESULTS_ANSWER,
     NO_RESULTS_WARNING,
     RagPipeline,
+    SearchStageProgress,
     _build_context,
     _dedupe_ranked_chunks,
 )
@@ -598,6 +599,46 @@ async def test_pipeline_records_stage_metrics(monkeypatch: MonkeyPatch) -> None:
     ]
     assert {mode for mode, _, _, _ in observed} == {"hybrid"}
     assert all(seconds >= 0.0 for *_, seconds in observed)
+
+
+async def test_pipeline_reports_stage_progress_and_diagnostic_timings() -> None:
+    """stream 用 callback へ stage progress を出し、diagnostics に ms timing を残す。"""
+    observed: list[SearchStageProgress] = []
+
+    async def capture_progress(progress: SearchStageProgress) -> None:
+        observed.append(progress)
+
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=StubOracleClient(),
+        llm=GroundedLlm(),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(query="INV-SECRET の承認条件"),
+        trace_id="trace-progress",
+        progress_callback=capture_progress,
+    )
+
+    assert [(event.stage, event.outcome) for event in observed] == [
+        ("embedding", "started"),
+        ("embedding", "success"),
+        ("retrieval", "started"),
+        ("retrieval", "success"),
+        ("rerank", "started"),
+        ("rerank", "success"),
+        ("generation", "started"),
+        ("generation", "success"),
+    ]
+    assert response.diagnostics.stream_stage_timings.keys() == {
+        "embedding",
+        "retrieval",
+        "rerank",
+        "generation",
+    }
+    assert all(value >= 0.0 for value in response.diagnostics.stream_stage_timings.values())
+    assert {event.trace_id for event in observed} == {"trace-progress"}
+    assert "INV-SECRET" not in str([event.attributes for event in observed])
 
 
 async def test_pipeline_records_trace_spans_without_payload_text(

@@ -52,6 +52,20 @@ class RetrievalExecutionResult:
     fallback_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class SearchStageProgress:
+    """SSE / diagnostics 用の低機密 stage progress event。"""
+
+    trace_id: str
+    stage: str
+    outcome: str
+    elapsed_ms: float
+    attributes: Mapping[str, object]
+
+
+type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[None]]
+
+
 class RagPipeline:
     """ハイブリッド検索 + リランク + 生成の RAG パイプライン。"""
 
@@ -69,10 +83,16 @@ class RagPipeline:
         self._llm = llm or OciEnterpriseAiClient(settings=self._settings)
         self._guardrails = guardrails or GuardrailPolicy()
 
-    async def run(self, request: SearchRequest, trace_id: str | None = None) -> SearchResponse:
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+        progress_callback: SearchStageProgressCallback | None = None,
+    ) -> SearchResponse:
         """RAG 検索を実行する。"""
         started_at = perf_counter()
         trace_id = trace_id or new_trace_id()
+        stream_stage_timings: dict[str, float] = {}
         query_guardrail = self._guardrails.validate_query(request.query)
         record_guardrail_findings(
             "query",
@@ -145,6 +165,9 @@ class RagPipeline:
                     "input_count": query_variant_count,
                     "query_variant_count": query_variant_count,
                 },
+                result_attributes=lambda vectors: {"output_count": len(vectors)},
+                progress_callback=progress_callback,
+                stage_timings=stream_stage_timings,
             )
             error_stage = "retrieval"
             retrieval_result = await _observe_stage(
@@ -170,6 +193,8 @@ class RagPipeline:
                     "graph_hit_count": result.graph_hit_count,
                     "fallback_reason": result.fallback_reason or "",
                 },
+                progress_callback=progress_callback,
+                stage_timings=stream_stage_timings,
             )
             retrieved = retrieval_result.chunks
             runtime_retrieval_strategy = retrieval_result.strategy.value
@@ -191,6 +216,8 @@ class RagPipeline:
                     "top_n": request.rerank_top_n,
                 },
                 result_attributes=lambda chunks: {"output_count": len(chunks)},
+                progress_callback=progress_callback,
+                stage_timings=stream_stage_timings,
             )
             if not ranked:
                 elapsed = elapsed_ms(started_at)
@@ -201,6 +228,7 @@ class RagPipeline:
                     route_reason=resolved_strategy.route_reason,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
+                    stream_stage_timings=stream_stage_timings,
                     retrieved_count=len(retrieved),
                     query_variant_count=query_variant_count,
                 )
@@ -247,6 +275,8 @@ class RagPipeline:
                         "reordered_count": item[1],
                         "output_count": len(item[0]),
                     },
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
                 )
             if self._settings.rag_context_group_expansion_enabled:
                 error_stage = "context_group_expansion"
@@ -263,6 +293,8 @@ class RagPipeline:
                         "expanded_count": item[1],
                         "output_count": len(item[0]),
                     },
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
                 )
             if self._settings.rag_context_neighbor_window > 0:
                 error_stage = "context_expansion"
@@ -279,6 +311,8 @@ class RagPipeline:
                         "expanded_count": item[1],
                         "output_count": len(item[0]),
                     },
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
                 )
             if self._settings.rag_context_compression_enabled:
                 error_stage = "context_compression"
@@ -306,6 +340,8 @@ class RagPipeline:
                         "saved_chars": item[2],
                         "output_count": len(item[0]),
                     },
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
                 )
             context, context_citations = _build_context_with_citations(
                 packed_chunks,
@@ -318,6 +354,7 @@ class RagPipeline:
                 route_reason=resolved_strategy.route_reason,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
+                stream_stage_timings=stream_stage_timings,
                 retrieved_count=len(retrieved),
                 reranked_count=len(ranked),
                 deduplicated_count=deduplicated_count,
@@ -342,6 +379,11 @@ class RagPipeline:
                     "citation_count": len(context_citations),
                 },
                 result_attributes=lambda generated: {"answer_chars": len(generated)},
+                progress_callback=progress_callback,
+                stage_timings=stream_stage_timings,
+            )
+            diagnostics = diagnostics.model_copy(
+                update={"stream_stage_timings": dict(stream_stage_timings)}
             )
             error_stage = "answer_guardrail"
             answer_guardrail = self._guardrails.validate_answer(answer, context=context)
@@ -389,6 +431,7 @@ class RagPipeline:
                 route_reason=resolved_strategy.route_reason,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
+                stream_stage_timings=stream_stage_timings,
                 retrieved_count=len(retrieved),
                 reranked_count=len(ranked),
                 deduplicated_count=deduplicated_count,
@@ -1084,14 +1127,25 @@ async def _observe_stage[T](
     *,
     attributes: Mapping[str, object] | None = None,
     result_attributes: Callable[[T], Mapping[str, object]] | None = None,
+    progress_callback: SearchStageProgressCallback | None = None,
+    stage_timings: dict[str, float] | None = None,
 ) -> T:
     """非同期 stage の処理時間を outcome 付きで記録する。"""
     started_at = perf_counter()
     base_attributes = dict(attributes or {})
+    await _emit_stage_progress(
+        progress_callback,
+        trace_id=trace_id,
+        stage=stage,
+        outcome="started",
+        elapsed=0.0,
+        attributes=base_attributes,
+    )
     try:
         result = await operation
     except asyncio.CancelledError as exc:
         elapsed = perf_counter() - started_at
+        _record_stage_timing(stage_timings, stage, elapsed)
         record_rag_stage(mode, stage, "cancelled", elapsed)
         record_trace_span(
             trace_id=trace_id,
@@ -1101,9 +1155,18 @@ async def _observe_stage[T](
             attributes=base_attributes,
             error=exc,
         )
+        await _emit_stage_progress(
+            progress_callback,
+            trace_id=trace_id,
+            stage=stage,
+            outcome="cancelled",
+            elapsed=elapsed,
+            attributes=base_attributes,
+        )
         raise
     except Exception as exc:
         elapsed = perf_counter() - started_at
+        _record_stage_timing(stage_timings, stage, elapsed)
         record_rag_stage(mode, stage, "error", elapsed)
         record_trace_span(
             trace_id=trace_id,
@@ -1113,10 +1176,22 @@ async def _observe_stage[T](
             attributes=base_attributes,
             error=exc,
         )
+        await _emit_stage_progress(
+            progress_callback,
+            trace_id=trace_id,
+            stage=stage,
+            outcome="error",
+            elapsed=elapsed,
+            attributes={
+                **base_attributes,
+                "error_type": type(exc).__name__,
+            },
+        )
         raise
     elapsed = perf_counter() - started_at
     if result_attributes is not None:
         base_attributes.update(result_attributes(result))
+    _record_stage_timing(stage_timings, stage, elapsed)
     record_rag_stage(mode, stage, "success", elapsed)
     record_trace_span(
         trace_id=trace_id,
@@ -1125,7 +1200,46 @@ async def _observe_stage[T](
         seconds=elapsed,
         attributes=base_attributes,
     )
+    await _emit_stage_progress(
+        progress_callback,
+        trace_id=trace_id,
+        stage=stage,
+        outcome="success",
+        elapsed=elapsed,
+        attributes=base_attributes,
+    )
     return result
+
+
+def _record_stage_timing(
+    stage_timings: dict[str, float] | None,
+    stage: str,
+    elapsed: float,
+) -> None:
+    if stage_timings is not None:
+        stage_timings[stage] = round(elapsed * 1000, 3)
+
+
+async def _emit_stage_progress(
+    progress_callback: SearchStageProgressCallback | None,
+    *,
+    trace_id: str,
+    stage: str,
+    outcome: str,
+    elapsed: float,
+    attributes: Mapping[str, object],
+) -> None:
+    if progress_callback is None:
+        return
+    await progress_callback(
+        SearchStageProgress(
+            trace_id=trace_id,
+            stage=stage,
+            outcome=outcome,
+            elapsed_ms=round(elapsed * 1000, 3),
+            attributes=dict(attributes),
+        )
+    )
 
 
 def _build_context_with_citations(

@@ -49,16 +49,18 @@ def test_search_api_returns_504_when_pipeline_times_out(
     assert "INV-SECRET" not in str(audit_event)
 
 
-def test_stream_search_api_returns_504_when_pipeline_times_out(monkeypatch: MonkeyPatch) -> None:
-    """SSE 検索も pipeline timeout 時は stream 開始前に 504 を返す。"""
+def test_stream_search_api_emits_error_event_when_pipeline_times_out(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """SSE 検索は stream 開始後の timeout を error event として返す。"""
     _force_search_timeout(monkeypatch)
 
     response = client.post("/api/search/stream", json={"query": "承認条件"})
 
-    assert response.status_code == 504
-    body = response.json()
-    assert body["data"] is None
-    assert body["error_messages"] == [search_route.SEARCH_TIMEOUT_MESSAGE]
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: error" in response.text
+    assert search_route.SEARCH_TIMEOUT_MESSAGE in response.text
 
 
 def test_search_api_hashes_tenant_and_user_headers_into_audit(
@@ -303,7 +305,9 @@ class SlowPipeline:
         self,
         _request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: object | None = None,
     ) -> SearchResponse:
+        _ = progress_callback
         assert trace_id
         await asyncio.sleep(1)
         raise AssertionError("timeout 前に完了しない")
@@ -316,7 +320,9 @@ class AuditingPipeline:
         self,
         request: SearchRequest,
         trace_id: str | None = None,
+        progress_callback: object | None = None,
     ) -> SearchResponse:
+        _ = progress_callback
         assert trace_id
         diagnostics = build_search_diagnostics(
             request,
