@@ -67,6 +67,7 @@ class StagingSmokeError(RuntimeError):
         super().__init__(f"staging smoke failed at {stage}: {type(cause).__name__}")
         self.stage = stage
         self.cause_type = type(cause).__name__
+        self.cause_details = _safe_cause_details(cause)
         self.cleanup = dict(cleanup or {})
 
 
@@ -334,9 +335,21 @@ def _error_payload(error: Exception) -> dict[str, object]:
     if isinstance(error, StagingSmokeError):
         payload["stage"] = error.stage
         payload["cause_type"] = error.cause_type
+        if error.cause_details:
+            payload["cause_details"] = error.cause_details
         if error.cleanup:
             payload["cleanup"] = error.cleanup
     return payload
+
+
+def _safe_cause_details(error: Exception) -> dict[str, str]:
+    """OCI SDK 等の低機密診断値だけを取り出す。raw message は含めない。"""
+    details: dict[str, str] = {}
+    for attr in ("status", "code", "opc_request_id", "request_id"):
+        value = getattr(error, attr, None)
+        if value is not None:
+            details[attr] = str(value)
+    return details
 
 
 if __name__ == "__main__":

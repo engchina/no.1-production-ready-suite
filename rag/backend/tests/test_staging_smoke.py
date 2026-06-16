@@ -226,6 +226,35 @@ def test_error_payload_includes_failed_stage_without_raw_message() -> None:
     assert "password" not in str(payload)
 
 
+def test_error_payload_includes_safe_external_error_details() -> None:
+    """OCI SDK の status/code/request id は raw message なしで診断に使える。"""
+
+    class ExternalServiceError(RuntimeError):
+        status = 404
+        code = "BucketNotFound"
+        request_id = "request-123"
+
+    error = staging_smoke.StagingSmokeError(
+        "object_storage_put",
+        ExternalServiceError("raw secret detail: bucket=my-private-bucket"),
+    )
+
+    payload = staging_smoke._error_payload(error)
+
+    assert payload == {
+        "ok": False,
+        "error_type": "StagingSmokeError",
+        "stage": "object_storage_put",
+        "cause_type": "ExternalServiceError",
+        "cause_details": {
+            "status": "404",
+            "code": "BucketNotFound",
+            "request_id": "request-123",
+        },
+    }
+    assert "my-private-bucket" not in str(payload)
+
+
 def test_error_payload_includes_preflight_checks_without_raw_values() -> None:
     """preflight 失敗 payload は安全な check status だけを含める。"""
     preflight = staging_smoke.SmokePreflightResult(
