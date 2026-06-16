@@ -338,6 +338,15 @@ class Settings(BaseSettings):
         ),
     )
     rag_embedding_cache_max_entries: int = Field(default=4096, ge=0, le=200000)
+    rag_embedding_batch_size: int = Field(
+        default=96,
+        ge=1,
+        le=1024,
+        description=(
+            "OCI Generative AI embedding へ 1 回に送る text 数。"
+            "大きな文書取込や query expansion で API payload を過大化しない。"
+        ),
+    )
     rag_rerank_cache_enabled: bool = Field(
         default=True,
         description=(

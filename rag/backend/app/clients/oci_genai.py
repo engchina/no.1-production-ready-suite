@@ -63,7 +63,7 @@ class OciGenAiClient:
         if not texts:
             return []
         if self._embedding_cache_disabled():
-            vectors = await self._embed_with_oci(texts, input_type=input_type)
+            vectors = await self._embed_with_oci_batches(texts, input_type=input_type)
             _validate_embedding_batch(
                 vectors,
                 expected_count=len(texts),
@@ -108,7 +108,10 @@ class OciGenAiClient:
                 miss_texts.append(text)
 
         if miss_texts:
-            missing_vectors = await self._embed_with_oci(miss_texts, input_type=input_type)
+            missing_vectors = await self._embed_with_oci_batches(
+                miss_texts,
+                input_type=input_type,
+            )
             _validate_embedding_batch(
                 missing_vectors,
                 expected_count=len(miss_texts),
@@ -120,6 +123,26 @@ class OciGenAiClient:
                     vectors[position] = list(vector)
 
         return [_require_cached_vector(vector, index) for index, vector in enumerate(vectors)]
+
+    async def _embed_with_oci_batches(
+        self,
+        texts: list[str],
+        *,
+        input_type: EmbeddingInputType,
+    ) -> list[list[float]]:
+        """OCI embedding request を設定値で分割し、入力順に結合して返す。"""
+        batch_size = max(1, getattr(self._settings, "rag_embedding_batch_size", 96))
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            batch_vectors = await self._embed_with_oci(batch, input_type=input_type)
+            _validate_embedding_batch(
+                batch_vectors,
+                expected_count=len(batch),
+                expected_dim=self._settings.oci_genai_embedding_dim,
+            )
+            vectors.extend(batch_vectors)
+        return vectors
 
     async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
         """Cohere Rerank v4 fast で再ランク付けし、(index, score) を返す。"""

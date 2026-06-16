@@ -219,13 +219,17 @@ def test_genai_cache_defaults_and_bounds() -> None:
 
     assert settings.rag_embedding_cache_enabled is True
     assert settings.rag_embedding_cache_max_entries == 4096
+    assert settings.rag_embedding_batch_size == 96
     assert settings.rag_rerank_cache_enabled is True
     assert settings.rag_rerank_cache_max_entries == 1024
     assert Settings(rag_embedding_cache_max_entries=0).rag_embedding_cache_max_entries == 0
+    assert Settings(rag_embedding_batch_size=1).rag_embedding_batch_size == 1
     assert Settings(rag_rerank_cache_max_entries=0).rag_rerank_cache_max_entries == 0
 
     with pytest.raises(ValidationError):
         Settings(rag_embedding_cache_max_entries=-1)
+    with pytest.raises(ValidationError):
+        Settings(rag_embedding_batch_size=0)
     with pytest.raises(ValidationError):
         Settings(rag_rerank_cache_max_entries=-1)
 

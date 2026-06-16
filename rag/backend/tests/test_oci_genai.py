@@ -86,6 +86,25 @@ async def test_embed_cache_reuses_hits_and_batches_only_misses() -> None:
     assert second[1] == _vector_for_text("証跡")
 
 
+async def test_embed_cache_batches_misses_with_configured_batch_size() -> None:
+    """cache miss の embedding は設定した batch size で分割する。"""
+    client = CountingEmbeddingClient(
+        settings=_oci_settings().model_copy(update={"rag_embedding_batch_size": 2})
+    )
+
+    vectors = await client.embed(["承認", "監査", "証跡", "監査", "規程"])
+
+    assert client.calls == 2
+    assert client.batches == [["承認", "監査"], ["証跡", "規程"]]
+    assert vectors == [
+        _vector_for_text("承認"),
+        _vector_for_text("監査"),
+        _vector_for_text("証跡"),
+        _vector_for_text("監査"),
+        _vector_for_text("規程"),
+    ]
+
+
 async def test_embed_cache_can_be_disabled() -> None:
     """設定で embedding cache を無効化できる。"""
     client = CountingEmbeddingClient(
@@ -97,6 +116,24 @@ async def test_embed_cache_can_be_disabled() -> None:
 
     assert client.calls == 2
     assert client.batches == [["承認"], ["承認"]]
+
+
+async def test_embed_batches_oci_calls_when_cache_is_disabled() -> None:
+    """cache 無効時も OCI embedding request は batch size で分割する。"""
+    client = CountingEmbeddingClient(
+        settings=_oci_settings().model_copy(
+            update={
+                "rag_embedding_cache_enabled": False,
+                "rag_embedding_batch_size": 2,
+            }
+        )
+    )
+
+    vectors = await client.embed(["a", "bb", "ccc"])
+
+    assert client.calls == 2
+    assert client.batches == [["a", "bb"], ["ccc"]]
+    assert vectors == [_vector_for_text("a"), _vector_for_text("bb"), _vector_for_text("ccc")]
 
 
 async def test_oci_embed_uses_generative_ai_embedding_request() -> None:
