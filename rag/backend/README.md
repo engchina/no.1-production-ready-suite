@@ -184,7 +184,7 @@ uv run python -m app.rag.staging_smoke --query "確認用キーワード {marker
 
 ## 検索ストリーミング
 
-`POST /api/search/stream` は `text/event-stream` を返します。イベントは `metadata`、`delta`、`citations`、`done` の順です。OCI Enterprise AI のストリーミング推論に接続しても同じイベント契約を維持します。
+`POST /api/search/stream` は `text/event-stream` を返します。既定では検索完了後に `metadata`、`delta`、`citations`、`done` を返します。`RAG_STREAM_REALTIME_ENABLED=true` の場合は OCI Enterprise AI の streaming 推論から generation 中に `delta` を即時送信し、最終的に `metadata`、`citations`、`done` を返します。どちらの場合も SSE event 名と payload 形状は維持します。
 
 ## 監査ログ
 

@@ -1,7 +1,7 @@
 """OCI Enterprise AI adapter 境界のテスト。"""
 
 import base64
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 
 import httpx
@@ -489,6 +489,30 @@ async def test_oci_generate_posts_rag_generation_payload() -> None:
     assert "[policy.txt#doc-1:0]" in input_items[0]["content"]
 
 
+async def test_oci_generate_stream_posts_stream_payload_and_parses_deltas() -> None:
+    """OCI LLM adapter は Enterprise AI stream を回答 delta として読める。"""
+    transport = FakeEnterpriseAiTransport(
+        {},
+        stream_lines=[
+            "event: response.output_text.delta",
+            'data: {"type":"response.output_text.delta","delta":"根拠に"}',
+            'data: {"choices":[{"delta":{"content":"基づく回答"}}]}',
+            "data: [DONE]",
+        ],
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    chunks = [chunk async for chunk in client.generate_stream("承認条件は？", "根拠")]
+
+    assert chunks == ["根拠に", "基づく回答"]
+    assert transport.stream_calls[0]["url"] == "https://enterprise-ai.example/llm/generate"
+    payload = transport.stream_calls[0]["payload"]
+    assert payload["model"] == "enterprise-llm"
+    assert payload["stream"] is True
+    assert payload["instructions"]
+    assert "承認条件は？" in str(payload["input"])
+
+
 async def test_oci_generate_uses_configured_default_model() -> None:
     """複数 LLM 登録時は既定モデルを回答生成に使う。"""
     settings = _oci_settings()
@@ -875,9 +899,16 @@ async def test_oci_adapter_rejects_invalid_response_path() -> None:
 class FakeEnterpriseAiTransport:
     """Enterprise AI HTTP transport の fake。"""
 
-    def __init__(self, response: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        response: Mapping[str, Any],
+        *,
+        stream_lines: list[str] | None = None,
+    ) -> None:
         self._response = response
+        self._stream_lines = stream_lines or []
         self.calls: list[dict[str, Any]] = []
+        self.stream_calls: list[dict[str, Any]] = []
         self.uploads: list[dict[str, Any]] = []
         self.deletes: list[dict[str, Any]] = []
 
@@ -898,6 +929,25 @@ class FakeEnterpriseAiTransport:
             }
         )
         return self._response
+
+    async def stream_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> AsyncIterator[str]:
+        self.stream_calls.append(
+            {
+                "url": url,
+                "payload": dict(payload),
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        for line in self._stream_lines:
+            yield line
 
     async def upload_file(
         self,

@@ -1,6 +1,7 @@
 """RAG pipeline の境界テスト。"""
 
 import logging
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
@@ -15,6 +16,7 @@ from app.rag.pipeline import (
     NO_RESULTS_WARNING,
     RagPipeline,
     SearchStageProgress,
+    SearchTokenDelta,
     _build_context,
     _dedupe_ranked_chunks,
 )
@@ -639,6 +641,32 @@ async def test_pipeline_reports_stage_progress_and_diagnostic_timings() -> None:
     assert all(value >= 0.0 for value in response.diagnostics.stream_stage_timings.values())
     assert {event.trace_id for event in observed} == {"trace-progress"}
     assert "INV-SECRET" not in str([event.attributes for event in observed])
+
+
+async def test_pipeline_streams_generation_deltas_when_enabled() -> None:
+    """stream flag と token callback がある場合は Enterprise AI stream を使う。"""
+    observed: list[SearchTokenDelta] = []
+
+    async def capture_token(delta: SearchTokenDelta) -> None:
+        observed.append(delta)
+
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=StubOracleClient(),
+        llm=StreamingLlm(),
+        settings=Settings.model_construct(rag_stream_realtime_enabled=True),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(query="承認条件"),
+        trace_id="trace-stream",
+        token_callback=capture_token,
+    )
+
+    assert response.answer == "承認条件は 120000 円です。"
+    assert [delta.text for delta in observed] == ["承認条件は ", "120000 円です。"]
+    assert {delta.trace_id for delta in observed} == {"trace-stream"}
+    assert response.diagnostics.stream_stage_timings["generation"] >= 0.0
 
 
 async def test_pipeline_records_trace_spans_without_payload_text(
@@ -1282,6 +1310,18 @@ class GroundedLlm(OciEnterpriseAiClient):
 
     async def generate(self, prompt: str, context: str) -> str:
         return "承認条件は 120000 円です。"
+
+
+class StreamingLlm(OciEnterpriseAiClient):
+    """Enterprise AI streaming 回答を返すテスト用 LLM。"""
+
+    async def generate(self, prompt: str, context: str) -> str:
+        raise AssertionError("stream 有効時は generate_stream を使う")
+
+    async def generate_stream(self, prompt: str, context: str) -> AsyncIterator[str]:
+        _ = prompt, context
+        for chunk in ("承認条件は ", "120000 円です。"):
+            yield chunk
 
 
 class CapturingLlm(OciEnterpriseAiClient):

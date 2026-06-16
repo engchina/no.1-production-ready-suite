@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.main import app
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.pipeline import SearchTokenDelta
 from app.schemas.search import SearchRequest, SearchResponse
 from tests.support import AsgiTestClient
 
@@ -61,6 +62,27 @@ def test_stream_search_api_emits_error_event_when_pipeline_times_out(
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: error" in response.text
     assert search_route.SEARCH_TIMEOUT_MESSAGE in response.text
+
+
+def test_stream_search_api_uses_realtime_deltas_without_duplicate_answer(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Enterprise AI token stream を使う場合、最終 answer を二重 delta 化しない。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_stream_realtime_enabled", True)
+    monkeypatch.setattr(search_route, "RagPipeline", RealtimeStreamingPipeline)
+
+    response = client.post("/api/search/stream", json={"query": "承認条件"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.count("event: delta") == 2
+    assert '{"text": "承認条件は "}' in response.text
+    assert '{"text": "120000 円です。"}' in response.text
+    assert '{"text": "承認条件は 120000 円です。"}' not in response.text
+    assert "event: metadata" in response.text
+    assert "event: citations" in response.text
+    assert "event: done" in response.text
 
 
 def test_search_api_hashes_tenant_and_user_headers_into_audit(
@@ -306,11 +328,36 @@ class SlowPipeline:
         _request: SearchRequest,
         trace_id: str | None = None,
         progress_callback: object | None = None,
+        token_callback: object | None = None,
     ) -> SearchResponse:
-        _ = progress_callback
+        _ = progress_callback, token_callback
         assert trace_id
         await asyncio.sleep(1)
         raise AssertionError("timeout 前に完了しない")
+
+
+class RealtimeStreamingPipeline:
+    """token_callback へ回答 delta を先に流すテスト用 pipeline。"""
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+        progress_callback: object | None = None,
+        token_callback: Any | None = None,
+    ) -> SearchResponse:
+        _ = progress_callback
+        assert trace_id
+        assert token_callback is not None
+        await token_callback(SearchTokenDelta(trace_id=trace_id, text="承認条件は "))
+        await token_callback(SearchTokenDelta(trace_id=trace_id, text="120000 円です。"))
+        return SearchResponse(
+            answer="承認条件は 120000 円です。",
+            citations=[],
+            trace_id=trace_id,
+            elapsed_ms=1.0,
+            diagnostics=build_search_diagnostics(request, settings=get_settings()),
+        )
 
 
 class AuditingPipeline:
@@ -321,8 +368,9 @@ class AuditingPipeline:
         request: SearchRequest,
         trace_id: str | None = None,
         progress_callback: object | None = None,
+        token_callback: object | None = None,
     ) -> SearchResponse:
-        _ = progress_callback
+        _ = progress_callback, token_callback
         assert trace_id
         diagnostics = build_search_diagnostics(
             request,

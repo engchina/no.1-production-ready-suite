@@ -1,6 +1,6 @@
 """Enterprise AI contract probe CLI の境界テスト。"""
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import asdict
 from typing import Any
 
@@ -128,6 +128,26 @@ class FakeEnterpriseAiTransport:
             }
         )
         return self._response
+
+    async def stream_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> AsyncIterator[str]:
+        self.calls.append(
+            {
+                "url": url,
+                "payload": dict(payload),
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        empty_lines: tuple[str, ...] = ()
+        for line in empty_lines:
+            yield line
 
     async def upload_file(
         self,

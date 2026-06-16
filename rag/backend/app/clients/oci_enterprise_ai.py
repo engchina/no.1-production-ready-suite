@@ -10,7 +10,7 @@ import asyncio
 import base64
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -112,6 +112,16 @@ class EnterpriseAiHttpTransport(Protocol):
         timeout: float,
     ) -> Mapping[str, Any]:
         """JSON payload を送信し、JSON object response を返す。"""
+
+    def stream_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> AsyncIterator[str]:
+        """JSON payload を送信し、SSE/line stream を返す。"""
 
     async def upload_file(
         self,
@@ -234,6 +244,16 @@ class OciEnterpriseAiClient:
     async def generate(self, prompt: str, context: str) -> str:
         """LLM で回答を生成する。"""
         return await self._generate_with_enterprise_ai(prompt, context)
+
+    async def generate_stream(self, prompt: str, context: str) -> AsyncIterator[str]:
+        """LLM で回答を token/chunk stream として生成する。"""
+        payload = _streaming_llm_payload(_build_llm_payload(self._settings, prompt, context))
+        lines = self._post_enterprise_ai_stream(
+            self._settings.oci_enterprise_ai_llm_path,
+            payload,
+        )
+        async for chunk in _iter_generated_text_stream(lines):
+            yield chunk
 
     async def generate_from_image(
         self,
@@ -417,6 +437,29 @@ class OciEnterpriseAiClient:
         except httpx.TimeoutException as exc:
             raise EnterpriseAiTimeoutError("OCI Enterprise AI endpoint", timeout) from exc
 
+    async def _post_enterprise_ai_stream(
+        self,
+        path: str,
+        payload: Mapping[str, Any],
+    ) -> AsyncIterator[str]:
+        """Enterprise AI endpoint へ streaming JSON POST する。"""
+        endpoint = _require_value(
+            self._settings.oci_enterprise_ai_endpoint,
+            "OCI Enterprise AI endpoint",
+        )
+        url = _join_endpoint_path(endpoint, path)
+        timeout = self._settings.oci_enterprise_ai_timeout_seconds
+        try:
+            async for line in self._http_transport.stream_json(
+                url,
+                payload,
+                headers=_enterprise_ai_headers(self._settings),
+                timeout=timeout,
+            ):
+                yield line
+        except httpx.TimeoutException as exc:
+            raise EnterpriseAiTimeoutError("OCI Enterprise AI endpoint", timeout) from exc
+
 
 class _DefaultEnterpriseAiTransport:
     """httpx による OpenAI-compatible Enterprise AI transport。"""
@@ -448,6 +491,43 @@ class _DefaultEnterpriseAiTransport:
                 _raise_for_status_with_body(response, "OCI Enterprise AI endpoint")
                 return _json_response_object(response)
         raise RuntimeError("OCI Enterprise AI endpoint の呼び出しに失敗しました。")
+
+    async def stream_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> AsyncIterator[str]:
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        attempts = self._settings.oci_enterprise_ai_max_retries + 1
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            for attempt in range(attempts):
+                async with client.stream(
+                    "POST",
+                    url,
+                    content=body,
+                    headers=headers,
+                    timeout=timeout,
+                ) as response:
+                    if response.status_code in RETRYABLE_STATUS_CODES and attempt + 1 < attempts:
+                        await response.aread()
+                        await asyncio.sleep(_retry_delay(attempt))
+                        continue
+                    if response.is_error:
+                        content = await response.aread()
+                        error_response = httpx.Response(
+                            response.status_code,
+                            content=content,
+                            headers=response.headers,
+                            request=response.request,
+                        )
+                        _raise_for_status_with_body(error_response, "OCI Enterprise AI endpoint")
+                    async for line in response.aiter_lines():
+                        yield line
+                    return
+        raise RuntimeError("OCI Enterprise AI endpoint の streaming 呼び出しに失敗しました。")
 
     async def upload_file(
         self,
@@ -756,6 +836,13 @@ def _build_llm_payload(settings: Settings, prompt: str, context: str) -> dict[st
     }
 
 
+def _streaming_llm_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """OpenAI-compatible gateway 向けに stream=true を付与する。"""
+    streamed = dict(payload)
+    streamed["stream"] = True
+    return streamed
+
+
 def _render_payload_template(
     template: str,
     values: Mapping[str, object],
@@ -1051,6 +1138,102 @@ def _parse_generated_text(
     if not text.strip():
         raise ValueError("OCI Enterprise AI LLM response に回答 text がありません。")
     return text.strip()
+
+
+async def _iter_generated_text_stream(lines: AsyncIterator[str]) -> AsyncIterator[str]:
+    """SSE/line stream から回答 delta を順に取り出す。"""
+    saw_delta = False
+    fallback_text = ""
+    async for raw_line in lines:
+        data = _stream_data_payload(raw_line)
+        if not data:
+            continue
+        if data == "[DONE]":
+            break
+        try:
+            payload = json.loads(data)
+        except ValueError:
+            saw_delta = True
+            yield data
+            continue
+        _raise_for_response_error(payload)
+        delta = _extract_stream_text_delta(payload)
+        if delta:
+            saw_delta = True
+            yield delta
+            continue
+        if not saw_delta:
+            candidate = _extract_stream_final_text_candidate(payload)
+            if candidate:
+                fallback_text = candidate
+    if not saw_delta and fallback_text.strip():
+        yield fallback_text.strip()
+
+
+def _stream_data_payload(line: str) -> str:
+    """SSE の data 行、または raw JSON/text line から payload だけを取り出す。"""
+    cleaned = line.strip()
+    if not cleaned or cleaned.startswith(":") or cleaned.startswith("event:"):
+        return ""
+    if cleaned.startswith("data:"):
+        return cleaned.removeprefix("data:").strip()
+    return cleaned
+
+
+def _extract_stream_text_delta(payload: object) -> str:
+    """Responses/Chat Completions/custom stream chunk から text delta を取り出す。"""
+    if isinstance(payload, str):
+        return payload
+    if isinstance(payload, list):
+        delta_parts = [_extract_stream_text_delta(item) for item in payload]
+        return "".join(part for part in delta_parts if part)
+    if not isinstance(payload, Mapping):
+        return ""
+
+    payload_type = str(payload.get("type", "")).strip().lower()
+    if "delta" in payload_type:
+        for key in ("delta", "text", "content", "output_text"):
+            value = payload.get(key)
+            text = _extract_text_candidate(value)
+            if text:
+                return text
+
+    if delta := payload.get("delta"):
+        text = _extract_text_candidate(delta)
+        if text:
+            return text
+
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        choice_parts: list[str] = []
+        for choice in choices:
+            if not isinstance(choice, Mapping):
+                continue
+            choice_delta = choice.get("delta")
+            if choice_delta:
+                choice_parts.append(_extract_text_candidate(choice_delta))
+                continue
+            choice_text = choice.get("text")
+            if choice_text:
+                choice_parts.append(_extract_text_candidate(choice_text))
+        return "".join(part for part in choice_parts if part)
+
+    for key in ("chunk", "token"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def _extract_stream_final_text_candidate(payload: object) -> str:
+    """delta がない stream payload が最終 response object だった場合の fallback。"""
+    if not isinstance(payload, Mapping):
+        return ""
+    if "delta" in str(payload.get("type", "")).strip().lower():
+        return ""
+    if not any(key in payload for key in ("choices", "output", "output_text", "answer", "text")):
+        return ""
+    return _extract_text_candidate(payload)
 
 
 def _select_response_path(payload: object, path: str, label: str) -> object:

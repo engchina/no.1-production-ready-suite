@@ -66,6 +66,17 @@ class SearchStageProgress:
 type SearchStageProgressCallback = Callable[[SearchStageProgress], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class SearchTokenDelta:
+    """SSE 用の回答 token/chunk delta。"""
+
+    trace_id: str
+    text: str
+
+
+type SearchTokenCallback = Callable[[SearchTokenDelta], Awaitable[None]]
+
+
 class RagPipeline:
     """ハイブリッド検索 + リランク + 生成の RAG パイプライン。"""
 
@@ -88,6 +99,7 @@ class RagPipeline:
         request: SearchRequest,
         trace_id: str | None = None,
         progress_callback: SearchStageProgressCallback | None = None,
+        token_callback: SearchTokenCallback | None = None,
     ) -> SearchResponse:
         """RAG 検索を実行する。"""
         started_at = perf_counter()
@@ -368,15 +380,22 @@ class RagPipeline:
                 query_variant_count=query_variant_count,
             )
             error_stage = "generation"
+            stream_generation = self._settings.rag_stream_realtime_enabled and token_callback
             answer = await _observe_stage(
                 trace_id,
                 request.mode.value,
                 "generation",
-                self._llm.generate(query_guardrail.sanitized_text, context),
+                self._generate_answer(
+                    query_guardrail.sanitized_text,
+                    context,
+                    trace_id=trace_id,
+                    token_callback=token_callback if stream_generation else None,
+                ),
                 attributes={
                     "model": enterprise_ai_default_model_id(self._settings),
                     "context_chars": len(context),
                     "citation_count": len(context_citations),
+                    "streaming_enabled": bool(stream_generation),
                 },
                 result_attributes=lambda generated: {"answer_chars": len(generated)},
                 progress_callback=progress_callback,
@@ -488,6 +507,27 @@ class RagPipeline:
             key=lambda chunk: chunk.rerank_score if chunk.rerank_score is not None else chunk.score,
             reverse=True,
         )[:top_n]
+
+    async def _generate_answer(
+        self,
+        query: str,
+        context: str,
+        *,
+        trace_id: str,
+        token_callback: SearchTokenCallback | None,
+    ) -> str:
+        """回答生成を通常呼び出しまたは Enterprise AI stream で実行する。"""
+        if token_callback is None:
+            return await self._llm.generate(query, context)
+        chunks: list[str] = []
+        async for chunk in self._llm.generate_stream(query, context):
+            if not chunk:
+                continue
+            chunks.append(chunk)
+            await token_callback(SearchTokenDelta(trace_id=trace_id, text=chunk))
+        if not chunks:
+            raise ValueError("OCI Enterprise AI stream に回答 text がありません。")
+        return "".join(chunks)
 
     async def _expand_context_neighbors(
         self,

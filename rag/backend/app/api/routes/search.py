@@ -15,7 +15,7 @@ from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
-from app.rag.pipeline import RagPipeline, SearchStageProgress
+from app.rag.pipeline import RagPipeline, SearchStageProgress, SearchTokenDelta
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
@@ -161,6 +161,7 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
     trace_id = new_trace_id()
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
     stage_timings: dict[str, float] = {}
+    realtime_delta_sent = False
 
     async def emit_progress(progress: SearchStageProgress) -> None:
         if progress.outcome != "started":
@@ -178,6 +179,13 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
             )
         )
 
+    async def emit_delta(delta: SearchTokenDelta) -> None:
+        nonlocal realtime_delta_sent
+        if not delta.text:
+            return
+        realtime_delta_sent = True
+        await queue.put(("delta", {"text": delta.text}))
+
     async def produce() -> None:
         try:
             result = await asyncio.wait_for(
@@ -185,6 +193,7 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
                     request,
                     trace_id=trace_id,
                     progress_callback=emit_progress,
+                    token_callback=(emit_delta if settings.rag_stream_realtime_enabled else None),
                 ),
                 timeout=timeout,
             )
@@ -243,7 +252,10 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
                 break
             event_name, payload = event
             if event_name == "result" and isinstance(payload, SearchResponse):
-                async for item in _search_events(payload):
+                async for item in _search_events(
+                    payload,
+                    include_answer_deltas=not realtime_delta_sent,
+                ):
                     yield item
                 continue
             yield _sse_event(event_name, payload)
@@ -254,7 +266,11 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
                 await producer
 
 
-async def _search_events(result: SearchResponse) -> AsyncIterator[str]:
+async def _search_events(
+    result: SearchResponse,
+    *,
+    include_answer_deltas: bool = True,
+) -> AsyncIterator[str]:
     """SearchResponse を SSE イベント列へ変換する。"""
     yield _sse_event(
         "metadata",
@@ -265,8 +281,9 @@ async def _search_events(result: SearchResponse) -> AsyncIterator[str]:
             "diagnostics": result.diagnostics.model_dump(mode="json"),
         },
     )
-    for chunk in _answer_chunks(result.answer):
-        yield _sse_event("delta", {"text": chunk})
+    if include_answer_deltas:
+        for chunk in _answer_chunks(result.answer):
+            yield _sse_event("delta", {"text": chunk})
     yield _sse_event(
         "citations",
         [citation.model_dump(mode="json") for citation in result.citations],
