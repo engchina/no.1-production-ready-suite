@@ -74,11 +74,28 @@ test("文書詳細で所属知識ベースを更新できる", async ({ page }) 
 });
 
 test("検索引用で構造 metadata chip を確認できる", async ({ page }) => {
+  let feedbackPayload: Record<string, unknown> | null = null;
   await page.route("**/api/search/stream", async (route) => {
     await route.fulfill({
       status: 200,
       headers: { "content-type": "text/event-stream" },
       body: searchStreamBody(),
+    });
+  });
+  await page.route("**/api/search/citation-feedback", async (route) => {
+    feedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      json: {
+        data: {
+          feedback_id: "feedback-1",
+          trace_id: "trace-1",
+          document_id: "doc-1",
+          chunk_id: "doc-1:1",
+          rating: "helpful",
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
     });
   });
 
@@ -92,6 +109,15 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await expect(citation.locator("dl").getByText("表", { exact: true })).toBeVisible();
   await expect(citation.getByText("経費申請 > 料金表")).toBeVisible();
   await expect(citation.getByText("structure_v1")).toBeVisible();
+  await citation.getByRole("button", { name: "この引用は役に立った" }).click();
+  await expect.poll(() => feedbackPayload).toEqual({
+    trace_id: "trace-1",
+    document_id: "doc-1",
+    chunk_id: "doc-1:1",
+    rating: "helpful",
+    reason: null,
+  });
+  await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 

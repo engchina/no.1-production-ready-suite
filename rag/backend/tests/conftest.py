@@ -13,7 +13,15 @@ from app.config import (
     load_persisted_model_settings,
 )
 from app.rag.rate_limit import reset_rate_limiter
+from app.rag.request_context import (
+    AuditRequestContext,
+    audit_request_context_from_headers,
+    current_audit_request_context,
+    reset_audit_request_context,
+    set_audit_request_context,
+)
 from tests import _ai_stubs, _oracle_test_db
+from tests.support import TEST_REQUEST_HEADERS
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -50,11 +58,40 @@ def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     settings.model_settings_file = DEFAULT_MODEL_SETTINGS_FILE
     load_persisted_model_settings(settings)
     _ai_stubs.patch_ai_clients(monkeypatch)
+    context = audit_request_context_from_headers(
+        TEST_REQUEST_HEADERS,
+        request_id="pytest-oracle-integration",
+        settings=settings,
+    )
+
+    def current_or_default_context() -> AuditRequestContext:
+        current = current_audit_request_context()
+        if (
+            current.request_id is None
+            and current.tenant_id_hash is None
+            and current.user_id_hash is None
+            and current.allowed_document_ids is None
+            and current.allowed_category_names is None
+            and current.allowed_knowledge_base_ids is None
+        ):
+            return context
+        return current
+
+    monkeypatch.setattr(
+        "app.clients.oracle.current_audit_request_context",
+        current_or_default_context,
+    )
+    monkeypatch.setattr(
+        "app.rag.audit.current_audit_request_context",
+        current_or_default_context,
+    )
+    token = set_audit_request_context(context)
     _oracle_test_db.cleanup_to_baseline()
     try:
         yield
     finally:
         _oracle_test_db.cleanup_to_baseline()
+        reset_audit_request_context(token)
 
 
 def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:

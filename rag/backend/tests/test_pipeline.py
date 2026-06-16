@@ -49,7 +49,13 @@ async def test_pipeline_returns_no_results_without_llm_call(
     trace_id = "trace-no-results"
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        response = await pipeline.run(SearchRequest(query="存在しない社内規程"), trace_id=trace_id)
+        response = await pipeline.run(
+            SearchRequest(
+                query="存在しない社内規程",
+                knowledge_base_ids=["kb-pipeline-no-results"],
+            ),
+            trace_id=trace_id,
+        )
 
     assert response.trace_id == trace_id
     assert response.answer == NO_RESULTS_ANSWER

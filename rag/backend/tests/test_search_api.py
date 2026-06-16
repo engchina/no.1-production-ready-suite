@@ -189,6 +189,50 @@ def test_select_ai_api_returns_503_when_unavailable() -> None:
     assert "Select AI" in body["error_messages"][0]
 
 
+def test_citation_feedback_api_saves_low_sensitivity_payload(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """引用 feedback は comment 明文を落とさず hash と文字数だけを保存する。"""
+    fake = CapturingFeedbackClient()
+    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
+
+    response = client.post(
+        "/api/search/citation-feedback",
+        json={
+            "trace_id": "trace-1",
+            "document_id": "doc-1",
+            "chunk_id": "doc-1:0",
+            "rating": "not_helpful",
+            "reason": "missing_evidence",
+            "comment": "根拠のページが違います",
+        },
+        headers={"X-Tenant-ID": "tenant-a", "X-User-ID": "user@example.com"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["feedback_id"] == "feedback-1"
+    assert body["trace_id"] == "trace-1"
+    assert body["rating"] == "not_helpful"
+    assert fake.saved_payloads == [
+        {
+            "trace_id": "trace-1",
+            "document_id": "doc-1",
+            "chunk_id": "doc-1:0",
+            "rating": "not_helpful",
+            "reason": "missing_evidence",
+            "comment_hash": fake.saved_payloads[0]["comment_hash"],
+            "comment_chars": 11,
+        }
+    ]
+    comment_hash = fake.saved_payloads[0]["comment_hash"]
+    assert isinstance(comment_hash, str)
+    assert len(comment_hash) == 64
+    assert "根拠" not in str(fake.saved_payloads)
+    assert "tenant-a" not in str(fake.saved_payloads)
+    assert "user@example.com" not in str(fake.saved_payloads)
+
+
 def test_search_request_accepts_chunk_metadata_filters() -> None:
     """構造化 chunk metadata filter は検索リクエストとして受け付ける。"""
     request = SearchRequest(
@@ -308,3 +352,14 @@ class CapturingSelectAiClient:
     async def select_ai(self, query: str, **kwargs: object) -> str:
         self.calls.append({"query": query, **kwargs})
         return "SELECT COUNT(*) FROM rag_documents"
+
+
+class CapturingFeedbackClient:
+    """引用 feedback API テスト用の fake Oracle client。"""
+
+    def __init__(self) -> None:
+        self.saved_payloads: list[dict[str, object]] = []
+
+    async def save_citation_feedback(self, payload: dict[str, object]) -> str:
+        self.saved_payloads.append(payload)
+        return "feedback-1"

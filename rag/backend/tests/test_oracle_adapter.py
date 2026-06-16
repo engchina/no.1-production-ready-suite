@@ -18,9 +18,12 @@ from app.clients.oracle import (
     _test_oracle_connection_sync,
     oracle_audit_schema_sql,
     oracle_document_schema_sql,
+    oracle_evaluation_artifact_schema_sql,
+    oracle_feedback_schema_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_knowledge_base_schema_sql,
+    oracle_knowledge_graph_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_vector_schema_sql,
     reset_local_store,
@@ -1086,8 +1089,7 @@ async def test_oci_retrieval_applies_multiple_knowledge_base_filters() -> None:
     call = pool.connection.calls[0]
     assert "rag_document_knowledge_bases dkb" in call.statement
     assert (
-        "dkb.knowledge_base_id IN "
-        "(:filter_knowledge_base_id_0, :filter_knowledge_base_id_1)"
+        "dkb.knowledge_base_id IN " "(:filter_knowledge_base_id_0, :filter_knowledge_base_id_1)"
     ) in call.statement
     assert call.parameters["filter_knowledge_base_id_0"] == "kb-1"
     assert call.parameters["filter_knowledge_base_id_1"] == "kb-2"
@@ -1227,6 +1229,7 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
     assert "request_id            varchar2(128)" in normalized
     assert "tenant_id_hash        char(64)" in normalized
     assert "user_id_hash          char(64)" in normalized
+    assert "search_mode           varchar2(16) not null" in normalized
     assert "query_hash            char(64) not null" in normalized
     assert "top_k                 number(10)" in normalized
     assert "rerank_top_n          number(10)" in normalized
@@ -1244,11 +1247,13 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
     assert "document_ids          json" in normalized
     assert "knowledge_base_ids    json" in normalized
     assert "check (outcome in ('success', 'blocked', 'no_results', 'error'))" in normalized
+    assert "check (search_mode in ('hybrid', 'vector', 'keyword'))" in normalized
     assert "rag_search_audit_created_outcome_idx" in ddl
     assert "rag_search_audit_tenant_created_idx" in ddl
     assert "rag_search_audit_config_idx" in ddl
     assert "query_text" not in normalized
     assert "prompt" not in normalized
+    assert " mode " not in normalized
 
 
 def test_oracle_ingestion_audit_schema_redacts_ocr_body() -> None:
@@ -1279,6 +1284,27 @@ def test_oracle_audit_schema_bundle_includes_search_and_ingestion_tables() -> No
     assert "CREATE TABLE rag_search_audit" in ddl
     assert "CREATE TABLE rag_ingestion_audit" in ddl
     assert ddl.count("CREATE TABLE") == 2
+
+
+def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> None:
+    """GraphRAG-lite / feedback / eval artifact は Oracle table と JSON で表現する。"""
+    graph_ddl = oracle_knowledge_graph_schema_sql()
+    feedback_ddl = oracle_feedback_schema_sql()
+    artifact_ddl = oracle_evaluation_artifact_schema_sql()
+
+    assert "CREATE TABLE rag_graph_entities" in graph_ddl
+    assert "CREATE TABLE rag_graph_relationships" in graph_ddl
+    assert "CREATE TABLE rag_graph_claims" in graph_ddl
+    assert "CREATE TABLE rag_graph_community_summaries" in graph_ddl
+    assert "CREATE TABLE rag_graph_entity_chunks" in graph_ddl
+    assert "CREATE TABLE rag_citation_feedback" in feedback_ddl
+    assert "comment_hash      CHAR(64)" in feedback_ddl
+    assert "comment_text" not in feedback_ddl.lower()
+    assert "comment_body" not in feedback_ddl.lower()
+    assert "CREATE TABLE rag_evaluation_runs" in artifact_ddl
+    assert "request_json      JSON NOT NULL" in artifact_ddl
+    assert "result_json       JSON NOT NULL" in artifact_ddl
+    assert "NEO4J" not in (graph_ddl + feedback_ddl + artifact_ddl).upper()
 
 
 async def test_vector_search_rejects_wrong_embedding_dimension() -> None:

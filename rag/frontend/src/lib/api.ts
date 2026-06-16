@@ -24,8 +24,14 @@ export type Degradable<T> = T & { warning_messages: string[] };
 
 export type FileStatus = "UPLOADED" | "INGESTING" | "INDEXED" | "ERROR";
 export type SearchMode = "hybrid" | "vector" | "keyword";
+export type SearchStrategy = "auto" | "hybrid" | "graph_local" | "graph_global" | "select_ai";
 export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
 export type SelectAiAction = "showsql" | "runsql";
+export type CitationFeedbackRating = "helpful" | "not_helpful";
+export type CitationFeedbackReason =
+  | "missing_evidence"
+  | "not_relevant"
+  | "answer_untrusted";
 export type UploadIngestionMode = "manual" | "auto";
 export type SourceModality = "pdf" | "image" | "text" | "office" | "unknown";
 export type IngestionJobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
@@ -42,7 +48,12 @@ export type EvaluationMetricName =
   | "recall_at_k"
   | "mrr"
   | "answer_keyword_hit_rate"
-  | "groundedness_pass_rate";
+  | "groundedness_pass_rate"
+  | "faithfulness"
+  | "context_precision"
+  | "context_recall"
+  | "response_relevancy"
+  | "noise_sensitivity";
 export type ModelSettingsCheckStatus = "ok" | "missing" | "invalid";
 export type ModelSettingsTestStatus = "success" | "failed";
 export type ModelSettingsTestTargetType =
@@ -297,6 +308,7 @@ export interface SearchRequestBody {
   top_k?: number;
   rerank_top_n?: number;
   mode?: SearchMode;
+  strategy?: SearchStrategy;
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
 }
@@ -315,6 +327,11 @@ export interface RetrievedChunk {
 export interface SearchDiagnostics {
   adapter: string;
   mode: string;
+  retrieval_strategy: string;
+  route_reason: string;
+  graph_hit_count: number;
+  fallback_reason: string | null;
+  stream_stage_timings: Record<string, number>;
   top_k: number;
   rerank_top_n: number;
   retrieved_count: number;
@@ -361,6 +378,23 @@ export interface SelectAiResponse {
   guardrail_warnings: string[];
 }
 
+export interface CitationFeedbackRequestBody {
+  trace_id: string;
+  document_id: string;
+  chunk_id: string;
+  rating: CitationFeedbackRating;
+  reason?: CitationFeedbackReason | null;
+  comment?: string | null;
+}
+
+export interface CitationFeedbackResponse {
+  feedback_id: string;
+  trace_id: string;
+  document_id: string;
+  chunk_id: string;
+  rating: CitationFeedbackRating;
+}
+
 // --- 評価 ---
 export interface EvaluationCase {
   id: string;
@@ -375,6 +409,11 @@ export interface EvaluationThresholds {
   mrr?: number | null;
   answer_keyword_hit_rate?: number | null;
   groundedness_pass_rate?: number | null;
+  faithfulness?: number | null;
+  context_precision?: number | null;
+  context_recall?: number | null;
+  response_relevancy?: number | null;
+  noise_sensitivity?: number | null;
 }
 
 export interface EvaluationRunRequestBody {
@@ -403,6 +442,11 @@ export interface EvaluationCaseResult {
   groundedness_score: number;
   grounding_overlap_count: number;
   grounding_answer_feature_count: number;
+  faithfulness: number;
+  context_precision: number;
+  context_recall: number;
+  response_relevancy: number;
+  noise_sensitivity: number;
   guardrail_warnings: string[];
   failure_reasons: EvaluationFailureReason[];
   diagnostics: SearchDiagnostics;
@@ -426,6 +470,11 @@ export interface EvaluationMetrics {
   mrr: number;
   answer_keyword_hit_rate: number;
   groundedness_pass_rate: number;
+  faithfulness: number;
+  context_precision: number;
+  context_recall: number;
+  response_relevancy: number;
+  noise_sensitivity: number;
   passed: boolean;
   threshold_failures: EvaluationThresholdFailure[];
   failure_reason_counts: Partial<Record<EvaluationFailureReason, number>>;
@@ -1012,6 +1061,8 @@ export const api = {
   search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
   selectAi: (body: SelectAiRequestBody) =>
     request<SelectAiResponse>("/api/search/select-ai", jsonBody(body)),
+  submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
+    request<CitationFeedbackResponse>("/api/search/citation-feedback", jsonBody(body)),
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>

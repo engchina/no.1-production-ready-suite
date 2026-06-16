@@ -81,6 +81,11 @@ const RANKING_METRICS: EvaluationMetricName[] = [
   "precision_at_k",
   "answer_keyword_hit_rate",
   "groundedness_pass_rate",
+  "faithfulness",
+  "context_precision",
+  "context_recall",
+  "response_relevancy",
+  "noise_sensitivity",
 ];
 const RANKING_METRIC_OPTIONS = RANKING_METRICS.map((metric) => ({
   value: metric,
@@ -422,6 +427,23 @@ function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
       label: t("evaluation.metric.groundedness"),
       value: formatPercent(metrics.groundedness_pass_rate),
     },
+    { label: t("evaluation.metric.faithfulness"), value: formatPercent(metrics.faithfulness) },
+    {
+      label: t("evaluation.metric.contextPrecision"),
+      value: formatPercent(metrics.context_precision),
+    },
+    {
+      label: t("evaluation.metric.contextRecall"),
+      value: formatPercent(metrics.context_recall),
+    },
+    {
+      label: t("evaluation.metric.responseRelevancy"),
+      value: formatPercent(metrics.response_relevancy),
+    },
+    {
+      label: t("evaluation.metric.noiseSensitivity"),
+      value: formatPercent(metrics.noise_sensitivity),
+    },
     {
       label: t("evaluation.metric.errors"),
       value: `${metrics.error_count} / ${metrics.case_count}`,
@@ -721,6 +743,16 @@ function metricLabel(metric: EvaluationMetricName) {
       return t("evaluation.metric.answerHit");
     case "groundedness_pass_rate":
       return t("evaluation.metric.groundedness");
+    case "faithfulness":
+      return t("evaluation.metric.faithfulness");
+    case "context_precision":
+      return t("evaluation.metric.contextPrecision");
+    case "context_recall":
+      return t("evaluation.metric.contextRecall");
+    case "response_relevancy":
+      return t("evaluation.metric.responseRelevancy");
+    case "noise_sensitivity":
+      return t("evaluation.metric.noiseSensitivity");
   }
 }
 

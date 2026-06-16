@@ -1,13 +1,51 @@
-import { FileText } from "lucide-react";
+import { FileText, ThumbsDown, ThumbsUp } from "lucide-react";
+import { useState } from "react";
 
-import type { RetrievedChunk } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { ApiError, api, type CitationFeedbackRating, type RetrievedChunk } from "@/lib/api";
 import { citationMetadataChips, type CitationMetadataChip } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
+import { toast } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 
 /** 引用チャンク1件の表示。retrieval 由来の score/metadata を併記。 */
-export function CitationCard({ chunk, index }: { chunk: RetrievedChunk; index: number }) {
+export function CitationCard({
+  chunk,
+  index,
+  traceId,
+}: {
+  chunk: RetrievedChunk;
+  index: number;
+  traceId?: string | null;
+}) {
   const score = chunk.rerank_score ?? chunk.score;
   const chips = citationMetadataChips(chunk.metadata);
+  const [pendingRating, setPendingRating] = useState<CitationFeedbackRating | null>(null);
+  const [submittedRating, setSubmittedRating] = useState<CitationFeedbackRating | null>(null);
+  const canSubmitFeedback = Boolean(traceId);
+
+  async function submitFeedback(rating: CitationFeedbackRating) {
+    if (!traceId || pendingRating) return;
+    setPendingRating(rating);
+    try {
+      await api.submitCitationFeedback({
+        trace_id: traceId,
+        document_id: chunk.document_id,
+        chunk_id: chunk.chunk_id,
+        rating,
+        reason: rating === "not_helpful" ? "answer_untrusted" : null,
+      });
+      setSubmittedRating(rating);
+      toast.success(t("search.citation.feedback.saved"));
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError ? error.message : t("search.citation.feedback.failed")
+      );
+    } finally {
+      setPendingRating(null);
+    }
+  }
+
   return (
     <li className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-2">
@@ -41,6 +79,42 @@ export function CitationCard({ chunk, index }: { chunk: RetrievedChunk; index: n
           {chunk.category_name}
         </span>
       ) : null}
+      <div
+        className="mt-3 flex justify-end gap-1"
+        role="group"
+        aria-label={t("search.citation.feedback.group")}
+      >
+        <Button
+          type="button"
+          variant={submittedRating === "helpful" ? "secondary" : "ghost"}
+          size="sm"
+          className={cn("size-8 px-0", submittedRating === "helpful" && "text-success")}
+          aria-label={t("search.citation.feedback.helpful")}
+          aria-pressed={submittedRating === "helpful"}
+          title={t("search.citation.feedback.helpful")}
+          disabled={!canSubmitFeedback || (pendingRating !== null && pendingRating !== "helpful")}
+          loading={pendingRating === "helpful"}
+          onClick={() => void submitFeedback("helpful")}
+        >
+          {pendingRating === "helpful" ? null : <ThumbsUp size={15} aria-hidden />}
+        </Button>
+        <Button
+          type="button"
+          variant={submittedRating === "not_helpful" ? "secondary" : "ghost"}
+          size="sm"
+          className={cn("size-8 px-0", submittedRating === "not_helpful" && "text-danger")}
+          aria-label={t("search.citation.feedback.notHelpful")}
+          aria-pressed={submittedRating === "not_helpful"}
+          title={t("search.citation.feedback.notHelpful")}
+          disabled={
+            !canSubmitFeedback || (pendingRating !== null && pendingRating !== "not_helpful")
+          }
+          loading={pendingRating === "not_helpful"}
+          onClick={() => void submitFeedback("not_helpful")}
+        >
+          {pendingRating === "not_helpful" ? null : <ThumbsDown size={15} aria-hidden />}
+        </Button>
+      </div>
     </li>
   );
 }

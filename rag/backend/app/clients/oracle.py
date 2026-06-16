@@ -647,6 +647,167 @@ class OracleClient:
             self._validate_embedding_width(embedding, f"chunk embedding[{index}]")
         return await self._save_chunks_with_oracle(document_id, chunks, embeddings)
 
+    async def save_search_audit_event(self, event: Mapping[str, object]) -> None:
+        """脱機密化済み検索監査イベントを Oracle audit table へ保存する。"""
+        await self._run_transaction(
+            lambda connection: _execute(
+                connection,
+                """
+                INSERT INTO rag_search_audit (
+                    event_type,
+                    trace_id,
+                    request_id,
+                    tenant_id_hash,
+                    user_id_hash,
+                    outcome,
+                    search_mode,
+                    query_hash,
+                    query_chars,
+                    filter_keys,
+                    top_k,
+                    rerank_top_n,
+                    query_variant_count,
+                    guardrail_codes,
+                    guardrail_severities,
+                    retrieved_count,
+                    reranked_count,
+                    deduplicated_count,
+                    context_diversified_count,
+                    context_group_expanded_count,
+                    context_expanded_count,
+                    context_compressed_count,
+                    context_compression_saved_chars,
+                    citation_count,
+                    context_chars,
+                    context_window_chars,
+                    document_ids,
+                    knowledge_base_ids,
+                    config_fingerprint,
+                    elapsed_ms,
+                    error_stage,
+                    error_type
+                ) VALUES (
+                    :event_type,
+                    :trace_id,
+                    :request_id,
+                    :tenant_id_hash,
+                    :user_id_hash,
+                    :outcome,
+                    :search_mode,
+                    :query_hash,
+                    :query_chars,
+                    :filter_keys,
+                    :top_k,
+                    :rerank_top_n,
+                    :query_variant_count,
+                    :guardrail_codes,
+                    :guardrail_severities,
+                    :retrieved_count,
+                    :reranked_count,
+                    :deduplicated_count,
+                    :context_diversified_count,
+                    :context_group_expanded_count,
+                    :context_expanded_count,
+                    :context_compressed_count,
+                    :context_compression_saved_chars,
+                    :citation_count,
+                    :context_chars,
+                    :context_window_chars,
+                    :document_ids,
+                    :knowledge_base_ids,
+                    :config_fingerprint,
+                    :elapsed_ms,
+                    :error_stage,
+                    :error_type
+                )
+                """,
+                _search_audit_binds(event),
+            )
+        )
+
+    async def save_ingestion_audit_event(self, event: Mapping[str, object]) -> None:
+        """脱機密化済み取込監査イベントを Oracle audit table へ保存する。"""
+        await self._run_transaction(
+            lambda connection: _execute(
+                connection,
+                """
+                INSERT INTO rag_ingestion_audit (
+                    event_type,
+                    trace_id,
+                    request_id,
+                    tenant_id_hash,
+                    user_id_hash,
+                    document_id,
+                    outcome,
+                    source_sha256,
+                    source_bytes,
+                    document_type,
+                    extraction_confidence,
+                    chunk_count,
+                    vector_count,
+                    elapsed_ms,
+                    error_type,
+                    error_message
+                ) VALUES (
+                    :event_type,
+                    :trace_id,
+                    :request_id,
+                    :tenant_id_hash,
+                    :user_id_hash,
+                    :document_id,
+                    :outcome,
+                    :source_sha256,
+                    :source_bytes,
+                    :document_type,
+                    :extraction_confidence,
+                    :chunk_count,
+                    :vector_count,
+                    :elapsed_ms,
+                    :error_type,
+                    :error_message
+                )
+                """,
+                _ingestion_audit_binds(event),
+            )
+        )
+
+    async def save_citation_feedback(self, feedback: Mapping[str, object]) -> str:
+        """引用 feedback を低機密 metadata だけで Oracle へ保存する。"""
+        feedback_id = _audit_str(feedback, "feedback_id", uuid4().hex)
+        binds = _citation_feedback_binds(feedback, feedback_id=feedback_id)
+        await self._run_transaction(
+            lambda connection: _execute(
+                connection,
+                """
+                INSERT INTO rag_citation_feedback (
+                    feedback_id,
+                    trace_id,
+                    document_id,
+                    chunk_id,
+                    tenant_id_hash,
+                    user_id_hash,
+                    rating,
+                    reason,
+                    comment_hash,
+                    comment_chars
+                ) VALUES (
+                    :feedback_id,
+                    :trace_id,
+                    :document_id,
+                    :chunk_id,
+                    :tenant_id_hash,
+                    :user_id_hash,
+                    :rating,
+                    :reason,
+                    :comment_hash,
+                    :comment_chars
+                )
+                """,
+                binds,
+            )
+        )
+        return feedback_id
+
     async def _vector_search_with_oracle(
         self, embedding: list[float], top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
@@ -947,8 +1108,7 @@ class OracleClient:
             return _to_document_detail(document).model_copy(
                 update={
                     "knowledge_bases": [
-                        _to_knowledge_base_ref(knowledge_base)
-                        for knowledge_base in knowledge_bases
+                        _to_knowledge_base_ref(knowledge_base) for knowledge_base in knowledge_bases
                     ]
                 }
             )
@@ -1925,9 +2085,7 @@ class OracleClient:
                     column: value for column, value in updates.items() if column != "max_attempts"
                 }
                 if legacy_updates:
-                    legacy_set_sql = ", ".join(
-                        f"{column} = :{column}" for column in legacy_updates
-                    )
+                    legacy_set_sql = ", ".join(f"{column} = :{column}" for column in legacy_updates)
                     legacy_binds = {"job_id": job_id, **legacy_updates}
                     _execute(
                         connection,
@@ -2643,6 +2801,125 @@ def _executemany(
         cursor.close()
 
 
+def _search_audit_binds(event: Mapping[str, object]) -> dict[str, object]:
+    """RagSearchAuditEvent JSON を Oracle bind 値へ変換する。"""
+    return {
+        "event_type": _audit_str(event, "event_type", "rag.search"),
+        "trace_id": _audit_str(event, "trace_id", ""),
+        "request_id": _audit_optional_str(event, "request_id"),
+        "tenant_id_hash": _audit_optional_str(event, "tenant_id_hash"),
+        "user_id_hash": _audit_optional_str(event, "user_id_hash"),
+        "outcome": _audit_str(event, "outcome", "error"),
+        "search_mode": _audit_str(event, "mode", "hybrid"),
+        "query_hash": _audit_str(event, "query_hash", ""),
+        "query_chars": _audit_int(event, "query_chars"),
+        "filter_keys": _audit_json(event.get("filter_keys", [])),
+        "top_k": _audit_optional_int(event, "top_k"),
+        "rerank_top_n": _audit_optional_int(event, "rerank_top_n"),
+        "query_variant_count": _audit_int(event, "query_variant_count", default=1),
+        "guardrail_codes": _audit_json(event.get("guardrail_codes", [])),
+        "guardrail_severities": _audit_json(event.get("guardrail_severities", [])),
+        "retrieved_count": _audit_int(event, "retrieved_count"),
+        "reranked_count": _audit_int(event, "reranked_count"),
+        "deduplicated_count": _audit_int(event, "deduplicated_count"),
+        "context_diversified_count": _audit_int(event, "context_diversified_count"),
+        "context_group_expanded_count": _audit_int(event, "context_group_expanded_count"),
+        "context_expanded_count": _audit_int(event, "context_expanded_count"),
+        "context_compressed_count": _audit_int(event, "context_compressed_count"),
+        "context_compression_saved_chars": _audit_int(
+            event,
+            "context_compression_saved_chars",
+        ),
+        "citation_count": _audit_int(event, "citation_count"),
+        "context_chars": _audit_int(event, "context_chars"),
+        "context_window_chars": _audit_optional_int(event, "context_window_chars"),
+        "document_ids": _audit_json(event.get("document_ids", [])),
+        "knowledge_base_ids": _audit_json(event.get("knowledge_base_ids", [])),
+        "config_fingerprint": _audit_optional_str(event, "config_fingerprint"),
+        "elapsed_ms": _audit_float(event, "elapsed_ms"),
+        "error_stage": _audit_optional_str(event, "error_stage"),
+        "error_type": _audit_optional_str(event, "error_type"),
+    }
+
+
+def _ingestion_audit_binds(event: Mapping[str, object]) -> dict[str, object]:
+    """RagIngestionAuditEvent JSON を Oracle bind 値へ変換する。"""
+    return {
+        "event_type": _audit_str(event, "event_type", "rag.ingestion"),
+        "trace_id": _audit_str(event, "trace_id", ""),
+        "request_id": _audit_optional_str(event, "request_id"),
+        "tenant_id_hash": _audit_optional_str(event, "tenant_id_hash"),
+        "user_id_hash": _audit_optional_str(event, "user_id_hash"),
+        "document_id": _audit_str(event, "document_id", ""),
+        "outcome": _audit_str(event, "outcome", "error"),
+        "source_sha256": _audit_str(event, "source_sha256", ""),
+        "source_bytes": _audit_int(event, "source_bytes"),
+        "document_type": _audit_optional_str(event, "document_type"),
+        "extraction_confidence": _audit_optional_float(event, "extraction_confidence"),
+        "chunk_count": _audit_int(event, "chunk_count"),
+        "vector_count": _audit_int(event, "vector_count"),
+        "elapsed_ms": _audit_float(event, "elapsed_ms"),
+        "error_type": _audit_optional_str(event, "error_type"),
+        "error_message": _audit_optional_str(event, "error_message"),
+    }
+
+
+def _citation_feedback_binds(
+    feedback: Mapping[str, object],
+    *,
+    feedback_id: str,
+) -> dict[str, object]:
+    """CitationFeedbackRequest を Oracle bind 値へ変換する。"""
+    context = current_audit_request_context()
+    return {
+        "feedback_id": feedback_id,
+        "trace_id": _audit_str(feedback, "trace_id", ""),
+        "document_id": _audit_str(feedback, "document_id", ""),
+        "chunk_id": _audit_str(feedback, "chunk_id", ""),
+        "tenant_id_hash": _audit_optional_str(feedback, "tenant_id_hash") or context.tenant_id_hash,
+        "user_id_hash": _audit_optional_str(feedback, "user_id_hash") or context.user_id_hash,
+        "rating": _audit_str(feedback, "rating", "not_helpful"),
+        "reason": _audit_optional_str(feedback, "reason"),
+        "comment_hash": _audit_optional_str(feedback, "comment_hash"),
+        "comment_chars": _audit_int(feedback, "comment_chars"),
+    }
+
+
+def _audit_json(value: object) -> str:
+    """Oracle JSON 列へ入れる低機密 metadata を JSON 文字列化する。"""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _audit_str(event: Mapping[str, object], key: str, default: str) -> str:
+    value = event.get(key)
+    return value if isinstance(value, str) and value else default
+
+
+def _audit_optional_str(event: Mapping[str, object], key: str) -> str | None:
+    value = event.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _audit_int(event: Mapping[str, object], key: str, default: int = 0) -> int:
+    value = event.get(key)
+    return int(value) if isinstance(value, int | float) else default
+
+
+def _audit_optional_int(event: Mapping[str, object], key: str) -> int | None:
+    value = event.get(key)
+    return int(value) if isinstance(value, int | float) else None
+
+
+def _audit_float(event: Mapping[str, object], key: str, default: float = 0.0) -> float:
+    value = event.get(key)
+    return float(value) if isinstance(value, int | float) else default
+
+
+def _audit_optional_float(event: Mapping[str, object], key: str) -> float | None:
+    value = event.get(key)
+    return float(value) if isinstance(value, int | float) else None
+
+
 def _fetch_ingestion_job_rows(
     connection: OracleConnectionProtocol,
     statement: str,
@@ -2717,9 +2994,7 @@ def _replace_exact_sql_line(statement: str, old: str, new: str) -> str:
 
 
 def _remove_exact_sql_lines(statement: str, stripped_lines: set[str]) -> str:
-    lines = [
-        line for line in statement.splitlines() if line.strip() not in stripped_lines
-    ]
+    lines = [line for line in statement.splitlines() if line.strip() not in stripped_lines]
     return "\n".join(lines)
 
 
@@ -2956,8 +3231,7 @@ def _select_document_knowledge_base_refs(
         _with_tenant_bind({"document_id": document_id}),
     )
     return [
-        KnowledgeBaseRef(id=str(row["knowledge_base_id"]), name=str(row["name"]))
-        for row in rows
+        KnowledgeBaseRef(id=str(row["knowledge_base_id"]), name=str(row["name"])) for row in rows
     ]
 
 
@@ -3053,7 +3327,7 @@ def _oracle_document_where(
             )
             """.format(
                 knowledge_base_filter_sql=knowledge_base_filter_sql,
-                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb")
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
             )
         )
         binds.update(knowledge_base_binds)
@@ -3068,8 +3342,7 @@ def _oracle_in_predicate(
     """可変長 IN 条件を bind 付きで生成する。"""
     unique_values = _unique_sequence(values)
     binds: dict[str, object] = {
-        f"{bind_prefix}_{index}": value
-        for index, value in enumerate(unique_values)
+        f"{bind_prefix}_{index}": value for index, value in enumerate(unique_values)
     }
     placeholders = ", ".join(f":{key}" for key in binds)
     return f"{column} IN ({placeholders})", binds
@@ -3107,10 +3380,7 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         )
         binds.update(knowledge_base_binds)
         knowledge_base_filter_sql = f"AND {knowledge_base_filter_sql}"
-    if (
-        knowledge_base_ids
-        or current_audit_request_context().allowed_knowledge_base_ids is not None
-    ):
+    if knowledge_base_ids or current_audit_request_context().allowed_knowledge_base_ids is not None:
         clauses.append(
             """
             EXISTS (
@@ -3961,7 +4231,7 @@ CREATE TABLE {table_name} (
     tenant_id_hash        CHAR(64),
     user_id_hash          CHAR(64),
     outcome               VARCHAR2(32) NOT NULL,
-    mode                  VARCHAR2(16) NOT NULL,
+    search_mode           VARCHAR2(16) NOT NULL,
     query_hash            CHAR(64) NOT NULL,
     query_chars           NUMBER(10) NOT NULL,
     filter_keys           JSON,
@@ -3990,8 +4260,8 @@ CREATE TABLE {table_name} (
     created_at            TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_outcome_ck
         CHECK (outcome IN ('success', 'blocked', 'no_results', 'error')),
-    CONSTRAINT {table_name}_mode_ck
-        CHECK (mode IN ('hybrid', 'vector', 'keyword'))
+    CONSTRAINT {table_name}_search_mode_ck
+        CHECK (search_mode IN ('hybrid', 'vector', 'keyword'))
 );
 
 CREATE INDEX {table_name}_trace_idx
@@ -4059,6 +4329,149 @@ def oracle_audit_schema_sql() -> str:
             oracle_ingestion_audit_schema_sql(),
         ]
     )
+
+
+def oracle_knowledge_graph_schema_sql() -> str:
+    """GraphRAG-lite 用の軽量 KG / community summary table DDL を返す。"""
+    return """
+CREATE TABLE rag_graph_entities (
+    entity_id          VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash     CHAR(64),
+    knowledge_base_id  VARCHAR2(64),
+    canonical_name     VARCHAR2(512) NOT NULL,
+    entity_type        VARCHAR2(128),
+    description        CLOB,
+    confidence         NUMBER(6, 5),
+    source_document_ids JSON,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+);
+
+CREATE INDEX rag_graph_entities_tenant_name_idx
+    ON rag_graph_entities (tenant_id_hash, canonical_name);
+
+CREATE TABLE rag_graph_relationships (
+    relationship_id    VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash     CHAR(64),
+    knowledge_base_id  VARCHAR2(64),
+    source_entity_id   VARCHAR2(64) NOT NULL,
+    target_entity_id   VARCHAR2(64) NOT NULL,
+    relationship_type  VARCHAR2(128) NOT NULL,
+    description        CLOB,
+    confidence         NUMBER(6, 5),
+    source_document_ids JSON,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_graph_rel_source_fk
+        FOREIGN KEY (source_entity_id) REFERENCES rag_graph_entities (entity_id),
+    CONSTRAINT rag_graph_rel_target_fk
+        FOREIGN KEY (target_entity_id) REFERENCES rag_graph_entities (entity_id)
+);
+
+CREATE INDEX rag_graph_rel_source_idx
+    ON rag_graph_relationships (tenant_id_hash, source_entity_id);
+
+CREATE INDEX rag_graph_rel_target_idx
+    ON rag_graph_relationships (tenant_id_hash, target_entity_id);
+
+CREATE TABLE rag_graph_claims (
+    claim_id           VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash     CHAR(64),
+    knowledge_base_id  VARCHAR2(64),
+    entity_id          VARCHAR2(64),
+    claim_text         CLOB NOT NULL,
+    confidence         NUMBER(6, 5),
+    source_document_id VARCHAR2(64),
+    source_chunk_id    VARCHAR2(128),
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_graph_claim_entity_fk
+        FOREIGN KEY (entity_id) REFERENCES rag_graph_entities (entity_id)
+);
+
+CREATE INDEX rag_graph_claim_entity_idx
+    ON rag_graph_claims (tenant_id_hash, entity_id);
+
+CREATE TABLE rag_graph_community_summaries (
+    community_id       VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash     CHAR(64),
+    knowledge_base_id  VARCHAR2(64),
+    level_no           NUMBER(5) DEFAULT 0 NOT NULL,
+    title              VARCHAR2(512),
+    summary_text       CLOB NOT NULL,
+    entity_ids         JSON,
+    source_document_ids JSON,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+);
+
+CREATE INDEX rag_graph_community_tenant_idx
+    ON rag_graph_community_summaries (tenant_id_hash, knowledge_base_id, level_no);
+
+CREATE TABLE rag_graph_entity_chunks (
+    entity_id          VARCHAR2(64) NOT NULL,
+    chunk_id           VARCHAR2(128) NOT NULL,
+    document_id        VARCHAR2(64) NOT NULL,
+    tenant_id_hash     CHAR(64),
+    relevance_score    NUMBER(8, 6) DEFAULT 1 NOT NULL,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_graph_entity_chunks_pk PRIMARY KEY (entity_id, chunk_id),
+    CONSTRAINT rag_graph_entity_chunks_entity_fk
+        FOREIGN KEY (entity_id) REFERENCES rag_graph_entities (entity_id)
+);
+
+CREATE INDEX rag_graph_entity_chunks_chunk_idx
+    ON rag_graph_entity_chunks (tenant_id_hash, chunk_id);
+""".strip()
+
+
+def oracle_feedback_schema_sql(table_name: str = "rag_citation_feedback") -> str:
+    """citation feedback の低機密保存 table DDL を返す。"""
+    return f"""
+CREATE TABLE {table_name} (
+    feedback_id       VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
+    trace_id          VARCHAR2(64) NOT NULL,
+    document_id       VARCHAR2(64) NOT NULL,
+    chunk_id          VARCHAR2(128) NOT NULL,
+    tenant_id_hash    CHAR(64),
+    user_id_hash      CHAR(64),
+    rating            VARCHAR2(32) NOT NULL,
+    reason            VARCHAR2(64),
+    comment_hash      CHAR(64),
+    comment_chars     NUMBER(10) DEFAULT 0 NOT NULL,
+    created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_rating_ck
+        CHECK (rating IN ('helpful', 'not_helpful')),
+    CONSTRAINT {table_name}_reason_ck
+        CHECK (reason IS NULL OR reason IN ('missing_evidence', 'not_relevant', 'answer_untrusted'))
+);
+
+CREATE INDEX {table_name}_trace_idx
+    ON {table_name} (trace_id);
+
+CREATE INDEX {table_name}_tenant_created_idx
+    ON {table_name} (tenant_id_hash, created_at DESC);
+""".strip()
+
+
+def oracle_evaluation_artifact_schema_sql(table_name: str = "rag_evaluation_runs") -> str:
+    """nightly / staging の評価結果 artifact table DDL を返す。"""
+    return f"""
+CREATE TABLE {table_name} (
+    evaluation_run_id VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
+    tenant_id_hash    CHAR(64),
+    knowledge_base_ids JSON,
+    request_json      JSON NOT NULL,
+    result_json       JSON NOT NULL,
+    best_experiment_id VARCHAR2(80),
+    passed            NUMBER(1) DEFAULT 0 NOT NULL,
+    created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+);
+
+CREATE INDEX {table_name}_tenant_created_idx
+    ON {table_name} (tenant_id_hash, created_at DESC);
+
+CREATE INDEX {table_name}_best_experiment_idx
+    ON {table_name} (best_experiment_id);
+""".strip()
 
 
 def _require_document(document_id: str) -> StoredDocument:

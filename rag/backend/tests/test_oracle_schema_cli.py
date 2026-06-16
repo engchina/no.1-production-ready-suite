@@ -27,6 +27,12 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "WITH TARGET ACCURACY 95" in sql
     assert "CREATE TABLE rag_search_audit" in sql
     assert "CREATE TABLE rag_ingestion_audit" in sql
+    assert "-- section: knowledge_graph" in sql
+    assert "CREATE TABLE rag_graph_entities" in sql
+    assert "-- section: citation_feedback" in sql
+    assert "CREATE TABLE rag_citation_feedback" in sql
+    assert "-- section: evaluation_artifacts" in sql
+    assert "CREATE TABLE rag_evaluation_runs" in sql
     assert "SELECT AI" not in sql.upper()
 
 
@@ -56,6 +62,9 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "chunks",
         "search_audit",
         "ingestion_audit",
+        "knowledge_graph",
+        "citation_feedback",
+        "evaluation_artifacts",
     ]
     assert all(section["statement_count"] > 0 for section in manifest["sections"])
 
@@ -83,7 +92,14 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "rag_ingestion_jobs_attempts_ck" in sql
     assert "CHECK" in sql
     assert "(attempt_count >= 0 AND max_attempts >= 1)" in sql
-    assert len(statements) == 3
+    assert "-- migration: 20260616_001_search_audit_search_mode" in sql
+    assert "table_name = 'RAG_SEARCH_AUDIT'" in sql
+    assert "column_name = 'MODE'" in sql
+    assert "column_name = 'SEARCH_MODE'" in sql
+    assert "RENAME COLUMN mode TO search_mode" in sql
+    assert "rag_search_audit_search_mode_ck" in sql
+    assert "(search_mode IN (''hybrid'', ''vector'', ''keyword''))" in sql
+    assert len(statements) == 4
     assert all(statement.startswith(("-- migration:", "DECLARE")) for statement in statements)
 
 
@@ -96,11 +112,12 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260615_001"
+    assert manifest["migration_artifact_version"] == "20260616_001"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
-        "20260615_001_ingestion_jobs_attempt_counters"
+        "20260615_001_ingestion_jobs_attempt_counters",
+        "20260616_001_search_audit_search_mode",
     ]
 
 
@@ -143,7 +160,9 @@ def test_oracle_schema_cli_writes_migration_sql_and_manifest(tmp_path: Path) -> 
     )
 
     assert exit_code == 0
-    assert "MAX_ATTEMPTS" in sql_output.read_text(encoding="utf-8")
+    migration_sql = sql_output.read_text(encoding="utf-8")
+    assert "MAX_ATTEMPTS" in migration_sql
+    assert "SEARCH_MODE" in migration_sql
     manifest = json.loads(manifest_output.read_text(encoding="utf-8"))
     assert manifest["artifact_type"] == "migration"
     assert (

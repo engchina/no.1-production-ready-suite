@@ -22,7 +22,8 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_transform import expand_retrieval_queries
-from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.rag.retrieval_strategy import resolve_retrieval_strategy
+from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest, SearchResponse
 
 NO_RESULTS_ANSWER = (
     "検索条件に一致する根拠が見つかりませんでした。" "条件やキーワードを変えて検索してください。"
@@ -96,6 +97,11 @@ class RagPipeline:
         context_compressed_count = 0
         context_compression_saved_chars = 0
         query_variant_count = 1
+        resolved_strategy = resolve_retrieval_strategy(
+            request,
+            settings=self._settings,
+            query=query_guardrail.sanitized_text,
+        )
         try:
             query_variants = expand_retrieval_queries(
                 query_guardrail.sanitized_text,
@@ -120,15 +126,17 @@ class RagPipeline:
             error_stage = "retrieval"
             retrieved = await _observe_stage(
                 trace_id,
-                request.mode.value,
+                resolved_strategy.mode.value,
                 "retrieval",
                 self._retrieve_with_query_variants(
                     query_variants=query_variants,
                     vectors=vectors,
                     request=request,
+                    mode=resolved_strategy.mode,
                 ),
                 attributes={
-                    "mode": request.mode.value,
+                    "mode": resolved_strategy.mode.value,
+                    "strategy": resolved_strategy.strategy.value,
                     "top_k": request.top_k,
                     "filter_key_count": len(request.filters),
                     "query_variant_count": query_variant_count,
@@ -157,14 +165,23 @@ class RagPipeline:
                 diagnostics = build_search_diagnostics(
                     request,
                     settings=self._settings,
+                    retrieval_strategy=resolved_strategy.strategy.value,
+                    route_reason=resolved_strategy.route_reason,
+                    graph_hit_count=resolved_strategy.graph_hit_count,
+                    fallback_reason=resolved_strategy.fallback_reason,
                     retrieved_count=len(retrieved),
                     query_variant_count=query_variant_count,
                 )
-                record_rag_request(request.mode.value, "no_results", elapsed / 1000, len(retrieved))
+                record_rag_request(
+                    resolved_strategy.mode.value,
+                    "no_results",
+                    elapsed / 1000,
+                    len(retrieved),
+                )
                 record_rag_search_audit(
                     trace_id=trace_id,
                     outcome="no_results",
-                    mode=request.mode,
+                    mode=resolved_strategy.mode,
                     sanitized_query=query_guardrail.sanitized_text,
                     filters=request.filters,
                     findings=query_guardrail.findings,
@@ -265,6 +282,10 @@ class RagPipeline:
             diagnostics = build_search_diagnostics(
                 request,
                 settings=self._settings,
+                retrieval_strategy=resolved_strategy.strategy.value,
+                route_reason=resolved_strategy.route_reason,
+                graph_hit_count=resolved_strategy.graph_hit_count,
+                fallback_reason=resolved_strategy.fallback_reason,
                 retrieved_count=len(retrieved),
                 reranked_count=len(ranked),
                 deduplicated_count=deduplicated_count,
@@ -301,11 +322,16 @@ class RagPipeline:
             warnings = [*query_guardrail.warnings, *answer_guardrail.warnings]
             outcome: AuditOutcome = "success" if answer_guardrail.allowed else "blocked"
             elapsed = elapsed_ms(started_at)
-            record_rag_request(request.mode.value, outcome, elapsed / 1000, len(retrieved))
+            record_rag_request(
+                resolved_strategy.mode.value,
+                outcome,
+                elapsed / 1000,
+                len(retrieved),
+            )
             record_rag_search_audit(
                 trace_id=trace_id,
                 outcome=outcome,
-                mode=request.mode,
+                mode=resolved_strategy.mode,
                 sanitized_query=query_guardrail.sanitized_text,
                 filters=request.filters,
                 findings=[*query_guardrail.findings, *answer_guardrail.findings],
@@ -327,6 +353,10 @@ class RagPipeline:
             diagnostics = build_search_diagnostics(
                 request,
                 settings=self._settings,
+                retrieval_strategy=resolved_strategy.strategy.value,
+                route_reason=resolved_strategy.route_reason,
+                graph_hit_count=resolved_strategy.graph_hit_count,
+                fallback_reason=resolved_strategy.fallback_reason,
                 retrieved_count=len(retrieved),
                 reranked_count=len(ranked),
                 deduplicated_count=deduplicated_count,
@@ -338,11 +368,16 @@ class RagPipeline:
                 citation_count=len(ranked),
                 query_variant_count=query_variant_count,
             )
-            record_rag_request(request.mode.value, "error", elapsed / 1000, len(retrieved))
+            record_rag_request(
+                resolved_strategy.mode.value,
+                "error",
+                elapsed / 1000,
+                len(retrieved),
+            )
             record_rag_search_audit(
                 trace_id=trace_id,
                 outcome="error",
-                mode=request.mode,
+                mode=resolved_strategy.mode,
                 sanitized_query=query_guardrail.sanitized_text,
                 filters=request.filters,
                 findings=query_guardrail.findings,
@@ -433,6 +468,7 @@ class RagPipeline:
         query_variants: list[str],
         vectors: list[list[float]],
         request: SearchRequest,
+        mode: SearchMode,
     ) -> list[RetrievedChunk]:
         """query expansion variants で検索し、chunk 単位で融合する。"""
         if len(query_variants) != len(vectors):
@@ -444,7 +480,7 @@ class RagPipeline:
                 query=query_variants[0],
                 embedding=vectors[0],
                 top_k=request.top_k,
-                mode=request.mode,
+                mode=mode,
                 filters=request.filters,
             )
         variant_hits = await asyncio.gather(
@@ -453,7 +489,7 @@ class RagPipeline:
                     query=query,
                     embedding=vector,
                     top_k=request.top_k,
-                    mode=request.mode,
+                    mode=mode,
                     filters=request.filters,
                 )
                 for query, vector in zip(query_variants, vectors, strict=True)

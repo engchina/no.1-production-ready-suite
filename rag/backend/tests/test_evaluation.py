@@ -90,6 +90,11 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert metrics.mrr == 1.0
     assert metrics.answer_keyword_hit_rate == 1.0
     assert metrics.groundedness_pass_rate == 1.0
+    assert metrics.faithfulness == 1.0
+    assert metrics.context_precision == 1.0
+    assert metrics.context_recall == 1.0
+    assert metrics.response_relevancy >= 0.8
+    assert metrics.noise_sensitivity == 1.0
     assert metrics.passed is True
     assert metrics.threshold_failures == []
     assert metrics.failure_reason_counts == {}
@@ -109,6 +114,11 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert result.groundedness_score == 1.0
     assert result.grounding_overlap_count >= 1
     assert result.grounding_answer_feature_count >= 1
+    assert result.faithfulness == 1.0
+    assert result.context_precision == 1.0
+    assert result.context_recall == 1.0
+    assert result.response_relevancy >= 0.8
+    assert result.noise_sensitivity == 1.0
     assert result.guardrail_warnings == []
     assert result.failure_reasons == []
     assert result.diagnostics.top_k == 5
@@ -277,6 +287,10 @@ async def test_evaluation_runner_marks_threshold_gate_passed() -> None:
             mrr=1.0,
             answer_keyword_hit_rate=1.0,
             groundedness_pass_rate=1.0,
+            faithfulness=1.0,
+            context_precision=1.0,
+            context_recall=1.0,
+            noise_sensitivity=1.0,
         ),
     )
 
@@ -305,6 +319,11 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
             mrr=0.5,
             answer_keyword_hit_rate=0.9,
             groundedness_pass_rate=0.9,
+            faithfulness=0.9,
+            context_precision=0.9,
+            context_recall=0.9,
+            response_relevancy=0.9,
+            noise_sensitivity=0.9,
         ),
     )
 
@@ -318,6 +337,11 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
         ("mrr", 0.0, 0.5),
         ("answer_keyword_hit_rate", 0.0, 0.9),
         ("groundedness_pass_rate", 0.0, 0.9),
+        ("faithfulness", 0.0, 0.9),
+        ("context_precision", 0.0, 0.9),
+        ("context_recall", 0.0, 0.9),
+        ("response_relevancy", 0.0, 0.9),
+        ("noise_sensitivity", 0.32, 0.9),
     ]
 
 
@@ -367,6 +391,11 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
     assert metrics.mrr == 0.0
     assert metrics.answer_keyword_hit_rate == 0.0
     assert metrics.groundedness_pass_rate == 0.0
+    assert metrics.faithfulness == 0.0
+    assert metrics.context_precision == 0.0
+    assert metrics.context_recall == 0.0
+    assert metrics.response_relevancy == 0.0
+    assert metrics.noise_sensitivity == 0.32
     result = metrics.case_results[0]
     assert result.case_id == "case-miss"
     assert result.trace_id
@@ -381,6 +410,11 @@ async def test_evaluation_case_result_exposes_miss_diagnostics() -> None:
     assert result.groundedness_passed is False
     assert result.groundedness_score == 0.0
     assert result.grounding_answer_feature_count > 0
+    assert result.faithfulness == 0.0
+    assert result.context_precision == 0.0
+    assert result.context_recall == 0.0
+    assert result.response_relevancy == 0.0
+    assert result.noise_sensitivity == 0.32
     assert result.guardrail_warnings == ["検索条件に一致する根拠が見つかりませんでした。"]
     assert result.failure_reasons == [
         "retrieval_miss",
@@ -925,6 +959,7 @@ def test_evaluation_api_runs_against_local_pipeline() -> None:
             "top_k": 5,
             "rerank_top_n": 3,
             "mode": "hybrid",
+            "knowledge_base_ids": ["kb-eval-empty-isolated"],
             "thresholds": {
                 "precision_at_k": 1.0,
                 "recall_at_k": 1.0,

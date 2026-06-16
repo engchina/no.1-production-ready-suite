@@ -21,8 +21,10 @@ from app.main import app
 from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipeline
 from app.schemas.document import FileStatus, SourceModality, SourceProfile
 from tests.support import AsgiTestClient
+from tests.support import test_audit_request_context as audit_request_context
 
 client = AsgiTestClient(app)
+NO_TENANT_HEADERS = {"X-Tenant-ID": "", "X-User-ID": ""}
 
 # 実 Oracle 26ai + OCI を用いる統合テスト（DB 未到達環境では自動 skip）。
 pytestmark = pytest.mark.usefixtures("oracle_db")
@@ -306,38 +308,39 @@ async def test_ingestion_normalizes_untrusted_document_type_in_logs(
 async def test_ingestion_rejects_chunk_count_above_limit() -> None:
     """chunk 数が上限を超える文書は索引せず ERROR 状態にする。"""
     oracle = OracleClient()
-    document = await oracle.create_document(
-        file_name="too-many-chunks.txt",
-        object_storage_path="local://uploaded/too-many-chunks.txt",
-        content_type="text/plain",
-        file_size_bytes=4,
-        content_sha256=hashlib.sha256(b"test").hexdigest(),
-    )
-    settings = Settings.model_construct(
-        rag_chunk_size=200,
-        rag_chunk_overlap=20,
-        rag_max_chunks_per_document=1,
-    )
-    pipeline = IngestionPipeline(
-        vlm=LongTextVlm(),
-        genai=StubEmbeddingClient(),
-        oracle=oracle,
-        settings=settings,
-    )
+    with audit_request_context():
+        document = await oracle.create_document(
+            file_name="too-many-chunks.txt",
+            object_storage_path="local://uploaded/too-many-chunks.txt",
+            content_type="text/plain",
+            file_size_bytes=4,
+            content_sha256=hashlib.sha256(b"test").hexdigest(),
+        )
+        settings = Settings.model_construct(
+            rag_chunk_size=200,
+            rag_chunk_overlap=20,
+            rag_max_chunks_per_document=1,
+        )
+        pipeline = IngestionPipeline(
+            vlm=LongTextVlm(),
+            genai=StubEmbeddingClient(),
+            oracle=oracle,
+            settings=settings,
+        )
 
-    try:
-        await pipeline.ingest(document.id, b"test", "prompt")
-    except ValueError as exc:
-        assert "索引用チャンク数が上限を超えています" in str(exc)
-    else:
-        raise AssertionError("chunk 数上限超過は ValueError にする")
+        try:
+            await pipeline.ingest(document.id, b"test", "prompt")
+        except ValueError as exc:
+            assert "索引用チャンク数が上限を超えています" in str(exc)
+        else:
+            raise AssertionError("chunk 数上限超過は ValueError にする")
 
-    failed = await oracle.get_document(document.id)
-    assert failed is not None
-    assert failed.status == FileStatus.ERROR
-    assert failed.error_message is not None
-    assert "索引用チャンク数が上限を超えています" in failed.error_message
-    assert await oracle.count_chunks() == 0
+        failed = await oracle.get_document(document.id)
+        assert failed is not None
+        assert failed.status == FileStatus.ERROR
+        assert failed.error_message is not None
+        assert "索引用チャンク数が上限を超えています" in failed.error_message
+        assert await oracle.count_document_chunks(document.id) == 0
 
 
 async def test_ingestion_redacts_internal_error_messages(
@@ -345,34 +348,35 @@ async def test_ingestion_redacts_internal_error_messages(
 ) -> None:
     """内部例外の本文は document error や監査ログへ保存しない。"""
     oracle = OracleClient()
-    document = await oracle.create_document(
-        file_name="internal-error.txt",
-        object_storage_path="local://uploaded/internal-error.txt",
-        content_type="text/plain",
-        file_size_bytes=4,
-        content_sha256=hashlib.sha256(b"test").hexdigest(),
-    )
-    pipeline = IngestionPipeline(
-        vlm=ShortTextVlm(),
-        genai=FailingEmbeddingClient(),
-        oracle=oracle,
-    )
+    with audit_request_context():
+        document = await oracle.create_document(
+            file_name="internal-error.txt",
+            object_storage_path="local://uploaded/internal-error.txt",
+            content_type="text/plain",
+            file_size_bytes=4,
+            content_sha256=hashlib.sha256(b"test").hexdigest(),
+        )
+        pipeline = IngestionPipeline(
+            vlm=ShortTextVlm(),
+            genai=FailingEmbeddingClient(),
+            oracle=oracle,
+        )
 
-    with caplog.at_level(logging.INFO, logger="app.audit"):
-        try:
-            await pipeline.ingest(document.id, b"test", "prompt")
-        except RuntimeError as exc:
-            assert "INV-SECRET" in str(exc)
-        else:
-            raise AssertionError("embedding failure は再送出する")
+        with caplog.at_level(logging.INFO, logger="app.audit"):
+            try:
+                await pipeline.ingest(document.id, b"test", "prompt")
+            except RuntimeError as exc:
+                assert "INV-SECRET" in str(exc)
+            else:
+                raise AssertionError("embedding failure は再送出する")
 
-    failed = await oracle.get_document(document.id)
-    assert failed is not None
-    assert failed.status == FileStatus.ERROR
-    assert failed.error_message == INGESTION_INTERNAL_ERROR_MESSAGE
-    assert "INV-SECRET" not in failed.error_message
-    assert "raw secret detail" not in failed.error_message
-    assert await oracle.count_chunks() == 0
+        failed = await oracle.get_document(document.id)
+        assert failed is not None
+        assert failed.status == FileStatus.ERROR
+        assert failed.error_message == INGESTION_INTERNAL_ERROR_MESSAGE
+        assert "INV-SECRET" not in failed.error_message
+        assert "raw secret detail" not in failed.error_message
+        assert await oracle.count_document_chunks(document.id) == 0
 
     audit_record = next(
         record for record in caplog.records if record.message == "rag_ingestion_audit"
@@ -528,7 +532,7 @@ def test_search_filters_are_applied_to_retrieval() -> None:
     """SearchRequest.filters は実際の検索候補に適用される。"""
     document_ids: list[str] = []
     for file_name in ("policy-a.txt", "policy-b.txt"):
-        content = "社内規程 クラウド利用料".encode()
+        content = f"社内規程 クラウド利用料 {file_name}".encode()
         upload_resp = client.post(
             "/api/documents/upload",
             files={"file": (file_name, content, "text/plain")},
@@ -947,81 +951,89 @@ def test_upload_rejects_file_over_configured_size(monkeypatch: MonkeyPatch) -> N
 
 def test_ingest_rejects_document_already_ingesting() -> None:
     """INGESTING 状態のドキュメントは二重取込しない。"""
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="ingesting.txt",
-            object_storage_path="local://uploaded/ingesting.txt",
-            content_type="text/plain",
+    with audit_request_context():
+        detail = asyncio.run(
+            OracleClient().create_document(
+                file_name="ingesting.txt",
+                object_storage_path="local://uploaded/ingesting.txt",
+                content_type="text/plain",
+            )
         )
-    )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INGESTING))
+        asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INGESTING))
 
-    response = client.post(f"/api/documents/{detail.id}/ingest")
+        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
 
-    assert response.status_code == 409
-    assert response.json()["error_messages"] == ["このドキュメントは現在取込中です。"]
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.INGESTING
+        assert response.status_code == 409
+        assert response.json()["error_messages"] == ["このドキュメントは現在取込中です。"]
+        stored = asyncio.run(OracleClient().get_document(detail.id))
+        assert stored is not None
+        assert stored.status == FileStatus.INGESTING
 
 
 def test_ingest_is_idempotent_for_already_indexed_document() -> None:
     """INDEXED は force なしなら原本取得せず既存結果を返す。"""
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="already-indexed.txt",
-            object_storage_path="local://missing/already-indexed.txt",
-            content_type="text/plain",
+    with audit_request_context():
+        detail = asyncio.run(
+            OracleClient().create_document(
+                file_name="already-indexed.txt",
+                object_storage_path="local://missing/already-indexed.txt",
+                content_type="text/plain",
+            )
         )
-    )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
+        asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-    response = client.post(f"/api/documents/{detail.id}/ingest")
+        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
 
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["id"] == detail.id
-    assert data["status"] == "INDEXED"
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.INDEXED
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["id"] == detail.id
+        assert data["status"] == "INDEXED"
+        stored = asyncio.run(OracleClient().get_document(detail.id))
+        assert stored is not None
+        assert stored.status == FileStatus.INDEXED
 
 
 def test_force_ingest_retries_already_indexed_document() -> None:
     """INDEXED に force=true を付けると再取込として原本取得まで進む。"""
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="retry-indexed.txt",
-            object_storage_path="local://missing/retry-indexed.txt",
-            content_type="text/plain",
+    with audit_request_context():
+        detail = asyncio.run(
+            OracleClient().create_document(
+                file_name="retry-indexed.txt",
+                object_storage_path="local://missing/retry-indexed.txt",
+                content_type="text/plain",
+            )
         )
-    )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
+        asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-    response = client.post(f"/api/documents/{detail.id}/ingest", params={"force": "true"})
+        response = client.post(
+            f"/api/documents/{detail.id}/ingest",
+            params={"force": "true"},
+            headers=NO_TENANT_HEADERS,
+        )
 
-    assert response.status_code == 409
-    assert response.json()["error_messages"] == ["原本ファイルが見つかりません。"]
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.ERROR
+        assert response.status_code == 409
+        assert response.json()["error_messages"] == ["原本ファイルが見つかりません。"]
+        stored = asyncio.run(OracleClient().get_document(detail.id))
+        assert stored is not None
+        assert stored.status == FileStatus.ERROR
 
 
 def test_indexed_document_is_idempotent_without_force() -> None:
     """INDEXED は force なしなら再取込せず既存状態を返す。"""
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="indexed-noop.txt",
-            object_storage_path="local://missing/indexed-noop.txt",
-            content_type="text/plain",
+    with audit_request_context():
+        detail = asyncio.run(
+            OracleClient().create_document(
+                file_name="indexed-noop.txt",
+                object_storage_path="local://missing/indexed-noop.txt",
+                content_type="text/plain",
+            )
         )
-    )
-    asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
+        asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-    response = client.post(f"/api/documents/{detail.id}/ingest")
+        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
 
-    assert response.status_code == 200
-    assert response.json()["data"]["status"] == "INDEXED"
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == "INDEXED"
 
 
 def test_ingest_marks_document_error_when_local_extraction_is_empty(
@@ -1118,97 +1130,101 @@ def test_ingest_returns_422_when_enterprise_ai_output_is_incomplete(
 
 def test_ingest_marks_document_error_when_source_object_is_missing() -> None:
     """原本ファイルが消えている場合は説明可能な 409 と ERROR 状態にする。"""
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="missing.txt",
-            object_storage_path="local://missing/missing.txt",
-            content_type="text/plain",
+    with audit_request_context():
+        detail = asyncio.run(
+            OracleClient().create_document(
+                file_name="missing.txt",
+                object_storage_path="local://missing/missing.txt",
+                content_type="text/plain",
+            )
         )
-    )
 
-    response = client.post(f"/api/documents/{detail.id}/ingest")
+        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
 
-    assert response.status_code == 409
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.ERROR
-    assert stored.error_message == "原本ファイルが見つかりません。"
+        assert response.status_code == 409
+        stored = asyncio.run(OracleClient().get_document(detail.id))
+        assert stored is not None
+        assert stored.status == FileStatus.ERROR
+        assert stored.error_message == "原本ファイルが見つかりません。"
 
 
 def test_ingest_rejects_source_size_mismatch() -> None:
     """取得した原本サイズがアップロード時メタデータと違う場合は取込しない。"""
-    data = b"policy body"
-    object_path = asyncio.run(
-        ObjectStorageClient().put("uploaded/size-mismatch.txt", data, "text/plain")
-    )
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="size-mismatch.txt",
-            object_storage_path=object_path,
-            content_type="text/plain",
-            file_size_bytes=len(data) + 1,
-            content_sha256=hashlib.sha256(data).hexdigest(),
+    with audit_request_context():
+        data = b"policy body"
+        object_path = asyncio.run(
+            ObjectStorageClient().put("uploaded/size-mismatch.txt", data, "text/plain")
         )
-    )
+        detail = asyncio.run(
+            OracleClient().create_document(
+                file_name="size-mismatch.txt",
+                object_storage_path=object_path,
+                content_type="text/plain",
+                file_size_bytes=len(data) + 1,
+                content_sha256=hashlib.sha256(data).hexdigest(),
+            )
+        )
 
-    response = client.post(f"/api/documents/{detail.id}/ingest")
+        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
 
-    assert response.status_code == 409
-    assert response.json()["error_messages"] == [
-        "原本ファイルのサイズがアップロード時と一致しません。"
-    ]
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.ERROR
-    assert stored.error_message == "原本ファイルのサイズがアップロード時と一致しません。"
+        assert response.status_code == 409
+        assert response.json()["error_messages"] == [
+            "原本ファイルのサイズがアップロード時と一致しません。"
+        ]
+        stored = asyncio.run(OracleClient().get_document(detail.id))
+        assert stored is not None
+        assert stored.status == FileStatus.ERROR
+        assert stored.error_message == "原本ファイルのサイズがアップロード時と一致しません。"
 
 
 def test_ingest_rejects_source_hash_mismatch() -> None:
     """取得した原本 hash がアップロード時メタデータと違う場合は取込しない。"""
-    data = b"policy body"
-    object_path = asyncio.run(
-        ObjectStorageClient().put("uploaded/hash-mismatch.txt", data, "text/plain")
-    )
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="hash-mismatch.txt",
-            object_storage_path=object_path,
-            content_type="text/plain",
-            file_size_bytes=len(data),
-            content_sha256=hashlib.sha256(b"different body").hexdigest(),
+    with audit_request_context():
+        data = b"policy body"
+        object_path = asyncio.run(
+            ObjectStorageClient().put("uploaded/hash-mismatch.txt", data, "text/plain")
         )
-    )
+        detail = asyncio.run(
+            OracleClient().create_document(
+                file_name="hash-mismatch.txt",
+                object_storage_path=object_path,
+                content_type="text/plain",
+                file_size_bytes=len(data),
+                content_sha256=hashlib.sha256(b"different body").hexdigest(),
+            )
+        )
 
-    response = client.post(f"/api/documents/{detail.id}/ingest")
+        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
 
-    assert response.status_code == 409
-    assert response.json()["error_messages"] == [
-        "原本ファイルの SHA-256 がアップロード時と一致しません。"
-    ]
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.ERROR
-    assert stored.error_message == "原本ファイルの SHA-256 がアップロード時と一致しません。"
+        assert response.status_code == 409
+        assert response.json()["error_messages"] == [
+            "原本ファイルの SHA-256 がアップロード時と一致しません。"
+        ]
+        stored = asyncio.run(OracleClient().get_document(detail.id))
+        assert stored is not None
+        assert stored.status == FileStatus.ERROR
+        assert stored.error_message == "原本ファイルの SHA-256 がアップロード時と一致しません。"
 
 
 def test_ingest_rejects_non_local_uri_in_local_upload_storage_backend() -> None:
     """local upload storage backend では OCI URI をローカルキーとして誤解釈しない。"""
-    detail = asyncio.run(
-        OracleClient().create_document(
-            file_name="external.txt",
-            object_storage_path="oci://namespace/bucket/external.txt",
-            content_type="text/plain",
+    with audit_request_context():
+        detail = asyncio.run(
+            OracleClient().create_document(
+                file_name="external.txt",
+                object_storage_path="oci://namespace/bucket/external.txt",
+                content_type="text/plain",
+            )
         )
-    )
 
-    response = client.post(f"/api/documents/{detail.id}/ingest")
+        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
 
-    assert response.status_code == 400
-    assert response.json()["error_messages"] == ["原本ファイルの参照パスが不正です。"]
-    stored = asyncio.run(OracleClient().get_document(detail.id))
-    assert stored is not None
-    assert stored.status == FileStatus.ERROR
-    assert stored.error_message == "ローカルモードでは local:// URI のみ取得できます。"
+        assert response.status_code == 400
+        assert response.json()["error_messages"] == ["原本ファイルの参照パスが不正です。"]
+        stored = asyncio.run(OracleClient().get_document(detail.id))
+        assert stored is not None
+        assert stored.status == FileStatus.ERROR
+        assert stored.error_message == "ローカルモードでは local:// URI のみ取得できます。"
 
 
 class TimeoutEnterpriseAi(OciEnterpriseAiClient):

@@ -326,7 +326,12 @@ export function SearchClient() {
                   </h2>
                   <ul className="space-y-3">
                     {citations.map((chunk, i) => (
-                      <CitationCard key={chunk.chunk_id} chunk={chunk} index={i} />
+                      <CitationCard
+                        key={chunk.chunk_id}
+                        chunk={chunk}
+                        index={i}
+                        traceId={meta?.trace_id}
+                      />
                     ))}
                   </ul>
                 </section>

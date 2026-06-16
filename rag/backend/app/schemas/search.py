@@ -28,6 +28,16 @@ class SearchMode(StrEnum):
     KEYWORD = "keyword"
 
 
+class SearchStrategy(StrEnum):
+    """検索ルーティング戦略。既存 mode は baseline retrieval mode として維持する。"""
+
+    AUTO = "auto"
+    HYBRID = "hybrid"
+    GRAPH_LOCAL = "graph_local"
+    GRAPH_GLOBAL = "graph_global"
+    SELECT_AI = "select_ai"
+
+
 class SelectAiAction(StrEnum):
     """Oracle Select AI の安全に公開する action。"""
 
@@ -42,6 +52,7 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=20, ge=1, le=100)
     rerank_top_n: int = Field(default=5, ge=1, le=50)
     mode: SearchMode = SearchMode.HYBRID
+    strategy: SearchStrategy = SearchStrategy.AUTO
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
 
@@ -67,9 +78,7 @@ class SearchRequest(BaseModel):
     def validate_search_options(self) -> Self:
         """rerank 深さとナレッジベース指定の整合性を検証する。"""
         validate_rerank_top_n(self.top_k, self.rerank_top_n)
-        filter_knowledge_base_ids = parse_search_id_filter(
-            self.filters.get("knowledge_base_id")
-        )
+        filter_knowledge_base_ids = parse_search_id_filter(self.filters.get("knowledge_base_id"))
         if (
             self.knowledge_base_ids
             and filter_knowledge_base_ids
@@ -105,6 +114,11 @@ class SearchDiagnostics(BaseModel):
     """検索実行時の非機密診断情報。"""
 
     mode: str = ""
+    retrieval_strategy: str = "hybrid"
+    route_reason: str = "default_hybrid"
+    graph_hit_count: int = 0
+    fallback_reason: str | None = None
+    stream_stage_timings: dict[str, float] = Field(default_factory=dict)
     top_k: int = 0
     rerank_top_n: int = 0
     retrieved_count: int = 0

@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
+AuditPersistence = Literal["log", "oracle", "both"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
@@ -330,6 +331,20 @@ class Settings(BaseSettings):
         description="query expansion で retrieval に使う query variant 数の上限。",
     )
     rag_search_timeout_seconds: float = Field(default=30.0, gt=0.0, le=300.0)
+    rag_graph_enabled: bool = Field(
+        default=False,
+        description=(
+            "Oracle 内の軽量 KG / community summary を使う GraphRAG-lite 経路。"
+            "未整備環境では hybrid へ安全に fallback する。"
+        ),
+    )
+    rag_stream_realtime_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enterprise AI のリアルタイム token stream を使う場合の feature flag。"
+            "無効時も既存 SSE event contract は維持する。"
+        ),
+    )
     dashboard_query_timeout_seconds: float = Field(
         default=8.0,
         gt=0.0,
@@ -369,6 +384,10 @@ class Settings(BaseSettings):
     audit_context_hash_salt: str = Field(
         default="",
         description="tenant/user id を監査ログへ hash 化するときの任意 salt。.env から注入する。",
+    )
+    audit_persistence: AuditPersistence = Field(
+        default="log",
+        description="RAG 監査イベントの保存先。log / oracle / both。",
     )
 
     # --- Trace export（OpenTelemetry / Langfuse gateway 連携用）---

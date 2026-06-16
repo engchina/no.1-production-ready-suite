@@ -21,6 +21,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Secret scan
+        working-directory: .
+        run: |
+          if git grep -n -E '(sk-[A-Za-z0-9]{20,}|-----BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY-----|[A-Za-z0-9_]*API_KEY[[:space:]]*=[[:space:]]*[^[:space:]#]+)' -- ':!backend/tests/**' ':!frontend/e2e/**' ':!frontend/src/lib/api.test.ts' ':!frontend/src/lib/i18n.ts' ':!.github/workflows/ci.yml'; then
+            echo "Potential secret material found in tracked source files."
+            exit 1
+          fi
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -79,11 +87,20 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Unit test
+        run: npm test
+
       - name: Dependency audit
         run: npm audit --audit-level=moderate
 
       - name: Build
         run: npm run build
+
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E test
+        run: npm run test:e2e
 
   compose:
     name: Docker Compose

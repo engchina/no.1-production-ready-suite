@@ -5,11 +5,13 @@
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
 
 import pytest
 
 from app.api.routes import documents as documents_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
+from app.config import get_settings
 from app.main import app
 from tests.support import AsgiTestClient
 
@@ -19,7 +21,7 @@ client = AsgiTestClient(app)
 class _RaisingOracle:
     """全 DB 呼び出しが即時に例外を送出する fake(DB 接続不可を再現)。"""
 
-    def __getattr__(self, _name: str):
+    def __getattr__(self, _name: str) -> Callable[..., Awaitable[object]]:
         async def _raise(*_args: object, **_kwargs: object) -> object:
             raise RuntimeError("database is down")
 
@@ -29,7 +31,7 @@ class _RaisingOracle:
 class _HangingOracle:
     """全 DB 呼び出しが返らない fake(DB 応答待ちハングを再現)。"""
 
-    def __getattr__(self, _name: str):
+    def __getattr__(self, _name: str) -> Callable[..., Awaitable[object]]:
         async def _hang(*_args: object, **_kwargs: object) -> object:
             await asyncio.sleep(60)
             raise AssertionError("unreachable")
@@ -38,7 +40,7 @@ class _HangingOracle:
 
 
 def _set_timeout(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
-    settings = documents_route.get_settings()
+    settings = get_settings()
     monkeypatch.setattr(settings, "db_read_timeout_seconds", seconds)
 
 

@@ -1,6 +1,7 @@
 """RAG 評価ランナー。"""
 
 import asyncio
+import re
 from collections.abc import Sequence
 from time import perf_counter
 from typing import Protocol
@@ -38,6 +39,22 @@ EVALUATION_CASE_ERROR_MESSAGE = (
     "評価ケースの検索処理に失敗しました。trace_id で監査ログを確認してください。"
 )
 ZERO_METRIC = 0.0
+TEXT_FEATURE_PATTERN = re.compile(r"[0-9a-zA-Z_]+|[\u3040-\u30ff\u3400-\u9fff]+")
+EVALUATION_STOP_FEATURES = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "について",
+    "ください",
+    "です",
+    "ます",
+}
+NOISE_FAILURE_REASONS: set[EvaluationFailureReason] = {
+    "unexpected_retrieval",
+    "low_groundedness",
+    "guardrail_warning",
+}
 
 
 class SearchPipeline(Protocol):
@@ -96,6 +113,11 @@ class EvaluationRunner:
                 "mrr": ZERO_METRIC,
                 "answer_keyword_hit_rate": ZERO_METRIC,
                 "groundedness_pass_rate": ZERO_METRIC,
+                "faithfulness": ZERO_METRIC,
+                "context_precision": ZERO_METRIC,
+                "context_recall": ZERO_METRIC,
+                "response_relevancy": ZERO_METRIC,
+                "noise_sensitivity": ZERO_METRIC,
             }
             threshold_failures = _threshold_failures(thresholds, aggregate_values)
             return EvaluationMetrics(
@@ -114,6 +136,11 @@ class EvaluationRunner:
         mrr_total = 0.0
         keyword_hits = 0
         groundedness_passes = 0
+        faithfulness_total = 0.0
+        context_precision_total = 0.0
+        context_recall_total = 0.0
+        response_relevancy_total = 0.0
+        noise_sensitivity_total = 0.0
         error_count = 0
         evaluated_k = max(1, min(top_k, rerank_top_n))
         case_results: list[EvaluationCaseResult] = []
@@ -219,6 +246,16 @@ class EvaluationRunner:
                 groundedness_passed=groundedness.grounded,
                 guardrail_warnings=response.guardrail_warnings,
             )
+            faithfulness = groundedness.score
+            context_precision = _context_precision(response.citations, relevant)
+            context_recall = recall
+            response_relevancy = _response_relevancy(case.query, response.answer)
+            noise_sensitivity = _noise_sensitivity(failure_reasons)
+            faithfulness_total += faithfulness
+            context_precision_total += context_precision
+            context_recall_total += context_recall
+            response_relevancy_total += response_relevancy
+            noise_sensitivity_total += noise_sensitivity
             _accumulate_failure_reasons(failure_reason_counts, failure_reasons)
             case_results.append(
                 EvaluationCaseResult(
@@ -235,6 +272,11 @@ class EvaluationRunner:
                     groundedness_score=groundedness.score,
                     grounding_overlap_count=groundedness.overlap_count,
                     grounding_answer_feature_count=groundedness.answer_feature_count,
+                    faithfulness=round(faithfulness, 4),
+                    context_precision=round(context_precision, 4),
+                    context_recall=round(context_recall, 4),
+                    response_relevancy=round(response_relevancy, 4),
+                    noise_sensitivity=round(noise_sensitivity, 4),
                     guardrail_warnings=response.guardrail_warnings,
                     failure_reasons=failure_reasons,
                     diagnostics=response.diagnostics,
@@ -249,6 +291,11 @@ class EvaluationRunner:
             "mrr": round(mrr_total / case_count, 4),
             "answer_keyword_hit_rate": round(keyword_hits / case_count, 4),
             "groundedness_pass_rate": round(groundedness_passes / case_count, 4),
+            "faithfulness": round(faithfulness_total / case_count, 4),
+            "context_precision": round(context_precision_total / case_count, 4),
+            "context_recall": round(context_recall_total / case_count, 4),
+            "response_relevancy": round(response_relevancy_total / case_count, 4),
+            "noise_sensitivity": round(noise_sensitivity_total / case_count, 4),
         }
         threshold_failures = _threshold_failures(thresholds, aggregate_values)
         return EvaluationMetrics(
@@ -339,8 +386,14 @@ async def _ingestion_quality_summary(
     """取込品質 source がある場合だけ評価結果へ集計を添付する。"""
     if source is None:
         return EvaluationIngestionQualitySummary()
+    # 評価本体の gate は検索・生成品質であり、品質サマリは補助情報。
+    # Oracle Wallet や監査用 schema の一時不整合で評価全体を落とさない。
+    try:
+        extractions = await source.list_document_extractions()
+    except Exception:
+        return EvaluationIngestionQualitySummary()
     return EvaluationIngestionQualitySummary.model_validate(
-        summarize_ingestion_quality(await source.list_document_extractions())
+        summarize_ingestion_quality(extractions)
     )
 
 
@@ -349,6 +402,51 @@ def _reciprocal_rank(retrieved_ids: list[str], relevant_ids: set[str]) -> float:
         if document_id in relevant_ids:
             return 1.0 / index
     return 0.0
+
+
+def _context_precision(citations: Sequence[object], relevant_ids: set[str]) -> float:
+    """引用 context のうち golden relevant document に由来する比率。"""
+    if not citations:
+        return 1.0 if not relevant_ids else 0.0
+    if not relevant_ids:
+        return 0.0
+    hit_count = sum(
+        1 for citation in citations if getattr(citation, "document_id", None) in relevant_ids
+    )
+    return hit_count / len(citations)
+
+
+def _response_relevancy(query: str, answer: str) -> float:
+    """query feature が回答にどれだけ反映されたかを低コストに近似する。"""
+    query_features = _text_features(query)
+    if not query_features:
+        return 1.0 if answer.strip() else 0.0
+    answer_features = _text_features(answer)
+    return len(query_features & answer_features) / len(query_features)
+
+
+def _noise_sensitivity(reasons: list[EvaluationFailureReason]) -> float:
+    """irrelevant context / guardrail noise に対する頑健性を 0..1 で返す。"""
+    noise_failure_count = len(NOISE_FAILURE_REASONS.intersection(reasons))
+    return max(0.0, 1.0 - (noise_failure_count * 0.34))
+
+
+def _text_features(text: str) -> set[str]:
+    """日本語と英数字を混在させた評価用 feature 集合を作る。"""
+    features: set[str] = set()
+    for raw_token in TEXT_FEATURE_PATTERN.findall(text.casefold()):
+        token = raw_token.strip()
+        if len(token) <= 1 or token in EVALUATION_STOP_FEATURES:
+            continue
+        features.add(token)
+        if _contains_cjk(token):
+            features.update(token[index : index + 2] for index in range(0, max(len(token) - 1, 0)))
+            features.update(token[index : index + 3] for index in range(0, max(len(token) - 2, 0)))
+    return features
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("\u3040" <= char <= "\u30ff" or "\u3400" <= char <= "\u9fff" for char in text)
 
 
 def _metric_value(metrics: EvaluationMetrics, metric: EvaluationMetricName) -> float:

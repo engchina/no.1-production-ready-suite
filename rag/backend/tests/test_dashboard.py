@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.api.routes import dashboard as dashboard_route
+from app.config import get_settings
 from app.main import app
 from app.rag.chunking import chunk_text
 from app.schemas.document import DocumentSummary, FileStatus
@@ -211,7 +212,7 @@ def test_dashboard_summary_degrades_when_database_does_not_respond(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """DB 停止時も dashboard は 200 で返し、縮退状態と復旧導線用メッセージを返す。"""
-    settings = dashboard_route.get_settings()
+    settings = get_settings()
     monkeypatch.setattr(settings, "dashboard_query_timeout_seconds", 0.01)
     monkeypatch.setattr(dashboard_route, "OracleClient", lambda settings: SlowDashboardOracle())
     monkeypatch.setattr(dashboard_route, "readiness_checks", lambda settings: {"oracle": "ok"})

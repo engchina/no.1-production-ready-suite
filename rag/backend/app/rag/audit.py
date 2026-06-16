@@ -1,5 +1,6 @@
 """RAG / guardrail の監査イベント。"""
 
+import asyncio
 import hashlib
 import logging
 from typing import Literal
@@ -16,6 +17,7 @@ from app.schemas.search import (
 )
 
 logger = logging.getLogger("app.audit")
+persist_logger = logging.getLogger("app.audit.persistence")
 
 AuditOutcome = Literal["success", "blocked", "no_results", "error"]
 IngestionAuditOutcome = Literal["success", "error"]
@@ -145,6 +147,7 @@ def record_rag_search_audit(
         "rag_search_audit",
         extra={"audit_event": event.model_dump(mode="json")},
     )
+    _schedule_audit_persistence("search", event.model_dump(mode="json"))
     return event
 
 
@@ -184,7 +187,54 @@ def record_rag_ingestion_audit(
         "rag_ingestion_audit",
         extra={"audit_event": event.model_dump(mode="json")},
     )
+    _schedule_audit_persistence("ingestion", event.model_dump(mode="json"))
     return event
+
+
+def _schedule_audit_persistence(
+    kind: Literal["search", "ingestion"],
+    event: dict[str, object],
+) -> None:
+    """設定されている場合だけ Oracle 監査 table へ非同期保存する。"""
+    from app.config import get_settings
+
+    settings = get_settings()
+    if settings.audit_persistence not in {"oracle", "both"}:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        persist_logger.warning(
+            "rag_audit_persistence_skipped",
+            extra={"audit_kind": kind, "reason": "no_running_event_loop"},
+        )
+        return
+    task = loop.create_task(_persist_audit_event(kind, event))
+    task.add_done_callback(_log_audit_persistence_failure)
+
+
+async def _persist_audit_event(
+    kind: Literal["search", "ingestion"], event: dict[str, object]
+) -> None:
+    """OracleClient への import を遅延し、audit/logging 経路の循環 import を避ける。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient()
+    if kind == "search":
+        await client.save_search_audit_event(event)
+    else:
+        await client.save_ingestion_audit_event(event)
+
+
+def _log_audit_persistence_failure(task: asyncio.Task[None]) -> None:
+    """監査 table 保存に失敗しても本処理は失敗させず、型だけを記録する。"""
+    try:
+        task.result()
+    except Exception as exc:  # pragma: no cover - task callback の防御的ログ
+        persist_logger.warning(
+            "rag_audit_persistence_failed",
+            extra={"error_type": type(exc).__name__},
+        )
 
 
 def _query_hash(query: str) -> str:

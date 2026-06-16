@@ -17,6 +17,7 @@ from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
 from app.rag.pipeline import RagPipeline
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
+from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
 from app.schemas.search import (
     SearchRequest,
     SearchResponse,
@@ -76,6 +77,28 @@ async def select_ai(
             profile_name=profile_name,
             query_chars=len(guardrail.sanitized_text),
             guardrail_warnings=guardrail.warnings,
+        )
+    )
+
+
+@router.post("/citation-feedback", response_model=ApiResponse[CitationFeedbackResponse])
+async def submit_citation_feedback(
+    http_request: Request,
+    request: CitationFeedbackRequest,
+) -> ApiResponse[CitationFeedbackResponse]:
+    """検索結果の引用 feedback を低機密 audit table へ保存する。"""
+    enforce_rate_limit("search", http_request)
+    payload = request.model_dump(mode="json", exclude={"comment"})
+    payload["comment_hash"] = request.comment_hash
+    payload["comment_chars"] = request.comment_chars
+    feedback_id = await OracleClient().save_citation_feedback(payload)
+    return ApiResponse(
+        data=CitationFeedbackResponse(
+            feedback_id=feedback_id,
+            trace_id=request.trace_id,
+            document_id=request.document_id,
+            chunk_id=request.chunk_id,
+            rating=request.rating,
         )
     )
 

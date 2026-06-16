@@ -52,6 +52,11 @@ class EvaluationMetrics(BaseModel):
     mrr: float
     answer_keyword_hit_rate: float
     groundedness_pass_rate: float
+    faithfulness: float = 0.0
+    context_precision: float = 0.0
+    context_recall: float = 0.0
+    response_relevancy: float = 0.0
+    noise_sensitivity: float = 0.0
     passed: bool = True
     threshold_failures: list["EvaluationThresholdFailure"] = Field(default_factory=list)
     failure_reason_counts: dict[EvaluationFailureReason, int] = Field(default_factory=dict)
@@ -90,6 +95,11 @@ class EvaluationCaseResult(BaseModel):
     groundedness_score: float
     grounding_overlap_count: int = 0
     grounding_answer_feature_count: int = 0
+    faithfulness: float = 0.0
+    context_precision: float = 0.0
+    context_recall: float = 0.0
+    response_relevancy: float = 0.0
+    noise_sensitivity: float = 0.0
     guardrail_warnings: list[str] = Field(default_factory=list)
     failure_reasons: list[EvaluationFailureReason] = Field(default_factory=list)
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
@@ -104,6 +114,11 @@ EvaluationMetricName = Literal[
     "mrr",
     "answer_keyword_hit_rate",
     "groundedness_pass_rate",
+    "faithfulness",
+    "context_precision",
+    "context_recall",
+    "response_relevancy",
+    "noise_sensitivity",
 ]
 
 
@@ -115,6 +130,11 @@ class EvaluationThresholds(BaseModel):
     mrr: float | None = Field(default=None, ge=0.0, le=1.0)
     answer_keyword_hit_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     groundedness_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    faithfulness: float | None = Field(default=None, ge=0.0, le=1.0)
+    context_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    context_recall: float | None = Field(default=None, ge=0.0, le=1.0)
+    response_relevancy: float | None = Field(default=None, ge=0.0, le=1.0)
+    noise_sensitivity: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class EvaluationThresholdFailure(BaseModel):

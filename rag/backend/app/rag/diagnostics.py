@@ -11,6 +11,11 @@ def build_search_diagnostics(
     request: SearchRequest,
     *,
     settings: Settings | None = None,
+    retrieval_strategy: str | None = None,
+    route_reason: str | None = None,
+    graph_hit_count: int = 0,
+    fallback_reason: str | None = None,
+    stream_stage_timings: dict[str, float] | None = None,
     retrieved_count: int = 0,
     reranked_count: int = 0,
     deduplicated_count: int = 0,
@@ -27,6 +32,11 @@ def build_search_diagnostics(
     resolved_settings = settings or get_settings()
     return SearchDiagnostics(
         mode=request.mode.value,
+        retrieval_strategy=retrieval_strategy or request.mode.value,
+        route_reason=route_reason or "default_hybrid",
+        graph_hit_count=graph_hit_count,
+        fallback_reason=fallback_reason,
+        stream_stage_timings=stream_stage_timings or {},
         top_k=request.top_k,
         rerank_top_n=request.rerank_top_n,
         retrieved_count=retrieved_count,
