@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from app.rag.search_load_cli import SearchLoadScenario
 from app.schemas.evaluation import EvaluationCompareRequest, EvaluationRunRequest
 from app.schemas.search import SearchMode
 
@@ -45,3 +46,19 @@ def test_compare_example_matches_evaluation_compare_schema() -> None:
     assert any(experiment.mode == SearchMode.HYBRID for experiment in request.experiments)
     assert any(experiment.rag_overrides is not None for experiment in request.experiments)
     assert all(experiment.rerank_top_n <= experiment.top_k for experiment in request.experiments)
+
+
+def test_search_load_example_matches_load_schema() -> None:
+    """search load example は p95 gate CLI の scenario schema と一致する。"""
+    repo_root = Path(__file__).resolve().parents[2]
+    payload = json.loads(
+        (repo_root / "evaluation/search-load.example.json").read_text(encoding="utf-8")
+    )
+
+    scenario = SearchLoadScenario.model_validate(payload)
+
+    assert scenario.cases
+    assert scenario.repeat > 0
+    assert scenario.concurrency > 0
+    assert scenario.thresholds.server_p95_ms is not None
+    assert all(case.rerank_top_n <= case.top_k for case in scenario.cases)

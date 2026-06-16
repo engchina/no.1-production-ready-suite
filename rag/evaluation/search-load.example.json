@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "id": "policy-approval-flow",
+      "query": "経費申請の承認フローを教えてください。",
+      "top_k": 10,
+      "rerank_top_n": 5,
+      "mode": "hybrid",
+      "strategy": "auto",
+      "filters": {
+        "status": "INDEXED"
+      }
+    },
+    {
+      "id": "manual-troubleshooting",
+      "query": "検索結果が表示されない場合の確認項目は何ですか。",
+      "top_k": 10,
+      "rerank_top_n": 5,
+      "mode": "hybrid",
+      "strategy": "auto",
+      "filters": {
+        "status": "INDEXED"
+      }
+    }
+  ],
+  "repeat": 3,
+  "concurrency": 2,
+  "thresholds": {
+    "client_p95_ms": 8000,
+    "server_p95_ms": 7000,
+    "error_rate": 0,
+    "stage_p95_ms": {
+      "embedding": 1500,
+      "retrieval": 2500,
+      "rerank": 2000,
+      "generation": 5000
+    }
+  }
+}

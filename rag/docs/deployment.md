@@ -101,9 +101,15 @@ uv run python -m app.rag.evaluation_cli \
   --api-base-url https://<staging-host> \
   --output ../evaluation/evaluation-compare-result.json \
   --trend-output ../evaluation/evaluation-compare-trend.json
+
+uv run python -m app.rag.search_load_cli \
+  ../evaluation/search-load.example.json \
+  --api-base-url https://<staging-host> \
+  --output ../evaluation/search-load-result.json \
+  --trend-output ../evaluation/search-load-trend.json
 ```
 
-`evaluation/golden-set.example.json` と `evaluation/compare.example.json` は API request schema に合うテンプレートとしてテストで検証する。運用する `evaluation/golden-set.json` には `thresholds` を含める。compare の `experiments[].rag_overrides` では RRF 定数、query expansion、context window、context diversity、隣接 context、context compression、Oracle vector target accuracy を一時的に上書きし、staging の golden set で安全に比較できる。CLI は入力 JSON に `experiments` がある場合は compare request とみなし、`--api-base-url` から `/api/evaluation/compare` を自動で選ぶ。CLI は `passed=false`、`error_count>0`、または `threshold_failures` 非空なら exit `1` にし、golden set/引数不備は exit `2`、API 接続・HTTP・レスポンス形式の問題は exit `3` にする。tenant 分離を検証する評価では `--tenant-id` / `RAG_EVALUATION_TENANT_ID` を設定する。tenant/user の raw 値は CLI 出力に表示しない。GitHub Actions の `RAG Evaluation Nightly` workflow は `RAG_EVALUATION_API_BASE_URL` repository variable が未設定なら skip し、設定済みなら評価レスポンスと trend JSON を artifact としてアップロードする。
+`evaluation/golden-set.example.json`、`evaluation/compare.example.json`、`evaluation/search-load.example.json` は API / CLI request schema に合うテンプレートとしてテストで検証する。運用する `evaluation/golden-set.json` には `thresholds` を含める。compare の `experiments[].rag_overrides` では RRF 定数、query expansion、context window、context diversity、隣接 context、context compression、Oracle vector target accuracy を一時的に上書きし、staging の golden set で安全に比較できる。評価 CLI は入力 JSON に `experiments` がある場合は compare request とみなし、`--api-base-url` から `/api/evaluation/compare` を自動で選ぶ。search load CLI は `cases`、`repeat`、`concurrency`、`thresholds` を受け取り、`/api/search` の client/server p50/p95、error rate、`diagnostics.stream_stage_timings` の stage p95 を query / answer 原文なしで artifact 化する。どちらの CLI も gate 失敗時は exit `1`、入力不備は exit `2` を返す。tenant 分離を検証する評価では `--tenant-id` / `RAG_EVALUATION_TENANT_ID` または `RAG_SEARCH_LOAD_TENANT_ID` を設定する。tenant/user の raw 値は CLI 出力に表示しない。GitHub Actions の `RAG Evaluation Nightly` workflow は `RAG_EVALUATION_API_BASE_URL` repository variable が未設定なら skip し、設定済みなら評価レスポンスと trend JSON を artifact としてアップロードする。
 
 ## 運用パラメータ
 
