@@ -22,6 +22,14 @@ from uuid import uuid4
 
 from app.config import Settings, get_settings
 from app.rag.chunking import Chunk
+from app.rag.graph_index import (
+    GraphClaim,
+    GraphCommunitySummary,
+    GraphEntity,
+    GraphEntityChunkLink,
+    GraphIndex,
+    GraphRelationship,
+)
 from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
 from app.schemas.document import (
@@ -665,6 +673,14 @@ class OracleClient:
         for index, embedding in enumerate(embeddings):
             self._validate_embedding_width(embedding, f"chunk embedding[{index}]")
         return await self._save_chunks_with_oracle(document_id, chunks, embeddings)
+
+    async def replace_document_graph_index(
+        self,
+        document_id: str,
+        graph_index: GraphIndex,
+    ) -> None:
+        """指定 document の GraphRAG-lite index を置換する。"""
+        await self._replace_document_graph_index_with_oracle(document_id, graph_index)
 
     async def save_search_audit_event(self, event: Mapping[str, object]) -> None:
         """脱機密化済み検索監査イベントを Oracle audit table へ保存する。"""
@@ -2813,6 +2829,160 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def _replace_document_graph_index_with_oracle(
+        self,
+        document_id: str,
+        graph_index: GraphIndex,
+    ) -> None:
+        """Oracle GraphRAG-lite tables の document scope を置換する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            if _select_document(connection, document_id) is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            existing_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
+            _delete_graph_rows_for_document(
+                connection,
+                document_id=document_id,
+                entity_ids=existing_entity_ids,
+            )
+            if graph_index.entities:
+                _executemany(
+                    connection,
+                    """
+                    INSERT INTO rag_graph_entities (
+                        entity_id,
+                        tenant_id_hash,
+                        knowledge_base_id,
+                        canonical_name,
+                        entity_type,
+                        description,
+                        confidence,
+                        source_document_ids
+                    ) VALUES (
+                        :entity_id,
+                        :tenant_id_hash,
+                        :knowledge_base_id,
+                        :canonical_name,
+                        :entity_type,
+                        :description,
+                        :confidence,
+                        :source_document_ids
+                    )
+                    """,
+                    [_graph_entity_binds(entity) for entity in graph_index.entities],
+                )
+            if graph_index.relationships:
+                _executemany(
+                    connection,
+                    """
+                    INSERT INTO rag_graph_relationships (
+                        relationship_id,
+                        tenant_id_hash,
+                        knowledge_base_id,
+                        source_entity_id,
+                        target_entity_id,
+                        relationship_type,
+                        description,
+                        confidence,
+                        source_document_ids
+                    ) VALUES (
+                        :relationship_id,
+                        :tenant_id_hash,
+                        :knowledge_base_id,
+                        :source_entity_id,
+                        :target_entity_id,
+                        :relationship_type,
+                        :description,
+                        :confidence,
+                        :source_document_ids
+                    )
+                    """,
+                    [
+                        _graph_relationship_binds(relationship)
+                        for relationship in graph_index.relationships
+                    ],
+                )
+            if graph_index.claims:
+                _executemany(
+                    connection,
+                    """
+                    INSERT INTO rag_graph_claims (
+                        claim_id,
+                        tenant_id_hash,
+                        knowledge_base_id,
+                        entity_id,
+                        claim_text,
+                        confidence,
+                        source_document_id,
+                        source_chunk_id
+                    ) VALUES (
+                        :claim_id,
+                        :tenant_id_hash,
+                        :knowledge_base_id,
+                        :entity_id,
+                        :claim_text,
+                        :confidence,
+                        :source_document_id,
+                        :source_chunk_id
+                    )
+                    """,
+                    [_graph_claim_binds(claim) for claim in graph_index.claims],
+                )
+            if graph_index.community_summaries:
+                _executemany(
+                    connection,
+                    """
+                    INSERT INTO rag_graph_community_summaries (
+                        community_id,
+                        tenant_id_hash,
+                        knowledge_base_id,
+                        level_no,
+                        title,
+                        summary_text,
+                        entity_ids,
+                        source_document_ids
+                    ) VALUES (
+                        :community_id,
+                        :tenant_id_hash,
+                        :knowledge_base_id,
+                        :level_no,
+                        :title,
+                        :summary_text,
+                        :entity_ids,
+                        :source_document_ids
+                    )
+                    """,
+                    [
+                        _graph_community_summary_binds(summary)
+                        for summary in graph_index.community_summaries
+                    ],
+                )
+            if graph_index.entity_chunk_links:
+                _executemany(
+                    connection,
+                    """
+                    INSERT INTO rag_graph_entity_chunks (
+                        entity_id,
+                        chunk_id,
+                        document_id,
+                        tenant_id_hash,
+                        relevance_score
+                    ) VALUES (
+                        :entity_id,
+                        :chunk_id,
+                        :document_id,
+                        :tenant_id_hash,
+                        :relevance_score
+                    )
+                    """,
+                    [
+                        _graph_entity_chunk_link_binds(link)
+                        for link in graph_index.entity_chunk_links
+                    ],
+                )
+
+        await self._run_transaction(operation)
+
     async def _fetch_one(
         self, statement: str, binds: Mapping[str, object] | None = None
     ) -> dict[str, object] | None:
@@ -2976,6 +3146,138 @@ def _executemany(
         cursor.close()
 
 
+def _select_graph_entity_ids_for_document(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> list[str]:
+    """指定 document に紐づく既存 graph entity id を取得する。"""
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT DISTINCT entity_id
+        FROM (
+            SELECT entity_id
+            FROM rag_graph_entity_chunks
+            WHERE document_id = :document_id
+              AND {graph_access_sql}
+            UNION
+            SELECT entity_id
+            FROM rag_graph_claims
+            WHERE source_document_id = :document_id
+              AND {graph_access_sql}
+            UNION
+            SELECT entity_id
+            FROM rag_graph_entities
+            WHERE JSON_EXISTS(
+                      source_document_ids,
+                      '$[*]?(@ == $document_id)'
+                      PASSING :document_id AS "document_id"
+                  )
+              AND {graph_access_sql}
+        )
+        """,
+            graph_access_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    return [str(row["entity_id"]) for row in rows if row.get("entity_id")]
+
+
+def _delete_graph_rows_for_document(
+    connection: OracleConnectionProtocol,
+    *,
+    document_id: str,
+    entity_ids: Sequence[str],
+) -> None:
+    """指定 document の GraphRAG-lite rows を FK 順に削除する。"""
+    unique_entity_ids = _unique_optional_sequence(entity_ids)
+    if unique_entity_ids:
+        source_sql, source_binds = _oracle_in_predicate(
+            "source_entity_id",
+            "graph_source_entity_id",
+            unique_entity_ids,
+        )
+        target_sql, target_binds = _oracle_in_predicate(
+            "target_entity_id",
+            "graph_target_entity_id",
+            unique_entity_ids,
+        )
+        _execute(
+            connection,
+            _render_sql(
+                """
+            DELETE FROM rag_graph_relationships
+            WHERE {graph_access_sql}
+              AND ({source_sql} OR {target_sql})
+            """,
+                graph_access_sql=_oracle_tenant_predicate(),
+                source_sql=source_sql,
+                target_sql=target_sql,
+            ),
+            _with_tenant_bind({**source_binds, **target_binds}),
+        )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        DELETE FROM rag_graph_entity_chunks
+        WHERE document_id = :document_id
+          AND {graph_access_sql}
+        """,
+            graph_access_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        DELETE FROM rag_graph_claims
+        WHERE source_document_id = :document_id
+          AND {graph_access_sql}
+        """,
+            graph_access_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        DELETE FROM rag_graph_community_summaries
+        WHERE JSON_EXISTS(
+                  source_document_ids,
+                  '$[*]?(@ == $document_id)'
+                  PASSING :document_id AS "document_id"
+              )
+          AND {graph_access_sql}
+        """,
+            graph_access_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+    if unique_entity_ids:
+        entity_sql, entity_binds = _oracle_in_predicate(
+            "entity_id",
+            "graph_entity_id",
+            unique_entity_ids,
+        )
+        _execute(
+            connection,
+            _render_sql(
+                """
+            DELETE FROM rag_graph_entities
+            WHERE {entity_sql}
+              AND {graph_access_sql}
+            """,
+                entity_sql=entity_sql,
+                graph_access_sql=_oracle_tenant_predicate(),
+            ),
+            _with_tenant_bind(entity_binds),
+        )
+
+
 def _search_audit_binds(event: Mapping[str, object]) -> dict[str, object]:
     """RagSearchAuditEvent JSON を Oracle bind 値へ変換する。"""
     return {
@@ -3087,6 +3389,69 @@ def _evaluation_artifact_binds(
         "result_sha256": hashlib.sha256(result_json.encode("utf-8")).hexdigest(),
         "best_experiment_id": _audit_optional_str(artifact, "best_experiment_id"),
         "passed": 1 if bool(artifact.get("passed")) else 0,
+    }
+
+
+def _graph_entity_binds(entity: GraphEntity) -> dict[str, object]:
+    return {
+        "entity_id": entity.entity_id,
+        "tenant_id_hash": _current_tenant_id_hash(),
+        "knowledge_base_id": entity.knowledge_base_id,
+        "canonical_name": entity.canonical_name,
+        "entity_type": entity.entity_type,
+        "description": entity.description,
+        "confidence": entity.confidence,
+        "source_document_ids": _audit_json(entity.source_document_ids),
+    }
+
+
+def _graph_relationship_binds(relationship: GraphRelationship) -> dict[str, object]:
+    return {
+        "relationship_id": relationship.relationship_id,
+        "tenant_id_hash": _current_tenant_id_hash(),
+        "knowledge_base_id": relationship.knowledge_base_id,
+        "source_entity_id": relationship.source_entity_id,
+        "target_entity_id": relationship.target_entity_id,
+        "relationship_type": relationship.relationship_type,
+        "description": relationship.description,
+        "confidence": relationship.confidence,
+        "source_document_ids": _audit_json(relationship.source_document_ids),
+    }
+
+
+def _graph_claim_binds(claim: GraphClaim) -> dict[str, object]:
+    return {
+        "claim_id": claim.claim_id,
+        "tenant_id_hash": _current_tenant_id_hash(),
+        "knowledge_base_id": claim.knowledge_base_id,
+        "entity_id": claim.entity_id,
+        "claim_text": claim.claim_text,
+        "confidence": claim.confidence,
+        "source_document_id": claim.source_document_id,
+        "source_chunk_id": claim.source_chunk_id,
+    }
+
+
+def _graph_community_summary_binds(summary: GraphCommunitySummary) -> dict[str, object]:
+    return {
+        "community_id": summary.community_id,
+        "tenant_id_hash": _current_tenant_id_hash(),
+        "knowledge_base_id": summary.knowledge_base_id,
+        "level_no": summary.level_no,
+        "title": summary.title,
+        "summary_text": summary.summary_text,
+        "entity_ids": _audit_json(summary.entity_ids),
+        "source_document_ids": _audit_json(summary.source_document_ids),
+    }
+
+
+def _graph_entity_chunk_link_binds(link: GraphEntityChunkLink) -> dict[str, object]:
+    return {
+        "entity_id": link.entity_id,
+        "chunk_id": link.chunk_id,
+        "document_id": link.document_id,
+        "tenant_id_hash": _current_tenant_id_hash(),
+        "relevance_score": link.relevance_score,
     }
 
 

@@ -30,6 +30,14 @@ from app.clients.oracle import (
 )
 from app.config import Settings
 from app.rag.chunking import Chunk
+from app.rag.graph_index import (
+    GraphClaim,
+    GraphCommunitySummary,
+    GraphEntity,
+    GraphEntityChunkLink,
+    GraphIndex,
+    GraphRelationship,
+)
 from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
@@ -703,6 +711,120 @@ async def test_oracle_graph_global_search_returns_community_summary_chunk() -> N
     assert "FROM rag_graph_community_summaries g" in call.statement
     assert call.parameters["top_k"] == 3
     assert call.parameters["graph_title_exact"] == "%全体の関係%"
+
+
+async def test_oracle_replace_document_graph_index_replaces_document_scope() -> None:
+    """GraphRAG-lite index 保存は対象 document の旧 KG rows を置換する。"""
+    graph_index = GraphIndex(
+        entities=[
+            GraphEntity(
+                entity_id="ent-doc",
+                knowledge_base_id="kb-1",
+                canonical_name="文書全体: 社内規程",
+                entity_type="document",
+                description="社内規程全体",
+                confidence=0.95,
+                source_document_ids=["doc-1"],
+            ),
+            GraphEntity(
+                entity_id="ent-section",
+                knowledge_base_id="kb-1",
+                canonical_name="承認条件",
+                entity_type="section",
+                description="承認条件の章節",
+                confidence=0.9,
+                source_document_ids=["doc-1"],
+            ),
+        ],
+        relationships=[
+            GraphRelationship(
+                relationship_id="rel-doc-section",
+                knowledge_base_id="kb-1",
+                source_entity_id="ent-doc",
+                target_entity_id="ent-section",
+                relationship_type="contains",
+                description="文書全体は承認条件を含みます。",
+                confidence=1.0,
+                source_document_ids=["doc-1"],
+            )
+        ],
+        claims=[
+            GraphClaim(
+                claim_id="claim-1",
+                knowledge_base_id="kb-1",
+                entity_id="ent-section",
+                claim_text="12万円以上は部門長承認です。",
+                confidence=0.88,
+                source_document_id="doc-1",
+                source_chunk_id="doc-1:0",
+            )
+        ],
+        community_summaries=[
+            GraphCommunitySummary(
+                community_id="comm-1",
+                knowledge_base_id="kb-1",
+                level_no=0,
+                title="社内規程 の全体要約",
+                summary_text="承認条件の関係をまとめた要約です。",
+                entity_ids=["ent-doc", "ent-section"],
+                source_document_ids=["doc-1"],
+            )
+        ],
+        entity_chunk_links=[
+            GraphEntityChunkLink(
+                entity_id="ent-section",
+                chunk_id="doc-1:0",
+                document_id="doc-1",
+                relevance_score=0.8,
+            )
+        ],
+    )
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_document_row()],
+            [{"entity_id": "ent-doc"}, {"entity_id": "ent-old"}, {"entity_id": "ent-stale"}],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.replace_document_graph_index("doc-1", graph_index)
+
+    assert pool.connection.commits == 1
+    statements = [call.statement for call in pool.connection.calls]
+    assert any("DELETE FROM rag_graph_relationships" in statement for statement in statements)
+    assert any(
+        "FROM rag_graph_entities" in statement and "source_document_ids" in statement
+        for statement in statements
+    )
+    assert any("source_entity_id IN" in statement for statement in statements)
+    assert any("target_entity_id IN" in statement for statement in statements)
+    assert any("DELETE FROM rag_graph_entity_chunks" in statement for statement in statements)
+    assert any("DELETE FROM rag_graph_claims" in statement for statement in statements)
+    assert any(
+        "DELETE FROM rag_graph_community_summaries" in statement and "JSON_EXISTS" in statement
+        for statement in statements
+    )
+    assert any("DELETE FROM rag_graph_entities" in statement for statement in statements)
+    many_statements = [call.statement for call in pool.connection.many_calls]
+    assert any("INSERT INTO rag_graph_entities" in statement for statement in many_statements)
+    assert any("INSERT INTO rag_graph_relationships" in statement for statement in many_statements)
+    assert any("INSERT INTO rag_graph_claims" in statement for statement in many_statements)
+    assert any(
+        "INSERT INTO rag_graph_community_summaries" in statement for statement in many_statements
+    )
+    assert any("INSERT INTO rag_graph_entity_chunks" in statement for statement in many_statements)
+    entity_insert = next(
+        call
+        for call in pool.connection.many_calls
+        if "INSERT INTO rag_graph_entities" in call.statement
+    )
+    assert json.loads(str(entity_insert.rows[0]["source_document_ids"])) == ["doc-1"]
+    claim_insert = next(
+        call
+        for call in pool.connection.many_calls
+        if "INSERT INTO rag_graph_claims" in call.statement
+    )
+    assert claim_insert.rows[0]["source_chunk_id"] == "doc-1:0"
 
 
 async def test_oracle_save_evaluation_artifact_redacts_query_text() -> None:

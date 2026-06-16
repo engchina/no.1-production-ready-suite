@@ -1,6 +1,7 @@
 """取込: VLM 抽出 -> チャンク分割 -> 埋め込み -> Oracle 26ai へ索引。"""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from time import perf_counter
@@ -15,6 +16,7 @@ from app.clients.oracle import OracleClient
 from app.config import Settings, enterprise_ai_vision_model_id, get_settings
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction
+from app.rag.graph_index import GraphIndex, build_graph_index
 from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.rag.ingestion_strategy import extraction_strategy_for_source
 from app.rag.observability import (
@@ -56,6 +58,7 @@ OBSERVABILITY_DOCUMENT_TYPES = frozenset(
         "knowledge_base",
     }
 )
+logger = logging.getLogger(__name__)
 
 
 class IngestionUserError(ValueError):
@@ -170,7 +173,7 @@ class IngestionPipeline:
             await _observe_ingestion_stage(
                 trace_id,
                 "indexing",
-                self._save_index(document_id, extraction, chunks, vectors),
+                self._save_index(trace_id, document_id, extraction, chunks, vectors),
                 attributes={
                     "chunk_count": len(chunks),
                     "vector_count": len(vectors),
@@ -345,6 +348,7 @@ class IngestionPipeline:
 
     async def _save_index(
         self,
+        trace_id: str,
         document_id: str,
         extraction: StructuredExtraction,
         chunks: list[Chunk],
@@ -353,6 +357,41 @@ class IngestionPipeline:
         """抽出本文とチャンクを一貫した indexing stage として保存する。"""
         await self._oracle.save_extraction(document_id, extraction)
         await self._oracle.save_chunks(document_id, chunks, vectors)
+        if not getattr(self._settings, "rag_graph_enabled", False):
+            return
+        try:
+            await _observe_ingestion_stage(
+                trace_id,
+                "graph_indexing",
+                self._save_graph_index(document_id, extraction, chunks),
+                attributes={
+                    "chunk_count": len(chunks),
+                    "element_count": len(extraction.elements),
+                },
+                result_attributes=_graph_index_result_attributes,
+            )
+        except Exception as exc:
+            logger.info(
+                "graph_indexing_skipped",
+                extra={"document_id": document_id, "error_type": type(exc).__name__},
+            )
+
+    async def _save_graph_index(
+        self,
+        document_id: str,
+        extraction: StructuredExtraction,
+        chunks: list[Chunk],
+    ) -> GraphIndex:
+        """構造化抽出から GraphRAG-lite index を作り Oracle へ保存する。"""
+        knowledge_bases = await self._oracle.list_document_knowledge_bases(document_id)
+        graph_index = build_graph_index(
+            document_id=document_id,
+            knowledge_base_ids=[knowledge_base.id for knowledge_base in knowledge_bases],
+            extraction=extraction,
+            chunks=chunks,
+        )
+        await self._oracle.replace_document_graph_index(document_id, graph_index)
+        return graph_index
 
 
 def _safe_persistent_error_message(error: Exception) -> str:
@@ -571,6 +610,17 @@ def _vlm_result_attributes(extracted: dict[str, object]) -> Mapping[str, object]
         "raw_text_chars": len(raw_text) if isinstance(raw_text, str) else 0,
         "warning_count": len(warnings) if isinstance(warnings, list) else 0,
         **_raw_extraction_structure_attributes(extracted),
+    }
+
+
+def _graph_index_result_attributes(graph_index: GraphIndex) -> Mapping[str, object]:
+    """GraphRAG-lite index 結果から件数だけを trace attribute にする。"""
+    return {
+        "graph_entity_count": len(graph_index.entities),
+        "graph_relationship_count": len(graph_index.relationships),
+        "graph_claim_count": len(graph_index.claims),
+        "graph_community_summary_count": len(graph_index.community_summaries),
+        "graph_entity_chunk_link_count": len(graph_index.entity_chunk_links),
     }
 
 

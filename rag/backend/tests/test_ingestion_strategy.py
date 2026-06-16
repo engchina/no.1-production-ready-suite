@@ -9,9 +9,11 @@ from pypdf import PdfReader, PdfWriter
 from app.clients.oci_enterprise_ai import EnterpriseAiIncompleteResponseError, OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.config import Settings
+from app.rag.graph_index import GraphIndex
 from app.rag.ingestion import IngestionPipeline
 from app.schemas.document import DocumentDetail, FileStatus, SourceModality, SourceProfile
 from app.schemas.extraction import StructuredExtraction
+from app.schemas.knowledge_base import KnowledgeBaseRef
 
 
 class FakeOracle:
@@ -20,6 +22,8 @@ class FakeOracle:
     def __init__(self) -> None:
         self.saved_extraction: StructuredExtraction | None = None
         self.saved_chunk_count = 0
+        self.saved_graph_index: GraphIndex | None = None
+        self.graph_document_id: str | None = None
         self.statuses: list[FileStatus] = []
 
     async def update_document_status(
@@ -57,6 +61,21 @@ class FakeOracle:
     ) -> None:
         _ = document_id, vectors
         self.saved_chunk_count = len(chunks)
+
+    async def list_document_knowledge_bases(
+        self,
+        document_id: str,
+    ) -> list[KnowledgeBaseRef]:
+        _ = document_id
+        return [KnowledgeBaseRef(id="kb-1", name="社内規程")]
+
+    async def replace_document_graph_index(
+        self,
+        document_id: str,
+        graph_index: GraphIndex,
+    ) -> None:
+        self.graph_document_id = document_id
+        self.saved_graph_index = graph_index
 
 
 class CapturingVlm(OciEnterpriseAiClient):
@@ -186,6 +205,44 @@ async def test_ingestion_pipeline_applies_parser_profile_strategy() -> None:
     assert oracle.saved_extraction.quality_report is not None
     assert oracle.saved_extraction.quality_report.parser_profile == "enterprise_ai_pdf_layout"
     assert "table_structure_review" in oracle.saved_extraction.quality_report.quality_warnings
+
+
+async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
+    """RAG_GRAPH_ENABLED 時は取込結果から GraphRAG-lite index を保存する。"""
+    oracle = FakeOracle()
+    settings = Settings.model_construct(
+        rag_graph_enabled=True,
+        rag_chunk_size=800,
+        rag_chunk_overlap=120,
+        rag_max_chunks_per_document=512,
+        oci_genai_embedding_model="cohere.embed-v4.0",
+        oci_enterprise_ai_models=[],
+        oci_enterprise_ai_default_model="",
+        oci_enterprise_ai_vlm_model="enterprise-vlm",
+    )
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        settings=settings,
+    )
+
+    detail = await pipeline.ingest(
+        "doc-graph",
+        b"pdfdata",
+        "本文を抽出してください。",
+        content_type="application/pdf",
+        source_profile=_pdf_source_profile(file_size_bytes=7),
+    )
+
+    assert detail.status == FileStatus.INDEXED
+    assert oracle.graph_document_id == "doc-graph"
+    assert oracle.saved_graph_index is not None
+    assert {entity.knowledge_base_id for entity in oracle.saved_graph_index.entities} == {"kb-1"}
+    assert oracle.saved_graph_index.relationships
+    assert oracle.saved_graph_index.claims
+    assert oracle.saved_graph_index.community_summaries
+    assert oracle.saved_graph_index.entity_chunk_links
 
 
 async def test_ingestion_pipeline_splits_pdf_into_page_segments() -> None:
