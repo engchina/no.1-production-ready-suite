@@ -5,6 +5,7 @@ from pathlib import Path
 
 from pytest import LogCaptureFixture, MonkeyPatch
 
+from app.api.routes import health as health_route
 from app.config import EnterpriseAiConfiguredModel, get_settings
 from app.main import UNHANDLED_ERROR_MESSAGE, app, create_app
 from tests.support import AsgiTestClient
@@ -222,6 +223,68 @@ def test_readiness_oci_invalid_embedding_dim_is_degraded(monkeypatch: MonkeyPatc
     body = resp.json()
     assert body["data"]["status"] == "degraded"
     assert body["data"]["checks"]["genai"] == "invalid"
+
+
+def _configure_oracle_only(monkeypatch: MonkeyPatch, *, password: str = "oracle-password") -> None:
+    """DB ステータス API 用に Oracle 接続情報だけ設定する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oracle_user", "rag_app")
+    monkeypatch.setattr(settings, "oracle_dsn", "adb.example.com/rag")
+    monkeypatch.setattr(settings, "oracle_password", password)
+    monkeypatch.setattr(settings, "oracle_wallet_dir", "")
+    monkeypatch.setattr(settings, "oracle_client_lib_dir", "")
+
+
+def test_database_status_not_configured_skips_probe(monkeypatch: MonkeyPatch) -> None:
+    """接続情報未設定なら実接続を試さず not_configured を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oracle_user", "")
+    monkeypatch.setattr(settings, "oracle_dsn", "")
+
+    async def _must_not_probe(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("未設定時は実接続を試さない")
+
+    monkeypatch.setattr(health_route, "test_oracle_connection", _must_not_probe)
+
+    resp = client.get("/api/ready/database")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["status"] == "not_configured"
+    assert body["data"]["check"] == "missing"
+
+
+def test_database_status_ok_when_probe_succeeds(monkeypatch: MonkeyPatch) -> None:
+    """設定済み + 実接続成功なら ok を返す。"""
+    _configure_oracle_only(monkeypatch)
+
+    async def _probe_ok(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(health_route, "test_oracle_connection", _probe_ok)
+
+    resp = client.get("/api/ready/database")
+
+    body = resp.json()
+    assert body["data"]["status"] == "ok"
+    assert body["data"]["check"] == "ok"
+
+
+def test_database_status_unreachable_when_probe_fails(monkeypatch: MonkeyPatch) -> None:
+    """設定済みでも起動していなければ unreachable を返す。"""
+    _configure_oracle_only(monkeypatch)
+
+    async def _probe_fail(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("listener does not currently know of service")
+
+    monkeypatch.setattr(health_route, "test_oracle_connection", _probe_fail)
+
+    resp = client.get("/api/ready/database")
+
+    body = resp.json()
+    assert body["data"]["status"] == "unreachable"
+    assert body["data"]["check"] == "ok"
+    assert body["data"]["detail"]
 
 
 def test_not_found_uses_api_response_shape() -> None:

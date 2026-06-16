@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 
+HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-3000}"
 
 if ! command -v npm >/dev/null 2>&1; then
@@ -40,5 +41,5 @@ if [ ! -d node_modules ]; then
   npm install
 fi
 
-echo "[frontend] http://localhost:3000 で起動します..."
-exec npm run dev
+echo "[frontend] http://localhost:${PORT} で起動します..."
+exec npm run dev -- --host "${HOST}" --port "${PORT}"

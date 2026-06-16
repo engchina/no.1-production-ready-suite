@@ -10,9 +10,27 @@ export const ja = {
   "common.confirm": "実行",
   "common.cancel": "キャンセル",
   "common.dismiss": "閉じる",
+  "common.degraded.title": "データベースに接続できません",
+  "common.degraded.fallback":
+    "データベースが応答しないため、最新のデータを取得できませんでした。データベースの起動状態を確認して再試行してください。",
+  "common.degraded.openDatabaseSettings": "データベース設定を開く",
+  "dbGate.checking": "データベースの状態を確認しています…",
+  "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
+  "dbGate.notConfigured.message":
+    "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+  "dbGate.unreachable.title": "データベースを起動してください",
+  "dbGate.unreachable.message":
+    "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
+  "dbGate.openDatabaseSettings": "データベース設定を開く",
+  "dbGate.settingsHint": "設定ページ(OCI 認証・モデル・データベース設定など)は引き続き利用できます。",
+  "dbGate.checkFailed.title": "データベースの状態を確認できません",
+  "dbGate.checkFailed.message":
+    "バックエンドの起動状態を確認して再試行してください。",
   "common.delete": "削除",
   "common.undo": "元に戻す",
   "common.retry": "再試行",
+  "common.api.timeout":
+    "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
   "settings.preview.env.title": ".env プレビュー",
   "settings.preview.json.title": "JSON プレビュー",
@@ -198,7 +216,6 @@ export const ja = {
   "settings.uploadStorage.actions.save": "保存",
   "settings.uploadStorage.actions.saving": "保存中…",
   "settings.uploadStorage.actions.saved": "保存しました",
-  "settings.uploadStorage.actions.reload": "再読み込み",
   "settings.uploadStorage.env.title": ".env プレビュー",
   "settings.uploadStorage.env.description":
     "保存時に backend/.env へ反映されるアップロード保存先の値です。",
@@ -588,8 +605,14 @@ export const ja = {
   "dashboard.system.online": "稼働中",
   "dashboard.system.degraded": "縮退稼働",
   "dashboard.system.offline": "停止",
+  "dashboard.system.databaseStatus": "データベース状態",
   "dashboard.system.version": "バージョン",
   "dashboard.system.indexedRows": "検索対象チャンク",
+  "dashboard.system.databaseDegraded.title": "データベース機能は縮退中です",
+  "dashboard.system.databaseDegraded.message":
+    "画面は利用できますが、文書一覧・検索・索引など DB を使う機能は復旧まで失敗する場合があります。データベースの起動状態を確認してください。",
+  "dashboard.system.openDatabaseSettings": "データベース設定を開く",
+  "dashboard.system.check.timeout": "タイムアウト",
   "dashboard.system.hint":
     "検索品質を安定させるため、索引済みチャンク数と readiness を定期的に確認してください。",
   "dashboard.ingestionQuality.title": "取込品質",
@@ -700,6 +723,14 @@ export const ja = {
   "knowledgeBaseScope.selected": "{count} 件選択中",
   "knowledgeBaseScope.all": "すべての知識ベースを対象にします。",
   "knowledgeBaseScope.empty": "有効な知識ベースがありません。",
+  "knowledgeBasePicker.filterPlaceholder": "知識ベース名で絞り込み",
+  "knowledgeBasePicker.filterAria": "知識ベースを名前で絞り込む",
+  "knowledgeBasePicker.filterClear": "絞り込みを解除",
+  "knowledgeBasePicker.selectAll": "全選択",
+  "knowledgeBasePicker.clear": "クリア",
+  "knowledgeBasePicker.count": "{shown} / {total} 件",
+  "knowledgeBasePicker.documentCount": "{count} 文書",
+  "knowledgeBasePicker.noMatch": "「{query}」に一致する知識ベースがありません。",
 
   "upload.subtitle": "検索対象にするドキュメントをアップロードします。",
   "upload.dropzone": "ここにドキュメント（PDF / 画像 / テキスト）をドラッグ＆ドロップ",

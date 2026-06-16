@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mockDatabaseReady } from "./_helpers";
 
 interface UploadStorageSettingsData {
   backend: "local" | "oci";
@@ -23,6 +24,7 @@ const localStorageSettings: UploadStorageSettingsData = {
 };
 
 test.beforeEach(async ({ page }) => {
+  await mockDatabaseReady(page);
   await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({
       json: {

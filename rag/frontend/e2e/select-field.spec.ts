@@ -19,6 +19,16 @@ async function mockApi(page: Page) {
       await route.fulfill({ json: authStatus });
       return;
     }
+    if (url.pathname === "/api/ready/database") {
+      await route.fulfill({
+        json: {
+          data: { status: "ok", check: "ok", detail: null },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
 
     await route.fulfill({
       json: { data: null, error_messages: [], warning_messages: [] },

@@ -22,6 +22,7 @@ import { Link } from "react-router-dom";
 
 import { Dropzone } from "./Dropzone";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
+import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Banner } from "@/components/ui/banner";
@@ -475,14 +476,6 @@ function UploadKnowledgeBasePicker({
   const query = useKnowledgeBases({ status: "ACTIVE", limit: 50, offset: 0 });
   const items = query.data?.items ?? [];
 
-  const toggle = (id: string) => {
-    onChange(
-      selectedIds.includes(id)
-        ? selectedIds.filter((current) => current !== id)
-        : [...selectedIds, id]
-    );
-  };
-
   if (query.isError) {
     return (
       <Banner severity="warning" title={t("upload.knowledgeBases.loadWarning")}>
@@ -502,36 +495,13 @@ function UploadKnowledgeBasePicker({
             {t("upload.knowledgeBases.loading")}
           </p>
         ) : items.length > 0 ? (
-          <div
-            className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3"
-            role="group"
-            aria-label={t("upload.knowledgeBases.aria")}
-          >
-            {items.map((knowledgeBase) => (
-              <label
-                key={knowledgeBase.id}
-                className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-info-bg/40"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(knowledgeBase.id)}
-                  onChange={() => toggle(knowledgeBase.id)}
-                  disabled={disabled}
-                  className="mt-0.5 cursor-pointer accent-[var(--primary)] disabled:cursor-not-allowed"
-                />
-                <span className="min-w-0">
-                  <span className="block truncate font-medium text-foreground">
-                    {knowledgeBase.name}
-                  </span>
-                  <span className="tnum block text-xs text-muted">
-                    {t("upload.knowledgeBases.documentCount", {
-                      count: knowledgeBase.document_count,
-                    })}
-                  </span>
-                </span>
-              </label>
-            ))}
-          </div>
+          <KnowledgeBasePickerGrid
+            items={items}
+            selectedIds={selectedIds}
+            onChange={onChange}
+            disabled={disabled}
+            ariaLabel={t("upload.knowledgeBases.aria")}
+          />
         ) : (
           <div className="flex flex-col gap-3 rounded-md border border-border bg-background p-4 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
             <span>{t("upload.knowledgeBases.emptyHint")}</span>

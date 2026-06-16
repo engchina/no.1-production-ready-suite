@@ -3,6 +3,8 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.clients.oracle import OracleClient
+from app.config import get_settings
+from app.db_degradation import load_or_degrade
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import DocumentSummary, FileStatus
 from app.schemas.knowledge_base import (
@@ -24,18 +26,35 @@ async def list_knowledge_bases(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[KnowledgeBaseSummary]]:
-    """ナレッジベース一覧を返す。"""
+    """ナレッジベース一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     oracle = OracleClient()
-    items = await oracle.list_knowledge_bases(status=status, query=q, limit=limit, offset=offset)
-    total = await oracle.count_knowledge_bases(status=status, query=q)
-    return ApiResponse(
-        data=Page(
+    settings = get_settings()
+
+    async def _load() -> Page[KnowledgeBaseSummary]:
+        items = await oracle.list_knowledge_bases(
+            status=status, query=q, limit=limit, offset=offset
+        )
+        total = await oracle.count_knowledge_bases(status=status, query=q)
+        return Page(
             items=items,
             total=total,
             limit=limit,
             offset=offset,
             has_next=offset + limit < total,
         )
+
+    empty_page: Page[KnowledgeBaseSummary] = Page(
+        items=[], total=0, limit=limit, offset=offset, has_next=False
+    )
+    page, degraded = await load_or_degrade(
+        _load,
+        timeout_seconds=settings.db_read_timeout_seconds,
+        fallback=empty_page,
+        log_label="knowledge_bases_list",
+    )
+    return ApiResponse(
+        data=page,
+        warning_messages=[degraded.message] if degraded else [],
     )
 
 

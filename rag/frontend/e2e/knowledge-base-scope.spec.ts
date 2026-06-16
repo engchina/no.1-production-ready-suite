@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -13,6 +14,7 @@ const authStatus = {
 };
 
 test.beforeEach(async ({ page }) => {
+  await mockDatabaseReady(page);
   await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({ json: authStatus });
   });
@@ -200,6 +202,15 @@ function evaluationMetrics() {
     passed: true,
     threshold_failures: [],
     failure_reason_counts: {},
+    ingestion_quality: {
+      document_count: 1,
+      table_document_count: 0,
+      figure_document_count: 0,
+      long_document_count: 0,
+      risk_counts: { high: 0, medium: 0 },
+      warning_counts: {},
+      parser_profile_counts: {},
+    },
     case_results: [
       {
         case_id: "policy-approval-flow-basic",

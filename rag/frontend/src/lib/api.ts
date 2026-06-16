@@ -6,6 +6,22 @@
  * - 型はバックエンドの Pydantic スキーマ（snake_case）にそのまま対応させる。
  */
 
+import { t } from "./i18n";
+
+export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
+  import.meta.env.VITE_API_TIMEOUT_MS,
+  30_000
+);
+// バックエンドは DB 停止時 dashboard_query_timeout_seconds(既定 8 秒)で縮退応答する。
+// フロント側は縮退応答が届くよう十分な余裕を取り、全画面エラーに落ちないようにする。
+export const DASHBOARD_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
+  import.meta.env.VITE_DASHBOARD_API_TIMEOUT_MS,
+  15_000
+);
+
+/** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
+export type Degradable<T> = T & { warning_messages: string[] };
+
 export type FileStatus = "UPLOADED" | "INGESTING" | "INDEXED" | "ERROR";
 export type SearchMode = "hybrid" | "vector" | "keyword";
 export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
@@ -122,6 +138,14 @@ export interface HealthData {
   version: string;
   message: string | null;
   checks: Record<string, string>;
+}
+
+export type DatabaseAvailability = "ok" | "not_configured" | "unreachable";
+
+export interface DatabaseStatusData {
+  status: DatabaseAvailability;
+  check: string;
+  detail: string | null;
 }
 
 // --- ドキュメント ---
@@ -703,6 +727,24 @@ export class ApiError extends Error {
   }
 }
 
+function resolveTimeoutMs(value: unknown, fallbackMs: number): number {
+  const parsed = typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
+}
+
+function runtimeApiTimeoutOverrideMs(): number | null {
+  if (typeof window === "undefined") return null;
+  const value = Number(
+    (window as unknown as { __RAG_API_TIMEOUT_MS__?: string | number })
+      .__RAG_API_TIMEOUT_MS__
+  );
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function timeoutMessage(timeoutMs: number): string {
+  return t("common.api.timeout", { seconds: Math.ceil(timeoutMs / 1000) });
+}
+
 async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
   try {
     return (await res.json()) as ApiResponse<T>;
@@ -711,28 +753,87 @@ async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
   }
 }
 
-/** ApiResponse を展開し、エラー時は ApiError を投げる。 */
+/** ApiResponse エンベロープを取得し、エラー時は ApiError を投げる。 */
+async function requestEnvelope<T>(
+  path: string,
+  init?: RequestInit,
+  options: { allowStatus?: number[]; timeoutMs?: number } = {}
+): Promise<ApiResponse<T>> {
+  const timeoutMs =
+    runtimeApiTimeoutOverrideMs() ?? options.timeoutMs ?? API_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const externalSignal = init?.signal;
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) {
+    abortFromExternal();
+  } else {
+    externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
+  }
+
+  if (timeoutMs > 0) {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  }
+
+  try {
+    const res = await fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        ...(init?.headers ?? {}),
+      },
+    });
+    const envelope = await parseEnvelope<T>(res);
+    if (!res.ok && !options.allowStatus?.includes(res.status)) {
+      const messages = envelope.error_messages?.length
+        ? envelope.error_messages
+        : [`APIエラー (${res.status})`];
+      throw new ApiError(res.status, messages);
+    }
+    return envelope;
+  } catch (error) {
+    if (timedOut) {
+      throw new ApiError(408, [timeoutMessage(timeoutMs)]);
+    }
+    throw error;
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    externalSignal?.removeEventListener("abort", abortFromExternal);
+  }
+}
+
+/** ApiResponse を展開し data のみ返す。エラー時は ApiError を投げる。 */
 async function request<T>(
   path: string,
   init?: RequestInit,
-  options: { allowStatus?: number[] } = {}
+  options: { allowStatus?: number[]; timeoutMs?: number } = {}
 ): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    credentials: "same-origin",
-    headers: {
-      Accept: "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const envelope = await parseEnvelope<T>(res);
-  if (!res.ok && !options.allowStatus?.includes(res.status)) {
-    const messages = envelope.error_messages?.length
-      ? envelope.error_messages
-      : [`APIエラー (${res.status})`];
-    throw new ApiError(res.status, messages);
-  }
+  const envelope = await requestEnvelope<T>(path, init, options);
   return envelope.data as T;
+}
+
+/**
+ * DB 停止時に縮退応答(空 data + warning_messages)を返す閲覧系 API 用。
+ * data オブジェクトへ `warning_messages` を併設して返すため、既存の
+ * data アクセス(`page.items` 等)を壊さずに縮退状態を画面へ伝えられる。
+ */
+async function requestDegradable<T extends object>(
+  path: string,
+  init?: RequestInit,
+  options: { allowStatus?: number[]; timeoutMs?: number } = {}
+): Promise<Degradable<T>> {
+  const envelope = await requestEnvelope<T>(path, init, options);
+  return {
+    ...(envelope.data as T),
+    warning_messages: envelope.warning_messages ?? [],
+  };
 }
 
 function jsonBody(body: unknown): RequestInit {
@@ -752,8 +853,19 @@ export const api = {
   // ヘルスチェック
   getReadiness: () => request<HealthData>("/api/ready", undefined, { allowStatus: [503] }),
 
+  // データベース利用可否(設定の有無 + 実接続プローブ)。DB ゲートが参照する。
+  getDatabaseStatus: () =>
+    request<DatabaseStatusData>("/api/ready/database", undefined, {
+      // 実接続プローブはバックエンドで bounded(db_read_timeout_seconds)。
+      // フロントはそれより十分長く待つ。
+      timeoutMs: DASHBOARD_REQUEST_TIMEOUT_MS,
+    }),
+
   // ダッシュボード
-  getDashboardSummary: () => request<DashboardSummary>("/api/dashboard/summary"),
+  getDashboardSummary: () =>
+    request<DashboardSummary>("/api/dashboard/summary", undefined, {
+      timeoutMs: DASHBOARD_REQUEST_TIMEOUT_MS,
+    }),
 
   // ドキュメント
   listDocuments: (params: {
@@ -770,10 +882,10 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return request<Page<DocumentSummary>>(`/api/documents${qs ? `?${qs}` : ""}`);
+    return requestDegradable<Page<DocumentSummary>>(`/api/documents${qs ? `?${qs}` : ""}`);
   },
   getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
-  getDocumentStats: () => request<DocumentStats>("/api/documents/stats"),
+  getDocumentStats: () => requestDegradable<DocumentStats>("/api/documents/stats"),
   listDocumentKnowledgeBases: (id: string) =>
     request<KnowledgeBaseRef[]>(`/api/documents/${encodeURIComponent(id)}/knowledge-bases`),
   replaceDocumentKnowledgeBases: (id: string, body: DocumentKnowledgeBaseReplaceRequest) =>
@@ -833,7 +945,9 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return request<Page<IngestionJob>>(`/api/documents/ingestion-jobs${qs ? `?${qs}` : ""}`);
+    return requestDegradable<Page<IngestionJob>>(
+      `/api/documents/ingestion-jobs${qs ? `?${qs}` : ""}`
+    );
   },
   getIngestionJob: (id: string) =>
     request<IngestionJob>(`/api/documents/ingestion-jobs/${encodeURIComponent(id)}`),
@@ -862,7 +976,7 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return request<Page<KnowledgeBaseSummary>>(
+    return requestDegradable<Page<KnowledgeBaseSummary>>(
       `/api/knowledge-bases${qs ? `?${qs}` : ""}`
     );
   },

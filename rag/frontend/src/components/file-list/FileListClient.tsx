@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { PageHeader } from "@/components/PageHeader";
+import { DegradedBanner } from "@/components/DegradedBanner";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -99,6 +100,13 @@ export function FileListClient() {
     <div>
       <PageHeader title={t("nav.fileList")} subtitle={t("fileList.subtitle")} />
       <div className="space-y-4 p-8">
+        {/* DB 停止時の縮退お知らせ(非ブロッキング) */}
+        <DegradedBanner
+          messages={page?.warning_messages}
+          onRetry={() => void query.refetch()}
+          isRetrying={query.isFetching}
+        />
+
         {/* フィルタ + 検索 */}
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("fileList.filterAll")}>

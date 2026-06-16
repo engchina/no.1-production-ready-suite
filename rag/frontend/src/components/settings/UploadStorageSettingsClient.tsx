@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Cloud,
   HardDrive,
-  RefreshCw,
   Save,
   ShieldCheck,
   XCircle,
@@ -227,18 +226,6 @@ export function UploadStorageSettingsClient() {
               {save.isPending
                 ? t("settings.uploadStorage.actions.saving")
                 : t("settings.uploadStorage.actions.save")}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                void query.refetch();
-                save.reset();
-                setSaved(false);
-              }}
-            >
-              <RefreshCw size={15} aria-hidden />
-              {t("settings.uploadStorage.actions.reload")}
             </Button>
             {saved ? (
               <FormStatus tone="success" message={t("settings.uploadStorage.actions.saved")} />

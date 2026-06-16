@@ -471,9 +471,9 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
         {t("evaluation.cases")}
       </h3>
       <div className="overflow-hidden rounded-lg border border-border bg-card">
-        <div className="overflow-x-auto">
+        <div className="max-h-[480px] overflow-auto [scrollbar-gutter:stable]">
           <table className="w-full min-w-[680px] text-left text-sm">
-            <thead className="bg-background text-xs text-muted">
+            <thead className="sticky top-0 z-10 bg-background text-xs text-muted shadow-[inset_0_-1px_0_var(--border)]">
               <tr>
                 <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.case.id")}</th>
                 <th className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.precision")}</th>

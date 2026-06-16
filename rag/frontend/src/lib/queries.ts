@@ -25,6 +25,7 @@ import {
 
 export const queryKeys = {
   authStatus: ["auth", "me"] as const,
+  databaseStatus: ["system", "database-status"] as const,
   dashboardSummary: ["dashboard", "summary"] as const,
   documents: (params: {
     status?: FileStatus;
@@ -51,11 +52,24 @@ export const queryKeys = {
   uploadStorageSettings: ["settings", "upload-storage"] as const,
 };
 
+/** データベース利用可否(DB ゲート用)。設定ページ以外を開く前に参照する。 */
+export function useDatabaseStatus(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: queryKeys.databaseStatus,
+    queryFn: api.getDatabaseStatus,
+    enabled: options.enabled ?? true,
+    retry: false,
+    // 短時間はキャッシュし、ページ遷移ごとの再プローブを避ける。
+    staleTime: 15_000,
+  });
+}
+
 /** ダッシュボード集計。 */
 export function useDashboardSummary() {
   return useQuery({
     queryKey: queryKeys.dashboardSummary,
     queryFn: api.getDashboardSummary,
+    retry: false,
   });
 }
 

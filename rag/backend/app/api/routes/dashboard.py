@@ -1,5 +1,7 @@
 """ダッシュボード API。"""
 
+import asyncio
+import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter
@@ -20,6 +22,32 @@ from app.schemas.document import DocumentSummary, FileStatus
 from app.schemas.extraction import DocumentElement, StructuredExtraction
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+DASHBOARD_DB_TIMEOUT_MESSAGE = (
+    "ダッシュボードのデータ取得が {timeout:g} 秒以内に完了しませんでした。"
+    "データベースの起動状態を確認して再試行してください。"
+)
+DASHBOARD_DB_ERROR_MESSAGE = (
+    "ダッシュボードのデータ取得に失敗しました。"
+    "データベースの起動状態を確認して再試行してください。"
+)
+
+type DashboardData = tuple[
+    list[DocumentSummary],
+    int,
+    list[dict[str, object]],
+    list[dict[str, str | int | float | bool | None]],
+]
+
+
+class DashboardDataUnavailable(RuntimeError):
+    """DB 応答不良時に dashboard を縮退表示するための内部例外。"""
+
+    def __init__(self, message: str, check_status: str) -> None:
+        super().__init__(message)
+        self.message = message
+        self.check_status = check_status
 
 
 @router.get("/summary", response_model=ApiResponse[DashboardSummary])
@@ -27,14 +55,31 @@ async def dashboard_summary() -> ApiResponse[DashboardSummary]:
     """ダッシュボード初期表示用の集計を返す。"""
     settings = get_settings()
     oracle = OracleClient(settings)
-    documents = await oracle.list_documents(limit=None)
-    searchable_rows = await oracle.count_chunks()
+    warning_messages: list[str] = []
+    dashboard_data_status: str | None = None
+    try:
+        documents, searchable_rows, extractions, chunk_metadata = await _load_dashboard_data(
+            oracle,
+            timeout_seconds=settings.dashboard_query_timeout_seconds,
+        )
+    except DashboardDataUnavailable as exc:
+        documents = []
+        searchable_rows = 0
+        extractions = []
+        chunk_metadata = []
+        warning_messages.append(exc.message)
+        dashboard_data_status = exc.check_status
+
     ingestion_quality = _ingestion_quality(
         documents=documents,
-        extractions=await oracle.list_document_extractions(),
-        chunk_metadata=await oracle.list_chunk_metadata(),
+        extractions=extractions,
+        chunk_metadata=chunk_metadata,
     )
     checks = readiness_checks(settings)
+    if dashboard_data_status is not None:
+        checks["dashboard_data"] = dashboard_data_status
+        if checks.get("oracle") == "ok":
+            checks["oracle"] = dashboard_data_status
 
     return ApiResponse(
         data=DashboardSummary(
@@ -50,8 +95,46 @@ async def dashboard_summary() -> ApiResponse[DashboardSummary]:
                 searchable_rows=searchable_rows,
                 checks=checks,
             ),
-        )
+        ),
+        warning_messages=warning_messages,
     )
+
+
+async def _load_dashboard_data(
+    oracle: OracleClient,
+    *,
+    timeout_seconds: float,
+) -> DashboardData:
+    """DB 停止時に dashboard 初期表示を長時間 pending にしない。"""
+    try:
+        return await asyncio.wait_for(
+            _load_dashboard_data_unbounded(oracle),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError as exc:
+        logger.warning(
+            "dashboard_data_timeout",
+            extra={"timeout_seconds": timeout_seconds},
+        )
+        raise DashboardDataUnavailable(
+            DASHBOARD_DB_TIMEOUT_MESSAGE.format(timeout=timeout_seconds),
+            "timeout",
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "dashboard_data_load_failed",
+            extra={"exception_type": type(exc).__name__},
+        )
+        raise DashboardDataUnavailable(DASHBOARD_DB_ERROR_MESSAGE, "error") from exc
+
+
+async def _load_dashboard_data_unbounded(oracle: OracleClient) -> DashboardData:
+    """dashboard 集計に必要な DB データを取得する。"""
+    documents = await oracle.list_documents(limit=None)
+    searchable_rows = await oracle.count_chunks()
+    extractions = await oracle.list_document_extractions()
+    chunk_metadata = await oracle.list_chunk_metadata()
+    return documents, searchable_rows, extractions, chunk_metadata
 
 
 def _ingestion_quality(

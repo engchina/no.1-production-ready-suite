@@ -158,6 +158,15 @@ class EnterpriseAiIncompleteResponseError(ValueError):
         super().__init__(message)
 
 
+class EnterpriseAiUnsupportedInputError(ValueError):
+    """選択中のモデル/アカウントが入力モダリティを受け付けないことを表すエラー。"""
+
+    safe_for_user = True
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class EnterpriseAiRequestPreview:
     """Enterprise AI request の非機密プレビュー。"""
@@ -313,10 +322,16 @@ class OciEnterpriseAiClient:
                 file_id=uploaded_file_id,
                 parser_profile=parser_profile,
             )
-            response = await self._post_enterprise_ai(
-                self._settings.oci_enterprise_ai_vlm_path,
-                payload,
-            )
+            try:
+                response = await self._post_enterprise_ai(
+                    self._settings.oci_enterprise_ai_vlm_path,
+                    payload,
+                )
+            except httpx.HTTPStatusError as exc:
+                _raise_for_unsupported_file_input(
+                    exc, model_id=enterprise_ai_vision_model_id(self._settings)
+                )
+                raise
             extraction = _parse_structured_extraction(
                 response,
                 response_path=self._settings.oci_enterprise_ai_vlm_response_path,
@@ -961,6 +976,31 @@ def _raise_for_status_with_body(response: httpx.Response, label: str) -> None:
         raise
 
 
+_UNSUPPORTED_FILE_INPUT_MARKERS = (
+    "file content is currently unsupported",
+    "zdr customers",
+)
+
+
+def _raise_for_unsupported_file_input(
+    error: httpx.HTTPStatusError,
+    *,
+    model_id: str,
+) -> None:
+    """provider がファイル(PDF/画像)入力を拒否した 400 を actionable なエラーへ変換する。"""
+    if error.response.status_code != 400:
+        return
+    body = error.response.text.casefold()
+    if not any(marker in body for marker in _UNSUPPORTED_FILE_INPUT_MARKERS):
+        return
+    model_label = model_id.strip() or "選択中のモデル"
+    raise EnterpriseAiUnsupportedInputError(
+        f"選択中の VLM モデル「{model_label}」は、このアカウント設定(ZDR 等)では"
+        "ファイル(PDF/画像)入力に対応していません。設定 > モデルでファイル入力に対応した"
+        "別の VLM モデル(例: Gemini 系)を選択して再実行してください。"
+    ) from error
+
+
 def _parse_structured_extraction(
     response: Mapping[str, Any],
     *,
@@ -1221,25 +1261,125 @@ def _extract_function_arguments(candidate: Mapping[str, Any]) -> object | None:
 def _json_string_to_object(value: str) -> Mapping[str, Any]:
     """JSON 文字列を object に変換する。"""
     cleaned = _strip_json_fence(value)
-    try:
-        parsed = json.loads(cleaned)
-    except ValueError as exc:
-        if object_text := _extract_json_object_text(cleaned):
-            try:
-                parsed = json.loads(object_text)
-            except ValueError:
-                raise ValueError(
-                    "OCI Enterprise AI VLM response の JSON 文字列を解析できません。"
-                ) from exc
-        else:
-            raise ValueError(
-                "OCI Enterprise AI VLM response の JSON 文字列を解析できません。"
-            ) from exc
+    parsed = _loads_json_lenient(cleaned)
+    if parsed is None and (object_text := _extract_json_object_text(cleaned)):
+        parsed = _loads_json_lenient(object_text)
+    if parsed is None:
+        raise ValueError("OCI Enterprise AI VLM response の JSON 文字列を解析できません。")
     if not isinstance(parsed, dict):
         raise ValueError(
             "OCI Enterprise AI VLM response の JSON 文字列は object である必要があります。"
         )
     return parsed
+
+
+def _loads_json_lenient(text: str) -> object | None:
+    """JSON を厳密 → 軽微修復の順で読み込む。どちらも失敗した場合は None。"""
+    try:
+        parsed: object = json.loads(text)
+    except ValueError:
+        repaired = _repair_json_text(text)
+        if repaired is None:
+            return None
+        try:
+            parsed = json.loads(repaired)
+        except ValueError:
+            return None
+    return parsed
+
+
+_JSON_STRING_TERMINATORS = frozenset(":,}]")
+_JSON_CONTROL_ESCAPES = {
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
+}
+
+
+def _repair_json_text(value: str) -> str | None:
+    """LLM/VLM が返した軽微に壊れた JSON を最小限の修復で復元する。
+
+    主な対象:
+    - 文字列値の中のエスケープされていない二重引用符
+    - 文字列値の中の生の制御文字(改行・タブ等)
+    - object/array 末尾の余分なカンマ
+    修復しても変化がない、または文字列が閉じられない場合は None を返す。
+    """
+    repaired: list[str] = []
+    in_string = False
+    escaped = False
+    for index, char in enumerate(value):
+        if not in_string:
+            repaired.append(char)
+            if char == '"':
+                in_string = True
+            continue
+        if escaped:
+            repaired.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            repaired.append(char)
+            escaped = True
+            continue
+        if char == '"':
+            if _is_json_string_terminator(value, index + 1):
+                in_string = False
+                repaired.append(char)
+            else:
+                # 文字列値の途中に現れたエスケープ漏れの引用符を補正する。
+                repaired.append('\\"')
+            continue
+        if char in _JSON_CONTROL_ESCAPES:
+            repaired.append(_JSON_CONTROL_ESCAPES[char])
+            continue
+        if ord(char) < 0x20:
+            repaired.append(f"\\u{ord(char):04x}")
+            continue
+        repaired.append(char)
+    if in_string:
+        return None
+    result = _strip_json_trailing_commas("".join(repaired))
+    return result if result != value else None
+
+
+def _is_json_string_terminator(value: str, start: int) -> bool:
+    """index 以降の最初の非空白文字が文字列を閉じる文脈かを判定する。"""
+    for char in value[start:]:
+        if char in " \t\r\n":
+            continue
+        return char in _JSON_STRING_TERMINATORS
+    return True
+
+
+def _strip_json_trailing_commas(value: str) -> str:
+    """object/array を閉じる直前の余分なカンマを文字列を避けて取り除く。"""
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for char in value:
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            result.append(char)
+            continue
+        if char in "}]":
+            while result and result[-1] in " \t\r\n":
+                result.pop()
+            if result and result[-1] == ",":
+                result.pop()
+        result.append(char)
+    return "".join(result)
 
 
 def _strip_json_fence(value: str) -> str:

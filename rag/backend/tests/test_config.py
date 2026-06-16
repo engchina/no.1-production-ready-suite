@@ -148,9 +148,15 @@ def test_max_upload_bytes_defaults_to_200_mib_and_is_positive() -> None:
 def test_search_timeout_is_positive() -> None:
     """検索 timeout は正の秒数に制限する。"""
     assert Settings().rag_search_timeout_seconds == 30.0
+    assert Settings().dashboard_query_timeout_seconds == 8.0
+    assert Settings().db_read_timeout_seconds == 8.0
 
     with pytest.raises(ValidationError):
         Settings(rag_search_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(dashboard_query_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(db_read_timeout_seconds=0)
 
 
 def test_oracle_connection_timeouts_are_bounded() -> None:

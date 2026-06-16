@@ -10,6 +10,7 @@ import pytest
 from app.clients.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
     EnterpriseAiTimeoutError,
+    EnterpriseAiUnsupportedInputError,
     OciEnterpriseAiClient,
     _raise_for_status_with_body,
 )
@@ -324,6 +325,83 @@ async def test_oci_vlm_accepts_fenced_json_payload() -> None:
     assert result["raw_text"] == "fenced OCR 本文"
     assert result["document_type"] == "仕様書"
     assert result["confidence"] == 0.86
+
+
+async def test_oci_vlm_repairs_unescaped_quotes_in_json_payload() -> None:
+    """文字列値の途中にエスケープ漏れの二重引用符があっても修復して読む。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "output": (
+                "{\n"
+                '  "raw_text": "項目 "A" の説明です。",\n'
+                '  "document_type": "マニュアル",\n'
+                '  "confidence": 0.81,\n'
+                '  "warnings": []\n'
+                "}"
+            )
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    result = await client.extract_with_vlm(b"document", "prompt")
+
+    assert result["raw_text"] == '項目 "A" の説明です。'
+    assert result["document_type"] == "マニュアル"
+    assert result["confidence"] == 0.81
+
+
+async def test_oci_vlm_repairs_raw_newlines_and_trailing_commas_in_json_payload() -> None:
+    """文字列内の生の改行と末尾カンマを含む壊れた JSON も修復して読む。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "output": (
+                "{\n"
+                '  "raw_text": "1 行目\n2 行目",\n'
+                '  "document_type": "報告書",\n'
+                '  "confidence": 0.7,\n'
+                '  "warnings": [],\n'
+                "}"
+            )
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    result = await client.extract_with_vlm(b"document", "prompt")
+
+    assert result["raw_text"] == "1 行目\n2 行目"
+    assert result["document_type"] == "報告書"
+
+
+async def test_oci_vlm_coerces_string_section_path_in_elements() -> None:
+    """elements[].section_path が ``/章/節`` 文字列でも list へ正規化して検証する。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "output": (
+                '{"raw_text":"本文","document_type":"資料","confidence":0.8,'
+                '"warnings":[],"elements":[{"kind":"text","text":"段落",'
+                '"order":0,"section_path":"/第1章/1.2 概要"}]}'
+            )
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    result = await client.extract_with_vlm(b"document", "prompt")
+
+    elements = cast(list[dict[str, Any]], result["elements"])
+    assert elements[0]["section_path"] == ["第1章", "1.2 概要"]
+
+
+async def test_oci_vlm_raises_actionable_error_when_file_input_unsupported() -> None:
+    """provider が ZDR で file 入力を拒否したら actionable な safe エラーへ変換する。"""
+    transport = UnsupportedFileInputTransport({})
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    with pytest.raises(EnterpriseAiUnsupportedInputError, match="ファイル") as exc_info:
+        await client.extract_with_vlm(b"%PDF-1.7", "prompt", mime_type="application/pdf")
+
+    assert getattr(exc_info.value, "safe_for_user", False) is True
+    # アップロード済み一時ファイルは best-effort で削除される。
+    assert transport.deletes
 
 
 async def test_oci_vlm_uses_configured_response_path() -> None:
@@ -876,6 +954,33 @@ class TimeoutEnterpriseAiTransport(FakeEnterpriseAiTransport):
             }
         )
         raise httpx.ReadTimeout("read timed out")
+
+
+class UnsupportedFileInputTransport(FakeEnterpriseAiTransport):
+    """JSON POST で provider の ZDR file 非対応 400 を返す fake。"""
+
+    async def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        self.calls.append({"url": url, "payload": dict(payload)})
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            400,
+            request=request,
+            text=(
+                '{"error":{"code":"invalid_value","message":'
+                '"Status Code from provider: 400, Provider response: '
+                '{\\"code\\":\\"invalid-argument\\",\\"error\\":'
+                '\\"File content is currently unsupported for ZDR customers.\\"}",'
+                '"type":"invalid_request_error"}}'
+            ),
+        )
+        raise httpx.HTTPStatusError("400 Bad Request", request=request, response=response)
 
 
 def _oci_settings() -> Settings:

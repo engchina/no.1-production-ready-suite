@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -13,6 +14,7 @@ const authStatus = {
 };
 
 test.beforeEach(async ({ page }) => {
+  await mockDatabaseReady(page);
   await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({ json: authStatus });
   });

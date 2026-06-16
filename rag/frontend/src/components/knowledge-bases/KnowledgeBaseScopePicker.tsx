@@ -1,10 +1,10 @@
 "use client";
 
-import { Database, X } from "lucide-react";
+import { Database } from "lucide-react";
 import { useId } from "react";
 
+import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
 import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useKnowledgeBases } from "@/lib/queries";
@@ -32,30 +32,14 @@ export function KnowledgeBaseScopePicker({
   const query = useKnowledgeBases({ status: "ACTIVE", limit: 50, offset: 0 });
   const items = query.data?.items ?? [];
 
-  const toggle = (id: string) => {
-    onChange(
-      selectedIds.includes(id)
-        ? selectedIds.filter((current) => current !== id)
-        : [...selectedIds, id]
-    );
-  };
-
   return (
     <div className={cn("space-y-2", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p id={labelId} className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <Database size={14} className="text-primary" aria-hidden />
-            {label}
-          </p>
-          <p className="mt-1 text-xs text-muted">{helper}</p>
-        </div>
-        {selectedIds.length > 0 ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => onChange([])} disabled={disabled}>
-            <X size={14} aria-hidden />
-            {t("knowledgeBaseScope.clear")}
-          </Button>
-        ) : null}
+      <div>
+        <p id={labelId} className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+          <Database size={14} className="text-primary" aria-hidden />
+          {label}
+        </p>
+        <p className="mt-1 text-xs text-muted">{helper}</p>
       </div>
 
       {query.isError ? (
@@ -72,40 +56,13 @@ export function KnowledgeBaseScopePicker({
         </p>
       ) : items.length > 0 ? (
         <>
-          <div
-            role="group"
-            aria-labelledby={labelId}
-            className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
-          >
-            {items.map((knowledgeBase) => (
-              <label
-                key={knowledgeBase.id}
-                className={cn(
-                  "flex min-w-0 cursor-pointer items-start gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-info-bg/40",
-                  selectedIds.includes(knowledgeBase.id) && "border-primary/40 bg-info-bg/50",
-                  disabled && "cursor-not-allowed opacity-60"
-                )}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(knowledgeBase.id)}
-                  onChange={() => toggle(knowledgeBase.id)}
-                  disabled={disabled}
-                  className="mt-0.5 cursor-pointer accent-[var(--primary)] disabled:cursor-not-allowed"
-                />
-                <span className="min-w-0">
-                  <span className="block truncate font-medium text-foreground">
-                    {knowledgeBase.name}
-                  </span>
-                  <span className="tnum block text-xs text-muted">
-                    {t("knowledgeBaseScope.documentCount", {
-                      count: knowledgeBase.document_count,
-                    })}
-                  </span>
-                </span>
-              </label>
-            ))}
-          </div>
+          <KnowledgeBasePickerGrid
+            items={items}
+            selectedIds={selectedIds}
+            onChange={onChange}
+            disabled={disabled}
+            ariaLabel={label}
+          />
           <p className="text-xs text-muted">
             {selectedIds.length > 0
               ? t("knowledgeBaseScope.selected", { count: selectedIds.length })

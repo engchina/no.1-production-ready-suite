@@ -107,11 +107,23 @@ class DocumentElement(BaseModel):
             return [min(xs), min(ys), max(xs), max(ys)]
         return None
 
-    @field_validator("section_path")
+    @field_validator("section_path", mode="before")
     @classmethod
-    def normalize_section_path(cls, value: list[str]) -> list[str]:
-        """空の章節名を落とし、長すぎる値を切り詰める。"""
-        return [re.sub(r"\s+", " ", item).strip()[:80] for item in value if item.strip()]
+    def normalize_section_path(cls, value: object) -> list[str]:
+        """str/None も許容し、空の章節名を落として長すぎる値を切り詰める。
+
+        VLM が ``/章/節`` のようなスラッシュ区切り文字列で返す場合があるため、
+        ``/`` で分割してから正規化する。
+        """
+        if value is None:
+            items: list[object] = []
+        elif isinstance(value, str):
+            items = list(value.split("/"))
+        elif isinstance(value, list | tuple):
+            items = list(value)
+        else:
+            items = [value]
+        return [re.sub(r"\s+", " ", str(item)).strip()[:80] for item in items if str(item).strip()]
 
     @field_validator("metadata")
     @classmethod

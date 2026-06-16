@@ -28,6 +28,7 @@ from fastapi import (
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
+from app.db_degradation import load_or_degrade
 from app.rag.ingestion import IngestionPipeline, IngestionTimeoutError, IngestionUserError
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.source_profile import build_source_profile
@@ -184,35 +185,60 @@ async def list_documents(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[DocumentSummary]]:
-    """取込対象ドキュメントの一覧を返す。"""
+    """取込対象ドキュメントの一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     oracle = OracleClient()
-    documents = await oracle.list_documents(
-        status=status,
-        query=q,
-        limit=limit,
-        offset=offset,
-        knowledge_base_id=knowledge_base_id,
-    )
-    total = await oracle.count_documents(
-        status=status,
-        query=q,
-        knowledge_base_id=knowledge_base_id,
-    )
-    return ApiResponse(
-        data=Page(
+    settings = get_settings()
+
+    async def _load() -> Page[DocumentSummary]:
+        documents = await oracle.list_documents(
+            status=status,
+            query=q,
+            limit=limit,
+            offset=offset,
+            knowledge_base_id=knowledge_base_id,
+        )
+        total = await oracle.count_documents(
+            status=status,
+            query=q,
+            knowledge_base_id=knowledge_base_id,
+        )
+        return Page(
             items=documents,
             total=total,
             limit=limit,
             offset=offset,
             has_next=offset + limit < total,
         )
+
+    empty_page: Page[DocumentSummary] = Page(
+        items=[], total=0, limit=limit, offset=offset, has_next=False
+    )
+    page, degraded = await load_or_degrade(
+        _load,
+        timeout_seconds=settings.db_read_timeout_seconds,
+        fallback=empty_page,
+        log_label="documents_list",
+    )
+    return ApiResponse(
+        data=page,
+        warning_messages=[degraded.message] if degraded else [],
     )
 
 
 @router.get("/stats", response_model=ApiResponse[DocumentStats])
 async def document_stats() -> ApiResponse[DocumentStats]:
-    """ドキュメント状態別の集計を返す。"""
-    return ApiResponse(data=await OracleClient().document_stats())
+    """ドキュメント状態別の集計を返す。DB 停止時はゼロ集計 + warning で縮退する。"""
+    settings = get_settings()
+    stats, degraded = await load_or_degrade(
+        OracleClient().document_stats,
+        timeout_seconds=settings.db_read_timeout_seconds,
+        fallback=DocumentStats(total=0, by_status={}),
+        log_label="document_stats",
+    )
+    return ApiResponse(
+        data=stats,
+        warning_messages=[degraded.message] if degraded else [],
+    )
 
 
 @router.get("/ingestion-jobs", response_model=ApiResponse[Page[IngestionJob]])
@@ -221,18 +247,33 @@ async def list_ingestion_jobs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[IngestionJob]]:
-    """直近の取込 job 一覧を返す。"""
+    """直近の取込 job 一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     oracle = OracleClient()
-    page_items = await oracle.list_ingestion_jobs(status=status, limit=limit, offset=offset)
-    total = await oracle.count_ingestion_jobs(status=status)
-    return ApiResponse(
-        data=Page(
+    settings = get_settings()
+
+    async def _load() -> Page[IngestionJob]:
+        page_items = await oracle.list_ingestion_jobs(status=status, limit=limit, offset=offset)
+        total = await oracle.count_ingestion_jobs(status=status)
+        return Page(
             items=page_items,
             total=total,
             limit=limit,
             offset=offset,
             has_next=offset + limit < total,
         )
+
+    empty_page: Page[IngestionJob] = Page(
+        items=[], total=0, limit=limit, offset=offset, has_next=False
+    )
+    page, degraded = await load_or_degrade(
+        _load,
+        timeout_seconds=settings.db_read_timeout_seconds,
+        fallback=empty_page,
+        log_label="ingestion_jobs_list",
+    )
+    return ApiResponse(
+        data=page,
+        warning_messages=[degraded.message] if degraded else [],
     )
 
 

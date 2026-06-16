@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, api } from "./api";
+import { DASHBOARD_REQUEST_TIMEOUT_MS, ApiError, api } from "./api";
+import { t } from "./i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -9,7 +10,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("api.request envelope", () => {
   it("成功時は data を取り出す", async () => {
@@ -43,6 +47,33 @@ describe("api.request envelope", () => {
     await expect(api.getDashboardSummary()).rejects.toBeInstanceOf(ApiError);
   });
 
+  it("応答が返らない場合はタイムアウトを ApiError として返す", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const requestPromise = expect(api.getDashboardSummary()).rejects.toMatchObject({
+      status: 408,
+      messages: [
+        t("common.api.timeout", { seconds: Math.ceil(DASHBOARD_REQUEST_TIMEOUT_MS / 1000) }),
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(DASHBOARD_REQUEST_TIMEOUT_MS);
+
+    await requestPromise;
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/dashboard/summary",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+  });
+
   it("listDocuments は query string を組み立てる", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({ data: { items: [], total: 0, limit: 50, offset: 0, has_next: false }, error_messages: [], warning_messages: [] })
@@ -63,6 +94,41 @@ describe("api.request envelope", () => {
     expect(url).toContain("knowledge_base_id=kb-1");
     expect(url).toContain("limit=20");
     expect(url).toContain("offset=40");
+  });
+
+  it("listDocuments は縮退応答の warning_messages を data へ併設する", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
+          error_messages: [],
+          warning_messages: ["データベースに接続できませんでした。"],
+        })
+      )
+    );
+
+    const page = await api.listDocuments();
+
+    expect(page.items).toEqual([]);
+    expect(page.warning_messages).toEqual(["データベースに接続できませんでした。"]);
+  });
+
+  it("正常応答では warning_messages が空配列になる", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
+          error_messages: [],
+          warning_messages: [],
+        })
+      )
+    );
+
+    const page = await api.listKnowledgeBases({ status: "ACTIVE" });
+
+    expect(page.warning_messages).toEqual([]);
   });
 
   it("uploadDocument は knowledge_base_ids と ingestion_mode を multipart に含める", async () => {

@@ -1,5 +1,6 @@
 """ダッシュボード API のテスト。"""
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -41,6 +42,14 @@ class FakeDashboardOracle:
 
     async def list_chunk_metadata(self) -> list[dict[str, str | int | float | bool | None]]:
         return self.chunk_metadata
+
+
+class SlowDashboardOracle(FakeDashboardOracle):
+    """DB 停止や接続待ちで dashboard 初期取得が返らない状態を再現する。"""
+
+    async def list_documents(self, *, limit: int | None = None) -> list[DocumentSummary]:
+        await asyncio.sleep(1)
+        return await super().list_documents(limit=limit)
 
 
 @pytest.fixture
@@ -196,3 +205,35 @@ def test_dashboard_ingestion_quality_counts_raw_text_fallback_chunks(
     assert quality["element_count"] >= 1
     assert quality["chunk_profile_counts"] == {"text_v1": len(chunks)}
     assert quality["content_kind_counts"] == {"text": len(chunks)}
+
+
+def test_dashboard_summary_degrades_when_database_does_not_respond(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB 停止時も dashboard は 200 で返し、縮退状態と復旧導線用メッセージを返す。"""
+    settings = dashboard_route.get_settings()
+    monkeypatch.setattr(settings, "dashboard_query_timeout_seconds", 0.01)
+    monkeypatch.setattr(dashboard_route, "OracleClient", lambda settings: SlowDashboardOracle())
+    monkeypatch.setattr(dashboard_route, "readiness_checks", lambda settings: {"oracle": "ok"})
+
+    response = client.get("/api/dashboard/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["error_messages"] == []
+    assert body["warning_messages"] == [
+        "ダッシュボードのデータ取得が 0.01 秒以内に完了しませんでした。"
+        "データベースの起動状態を確認して再試行してください。"
+    ]
+    data = body["data"]
+    assert data["stats"] == {
+        "total_uploads": 0,
+        "uploads_this_month": 0,
+        "total_indexed": 0,
+        "indexed_this_month": 0,
+        "searchable_rows": 0,
+    }
+    assert data["recent_activities"] == []
+    assert data["system"]["status"] == "degraded"
+    assert data["system"]["checks"]["oracle"] == "timeout"
+    assert data["system"]["checks"]["dashboard_data"] == "timeout"

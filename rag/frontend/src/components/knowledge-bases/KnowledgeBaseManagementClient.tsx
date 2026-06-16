@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { PageHeader } from "@/components/PageHeader";
+import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -98,6 +99,12 @@ export function KnowledgeBaseManagementClient() {
       <PageHeader title={t("nav.knowledgeBases")} subtitle={t("knowledgeBases.subtitle")} />
       <div className="grid gap-5 p-8 xl:grid-cols-[minmax(0,1fr)_25rem]">
         <div className="space-y-4">
+          <DegradedBanner
+            messages={page?.warning_messages}
+            onRetry={() => void query.refetch()}
+            isRetrying={query.isFetching}
+          />
+
           <KnowledgeBaseCreateForm onCreated={(id) => setSelectedId(id)} />
 
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -567,7 +574,7 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
       ) : documents.isPending ? (
         <KnowledgeBaseDocumentsSkeleton />
       ) : documents.data.items.length > 0 ? (
-        <ul className="divide-y divide-border rounded-md border border-border">
+        <ul className="max-h-72 divide-y divide-border overflow-y-auto rounded-md border border-border [scrollbar-gutter:stable]">
           {documents.data.items.map((document) => (
             <li key={document.id} className="flex items-center justify-between gap-3 px-3 py-2">
               <Link

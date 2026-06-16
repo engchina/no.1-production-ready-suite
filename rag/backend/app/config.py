@@ -330,6 +330,21 @@ class Settings(BaseSettings):
         description="query expansion で retrieval に使う query variant 数の上限。",
     )
     rag_search_timeout_seconds: float = Field(default=30.0, gt=0.0, le=300.0)
+    dashboard_query_timeout_seconds: float = Field(
+        default=8.0,
+        gt=0.0,
+        le=60.0,
+        description="ダッシュボード初期集計の DB 待機秒数。DB 停止時に Skeleton を長時間残さない。",
+    )
+    db_read_timeout_seconds: float = Field(
+        default=8.0,
+        gt=0.0,
+        le=60.0,
+        description=(
+            "閲覧系一覧/集計 API（ドキュメント・取込ジョブ・ナレッジベース）の DB 待機秒数。"
+            "DB 停止時に 500 ではなく空データ + warning で縮退応答するための上限。"
+        ),
+    )
     rag_pdf_segmentation_enabled: bool = Field(
         default=True,
         description="PDF を VLM へ送る前にページ単位の小さな PDF segment へ分割する。",
