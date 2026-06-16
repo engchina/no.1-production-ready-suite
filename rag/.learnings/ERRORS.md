@@ -28,6 +28,72 @@ Use a writable cache directory for verification commands, for example `uv --cach
 
 ---
 
+## [ERR-20260616-002] document_index_e2e_route
+
+**Logged**: 2026-06-16T15:47:29+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+The document-delete Playwright test initially opened `/documents`, but the document index route is `/file-list`; `/documents/:id` is reserved for document detail.
+
+### Error
+```text
+Locator: getByRole('heading', { name: '文書インデックス' })
+Expected: visible
+Error: element(s) not found
+```
+
+### Context
+- Command attempted: `npx playwright test e2e/document-delete.spec.ts --project=desktop --project=mobile`
+- The app redirected the unmatched `/documents` route to the dashboard, so the document index heading never appeared.
+
+### Suggested Fix
+Use `APP_ROUTES.fileList` semantics in e2e tests and open `/file-list` for the document index.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/lib/routes.ts, frontend/e2e/document-delete.spec.ts
+
+### Resolution
+- **Resolved**: 2026-06-16T15:47:29+09:00
+- **Notes**: The e2e now opens `/file-list`; desktop and 375px mobile projects pass.
+
+---
+
+## [ERR-20260616-001] vitest_runinband_option
+
+**Logged**: 2026-06-16T15:44:22+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+`npm test -- --runInBand` failed because Vitest does not support Jest's `--runInBand` option.
+
+### Error
+```text
+CACError: Unknown option `--runInBand`
+```
+
+### Context
+- Command attempted: `npm test -- --runInBand`
+- Project test script is `vitest run`; the extra flag came from Jest muscle memory rather than project convention.
+
+### Suggested Fix
+Use `npm test` for the project default, or pass Vitest-supported flags only.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/package.json
+
+### Resolution
+- **Resolved**: 2026-06-16T15:44:22+09:00
+- **Notes**: Reran with `npm test` instead.
+
+---
+
 ## [ERR-20260615-004] oci_vlm_incomplete_max_output_tokens
 
 **Logged**: 2026-06-15T21:50:00+09:00
