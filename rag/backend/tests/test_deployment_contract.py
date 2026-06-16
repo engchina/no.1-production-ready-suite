@@ -70,3 +70,18 @@ def test_frontend_build_does_not_fetch_remote_fonts() -> None:
 
     assert "fonts.googleapis.com" not in source_text
     assert "fonts.gstatic.com" not in source_text
+
+
+def test_nightly_rag_workflow_runs_search_load_gate() -> None:
+    """nightly RAG gate は評価 trend と検索 p95 trend を同じ artifact に残す。"""
+    workflow = (REPO_ROOT / ".github" / "workflows" / "rag-evaluation-nightly.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "search_load_path:" in workflow
+    assert "app.rag.evaluation_cli" in workflow
+    assert "app.rag.search_load_cli" in workflow
+    assert "--trend-output ../artifacts/evaluation-trend.json" in workflow
+    assert "--trend-output ../artifacts/search-load-trend.json" in workflow
+    assert "export RAG_SEARCH_LOAD_TENANT_ID" in workflow
+    assert "if: always()" in workflow

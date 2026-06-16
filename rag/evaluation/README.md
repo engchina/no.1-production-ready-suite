@@ -31,11 +31,24 @@ uv run python -m app.rag.evaluation_cli \
   --output ../evaluation/evaluation-compare-result.json
 ```
 
+検索 latency / p95 gate には `search-load.example.json` を使います。`cases`、`repeat`、`concurrency`、`thresholds` を定義し、`/api/search` の client/server p50/p95、error rate、`diagnostics.stream_stage_timings` の stage p95 を artifact 化します。結果 JSON と trend JSON には query / answer / context 原文を残しません。
+
+```bash
+cd backend
+uv run python -m app.rag.search_load_cli \
+  ../evaluation/search-load.example.json \
+  --api-base-url https://<staging-host> \
+  --output ../evaluation/search-load-result.json \
+  --trend-output ../evaluation/search-load-trend.json
+```
+
 終了コード:
 
-- `0`: 評価 gate 成功。
-- `1`: API は正常に応答したが `passed=false`、`error_count>0`、または `threshold_failures` 非空。
-- `2`: golden set ファイルや CLI 引数が不正。
-- `3`: 評価 API への接続、HTTP 応答、レスポンス形式の問題。
+- `0`: gate 成功。
+- `1`: API は応答したが評価 threshold、search load threshold、または error rate が gate 条件を満たさない。
+- `2`: golden set / search load scenario ファイルや CLI 引数が不正。
+- `3`: 評価 CLI で API 接続、HTTP 応答、レスポンス形式の問題が起きた。
 
 `RAG_EVALUATION_API_BASE_URL`、`RAG_EVALUATION_RUN_API_URL`、`RAG_EVALUATION_COMPARE_API_URL`、`RAG_EVALUATION_API_URL`、`RAG_EVALUATION_TIMEOUT_SECONDS`、`RAG_EVALUATION_TENANT_ID`、`RAG_EVALUATION_USER_ID` でも指定できます。`--api-url` は最優先で、`--api-base-url` は入力形式に応じて `/api/evaluation/run` または `/api/evaluation/compare` を付与します。tenant/user の raw 値は CLI 出力には表示しません。
+
+`RAG_SEARCH_LOAD_API_BASE_URL`、`RAG_SEARCH_LOAD_API_URL`、`RAG_SEARCH_LOAD_TIMEOUT_SECONDS`、`RAG_SEARCH_LOAD_TENANT_ID`、`RAG_SEARCH_LOAD_USER_ID` でも検索 load CLI を指定できます。GitHub Actions の `RAG Evaluation Nightly` workflow は evaluation trend と search-load trend を同じ `rag-evaluation-nightly` artifact に保存します。`workflow_dispatch` の `search_load_path` を空文字にすると search load gate だけを skip できます。
