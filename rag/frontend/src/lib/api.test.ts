@@ -248,6 +248,7 @@ describe("api.request envelope", () => {
     await api.getIngestionJob("job-1");
     await api.retryIngestionJob("job-1");
     await api.drainIngestionJobs(25);
+    await api.cancelIngestionJob("job-1");
 
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
@@ -267,9 +268,11 @@ describe("api.request envelope", () => {
     expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: "POST" });
     expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/ingestion-jobs/drain?limit=25");
     expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[4][0]).toContain("status=FAILED");
-    expect(fetchMock.mock.calls[4][0]).toContain("limit=10");
-    expect(fetchMock.mock.calls[4][0]).toContain("offset=20");
+    expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/ingestion-jobs/job-1/cancel");
+    expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[5][0]).toContain("status=FAILED");
+    expect(fetchMock.mock.calls[5][0]).toContain("limit=10");
+    expect(fetchMock.mock.calls[5][0]).toContain("offset=20");
   });
 
   it("getReadiness は 503 の degraded envelope も data として返す", async () => {

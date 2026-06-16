@@ -1422,7 +1422,10 @@ def test_oracle_ingestion_job_schema_includes_queue_table() -> None:
     assert "quality_warnings JSON" in ddl
     assert "attempt_count    NUMBER(5) DEFAULT 0 NOT NULL" in ddl
     assert "max_attempts     NUMBER(5) DEFAULT 3 NOT NULL" in ddl
-    assert "CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED'))" in ddl
+    assert (
+        "CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED'))"
+        in ddl
+    )
     assert "CHECK (attempt_count >= 0 AND max_attempts >= 1)" in ddl
     assert "REFERENCES rag_documents (document_id)" in ddl
     assert "ON rag_ingestion_jobs (tenant_id_hash, status, queued_at DESC)" in ddl

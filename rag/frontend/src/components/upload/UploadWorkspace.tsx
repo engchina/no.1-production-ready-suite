@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  Ban,
   CheckCircle2,
   Cloud,
   Clock3,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/api";
 import {
   useBatchUploadDocuments,
+  useCancelIngestionJob,
   useDrainIngestionJobs,
   useIngestionJobs,
   useKnowledgeBases,
@@ -242,6 +244,7 @@ function RecentIngestionJobsPanel() {
   const query = useIngestionJobs({ limit: 5, offset: 0 });
   const drain = useDrainIngestionJobs();
   const retry = useRetryIngestionJob();
+  const cancel = useCancelIngestionJob();
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const jobs = query.data?.items ?? [];
   if (query.isPending || query.isError || jobs.length === 0) return null;
@@ -302,6 +305,13 @@ function RecentIngestionJobsPanel() {
               : t("upload.jobs.retryFailed")}
           </Banner>
         ) : null}
+        {cancel.isError ? (
+          <Banner severity="danger">
+            {cancel.error instanceof ApiError
+              ? cancel.error.message
+              : t("upload.jobs.cancelFailed")}
+          </Banner>
+        ) : null}
         <div className="divide-y divide-border rounded-md border border-border bg-background">
           {jobs.map((job) => (
             <div
@@ -321,6 +331,20 @@ function RecentIngestionJobsPanel() {
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
                 <IngestionJobBadge job={job} />
+                {job.status === "QUEUED" || job.status === "RUNNING" ? (
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    onClick={() => cancel.mutate({ id: job.id })}
+                    loading={cancel.isPending && cancel.variables?.id === job.id}
+                  >
+                    {!(cancel.isPending && cancel.variables?.id === job.id) ? (
+                      <Ban size={14} aria-hidden />
+                    ) : null}
+                    {t("upload.jobs.cancel")}
+                  </Button>
+                ) : null}
                 {job.status === "FAILED" ? (
                   <Button
                     type="button"
@@ -373,6 +397,8 @@ function jobIcon(status: IngestionJob["status"]) {
       return XCircle;
     case "SKIPPED":
       return AlertTriangle;
+    case "CANCELLED":
+      return Ban;
     default:
       return Clock3;
   }
@@ -389,6 +415,8 @@ function jobBadgeClass(status: IngestionJob["status"]) {
       return "border-danger/30 bg-danger-bg text-danger";
     case "SKIPPED":
       return "border-warning/30 bg-warning-bg text-warning";
+    case "CANCELLED":
+      return "border-border bg-card text-muted";
     default:
       return "border-border bg-card text-foreground";
   }
@@ -406,6 +434,8 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
       return "upload.job.status.FAILED";
     case "SKIPPED":
       return "upload.job.status.SKIPPED";
+    case "CANCELLED":
+      return "upload.job.status.CANCELLED";
     default:
       return "upload.job.status.QUEUED";
   }

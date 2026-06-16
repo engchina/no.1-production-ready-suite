@@ -34,7 +34,13 @@ export type CitationFeedbackReason =
   | "answer_untrusted";
 export type UploadIngestionMode = "manual" | "auto";
 export type SourceModality = "pdf" | "image" | "text" | "office" | "unknown";
-export type IngestionJobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
+export type IngestionJobStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "SKIPPED"
+  | "CANCELLED";
 export type EvaluationFailureReason =
   | "retrieval_miss"
   | "partial_recall"
@@ -1009,6 +1015,10 @@ export const api = {
       `/api/documents/ingestion-jobs/${encodeURIComponent(id)}/retry${force ? "?force=true" : ""}`,
       { method: "POST" }
     ),
+  cancelIngestionJob: (id: string) =>
+    request<IngestionJob>(`/api/documents/ingestion-jobs/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    }),
   /** 原本ファイルの配信 URL（プレビュー用）。 */
   documentContentUrl: (id: string) => `/api/documents/${encodeURIComponent(id)}/content`,
 

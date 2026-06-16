@@ -36,6 +36,11 @@ uv run bandit -r app          # セキュリティ
 | `GET /api/documents?status=UPLOADED&q=manual&limit=50&offset=0` | 文書一覧をページング・状態・ファイル名で絞り込み |
 | `GET /api/documents/stats` | 状態別ドキュメント件数を取得 |
 | `POST /api/documents/{id}/ingest?force=false` | OCR/本文抽出、chunking、embedding、Oracle 26ai 索引 |
+| `POST /api/documents/{id}/ingestion-jobs?force=false` | 保存済みドキュメントを永続取込 job としてキュー投入 |
+| `GET /api/documents/ingestion-jobs?status=QUEUED` | 取込 job 履歴・状態をページング取得 |
+| `POST /api/documents/ingestion-jobs/drain` | 永続化済み QUEUED job を再実行 |
+| `POST /api/documents/ingestion-jobs/{job_id}/retry` | 失敗・完了・キャンセル済み job の対象文書を新規 job として再投入 |
+| `POST /api/documents/ingestion-jobs/{job_id}/cancel` | QUEUED/RUNNING job を CANCELLED にし、worker 終了時の上書きを防ぐ |
 | `POST /api/search` | hybrid/vector/keyword 検索 + rerank + citation-grounded 回答生成 |
 | `POST /api/search/stream` | SSE 形式で回答・引用をストリーミング |
 | `POST /api/evaluation/run` | golden set 評価 |

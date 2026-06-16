@@ -340,6 +340,20 @@ export function useRetryIngestionJob() {
   });
 }
 
+/** 待機中・実行中の取込 job をキャンセルする。 */
+export function useCancelIngestionJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => api.cancelIngestionJob(id),
+    onSuccess: (job) => {
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
 /** Oracle Select AI。 */
 export function useSelectAi() {
   return useMutation({

@@ -528,6 +528,142 @@ def test_retry_ingestion_job_rejects_running_job(
     assert resp.json()["error_messages"] == ["この取込ジョブはまだ実行中です。"]
 
 
+def test_cancel_queued_ingestion_job(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """待機中 job は CANCELLED にでき、drain 対象から外れる。"""
+    document_id = _upload(
+        "cancel-queued-policy.txt",
+        "cancel queued 本文".encode(),
+        "text/plain",
+    )
+    queued_job = IngestionJob(
+        id="job-cancel-queued",
+        document_id=document_id,
+        status=IngestionJobStatus.QUEUED,
+        parser_profile="enterprise_ai_text_structure",
+        queued_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
+
+    resp = client.post("/api/documents/ingestion-jobs/job-cancel-queued/cancel")
+
+    assert resp.status_code == 200
+    cancelled = resp.json()["data"]
+    assert cancelled["status"] == "CANCELLED"
+    assert cancelled["error_message"] == documents_route.INGESTION_JOB_CANCELLED_MESSAGE
+    assert cancelled["finished_at"] is not None
+
+    drain = client.post("/api/documents/ingestion-jobs/drain")
+    assert drain.status_code == 200
+    assert drain.json()["data"] == []
+
+
+def test_cancel_running_ingestion_job(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """実行中 job は cancellation requested として CANCELLED にできる。"""
+    document_id = _upload(
+        "cancel-running-policy.txt",
+        "cancel running 本文".encode(),
+        "text/plain",
+    )
+    running_job = IngestionJob(
+        id="job-cancel-running",
+        document_id=document_id,
+        status=IngestionJobStatus.RUNNING,
+        parser_profile="enterprise_ai_text_structure",
+        queued_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[running_job.id] = running_job
+    fake_document_dependencies.documents[document_id] = fake_document_dependencies.documents[
+        document_id
+    ].model_copy(update={"status": FileStatus.INGESTING})
+
+    resp = client.post("/api/documents/ingestion-jobs/job-cancel-running/cancel")
+
+    assert resp.status_code == 200
+    cancelled = resp.json()["data"]
+    assert cancelled["status"] == "CANCELLED"
+    assert cancelled["error_message"] == documents_route.INGESTION_JOB_CANCELLED_MESSAGE
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.UPLOADED
+
+
+def test_cancel_ingestion_job_rejects_terminal_status(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """完了済み job の cancel は履歴破壊を避けて拒否する。"""
+    document_id = _upload(
+        "cancel-terminal-policy.txt",
+        "cancel terminal 本文".encode(),
+        "text/plain",
+    )
+    succeeded_job = IngestionJob(
+        id="job-cancel-terminal",
+        document_id=document_id,
+        status=IngestionJobStatus.SUCCEEDED,
+        parser_profile="enterprise_ai_text_structure",
+        queued_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[succeeded_job.id] = succeeded_job
+
+    resp = client.post("/api/documents/ingestion-jobs/job-cancel-terminal/cancel")
+
+    assert resp.status_code == 409
+    assert resp.json()["error_messages"] == ["この取込ジョブはキャンセルできません。"]
+    assert fake_document_dependencies.ingestion_jobs[succeeded_job.id].status == (
+        IngestionJobStatus.SUCCEEDED
+    )
+
+
+def test_running_ingestion_job_does_not_overwrite_cancelled_status(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker 終了時に、途中で cancel された job を SUCCEEDED で上書きしない。"""
+    document_id = _upload(
+        "cancel-race-policy.txt",
+        "cancel race 本文".encode(),
+        "text/plain",
+    )
+    queued_job = IngestionJob(
+        id="job-cancel-race",
+        document_id=document_id,
+        status=IngestionJobStatus.QUEUED,
+        parser_profile="enterprise_ai_text_structure",
+        queued_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
+
+    async def cancel_during_ingest(
+        document_id: str,
+        *,
+        force: bool = False,
+    ) -> DocumentDetail:
+        _ = force
+        job = fake_document_dependencies.ingestion_jobs[queued_job.id]
+        fake_document_dependencies.ingestion_jobs[queued_job.id] = job.model_copy(
+            update={
+                "status": IngestionJobStatus.CANCELLED,
+                "error_message": documents_route.INGESTION_JOB_CANCELLED_MESSAGE,
+                "finished_at": datetime.now(UTC),
+            }
+        )
+        detail = await fake_document_dependencies.get_document(document_id)
+        assert detail is not None
+        return detail
+
+    monkeypatch.setattr(documents_route, "_ingest_existing_document", cancel_during_ingest)
+
+    anyio.run(documents_route._run_ingestion_job, queued_job.id)
+
+    assert fake_document_dependencies.ingestion_jobs[queued_job.id].status == (
+        IngestionJobStatus.CANCELLED
+    )
+
+
 def test_recover_and_drain_ingestion_jobs_recovers_stale_running_jobs(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:

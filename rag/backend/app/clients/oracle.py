@@ -4826,7 +4826,7 @@ CREATE TABLE {table_name} (
     started_at       TIMESTAMP WITH TIME ZONE,
     finished_at      TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
-        CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED')),
+        CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED')),
     CONSTRAINT {table_name}_attempts_ck
         CHECK (attempt_count >= 0 AND max_attempts >= 1),
     CONSTRAINT {table_name}_document_fk

@@ -27,7 +27,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260616_002"
+MIGRATION_ARTIFACT_VERSION = "20260616_003"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -126,6 +126,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260616_002_evaluation_runs_result_sha256",
             table_name="rag_evaluation_runs",
             sql=_evaluation_runs_result_sha256_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260616_003_ingestion_jobs_cancelled_status",
+            table_name="rag_ingestion_jobs",
+            sql=_ingestion_jobs_cancelled_status_migration_sql(),
         ),
     ]
 
@@ -382,6 +387,34 @@ BEGIN
         'ALTER TABLE rag_search_audit ADD CONSTRAINT '
         || 'rag_search_audit_search_mode_ck CHECK '
         || '(search_mode IN (''hybrid'', ''vector'', ''keyword''))';
+END;
+/
+""".strip()
+
+
+def _ingestion_jobs_cancelled_status_migration_sql() -> str:
+    """rag_ingestion_jobs.status の CHECK constraint に CANCELLED を追加する。"""
+    return """
+DECLARE
+    v_constraint_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND constraint_name = 'RAG_INGESTION_JOBS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_jobs DROP CONSTRAINT '
+            || 'rag_ingestion_jobs_status_ck';
+    END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_ingestion_jobs ADD CONSTRAINT '
+        || 'rag_ingestion_jobs_status_ck CHECK '
+        || '(status IN (''QUEUED'', ''RUNNING'', ''SUCCEEDED'', ''FAILED'', '
+        || '''SKIPPED'', ''CANCELLED''))';
 END;
 /
 """.strip()

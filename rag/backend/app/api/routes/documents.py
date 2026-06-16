@@ -51,6 +51,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
+INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
 
 
 class UploadIngestionMode(StrEnum):
@@ -315,6 +316,32 @@ async def retry_ingestion_job(
         background_tasks=background_tasks,
     )
     return ApiResponse(data=retry_job)
+
+
+@router.post("/ingestion-jobs/{job_id}/cancel", response_model=ApiResponse[IngestionJob])
+async def cancel_ingestion_job(
+    http_request: Request,
+    job_id: str,
+) -> ApiResponse[IngestionJob]:
+    """待機中または実行中の取込 job をキャンセル済みにする。"""
+    enforce_rate_limit("ingest", http_request)
+    oracle = OracleClient()
+    job = await oracle.get_ingestion_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="取込ジョブが見つかりません。")
+    if job.status not in {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}:
+        raise HTTPException(status_code=409, detail="この取込ジョブはキャンセルできません。")
+    cancelled = await oracle.update_ingestion_job(
+        job_id,
+        status=IngestionJobStatus.CANCELLED,
+        error_message=INGESTION_JOB_CANCELLED_MESSAGE,
+        finished_at=datetime.now(UTC),
+    )
+    if cancelled is None:
+        raise HTTPException(status_code=404, detail="取込ジョブが見つかりません。")
+    if job.status == IngestionJobStatus.RUNNING:
+        await oracle.update_document_status(job.document_id, FileStatus.UPLOADED)
+    return ApiResponse(data=cancelled)
 
 
 @router.get("/ingestion-jobs/{job_id}", response_model=ApiResponse[IngestionJob])
@@ -592,11 +619,11 @@ async def _run_ingestion_job(
     try:
         await _ingest_existing_document(job.document_id, force=force)
     except HTTPException as exc:
-        await oracle.update_ingestion_job(
+        await _finish_ingestion_job_unless_cancelled(
+            oracle,
             job_id,
             status=IngestionJobStatus.FAILED,
             error_message=str(exc.detail),
-            finished_at=datetime.now(UTC),
         )
         logger.info(
             "ingestion_job_user_error",
@@ -609,11 +636,11 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionTimeoutError as exc:
-        await oracle.update_ingestion_job(
+        await _finish_ingestion_job_unless_cancelled(
+            oracle,
             job_id,
             status=IngestionJobStatus.FAILED,
             error_message=str(exc),
-            finished_at=datetime.now(UTC),
         )
         logger.info(
             "ingestion_job_timeout",
@@ -622,11 +649,11 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionUserError as exc:
-        await oracle.update_ingestion_job(
+        await _finish_ingestion_job_unless_cancelled(
+            oracle,
             job_id,
             status=IngestionJobStatus.FAILED,
             error_message=str(exc),
-            finished_at=datetime.now(UTC),
         )
         logger.info(
             "ingestion_job_validation_error",
@@ -635,11 +662,11 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except Exception:
-        await oracle.update_ingestion_job(
+        await _finish_ingestion_job_unless_cancelled(
+            oracle,
             job_id,
             status=IngestionJobStatus.FAILED,
             error_message="取込処理に失敗しました。",
-            finished_at=datetime.now(UTC),
         )
         logger.exception(
             "ingestion_job_failed",
@@ -648,11 +675,34 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     else:
-        await oracle.update_ingestion_job(
+        await _finish_ingestion_job_unless_cancelled(
+            oracle,
             job_id,
             status=IngestionJobStatus.SUCCEEDED,
-            finished_at=datetime.now(UTC),
         )
+
+
+async def _finish_ingestion_job_unless_cancelled(
+    oracle: OracleClient,
+    job_id: str,
+    *,
+    status: IngestionJobStatus,
+    error_message: str | None = None,
+) -> IngestionJob | None:
+    """実行中に cancel された job の最終状態を上書きしない。"""
+    current = await oracle.get_ingestion_job(job_id)
+    if current is not None and current.status == IngestionJobStatus.CANCELLED:
+        logger.info(
+            "ingestion_job_finish_skipped_after_cancel",
+            extra={"job_id": job_id, "final_status": status.value},
+        )
+        return current
+    return await oracle.update_ingestion_job(
+        job_id,
+        status=status,
+        error_message=error_message,
+        finished_at=datetime.now(UTC),
+    )
 
 
 async def recover_and_drain_ingestion_jobs(
