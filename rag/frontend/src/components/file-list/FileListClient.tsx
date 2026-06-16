@@ -1,7 +1,7 @@
 "use client";
 
 import { Link } from "react-router-dom";
-import { Search as SearchIcon, Sparkles, X } from "lucide-react";
+import { Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -11,17 +11,30 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Banner } from "@/components/ui/banner";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { ToggleChip } from "@/components/ui/toggle-chip";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, ApiError, type DocumentSummary, type FileStatus, type KnowledgeBaseRef } from "@/lib/api";
-import { useDocuments, useEnqueueDocumentIngestionJob, useKnowledgeBases } from "@/lib/queries";
+import {
+  api,
+  ApiError,
+  type DocumentSummary,
+  type FileStatus,
+  type KnowledgeBaseRef,
+} from "@/lib/api";
+import {
+  useDeleteDocument,
+  useDocuments,
+  useEnqueueDocumentIngestionJob,
+  useKnowledgeBases,
+} from "@/lib/queries";
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
+import { toast } from "@/lib/toast";
 
 const LIMIT = 20;
 const FILTERS: (FileStatus | "ALL")[] = ["ALL", "UPLOADED", "INGESTING", "INDEXED", "ERROR"];
@@ -30,6 +43,7 @@ const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
 export function FileListClient() {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [filter, setFilter] = useState<FileStatus | "ALL">("ALL");
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
@@ -49,6 +63,7 @@ export function FileListClient() {
   const knowledgeBases = useKnowledgeBases({ status: "ACTIVE", limit: 100, offset: 0 });
 
   const enqueueIngestion = useEnqueueDocumentIngestionJob();
+  const deleteDocument = useDeleteDocument();
 
   const page = query.data;
   const items = page?.items ?? [];
@@ -94,6 +109,28 @@ export function FileListClient() {
     qc.invalidateQueries({ queryKey: ["documents"] });
     qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     qc.invalidateQueries({ queryKey: ["dashboard", "summary"] });
+  };
+
+  const runDelete = async (doc: DocumentSummary) => {
+    const confirmed = await confirm({
+      title: t("fileList.delete.confirm.title"),
+      description: t("fileList.delete.confirm.description", { name: doc.file_name }),
+      confirmLabel: t("fileList.delete.confirm.confirm"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!confirmed) return;
+    try {
+      const result = await deleteDocument.mutateAsync(doc.id);
+      selection.clear();
+      toast.success(t("fileList.delete.toast.deleted", { name: result.file_name }));
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError
+          ? error.message
+          : t("fileList.delete.toast.failed")
+      );
+    }
   };
 
   return (
@@ -230,9 +267,14 @@ export function FileListClient() {
                       onIngest={(force) =>
                         enqueueIngestion.mutate({ id: doc.id, force })
                       }
+                      onDelete={() => void runDelete(doc)}
                       ingesting={
                         enqueueIngestion.isPending &&
                         enqueueIngestion.variables?.id === doc.id
+                      }
+                      deleting={
+                        deleteDocument.isPending &&
+                        deleteDocument.variables === doc.id
                       }
                     />
                   ))}
@@ -293,13 +335,17 @@ function Row({
   selected,
   onToggle,
   onIngest,
+  onDelete,
   ingesting,
+  deleting,
 }: {
   doc: DocumentSummary;
   selected: boolean;
   onToggle: () => void;
   onIngest: (force: boolean) => void;
+  onDelete: () => void;
   ingesting: boolean;
+  deleting: boolean;
 }) {
   return (
     <tr className={cn("border-t border-border", selected && "bg-info-bg/30")}>
@@ -333,11 +379,27 @@ function Row({
       <td className="px-4 py-3">
         <div className="flex justify-end gap-2">
           {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
-            <Button size="sm" loading={ingesting} onClick={() => onIngest(false)}>
+            <Button
+              size="sm"
+              loading={ingesting}
+              disabled={deleting}
+              onClick={() => onIngest(false)}
+            >
               {!ingesting ? <Sparkles size={14} aria-hidden /> : null}
               {t("action.enqueueIngestion")}
             </Button>
           )}
+          <Button
+            variant="danger"
+            size="sm"
+            loading={deleting}
+            disabled={ingesting}
+            onClick={onDelete}
+            aria-label={t("fileList.delete.aria", { name: doc.file_name })}
+          >
+            {!deleting ? <Trash2 size={14} aria-hidden /> : null}
+            {t("fileList.delete.action")}
+          </Button>
         </div>
       </td>
     </tr>

@@ -533,6 +533,18 @@ class OracleClient:
             offset=offset,
         )
 
+    async def list_document_ingestion_jobs(
+        self,
+        document_id: str,
+        *,
+        status: IngestionJobStatus | None = None,
+    ) -> list[IngestionJob]:
+        """指定 document の取込 job 一覧を返す。"""
+        return await self._list_document_ingestion_jobs_with_oracle(
+            document_id,
+            status=status,
+        )
+
     async def count_ingestion_jobs(self, *, status: IngestionJobStatus | None = None) -> int:
         """アクセス可能な取込 job 件数を返す。"""
         return await self._count_ingestion_jobs_with_oracle(status=status)
@@ -2012,6 +2024,49 @@ class OracleClient:
         )
         return [_ingestion_job_from_row(row) for row in rows]
 
+    async def _list_document_ingestion_jobs_with_oracle(
+        self,
+        document_id: str,
+        *,
+        status: IngestionJobStatus | None,
+    ) -> list[IngestionJob]:
+        """Oracle ingestion job table から指定 document の job を取得する。"""
+        binds: dict[str, object] = {"document_id": document_id}
+        status_clause = ""
+        if status is not None:
+            binds["ingestion_job_status"] = status.value
+            status_clause = "AND j.status = :ingestion_job_status"
+        rows = await self._fetch_ingestion_job_rows(
+            _render_sql(
+                """
+            SELECT
+                j.job_id,
+                j.document_id,
+                j.status,
+                j.parser_profile,
+                j.quality_warnings,
+                j.skip_reason,
+                j.error_message,
+                j.attempt_count,
+                j.max_attempts,
+                j.queued_at,
+                j.started_at,
+                j.finished_at
+            FROM rag_ingestion_jobs j
+            JOIN rag_documents d
+              ON d.document_id = j.document_id
+            WHERE j.document_id = :document_id
+              AND {document_access_sql}
+              {status_clause}
+            ORDER BY j.queued_at DESC, j.job_id DESC
+            """,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                status_clause=status_clause,
+            ),
+            _with_tenant_bind(binds),
+        )
+        return [_ingestion_job_from_row(row) for row in rows]
+
     async def _count_ingestion_jobs_with_oracle(
         self,
         *,
@@ -2687,6 +2742,25 @@ class OracleClient:
             existing = _select_document(connection, document_id)
             if existing is None:
                 return False
+            graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
+            _delete_graph_rows_for_document(
+                connection,
+                document_id=document_id,
+                entity_ids=graph_entity_ids,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET duplicate_of_document_id = NULL
+                WHERE duplicate_of_document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
             _execute(
                 connection,
                 """

@@ -338,6 +338,28 @@ async def test_oracle_client_lists_and_counts_ingestion_jobs() -> None:
     assert count_call.parameters["ingestion_job_status"] == "QUEUED"
 
 
+async def test_oracle_client_lists_document_ingestion_jobs() -> None:
+    """指定 document の取込 job 一覧は document_id と状態で絞り込める。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_ingestion_job_row(status="RUNNING")]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    jobs = await client.list_document_ingestion_jobs(
+        "doc-1",
+        status=IngestionJobStatus.RUNNING,
+    )
+
+    assert len(jobs) == 1
+    assert jobs[0].document_id == "doc-1"
+    assert jobs[0].status == IngestionJobStatus.RUNNING
+    call = pool.connection.calls[0]
+    assert "FROM rag_ingestion_jobs j" in call.statement
+    assert "JOIN rag_documents d" in call.statement
+    assert "j.document_id = :document_id" in call.statement
+    assert "j.status = :ingestion_job_status" in call.statement
+    assert call.parameters["document_id"] == "doc-1"
+    assert call.parameters["ingestion_job_status"] == "RUNNING"
+
+
 async def test_oracle_client_updates_ingestion_job_status() -> None:
     """取込 job 状態更新後に最新行を返す。"""
     started_at = datetime(2026, 1, 2, 0, 1, tzinfo=UTC)
@@ -1228,6 +1250,18 @@ async def test_oci_delete_document_removes_chunks_and_document_with_access_scope
     statements = [call.statement for call in pool.connection.calls]
     assert statements[0].startswith("SELECT")
     assert "document_id IN (:access_document_id_0)" in statements[0]
+    assert any("FROM rag_graph_entity_chunks" in statement for statement in statements)
+    assert any("DELETE FROM rag_graph_entity_chunks" in statement for statement in statements)
+    assert any("DELETE FROM rag_graph_claims" in statement for statement in statements)
+    assert any("DELETE FROM rag_graph_community_summaries" in statement for statement in statements)
+    duplicate_clear = next(
+        call
+        for call in pool.connection.calls
+        if call.statement.startswith("UPDATE rag_documents")
+        and "duplicate_of_document_id = NULL" in call.statement
+    )
+    assert "duplicate_of_document_id = :document_id" in duplicate_clear.statement
+    assert duplicate_clear.parameters["document_id"] == "doc-1"
     assert any("DELETE FROM rag_chunks" in statement for statement in statements)
     document_delete = next(
         call

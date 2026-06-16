@@ -136,6 +136,22 @@ export function useReplaceDocumentKnowledgeBases() {
   });
 }
 
+/** ドキュメント本体と検索 index を削除する。 */
+export function useDeleteDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteDocument(id),
+    onSuccess: (result) => {
+      qc.removeQueries({ queryKey: queryKeys.document(result.id) });
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
+      qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
+      qc.invalidateQueries({ queryKey: queryKeys.documentStats });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
 /** ファイルアップロード。成功時に一覧・ダッシュボードを無効化。 */
 export function useUploadDocument() {
   const qc = useQueryClient();

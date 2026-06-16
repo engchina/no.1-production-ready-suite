@@ -242,6 +242,13 @@ export interface DocumentDetail extends DocumentSummary {
   error_message: string | null;
 }
 
+export interface DocumentDeleteResult {
+  id: string;
+  file_name: string;
+  object_storage_path: string | null;
+  object_deleted: boolean;
+}
+
 export interface UploadResult {
   id: string;
   file_name: string;
@@ -940,6 +947,10 @@ export const api = {
     return requestDegradable<Page<DocumentSummary>>(`/api/documents${qs ? `?${qs}` : ""}`);
   },
   getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  deleteDocument: (id: string) =>
+    request<DocumentDeleteResult>(`/api/documents/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   getDocumentStats: () => requestDegradable<DocumentStats>("/api/documents/stats"),
   listDocumentKnowledgeBases: (id: string) =>
     request<KnowledgeBaseRef[]>(`/api/documents/${encodeURIComponent(id)}/knowledge-bases`),

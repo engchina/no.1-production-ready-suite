@@ -7,6 +7,7 @@ import anyio
 import pytest
 
 from app.api.routes import documents as documents_route
+from app.clients.object_storage import ObjectStorageClient
 from app.main import app
 from app.schemas.document import (
     DocumentDetail,
@@ -68,6 +69,22 @@ class FakeWorkspaceOracle:
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.documents.get(document_id)
 
+    async def delete_document(self, document_id: str) -> bool:
+        if document_id not in self.documents:
+            return False
+        del self.documents[document_id]
+        self.ingestion_jobs = {
+            job_id: job
+            for job_id, job in self.ingestion_jobs.items()
+            if job.document_id != document_id
+        }
+        for duplicate_id, detail in list(self.documents.items()):
+            if detail.duplicate_of_document_id == document_id:
+                self.documents[duplicate_id] = detail.model_copy(
+                    update={"duplicate_of_document_id": None}
+                )
+        return True
+
     async def update_document_status(
         self,
         document_id: str,
@@ -109,6 +126,18 @@ class FakeWorkspaceOracle:
             reverse=True,
         )
         return sorted_jobs[offset : offset + limit] if limit is not None else sorted_jobs[offset:]
+
+    async def list_document_ingestion_jobs(
+        self,
+        document_id: str,
+        *,
+        status: IngestionJobStatus | None = None,
+    ) -> list[IngestionJob]:
+        return [
+            job
+            for job in self.ingestion_jobs.values()
+            if job.document_id == document_id and (status is None or job.status == status)
+        ]
 
     async def count_ingestion_jobs(
         self,
@@ -794,6 +823,65 @@ def test_document_content_returns_404_for_unknown_document() -> None:
 
     assert resp.status_code == 404
     assert resp.json()["error_messages"] == ["ドキュメントが見つかりません。"]
+
+
+def test_delete_document_removes_record_and_original_file(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """document 削除 API は DB record とアップロード原本を削除する。"""
+    body = b"sample policy"
+    document_id = _upload("policy.txt", body, "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    assert detail.object_storage_path is not None
+    assert anyio.run(ObjectStorageClient().get, detail.object_storage_path) == body
+
+    resp = client.delete(f"/api/documents/{document_id}")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["id"] == document_id
+    assert data["file_name"] == "policy.txt"
+    assert data["object_deleted"] is True
+    assert document_id not in fake_document_dependencies.documents
+    with pytest.raises(FileNotFoundError):
+        anyio.run(ObjectStorageClient().get, detail.object_storage_path)
+    assert client.get(f"/api/documents/{document_id}").status_code == 404
+
+
+def test_delete_document_blocks_active_ingestion_job(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """未完了の取込 job がある document は誤削除を止める。"""
+    document_id = _upload("policy.txt", b"sample", "text/plain")
+    fake_document_dependencies.ingestion_jobs["job-queued"] = IngestionJob(
+        id="job-queued",
+        document_id=document_id,
+        status=IngestionJobStatus.QUEUED,
+        parser_profile="enterprise_ai_generic",
+        queued_at=datetime.now(UTC),
+    )
+
+    resp = client.delete(f"/api/documents/{document_id}")
+
+    assert resp.status_code == 409
+    assert "先にキャンセルしてください" in resp.json()["error_messages"][0]
+    assert document_id in fake_document_dependencies.documents
+
+
+def test_delete_document_clears_duplicate_references(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """重複元 document を削除すると、残る重複 document の参照を外す。"""
+    original_id = _upload("original.txt", b"same body", "text/plain")
+    duplicate_id = _upload("duplicate.txt", b"same body", "text/plain")
+    assert (
+        fake_document_dependencies.documents[duplicate_id].duplicate_of_document_id == original_id
+    )
+
+    resp = client.delete(f"/api/documents/{original_id}")
+
+    assert resp.status_code == 200
+    assert fake_document_dependencies.documents[duplicate_id].duplicate_of_document_id is None
 
 
 def test_document_detail_returns_extraction_after_ingest() -> None:

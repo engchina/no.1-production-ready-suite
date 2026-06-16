@@ -127,6 +127,15 @@ class BatchUploadResult(BaseModel):
     skipped_count: int = 0
 
 
+class DocumentDeleteResult(BaseModel):
+    """ドキュメント削除結果。"""
+
+    id: str
+    file_name: str
+    object_storage_path: str | None = None
+    object_deleted: bool = False
+
+
 class DocumentStats(BaseModel):
     """ドキュメント状態別の集計。"""
 

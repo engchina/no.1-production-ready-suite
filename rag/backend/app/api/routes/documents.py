@@ -35,6 +35,7 @@ from app.rag.source_profile import build_source_profile
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
     BatchUploadResult,
+    DocumentDeleteResult,
     DocumentDetail,
     DocumentStats,
     DocumentSummary,
@@ -52,6 +53,9 @@ logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
+ACTIVE_INGESTION_STATUSES = frozenset(
+    {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}
+)
 
 
 class UploadIngestionMode(StrEnum):
@@ -379,6 +383,59 @@ async def get_document(document_id: str) -> ApiResponse[DocumentDetail]:
     return ApiResponse(data=detail)
 
 
+@router.delete("/{document_id}", response_model=ApiResponse[DocumentDeleteResult])
+async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]:
+    """ドキュメント本体、検索 index、原本ファイル参照を削除する。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    active_jobs = await _list_active_ingestion_jobs(oracle, document_id)
+    if active_jobs:
+        raise HTTPException(
+            status_code=409,
+            detail="取込ジョブが待機中または実行中のため削除できません。先にキャンセルしてください。",
+        )
+
+    deleted = await oracle.delete_document(document_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+
+    object_deleted = False
+    warning_messages: list[str] = []
+    if detail.object_storage_path:
+        try:
+            object_deleted = await ObjectStorageClient().delete(detail.object_storage_path)
+            if not object_deleted:
+                warning_messages.append("原本ファイルは既に存在しませんでした。")
+        except FileNotFoundError:
+            warning_messages.append("原本ファイルは既に存在しませんでした。")
+        except ValueError:
+            logger.warning(
+                "document_source_delete_invalid_reference",
+                extra={"document_id": document_id},
+            )
+            warning_messages.append("原本ファイルの参照パスが不正なため削除できませんでした。")
+        except Exception:
+            logger.exception(
+                "document_source_delete_failed",
+                extra={"document_id": document_id},
+            )
+            warning_messages.append(
+                "文書は削除しましたが、原本ファイルの削除に失敗しました。保存先を確認してください。"
+            )
+
+    return ApiResponse(
+        data=DocumentDeleteResult(
+            id=detail.id,
+            file_name=detail.file_name,
+            object_storage_path=detail.object_storage_path,
+            object_deleted=object_deleted,
+        ),
+        warning_messages=warning_messages,
+    )
+
+
 @router.get("/{document_id}/knowledge-bases", response_model=ApiResponse[list[KnowledgeBaseRef]])
 async def list_document_knowledge_bases(
     document_id: str,
@@ -549,6 +606,17 @@ async def _enqueue_ingestion_job_for_document(
     if background_tasks is not None:
         background_tasks.add_task(_run_ingestion_job, job.id, force=force)
     return job
+
+
+async def _list_active_ingestion_jobs(
+    oracle: OracleClient,
+    document_id: str,
+) -> list[IngestionJob]:
+    """削除を止めるべき未完了の取込 job を返す。"""
+    jobs: list[IngestionJob] = []
+    for status in ACTIVE_INGESTION_STATUSES:
+        jobs.extend(await oracle.list_document_ingestion_jobs(document_id, status=status))
+    return jobs
 
 
 async def _create_ingestion_job(result: UploadResult) -> IngestionJob:
