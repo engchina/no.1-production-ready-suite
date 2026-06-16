@@ -1,0 +1,74 @@
+name: RAG Evaluation Nightly
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "評価対象 API base URL。未指定時は repo variable RAG_EVALUATION_API_BASE_URL を使います。"
+        required: false
+        type: string
+      golden_set_path:
+        description: "評価 JSON path。未指定時は evaluation/compare.example.json を使います。"
+        required: false
+        default: "evaluation/compare.example.json"
+        type: string
+
+concurrency:
+  group: rag-evaluation-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluation:
+    name: Golden Set Compare
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run evaluation gate
+        env:
+          INPUT_API_BASE_URL: ${{ github.event.inputs.api_base_url }}
+          DEFAULT_API_BASE_URL: ${{ vars.RAG_EVALUATION_API_BASE_URL }}
+          INPUT_GOLDEN_SET_PATH: ${{ github.event.inputs.golden_set_path }}
+          RAG_EVALUATION_TENANT_ID: ${{ vars.RAG_EVALUATION_TENANT_ID }}
+          RAG_EVALUATION_USER_ID: ${{ vars.RAG_EVALUATION_USER_ID }}
+        run: |
+          set -euo pipefail
+          api_base_url="${INPUT_API_BASE_URL:-${DEFAULT_API_BASE_URL:-}}"
+          golden_set_path="${INPUT_GOLDEN_SET_PATH:-evaluation/compare.example.json}"
+          if [ -z "$api_base_url" ]; then
+            echo "RAG_EVALUATION_API_BASE_URL が未設定のため nightly evaluation を skip します。"
+            exit 0
+          fi
+          mkdir -p ../artifacts
+          uv run python -m app.rag.evaluation_cli \
+            "../${golden_set_path}" \
+            --api-base-url "$api_base_url" \
+            --output ../artifacts/evaluation-result.json \
+            --trend-output ../artifacts/evaluation-trend.json
+
+      - name: Upload evaluation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-evaluation-nightly
+          path: artifacts/
+          if-no-files-found: ignore

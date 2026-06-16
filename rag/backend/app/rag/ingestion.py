@@ -435,11 +435,7 @@ def _merge_pdf_segment_extractions(
             elements.append(adjusted)
             next_order += 1
 
-    confidence = (
-        sum(confidence_values) / len(confidence_values)
-        if confidence_values
-        else 0.0
-    )
+    confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
     return StructuredExtraction(
         raw_text="\n\n".join(raw_parts),
         document_type=document_type,

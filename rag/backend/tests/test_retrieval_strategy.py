@@ -41,3 +41,15 @@ def test_select_ai_candidate_keeps_dedicated_endpoint_boundary() -> None:
     assert resolved.mode == SearchMode.HYBRID
     assert resolved.route_reason == "auto_select_ai_candidate"
     assert resolved.fallback_reason == "select_ai_uses_dedicated_endpoint"
+
+
+def test_graph_strategy_is_preserved_when_graph_enabled() -> None:
+    settings = Settings.model_construct(rag_graph_enabled=True)
+    request = SearchRequest(query="文書全体の関係をまとめて", mode=SearchMode.HYBRID)
+
+    resolved = resolve_retrieval_strategy(request, settings=settings, query=request.query)
+
+    assert resolved.strategy == SearchStrategy.GRAPH_GLOBAL
+    assert resolved.mode == SearchMode.HYBRID
+    assert resolved.route_reason == "auto_graph_global_candidate"
+    assert resolved.fallback_reason is None

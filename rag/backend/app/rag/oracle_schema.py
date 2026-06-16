@@ -27,7 +27,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260616_001"
+MIGRATION_ARTIFACT_VERSION = "20260616_002"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -121,6 +121,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260616_001_search_audit_search_mode",
             table_name="rag_search_audit",
             sql=_search_audit_search_mode_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260616_002_evaluation_runs_result_sha256",
+            table_name="rag_evaluation_runs",
+            sql=_evaluation_runs_result_sha256_migration_sql(),
         ),
     ]
 
@@ -377,6 +382,42 @@ BEGIN
         'ALTER TABLE rag_search_audit ADD CONSTRAINT '
         || 'rag_search_audit_search_mode_ck CHECK '
         || '(search_mode IN (''hybrid'', ''vector'', ''keyword''))';
+END;
+/
+""".strip()
+
+
+def _evaluation_runs_result_sha256_migration_sql() -> str:
+    """rag_evaluation_runs に artifact hash 列を追加する。"""
+    return """
+DECLARE
+    v_column_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_RUNS'
+      AND column_name = 'RESULT_SHA256';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_runs ADD '
+            || '(result_sha256 CHAR(64) DEFAULT '''
+            || RPAD('0', 64, '0')
+            || ''' NOT NULL)';
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_RUNS_RESULT_HASH_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_runs_result_hash_idx '
+            || 'ON rag_evaluation_runs (result_sha256)';
+    END IF;
 END;
 /
 """.strip()

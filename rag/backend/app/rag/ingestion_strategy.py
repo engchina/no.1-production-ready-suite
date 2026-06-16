@@ -51,9 +51,7 @@ def extraction_strategy_for_source(
 ) -> ExtractionStrategy:
     """source profile の parser_profile を VLM/抽出 prompt へ反映する。"""
     parser_profile = (
-        source_profile.parser_profile
-        if source_profile is not None
-        else "enterprise_ai_generic"
+        source_profile.parser_profile if source_profile is not None else "enterprise_ai_generic"
     )
     profile_instruction = PROFILE_INSTRUCTIONS.get(
         parser_profile,

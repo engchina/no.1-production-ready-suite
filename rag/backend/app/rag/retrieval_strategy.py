@@ -130,10 +130,9 @@ def _resolve_graph_strategy(
             fallback_reason="graph_disabled",
         )
     return ResolvedRetrievalStrategy(
-        strategy=SearchStrategy.HYBRID,
+        strategy=requested,
         mode=fallback_mode,
         route_reason=route_reason,
-        fallback_reason="graph_index_unavailable",
     )
 
 

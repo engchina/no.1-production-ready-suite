@@ -1,6 +1,7 @@
 """golden set 評価を CI / nightly gate として実行する CLI。"""
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -65,6 +66,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         gate = _extract_gate_evaluation(response_payload)
         _write_json(response_payload, args.output)
+        if args.trend_output is not None:
+            _write_json(_trend_payload(response_payload, gate), args.trend_output)
     except EvaluationGateError as exc:
         print(f"評価 gate エラー: {exc}", file=sys.stderr)
         return exc.exit_code
@@ -113,6 +116,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         help="評価 API レスポンス JSON の保存先。未指定なら stdout に出力します。",
+    )
+    parser.add_argument(
+        "--trend-output",
+        type=Path,
+        help=(
+            "nightly trend 用の非機密サマリ JSON 保存先。"
+            "query/context 原文や case_results は含めません。"
+        ),
     )
     parser.add_argument(
         "--tenant-id",
@@ -273,6 +284,61 @@ def _write_json(payload: Mapping[str, Any], output_path: Path | None) -> None:
         return
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(serialized, encoding="utf-8")
+
+
+def _trend_payload(response_payload: Mapping[str, Any], gate: GateEvaluation) -> dict[str, Any]:
+    """nightly compare 用に raw case 詳細を除いた trend snapshot を作る。"""
+    response_json = json.dumps(response_payload, ensure_ascii=False, sort_keys=True)
+    data = response_payload.get("data", response_payload)
+    trend: dict[str, Any] = {
+        "kind": "compare" if isinstance(data, Mapping) and "results" in data else "run",
+        "result_sha256": hashlib.sha256(response_json.encode("utf-8")).hexdigest(),
+        "passed": not _gate_failed(gate.metrics),
+        "best_experiment_id": gate.best_experiment_id,
+        "ranking_metric": gate.ranking_metric,
+        "metrics": _metrics_trend(gate.metrics),
+    }
+    if isinstance(data, Mapping) and "results" in data:
+        try:
+            comparison = EvaluationCompareResponse.model_validate(data)
+        except ValidationError:
+            return trend
+        trend["experiments"] = [
+            {
+                "rank": result.rank,
+                "id": result.experiment.id,
+                "mode": result.experiment.mode.value,
+                "ranking_score": result.ranking_score,
+                "passed": not _gate_failed(result.metrics),
+                "metrics": _metrics_trend(result.metrics),
+            }
+            for result in sorted(comparison.results, key=lambda item: item.rank)
+        ]
+    return trend
+
+
+def _metrics_trend(metrics: EvaluationMetrics) -> dict[str, Any]:
+    """評価 metrics から trend に必要な aggregate だけを残す。"""
+    return {
+        "case_count": metrics.case_count,
+        "error_count": metrics.error_count,
+        "evaluated_k": metrics.evaluated_k,
+        "precision_at_k": metrics.precision_at_k,
+        "recall_at_k": metrics.recall_at_k,
+        "mrr": metrics.mrr,
+        "answer_keyword_hit_rate": metrics.answer_keyword_hit_rate,
+        "groundedness_pass_rate": metrics.groundedness_pass_rate,
+        "faithfulness": metrics.faithfulness,
+        "context_precision": metrics.context_precision,
+        "context_recall": metrics.context_recall,
+        "response_relevancy": metrics.response_relevancy,
+        "noise_sensitivity": metrics.noise_sensitivity,
+        "threshold_failure_count": len(metrics.threshold_failures),
+        "threshold_failures": [
+            failure.model_dump(mode="json") for failure in metrics.threshold_failures
+        ],
+        "failure_reason_counts": dict(metrics.failure_reason_counts),
+    }
 
 
 def _gate_failed(metrics: EvaluationMetrics) -> bool:

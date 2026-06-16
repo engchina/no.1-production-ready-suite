@@ -17,7 +17,7 @@ from app.rag.pipeline import (
     _build_context,
     _dedupe_ranked_chunks,
 )
-from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest, SearchStrategy
 
 
 def test_build_context_keeps_truncated_first_chunk_when_window_is_small() -> None:
@@ -198,6 +198,64 @@ async def test_pipeline_records_answer_guardrail_findings_metric(
 
     assert response.guardrail_warnings
     assert observed == [("answer", ["low_groundedness"], "warning")]
+
+
+async def test_pipeline_uses_graph_global_strategy_when_hits_exist() -> None:
+    """GraphRAG-lite が有効で community summary が命中したら graph route を使う。"""
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=GraphGlobalOracleClient(),
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_graph_enabled=True,
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="全体の関係をまとめて",
+            strategy=SearchStrategy.GRAPH_GLOBAL,
+            top_k=3,
+            rerank_top_n=1,
+        )
+    )
+
+    assert response.citations[0].metadata["retrieval_mode"] == "graph_global"
+    assert response.diagnostics.retrieval_strategy == "graph_global"
+    assert response.diagnostics.graph_hit_count == 1
+    assert response.diagnostics.fallback_reason is None
+
+
+async def test_pipeline_falls_back_to_hybrid_when_graph_has_no_hits() -> None:
+    """GraphRAG-lite の命中が空なら既存 hybrid retrieval へ戻る。"""
+    oracle = EmptyGraphOracleClient()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=oracle,
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_graph_enabled=True,
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="関係を説明して",
+            strategy=SearchStrategy.GRAPH_LOCAL,
+            top_k=3,
+            rerank_top_n=1,
+        )
+    )
+
+    assert oracle.hybrid_called is True
+    assert response.citations[0].chunk_id == "doc-fallback:0"
+    assert response.diagnostics.retrieval_strategy == "hybrid"
+    assert response.diagnostics.graph_hit_count == 0
+    assert response.diagnostics.fallback_reason == "graph_no_hits"
 
 
 async def test_pipeline_returns_only_citations_in_generation_context(
@@ -832,6 +890,76 @@ class SensitiveOracleClient(OracleClient):
                 file_name="policy-sensitive.txt",
             )
         ]
+
+
+class GraphGlobalOracleClient(OracleClient):
+    """Graph global route の citation を返す Oracle client。"""
+
+    async def graph_global_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-graph",
+                chunk_id="community:comm-1",
+                text="承認条件は 120000 円です。関連文書全体では費用申請と監査証跡が関係します。",
+                score=0.95,
+                file_name="承認条件 community",
+                metadata={"retrieval_mode": "graph_global", "graph_community_id": "comm-1"},
+            )
+        ][:top_k]
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, top_k, mode, filters
+        raise AssertionError("graph hit がある場合は baseline fallback しない")
+
+
+class EmptyGraphOracleClient(OracleClient):
+    """Graph local が空で baseline に戻る Oracle client。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hybrid_called = False
+
+    async def graph_local_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, top_k, filters
+        return []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        self.hybrid_called = True
+        return [
+            RetrievedChunk(
+                document_id="doc-fallback",
+                chunk_id="doc-fallback:0",
+                text="承認条件は 120000 円です。",
+                score=0.9,
+                file_name="fallback.txt",
+            )
+        ][:top_k]
 
 
 class LongChunkOracleClient(OracleClient):

@@ -199,9 +199,7 @@ class FakeKnowledgeBaseOracle:
             if document_id not in self.documents:
                 raise KeyError(document_id)
             self.memberships.add((knowledge_base_id, document_id))
-        assigned = len(
-            [doc_id for kb_id, doc_id in self.memberships if kb_id == knowledge_base_id]
-        )
+        assigned = len([doc_id for kb_id, doc_id in self.memberships if kb_id == knowledge_base_id])
         updated = detail.model_copy(
             update={
                 "document_count": assigned,

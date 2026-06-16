@@ -101,9 +101,7 @@ class FakeWorkspaceOracle:
         offset: int = 0,
     ) -> list[IngestionJob]:
         jobs = [
-            job
-            for job in self.ingestion_jobs.values()
-            if status is None or job.status == status
+            job for job in self.ingestion_jobs.values() if status is None or job.status == status
         ]
         sorted_jobs = sorted(
             jobs,
@@ -118,11 +116,7 @@ class FakeWorkspaceOracle:
         status: IngestionJobStatus | None = None,
     ) -> int:
         return len(
-            [
-                job
-                for job in self.ingestion_jobs.values()
-                if status is None or job.status == status
-            ]
+            [job for job in self.ingestion_jobs.values() if status is None or job.status == status]
         )
 
     async def recover_stale_ingestion_jobs(
@@ -147,9 +141,9 @@ class FakeWorkspaceOracle:
                 update={
                     "status": status,
                     "started_at": None if status == IngestionJobStatus.QUEUED else job.started_at,
-                    "finished_at": datetime.now(UTC)
-                    if status == IngestionJobStatus.FAILED
-                    else None,
+                    "finished_at": (
+                        datetime.now(UTC) if status == IngestionJobStatus.FAILED else None
+                    ),
                 }
             )
         return stale_jobs

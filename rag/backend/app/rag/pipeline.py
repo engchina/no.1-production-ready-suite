@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from time import perf_counter
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -22,8 +23,14 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_transform import expand_retrieval_queries
-from app.rag.retrieval_strategy import resolve_retrieval_strategy
-from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest, SearchResponse
+from app.rag.retrieval_strategy import ResolvedRetrievalStrategy, resolve_retrieval_strategy
+from app.schemas.search import (
+    RetrievedChunk,
+    SearchMode,
+    SearchRequest,
+    SearchResponse,
+    SearchStrategy,
+)
 
 NO_RESULTS_ANSWER = (
     "検索条件に一致する根拠が見つかりませんでした。" "条件やキーワードを変えて検索してください。"
@@ -33,6 +40,16 @@ WHITESPACE_RE = re.compile(r"\s+")
 CONTEXT_SEGMENT_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
 QUERY_FEATURE_RE = re.compile(r"[a-z0-9_]{2,}|[ぁ-んァ-ン一-龯々ー]{2,}", re.IGNORECASE)
 CONTEXT_DIVERSITY_NGRAM_SIZE = 3
+
+
+@dataclass(frozen=True)
+class RetrievalExecutionResult:
+    """retrieval stage の実行結果と runtime routing 診断。"""
+
+    chunks: list[RetrievedChunk]
+    strategy: SearchStrategy
+    graph_hit_count: int = 0
+    fallback_reason: str | None = None
 
 
 class RagPipeline:
@@ -97,11 +114,17 @@ class RagPipeline:
         context_compressed_count = 0
         context_compression_saved_chars = 0
         query_variant_count = 1
+        runtime_retrieval_strategy = "hybrid"
+        runtime_fallback_reason: str | None = None
+        runtime_graph_hit_count = 0
         resolved_strategy = resolve_retrieval_strategy(
             request,
             settings=self._settings,
             query=query_guardrail.sanitized_text,
         )
+        runtime_retrieval_strategy = resolved_strategy.strategy.value
+        runtime_fallback_reason = resolved_strategy.fallback_reason
+        runtime_graph_hit_count = resolved_strategy.graph_hit_count
         try:
             query_variants = expand_retrieval_queries(
                 query_guardrail.sanitized_text,
@@ -124,15 +147,15 @@ class RagPipeline:
                 },
             )
             error_stage = "retrieval"
-            retrieved = await _observe_stage(
+            retrieval_result = await _observe_stage(
                 trace_id,
                 resolved_strategy.mode.value,
                 "retrieval",
-                self._retrieve_with_query_variants(
+                self._retrieve_with_strategy(
                     query_variants=query_variants,
                     vectors=vectors,
                     request=request,
-                    mode=resolved_strategy.mode,
+                    resolved_strategy=resolved_strategy,
                 ),
                 attributes={
                     "mode": resolved_strategy.mode.value,
@@ -141,8 +164,17 @@ class RagPipeline:
                     "filter_key_count": len(request.filters),
                     "query_variant_count": query_variant_count,
                 },
-                result_attributes=lambda chunks: {"output_count": len(chunks)},
+                result_attributes=lambda result: {
+                    "output_count": len(result.chunks),
+                    "runtime_strategy": result.strategy.value,
+                    "graph_hit_count": result.graph_hit_count,
+                    "fallback_reason": result.fallback_reason or "",
+                },
             )
+            retrieved = retrieval_result.chunks
+            runtime_retrieval_strategy = retrieval_result.strategy.value
+            runtime_fallback_reason = retrieval_result.fallback_reason
+            runtime_graph_hit_count = retrieval_result.graph_hit_count
             error_stage = "rerank"
             ranked = await _observe_stage(
                 trace_id,
@@ -165,10 +197,10 @@ class RagPipeline:
                 diagnostics = build_search_diagnostics(
                     request,
                     settings=self._settings,
-                    retrieval_strategy=resolved_strategy.strategy.value,
+                    retrieval_strategy=runtime_retrieval_strategy,
                     route_reason=resolved_strategy.route_reason,
-                    graph_hit_count=resolved_strategy.graph_hit_count,
-                    fallback_reason=resolved_strategy.fallback_reason,
+                    graph_hit_count=runtime_graph_hit_count,
+                    fallback_reason=runtime_fallback_reason,
                     retrieved_count=len(retrieved),
                     query_variant_count=query_variant_count,
                 )
@@ -282,10 +314,10 @@ class RagPipeline:
             diagnostics = build_search_diagnostics(
                 request,
                 settings=self._settings,
-                retrieval_strategy=resolved_strategy.strategy.value,
+                retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
-                graph_hit_count=resolved_strategy.graph_hit_count,
-                fallback_reason=resolved_strategy.fallback_reason,
+                graph_hit_count=runtime_graph_hit_count,
+                fallback_reason=runtime_fallback_reason,
                 retrieved_count=len(retrieved),
                 reranked_count=len(ranked),
                 deduplicated_count=deduplicated_count,
@@ -353,10 +385,10 @@ class RagPipeline:
             diagnostics = build_search_diagnostics(
                 request,
                 settings=self._settings,
-                retrieval_strategy=resolved_strategy.strategy.value,
+                retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
-                graph_hit_count=resolved_strategy.graph_hit_count,
-                fallback_reason=resolved_strategy.fallback_reason,
+                graph_hit_count=runtime_graph_hit_count,
+                fallback_reason=runtime_fallback_reason,
                 retrieved_count=len(retrieved),
                 reranked_count=len(ranked),
                 deduplicated_count=deduplicated_count,
@@ -461,6 +493,73 @@ class RagPipeline:
             max_sentences=self._settings.rag_context_compression_max_sentences,
             max_chars_per_chunk=(self._settings.rag_context_compression_max_chars_per_chunk),
         )
+
+    async def _retrieve_with_strategy(
+        self,
+        *,
+        query_variants: list[str],
+        vectors: list[list[float]],
+        request: SearchRequest,
+        resolved_strategy: ResolvedRetrievalStrategy,
+    ) -> RetrievalExecutionResult:
+        """resolved strategy に応じて GraphRAG-lite または baseline retrieval を実行する。"""
+        if resolved_strategy.strategy not in (
+            SearchStrategy.GRAPH_LOCAL,
+            SearchStrategy.GRAPH_GLOBAL,
+        ):
+            return RetrievalExecutionResult(
+                chunks=await self._retrieve_with_query_variants(
+                    query_variants=query_variants,
+                    vectors=vectors,
+                    request=request,
+                    mode=resolved_strategy.mode,
+                ),
+                strategy=resolved_strategy.strategy,
+                graph_hit_count=resolved_strategy.graph_hit_count,
+                fallback_reason=resolved_strategy.fallback_reason,
+            )
+
+        graph_query = query_variants[0] if query_variants else request.query
+        graph_hits, graph_fallback_reason = await self._graph_search(
+            strategy=resolved_strategy.strategy,
+            query=graph_query,
+            top_k=request.top_k,
+            filters=request.filters,
+        )
+        if graph_hits:
+            return RetrievalExecutionResult(
+                chunks=graph_hits,
+                strategy=resolved_strategy.strategy,
+                graph_hit_count=len(graph_hits),
+            )
+
+        return RetrievalExecutionResult(
+            chunks=await self._retrieve_with_query_variants(
+                query_variants=query_variants,
+                vectors=vectors,
+                request=request,
+                mode=resolved_strategy.mode,
+            ),
+            strategy=SearchStrategy.HYBRID,
+            graph_hit_count=0,
+            fallback_reason=graph_fallback_reason or "graph_no_hits",
+        )
+
+    async def _graph_search(
+        self,
+        *,
+        strategy: SearchStrategy,
+        query: str,
+        top_k: int,
+        filters: dict[str, str],
+    ) -> tuple[list[RetrievedChunk], str | None]:
+        """GraphRAG-lite 経路を実行し、KG 未適用環境では空として扱う。"""
+        try:
+            if strategy == SearchStrategy.GRAPH_GLOBAL:
+                return await self._oracle.graph_global_search(query, top_k, filters), None
+            return await self._oracle.graph_local_search(query, top_k, filters), None
+        except Exception:
+            return [], "graph_query_error"
 
     async def _retrieve_with_query_variants(
         self,

@@ -13,6 +13,7 @@ from app.rag.evaluation import EVALUATION_CASE_ERROR_MESSAGE, EvaluationRunner
 from app.schemas.evaluation import (
     EvaluationCase,
     EvaluationExperiment,
+    EvaluationMetrics,
     EvaluationRagOverrides,
     EvaluationThresholds,
 )
@@ -940,6 +941,58 @@ def test_evaluation_api_rejects_blank_case_query() -> None:
     body = response.json()
     assert body["data"] is None
     assert body["error_messages"]
+
+
+def test_evaluation_api_persists_redacted_artifact(monkeypatch: MonkeyPatch) -> None:
+    """評価 API は query 原文を除いた artifact summary を best-effort 保存する。"""
+    artifacts: list[dict[str, Any]] = []
+
+    class FakeEvaluationRunner:
+        async def run(self, **kwargs: object) -> EvaluationMetrics:
+            del kwargs
+            return EvaluationMetrics(
+                case_count=1,
+                evaluated_k=1,
+                precision_at_k=1.0,
+                recall_at_k=1.0,
+                mrr=1.0,
+                answer_keyword_hit_rate=1.0,
+                groundedness_pass_rate=1.0,
+                passed=True,
+            )
+
+    class FakeOracleClient:
+        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
+            artifacts.append(artifact)
+            return "eval-1"
+
+    monkeypatch.setattr("app.api.routes.evaluation.EvaluationRunner", FakeEvaluationRunner)
+    monkeypatch.setattr("app.api.routes.evaluation.OracleClient", FakeOracleClient)
+
+    response = client.post(
+        "/api/evaluation/run",
+        json={
+            "cases": [
+                {
+                    "id": "secret-case",
+                    "query": "社外秘キーワード ABC-123 の承認条件",
+                    "relevant_document_ids": ["doc-1"],
+                    "expected_answer_keywords": ["ABC-123"],
+                }
+            ],
+            "top_k": 1,
+            "rerank_top_n": 1,
+            "knowledge_base_ids": ["kb-1"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(artifacts) == 1
+    artifact_text = str(artifacts[0])
+    assert "社外秘キーワード" not in artifact_text
+    assert "ABC-123" not in artifact_text
+    assert artifacts[0]["request_summary"]["cases"][0]["query_hash"]
+    assert artifacts[0]["knowledge_base_ids"] == ["kb-1"]
 
 
 @pytest.mark.usefixtures("oracle_db")

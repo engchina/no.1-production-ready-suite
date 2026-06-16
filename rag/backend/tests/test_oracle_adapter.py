@@ -629,6 +629,110 @@ async def test_oci_vector_search_applies_chunk_metadata_filters() -> None:
     assert call.parameters["filter_section_path"] == "%経費申請%"
 
 
+async def test_oracle_graph_local_search_uses_kg_chunk_links() -> None:
+    """Graph local search は Oracle KG entity-chunk link から citation を作る。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:2",
+                    "chunk_text": "承認条件は 120000 円以上です。",
+                    "metadata_json": '{"chunk_index":2}',
+                    "chunk_index": 2,
+                    "file_name": "policy.txt",
+                    "category_name": "社内規程",
+                    "entity_id": "ent-1",
+                    "canonical_name": "承認条件",
+                    "entity_type": "policy_rule",
+                    "entity_confidence": 0.92,
+                    "entity_chunk_relevance": 0.88,
+                    "score": 0.894,
+                }
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    hits = await client.graph_local_search(
+        "承認条件",
+        top_k=5,
+        filters={"knowledge_base_id": "kb-1"},
+    )
+
+    assert len(hits) == 1
+    assert hits[0].metadata["retrieval_mode"] == "graph_local"
+    assert hits[0].metadata["graph_entity_id"] == "ent-1"
+    assert hits[0].metadata["graph_entity_name"] == "承認条件"
+    call = pool.connection.calls[0]
+    assert "FROM rag_graph_entities e" in call.statement
+    assert "JOIN rag_graph_entity_chunks ec" in call.statement
+    assert "JOIN rag_chunks c" in call.statement
+    assert call.parameters["top_k"] == 5
+    assert call.parameters["filter_knowledge_base_id_0"] == "kb-1"
+    assert call.parameters["graph_local_term_0"] == "%承認条件%"
+
+
+async def test_oracle_graph_global_search_returns_community_summary_chunk() -> None:
+    """Graph global search は community summary を合成 RetrievedChunk として返す。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "community_id": "comm-1",
+                    "knowledge_base_id": "kb-1",
+                    "level_no": 1,
+                    "title": "承認と監査",
+                    "summary_text": "承認条件と監査証跡の関係をまとめた要約です。",
+                    "source_document_ids": '["doc-a","doc-b"]',
+                    "score": 1.75,
+                }
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    hits = await client.graph_global_search("全体の関係", top_k=3)
+
+    assert len(hits) == 1
+    assert hits[0].document_id == "doc-a"
+    assert hits[0].chunk_id == "community:comm-1"
+    assert hits[0].metadata["retrieval_mode"] == "graph_global"
+    assert hits[0].metadata["graph_source_document_count"] == 2
+    call = pool.connection.calls[0]
+    assert "FROM rag_graph_community_summaries g" in call.statement
+    assert call.parameters["top_k"] == 3
+    assert call.parameters["graph_title_exact"] == "%全体の関係%"
+
+
+async def test_oracle_save_evaluation_artifact_redacts_query_text() -> None:
+    """評価 artifact は query 原文ではなく summary/hash だけを保存する。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    evaluation_run_id = await client.save_evaluation_artifact(
+        {
+            "evaluation_run_id": "eval-1",
+            "knowledge_base_ids": ["kb-1"],
+            "request_summary": {
+                "kind": "run",
+                "cases": [{"id": "case-1", "query_hash": "a" * 64, "query_chars": 12}],
+            },
+            "result_summary": {"case_count": 1, "passed": True},
+            "passed": True,
+        }
+    )
+
+    assert evaluation_run_id == "eval-1"
+    assert pool.connection.commits == 1
+    call = pool.connection.calls[0]
+    assert "INSERT INTO rag_evaluation_runs" in call.statement
+    assert call.parameters["evaluation_run_id"] == "eval-1"
+    assert call.parameters["passed"] == 1
+    assert len(str(call.parameters["result_sha256"])) == 64
+    assert "query_text" not in str(call.parameters)
+
+
 async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> None:
     """OCI mode の chunk 保存は既存 chunk を消して VECTOR bind を挿入する。"""
     pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
@@ -1304,6 +1408,8 @@ def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> N
     assert "CREATE TABLE rag_evaluation_runs" in artifact_ddl
     assert "request_json      JSON NOT NULL" in artifact_ddl
     assert "result_json       JSON NOT NULL" in artifact_ddl
+    assert "result_sha256     CHAR(64) NOT NULL" in artifact_ddl
+    assert "rag_evaluation_runs_result_hash_idx" in artifact_ddl
     assert "NEO4J" not in (graph_ddl + feedback_ddl + artifact_ddl).upper()
 
 

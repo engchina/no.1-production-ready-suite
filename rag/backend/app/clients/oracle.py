@@ -5,6 +5,7 @@ Oracle Text による keyword retrieval を担う。外部ベクトル DB は使
 """
 
 import asyncio
+import hashlib
 import importlib
 import json
 import math
@@ -284,6 +285,24 @@ class OracleClient:
             )
             for chunk_id in ranked_ids
         ]
+
+    async def graph_local_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """軽量 KG の entity/claim/chunk link から local graph 根拠を取得する。"""
+        return await self._graph_local_search_with_oracle(query, top_k, filters or {})
+
+    async def graph_global_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """軽量 KG の community summary から横断・全体質問向け根拠を取得する。"""
+        return await self._graph_global_search_with_oracle(query, top_k, filters or {})
 
     async def context_neighbors(
         self,
@@ -808,6 +827,39 @@ class OracleClient:
         )
         return feedback_id
 
+    async def save_evaluation_artifact(self, artifact: Mapping[str, object]) -> str:
+        """nightly / staging 評価 artifact を query 原文なしで Oracle へ保存する。"""
+        evaluation_run_id = _audit_str(artifact, "evaluation_run_id", uuid4().hex)
+        binds = _evaluation_artifact_binds(artifact, evaluation_run_id=evaluation_run_id)
+        await self._run_transaction(
+            lambda connection: _execute(
+                connection,
+                """
+                INSERT INTO rag_evaluation_runs (
+                    evaluation_run_id,
+                    tenant_id_hash,
+                    knowledge_base_ids,
+                    request_json,
+                    result_json,
+                    result_sha256,
+                    best_experiment_id,
+                    passed
+                ) VALUES (
+                    :evaluation_run_id,
+                    :tenant_id_hash,
+                    :knowledge_base_ids,
+                    :request_json,
+                    :result_json,
+                    :result_sha256,
+                    :best_experiment_id,
+                    :passed
+                )
+                """,
+                binds,
+            )
+        )
+        return evaluation_run_id
+
     async def _vector_search_with_oracle(
         self, embedding: list[float], top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
@@ -904,6 +956,129 @@ class OracleClient:
                 keyword_rank=rank,
                 keyword_score=round(_float_value(row.get("score", 0.0)), 6),
             )
+            for rank, row in enumerate(rows, start=1)
+        ]
+
+    async def _graph_local_search_with_oracle(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str],
+    ) -> list[RetrievedChunk]:
+        """Oracle KG entity/claim から関連 chunk を取得する。"""
+        where_sql, binds = _oracle_retrieval_where(filters)
+        match_sql, match_binds = _oracle_graph_local_match_predicate(query)
+        binds.update(match_binds)
+        binds["top_k"] = top_k
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT *
+            FROM (
+                SELECT
+                    c.document_id,
+                    c.chunk_id,
+                    c.chunk_text,
+                    c.metadata_json,
+                    c.chunk_index,
+                    d.file_name,
+                    d.category_name,
+                    e.entity_id,
+                    e.canonical_name,
+                    e.entity_type,
+                    NVL(e.confidence, 1) AS entity_confidence,
+                    NVL(ec.relevance_score, 1) AS entity_chunk_relevance,
+                    (
+                        NVL(ec.relevance_score, 1) * 0.65
+                        + NVL(e.confidence, 1) * 0.35
+                    ) AS score
+                FROM rag_graph_entities e
+                JOIN rag_graph_entity_chunks ec
+                  ON ec.entity_id = e.entity_id
+                JOIN rag_chunks c
+                  ON c.chunk_id = ec.chunk_id
+                 AND c.document_id = ec.document_id
+                JOIN rag_documents d
+                  ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND {match_sql}
+                ORDER BY
+                    score DESC,
+                    c.document_id ASC,
+                    c.chunk_index ASC,
+                    c.chunk_id ASC
+            )
+            WHERE ROWNUM <= :top_k
+            """,
+                where_sql=where_sql,
+                match_sql=match_sql,
+            ),
+            binds,
+        )
+        return [
+            _with_retrieval_metadata(
+                _retrieved_chunk_from_row(row),
+                retrieval_mode="graph_local",
+                graph_rank=rank,
+                graph_entity_id=_optional_str(row.get("entity_id")),
+                graph_entity_name=_optional_str(row.get("canonical_name")),
+                graph_entity_type=_optional_str(row.get("entity_type")),
+                graph_entity_confidence=round(_float_value(row.get("entity_confidence")), 6),
+                graph_entity_chunk_relevance=round(
+                    _float_value(row.get("entity_chunk_relevance")),
+                    6,
+                ),
+            )
+            for rank, row in enumerate(rows, start=1)
+        ]
+
+    async def _graph_global_search_with_oracle(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str],
+    ) -> list[RetrievedChunk]:
+        """Oracle KG community summary から横断 context を取得する。"""
+        where_sql, binds = _oracle_graph_community_where(filters)
+        match_sql, match_binds = _oracle_graph_global_match_predicate(query)
+        binds.update(match_binds)
+        binds["top_k"] = top_k
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT *
+            FROM (
+                SELECT
+                    community_id,
+                    knowledge_base_id,
+                    level_no,
+                    title,
+                    summary_text,
+                    source_document_ids,
+                    (
+                        CASE
+                            WHEN LOWER(title) LIKE :graph_title_exact ESCAPE '\\' THEN 1
+                            ELSE 0
+                        END
+                        + 0.75
+                    ) AS score
+                FROM rag_graph_community_summaries g
+                WHERE {where_sql}
+                  AND {match_sql}
+                ORDER BY
+                    score DESC,
+                    level_no ASC,
+                    community_id ASC
+            )
+            WHERE ROWNUM <= :top_k
+            """,
+                where_sql=where_sql,
+                match_sql=match_sql,
+            ),
+            binds,
+        )
+        return [
+            _graph_community_chunk_from_row(row, rank=rank)
             for rank, row in enumerate(rows, start=1)
         ]
 
@@ -2885,6 +3060,36 @@ def _citation_feedback_binds(
     }
 
 
+def _evaluation_artifact_binds(
+    artifact: Mapping[str, object],
+    *,
+    evaluation_run_id: str,
+) -> dict[str, object]:
+    """評価 artifact を query/context 原文なしの Oracle bind 値へ変換する。"""
+    context = current_audit_request_context()
+    request_summary = artifact.get("request_summary", {})
+    result_summary = artifact.get("result_summary", {})
+    result_json = _audit_json(result_summary if isinstance(result_summary, Mapping) else {})
+    knowledge_base_ids = artifact.get("knowledge_base_ids", [])
+    return {
+        "evaluation_run_id": evaluation_run_id,
+        "tenant_id_hash": _audit_optional_str(artifact, "tenant_id_hash") or context.tenant_id_hash,
+        "knowledge_base_ids": _audit_json(
+            knowledge_base_ids
+            if isinstance(knowledge_base_ids, Sequence)
+            and not isinstance(knowledge_base_ids, str | bytes | bytearray)
+            else []
+        ),
+        "request_json": _audit_json(
+            request_summary if isinstance(request_summary, Mapping) else {}
+        ),
+        "result_json": result_json,
+        "result_sha256": hashlib.sha256(result_json.encode("utf-8")).hexdigest(),
+        "best_experiment_id": _audit_optional_str(artifact, "best_experiment_id"),
+        "passed": 1 if bool(artifact.get("passed")) else 0,
+    }
+
+
 def _audit_json(value: object) -> str:
     """Oracle JSON 列へ入れる低機密 metadata を JSON 文字列化する。"""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -3438,6 +3643,85 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
     return " AND ".join(clauses), binds
 
 
+def _oracle_graph_community_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
+    """community summary table 用の tenant / KB scope predicate を作る。"""
+    clauses = _oracle_knowledge_base_access_predicates(alias="g")
+    binds = _with_tenant_bind({}, alias="g")
+    unsupported_global_filters = {
+        key for key, value in filters.items() if key != "knowledge_base_id" and value.strip()
+    }
+    if unsupported_global_filters:
+        clauses.append("1 = 0")
+    knowledge_base_ids = _filter_id_values(filters.get("knowledge_base_id"))
+    if knowledge_base_ids:
+        knowledge_base_filter_sql, knowledge_base_binds = _oracle_in_predicate(
+            "g.knowledge_base_id",
+            "filter_knowledge_base_id",
+            knowledge_base_ids,
+        )
+        clauses.append(knowledge_base_filter_sql)
+        binds.update(knowledge_base_binds)
+    return " AND ".join(clauses), binds
+
+
+def _oracle_graph_local_match_predicate(query: str) -> tuple[str, dict[str, object]]:
+    """entity local search 用の LIKE predicate を作る。"""
+    return _oracle_like_any_predicate(
+        query,
+        columns=[
+            "LOWER(e.canonical_name)",
+            "LOWER(e.entity_type)",
+            "LOWER(DBMS_LOB.SUBSTR(e.description, 4000, 1))",
+        ],
+        bind_prefix="graph_local_term",
+    )
+
+
+def _oracle_graph_global_match_predicate(query: str) -> tuple[str, dict[str, object]]:
+    """community summary search 用の LIKE predicate を作る。"""
+    match_sql, binds = _oracle_like_any_predicate(
+        query,
+        columns=[
+            "LOWER(g.title)",
+            "LOWER(DBMS_LOB.SUBSTR(g.summary_text, 4000, 1))",
+        ],
+        bind_prefix="graph_global_term",
+    )
+    binds["graph_title_exact"] = _like_pattern(query)
+    return match_sql, binds
+
+
+def _oracle_like_any_predicate(
+    query: str,
+    *,
+    columns: Sequence[str],
+    bind_prefix: str,
+) -> tuple[str, dict[str, object]]:
+    """複数列 x query term の OR predicate を bind 付きで生成する。"""
+    terms = _graph_query_terms(query)
+    if not terms:
+        return "1 = 1", {}
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    for index, term in enumerate(terms):
+        bind_name = f"{bind_prefix}_{index}"
+        binds[bind_name] = _like_pattern(term)
+        clauses.extend(f"{column} LIKE :{bind_name} ESCAPE '\\'" for column in columns)
+    return "(" + " OR ".join(clauses) + ")", binds
+
+
+def _graph_query_terms(query: str) -> list[str]:
+    """Graph 検索用に query から短い低コスト term 集合を作る。"""
+    normalized = query.casefold().strip()
+    terms = [normalized] if len(normalized) >= 2 else []
+    terms.extend(
+        token.strip().casefold()
+        for token in TOKEN_PATTERN.findall(normalized)
+        if len(token.strip()) >= 2
+    )
+    return _unique_optional_sequence(terms)[:8]
+
+
 def _oracle_vector_fetch_clause(*, top_k: int, target_accuracy: int) -> str:
     """Oracle AI Vector Search の approximate top-k 句を安全な整数 literal で返す。"""
     top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=1000)
@@ -3717,6 +4001,32 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
     )
 
 
+def _graph_community_chunk_from_row(row: Mapping[str, object], *, rank: int) -> RetrievedChunk:
+    """community summary row を RetrievedChunk として LLM context へ渡す。"""
+    community_id = str(row["community_id"])
+    source_document_ids = _json_list(row.get("source_document_ids"))
+    primary_document_id = source_document_ids[0] if source_document_ids else community_id
+    title = _optional_str(row.get("title")) or "Graph community summary"
+    metadata: dict[str, MetadataValue] = {
+        "retrieval_mode": "graph_global",
+        "graph_rank": rank,
+        "graph_community_id": community_id,
+        "graph_community_title": title,
+        "graph_level": _int_value(row.get("level_no")),
+        "graph_knowledge_base_id": _optional_str(row.get("knowledge_base_id")),
+        "graph_source_document_count": len(source_document_ids),
+        "graph_source_document_ids": _audit_json(source_document_ids),
+    }
+    return RetrievedChunk(
+        document_id=primary_document_id,
+        chunk_id=f"community:{community_id}",
+        text=str(row["summary_text"]),
+        score=round(_float_value(row.get("score", 0.0)), 6),
+        file_name=title,
+        metadata=metadata,
+    )
+
+
 def _metadata_from_json(value: object) -> dict[str, MetadataValue]:
     decoded = _json_loads(value)
     return {str(key): _coerce_metadata_value(item) for key, item in decoded.items()}
@@ -3755,6 +4065,23 @@ def _json_loads(value: object) -> dict[str, object]:
     if isinstance(decoded, Mapping):
         return {str(key): item for key, item in decoded.items()}
     return {}
+
+
+def _json_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [str(item) for item in value]
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(decoded, Sequence) and not isinstance(decoded, str | bytes | bytearray):
+        return [str(item) for item in decoded]
+    return []
 
 
 def _json_string_list(value: object) -> list[str]:
@@ -4461,6 +4788,7 @@ CREATE TABLE {table_name} (
     knowledge_base_ids JSON,
     request_json      JSON NOT NULL,
     result_json       JSON NOT NULL,
+    result_sha256     CHAR(64) NOT NULL,
     best_experiment_id VARCHAR2(80),
     passed            NUMBER(1) DEFAULT 0 NOT NULL,
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
@@ -4471,6 +4799,9 @@ CREATE INDEX {table_name}_tenant_created_idx
 
 CREATE INDEX {table_name}_best_experiment_idx
     ON {table_name} (best_experiment_id);
+
+CREATE INDEX {table_name}_result_hash_idx
+    ON {table_name} (result_sha256);
 """.strip()
 
 

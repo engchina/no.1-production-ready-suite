@@ -137,6 +137,39 @@ def test_evaluation_gate_cli_detects_compare_request_and_gates_best_experiment(
     assert response["data"]["best_experiment_id"] == "hybrid-deep"
 
 
+def test_evaluation_gate_cli_writes_redacted_trend_output(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """--trend-output は nightly 用 aggregate だけを書き、golden query 原文を含めない。"""
+    compare_set = _write_compare_set(tmp_path)
+    trend_output = tmp_path / "reports" / "evaluation-trend.json"
+
+    def fake_post(
+        *,
+        api_url: str,
+        payload: dict[str, Any],
+        timeout: float,
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        del api_url, payload, timeout, headers
+        return {"data": _compare_payload(best_passed=True)}
+
+    monkeypatch.setattr(evaluation_cli, "_post_evaluation_request", fake_post)
+
+    exit_code = evaluation_cli.main([str(compare_set), "--trend-output", str(trend_output)])
+
+    assert exit_code == 0
+    trend = json.loads(trend_output.read_text(encoding="utf-8"))
+    assert trend["kind"] == "compare"
+    assert trend["best_experiment_id"] == "hybrid-deep"
+    assert trend["metrics"]["case_count"] == 1
+    assert trend["experiments"][0]["id"] == "hybrid-deep"
+    trend_text = json.dumps(trend, ensure_ascii=False)
+    assert "承認条件はいくらですか" not in trend_text
+    assert "120000" not in trend_text
+
+
 def test_evaluation_gate_cli_uses_base_url_for_compare_request(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
