@@ -5,10 +5,12 @@
 """
 
 import asyncio
+import hashlib
 import importlib
+import json
 import math
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Awaitable, Callable, Sequence
 from numbers import Real
 from typing import Any, Literal, Protocol
@@ -46,6 +48,8 @@ class OciGenAiClient:
         self._settings = settings or get_settings()
         self._inference_client = inference_client
         self._sdk_call_runner = sdk_call_runner or _run_sdk_call_in_thread
+        self._embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._rerank_cache: OrderedDict[str, list[tuple[int, float]]] = OrderedDict()
 
     async def embed(
         self,
@@ -56,7 +60,18 @@ class OciGenAiClient:
         """テキストを 1536 次元ベクトルに埋め込む（Cohere Embed v4）。"""
         if input_type not in EMBEDDING_INPUT_TYPES:
             raise ValueError(f"embedding input_type が不正です。input_type={input_type}")
-        vectors = await self._embed_with_oci(texts, input_type=input_type)
+        if not texts:
+            return []
+        if self._embedding_cache_disabled():
+            vectors = await self._embed_with_oci(texts, input_type=input_type)
+            _validate_embedding_batch(
+                vectors,
+                expected_count=len(texts),
+                expected_dim=self._settings.oci_genai_embedding_dim,
+            )
+            return vectors
+
+        vectors = await self._embed_with_cache(texts, input_type=input_type)
         _validate_embedding_batch(
             vectors,
             expected_count=len(texts),
@@ -64,14 +79,70 @@ class OciGenAiClient:
         )
         return vectors
 
+    async def _embed_with_cache(
+        self,
+        texts: list[str],
+        *,
+        input_type: EmbeddingInputType,
+    ) -> list[list[float]]:
+        """cache hit を再利用し、miss だけをまとめて OCI embedding に出す。"""
+        vectors: list[list[float] | None] = [None] * len(texts)
+        miss_texts: list[str] = []
+        miss_keys: list[str] = []
+        miss_positions: dict[str, list[int]] = {}
+        for position, text in enumerate(texts):
+            key = _embedding_cache_key(
+                text=text,
+                input_type=input_type,
+                model_id=self._settings.oci_genai_embedding_model,
+                dimension=self._settings.oci_genai_embedding_dim,
+            )
+            cached = self._get_cached_embedding(key)
+            if cached is not None:
+                vectors[position] = cached
+                continue
+            positions = miss_positions.setdefault(key, [])
+            positions.append(position)
+            if len(positions) == 1:
+                miss_keys.append(key)
+                miss_texts.append(text)
+
+        if miss_texts:
+            missing_vectors = await self._embed_with_oci(miss_texts, input_type=input_type)
+            _validate_embedding_batch(
+                missing_vectors,
+                expected_count=len(miss_texts),
+                expected_dim=self._settings.oci_genai_embedding_dim,
+            )
+            for key, vector in zip(miss_keys, missing_vectors, strict=True):
+                self._store_embedding(key, vector)
+                for position in miss_positions[key]:
+                    vectors[position] = list(vector)
+
+        return [_require_cached_vector(vector, index) for index, vector in enumerate(vectors)]
+
     async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
         """Cohere Rerank v4 fast で再ランク付けし、(index, score) を返す。"""
         if top_n < 1:
             raise ValueError(f"rerank top_n は 1 以上である必要があります。actual={top_n}")
         if not documents:
             return []
+        cache_key: str | None = None
+        if not self._rerank_cache_disabled():
+            cache_key = _rerank_cache_key(
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                model_id=self._settings.oci_genai_rerank_model,
+            )
+            cached = self._get_cached_rerank(cache_key)
+            if cached is not None:
+                return cached
         results = await self._rerank_with_oci(query, documents, top_n)
-        return _validate_rerank_results(results, document_count=len(documents), top_n=top_n)
+        validated = _validate_rerank_results(results, document_count=len(documents), top_n=top_n)
+        if cache_key is not None:
+            self._store_rerank(cache_key, validated)
+        return validated
 
     async def _embed_with_oci(
         self,
@@ -136,10 +207,105 @@ class OciGenAiClient:
         self._inference_client = genai.GenerativeAiInferenceClient(config)
         return self._inference_client
 
+    def _embedding_cache_disabled(self) -> bool:
+        return not getattr(self._settings, "rag_embedding_cache_enabled", True) or (
+            getattr(self._settings, "rag_embedding_cache_max_entries", 4096) <= 0
+        )
+
+    def _rerank_cache_disabled(self) -> bool:
+        return not getattr(self._settings, "rag_rerank_cache_enabled", True) or (
+            getattr(self._settings, "rag_rerank_cache_max_entries", 1024) <= 0
+        )
+
+    def _get_cached_embedding(self, key: str) -> list[float] | None:
+        cached = self._embedding_cache.pop(key, None)
+        if cached is None:
+            return None
+        self._embedding_cache[key] = cached
+        return list(cached)
+
+    def _store_embedding(self, key: str, vector: Sequence[float]) -> None:
+        self._embedding_cache[key] = [float(value) for value in vector]
+        self._trim_embedding_cache()
+
+    def _trim_embedding_cache(self) -> None:
+        max_entries = getattr(self._settings, "rag_embedding_cache_max_entries", 4096)
+        while len(self._embedding_cache) > max_entries:
+            self._embedding_cache.popitem(last=False)
+
+    def _get_cached_rerank(self, key: str) -> list[tuple[int, float]] | None:
+        cached = self._rerank_cache.pop(key, None)
+        if cached is None:
+            return None
+        self._rerank_cache[key] = cached
+        return list(cached)
+
+    def _store_rerank(self, key: str, results: Sequence[tuple[int, float]]) -> None:
+        self._rerank_cache[key] = [(int(index), float(score)) for index, score in results]
+        self._trim_rerank_cache()
+
+    def _trim_rerank_cache(self) -> None:
+        max_entries = getattr(self._settings, "rag_rerank_cache_max_entries", 1024)
+        while len(self._rerank_cache) > max_entries:
+            self._rerank_cache.popitem(last=False)
+
 
 async def _run_sdk_call_in_thread(operation: Callable[[], Any]) -> Any:
     """同期 OCI SDK 呼び出しを event loop 外で実行する。"""
     return await asyncio.to_thread(operation)
+
+
+def _embedding_cache_key(
+    *,
+    text: str,
+    input_type: EmbeddingInputType,
+    model_id: str,
+    dimension: int,
+) -> str:
+    """embedding cache key を原文なしの安定 hash で作る。"""
+    return _cache_key(
+        {
+            "kind": "embedding",
+            "model_id": model_id,
+            "dimension": dimension,
+            "input_type": input_type,
+            "text_sha256": _sha256_text(text),
+        }
+    )
+
+
+def _rerank_cache_key(
+    *,
+    query: str,
+    documents: list[str],
+    top_n: int,
+    model_id: str,
+) -> str:
+    """rerank cache key を query/document 原文なしの安定 hash で作る。"""
+    return _cache_key(
+        {
+            "kind": "rerank",
+            "model_id": model_id,
+            "top_n": top_n,
+            "query_sha256": _sha256_text(query),
+            "document_sha256": [_sha256_text(document) for document in documents],
+        }
+    )
+
+
+def _cache_key(payload: dict[str, object]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _require_cached_vector(vector: list[float] | None, index: int) -> list[float]:
+    if vector is None:
+        raise ValueError(f"embedding[{index}] の cache 復元に失敗しました。")
+    return list(vector)
 
 
 def _validate_embedding_batch(

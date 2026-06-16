@@ -72,6 +72,33 @@ async def test_embed_accepts_expected_dimension() -> None:
     assert await client.embed(["a"]) == [[1.0, 0.0, 0.0]]
 
 
+async def test_embed_cache_reuses_hits_and_batches_only_misses() -> None:
+    """embedding cache は hit を再利用し、miss だけ OCI へまとめて送る。"""
+    client = CountingEmbeddingClient()
+
+    first = await client.embed(["承認", "監査"])
+    second = await client.embed(["監査", "証跡", "監査"])
+
+    assert client.calls == 2
+    assert client.batches == [["承認", "監査"], ["証跡"]]
+    assert second[0] == first[1]
+    assert second[2] == first[1]
+    assert second[1] == _vector_for_text("証跡")
+
+
+async def test_embed_cache_can_be_disabled() -> None:
+    """設定で embedding cache を無効化できる。"""
+    client = CountingEmbeddingClient(
+        settings=_oci_settings().model_copy(update={"rag_embedding_cache_enabled": False})
+    )
+
+    await client.embed(["承認"])
+    await client.embed(["承認"])
+
+    assert client.calls == 2
+    assert client.batches == [["承認"], ["承認"]]
+
+
 async def test_oci_embed_uses_generative_ai_embedding_request() -> None:
     """OCI embedding は Generative AI embed_text API に Cohere Embed v4 設定を渡す。"""
     sdk = FakeGenAiInferenceClient(
@@ -116,6 +143,36 @@ async def test_rerank_accepts_and_sorts_valid_oci_results() -> None:
         (0, 0.75),
         (1, 0.25),
     ]
+
+
+async def test_rerank_cache_reuses_same_query_documents_and_top_n() -> None:
+    """rerank cache は query/document/top_n が同一のときだけ結果を再利用する。"""
+    client = CountingRerankClient()
+
+    first = await client.rerank("承認条件", ["本文 A", "本文 B"], top_n=2)
+    second = await client.rerank("承認条件", ["本文 A", "本文 B"], top_n=2)
+    third = await client.rerank("承認条件", ["本文 A", "本文 B"], top_n=1)
+
+    assert first == [(0, 0.9), (1, 0.8)]
+    assert second == first
+    assert third == [(0, 0.9)]
+    assert client.calls == 2
+    assert client.calls_args == [
+        ("承認条件", ["本文 A", "本文 B"], 2),
+        ("承認条件", ["本文 A", "本文 B"], 1),
+    ]
+
+
+async def test_rerank_cache_can_be_disabled() -> None:
+    """設定で rerank cache を無効化できる。"""
+    client = CountingRerankClient(
+        settings=_oci_settings().model_copy(update={"rag_rerank_cache_enabled": False})
+    )
+
+    await client.rerank("承認条件", ["本文 A"], top_n=1)
+    await client.rerank("承認条件", ["本文 A"], top_n=1)
+
+    assert client.calls == 2
 
 
 async def test_oci_rerank_uses_generative_ai_rerank_request() -> None:
@@ -234,6 +291,42 @@ class StubRerankClient(OciGenAiClient):
         return self._results
 
 
+class CountingEmbeddingClient(OciGenAiClient):
+    """cache 挙動確認用の deterministic embedding client。"""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        super().__init__(settings=settings or _oci_settings())
+        self.calls = 0
+        self.batches: list[list[str]] = []
+
+    async def _embed_with_oci(
+        self,
+        texts: list[str],
+        *,
+        input_type: str,
+    ) -> list[list[float]]:
+        _ = input_type
+        self.calls += 1
+        self.batches.append(list(texts))
+        return [_vector_for_text(text) for text in texts]
+
+
+class CountingRerankClient(OciGenAiClient):
+    """cache 挙動確認用の deterministic rerank client。"""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        super().__init__(settings=settings or _oci_settings())
+        self.calls = 0
+        self.calls_args: list[tuple[str, list[str], int]] = []
+
+    async def _rerank_with_oci(
+        self, query: str, documents: list[str], top_n: int
+    ) -> list[tuple[int, float]]:
+        self.calls += 1
+        self.calls_args.append((query, list(documents), top_n))
+        return [(index, 0.9 - (index * 0.1)) for index in range(min(len(documents), top_n))]
+
+
 class FakeGenAiInferenceClient:
     """OCI SDK client の最小 fake。"""
 
@@ -272,6 +365,10 @@ def _oci_settings() -> Settings:
         oci_genai_embedding_dim=3,
         oci_genai_rerank_model="cohere.rerank-v4.0-fast",
     )
+
+
+def _vector_for_text(text: str) -> list[float]:
+    return [float(len(text.encode("utf-8"))), 0.0, 0.0]
 
 
 async def _run_inline(operation: Callable[[], Any]) -> Any:

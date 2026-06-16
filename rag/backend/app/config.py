@@ -330,6 +330,22 @@ class Settings(BaseSettings):
         le=8,
         description="query expansion で retrieval に使う query variant 数の上限。",
     )
+    rag_embedding_cache_enabled: bool = Field(
+        default=True,
+        description=(
+            "同一 process 内で OCI Generative AI embedding 結果を LRU cache する。"
+            "cache key は本文 hash と model/input_type/dimension だけで構成する。"
+        ),
+    )
+    rag_embedding_cache_max_entries: int = Field(default=4096, ge=0, le=200000)
+    rag_rerank_cache_enabled: bool = Field(
+        default=True,
+        description=(
+            "同一 process 内で OCI Generative AI rerank 結果を LRU cache する。"
+            "cache key は query/document hash と model/top_n だけで構成する。"
+        ),
+    )
+    rag_rerank_cache_max_entries: int = Field(default=1024, ge=0, le=100000)
     rag_search_timeout_seconds: float = Field(default=30.0, gt=0.0, le=300.0)
     rag_graph_enabled: bool = Field(
         default=False,

@@ -213,6 +213,23 @@ def test_query_expansion_defaults_and_bounds() -> None:
         Settings(rag_query_expansion_max_variants=9)
 
 
+def test_genai_cache_defaults_and_bounds() -> None:
+    """embedding / rerank cache は既定有効で、容量を安全範囲に制限する。"""
+    settings = Settings()
+
+    assert settings.rag_embedding_cache_enabled is True
+    assert settings.rag_embedding_cache_max_entries == 4096
+    assert settings.rag_rerank_cache_enabled is True
+    assert settings.rag_rerank_cache_max_entries == 1024
+    assert Settings(rag_embedding_cache_max_entries=0).rag_embedding_cache_max_entries == 0
+    assert Settings(rag_rerank_cache_max_entries=0).rag_rerank_cache_max_entries == 0
+
+    with pytest.raises(ValidationError):
+        Settings(rag_embedding_cache_max_entries=-1)
+    with pytest.raises(ValidationError):
+        Settings(rag_rerank_cache_max_entries=-1)
+
+
 def test_context_diversity_lambda_defaults_to_disabled_and_is_bounded() -> None:
     """context diversity は既定無効で、MMR 重みは 0-1 に制限する。"""
     assert Settings().rag_context_diversity_lambda == 1.0

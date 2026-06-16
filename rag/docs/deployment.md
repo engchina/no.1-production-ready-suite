@@ -118,6 +118,8 @@ uv run python -m app.rag.evaluation_cli \
 - `RAG_MIN_SIMILARITY`: recall を落としすぎないよう、評価セットで確認して調整する。
 - `RAG_RRF_K`: hybrid retrieval の Reciprocal Rank Fusion 定数。小さいほど上位 rank を強く優先する。golden set で keyword/vector の寄与と citation 安定性を確認して調整する。
 - `RAG_QUERY_EXPANSION_ENABLED` / `RAG_QUERY_EXPANSION_MAX_VARIANTS`: retrieval 前に deterministic な業務同義語 query expansion を行う。日本語/英語混在 query の recall を上げる目的で既定有効。variant 数を増やすと embedding / Oracle retrieval 呼び出し数も増えるため、golden set と OCI / Oracle の p95 latency を見て 1-3 から調整する。audit / trace には query 本文や展開語ではなく variant 件数だけを残す。
+- `RAG_EMBEDDING_CACHE_ENABLED` / `RAG_EMBEDDING_CACHE_MAX_ENTRIES`: backend process 内で OCI Generative AI embedding 結果を LRU cache する。cache key は本文そのものではなく、model id、input type、dimension、本文 SHA-256 から作る。batch 内や連続検索で同じ query/chunk が出た場合は miss だけを OCI へ送る。worker 間共有はしないため、容量は worker 数とメモリを見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
+- `RAG_RERANK_CACHE_ENABLED` / `RAG_RERANK_CACHE_MAX_ENTRIES`: backend process 内で OCI Generative AI rerank 結果を LRU cache する。cache key は query/document 原文ではなく SHA-256、model id、top_n、document 順序から作る。候補順や top_n が変わると別 cache entry になる。頻出 FAQ / 評価実行 / 再検索の p95 latency と OCI 呼び出し数を見て調整する。`MAX_ENTRIES=0` は無効化と同じ。
 - `RAG_SEARCH_TIMEOUT_SECONDS`: `/api/search` と `/api/search/stream` の pipeline timeout。OCI / Oracle の p95 latency と worker 数に合わせる。
 - `ORACLE_VECTOR_TARGET_ACCURACY`: Oracle AI Vector Search の問い合わせ側 `FETCH APPROX ... WITH TARGET ACCURACY`。既定は 95。staging / golden set で召回率とレイテンシを見ながら調整する。
 - `ORACLE_SELECT_AI_PROFILE` / `ORACLE_SELECT_AI_MAX_RESULT_CHARS`: Select AI を使う場合の DBMS_CLOUD_AI profile 名と API レスポンス最大文字数。未設定なら `/api/search/select-ai` は 503 を返す。profile は Oracle 側で対象 schema / 権限 / model credential を最小化して管理する。
