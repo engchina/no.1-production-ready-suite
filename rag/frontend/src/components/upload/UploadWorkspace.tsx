@@ -31,6 +31,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState } from "@/components/StateViews";
 import {
   ApiError,
+  type BatchUploadFailedItem,
   type IngestionJob,
   type UploadIngestionMode,
   type UploadResult,
@@ -48,12 +49,20 @@ import {
 } from "@/lib/queries";
 import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
+import {
+  parserProfileKey,
+  sourceModalityKey,
+  sourcePreviewKey,
+  sourceWarningKey,
+  unsupportedReasonLabel,
+} from "@/lib/source-profile-labels";
 import { cn } from "@/lib/utils";
 
 /** アップロード → 取込 → RAG 索引化を1画面で進めるワークスペース。 */
 export function UploadWorkspace() {
   const [uploaded, setUploaded] = useState<UploadResult | null>(null);
   const [batchItems, setBatchItems] = useState<UploadResult[]>([]);
+  const [batchFailedItems, setBatchFailedItems] = useState<BatchUploadFailedItem[]>([]);
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
   const [ingestionMode, setIngestionMode] = useState<UploadIngestionMode>("manual");
   const upload = useUploadDocument();
@@ -64,6 +73,7 @@ export function UploadWorkspace() {
   const reset = () => {
     setUploaded(null);
     setBatchItems([]);
+    setBatchFailedItems([]);
     upload.reset();
     batchUpload.reset();
   };
@@ -72,6 +82,7 @@ export function UploadWorkspace() {
     if (files.length === 0) return;
     setUploaded(null);
     setBatchItems([]);
+    setBatchFailedItems([]);
     upload.reset();
     batchUpload.reset();
     if (files.length === 1) {
@@ -80,6 +91,7 @@ export function UploadWorkspace() {
         {
           onSuccess: (result) => {
             setBatchItems([result]);
+            setBatchFailedItems([]);
             setUploaded(result);
           },
         }
@@ -91,6 +103,7 @@ export function UploadWorkspace() {
       {
         onSuccess: (result) => {
           setBatchItems(result.items);
+          setBatchFailedItems(result.failed_items);
           setUploaded(result.items[0] ?? null);
         },
       }
@@ -129,6 +142,9 @@ export function UploadWorkspace() {
                 }
               />
             ) : null}
+            {batchFailedItems.length > 0 ? (
+              <BatchUploadFailureList failedItems={batchFailedItems} />
+            ) : null}
             <RecentIngestionJobsPanel />
           </>
         ) : (
@@ -136,9 +152,13 @@ export function UploadWorkspace() {
             {batchItems.length > 1 ? (
               <BatchUploadSummary
                 items={batchItems}
+                failedItems={batchFailedItems}
                 selectedId={uploaded.id}
                 onSelect={setUploaded}
               />
+            ) : null}
+            {batchItems.length <= 1 ? (
+              <UploadIngestionJobNotice job={uploaded.ingestion_job} />
             ) : null}
             <DocumentWorkspace
               documentId={uploaded.id}
@@ -155,6 +175,43 @@ export function UploadWorkspace() {
   );
 }
 
+function UploadIngestionJobNotice({ job }: { job: IngestionJob | null | undefined }) {
+  if (!job) return null;
+  return (
+    <Banner severity={uploadJobNoticeSeverity(job.status)} title={t("upload.jobs.title")}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <IngestionJobBadge job={job} />
+        {job.skip_reason ? (
+          <span className="text-muted">{uploadSkipReasonLabel(job.skip_reason)}</span>
+        ) : null}
+        {job.error_message ? <span className="text-danger">{job.error_message}</span> : null}
+      </div>
+    </Banner>
+  );
+}
+
+function uploadJobNoticeSeverity(status: IngestionJob["status"]) {
+  switch (status) {
+    case "SUCCEEDED":
+      return "success";
+    case "FAILED":
+      return "danger";
+    case "SKIPPED":
+      return "warning";
+    default:
+      return "info";
+  }
+}
+
+function uploadSkipReasonLabel(reason: string): string {
+  switch (reason) {
+    case "duplicate_content":
+      return t("sourceProfile.warning.duplicate");
+    default:
+      return unsupportedReasonLabel(reason) || t("flow.ingestionSkipped");
+  }
+}
+
 function shouldWatchProcessing(uploaded: UploadResult): boolean {
   return (
     uploaded.ingestion_started ||
@@ -165,10 +222,12 @@ function shouldWatchProcessing(uploaded: UploadResult): boolean {
 
 function BatchUploadSummary({
   items,
+  failedItems,
   selectedId,
   onSelect,
 }: {
   items: UploadResult[];
+  failedItems: BatchUploadFailedItem[];
   selectedId: string;
   onSelect: (item: UploadResult) => void;
 }) {
@@ -183,10 +242,11 @@ function BatchUploadSummary({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <BatchMetric label={t("upload.batch.total")} value={items.length} />
+        <div className="grid gap-3 sm:grid-cols-4">
+          <BatchMetric label={t("upload.batch.total")} value={items.length + failedItems.length} />
           <BatchMetric label={t("upload.batch.queued")} value={queuedCount} />
           <BatchMetric label={t("upload.batch.skipped")} value={skippedCount} />
+          <BatchMetric label={t("upload.batch.failed")} value={failedItems.length} />
         </div>
         <div className="divide-y divide-border rounded-md border border-border bg-background">
           {items.map((item) => {
@@ -226,8 +286,54 @@ function BatchUploadSummary({
             );
           })}
         </div>
+        {failedItems.length > 0 ? <BatchUploadFailureList failedItems={failedItems} /> : null}
       </CardContent>
     </Card>
+  );
+}
+
+function BatchUploadFailureList({
+  failedItems,
+}: {
+  failedItems: BatchUploadFailedItem[];
+}) {
+  return (
+    <Banner severity="warning" title={t("upload.batch.failedTitle")}>
+      <ul className="space-y-2 text-sm">
+        {failedItems.map((item) => (
+          <li key={`${item.file_name}-${item.status_code}`} className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="font-medium">{item.file_name}</span>
+              <span className="tnum text-muted">{item.status_code}</span>
+              <span>{item.message}</span>
+            </div>
+            {item.source_profile ? (
+              <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
+                <span className="rounded-full border border-border bg-card px-2 py-0.5 text-muted">
+                  {t(sourceModalityKey(item.source_profile.modality))}
+                </span>
+                <span className="rounded-full border border-border bg-card px-2 py-0.5 text-muted">
+                  {t("sourceProfile.parser")}:{" "}
+                  {t(parserProfileKey(item.source_profile.parser_profile))}
+                </span>
+                <span className="rounded-full border border-border bg-card px-2 py-0.5 text-muted">
+                  {t("sourceProfile.previewKind")}:{" "}
+                  {t(sourcePreviewKey(item.source_profile.preview_kind))}
+                </span>
+                {item.source_profile.quality_warnings.slice(0, 2).map((warning) => (
+                  <span
+                    key={warning}
+                    className="rounded-full border border-warning/30 bg-warning-bg px-2 py-0.5 text-warning"
+                  >
+                    {t(sourceWarningKey(warning))}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </Banner>
   );
 }
 
@@ -438,23 +544,6 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
       return "upload.job.status.CANCELLED";
     default:
       return "upload.job.status.QUEUED";
-  }
-}
-
-function parserProfileKey(profile: string): I18nKey {
-  switch (profile) {
-    case "enterprise_ai_pdf_layout":
-      return "sourceProfile.parser.pdf";
-    case "enterprise_ai_image_ocr":
-      return "sourceProfile.parser.image";
-    case "enterprise_ai_text_structure":
-      return "sourceProfile.parser.text";
-    case "enterprise_ai_office_structure":
-      return "sourceProfile.parser.office";
-    case "legacy":
-      return "evaluation.ingestionQuality.parser.legacy";
-    default:
-      return "sourceProfile.parser.generic";
   }
 }
 

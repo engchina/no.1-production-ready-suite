@@ -10,6 +10,9 @@ from app.config import Settings, get_settings
 
 TENANT_ID_HEADER = "x-tenant-id"
 USER_ID_HEADER = "x-user-id"
+ROLE_ID_HEADER = "x-rag-role-id"
+AGENT_ID_HEADER = "x-rag-agent-id"
+THREAD_ID_HEADER = "x-rag-thread-id"
 ALLOWED_DOCUMENT_IDS_HEADER = "x-rag-allowed-document-ids"
 ALLOWED_CATEGORY_NAMES_HEADER = "x-rag-allowed-category-names"
 ALLOWED_KNOWLEDGE_BASE_IDS_HEADER = "x-rag-allowed-knowledge-base-ids"
@@ -25,6 +28,9 @@ class AuditRequestContext:
     request_id: str | None = None
     tenant_id_hash: str | None = None
     user_id_hash: str | None = None
+    role_id_hash: str | None = None
+    agent_id_hash: str | None = None
+    thread_id_hash: str | None = None
     allowed_document_ids: frozenset[str] | None = field(default=None, repr=False)
     allowed_category_names: frozenset[str] | None = field(default=None, repr=False)
     allowed_knowledge_base_ids: frozenset[str] | None = field(default=None, repr=False)
@@ -48,6 +54,9 @@ def audit_request_context_from_headers(
         request_id=request_id,
         tenant_id_hash=_header_hash(headers.get(TENANT_ID_HEADER), resolved_settings),
         user_id_hash=_header_hash(headers.get(USER_ID_HEADER), resolved_settings),
+        role_id_hash=_header_hash(headers.get(ROLE_ID_HEADER), resolved_settings),
+        agent_id_hash=_header_hash(headers.get(AGENT_ID_HEADER), resolved_settings),
+        thread_id_hash=_header_hash(headers.get(THREAD_ID_HEADER), resolved_settings),
         allowed_document_ids=_access_scope_values(
             headers.get(ALLOWED_DOCUMENT_IDS_HEADER),
             normalizer=_normalize_document_id,

@@ -36,6 +36,7 @@ class RagSearchAuditEvent(BaseModel):
     query_hash: str
     query_chars: int
     filter_keys: list[str] = Field(default_factory=list)
+    memory_plan_id: str | None = None
     top_k: int | None = None
     rerank_top_n: int | None = None
     query_variant_count: int = 1
@@ -49,6 +50,15 @@ class RagSearchAuditEvent(BaseModel):
     context_expanded_count: int = 0
     context_compressed_count: int = 0
     context_compression_saved_chars: int = 0
+    agent_memory_retrieved_count: int = 0
+    agent_memory_writeback_count: int = 0
+    agent_memory_writeback_status: str = "skipped"
+    evidence_count: int = 0
+    support_count: int = 0
+    structure_count: int = 0
+    history_count: int = 0
+    resolver_rejected_count: int = 0
+    insufficient_context_count: int = 0
     citation_count: int = 0
     context_chars: int = 0
     context_window_chars: int | None = None
@@ -74,6 +84,11 @@ class RagIngestionAuditEvent(BaseModel):
     source_bytes: int
     document_type: str | None = None
     extraction_confidence: float | None = None
+    parser_backend: str | None = None
+    parser_profile: str | None = None
+    segment_count: int = 0
+    fallback_count: int = 0
+    failed_segment_count: int = 0
     chunk_count: int = 0
     vector_count: int = 0
     elapsed_ms: float
@@ -108,6 +123,7 @@ def record_rag_search_audit(
         query_hash=_query_hash(sanitized_query),
         query_chars=len(sanitized_query),
         filter_keys=sorted(filters),
+        memory_plan_id=diagnostics.memory_plan_id if diagnostics is not None else None,
         top_k=diagnostics.top_k if diagnostics is not None else None,
         rerank_top_n=diagnostics.rerank_top_n if diagnostics is not None else None,
         query_variant_count=diagnostics.query_variant_count if diagnostics is not None else 1,
@@ -130,6 +146,25 @@ def record_rag_search_audit(
         ),
         context_compression_saved_chars=(
             diagnostics.context_compression_saved_chars if diagnostics is not None else 0
+        ),
+        agent_memory_retrieved_count=(
+            diagnostics.agent_memory_retrieved_count if diagnostics is not None else 0
+        ),
+        agent_memory_writeback_count=(
+            diagnostics.agent_memory_writeback_count if diagnostics is not None else 0
+        ),
+        agent_memory_writeback_status=(
+            diagnostics.agent_memory_writeback_status if diagnostics is not None else "skipped"
+        ),
+        evidence_count=diagnostics.evidence_count if diagnostics is not None else 0,
+        support_count=diagnostics.support_count if diagnostics is not None else 0,
+        structure_count=diagnostics.structure_count if diagnostics is not None else 0,
+        history_count=diagnostics.history_count if diagnostics is not None else 0,
+        resolver_rejected_count=(
+            diagnostics.resolver_rejected_count if diagnostics is not None else 0
+        ),
+        insufficient_context_count=(
+            diagnostics.insufficient_context_count if diagnostics is not None else 0
         ),
         citation_count=len(citations),
         context_chars=diagnostics.context_chars if diagnostics is not None else 0,
@@ -160,6 +195,11 @@ def record_rag_ingestion_audit(
     elapsed_ms: float,
     document_type: str | None = None,
     extraction_confidence: float | None = None,
+    parser_backend: str | None = None,
+    parser_profile: str | None = None,
+    segment_count: int = 0,
+    fallback_count: int = 0,
+    failed_segment_count: int = 0,
     chunk_count: int = 0,
     vector_count: int = 0,
     error: Exception | None = None,
@@ -177,6 +217,11 @@ def record_rag_ingestion_audit(
         source_bytes=len(source_bytes),
         document_type=document_type,
         extraction_confidence=extraction_confidence,
+        parser_backend=parser_backend,
+        parser_profile=parser_profile,
+        segment_count=segment_count,
+        fallback_count=fallback_count,
+        failed_segment_count=failed_segment_count,
         chunk_count=chunk_count,
         vector_count=vector_count,
         elapsed_ms=elapsed_ms,

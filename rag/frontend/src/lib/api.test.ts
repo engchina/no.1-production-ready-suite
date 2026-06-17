@@ -228,7 +228,7 @@ describe("api.request envelope", () => {
           id: "job-1",
           document_id: "doc-1",
           status: "QUEUED",
-          parser_profile: "enterprise_ai_text_structure",
+          parser_profile: "local_text_structure",
           quality_warnings: [],
           skip_reason: null,
           error_message: null,
@@ -273,6 +273,23 @@ describe("api.request envelope", () => {
     expect(fetchMock.mock.calls[5][0]).toContain("status=FAILED");
     expect(fetchMock.mock.calls[5][0]).toContain("limit=10");
     expect(fetchMock.mock.calls[5][0]).toContain("offset=20");
+  });
+
+  it("document workspace API は chunk と segment endpoint を呼ぶ", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [],
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.listDocumentChunks("doc-1");
+    await api.listDocumentIngestionSegments("doc-1");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/chunks");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc-1/ingestion-segments");
   });
 
   it("getReadiness は 503 の degraded envelope も data として返す", async () => {
@@ -545,6 +562,66 @@ describe("api.request envelope", () => {
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify(payload),
+      })
+    );
+  });
+
+  it("getParserAdapterSettings は adapter readiness API を読む", async () => {
+    const payload = {
+      adapter_backend: "auto",
+      effective_order: ["docling", "marker"],
+      adapters: [
+        {
+          backend: "docling",
+          package_name: "docling",
+          enabled: true,
+          selected: true,
+          installed: true,
+          status: "active",
+          version: "1.2.3",
+          warning_code: null,
+        },
+        {
+          backend: "marker",
+          package_name: "marker",
+          enabled: true,
+          selected: true,
+          installed: false,
+          status: "missing",
+          version: null,
+          warning_code: "adapter_package_missing",
+        },
+        {
+          backend: "unstructured",
+          package_name: "unstructured",
+          enabled: false,
+          selected: false,
+          installed: false,
+          status: "disabled",
+          version: null,
+          warning_code: null,
+        },
+      ],
+      config_source: "runtime",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: payload,
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.getParserAdapterSettings();
+
+    expect(result.adapter_backend).toBe("auto");
+    expect(result.effective_order).toEqual(["docling", "marker"]);
+    expect(result.adapters[1].warning_code).toBe("adapter_package_missing");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings/parser-adapters",
+      expect.objectContaining({
+        credentials: "same-origin",
       })
     );
   });

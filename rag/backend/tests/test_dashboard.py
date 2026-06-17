@@ -10,7 +10,13 @@ from app.config import get_settings
 from app.main import app
 from app.rag.chunking import chunk_text
 from app.schemas.document import DocumentSummary, FileStatus
-from app.schemas.extraction import StructuredExtraction
+from app.schemas.extraction import (
+    DocumentElement,
+    ExtractionAsset,
+    ExtractionPage,
+    ExtractionTable,
+    StructuredExtraction,
+)
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -80,8 +86,20 @@ def test_dashboard_summary_returns_zero_state(dashboard_oracle: FakeDashboardOra
         "structured_document_count": 0,
         "element_count": 0,
         "table_count": 0,
+        "figure_count": 0,
+        "formula_count": 0,
         "list_count": 0,
         "page_count": 0,
+        "low_confidence_count": 0,
+        "fallback_document_count": 0,
+        "failed_segment_document_count": 0,
+        "segment_artifact_cache_miss_document_count": 0,
+        "long_document_count": 0,
+        "average_page_coverage": 0.0,
+        "risk_counts": {"low": 0, "medium": 0, "high": 0},
+        "parser_profile_counts": {},
+        "parser_backend_counts": {},
+        "warning_counts": {},
         "chunk_profile_counts": {},
         "content_kind_counts": {},
     }
@@ -126,6 +144,9 @@ def test_dashboard_summary_reflects_documents_and_indexed_chunks(
         ),
         confidence=0.9,
     ).model_dump(mode="json")
+    extraction["quality_report"] = {
+        "quality_warnings": ["segment_extraction_artifact_cache_miss"],
+    }
     dashboard_oracle.documents = [indexed_document, uploaded_document]
     dashboard_oracle.searchable_rows = 3
     dashboard_oracle.extractions = [extraction, {}]
@@ -165,9 +186,82 @@ def test_dashboard_summary_reflects_documents_and_indexed_chunks(
     assert quality["table_count"] >= 1
     assert quality["list_count"] >= 1
     assert quality["page_count"] >= 1
+    assert quality["segment_artifact_cache_miss_document_count"] == 1
+    assert quality["warning_counts"]["segment_extraction_artifact_cache_miss"] == 1
     assert quality["chunk_profile_counts"]["structure_v1"] == 3
     assert quality["content_kind_counts"]["table"] == 1
     assert quality["content_kind_counts"]["list"] == 1
+
+
+def test_dashboard_ingestion_quality_uses_first_class_tables_pages_and_report(
+    dashboard_oracle: FakeDashboardOracle,
+) -> None:
+    """Dashboard は elements だけでなく quality_report と first-class metadata を使う。"""
+    dashboard_oracle.documents = [
+        DocumentSummary(
+            id="doc-layout",
+            file_name="layout.pdf",
+            status=FileStatus.INDEXED,
+            content_type="application/pdf",
+            file_size_bytes=256,
+            uploaded_at=datetime.now(UTC),
+            indexed_at=datetime.now(UTC),
+        )
+    ]
+    extraction = StructuredExtraction(
+        raw_text="本文",
+        elements=[
+            DocumentElement(kind="text", text="本文", page_number=1),
+            DocumentElement(kind="equation", text="E=mc^2", page_number=2),
+        ],
+        pages=[
+            ExtractionPage(page_number=1, element_ids=["el-0000"]),
+            ExtractionPage(page_number=2),
+            ExtractionPage(page_number=3, element_ids=["tbl-main"]),
+        ],
+        tables=[ExtractionTable(table_id="tbl-main", page_number=3)],
+        assets=[ExtractionAsset(asset_id="fig-main", kind="image", page_number=3)],
+    ).model_dump(mode="json")
+    extraction["quality_report"] = {
+        "parser_profile": "enterprise_ai_pdf_layout",
+        "parser_backend": "docling",
+        "fallback_used": True,
+        "risk_level": "medium",
+        "page_count": 4,
+        "page_coverage": 0.75,
+        "table_count": 2,
+        "figure_count": 3,
+        "formula_count": 2,
+        "low_confidence_count": 5,
+        "failed_segment_count": 1,
+        "long_document": True,
+        "quality_warnings": ["table_structure_review", "parser_fallback_used"],
+    }
+    dashboard_oracle.extractions = [extraction]
+
+    response = client.get("/api/dashboard/summary")
+
+    assert response.status_code == 200
+    quality = response.json()["data"]["ingestion_quality"]
+    assert quality["document_count"] == 1
+    assert quality["structured_document_count"] == 1
+    assert quality["element_count"] == 2
+    assert quality["table_count"] == 2
+    assert quality["figure_count"] == 3
+    assert quality["formula_count"] == 2
+    assert quality["page_count"] == 4
+    assert quality["low_confidence_count"] == 5
+    assert quality["fallback_document_count"] == 1
+    assert quality["failed_segment_document_count"] == 1
+    assert quality["long_document_count"] == 1
+    assert quality["average_page_coverage"] == 0.75
+    assert quality["risk_counts"] == {"low": 0, "medium": 1, "high": 0}
+    assert quality["parser_profile_counts"] == {"enterprise_ai_pdf_layout": 1}
+    assert quality["parser_backend_counts"] == {"docling": 1}
+    assert quality["warning_counts"] == {
+        "table_structure_review": 1,
+        "parser_fallback_used": 1,
+    }
 
 
 def test_dashboard_ingestion_quality_counts_raw_text_fallback_chunks(
@@ -204,6 +298,7 @@ def test_dashboard_ingestion_quality_counts_raw_text_fallback_chunks(
     assert quality["document_count"] == 1
     assert quality["structured_document_count"] == 1
     assert quality["element_count"] >= 1
+    assert quality["segment_artifact_cache_miss_document_count"] == 0
     assert quality["chunk_profile_counts"] == {"text_v1": len(chunks)}
     assert quality["content_kind_counts"] == {"text": len(chunks)}
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { citationMetadataChips } from "./chunk-metadata";
+import { citationMetadataChips, firstCitationElementId } from "./chunk-metadata";
 
 describe("citationMetadataChips", () => {
   it("ページ範囲と構造 metadata を chip 化する", () => {
@@ -31,5 +31,13 @@ describe("citationMetadataChips", () => {
         chunk_profile: true,
       })
     ).toEqual([]);
+  });
+
+  it("citation preview 用の先頭 element id を複数 metadata 形態から取り出す", () => {
+    expect(firstCitationElementId(" tbl-1, el-2 ")).toBe("tbl-1");
+    expect(firstCitationElementId(["", " el-3 ", "el-4"])).toBe("el-3");
+    expect(firstCitationElementId(42)).toBe("42");
+    expect(firstCitationElementId([null, false, ""])).toBeNull();
+    expect(firstCitationElementId(null)).toBeNull();
   });
 });

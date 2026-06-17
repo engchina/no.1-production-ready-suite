@@ -54,6 +54,14 @@ for (const viewport of [
     const brand = sidebar.locator('[title="Production Ready RAG"]').first();
     const uploadLink = sidebar.getByRole("link", { name: "ドキュメントアップロード" });
 
+    if (viewport.width <= 640) {
+      await expect(brand).toHaveAttribute("aria-hidden", "true");
+      await expect(brand.getByText("Production Ready", { exact: true })).toBeHidden();
+      await expect(page.getByRole("button", { name: "サイドバーを展開" })).toBeVisible();
+      await expect(uploadLink).toBeVisible();
+      return;
+    }
+
     await expect(brand).toBeVisible();
     await expect(brand.getByText("Production Ready", { exact: true })).toBeVisible();
     await expect(brand.getByText("RAG", { exact: true })).toBeVisible();

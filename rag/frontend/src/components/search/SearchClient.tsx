@@ -28,7 +28,18 @@ interface Meta {
 
 const MODES: SearchMode[] = ["hybrid", "vector", "keyword"];
 const SELECT_AI_ACTIONS: SelectAiAction[] = ["showsql", "runsql"];
-const CONTENT_KIND_OPTIONS = ["", "text", "list", "table", "figure"] as const;
+const CONTENT_KIND_OPTIONS = [
+  "",
+  "text",
+  "list",
+  "table",
+  "figure",
+  "equation",
+  "code",
+  "email",
+  "slide",
+  "sheet",
+] as const;
 type ContentKindFilter = (typeof CONTENT_KIND_OPTIONS)[number];
 const MODE_LABEL: Record<SearchMode, Parameters<typeof t>[0]> = {
   hybrid: "search.mode.hybrid",
@@ -41,6 +52,11 @@ const CONTENT_KIND_LABEL: Record<ContentKindFilter, Parameters<typeof t>[0]> = {
   list: "search.filters.contentKind.list",
   table: "search.filters.contentKind.table",
   figure: "search.filters.contentKind.figure",
+  equation: "search.filters.contentKind.equation",
+  code: "search.filters.contentKind.code",
+  email: "search.filters.contentKind.email",
+  slide: "search.filters.contentKind.slide",
+  sheet: "search.filters.contentKind.sheet",
 };
 const SELECT_AI_ACTION_LABEL: Record<SelectAiAction, Parameters<typeof t>[0]> = {
   showsql: "search.selectAi.action.showsql",

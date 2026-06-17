@@ -16,6 +16,27 @@ NUMBERED_HEADING = re.compile(
 )
 BULLET_LINE = re.compile(r"^\s*(?:[-*・]|\d+[.)）]|[（(]\d+[）)])\s+")
 TABLE_LINE = re.compile(r"^\s*\|.+\|\s*$")
+FENCED_CODE_START = re.compile(
+    r"^\s*(?P<fence>`{3,}|~{3,})(?P<language>[\w.+#-]*)\s*$"
+)
+FENCED_CODE_ENDS = {
+    "`": re.compile(r"^\s*`{3,}\s*$"),
+    "~": re.compile(r"^\s*~{3,}\s*$"),
+}
+INLINE_DISPLAY_MATH = re.compile(r"^\s*\$\$(?P<body>.+?)\$\$\s*$")
+INLINE_BRACKET_MATH = re.compile(r"^\s*\\\[(?P<body>.+?)\\\]\s*$")
+DISPLAY_MATH_START = re.compile(r"^\s*(?:\$\$|\\\[)")
+DISPLAY_MATH_ENDS = {
+    "$$": re.compile(r"^.*\$\$\s*$"),
+    "\\[": re.compile(r"^.*\\\]\s*$"),
+}
+LATEX_EQUATION_ENV_NAMES = r"(?:equation|align|gather|multline)\*?"
+LATEX_EQUATION_BEGIN = re.compile(
+    rf"^\s*\\begin\{{(?P<env>{LATEX_EQUATION_ENV_NAMES})\}}"
+)
+LATEX_EQUATION_END = re.compile(
+    rf"^.*\\end\{{(?P<env>{LATEX_EQUATION_ENV_NAMES})\}}\s*$"
+)
 PAGE_MARKER = re.compile(
     r"^\s*(?:-{2,}\s*)?(?:page|ページ|頁)\s*(?P<page>\d+)\s*(?:-{2,})?\s*$",
     re.IGNORECASE,
@@ -67,6 +88,10 @@ class DocumentElement(BaseModel):
     kind: str = "text"
     text: str = ""
     order: int = Field(default=0, ge=0)
+    element_id: str | None = Field(default=None, max_length=128)
+    parent_id: str | None = Field(default=None, max_length=128)
+    content_kind: str | None = Field(default=None, max_length=40)
+    source_parser: str | None = Field(default=None, max_length=80)
     page_number: int | None = Field(default=None, ge=1)
     bbox: list[float] | None = None
     section_path: list[str] = Field(default_factory=list)
@@ -89,6 +114,15 @@ class DocumentElement(BaseModel):
     def normalize_text(cls, value: str) -> str:
         """要素本文の改行だけ正規化し、表・リストの構造は残す。"""
         return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    @field_validator("element_id", "parent_id", "content_kind", "source_parser")
+    @classmethod
+    def normalize_optional_label(cls, value: str | None) -> str | None:
+        """識別子・分類ラベルは空文字を None に寄せる。"""
+        if value is None:
+            return None
+        cleaned = re.sub(r"\s+", " ", value).strip()
+        return cleaned or None
 
     @field_validator("bbox", mode="before")
     @classmethod
@@ -148,11 +182,18 @@ class IngestionQualityReport(BaseModel):
     """取込後に評価へ渡す非機密な文書品質レポート。"""
 
     parser_profile: str = "enterprise_ai_generic"
+    parser_backend: str = "enterprise_ai"
+    parser_version: str = "v1"
+    fallback_used: bool = False
     risk_level: str = "low"
     page_count: int = 0
+    page_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
     table_count: int = 0
     figure_count: int = 0
+    formula_count: int = 0
     element_count: int = 0
+    low_confidence_count: int = 0
+    failed_segment_count: int = 0
     long_document: bool = False
     quality_warnings: list[str] = Field(default_factory=list)
 
@@ -164,6 +205,53 @@ class IngestionQualityReport(BaseModel):
         return normalized if normalized in {"low", "medium", "high"} else "low"
 
 
+class ExtractionPage(BaseModel):
+    """原本上のページ/スライド/シート単位 metadata。"""
+
+    page_number: int = Field(default=1, ge=1)
+    label: str | None = Field(default=None, max_length=128)
+    width: float | None = Field(default=None, gt=0.0)
+    height: float | None = Field(default=None, gt=0.0)
+    rotation: int | None = None
+    element_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, ExtractionMetadataValue] = Field(default_factory=dict)
+
+
+class ExtractionTableCell(BaseModel):
+    """表セル metadata。"""
+
+    row: int = Field(ge=0)
+    col: int = Field(ge=0)
+    text: str = ""
+    row_span: int = Field(default=1, ge=1)
+    col_span: int = Field(default=1, ge=1)
+    bbox: list[float] | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class ExtractionTable(BaseModel):
+    """表全体の構造 metadata。"""
+
+    table_id: str
+    element_id: str | None = None
+    page_number: int | None = Field(default=None, ge=1)
+    caption: str | None = None
+    cells: list[ExtractionTableCell] = Field(default_factory=list)
+    metadata: dict[str, ExtractionMetadataValue] = Field(default_factory=dict)
+
+
+class ExtractionAsset(BaseModel):
+    """図・画像・添付などの派生 asset metadata。"""
+
+    asset_id: str
+    kind: str = "figure"
+    object_path: str | None = None
+    page_number: int | None = Field(default=None, ge=1)
+    bbox: list[float] | None = None
+    alt_text: str | None = None
+    metadata: dict[str, ExtractionMetadataValue] = Field(default_factory=dict)
+
+
 class StructuredExtraction(BaseModel):
     """OCI Enterprise AI の VLM/LLM 出力を検証して保存するための正規化形。"""
 
@@ -172,6 +260,10 @@ class StructuredExtraction(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     warnings: list[str] = Field(default_factory=list)
     elements: list[DocumentElement] = Field(default_factory=list)
+    pages: list[ExtractionPage] = Field(default_factory=list)
+    tables: list[ExtractionTable] = Field(default_factory=list)
+    assets: list[ExtractionAsset] = Field(default_factory=list)
+    parser_artifacts: dict[str, ExtractionMetadataValue] = Field(default_factory=dict)
     quality_report: IngestionQualityReport | None = None
 
     @model_validator(mode="after")
@@ -179,6 +271,8 @@ class StructuredExtraction(BaseModel):
         """raw_text と elements のどちらか片方だけでも検索可能な形へ補完する。"""
         self.raw_text = self.raw_text.replace("\r\n", "\n").replace("\r", "\n").strip()
         self.elements = normalize_document_elements(self.elements, fallback_text=self.raw_text)
+        if not self.pages:
+            self.pages = infer_extraction_pages(self.elements)
         if not self.raw_text and self.elements:
             self.raw_text = "\n".join(
                 element.text
@@ -195,6 +289,10 @@ class StructuredExtraction(BaseModel):
             "confidence": self.confidence,
             "warnings": self.warnings,
             "elements": [element.to_payload() for element in self.elements],
+            "pages": [page.model_dump(exclude_none=True) for page in self.pages],
+            "tables": [table.model_dump(exclude_none=True) for table in self.tables],
+            "assets": [asset.model_dump(exclude_none=True) for asset in self.assets],
+            "parser_artifacts": self.parser_artifacts,
             "quality_report": (
                 self.quality_report.model_dump(exclude_none=True)
                 if self.quality_report is not None
@@ -222,9 +320,12 @@ def normalize_document_elements(
     for order, (_, element) in enumerate(indexed):
         metadata = dict(element.metadata)
         kind = element.kind
+        element_id = element.element_id or _metadata_text(metadata.get("element_id"))
+        content_kind = element.content_kind or _content_kind_for_element_kind(kind)
         if heading := _parse_heading(element.text):
             level, title = heading
             kind = "title"
+            content_kind = "text"
             path_by_level = {
                 existing_level: existing_title
                 for existing_level, existing_title in path_by_level.items()
@@ -241,12 +342,59 @@ def normalize_document_elements(
                 update={
                     "kind": kind,
                     "order": order,
+                    "element_id": element_id or f"el-{order:04d}",
+                    "content_kind": content_kind,
                     "section_path": element.section_path or current_path,
                     "metadata": metadata,
                 }
             )
         )
     return normalized
+
+
+def infer_extraction_pages(elements: list[DocumentElement]) -> list[ExtractionPage]:
+    """element の page_number から軽量 page metadata を作る。"""
+    by_page: dict[int, list[str]] = {}
+    for element in elements:
+        page_number = element.page_number
+        if page_number is None:
+            continue
+        element_id = element.element_id or _metadata_text(element.metadata.get("element_id"))
+        if element_id:
+            by_page.setdefault(page_number, []).append(element_id)
+        else:
+            by_page.setdefault(page_number, [])
+    return [
+        ExtractionPage(
+            page_number=page_number,
+            label=f"page {page_number}",
+            element_ids=element_ids,
+        )
+        for page_number, element_ids in sorted(by_page.items())
+    ]
+
+
+def _metadata_text(value: object) -> str | None:
+    """metadata scalar を短い文字列として読む。"""
+    if isinstance(value, str | int):
+        cleaned = str(value).strip()
+        return cleaned[:128] if cleaned else None
+    return None
+
+
+def _content_kind_for_element_kind(kind: str) -> str:
+    """element kind から retrieval/filter 用の content_kind を推定する。"""
+    if kind in {"table", "table_caption"}:
+        return "table"
+    if kind in {"figure", "figure_caption"}:
+        return "figure"
+    if kind == "equation":
+        return "equation"
+    if kind == "code":
+        return "code"
+    if kind == "list":
+        return "list"
+    return "text"
 
 
 def _bbox_coordinates(value: object) -> list[float] | None:
@@ -357,6 +505,14 @@ def infer_document_elements(text: str) -> list[DocumentElement]:
     pending_lines: list[str] = []
     pending_start = 0
     pending_page = current_page
+    active_block_kind: str | None = None
+    active_block_lines: list[str] = []
+    active_block_start = 0
+    active_block_page = current_page
+    active_block_section_path: list[str] = []
+    active_block_metadata: dict[str, ExtractionMetadataValue] = {}
+    active_code_fence: str | None = None
+    active_equation_end: str | None = None
 
     def flush_pending(end_offset: int) -> None:
         nonlocal pending_kind, pending_lines, pending_start, pending_page
@@ -374,12 +530,112 @@ def infer_document_elements(text: str) -> list[DocumentElement]:
         pending_kind = None
         pending_lines = []
 
+    def start_block(
+        *,
+        kind: str,
+        line: str,
+        start_offset: int,
+        page_number: int,
+        extra_metadata: dict[str, ExtractionMetadataValue],
+        code_fence: str | None = None,
+        equation_end: str | None = None,
+    ) -> None:
+        nonlocal active_block_kind, active_block_lines, active_block_start
+        nonlocal active_block_page, active_block_section_path, active_block_metadata
+        nonlocal active_code_fence, active_equation_end
+        active_block_kind = kind
+        active_block_lines = [line]
+        active_block_start = start_offset
+        active_block_page = page_number
+        active_block_section_path = [path_by_level[key] for key in sorted(path_by_level)]
+        active_block_metadata = extra_metadata
+        active_code_fence = code_fence
+        active_equation_end = equation_end
+
+    def flush_active_block(end_offset: int) -> None:
+        nonlocal active_block_kind, active_block_lines, active_block_start
+        nonlocal active_block_page, active_block_section_path, active_block_metadata
+        nonlocal active_code_fence, active_equation_end
+        if not active_block_kind or not active_block_lines:
+            return
+        _append_element(
+            elements,
+            kind=active_block_kind,
+            text="\n".join(active_block_lines),
+            page_number=active_block_page,
+            section_path=active_block_section_path,
+            raw_start=active_block_start,
+            raw_end=end_offset,
+            extra_metadata=active_block_metadata,
+        )
+        active_block_kind = None
+        active_block_lines = []
+        active_block_metadata = {}
+        active_code_fence = None
+        active_equation_end = None
+
     for raw_line in source.splitlines(keepends=True):
         line_start = offset
         offset += len(raw_line)
+        line = raw_line.removesuffix("\n")
         stripped = raw_line.strip()
+        if active_block_kind is not None:
+            active_block_lines.append(line)
+            if _is_block_end(
+                stripped,
+                kind=active_block_kind,
+                code_fence=active_code_fence,
+                equation_end=active_equation_end,
+            ):
+                flush_active_block(offset)
+            continue
+
         if not stripped:
             flush_pending(line_start)
+            continue
+
+        if code_start := FENCED_CODE_START.match(stripped):
+            flush_pending(line_start)
+            fence = code_start.group("fence")
+            language = code_start.group("language") or None
+            start_block(
+                kind="code",
+                line=line,
+                start_offset=line_start,
+                page_number=current_page,
+                code_fence=fence[0],
+                extra_metadata={
+                    "block_delimiter": "fenced_code",
+                    "code_language": language,
+                },
+            )
+            continue
+
+        if equation_metadata := _single_line_equation_metadata(stripped):
+            flush_pending(line_start)
+            _append_element(
+                elements,
+                kind="equation",
+                text=line,
+                page_number=current_page,
+                section_path=[path_by_level[key] for key in sorted(path_by_level)],
+                raw_start=line_start,
+                raw_end=offset,
+                extra_metadata=equation_metadata,
+            )
+            continue
+
+        if equation_start := _equation_block_start(stripped):
+            flush_pending(line_start)
+            equation_end, equation_metadata = equation_start
+            start_block(
+                kind="equation",
+                line=line,
+                start_offset=line_start,
+                page_number=current_page,
+                equation_end=equation_end,
+                extra_metadata=equation_metadata,
+            )
             continue
 
         if page_match := PAGE_MARKER.match(stripped):
@@ -417,6 +673,7 @@ def infer_document_elements(text: str) -> list[DocumentElement]:
             pending_page = current_page
         pending_lines.append(stripped)
 
+    flush_active_block(offset)
     flush_pending(offset)
     return elements
 
@@ -443,6 +700,8 @@ def _append_element(
             kind=kind,
             text=text,
             order=len(elements),
+            element_id=f"el-{len(elements):04d}",
+            content_kind=_content_kind_for_element_kind(kind),
             page_number=page_number,
             section_path=section_path,
             metadata=metadata,
@@ -461,6 +720,69 @@ def _line_kind(line: str) -> str:
     if line.casefold().startswith(("footer:", "フッター:")):
         return "footer"
     return "text"
+
+
+def _is_block_end(
+    line: str,
+    *,
+    kind: str,
+    code_fence: str | None,
+    equation_end: str | None,
+) -> bool:
+    """active block の終了行かどうかを判定する。"""
+    if kind == "code" and code_fence:
+        return bool(FENCED_CODE_ENDS[code_fence].match(line))
+    if kind == "equation" and equation_end:
+        if equation_end.startswith("latex:"):
+            env_name = equation_end.removeprefix("latex:")
+            match = LATEX_EQUATION_END.match(line)
+            return bool(match and match.group("env") == env_name)
+        return bool(DISPLAY_MATH_ENDS[equation_end].match(line))
+    return False
+
+
+def _single_line_equation_metadata(
+    line: str,
+) -> dict[str, ExtractionMetadataValue] | None:
+    """1 行で閉じる display math / LaTeX equation を識別する。"""
+    if INLINE_DISPLAY_MATH.match(line):
+        return {"block_delimiter": "display_math", "equation_delimiter": "$$"}
+    if INLINE_BRACKET_MATH.match(line):
+        return {"block_delimiter": "display_math", "equation_delimiter": "\\[\\]"}
+    begin = LATEX_EQUATION_BEGIN.match(line)
+    end = LATEX_EQUATION_END.match(line)
+    if begin and end and begin.group("env") == end.group("env"):
+        return {
+            "block_delimiter": "latex_environment",
+            "equation_environment": begin.group("env"),
+        }
+    return None
+
+
+def _equation_block_start(
+    line: str,
+) -> tuple[str, dict[str, ExtractionMetadataValue]] | None:
+    """複数行 display math / LaTeX equation の開始行を識別する。"""
+    if not DISPLAY_MATH_START.match(line):
+        begin = LATEX_EQUATION_BEGIN.match(line)
+        if not begin:
+            return None
+        env_name = begin.group("env")
+        return (
+            f"latex:{env_name}",
+            {
+                "block_delimiter": "latex_environment",
+                "equation_environment": env_name,
+            },
+        )
+    delimiter = "\\[" if line.lstrip().startswith("\\[") else "$$"
+    return (
+        delimiter,
+        {
+            "block_delimiter": "display_math",
+            "equation_delimiter": "\\[\\]" if delimiter == "\\[" else "$$",
+        },
+    )
 
 
 def _parse_heading(line: str) -> tuple[int, str] | None:

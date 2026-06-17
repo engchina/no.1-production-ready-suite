@@ -28,6 +28,7 @@ const degradedDashboardSummary = {
       table_count: 0,
       list_count: 0,
       page_count: 0,
+      segment_artifact_cache_miss_document_count: 0,
       chunk_profile_counts: {},
       content_kind_counts: {},
     },

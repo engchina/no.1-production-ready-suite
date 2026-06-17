@@ -1,10 +1,16 @@
-import { FileText, ThumbsDown, ThumbsUp } from "lucide-react";
+import { FileText, LocateFixed, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { ApiError, api, type CitationFeedbackRating, type RetrievedChunk } from "@/lib/api";
-import { citationMetadataChips, type CitationMetadataChip } from "@/lib/chunk-metadata";
+import {
+  citationMetadataChips,
+  firstCitationElementId,
+  type CitationMetadataChip,
+} from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +26,7 @@ export function CitationCard({
 }) {
   const score = chunk.rerank_score ?? chunk.score;
   const chips = citationMetadataChips(chunk.metadata);
+  const previewUrl = citationPreviewUrl(chunk);
   const [pendingRating, setPendingRating] = useState<CitationFeedbackRating | null>(null);
   const [submittedRating, setSubmittedRating] = useState<CitationFeedbackRating | null>(null);
   const canSubmitFeedback = Boolean(traceId);
@@ -79,44 +86,63 @@ export function CitationCard({
           {chunk.category_name}
         </span>
       ) : null}
-      <div
-        className="mt-3 flex justify-end gap-1"
-        role="group"
-        aria-label={t("search.citation.feedback.group")}
-      >
-        <Button
-          type="button"
-          variant={submittedRating === "helpful" ? "secondary" : "ghost"}
-          size="sm"
-          className={cn("size-8 px-0", submittedRating === "helpful" && "text-success")}
-          aria-label={t("search.citation.feedback.helpful")}
-          aria-pressed={submittedRating === "helpful"}
-          title={t("search.citation.feedback.helpful")}
-          disabled={!canSubmitFeedback || (pendingRating !== null && pendingRating !== "helpful")}
-          loading={pendingRating === "helpful"}
-          onClick={() => void submitFeedback("helpful")}
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Link
+          to={previewUrl}
+          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          aria-label={t("search.citation.openPreview", {
+            file: chunk.file_name ?? chunk.document_id,
+          })}
         >
-          {pendingRating === "helpful" ? null : <ThumbsUp size={15} aria-hidden />}
-        </Button>
-        <Button
-          type="button"
-          variant={submittedRating === "not_helpful" ? "secondary" : "ghost"}
-          size="sm"
-          className={cn("size-8 px-0", submittedRating === "not_helpful" && "text-danger")}
-          aria-label={t("search.citation.feedback.notHelpful")}
-          aria-pressed={submittedRating === "not_helpful"}
-          title={t("search.citation.feedback.notHelpful")}
-          disabled={
-            !canSubmitFeedback || (pendingRating !== null && pendingRating !== "not_helpful")
-          }
-          loading={pendingRating === "not_helpful"}
-          onClick={() => void submitFeedback("not_helpful")}
+          <LocateFixed size={15} aria-hidden />
+          {t("search.citation.openPreviewShort")}
+        </Link>
+        <div
+          className="flex justify-end gap-1"
+          role="group"
+          aria-label={t("search.citation.feedback.group")}
         >
-          {pendingRating === "not_helpful" ? null : <ThumbsDown size={15} aria-hidden />}
-        </Button>
+          <Button
+            type="button"
+            variant={submittedRating === "helpful" ? "secondary" : "ghost"}
+            size="sm"
+            className={cn("size-8 px-0", submittedRating === "helpful" && "text-success")}
+            aria-label={t("search.citation.feedback.helpful")}
+            aria-pressed={submittedRating === "helpful"}
+            title={t("search.citation.feedback.helpful")}
+            disabled={!canSubmitFeedback || (pendingRating !== null && pendingRating !== "helpful")}
+            loading={pendingRating === "helpful"}
+            onClick={() => void submitFeedback("helpful")}
+          >
+            {pendingRating === "helpful" ? null : <ThumbsUp size={15} aria-hidden />}
+          </Button>
+          <Button
+            type="button"
+            variant={submittedRating === "not_helpful" ? "secondary" : "ghost"}
+            size="sm"
+            className={cn("size-8 px-0", submittedRating === "not_helpful" && "text-danger")}
+            aria-label={t("search.citation.feedback.notHelpful")}
+            aria-pressed={submittedRating === "not_helpful"}
+            title={t("search.citation.feedback.notHelpful")}
+            disabled={
+              !canSubmitFeedback || (pendingRating !== null && pendingRating !== "not_helpful")
+            }
+            loading={pendingRating === "not_helpful"}
+            onClick={() => void submitFeedback("not_helpful")}
+          >
+            {pendingRating === "not_helpful" ? null : <ThumbsDown size={15} aria-hidden />}
+          </Button>
+        </div>
       </div>
     </li>
   );
+}
+
+function citationPreviewUrl(chunk: RetrievedChunk): string {
+  const params = new URLSearchParams({ chunk_id: chunk.chunk_id });
+  const elementId = firstCitationElementId(chunk.metadata.element_ids);
+  if (elementId) params.set("element_id", elementId);
+  return `${APP_ROUTES.documents}/${encodeURIComponent(chunk.document_id)}?${params.toString()}`;
 }
 
 function MetadataChip({ chip }: { chip: CitationMetadataChip }) {
@@ -170,6 +196,16 @@ function contentKindLabel(kind: string): string {
       return t("search.filters.contentKind.table");
     case "figure":
       return t("search.filters.contentKind.figure");
+    case "equation":
+      return t("search.filters.contentKind.equation");
+    case "code":
+      return t("search.filters.contentKind.code");
+    case "email":
+      return t("search.filters.contentKind.email");
+    case "slide":
+      return t("search.filters.contentKind.slide");
+    case "sheet":
+      return t("search.filters.contentKind.sheet");
     default:
       return kind;
   }

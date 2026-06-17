@@ -1,4 +1,10 @@
-import type { DocumentElement } from "./api";
+import type {
+  DocumentElement,
+  ExtractionAsset,
+  ExtractionPage,
+  ExtractionTable,
+  ExtractionTableCell,
+} from "./api";
 
 export interface ParsedStructuredExtraction {
   rawText: string;
@@ -6,6 +12,10 @@ export interface ParsedStructuredExtraction {
   confidence: number | null;
   warnings: string[];
   elements: DocumentElement[];
+  pages: ExtractionPage[];
+  tables: ExtractionTable[];
+  assets: ExtractionAsset[];
+  parserArtifacts: Record<string, JsonScalar>;
 }
 
 export interface ExtractionElementStats {
@@ -27,6 +37,9 @@ export function parseStructuredExtraction(input: unknown): ParsedStructuredExtra
   const confidence = numberValue(source.confidence, 0, 1);
   const warnings = arrayValue(source.warnings).map(String).filter(Boolean);
   const elements = parseElements(source.elements);
+  const pages = parsePages(source.pages);
+  const tables = parseTables(source.tables);
+  const assets = parseAssets(source.assets);
 
   return {
     rawText,
@@ -34,6 +47,10 @@ export function parseStructuredExtraction(input: unknown): ParsedStructuredExtra
     confidence,
     warnings,
     elements,
+    pages,
+    tables,
+    assets,
+    parserArtifacts: metadataValue(source.parser_artifacts),
   };
 }
 
@@ -77,12 +94,92 @@ function parseElement(value: unknown, fallbackOrder: number): DocumentElement | 
     kind: stringValue(source.kind) || "text",
     text,
     order: integerValue(source.order) ?? fallbackOrder,
+    element_id: stringValue(source.element_id) || null,
+    parent_id: stringValue(source.parent_id) || null,
+    content_kind: stringValue(source.content_kind) || null,
+    source_parser: stringValue(source.source_parser) || null,
     page_number: integerValue(source.page_number, 1) ?? null,
     bbox: numberArrayValue(source.bbox),
     section_path: arrayValue(source.section_path).map(String).filter(Boolean),
     confidence: numberValue(source.confidence, 0, 1),
     metadata: metadataValue(source.metadata),
   };
+}
+
+function parsePages(value: unknown): ExtractionPage[] {
+  return arrayValue(value)
+    .map((item): ExtractionPage | null => {
+      const source = recordValue(item);
+      const pageNumber = integerValue(source.page_number, 1);
+      if (pageNumber == null) return null;
+      return {
+        page_number: pageNumber,
+        label: stringValue(source.label) || null,
+        width: numberValue(source.width, 0),
+        height: numberValue(source.height, 0),
+        rotation: integerValue(source.rotation),
+        element_ids: arrayValue(source.element_ids).map(String).filter(Boolean),
+        metadata: metadataValue(source.metadata),
+      };
+    })
+    .filter((item): item is ExtractionPage => item != null);
+}
+
+function parseTables(value: unknown): ExtractionTable[] {
+  return arrayValue(value)
+    .map((item): ExtractionTable | null => {
+      const source = recordValue(item);
+      const tableId = stringValue(source.table_id);
+      if (!tableId) return null;
+      return {
+        table_id: tableId,
+        element_id: stringValue(source.element_id) || null,
+        page_number: integerValue(source.page_number, 1),
+        caption: stringValue(source.caption) || null,
+        cells: parseTableCells(source.cells),
+        metadata: metadataValue(source.metadata),
+      };
+    })
+    .filter((item): item is ExtractionTable => item != null);
+}
+
+function parseTableCells(value: unknown): ExtractionTableCell[] {
+  return arrayValue(value)
+    .map((item): ExtractionTableCell | null => {
+      const source = recordValue(item);
+      const row = integerValue(source.row);
+      const col = integerValue(source.col);
+      if (row == null || col == null) return null;
+      return {
+        row,
+        col,
+        text: stringValue(source.text),
+        row_span: integerValue(source.row_span, 1) ?? 1,
+        col_span: integerValue(source.col_span, 1) ?? 1,
+        bbox: numberArrayValue(source.bbox),
+        confidence: numberValue(source.confidence, 0, 1),
+      };
+    })
+    .filter((item): item is ExtractionTableCell => item != null);
+}
+
+function parseAssets(value: unknown): ExtractionAsset[] {
+  return arrayValue(value)
+    .map((item): ExtractionAsset | null => {
+      const source = recordValue(item);
+      const assetId = stringValue(source.asset_id);
+      if (!assetId) return null;
+      return {
+        asset_id: assetId,
+        kind: stringValue(source.kind) || "figure",
+        object_path: stringValue(source.object_path) || null,
+        page_number: integerValue(source.page_number, 1),
+        bbox: numberArrayValue(source.bbox),
+        alt_text: stringValue(source.alt_text) || null,
+        metadata: metadataValue(source.metadata),
+      };
+    })
+    .filter((item): item is ExtractionAsset => item != null);
 }
 
 function recordValue(value: unknown): Record<string, unknown> {
@@ -113,9 +210,9 @@ function integerValue(value: unknown, min = 0): number | null {
 }
 
 function numberArrayValue(value: unknown): number[] | null {
-  if (!Array.isArray(value) || value.length !== 4) return null;
+  if (!Array.isArray(value) || ![4, 8].includes(value.length)) return null;
   const numbers = value.filter((item): item is number => typeof item === "number");
-  return numbers.length === 4 && numbers.every(Number.isFinite) ? numbers : null;
+  return numbers.length === value.length && numbers.every(Number.isFinite) ? numbers : null;
 }
 
 function metadataValue(value: unknown): Record<string, JsonScalar> {

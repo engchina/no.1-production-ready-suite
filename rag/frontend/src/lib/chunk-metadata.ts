@@ -26,6 +26,21 @@ export function citationMetadataChips(
   return chips;
 }
 
+/** citation preview link に渡す先頭 element id を安全に取り出す。 */
+export function firstCitationElementId(value: unknown): string | null {
+  if (typeof value === "string" || typeof value === "number") {
+    return firstNonEmptyToken(String(value).split(","));
+  }
+  if (Array.isArray(value)) {
+    return firstNonEmptyToken(
+      value.flatMap((item) =>
+        typeof item === "string" || typeof item === "number" ? [String(item)] : []
+      )
+    );
+  }
+  return null;
+}
+
 function pageRange(metadata: RetrievedChunk["metadata"]): string {
   const start = integerMetadata(metadata, "page_start");
   const end = integerMetadata(metadata, "page_end") ?? start;
@@ -42,4 +57,9 @@ function integerMetadata(metadata: RetrievedChunk["metadata"], key: string): num
 function stringMetadata(metadata: RetrievedChunk["metadata"], key: string): string {
   const value = metadata[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function firstNonEmptyToken(values: string[]): string | null {
+  const first = values.map((item) => item.trim()).find(Boolean);
+  return first ?? null;
 }

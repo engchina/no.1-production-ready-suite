@@ -25,6 +25,140 @@ Use a writable cache directory for verification commands, for example `uv --cach
 ### Metadata
 - Reproducible: yes
 - Related Files: backend/pyproject.toml
+- Recurrence-Count: 2
+- Last-Seen: 2026-06-16T20:36:23+09:00
+
+### Recurrence Notes
+- 2026-06-16T20:36:23+09:00: `uv run ruff check ...` and `uv run pytest ...` failed in the managed sandbox for the same `/root/.cache/uv` write issue. Reran successfully with `UV_CACHE_DIR=/tmp/uv-cache`.
+
+---
+
+## [ERR-20260617-002] document_workspace_element_deeplink_reset
+
+**Logged**: 2026-06-17T16:07:02+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+`element_id` only deep links in DocumentWorkspace were reset to the first chunk when chunk data arrived after the extraction selection.
+
+### Error
+```text
+Expected selected table element aria-pressed="true"; received "false" in Playwright desktop/mobile.
+```
+
+### Context
+- Command attempted: `npm run test:e2e -- e2e/structure-explainability.spec.ts e2e/document-workspace-file-processing.spec.ts`
+- The element deep-link effect selected `tbl-1` before chunks loaded, then the default first-chunk selection ran later and overwrote the selected element.
+
+### Suggested Fix
+When a requested `element_id` is already selected, preserve it as the authoritative deep-link target; later chunk loading may attach the linked chunk but must not reset the element selection.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/components/documents/DocumentWorkspace.tsx, frontend/e2e/document-workspace-file-processing.spec.ts
+
+### Resolution
+- **Resolved**: 2026-06-17T16:07:02+09:00
+- **Notes**: Added a guard that preserves selected URL element targets and only backfills linked chunk id; reran the focused Playwright specs successfully on desktop and mobile.
+
+---
+
+## [ERR-20260617-001] file_processing_golden_cli_argument
+
+**Logged**: 2026-06-17T00:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+`rag-file-processing-golden` takes the manifest path as a positional argument, not `--manifest`.
+
+### Error
+```text
+rag-file-processing-golden: error: unrecognized arguments: --manifest
+```
+
+### Context
+- Command attempted: `uv run python -m app.rag.file_processing_golden_cli --manifest ../docs/evaluation/file-processing-golden-set.json`
+- The CLI usage is `rag-file-processing-golden [--output OUTPUT] [--fail-on-pending] [--github-annotations] manifest`.
+
+### Suggested Fix
+Run `uv run python -m app.rag.file_processing_golden_cli ../docs/evaluation/file-processing-golden-set.json`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/rag/file_processing_golden_cli.py, docs/evaluation/file-processing-golden-set.json
+
+### Resolution
+- **Resolved**: 2026-06-17T00:00:00+09:00
+- **Notes**: Reran with the manifest path as the positional argument.
+
+---
+
+## [ERR-20260617-002] playwright_chromium_sandbox_eperm
+
+**Logged**: 2026-06-17T05:01:55+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+Playwright Chromium failed to launch inside the managed sandbox while verifying the document workspace UI.
+
+### Error
+```text
+FATAL:content/browser/sandbox_host_linux.cc:41 Check failed: . shutdown: Operation not permitted (1)
+```
+
+### Context
+- Command attempted: `env PLAYWRIGHT_SKIP_WEB_SERVER=1 npx playwright test e2e/document-workspace-file-processing.spec.ts`
+- Vite dev server was already running with approved escalation.
+- Chromium launch needs sandbox escalation in this desktop environment.
+
+### Suggested Fix
+Run targeted Playwright verification with approved sandbox escalation when Chromium launch hits `sandbox_host_linux.cc` EPERM.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/playwright.config.ts
+
+### Resolution
+- **Resolved**: 2026-06-17T05:01:55+09:00
+- **Notes**: Reran the same targeted Playwright command with escalation; 4 tests passed across desktop and mobile.
+
+---
+
+## [ERR-20260617-001] vitest_runinband_option
+
+**Logged**: 2026-06-17T04:59:52+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+Vitest failed because the command used Jest's `--runInBand` option, which this frontend test runner does not support.
+
+### Error
+```text
+CACError: Unknown option `--runInBand`
+```
+
+### Context
+- Command attempted: `npm run test -- --runInBand`
+- Project script is `vitest run`; run it directly without Jest-only flags.
+
+### Suggested Fix
+Use `npm run test` for the frontend Vitest suite, or Vitest-supported flags only.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/package.json
+
+### Resolution
+- **Resolved**: 2026-06-17T04:59:52+09:00
+- **Notes**: Rerun the frontend test suite with `npm run test`.
 
 ---
 
@@ -59,6 +193,38 @@ Use `APP_ROUTES.fileList` semantics in e2e tests and open `/file-list` for the d
 ### Resolution
 - **Resolved**: 2026-06-16T15:47:29+09:00
 - **Notes**: The e2e now opens `/file-list`; desktop and 375px mobile projects pass.
+
+---
+
+## [ERR-20260616-003] backend_full_pytest_timeout
+
+**Logged**: 2026-06-16T20:47:00+09:00
+**Priority**: medium
+**Status**: pending
+**Area**: tests
+
+### Summary
+Backend full `pytest -q` did not complete within a 180 second timeout in the managed sandbox, while targeted pipeline/search tests completed.
+
+### Error
+```text
+timeout 180s env UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q
+# exited with code 124 after reaching 13% progress output
+```
+
+### Context
+- Initial full pytest run reached 13% and then produced no further output for several minutes.
+- A second run with explicit `timeout 180s` reproduced the stall/long-running behavior.
+- Targeted verification passed: `tests/test_pipeline.py tests/test_search_api.py -q`.
+- `uv run ruff check .` and `uv run mypy .` passed with `UV_CACHE_DIR=/tmp/uv-cache`.
+
+### Suggested Fix
+Use a targeted test subset for code-change verification when full pytest stalls, then investigate full-suite timing with verbose/failfast selection in a dedicated debugging pass.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests
+- See Also: ERR-20260614-003, ERR-20260614-018
 
 ---
 

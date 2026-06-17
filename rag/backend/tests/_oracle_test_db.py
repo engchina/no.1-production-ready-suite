@@ -102,6 +102,12 @@ def ensure_schema() -> None:
                 # 既存 schema では新列を migration で補うため、当該索引だけ先に失敗し得る。
                 if code == 904 and "RESULT_SHA256" in sql.upper():
                     continue
+                if (
+                    code == 904
+                    and "RAG_AGENT_MEMORIES" in sql.upper()
+                    and "ROLE_ID_HASH" in sql.upper()
+                ):
+                    continue
                 raise
         for statement in split_sql_statements(oracle_schema_migration_sql()):
             sql = _clean_ddl_statement(statement)
@@ -164,6 +170,16 @@ def cleanup_to_baseline() -> None:
         else:
             with suppress(Exception):
                 cursor.execute("DELETE FROM rag_document_knowledge_bases")
+        with suppress(Exception):
+            if baseline:
+                placeholders = ", ".join(f":b{i}" for i in range(len(baseline)))
+                params = {f"b{i}": value for i, value in enumerate(baseline)}
+                cursor.execute(
+                    f"DELETE FROM rag_ingestion_segments WHERE document_id NOT IN ({placeholders})",
+                    params,
+                )
+            else:
+                cursor.execute("DELETE FROM rag_ingestion_segments")
         if baseline:
             placeholders = ", ".join(f":b{i}" for i in range(len(baseline)))
             params = {f"b{i}": value for i, value in enumerate(baseline)}

@@ -81,6 +81,8 @@ test("データベース設定から Wallet ZIP をアップロードできる",
 
   await page.goto("/settings/database");
 
+  const main = page.getByRole("main", { name: "メイン領域" });
+
   await expect(page.getByText("保存済みパスワードを削除する")).toHaveCount(0);
   await expect(page.getByText("保存済み Wallet パスワードを削除する")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "再読み込み" })).toHaveCount(0);
@@ -96,11 +98,11 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   await expect(page.getByRole("heading", { name: "運用メモ" })).toBeVisible();
   await expect(page.getByLabel(".env プレビュー")).toContainText("ORACLE_USER=rag_app");
   await expect(page.getByText("認証方式")).toBeVisible();
-  await expect(page.getByText("アダプタ")).toHaveCount(0);
-  await expect(page.getByText("反映先")).toHaveCount(0);
-  await expect(page.getByText("サービス名候補")).toHaveCount(0);
-  await expect(page.getByText("Embedding 次元")).toHaveCount(0);
-  await expect(page.getByText("ベクトル列")).toHaveCount(0);
+  await expect(main.getByText("アダプタ")).toHaveCount(0);
+  await expect(main.getByText("反映先")).toHaveCount(0);
+  await expect(main.getByText("サービス名候補")).toHaveCount(0);
+  await expect(main.getByText("Embedding 次元")).toHaveCount(0);
+  await expect(main.getByText("ベクトル列")).toHaveCount(0);
   await page.getByLabel("Wallet ZIP ファイルを選択").setInputFiles({
     name: "Wallet_RAGDB.zip",
     mimeType: "application/zip",
@@ -111,8 +113,8 @@ test("データベース設定から Wallet ZIP をアップロードできる",
     page.getByText("Wallet ZIP をアップロードしました: Wallet_RAGDB.zip")
   ).toBeVisible();
   await expect(page.locator("form").getByText("Readiness: OK")).toBeVisible();
-  await expect(page.getByText("サービス名候補")).toHaveCount(0);
-  await expect(page.getByText("Embedding 次元")).toHaveCount(0);
+  await expect(main.getByText("サービス名候補")).toHaveCount(0);
+  await expect(main.getByText("Embedding 次元")).toHaveCount(0);
   await expect(page.getByText("ベクトル列")).toHaveCount(0);
   const walletService = page.getByRole("combobox", { name: "サービス名 / DSN" });
   await walletService.click();

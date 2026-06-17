@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import {
   Link,
   Navigate,
@@ -25,6 +25,7 @@ import { ErrorState } from "@/components/StateViews";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
+import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,6 +33,7 @@ import { UploadWorkspace } from "@/components/upload/UploadWorkspace";
 import { useAuth } from "@/lib/auth";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
+import { useUiStore } from "@/lib/ui-store";
 
 export function App() {
   const auth = useAuth();
@@ -67,6 +69,10 @@ export function App() {
           path={APP_ROUTES.settingsUploadStorage}
           element={<SettingsUploadStorageRoute />}
         />
+        <Route
+          path={APP_ROUTES.settingsParserAdapters}
+          element={<SettingsParserAdaptersRoute />}
+        />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
@@ -81,6 +87,8 @@ function ProtectedLayout() {
   const location = useLocation();
   const navigationType = useNavigationType();
   const mainRef = useRef<HTMLElement | null>(null);
+  const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
+  useCollapseSidebarOnNarrowViewport(setSidebarCollapsed);
   useMainScrollRestoration(mainRef, location, navigationType);
 
   if (auth.authRequired && !auth.isAuthenticated) {
@@ -107,6 +115,18 @@ function ProtectedLayout() {
 
 type RouterLocation = ReturnType<typeof useLocation>;
 type RouterNavigationType = ReturnType<typeof useNavigationType>;
+
+function useCollapseSidebarOnNarrowViewport(setSidebarCollapsed: (collapsed: boolean) => void) {
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 640px)");
+    const collapseIfNarrow = () => {
+      if (media.matches) setSidebarCollapsed(true);
+    };
+    collapseIfNarrow();
+    media.addEventListener("change", collapseIfNarrow);
+    return () => media.removeEventListener("change", collapseIfNarrow);
+  }, [setSidebarCollapsed]);
+}
 
 const mainScrollPositions = new Map<string, number>();
 
@@ -255,6 +275,18 @@ function SettingsUploadStorageRoute() {
         subtitle={t("settings.uploadStorage.subtitle")}
       />
       <UploadStorageSettingsClient />
+    </div>
+  );
+}
+
+function SettingsParserAdaptersRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsParserAdapters")}
+        subtitle={t("settings.parserAdapters.subtitle")}
+      />
+      <ParserAdapterSettingsClient />
     </div>
   );
 }

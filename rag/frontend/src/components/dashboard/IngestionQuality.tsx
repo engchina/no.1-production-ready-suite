@@ -1,11 +1,19 @@
 import {
   BookOpen,
+  CircleGauge,
   FileCheck2,
+  FileImage,
+  FileWarning,
   Layers3,
   ListChecks,
+  RefreshCcw,
+  ShieldAlert,
+  Sigma,
   Table2,
+  TriangleAlert,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { DashboardIngestionQuality } from "@/lib/api";
@@ -57,7 +65,7 @@ export function IngestionQuality({ quality }: { quality: DashboardIngestionQuali
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <MetricGroup title={t("dashboard.ingestionQuality.structureMetrics")}>
           <Metric
             icon={Layers3}
             label={t("dashboard.ingestionQuality.elements")}
@@ -78,11 +86,59 @@ export function IngestionQuality({ quality }: { quality: DashboardIngestionQuali
             label={t("dashboard.ingestionQuality.lists")}
             value={quality.list_count}
           />
-        </div>
+          <Metric
+            icon={FileImage}
+            label={t("dashboard.ingestionQuality.figures")}
+            value={quality.figure_count ?? 0}
+          />
+          <Metric
+            icon={Sigma}
+            label={t("dashboard.ingestionQuality.formulas")}
+            value={quality.formula_count ?? 0}
+          />
+        </MetricGroup>
+
+        <MetricGroup title={t("dashboard.ingestionQuality.healthMetrics")}>
+          <Metric
+            icon={CircleGauge}
+            label={t("dashboard.ingestionQuality.pageCoverage")}
+            value={formatPercent(quality.average_page_coverage ?? 0)}
+          />
+          <Metric
+            icon={TriangleAlert}
+            label={t("dashboard.ingestionQuality.lowConfidence")}
+            value={quality.low_confidence_count ?? 0}
+          />
+          <Metric
+            icon={ShieldAlert}
+            label={t("dashboard.ingestionQuality.fallbacks")}
+            value={quality.fallback_document_count ?? 0}
+          />
+          <Metric
+            icon={FileWarning}
+            label={t("dashboard.ingestionQuality.failedSegments")}
+            value={quality.failed_segment_document_count ?? 0}
+          />
+          <Metric
+            icon={RefreshCcw}
+            label={t("dashboard.ingestionQuality.segmentArtifactMisses")}
+            value={quality.segment_artifact_cache_miss_document_count ?? 0}
+          />
+          <Metric
+            icon={BookOpen}
+            label={t("dashboard.ingestionQuality.longDocuments")}
+            value={quality.long_document_count ?? 0}
+          />
+        </MetricGroup>
 
         <Distribution
           title={t("dashboard.ingestionQuality.chunkProfiles")}
           values={quality.chunk_profile_counts}
+          empty={t("dashboard.ingestionQuality.emptyDistribution")}
+        />
+        <Distribution
+          title={t("dashboard.ingestionQuality.parserBackends")}
+          values={quality.parser_backend_counts ?? {}}
           empty={t("dashboard.ingestionQuality.emptyDistribution")}
         />
         <Distribution
@@ -95,6 +151,21 @@ export function IngestionQuality({ quality }: { quality: DashboardIngestionQuali
   );
 }
 
+function MetricGroup({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-2">
+      <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+      <div className="grid grid-cols-2 gap-3">{children}</div>
+    </section>
+  );
+}
+
 function Metric({
   icon: Icon,
   label,
@@ -102,16 +173,16 @@ function Metric({
 }: {
   icon: LucideIcon;
   label: string;
-  value: number;
+  value: number | string;
 }) {
   return (
     <div className="rounded-md border border-border bg-background p-3">
-      <div className="flex items-center gap-2 text-xs text-muted">
-        <Icon size={14} className="text-primary" aria-hidden />
-        <span>{label}</span>
+      <div className="flex items-start gap-2 text-xs leading-5 text-muted">
+        <Icon size={14} className="mt-0.5 shrink-0 text-primary" aria-hidden />
+        <span className="min-w-0">{label}</span>
       </div>
       <p className="tnum mt-2 text-lg font-semibold text-foreground">
-        {formatNumber(value)}
+        {typeof value === "number" ? formatNumber(value) : value}
       </p>
     </div>
   );
@@ -171,9 +242,29 @@ function distributionLabel(value: string): string {
       return t("search.filters.contentKind.table");
     case "figure":
       return t("search.filters.contentKind.figure");
+    case "equation":
+      return t("search.filters.contentKind.equation");
+    case "code":
+      return t("search.filters.contentKind.code");
+    case "email":
+      return t("search.filters.contentKind.email");
+    case "slide":
+      return t("search.filters.contentKind.slide");
+    case "sheet":
+      return t("search.filters.contentKind.sheet");
     case "unknown":
       return t("dashboard.ingestionQuality.unknown");
+    case "enterprise_ai":
+      return t("dashboard.ingestionQuality.parserBackend.enterpriseAi");
+    case "local_partition":
+      return t("dashboard.ingestionQuality.parserBackend.localPartition");
+    case "unsupported":
+      return t("dashboard.ingestionQuality.parserBackend.unsupported");
     default:
       return value;
   }
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }

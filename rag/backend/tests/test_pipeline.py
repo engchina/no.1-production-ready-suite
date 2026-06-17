@@ -1,7 +1,7 @@
 """RAG pipeline の境界テスト。"""
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 
 import pytest
@@ -19,6 +19,11 @@ from app.rag.pipeline import (
     SearchTokenDelta,
     _build_context,
     _dedupe_ranked_chunks,
+)
+from app.rag.request_context import (
+    AuditRequestContext,
+    reset_audit_request_context,
+    set_audit_request_context,
 )
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest, SearchStrategy
 
@@ -496,6 +501,211 @@ async def test_pipeline_compresses_long_chunks_before_generation_context(
     assert "無関係な監査メモ" not in str(audit_event)
 
 
+async def test_pipeline_builds_aidb_memory_plan_and_structured_context(
+    caplog: LogCaptureFixture,
+) -> None:
+    """PDF の AIDB RAG flow と同じく業務文脈・読み取り計画・根拠分類を通す。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=ThreeResultGenAiClient(),
+        oracle=BusinessContextOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+    token = set_audit_request_context(
+        AuditRequestContext(
+            request_id="request-aidb-memory",
+            tenant_id_hash="a" * 64,
+            user_id_hash="b" * 64,
+            role_id_hash="c" * 64,
+            allowed_document_ids=frozenset({"doc-evidence", "doc-support", "doc-history"}),
+            allowed_knowledge_base_ids=frozenset({"kb-a"}),
+        )
+    )
+    try:
+        with caplog.at_level(logging.INFO, logger="app.audit"):
+            response = await pipeline.run(
+                SearchRequest(
+                    query="保証延長の条件を教えて",
+                    top_k=3,
+                    rerank_top_n=3,
+                    filters={
+                        "source_acl": "support",
+                        "document_version": "2024.05",
+                        "knowledge_base_id": "kb-a",
+                    },
+                )
+            )
+    finally:
+        reset_audit_request_context(token)
+
+    assert response.diagnostics.memory_plan_id
+    assert response.diagnostics.business_context["tenant_scoped"] is True
+    assert response.diagnostics.business_context["user_scoped"] is True
+    assert response.diagnostics.business_context["role_scoped"] is True
+    assert response.diagnostics.business_context["document_acl_scoped"] is True
+    assert response.diagnostics.business_context["knowledge_base_scoped"] is True
+    assert response.diagnostics.business_context["source_acl_filter_present"] is True
+    assert response.diagnostics.business_context["version_filter_present"] is True
+    assert response.diagnostics.retrieval_plan["memory_sequence"] == [
+        "evidence",
+        "similar",
+        "structure",
+        "history",
+    ]
+    scope_keys = cast(list[str], response.diagnostics.retrieval_plan["scope_keys"])
+    assert "role" in scope_keys
+    assert "source_acl" in scope_keys
+    assert "version" in scope_keys
+    assert response.diagnostics.retrieved_context_pack["evidence_count"] == 1
+    assert response.diagnostics.retrieved_context_pack["support_count"] == 1
+    assert response.diagnostics.retrieved_context_pack["history_count"] == 1
+    assert response.diagnostics.agent_memory_retrieved_count == 1
+    assert response.diagnostics.evidence_count == 1
+    assert response.diagnostics.support_count == 1
+    assert response.diagnostics.history_count == 1
+    assert [citation.metadata["context_role"] for citation in response.citations] == [
+        "evidence",
+        "support",
+        "history",
+    ]
+    assert "[Evidence 1 | high | required | warranty-policy.txt#doc-evidence:0]" in llm.context
+    assert "[Support 1 | high | optional | warranty-faq.txt#doc-support:0]" in llm.context
+    assert "[History 1 | mid | optional | agent-memory#agent-memory:memory-1]" in llm.context
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["memory_plan_id"] == response.diagnostics.memory_plan_id
+    assert audit_event["evidence_count"] == 1
+    assert audit_event["support_count"] == 1
+    assert audit_event["history_count"] == 1
+    assert "保証延長" not in str(audit_event)
+
+
+async def test_pipeline_filters_agent_memory_by_referenced_dataset_scope() -> None:
+    """Agent Memory は synthetic document_id ではなく参照文書・KB scope で採否を決める。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=ThreeResultGenAiClient(),
+        oracle=ScopedAgentMemoryOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+    token = set_audit_request_context(
+        AuditRequestContext(
+            request_id="request-memory-scope",
+            tenant_id_hash="a" * 64,
+            user_id_hash="b" * 64,
+            allowed_document_ids=frozenset({"doc-allowed"}),
+            allowed_knowledge_base_ids=frozenset({"kb-scope"}),
+        )
+    )
+    try:
+        response = await pipeline.run(
+            SearchRequest(
+                query="承認条件を教えて",
+                top_k=1,
+                rerank_top_n=1,
+                filters={
+                    "knowledge_base_id": "kb-scope",
+                    "source_acl": "support",
+                    "document_version": "2024.05",
+                },
+            )
+        )
+    finally:
+        reset_audit_request_context(token)
+
+    assert response.diagnostics.agent_memory_retrieved_count == 1
+    assert response.diagnostics.history_count == 1
+    assert [citation.document_id for citation in response.citations] == [
+        "doc-allowed",
+        "agent-memory",
+    ]
+    assert "許可された履歴" in llm.context
+    assert "KB 不一致の履歴" not in llm.context
+    assert "文書アンカーなしの履歴" not in llm.context
+
+
+async def test_pipeline_verifier_rejects_unusable_candidates_before_context(
+    caplog: LogCaptureFixture,
+) -> None:
+    """Resolver / Verifier は ACL や版が不適合な候補を根拠化しない。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=TwoResultGenAiClient(),
+        oracle=RejectedCandidateOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(SearchRequest(query="承認条件", top_k=2, rerank_top_n=2))
+
+    assert [citation.chunk_id for citation in response.citations] == ["doc-valid:0"]
+    assert response.diagnostics.resolver_rejected_count == 1
+    assert response.diagnostics.retrieved_context_pack["rejection_reasons"] == ["access_denied"]
+    assert "旧版かつ ACL 不適合の候補" not in llm.context
+    assert "現行版の承認条件" in llm.context
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["resolver_rejected_count"] == 1
+    assert audit_event["citation_count"] == 1
+
+
+async def test_pipeline_writes_scoped_agent_memory_after_grounded_answer() -> None:
+    """回答後の Memory Loop は scoped Agent Memory へ短い要約を書き戻す。"""
+    oracle = MemoryWritebackOracleClient()
+    genai = MemoryWritebackGenAiClient()
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=CapturingLlm(),
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=False,
+            rag_agent_memory_writeback_enabled=True,
+            rag_context_window_chars=2000,
+        ),
+    )
+    token = set_audit_request_context(
+        AuditRequestContext(
+            request_id="request-memory-writeback",
+            tenant_id_hash="a" * 64,
+            user_id_hash="b" * 64,
+            agent_id_hash="c" * 64,
+            thread_id_hash="d" * 64,
+        )
+    )
+    try:
+        response = await pipeline.run(
+            SearchRequest(query="承認条件を教えて", top_k=1, rerank_top_n=1)
+        )
+    finally:
+        reset_audit_request_context(token)
+
+    assert response.diagnostics.agent_memory_writeback_count == 1
+    assert response.diagnostics.agent_memory_writeback_status == "saved"
+    assert oracle.saved_memories
+    saved_memory = oracle.saved_memories[0]
+    assert saved_memory["trace_id"] == response.trace_id
+    assert saved_memory["metadata"]["memory_plan_id"] == response.diagnostics.memory_plan_id
+    assert saved_memory["metadata"]["citation_ids"] == ["doc-1#doc-1:0"]
+    assert "承認条件は 120000 円です。" in saved_memory["memory_text"]
+    assert "doc-1#doc-1:0" in saved_memory["memory_text"]
+    assert "承認条件を教えて" not in saved_memory["memory_text"]
+    assert genai.embed_input_types == ["SEARCH_QUERY", "SEARCH_DOCUMENT"]
+
+
 def test_dedupe_ranked_chunks_falls_back_to_normalized_text_hash() -> None:
     """text_sha256 がない古い chunk でも正規化本文で重複を抑止する。"""
     chunks = [
@@ -853,6 +1063,26 @@ class ThreeResultGenAiClient(OciGenAiClient):
         return [(0, 1.0), (1, 0.99), (2, 0.98)][:top_n]
 
 
+class MemoryWritebackGenAiClient(OciGenAiClient):
+    """Agent Memory writeback の embedding 入力種別を記録する。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed_input_types: list[str] = []
+
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        input_type: str = "SEARCH_DOCUMENT",
+    ) -> list[list[float]]:
+        self.embed_input_types.append(input_type)
+        return [[1.0] + [0.0] * 1535 for _ in texts]
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        return [(0, 0.99)][:top_n]
+
+
 class FailingRerankGenAiClient(OciGenAiClient):
     """rerank failure を再現するテスト用 GenAI client。"""
 
@@ -895,6 +1125,59 @@ class StubOracleClient(OracleClient):
                 file_name="policy.txt",
             )
         ]
+
+
+class MemoryWritebackOracleClient(OracleClient):
+    """Agent Memory writeback を記録する Oracle fake。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.saved_memories: list[dict[str, Any]] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="承認条件は 120000 円以上です。",
+                score=0.94,
+                file_name="policy.txt",
+                metadata={"chunk_index": 0},
+            )
+        ][:top_k]
+
+    async def agent_memory_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, top_k, filters
+        return []
+
+    async def save_agent_memory(
+        self,
+        memory: Mapping[str, object],
+        embedding: list[float],
+    ) -> str | None:
+        assert len(embedding) == 1536
+        self.saved_memories.append(
+            {
+                "trace_id": memory["trace_id"],
+                "memory_text": memory["memory_text"],
+                "metadata": memory["metadata"],
+            }
+        )
+        return "memory-1"
 
 
 class QueryVariantOracleClient(OracleClient):
@@ -1294,6 +1577,216 @@ class DiverseChunkOracleClient(OracleClient):
                 score=0.91,
                 file_name="observability.txt",
                 metadata={"chunk_index": 0},
+            ),
+        ][:top_k]
+
+
+class BusinessContextOracleClient(OracleClient):
+    """Business Context / Memory Plan テスト用の検索候補を返す。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode
+        assert filters == {
+            "source_acl": "support",
+            "document_version": "2024.05",
+            "knowledge_base_id": "kb-a",
+        }
+        return [
+            RetrievedChunk(
+                document_id="doc-evidence",
+                chunk_id="doc-evidence:0",
+                text="保証延長は申請日から30日以内に申し込む必要があります。",
+                score=0.94,
+                file_name="warranty-policy.txt",
+                metadata={
+                    "chunk_index": 0,
+                    "source_acl": "support",
+                    "document_version": "2024.05",
+                    "version_status": "active",
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-support",
+                chunk_id="doc-support:0",
+                text="FAQでは保証延長の対象例とよくある補足説明を扱います。",
+                score=0.72,
+                file_name="warranty-faq.txt",
+                metadata={
+                    "chunk_index": 0,
+                    "support_only": True,
+                    "source_acl": "support",
+                    "document_version": "2024.05",
+                    "version_status": "active",
+                },
+            ),
+        ][:top_k]
+
+    async def agent_memory_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding
+        assert filters == {
+            "source_acl": "support",
+            "document_version": "2024.05",
+            "knowledge_base_id": "kb-a",
+        }
+        return [
+            RetrievedChunk(
+                document_id="agent-memory",
+                chunk_id="agent-memory:memory-1",
+                text="前回相談では保証延長の申込期限を重視していました。",
+                score=0.68,
+                file_name="agent-memory",
+                metadata={
+                    "chunk_index": 0,
+                    "retrieval_mode": "agent_memory",
+                    "citation_document_ids": "doc-history",
+                    "knowledge_base_id": "kb-a",
+                    "source_acl": "support",
+                    "document_version": "2024.05",
+                },
+            ),
+        ][:top_k]
+
+
+class ScopedAgentMemoryOracleClient(OracleClient):
+    """Agent Memory の dataset scope filtering を検証する検索候補を返す。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode
+        assert filters == {
+            "knowledge_base_id": "kb-scope",
+            "source_acl": "support",
+            "document_version": "2024.05",
+        }
+        return [
+            RetrievedChunk(
+                document_id="doc-allowed",
+                chunk_id="doc-allowed:0",
+                text="承認条件は 120000 円以上です。",
+                score=0.96,
+                file_name="approval-policy.txt",
+                metadata={
+                    "chunk_index": 0,
+                    "knowledge_base_id": "kb-scope",
+                    "source_acl": "support",
+                    "document_version": "2024.05",
+                    "version_status": "active",
+                },
+            )
+        ][:top_k]
+
+    async def agent_memory_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding
+        assert filters == {
+            "knowledge_base_id": "kb-scope",
+            "source_acl": "support",
+            "document_version": "2024.05",
+        }
+        return [
+            RetrievedChunk(
+                document_id="agent-memory",
+                chunk_id="agent-memory:allowed",
+                text="許可された履歴: 前回も 120000 円の承認条件を確認しました。",
+                score=0.75,
+                file_name="agent-memory",
+                metadata={
+                    "chunk_index": 0,
+                    "retrieval_mode": "agent_memory",
+                    "citation_document_ids": "doc-allowed",
+                    "knowledge_base_id": "kb-scope",
+                    "source_acl": "support",
+                    "document_version": "2024.05",
+                },
+            ),
+            RetrievedChunk(
+                document_id="agent-memory",
+                chunk_id="agent-memory:wrong-kb",
+                text="KB 不一致の履歴: 別ナレッジベースの承認条件です。",
+                score=0.74,
+                file_name="agent-memory",
+                metadata={
+                    "chunk_index": 0,
+                    "retrieval_mode": "agent_memory",
+                    "citation_document_ids": "doc-allowed",
+                    "knowledge_base_id": "kb-other",
+                    "source_acl": "support",
+                    "document_version": "2024.05",
+                },
+            ),
+            RetrievedChunk(
+                document_id="agent-memory",
+                chunk_id="agent-memory:unanchored",
+                text="文書アンカーなしの履歴: tenant scope だけの古い記憶です。",
+                score=0.73,
+                file_name="agent-memory",
+                metadata={
+                    "chunk_index": 0,
+                    "retrieval_mode": "agent_memory",
+                    "knowledge_base_id": "kb-scope",
+                    "source_acl": "support",
+                    "document_version": "2024.05",
+                },
+            ),
+        ][:top_k]
+
+
+class RejectedCandidateOracleClient(OracleClient):
+    """Verifier が除外すべき候補と有効候補を返す。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-rejected",
+                chunk_id="doc-rejected:0",
+                text="旧版かつ ACL 不適合の候補です。",
+                score=0.95,
+                file_name="old-policy.txt",
+                metadata={
+                    "chunk_index": 0,
+                    "source_acl_denied": True,
+                    "version_status": "superseded",
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-valid",
+                chunk_id="doc-valid:0",
+                text="現行版の承認条件は 120000 円以上です。",
+                score=0.91,
+                file_name="active-policy.txt",
+                metadata={"chunk_index": 0, "version_status": "active"},
             ),
         ][:top_k]
 

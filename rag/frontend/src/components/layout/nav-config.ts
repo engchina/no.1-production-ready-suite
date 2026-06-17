@@ -7,6 +7,7 @@ import {
   Cloud,
   KeyRound,
   LayoutDashboard,
+  Plug,
   Settings,
   Upload,
   type LucideIcon,
@@ -55,6 +56,11 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: APP_ROUTES.settingsOci, labelKey: "nav.settingsOci", icon: KeyRound },
       { href: APP_ROUTES.settingsUploadStorage, labelKey: "nav.settingsUploadStorage", icon: Cloud },
+      {
+        href: APP_ROUTES.settingsParserAdapters,
+        labelKey: "nav.settingsParserAdapters",
+        icon: Plug,
+      },
       { href: APP_ROUTES.settingsModel, labelKey: "nav.settingsModel", icon: Settings },
       { href: APP_ROUTES.settingsDatabase, labelKey: "nav.settingsDatabase", icon: Database },
     ],

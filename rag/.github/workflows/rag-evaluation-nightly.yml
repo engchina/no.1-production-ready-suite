@@ -19,6 +19,21 @@ on:
         required: false
         default: "evaluation/search-load.example.json"
         type: string
+      file_processing_manifest_path:
+        description: "file-processing golden manifest path。空文字なら file-processing gate を skip します。"
+        required: false
+        default: "docs/evaluation/file-processing-golden-set.json"
+        type: string
+      fail_on_file_processing_pending:
+        description: "file-processing の staging pending check を失敗扱いにします。"
+        required: false
+        default: false
+        type: boolean
+      run_file_processing_staging:
+        description: "OCI/Oracle staging 実環境で file-processing pending checks を検証します。"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: rag-evaluation-nightly-${{ github.ref }}
@@ -55,6 +70,9 @@ jobs:
           DEFAULT_API_BASE_URL: ${{ vars.RAG_EVALUATION_API_BASE_URL }}
           INPUT_GOLDEN_SET_PATH: ${{ github.event.inputs.golden_set_path }}
           INPUT_SEARCH_LOAD_PATH: ${{ github.event.inputs.search_load_path }}
+          INPUT_FILE_PROCESSING_MANIFEST_PATH: ${{ github.event.inputs.file_processing_manifest_path }}
+          INPUT_FAIL_ON_FILE_PROCESSING_PENDING: ${{ github.event.inputs.fail_on_file_processing_pending }}
+          INPUT_RUN_FILE_PROCESSING_STAGING: ${{ github.event.inputs.run_file_processing_staging }}
           RAG_EVALUATION_TENANT_ID: ${{ vars.RAG_EVALUATION_TENANT_ID }}
           RAG_EVALUATION_USER_ID: ${{ vars.RAG_EVALUATION_USER_ID }}
           RAG_SEARCH_LOAD_TENANT_ID: ${{ vars.RAG_SEARCH_LOAD_TENANT_ID }}
@@ -64,11 +82,44 @@ jobs:
           api_base_url="${INPUT_API_BASE_URL:-${DEFAULT_API_BASE_URL:-}}"
           golden_set_path="${INPUT_GOLDEN_SET_PATH:-evaluation/compare.example.json}"
           search_load_path="${INPUT_SEARCH_LOAD_PATH:-evaluation/search-load.example.json}"
+          file_processing_manifest_path="${INPUT_FILE_PROCESSING_MANIFEST_PATH:-docs/evaluation/file-processing-golden-set.json}"
+          mkdir -p ../artifacts
+
+          file_processing_status=0
+          file_processing_staging_status=0
+          if [ -n "$file_processing_manifest_path" ]; then
+            file_processing_args=(
+              "../${file_processing_manifest_path}"
+              --output ../artifacts/file-processing-report.json
+              --github-annotations
+            )
+            if [ "${INPUT_FAIL_ON_FILE_PROCESSING_PENDING:-false}" = "true" ]; then
+              file_processing_args+=(--fail-on-pending)
+            fi
+            uv run python -m app.rag.file_processing_golden_cli \
+              "${file_processing_args[@]}" || file_processing_status=$?
+            if [ "${INPUT_RUN_FILE_PROCESSING_STAGING:-false}" = "true" ]; then
+              uv run python -m app.rag.file_processing_staging_cli \
+                "../${file_processing_manifest_path}" \
+                --output ../artifacts/file-processing-staging-report.json \
+                --cleanup || file_processing_staging_status=$?
+            fi
+          else
+            echo "file_processing_manifest_path が空のため file-processing gate を skip します。"
+          fi
+
           if [ -z "$api_base_url" ]; then
             echo "RAG_EVALUATION_API_BASE_URL が未設定のため nightly evaluation を skip します。"
+            if [ "$file_processing_status" -ne 0 ]; then
+              echo "::error::file-processing gate failed with exit code ${file_processing_status}"
+              exit "$file_processing_status"
+            fi
+            if [ "$file_processing_staging_status" -ne 0 ]; then
+              echo "::error::file-processing staging gate failed with exit code ${file_processing_staging_status}"
+              exit "$file_processing_staging_status"
+            fi
             exit 0
           fi
-          mkdir -p ../artifacts
           export RAG_SEARCH_LOAD_TENANT_ID="${RAG_SEARCH_LOAD_TENANT_ID:-${RAG_EVALUATION_TENANT_ID:-}}"
           export RAG_SEARCH_LOAD_USER_ID="${RAG_SEARCH_LOAD_USER_ID:-${RAG_EVALUATION_USER_ID:-}}"
 
@@ -90,6 +141,14 @@ jobs:
             echo "search_load_path が空のため search load gate を skip します。"
           fi
 
+          if [ "$file_processing_status" -ne 0 ]; then
+            echo "::error::file-processing gate failed with exit code ${file_processing_status}"
+            exit "$file_processing_status"
+          fi
+          if [ "$file_processing_staging_status" -ne 0 ]; then
+            echo "::error::file-processing staging gate failed with exit code ${file_processing_staging_status}"
+            exit "$file_processing_staging_status"
+          fi
           if [ "$evaluation_status" -ne 0 ]; then
             echo "::error::evaluation gate failed with exit code ${evaluation_status}"
             exit "$evaluation_status"

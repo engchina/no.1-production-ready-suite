@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.config import UploadStorageBackend
+from app.config import ParserAdapterBackend, UploadStorageBackend
 
 ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
 ModelSettingsTestStatus = Literal["success", "failed"]
@@ -15,6 +15,8 @@ ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "e
 DatabaseConnectionTestStatus = Literal["success", "failed"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
+ParserAdapterBackendName = Literal["docling", "marker", "unstructured"]
+ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 
 
 class EnterpriseAiModelEntrySettings(BaseModel):
@@ -294,6 +296,28 @@ class UploadStorageSettingsUpdate(BaseModel):
                 "Object Storage の値は英数字、ハイフン、アンダースコア、ドットで入力してください。"
             )
         return value
+
+
+class ParserAdapterStatusData(BaseModel):
+    """任意 parser adapter の feature flag / package readiness。"""
+
+    backend: ParserAdapterBackendName
+    package_name: str
+    enabled: bool
+    selected: bool
+    installed: bool
+    status: ParserAdapterStatus
+    version: str | None = None
+    warning_code: str | None = None
+
+
+class ParserAdapterSettingsData(BaseModel):
+    """任意 parser adapter 設定の非機密 runtime snapshot。"""
+
+    adapter_backend: ParserAdapterBackend
+    effective_order: list[ParserAdapterBackendName]
+    adapters: list[ParserAdapterStatusData]
+    config_source: Literal["runtime"]
 
 
 class OciConfigReadRequest(BaseModel):

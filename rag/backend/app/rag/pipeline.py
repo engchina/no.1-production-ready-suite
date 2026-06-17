@@ -14,6 +14,15 @@ from app.config import Settings, enterprise_ai_default_model_id, get_settings
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.guardrails import GuardrailPolicy
+from app.rag.memory_engineering import (
+    BusinessContextPack,
+    ContextPack,
+    RetrievalPlan,
+    build_business_context_pack,
+    build_context_with_memory_roles,
+    build_retrieval_plan,
+    resolve_context_pack,
+)
 from app.rag.observability import (
     elapsed_ms,
     new_trace_id,
@@ -23,6 +32,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.query_transform import expand_retrieval_queries
+from app.rag.request_context import current_audit_request_context
 from app.rag.retrieval_strategy import ResolvedRetrievalStrategy, resolve_retrieval_strategy
 from app.schemas.search import (
     RetrievedChunk,
@@ -36,6 +46,7 @@ NO_RESULTS_ANSWER = (
     "検索条件に一致する根拠が見つかりませんでした。" "条件やキーワードを変えて検索してください。"
 )
 NO_RESULTS_WARNING = "検索条件に一致する根拠が見つかりませんでした。"
+UNVERIFIED_RESULTS_WARNING = "取得候補は検証で除外されたため、回答に使える根拠がありませんでした。"
 WHITESPACE_RE = re.compile(r"\s+")
 CONTEXT_SEGMENT_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
 QUERY_FEATURE_RE = re.compile(r"[a-z0-9_]{2,}|[ぁ-んァ-ン一-龯々ー]{2,}", re.IGNORECASE)
@@ -49,6 +60,7 @@ class RetrievalExecutionResult:
     chunks: list[RetrievedChunk]
     strategy: SearchStrategy
     graph_hit_count: int = 0
+    agent_memory_hit_count: int = 0
     fallback_reason: str | None = None
 
 
@@ -113,7 +125,12 @@ class RagPipeline:
         )
         if not query_guardrail.allowed:
             elapsed = elapsed_ms(started_at)
-            diagnostics = build_search_diagnostics(request, settings=self._settings)
+            blocked_business_context = build_business_context_pack(request)
+            diagnostics = build_search_diagnostics(
+                request,
+                settings=self._settings,
+                business_context=blocked_business_context.diagnostics(),
+            )
             record_rag_request(request.mode.value, "blocked", elapsed / 1000, 0)
             record_rag_search_audit(
                 trace_id=trace_id,
@@ -145,7 +162,14 @@ class RagPipeline:
         context_expanded_count = 0
         context_compressed_count = 0
         context_compression_saved_chars = 0
+        agent_memory_retrieved_count = 0
+        agent_memory_writeback_count = 0
+        agent_memory_writeback_status = "skipped"
         query_variant_count = 1
+        business_context: BusinessContextPack = build_business_context_pack(request)
+        retrieval_plan: RetrievalPlan | None = None
+        context_pack: ContextPack | None = None
+        context_builder_diagnostics: dict[str, object] = {}
         runtime_retrieval_strategy = "hybrid"
         runtime_fallback_reason: str | None = None
         runtime_graph_hit_count = 0
@@ -166,6 +190,13 @@ class RagPipeline:
             if not query_variants:
                 query_variants = [query_guardrail.sanitized_text]
             query_variant_count = len(query_variants)
+            retrieval_plan = build_retrieval_plan(
+                trace_id=trace_id,
+                request=request,
+                business_context=business_context,
+                resolved_strategy=resolved_strategy,
+                query_variant_count=query_variant_count,
+            )
             vectors = await _observe_stage(
                 trace_id,
                 request.mode.value,
@@ -198,11 +229,14 @@ class RagPipeline:
                     "top_k": request.top_k,
                     "filter_key_count": len(request.filters),
                     "query_variant_count": query_variant_count,
+                    "memory_plan_id": retrieval_plan.plan_id,
+                    "memory_type_count": len(retrieval_plan.memory_sequence),
                 },
                 result_attributes=lambda result: {
                     "output_count": len(result.chunks),
                     "runtime_strategy": result.strategy.value,
                     "graph_hit_count": result.graph_hit_count,
+                    "agent_memory_hit_count": result.agent_memory_hit_count,
                     "fallback_reason": result.fallback_reason or "",
                 },
                 progress_callback=progress_callback,
@@ -212,6 +246,7 @@ class RagPipeline:
             runtime_retrieval_strategy = retrieval_result.strategy.value
             runtime_fallback_reason = retrieval_result.fallback_reason
             runtime_graph_hit_count = retrieval_result.graph_hit_count
+            agent_memory_retrieved_count = retrieval_result.agent_memory_hit_count
             error_stage = "rerank"
             ranked = await _observe_stage(
                 trace_id,
@@ -238,10 +273,14 @@ class RagPipeline:
                     settings=self._settings,
                     retrieval_strategy=runtime_retrieval_strategy,
                     route_reason=resolved_strategy.route_reason,
+                    memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
+                    business_context=business_context.diagnostics(),
+                    retrieval_plan=retrieval_plan.diagnostics(),
                     stream_stage_timings=stream_stage_timings,
                     retrieved_count=len(retrieved),
+                    agent_memory_retrieved_count=agent_memory_retrieved_count,
                     query_variant_count=query_variant_count,
                 )
                 record_rag_request(
@@ -355,17 +394,85 @@ class RagPipeline:
                     progress_callback=progress_callback,
                     stage_timings=stream_stage_timings,
                 )
-            context, context_citations = _build_context_with_citations(
-                packed_chunks,
+            if retrieval_plan is None:
+                raise RuntimeError("retrieval plan が初期化されていません。")
+            context_pack = resolve_context_pack(packed_chunks, plan=retrieval_plan)
+            if not context_pack.chunks:
+                elapsed = elapsed_ms(started_at)
+                diagnostics = build_search_diagnostics(
+                    request,
+                    settings=self._settings,
+                    retrieval_strategy=runtime_retrieval_strategy,
+                    route_reason=resolved_strategy.route_reason,
+                    memory_plan_id=retrieval_plan.plan_id,
+                    graph_hit_count=runtime_graph_hit_count,
+                    fallback_reason=runtime_fallback_reason,
+                    business_context=business_context.diagnostics(),
+                    retrieval_plan=retrieval_plan.diagnostics(),
+                    retrieved_context_pack=context_pack.diagnostics(),
+                    stream_stage_timings=stream_stage_timings,
+                    retrieved_count=len(retrieved),
+                    reranked_count=len(ranked),
+                    deduplicated_count=deduplicated_count,
+                    context_diversified_count=context_diversified_count,
+                    context_group_expanded_count=context_group_expanded_count,
+                    context_expanded_count=context_expanded_count,
+                    context_compressed_count=context_compressed_count,
+                    context_compression_saved_chars=context_compression_saved_chars,
+                    agent_memory_retrieved_count=agent_memory_retrieved_count,
+                    resolver_rejected_count=context_pack.rejected_count,
+                    insufficient_context_count=context_pack.insufficient_count,
+                    query_variant_count=query_variant_count,
+                )
+                record_rag_request(
+                    resolved_strategy.mode.value,
+                    "no_results",
+                    elapsed / 1000,
+                    len(retrieved),
+                )
+                record_rag_search_audit(
+                    trace_id=trace_id,
+                    outcome="no_results",
+                    mode=resolved_strategy.mode,
+                    sanitized_query=query_guardrail.sanitized_text,
+                    filters=request.filters,
+                    findings=query_guardrail.findings,
+                    retrieved_count=len(retrieved),
+                    citations=[],
+                    elapsed_ms=elapsed,
+                    diagnostics=diagnostics,
+                )
+                return SearchResponse(
+                    answer=NO_RESULTS_ANSWER,
+                    citations=[],
+                    trace_id=trace_id,
+                    guardrail_warnings=[
+                        *query_guardrail.warnings,
+                        NO_RESULTS_WARNING,
+                        UNVERIFIED_RESULTS_WARNING,
+                    ],
+                    elapsed_ms=elapsed,
+                    diagnostics=diagnostics,
+                )
+            built_context = build_context_with_memory_roles(
+                context_pack.chunks,
                 self._settings.rag_context_window_chars,
             )
+            context = built_context.context
+            context_citations = built_context.citations
+            context_builder_diagnostics = built_context.diagnostics()
             diagnostics = build_search_diagnostics(
                 request,
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
+                memory_plan_id=retrieval_plan.plan_id,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
+                business_context=business_context.diagnostics(),
+                retrieval_plan=retrieval_plan.diagnostics(),
+                retrieved_context_pack=context_pack.diagnostics(),
+                context_builder=context_builder_diagnostics,
                 stream_stage_timings=stream_stage_timings,
                 retrieved_count=len(retrieved),
                 reranked_count=len(ranked),
@@ -375,6 +482,13 @@ class RagPipeline:
                 context_expanded_count=context_expanded_count,
                 context_compressed_count=context_compressed_count,
                 context_compression_saved_chars=context_compression_saved_chars,
+                agent_memory_retrieved_count=agent_memory_retrieved_count,
+                evidence_count=built_context.evidence_count,
+                support_count=built_context.support_count,
+                structure_count=built_context.structure_count,
+                history_count=built_context.history_count,
+                resolver_rejected_count=context_pack.rejected_count,
+                insufficient_context_count=context_pack.insufficient_count,
                 citation_count=len(context_citations),
                 context_chars=len(context),
                 query_variant_count=query_variant_count,
@@ -414,6 +528,21 @@ class RagPipeline:
             final_answer = answer_guardrail.sanitized_text
             warnings = [*query_guardrail.warnings, *answer_guardrail.warnings]
             outcome: AuditOutcome = "success" if answer_guardrail.allowed else "blocked"
+            if answer_guardrail.allowed:
+                agent_memory_writeback_count, agent_memory_writeback_status = (
+                    await self._write_agent_memory(
+                        trace_id=trace_id,
+                        answer=final_answer,
+                        citations=context_citations,
+                        retrieval_plan=retrieval_plan,
+                    )
+                )
+                diagnostics = diagnostics.model_copy(
+                    update={
+                        "agent_memory_writeback_count": agent_memory_writeback_count,
+                        "agent_memory_writeback_status": agent_memory_writeback_status,
+                    }
+                )
             elapsed = elapsed_ms(started_at)
             record_rag_request(
                 resolved_strategy.mode.value,
@@ -448,8 +577,17 @@ class RagPipeline:
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
+                memory_plan_id=retrieval_plan.plan_id if retrieval_plan is not None else None,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
+                business_context=business_context.diagnostics(),
+                retrieval_plan=(
+                    retrieval_plan.diagnostics() if retrieval_plan is not None else None
+                ),
+                retrieved_context_pack=(
+                    context_pack.diagnostics() if context_pack is not None else None
+                ),
+                context_builder=context_builder_diagnostics,
                 stream_stage_timings=stream_stage_timings,
                 retrieved_count=len(retrieved),
                 reranked_count=len(ranked),
@@ -459,6 +597,15 @@ class RagPipeline:
                 context_expanded_count=context_expanded_count,
                 context_compressed_count=context_compressed_count,
                 context_compression_saved_chars=context_compression_saved_chars,
+                agent_memory_retrieved_count=agent_memory_retrieved_count,
+                agent_memory_writeback_count=agent_memory_writeback_count,
+                agent_memory_writeback_status=agent_memory_writeback_status,
+                resolver_rejected_count=(
+                    context_pack.rejected_count if context_pack is not None else 0
+                ),
+                insufficient_context_count=(
+                    context_pack.insufficient_count if context_pack is not None else 0
+                ),
                 citation_count=len(ranked),
                 query_variant_count=query_variant_count,
             )
@@ -493,20 +640,29 @@ class RagPipeline:
         """検索候補を rerank し、上位だけ返す。"""
         if not chunks:
             return []
+        history_chunks = [chunk for chunk in chunks if _is_agent_memory_chunk(chunk)]
+        rerank_candidates = [chunk for chunk in chunks if not _is_agent_memory_chunk(chunk)]
+        if not rerank_candidates:
+            return history_chunks[:top_n]
         # OCI Rerank は top_n <= documents 数を要求するため候補数でクランプする。
-        top_n = min(top_n, len(chunks))
-        reranked = await self._genai.rerank(query, [chunk.text for chunk in chunks], top_n)
+        top_n = min(top_n, len(rerank_candidates))
+        reranked = await self._genai.rerank(
+            query,
+            [chunk.text for chunk in rerank_candidates],
+            top_n,
+        )
         by_index = {index: score for index, score in reranked}
         ranked = [
             chunk.model_copy(update={"rerank_score": by_index[index]})
-            for index, chunk in enumerate(chunks)
+            for index, chunk in enumerate(rerank_candidates)
             if index in by_index
         ]
-        return sorted(
+        ranked_context = sorted(
             ranked,
             key=lambda chunk: chunk.rerank_score if chunk.rerank_score is not None else chunk.score,
             reverse=True,
         )[:top_n]
+        return [*ranked_context, *history_chunks]
 
     async def _generate_answer(
         self,
@@ -528,6 +684,53 @@ class RagPipeline:
         if not chunks:
             raise ValueError("OCI Enterprise AI stream に回答 text がありません。")
         return "".join(chunks)
+
+    async def _write_agent_memory(
+        self,
+        *,
+        trace_id: str,
+        answer: str,
+        citations: list[RetrievedChunk],
+        retrieval_plan: RetrievalPlan,
+    ) -> tuple[int, str]:
+        """根拠付き回答を scoped Agent Memory として Oracle 26ai へ writeback する。"""
+        if (
+            not self._settings.rag_agent_memory_writeback_enabled
+            or not _agent_memory_scope_available()
+            or not citations
+            or _oracle_method_is_inherited(self._oracle, "save_agent_memory")
+        ):
+            return 0, "skipped"
+        memory_text = _build_agent_memory_text(
+            answer,
+            citations,
+            max_chars=self._settings.rag_agent_memory_max_chars,
+        )
+        if not memory_text:
+            return 0, "skipped"
+        try:
+            vectors = await self._genai.embed([memory_text], input_type="SEARCH_DOCUMENT")
+            if not vectors:
+                return 0, "failed"
+            saved_id = await self._oracle.save_agent_memory(
+                {
+                    "trace_id": trace_id,
+                    "memory_text": memory_text,
+                    "metadata": {
+                        "memory_plan_id": retrieval_plan.plan_id,
+                        "citation_count": len(citations),
+                        "citation_ids": _citation_ids(citations),
+                        "citation_document_ids": _citation_document_ids(citations),
+                        "knowledge_base_ids": _citation_knowledge_base_ids(citations),
+                        "source": "rag_answer_writeback",
+                    },
+                    "usefulness_score": 0.5,
+                },
+                vectors[0],
+            )
+        except Exception:
+            return 0, "failed"
+        return (1, "saved") if saved_id else (0, "skipped")
 
     async def _expand_context_neighbors(
         self,
@@ -590,15 +793,22 @@ class RagPipeline:
             SearchStrategy.GRAPH_LOCAL,
             SearchStrategy.GRAPH_GLOBAL,
         ):
+            chunks = await self._retrieve_with_query_variants(
+                query_variants=query_variants,
+                vectors=vectors,
+                request=request,
+                mode=resolved_strategy.mode,
+            )
+            agent_memory_hits = await self._retrieve_agent_memory(
+                query_variants=query_variants,
+                vectors=vectors,
+                request=request,
+            )
             return RetrievalExecutionResult(
-                chunks=await self._retrieve_with_query_variants(
-                    query_variants=query_variants,
-                    vectors=vectors,
-                    request=request,
-                    mode=resolved_strategy.mode,
-                ),
+                chunks=[*chunks, *agent_memory_hits],
                 strategy=resolved_strategy.strategy,
                 graph_hit_count=resolved_strategy.graph_hit_count,
+                agent_memory_hit_count=len(agent_memory_hits),
                 fallback_reason=resolved_strategy.fallback_reason,
             )
 
@@ -610,23 +820,64 @@ class RagPipeline:
             filters=request.filters,
         )
         if graph_hits:
-            return RetrievalExecutionResult(
-                chunks=graph_hits,
-                strategy=resolved_strategy.strategy,
-                graph_hit_count=len(graph_hits),
-            )
-
-        return RetrievalExecutionResult(
-            chunks=await self._retrieve_with_query_variants(
+            agent_memory_hits = await self._retrieve_agent_memory(
                 query_variants=query_variants,
                 vectors=vectors,
                 request=request,
-                mode=resolved_strategy.mode,
-            ),
+            )
+            return RetrievalExecutionResult(
+                chunks=[*graph_hits, *agent_memory_hits],
+                strategy=resolved_strategy.strategy,
+                graph_hit_count=len(graph_hits),
+                agent_memory_hit_count=len(agent_memory_hits),
+            )
+
+        chunks = await self._retrieve_with_query_variants(
+            query_variants=query_variants,
+            vectors=vectors,
+            request=request,
+            mode=resolved_strategy.mode,
+        )
+        agent_memory_hits = await self._retrieve_agent_memory(
+            query_variants=query_variants,
+            vectors=vectors,
+            request=request,
+        )
+        return RetrievalExecutionResult(
+            chunks=[*chunks, *agent_memory_hits],
             strategy=SearchStrategy.HYBRID,
             graph_hit_count=0,
+            agent_memory_hit_count=len(agent_memory_hits),
             fallback_reason=graph_fallback_reason or "graph_no_hits",
         )
+
+    async def _retrieve_agent_memory(
+        self,
+        *,
+        query_variants: list[str],
+        vectors: list[list[float]],
+        request: SearchRequest,
+    ) -> list[RetrievedChunk]:
+        """Agent Memory Search を別 backend として実行し、失敗時は retrieval を継続する。"""
+        if (
+            not self._settings.rag_agent_memory_search_enabled
+            or self._settings.rag_agent_memory_top_k <= 0
+            or not query_variants
+            or not vectors
+            or not _agent_memory_scope_available()
+            or _oracle_method_is_inherited(self._oracle, "agent_memory_search")
+        ):
+            return []
+        try:
+            hits = await self._oracle.agent_memory_search(
+                query=query_variants[0],
+                embedding=vectors[0],
+                top_k=self._settings.rag_agent_memory_top_k,
+                filters=request.filters,
+            )
+            return [chunk for chunk in hits if _agent_memory_chunk_matches_request(chunk, request)]
+        except Exception:
+            return []
 
     async def _graph_search(
         self,
@@ -688,6 +939,260 @@ def _build_context(chunks: list[RetrievedChunk], max_chars: int) -> str:
     """LLM に渡す引用コンテキストを作る。"""
     context, _ = _build_context_with_citations(chunks, max_chars)
     return context
+
+
+def _agent_memory_scope_available() -> bool:
+    context = current_audit_request_context()
+    return any(
+        (
+            context.user_id_hash,
+            context.role_id_hash,
+            context.agent_id_hash,
+            context.thread_id_hash,
+        )
+    )
+
+
+def _build_agent_memory_text(
+    answer: str,
+    citations: list[RetrievedChunk],
+    *,
+    max_chars: int,
+) -> str:
+    """Agent Memory に保存する短い回答要約を作る。query 原文は含めない。"""
+    cleaned_answer = WHITESPACE_RE.sub(" ", answer).strip()
+    if not cleaned_answer:
+        return ""
+    citation_ids = ", ".join(_citation_ids(citations)[:8])
+    text = f"回答要約: {cleaned_answer}"
+    if citation_ids:
+        text = f"{text}\n根拠ID: {citation_ids}"
+    return text[:max_chars].rstrip()
+
+
+def _citation_ids(citations: list[RetrievedChunk]) -> list[str]:
+    ids: list[str] = []
+    for citation in citations:
+        if citation.document_id == "agent-memory":
+            continue
+        ids.append(f"{citation.document_id}#{citation.chunk_id}")
+    return ids
+
+
+def _citation_document_ids(citations: list[RetrievedChunk]) -> list[str]:
+    return sorted({citation.document_id for citation in citations if citation.document_id})
+
+
+def _citation_knowledge_base_ids(citations: list[RetrievedChunk]) -> list[str]:
+    knowledge_base_ids: set[str] = set()
+    for citation in citations:
+        knowledge_base_ids.update(_metadata_id_set(citation.metadata, "knowledge_base_id"))
+        knowledge_base_ids.update(_metadata_id_set(citation.metadata, "knowledge_base_ids"))
+    return sorted(knowledge_base_ids)
+
+
+def _is_agent_memory_chunk(chunk: RetrievedChunk) -> bool:
+    return str(chunk.metadata.get("retrieval_mode") or "").casefold() in {
+        "agent_memory",
+        "memory",
+        "history",
+    }
+
+
+def _agent_memory_chunk_matches_request(chunk: RetrievedChunk, request: SearchRequest) -> bool:
+    """Agent Memory hit が明示 filter / access scope を破らないことを確認する。"""
+    if _is_agent_memory_chunk(chunk):
+        return _agent_memory_history_matches_request(chunk, request)
+    return _document_chunk_matches_request(chunk, request)
+
+
+def _document_chunk_matches_request(chunk: RetrievedChunk, request: SearchRequest) -> bool:
+    """通常 document chunk が明示 filter / access scope を破らないことを確認する。"""
+    filters = request.filters
+    context = current_audit_request_context()
+    if (document_id := filters.get("document_id")) and chunk.document_id != document_id:
+        return False
+    if (status := filters.get("status")) and not _metadata_value_equals(
+        chunk.metadata,
+        "status",
+        status,
+    ):
+        return False
+    if (file_name := filters.get("file_name")) and (
+        file_name.casefold() not in (chunk.file_name or "").casefold()
+    ):
+        return False
+    if (category_name := filters.get("category_name")) and not (
+        _metadata_value_contains(chunk.metadata, "category_name", category_name)
+        or (
+            chunk.category_name is not None
+            and category_name.casefold() in chunk.category_name.casefold()
+        )
+    ):
+        return False
+    for key in ("content_kind", "source_acl", "document_version"):
+        expected = filters.get(key)
+        if expected and not _metadata_value_equals(chunk.metadata, key, expected):
+            return False
+    for key in ("section_title", "section_path"):
+        expected = filters.get(key)
+        if expected and not _metadata_value_contains(chunk.metadata, key, expected):
+            return False
+
+    if context.allowed_document_ids is not None and chunk.document_id not in (
+        context.allowed_document_ids
+    ):
+        return False
+    if context.allowed_category_names is not None:
+        category = (
+            chunk.category_name
+            or _metadata_string(chunk.metadata, "category_name")
+            or _metadata_string(chunk.metadata, "category")
+            or ""
+        )
+        if category.casefold() not in context.allowed_category_names:
+            return False
+    return True
+
+
+def _agent_memory_history_matches_request(
+    chunk: RetrievedChunk,
+    request: SearchRequest,
+) -> bool:
+    """History memory が明示 filter / dataset scope を破らないことを確認する。"""
+    filters = request.filters
+    context = current_audit_request_context()
+    has_document_scope = (
+        bool(filters.get("document_id")) or context.allowed_document_ids is not None
+    )
+    knowledge_base_ids = _expected_knowledge_base_ids(request, context)
+    if context.tenant_id_hash is not None and not has_document_scope and not knowledge_base_ids:
+        return False
+    if (document_id := filters.get("document_id")) and not _memory_references_document(
+        chunk,
+        document_id,
+    ):
+        return False
+    if context.allowed_document_ids is not None:
+        if not context.allowed_document_ids:
+            return False
+        if not any(
+            _memory_references_document(chunk, item) for item in context.allowed_document_ids
+        ):
+            return False
+    if (
+        knowledge_base_ids
+        and not (
+            _metadata_id_set(chunk.metadata, "knowledge_base_id")
+            | _metadata_id_set(chunk.metadata, "knowledge_base_ids")
+        )
+        & knowledge_base_ids
+    ):
+        return False
+    if (status := filters.get("status")) and not _metadata_value_equals(
+        chunk.metadata,
+        "status",
+        status,
+    ):
+        return False
+    if (file_name := filters.get("file_name")) and not _metadata_value_contains(
+        chunk.metadata,
+        "file_name",
+        file_name,
+    ):
+        return False
+    if (category_name := filters.get("category_name")) and not _metadata_value_contains(
+        chunk.metadata,
+        "category_name",
+        category_name,
+    ):
+        return False
+    if context.allowed_category_names is not None:
+        category = _metadata_string(chunk.metadata, "category_name") or ""
+        if category.casefold() not in context.allowed_category_names:
+            return False
+    for key in ("content_kind", "source_acl", "document_version"):
+        expected = filters.get(key)
+        if expected and not _metadata_value_equals(chunk.metadata, key, expected):
+            return False
+    for key in ("section_title", "section_path"):
+        expected = filters.get(key)
+        if expected and not _metadata_value_contains(chunk.metadata, key, expected):
+            return False
+    return True
+
+
+def _expected_knowledge_base_ids(request: SearchRequest, context: object) -> set[str]:
+    expected = set(request.knowledge_base_ids)
+    if filter_ids := request.filters.get("knowledge_base_id"):
+        expected.update(item.strip() for item in filter_ids.split(",") if item.strip())
+    allowed = getattr(context, "allowed_knowledge_base_ids", None)
+    if allowed is not None:
+        expected.update(str(item) for item in allowed)
+    return expected
+
+
+def _memory_references_document(chunk: RetrievedChunk, document_id: str) -> bool:
+    document_ids = (
+        _metadata_id_set(chunk.metadata, "citation_document_ids")
+        | _metadata_id_set(chunk.metadata, "source_document_ids")
+        | _document_ids_from_citation_ids(chunk.metadata)
+    )
+    return document_id in document_ids
+
+
+def _metadata_id_set(
+    metadata: Mapping[str, str | int | float | bool | None],
+    key: str,
+) -> set[str]:
+    value = metadata.get(key)
+    if isinstance(value, str):
+        cleaned = value.replace("[", "").replace("]", "").replace("'", "").replace('"', "")
+        return {item.strip() for item in cleaned.split(",") if item.strip()}
+    if isinstance(value, int):
+        return {str(value)}
+    return set()
+
+
+def _document_ids_from_citation_ids(
+    metadata: Mapping[str, str | int | float | bool | None],
+) -> set[str]:
+    citation_ids = _metadata_id_set(metadata, "citation_ids")
+    return {item.split("#", 1)[0] for item in citation_ids if "#" in item}
+
+
+def _metadata_value_equals(
+    metadata: Mapping[str, str | int | float | bool | None],
+    key: str,
+    expected: str,
+) -> bool:
+    value = metadata.get(key)
+    return isinstance(value, str) and value.casefold() == expected.casefold()
+
+
+def _metadata_value_contains(
+    metadata: Mapping[str, str | int | float | bool | None],
+    key: str,
+    expected: str,
+) -> bool:
+    value = metadata.get(key)
+    return isinstance(value, str) and expected.casefold() in value.casefold()
+
+
+def _metadata_string(
+    metadata: Mapping[str, str | int | float | bool | None],
+    key: str,
+) -> str | None:
+    value = metadata.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _oracle_method_is_inherited(oracle: OracleClient, method_name: str) -> bool:
+    """テスト用 subclass が実 DB 用 base method を継承しているだけなら true。"""
+    oracle_type = type(oracle)
+    if oracle_type is OracleClient:
+        return False
+    return getattr(oracle_type, method_name, None) is getattr(OracleClient, method_name, None)
 
 
 def _dedupe_ranked_chunks(chunks: list[RetrievedChunk]) -> tuple[list[RetrievedChunk], int]:

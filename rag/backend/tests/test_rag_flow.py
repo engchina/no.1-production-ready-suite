@@ -105,7 +105,7 @@ def test_ingest_emits_ingestion_audit_without_raw_text(caplog: LogCaptureFixture
     assert audit_event["outcome"] == "success"
     assert audit_event["source_sha256"] == hashlib.sha256(sample).hexdigest()
     assert audit_event["source_bytes"] == len(sample)
-    assert audit_event["document_type"] == "社内規程"
+    assert audit_event["document_type"] == "other"
     assert audit_event["chunk_count"] >= 1
     assert audit_event["vector_count"] == audit_event["chunk_count"]
     assert "秘密の承認フロー" not in str(audit_event)
@@ -146,12 +146,14 @@ async def test_ingestion_records_trace_spans_without_payload_text(
 
     assert detail.status == FileStatus.INDEXED
     assert [(event["span_name"], event["outcome"]) for event in observed] == [
+        ("source_partition", "success"),
         ("vlm_extraction", "success"),
         ("chunking", "success"),
         ("embedding", "success"),
         ("indexing", "success"),
     ]
     assert [(stage, outcome) for stage, outcome, _ in stage_metrics] == [
+        ("source_partition", "success"),
         ("vlm_extraction", "success"),
         ("chunking", "success"),
         ("embedding", "success"),
@@ -163,7 +165,7 @@ async def test_ingestion_records_trace_spans_without_payload_text(
     assert "部門長が承認" not in str(observed)
     assert "抽出する prompt" not in str(observed)
 
-    vlm_attributes = observed[0]["attributes"]
+    vlm_attributes = observed[1]["attributes"]
     assert isinstance(vlm_attributes, dict)
     assert vlm_attributes["source_bytes"] == 4
     assert vlm_attributes["content_type"] == "application/octet-stream"
@@ -256,6 +258,7 @@ async def test_ingestion_records_error_trace_span_without_error_message(
         if record.message == "rag_trace_span"
     ]
     assert [(event["span_name"], event["outcome"]) for event in trace_events] == [
+        ("source_partition", "success"),
         ("vlm_extraction", "success"),
         ("chunking", "success"),
         ("embedding", "error"),
@@ -933,6 +936,17 @@ def test_upload_rejects_unsupported_content_type() -> None:
     assert response.json()["error_messages"] == ["対応していないファイル形式です。"]
 
 
+def test_upload_rejects_unknown_octet_stream_binary() -> None:
+    """application/octet-stream でも未知拡張子の binary は保存前に 415 にする。"""
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("binary.bin", b"\x81", "application/octet-stream")},
+    )
+
+    assert response.status_code == 415
+    assert response.json()["error_messages"] == ["対応していないファイル形式です。"]
+
+
 def test_upload_accepts_content_type_parameters() -> None:
     """MIME type パラメータ付きの text/plain も許可する。"""
     response = client.post(
@@ -940,6 +954,27 @@ def test_upload_accepts_content_type_parameters() -> None:
         files={"file": ("policy.txt", b"sample", "text/plain; charset=utf-8")},
     )
     assert response.status_code == 200
+
+
+def test_upload_accepts_jsonl_octet_stream_by_extension() -> None:
+    """JSONL は octet-stream upload でも SourceProfile と local parser 契約に合わせて許可する。"""
+    response = client.post(
+        "/api/documents/upload",
+        files={
+            "file": (
+                "events.jsonl",
+                b'{"event":"created"}\n{"event":"done"}',
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    profile = response.json()["data"]["source_profile"]
+    assert profile["modality"] == "text"
+    assert profile["parser_profile"] == "local_text_structure"
+    assert profile["preview_kind"] == "text"
+    assert profile["unsupported_reason"] is None
 
 
 def test_upload_rejects_file_over_configured_size(monkeypatch: MonkeyPatch) -> None:
@@ -1047,7 +1082,7 @@ def test_ingest_marks_document_error_when_local_extraction_is_empty(
     """ローカル抽出でテキスト化できない場合は 422 と ERROR 状態にする。"""
     upload_resp = client.post(
         "/api/documents/upload",
-        files={"file": ("binary.bin", b"\x81", "application/octet-stream")},
+        files={"file": ("blank.txt", b"   \n\t", "text/plain")},
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]

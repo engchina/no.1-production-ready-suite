@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from app.clients.oracle import OracleClient
 from app.config import get_settings
+from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.readiness import readiness_checks, readiness_checks_are_ok
 from app.schemas.common import ApiResponse
 from app.schemas.dashboard import (
@@ -148,42 +149,148 @@ def _ingestion_quality(
     structured_document_count = 0
     element_count = 0
     table_count = 0
+    figure_count = 0
+    formula_count = 0
     list_count = 0
-    page_keys: set[tuple[int, int]] = set()
+    page_count = 0
+    low_confidence_count = 0
+    fallback_document_count = 0
+    failed_segment_document_count = 0
+    segment_artifact_cache_miss_document_count = 0
+    long_document_count = 0
+    page_coverages: list[float] = []
+    risk_counts = {"low": 0, "medium": 0, "high": 0}
+    parser_profile_counts: dict[str, int] = {}
+    parser_backend_counts: dict[str, int] = {}
+    warning_counts: dict[str, int] = {}
 
-    for document_index, extraction in enumerate(extractions):
-        elements = _normalized_elements(extraction)
-        if elements:
+    for extraction in extractions:
+        normalized = _normalized_extraction(extraction)
+        quality_report = (
+            normalized.quality_report
+            if normalized is not None and normalized.quality_report is not None
+            else build_ingestion_quality_report(normalized)
+            if normalized is not None
+            else None
+        )
+        if (
+            normalized is not None
+            and quality_report is not None
+            and "segment_extraction_artifact_cache_miss"
+            in quality_report.quality_warnings
+        ):
+            segment_artifact_cache_miss_document_count += 1
+        elements = normalized.elements if normalized is not None else []
+        tables = normalized.tables if normalized is not None else []
+        assets = normalized.assets if normalized is not None else []
+        pages = normalized.pages if normalized is not None else []
+        if elements or tables or assets or pages:
             structured_document_count += 1
         element_count += len(elements)
+        document_table_count = 0
+        document_figure_count = 0
+        document_formula_count = 0
+        document_page_numbers: set[int] = set()
         for element in elements:
             if element.kind == "table":
-                table_count += 1
+                document_table_count += 1
+            elif element.kind in {"figure", "figure_caption"}:
+                document_figure_count += 1
+            elif element.kind in {"formula", "equation"} or element.content_kind == "equation":
+                document_formula_count += 1
             elif element.kind == "list":
                 list_count += 1
             if element.page_number is not None:
-                page_keys.add((document_index, element.page_number))
+                document_page_numbers.add(element.page_number)
+        document_table_count = max(
+            document_table_count,
+            len(tables),
+            quality_report.table_count if quality_report is not None else 0,
+        )
+        document_figure_count = max(
+            document_figure_count,
+            sum(1 for asset in assets if asset.kind in {"figure", "image", "picture", "chart"}),
+            quality_report.figure_count if quality_report is not None else 0,
+        )
+        document_formula_count = max(
+            document_formula_count,
+            quality_report.formula_count if quality_report is not None else 0,
+        )
+        for table in tables:
+            if table.page_number is not None:
+                document_page_numbers.add(table.page_number)
+        for asset in assets:
+            if asset.page_number is not None:
+                document_page_numbers.add(asset.page_number)
+        for page in pages:
+            if page.element_ids:
+                document_page_numbers.add(page.page_number)
+        table_count += document_table_count
+        page_count += max(
+            len(pages),
+            len(document_page_numbers),
+            quality_report.page_count if quality_report is not None else 0,
+        )
+        figure_count += document_figure_count
+        formula_count += document_formula_count
+        if quality_report is None:
+            continue
+        low_confidence_count += quality_report.low_confidence_count
+        if quality_report.fallback_used:
+            fallback_document_count += 1
+        if quality_report.failed_segment_count > 0:
+            failed_segment_document_count += 1
+        if quality_report.long_document:
+            long_document_count += 1
+        page_coverages.append(quality_report.page_coverage)
+        risk_counts[quality_report.risk_level] = risk_counts.get(quality_report.risk_level, 0) + 1
+        parser_profile_counts[quality_report.parser_profile] = (
+            parser_profile_counts.get(quality_report.parser_profile, 0) + 1
+        )
+        parser_backend_counts[quality_report.parser_backend] = (
+            parser_backend_counts.get(quality_report.parser_backend, 0) + 1
+        )
+        for warning in quality_report.quality_warnings:
+            warning_counts[warning] = warning_counts.get(warning, 0) + 1
 
     return DashboardIngestionQuality(
         document_count=document_count,
         structured_document_count=structured_document_count,
         element_count=element_count,
         table_count=table_count,
+        figure_count=figure_count,
+        formula_count=formula_count,
         list_count=list_count,
-        page_count=len(page_keys),
+        page_count=page_count,
+        low_confidence_count=low_confidence_count,
+        fallback_document_count=fallback_document_count,
+        failed_segment_document_count=failed_segment_document_count,
+        segment_artifact_cache_miss_document_count=segment_artifact_cache_miss_document_count,
+        long_document_count=long_document_count,
+        average_page_coverage=_average(page_coverages),
+        risk_counts=risk_counts,
+        parser_profile_counts=parser_profile_counts,
+        parser_backend_counts=parser_backend_counts,
+        warning_counts=warning_counts,
         chunk_profile_counts=_metadata_counts(chunk_metadata, "chunk_profile"),
         content_kind_counts=_metadata_counts(chunk_metadata, "content_kind"),
     )
 
 
+def _normalized_extraction(extraction: dict[str, object]) -> StructuredExtraction | None:
+    """Dashboard 集計用に extraction payload を正規化する。"""
+    if not extraction:
+        return None
+    try:
+        return StructuredExtraction.model_validate(extraction)
+    except (TypeError, ValueError, ValidationError):
+        return None
+
+
 def _normalized_elements(extraction: dict[str, object]) -> list[DocumentElement]:
     """旧 raw_text-only データも StructureExtraction と同じ規則で elements 化する。"""
-    if not extraction:
-        return []
-    try:
-        return StructuredExtraction.model_validate(extraction).elements
-    except (TypeError, ValueError, ValidationError):
-        return []
+    normalized = _normalized_extraction(extraction)
+    return normalized.elements if normalized is not None else []
 
 
 def _metadata_counts(
@@ -197,6 +304,13 @@ def _metadata_counts(
         label = str(value).strip() if isinstance(value, str) and value.strip() else "unknown"
         counts[label] = counts.get(label, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _average(values: list[float]) -> float:
+    """空配列を 0 とする dashboard 用平均値。"""
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 4)
 
 
 def _dashboard_stats(

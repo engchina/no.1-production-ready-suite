@@ -1,14 +1,22 @@
 """取込: VLM 抽出 -> チャンク分割 -> 埋め込み -> Oracle 26ai へ索引。"""
 
 import asyncio
+import json
 import logging
+import re
+import zipfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from io import BytesIO
 from time import perf_counter
 
+from pydantic import ValidationError
+
+from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
     EnterpriseAiTimeoutError,
+    EnterpriseAiValidationError,
     OciEnterpriseAiClient,
 )
 from app.clients.oci_genai import OciGenAiClient
@@ -28,11 +36,28 @@ from app.rag.observability import (
     record_ingestion_stage,
     record_trace_span,
 )
+from app.rag.parsers import (
+    OfficeSegmentExtraction,
+    OfficeSegmentFailure,
+    ParserRegistryResult,
+    parse_openxml_office_segment_extractions,
+    parse_with_registry,
+    template_for_source_profile,
+)
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
-from app.schemas.document import DocumentDetail, FileStatus, SourceProfile
-from app.schemas.extraction import DocumentElement, StructuredExtraction
+from app.schemas.document import DocumentDetail, FileStatus, IngestionSegment, SourceProfile
+from app.schemas.extraction import (
+    DocumentElement,
+    ExtractionAsset,
+    ExtractionMetadataValue,
+    ExtractionPage,
+    ExtractionTable,
+    StructuredExtraction,
+)
 
 INGESTION_INTERNAL_ERROR_MESSAGE = "取込処理に失敗しました。時間をおいて再実行してください。"
+INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 1
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
@@ -58,6 +83,18 @@ OBSERVABILITY_DOCUMENT_TYPES = frozenset(
         "knowledge_base",
     }
 )
+STRUCTURE_TABLE_COUNT_KEYS = ("table_count", "adapter_table_count")
+STRUCTURE_FIGURE_COUNT_KEYS = (
+    "figure_count",
+    "image_count",
+    "picture_count",
+    "chart_count",
+    "asset_count",
+)
+STRUCTURE_FORMULA_COUNT_KEYS = ("formula_count", "equation_count")
+STRUCTURE_PAGE_COUNT_KEYS = ("page_count", "page_total")
+STRUCTURE_ASSET_COUNT_KEYS = ("asset_count", "picture_count", "image_count")
+FIGURE_ASSET_KINDS = {"figure", "image", "picture", "chart", "diagram"}
 logger = logging.getLogger(__name__)
 
 
@@ -71,12 +108,24 @@ class IngestionTimeoutError(IngestionUserError):
     """上流 AI 処理の timeout により再実行または設定変更が必要な取込エラー。"""
 
 
+class IngestionCancelledError(IngestionUserError):
+    """cooperative cancellation により取込を中断した。"""
+
+
 @dataclass(frozen=True)
 class _SegmentExtraction:
     """PDF segment とその抽出結果。"""
 
     segment: PdfPageSegment
     extraction: StructuredExtraction
+
+
+@dataclass(frozen=True)
+class _CachedSegmentLoadResult:
+    """成功済み segment artifact の読み戻し結果。"""
+
+    cached: list[_SegmentExtraction]
+    missing_ranges: set[tuple[int, int]]
 
 
 class IngestionPipeline:
@@ -87,12 +136,14 @@ class IngestionPipeline:
         vlm: OciEnterpriseAiClient | None = None,
         genai: OciGenAiClient | None = None,
         oracle: OracleClient | None = None,
+        object_storage: ObjectStorageClient | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._vlm = vlm or OciEnterpriseAiClient(settings=self._settings)
         self._genai = genai or OciGenAiClient(settings=self._settings)
         self._oracle = oracle or OracleClient(settings=self._settings)
+        self._object_storage = object_storage or ObjectStorageClient(settings=self._settings)
 
     async def ingest(
         self,
@@ -102,6 +153,7 @@ class IngestionPipeline:
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う。"""
         started_at = now()
@@ -111,29 +163,136 @@ class IngestionPipeline:
             base_prompt=prompt,
         )
         await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
+        checkpoint_segments: list[IngestionSegment] = []
         try:
-            try:
-                extracted = await self._extract_with_vlm(
-                    trace_id=trace_id,
-                    source_bytes=image_bytes,
-                    prompt=strategy.prompt,
+            await _raise_if_cancelled(cancel_checker)
+            parser_result = _observe_sync_ingestion_stage(
+                trace_id,
+                "source_partition",
+                lambda: parse_with_registry(
+                    image_bytes,
+                    source_profile=source_profile,
                     content_type=content_type,
-                    parser_profile=strategy.parser_profile,
-                )
+                    adapter_backend=getattr(
+                        self._settings,
+                        "rag_parser_adapter_backend",
+                        "local",
+                    ),
+                    docling_enabled=getattr(
+                        self._settings,
+                        "rag_parser_docling_enabled",
+                        False,
+                    ),
+                    marker_enabled=getattr(
+                        self._settings,
+                        "rag_parser_marker_enabled",
+                        False,
+                    ),
+                    unstructured_enabled=getattr(
+                        self._settings,
+                        "rag_parser_unstructured_enabled",
+                        False,
+                    ),
+                ),
+                attributes={
+                    "content_type": _observability_content_type(content_type),
+                    "source_modality": (
+                        source_profile.modality.value if source_profile is not None else "unknown"
+                    ),
+                    "parser_profile": strategy.parser_profile,
+                },
+                result_attributes=_parser_result_attributes,
+            )
+            if parser_result.unsupported_reason:
+                raise IngestionUserError(_unsupported_parser_message(parser_result))
+            checkpoint_segments = await self._prepare_segment_checkpoints(
+                document_id=document_id,
+                source_bytes=image_bytes,
+                content_type=content_type,
+                source_profile=source_profile,
+                parser_backend=_checkpoint_parser_backend(parser_result, source_profile),
+                parser_profile=strategy.parser_profile,
+            )
+            await _raise_if_cancelled(cancel_checker)
+            try:
+                if parser_result.extraction is not None and _is_external_adapter_backend(
+                    parser_result.parser_backend
+                ):
+                    extraction = parser_result.extraction
+                else:
+                    office_extraction = await self._extract_local_office_segments(
+                        document_id=document_id,
+                        trace_id=trace_id,
+                        source_bytes=image_bytes,
+                        source_profile=source_profile,
+                        checkpoint_segments=checkpoint_segments,
+                        cancel_checker=cancel_checker,
+                    )
+                    if office_extraction is not None:
+                        extraction = office_extraction
+                    elif parser_result.extraction is not None:
+                        extraction = parser_result.extraction
+                    else:
+                        cached_extraction = await self._load_cached_full_extraction(
+                            checkpoint_segments
+                        )
+                        if cached_extraction is not None:
+                            extraction = cached_extraction
+                        else:
+                            extracted = await self._extract_with_vlm(
+                                trace_id=trace_id,
+                                document_id=document_id,
+                                source_bytes=image_bytes,
+                                prompt=strategy.prompt,
+                                content_type=content_type,
+                                parser_profile=strategy.parser_profile,
+                                checkpoint_segments=checkpoint_segments,
+                                cancel_checker=cancel_checker,
+                            )
+                            extraction = _validate_structured_extraction_payload(extracted)
             except EnterpriseAiTimeoutError as exc:
                 raise IngestionTimeoutError(str(exc)) from exc
             except EnterpriseAiIncompleteResponseError as exc:
                 raise IngestionUserError(str(exc)) from exc
-            extraction = StructuredExtraction.model_validate(extracted)
+            await _raise_if_cancelled(cancel_checker)
+            extraction = _extraction_with_parser_context(
+                extraction,
+                parser_result=parser_result,
+                fallback_template=template_for_source_profile(source_profile),
+                source_parser=strategy.parser_profile,
+            )
             quality_report = build_ingestion_quality_report(
                 extraction,
                 source_profile=source_profile,
                 parser_profile=strategy.parser_profile,
+                parser_backend=parser_result.parser_backend,
+                parser_version=parser_result.parser_version,
+                fallback_used=parser_result.fallback_used,
             )
             extraction = extraction.model_copy(update={"quality_report": quality_report})
+            await _raise_if_cancelled(cancel_checker)
+            extraction, extraction_artifact_path = await self._cache_extraction_artifact(
+                document_id=document_id,
+                trace_id=trace_id,
+                extraction=extraction,
+            )
+            quality_report = build_ingestion_quality_report(
+                extraction,
+                source_profile=source_profile,
+                parser_profile=strategy.parser_profile,
+                parser_backend=parser_result.parser_backend,
+                parser_version=parser_result.parser_version,
+                fallback_used=parser_result.fallback_used,
+            )
+            extraction = extraction.model_copy(update={"quality_report": quality_report})
+            checkpoint_segments = await self._mark_segments_succeeded(
+                checkpoint_segments,
+                artifact_path=extraction_artifact_path,
+            )
             text = _text_for_chunking(extraction)
             if not text:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
+            await _raise_if_cancelled(cancel_checker)
             chunks = _observe_sync_ingestion_stage(
                 trace_id,
                 "chunking",
@@ -148,6 +307,8 @@ class IngestionPipeline:
                     "chunk_overlap": self._settings.rag_chunk_overlap,
                     "input_chars": len(text),
                     "parser_profile": strategy.parser_profile,
+                    "parser_backend": quality_report.parser_backend,
+                    "fallback_used": quality_report.fallback_used,
                     "quality_risk_level": quality_report.risk_level,
                     **_extraction_structure_attributes(extraction),
                 },
@@ -160,6 +321,7 @@ class IngestionPipeline:
                     "索引用チャンク数が上限を超えています。"
                     f"max={self._settings.rag_max_chunks_per_document}, actual={len(chunks)}"
                 )
+            await _raise_if_cancelled(cancel_checker)
             vectors = await _observe_ingestion_stage(
                 trace_id,
                 "embedding",
@@ -170,15 +332,24 @@ class IngestionPipeline:
                 },
                 result_attributes=lambda result: {"vector_count": len(result)},
             )
+            await _raise_if_cancelled(cancel_checker)
             await _observe_ingestion_stage(
                 trace_id,
                 "indexing",
-                self._save_index(trace_id, document_id, extraction, chunks, vectors),
+                self._save_index(
+                    trace_id,
+                    document_id,
+                    extraction,
+                    chunks,
+                    vectors,
+                    cancel_checker=cancel_checker,
+                ),
                 attributes={
                     "chunk_count": len(chunks),
                     "vector_count": len(vectors),
                 },
             )
+            await _raise_if_cancelled(cancel_checker)
             detail = await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
             record_ingestion("success", len(chunks))
             record_rag_ingestion_audit(
@@ -188,13 +359,33 @@ class IngestionPipeline:
                 source_bytes=image_bytes,
                 document_type=_observability_document_type(extraction.document_type),
                 extraction_confidence=extraction.confidence,
+                parser_backend=quality_report.parser_backend,
+                parser_profile=quality_report.parser_profile,
+                segment_count=len(checkpoint_segments),
+                fallback_count=1 if quality_report.fallback_used else 0,
+                failed_segment_count=quality_report.failed_segment_count,
                 chunk_count=len(chunks),
                 vector_count=len(vectors),
                 elapsed_ms=elapsed_ms(started_at),
             )
             return detail
+        except IngestionCancelledError as exc:
+            await self._mark_segments_cancelled(checkpoint_segments)
+            record_ingestion("cancelled", 0)
+            record_rag_ingestion_audit(
+                trace_id=trace_id,
+                document_id=document_id,
+                outcome="error",
+                source_bytes=image_bytes,
+                segment_count=len(checkpoint_segments),
+                failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
+                elapsed_ms=elapsed_ms(started_at),
+                error=exc,
+            )
+            raise
         except Exception as exc:
             record_ingestion("error", 0)
+            await self._mark_segments_failed(checkpoint_segments, error=exc)
             await self._oracle.update_document_status(
                 document_id,
                 FileStatus.ERROR,
@@ -205,19 +396,546 @@ class IngestionPipeline:
                 document_id=document_id,
                 outcome="error",
                 source_bytes=image_bytes,
+                segment_count=len(checkpoint_segments),
+                failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
                 elapsed_ms=elapsed_ms(started_at),
                 error=exc,
             )
             raise
 
+    async def _prepare_segment_checkpoints(
+        self,
+        *,
+        document_id: str,
+        source_bytes: bytes,
+        content_type: str,
+        source_profile: SourceProfile | None,
+        parser_backend: str,
+        parser_profile: str,
+    ) -> list[IngestionSegment]:
+        """segment checkpoint を作成し、既存 failed segment があれば再試行対象にする。"""
+        if not getattr(self._settings, "rag_segment_checkpoint_enabled", True):
+            return []
+        existing = await self._safe_list_ingestion_segments(document_id)
+        failed = [segment for segment in existing if segment.status == "FAILED"]
+        if failed:
+            failed_ids = {segment.segment_id for segment in failed}
+            for segment in failed:
+                await self._safe_update_ingestion_segment(
+                    segment.segment_id,
+                    status="QUEUED",
+                    error_code="retry_failed_segment",
+                    error_message="失敗 segment のみ再試行します。",
+                )
+            return [
+                (
+                    segment.model_copy(
+                        update={"status": "QUEUED", "error_code": "retry_failed_segment"}
+                    )
+                    if segment.segment_id in failed_ids
+                    else segment
+                )
+                for segment in existing
+            ]
+        if existing and all(segment.status == "SUCCEEDED" for segment in existing):
+            return existing
+        segments = _checkpoint_segments_for_source(
+            document_id=document_id,
+            source_bytes=source_bytes,
+            content_type=content_type,
+            source_profile=source_profile,
+            parser_backend=parser_backend,
+            parser_profile=parser_profile,
+            max_pages_per_segment=self._settings.rag_pdf_max_pages_per_segment,
+            max_segments=self._settings.rag_pdf_max_segments,
+            segmentation_enabled=self._settings.rag_pdf_segmentation_enabled,
+        )
+        await self._safe_replace_ingestion_segments(document_id, segments)
+        return segments
+
+    async def _cache_extraction_artifact(
+        self,
+        *,
+        document_id: str,
+        trace_id: str,
+        extraction: StructuredExtraction,
+    ) -> tuple[StructuredExtraction, str | None]:
+        """抽出 JSON artifact を Object Storage に保存し、path を metadata へ戻す。"""
+        if not getattr(self._settings, "rag_extraction_artifact_cache_enabled", True):
+            return extraction, None
+        key_prefix = _safe_artifact_prefix(
+            getattr(
+                self._settings,
+                "rag_extraction_artifact_prefix",
+                "artifacts/extractions",
+            )
+        )
+        document_key = _safe_artifact_key_part(document_id)
+        trace_key = _safe_artifact_key_part(trace_id)
+        key = f"{key_prefix}/{document_key}/{trace_key}.json"
+        cache_extraction = _extraction_with_artifact_cache_metadata(
+            extraction,
+            artifact_kind="full",
+            document_id=document_id,
+            trace_id=trace_id,
+        )
+        payload = cache_extraction.to_document_payload()
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        try:
+            artifact_path = await self._object_storage.put(
+                key,
+                data,
+                content_type="application/json",
+            )
+        except Exception as exc:
+            logger.warning(
+                "extraction_artifact_cache_failed",
+                extra={"document_id": document_id, "error_type": type(exc).__name__},
+            )
+            parser_artifacts = {
+                **extraction.parser_artifacts,
+                "extraction_artifact_cache_failed": True,
+            }
+            warnings = _dedupe_text([*extraction.warnings, "extraction_artifact_cache_failed"])
+            return (
+                extraction.model_copy(
+                    update={"parser_artifacts": parser_artifacts, "warnings": warnings}
+                ),
+                None,
+            )
+        parser_artifacts = {
+            **cache_extraction.parser_artifacts,
+            "extraction_artifact_path": artifact_path,
+            "extraction_artifact_content_type": "application/json",
+        }
+        return (
+            cache_extraction.model_copy(update={"parser_artifacts": parser_artifacts}),
+            artifact_path,
+        )
+
+    async def _cache_segment_extraction_artifact(
+        self,
+        *,
+        document_id: str,
+        trace_id: str,
+        segment: IngestionSegment | None,
+        extraction: StructuredExtraction,
+    ) -> str | None:
+        """成功した PDF segment の抽出 JSON を個別 artifact として保存する。"""
+        if segment is None or not getattr(
+            self._settings,
+            "rag_extraction_artifact_cache_enabled",
+            True,
+        ):
+            return None
+        key_prefix = _safe_artifact_prefix(
+            getattr(
+                self._settings,
+                "rag_extraction_artifact_prefix",
+                "artifacts/extractions",
+            )
+        )
+        document_key = _safe_artifact_key_part(document_id)
+        trace_key = _safe_artifact_key_part(trace_id)
+        segment_key = _safe_artifact_key_part(segment.segment_id)
+        key = f"{key_prefix}/{document_key}/{trace_key}/segments/{segment_key}.json"
+        cache_extraction = _extraction_with_artifact_cache_metadata(
+            extraction,
+            artifact_kind="segment",
+            document_id=document_id,
+            trace_id=trace_id,
+            segment=segment,
+        )
+        data = json.dumps(
+            cache_extraction.to_document_payload(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        try:
+            return await self._object_storage.put(
+                key,
+                data,
+                content_type="application/json",
+            )
+        except Exception as exc:
+            logger.info(
+                "segment_extraction_artifact_cache_skipped",
+                extra={"segment_id": segment.segment_id, "error_type": type(exc).__name__},
+            )
+            return None
+
+    async def _load_cached_segment_extractions(
+        self,
+        checkpoint_segments: Sequence[IngestionSegment],
+        *,
+        target_segments: Sequence[PdfPageSegment],
+        available_ranges: set[tuple[int, int]] | None = None,
+    ) -> _CachedSegmentLoadResult:
+        """成功済み segment artifact を読み戻し、欠落分は再処理へ回す。"""
+        target_ranges = {(segment.page_start, segment.page_end) for segment in target_segments}
+        cached: list[_SegmentExtraction] = []
+        missing_ranges: set[tuple[int, int]] = set()
+        for checkpoint in checkpoint_segments:
+            if checkpoint.status != "SUCCEEDED":
+                continue
+            if checkpoint.page_start is None or checkpoint.page_end is None:
+                continue
+            checkpoint_range = (checkpoint.page_start, checkpoint.page_end)
+            if available_ranges is not None and checkpoint_range not in available_ranges:
+                continue
+            if checkpoint_range in target_ranges:
+                continue
+            if not checkpoint.artifact_path:
+                missing_ranges.add(checkpoint_range)
+                continue
+            try:
+                data = await self._object_storage.get(checkpoint.artifact_path)
+                extraction = StructuredExtraction.model_validate_json(data)
+            except Exception as exc:
+                logger.info(
+                    "segment_extraction_artifact_load_skipped",
+                    extra={
+                        "segment_id": checkpoint.segment_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                missing_ranges.add(checkpoint_range)
+                continue
+            cached.append(
+                _SegmentExtraction(
+                    segment=PdfPageSegment(
+                        index=len(cached),
+                        page_start=checkpoint.page_start,
+                        page_end=checkpoint.page_end,
+                        content=b"",
+                    ),
+                    extraction=extraction,
+                )
+            )
+        return _CachedSegmentLoadResult(cached=cached, missing_ranges=missing_ranges)
+
+    async def _load_cached_full_extraction(
+        self,
+        checkpoint_segments: Sequence[IngestionSegment],
+    ) -> StructuredExtraction | None:
+        """全 segment が同じ full artifact を指す場合は抽出結果を再利用する。"""
+        if not checkpoint_segments:
+            return None
+        if any(
+            segment.status != "SUCCEEDED" or not segment.artifact_path
+            for segment in checkpoint_segments
+        ):
+            return None
+        paths = {segment.artifact_path for segment in checkpoint_segments if segment.artifact_path}
+        if len(paths) != 1:
+            return None
+        artifact_path = next(iter(paths))
+        try:
+            data = await self._object_storage.get(artifact_path)
+            extraction = StructuredExtraction.model_validate_json(data)
+        except Exception as exc:
+            logger.info(
+                "full_extraction_artifact_load_skipped",
+                extra={"error_type": type(exc).__name__},
+            )
+            return None
+        parser_artifacts = {
+            **extraction.parser_artifacts,
+            "extraction_artifact_reused": True,
+            "extraction_artifact_path": artifact_path,
+        }
+        return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
+
+    async def _extract_local_office_segments(
+        self,
+        *,
+        document_id: str,
+        trace_id: str,
+        source_bytes: bytes,
+        source_profile: SourceProfile | None,
+        checkpoint_segments: Sequence[IngestionSegment],
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> StructuredExtraction | None:
+        """OpenXML Office を slide/sheet checkpoint 単位で抽出・cache する。"""
+        if not _has_office_checkpoint_segments(checkpoint_segments):
+            return None
+        parse_result = parse_openxml_office_segment_extractions(
+            source_bytes,
+            source_profile=source_profile,
+        )
+        office_segments = parse_result.segments
+        failures = parse_result.failures
+        if not office_segments:
+            if failures:
+                await self._mark_office_segment_failures(
+                    failures,
+                    checkpoint_segments=checkpoint_segments,
+                )
+                raise IngestionUserError("Office の一部 segment を解析できませんでした。")
+            return None
+        retry_targets = _failed_retry_segments(checkpoint_segments)
+        available_ranges = {
+            (_office_segment_page(segment).page_start, _office_segment_page(segment).page_end)
+            for segment in office_segments
+        }
+        reusable_ranges = _successful_checkpoint_ranges(
+            checkpoint_segments,
+            available_ranges=available_ranges,
+        )
+        if retry_targets:
+            target_segments = _office_segments_for_retry(office_segments, retry_targets)
+        elif reusable_ranges:
+            target_segments = [
+                segment
+                for segment in office_segments
+                if (segment.number, segment.number) not in reusable_ranges
+            ]
+        else:
+            target_segments = list(office_segments)
+        page_like_targets = [_office_segment_page(segment) for segment in target_segments]
+        cached_segments = await self._load_cached_segment_extractions(
+            checkpoint_segments,
+            target_segments=page_like_targets,
+            available_ranges=available_ranges,
+        )
+        segment_extractions = list(cached_segments.cached)
+        target_segments = _append_office_segments_for_ranges(
+            target_segments,
+            office_segments,
+            cached_segments.missing_ranges,
+        )
+        if retry_targets:
+            retry_ranges = {
+                (target.page_start, target.page_end)
+                for target in retry_targets
+                if target.page_start is not None and target.page_end is not None
+            }
+            target_failures = _office_failures_for_ranges(failures, retry_ranges)
+        elif reusable_ranges:
+            target_failure_ranges = {
+                (failure.number, failure.number)
+                for failure in failures
+                if (failure.number, failure.number) not in reusable_ranges
+            } | cached_segments.missing_ranges
+            target_failures = _office_failures_for_ranges(failures, target_failure_ranges)
+        else:
+            target_failures = list(failures)
+        for office_segment in target_segments:
+            await _raise_if_cancelled(cancel_checker)
+            page_segment = _office_segment_page(office_segment)
+            checkpoint = _checkpoint_for_pdf_segment(checkpoint_segments, page_segment)
+            await self._mark_segment_running(checkpoint)
+            segment_artifact_path = await self._cache_segment_extraction_artifact(
+                document_id=document_id,
+                trace_id=trace_id,
+                segment=checkpoint,
+                extraction=office_segment.extraction,
+            )
+            await self._mark_segment_succeeded(
+                checkpoint,
+                artifact_path=segment_artifact_path,
+            )
+            segment_extractions.append(
+                _SegmentExtraction(
+                    segment=page_segment,
+                    extraction=office_segment.extraction,
+                )
+            )
+        if target_failures:
+            await self._mark_office_segment_failures(
+                target_failures,
+                checkpoint_segments=checkpoint_segments,
+            )
+            raise IngestionUserError("Office の一部 segment を解析できませんでした。")
+        merged = _merge_segment_extractions(
+            segment_extractions,
+            warning_code="office_segmented_extraction",
+        )
+        return _extraction_with_segment_cache_miss_context(
+            merged,
+            missing_ranges=cached_segments.missing_ranges,
+        )
+
+    async def _mark_office_segment_failures(
+        self,
+        failures: Sequence[OfficeSegmentFailure],
+        *,
+        checkpoint_segments: Sequence[IngestionSegment],
+    ) -> None:
+        for failure in failures:
+            checkpoint = _checkpoint_for_office_failure(checkpoint_segments, failure)
+            await self._mark_segment_running(checkpoint)
+            await self._mark_segment_failed(
+                checkpoint,
+                status="FAILED",
+                error_code=failure.error_code,
+                error_message=f"{failure.segment_kind} {failure.number} を解析できませんでした。",
+            )
+
+    async def _mark_segments_succeeded(
+        self,
+        segments: Sequence[IngestionSegment],
+        *,
+        artifact_path: str | None,
+    ) -> list[IngestionSegment]:
+        updated_segments: list[IngestionSegment] = []
+        latest_segments = await self._segments_with_latest_status(segments)
+        latest_by_id = {segment.segment_id: segment for segment in latest_segments}
+        for segment in segments:
+            latest = latest_by_id.get(segment.segment_id, segment)
+            checkpoint_artifact_path = (
+                latest.artifact_path or segment.artifact_path or artifact_path
+            )
+            await self._mark_segment_succeeded(latest, artifact_path=checkpoint_artifact_path)
+            updated_segments.append(
+                latest.model_copy(
+                    update={"status": "SUCCEEDED", "artifact_path": checkpoint_artifact_path}
+                )
+            )
+        return updated_segments
+
+    async def _mark_segments_cancelled(
+        self,
+        segments: Sequence[IngestionSegment],
+    ) -> None:
+        for segment in await self._segments_with_latest_status(segments):
+            if segment.status == "SUCCEEDED":
+                continue
+            await self._safe_update_ingestion_segment(segment.segment_id, status="CANCELLED")
+
+    async def _mark_segments_failed(
+        self,
+        segments: Sequence[IngestionSegment],
+        *,
+        error: Exception,
+    ) -> None:
+        for segment in await self._segments_with_latest_status(segments):
+            if segment.status in {"SUCCEEDED", "FAILED"}:
+                continue
+            await self._mark_segment_failed(segment, error=error)
+
+    async def _segments_with_latest_status(
+        self,
+        segments: Sequence[IngestionSegment],
+    ) -> list[IngestionSegment]:
+        """DB 上の最新 segment 状態を反映し、成功済み checkpoint を保護する。"""
+        if not segments:
+            return []
+        document_id = segments[0].document_id
+        latest = await self._safe_list_ingestion_segments(document_id)
+        if not latest:
+            return list(segments)
+        latest_by_id = {segment.segment_id: segment for segment in latest}
+        return [latest_by_id.get(segment.segment_id, segment) for segment in segments]
+
+    async def _mark_segment_running(
+        self,
+        segment: IngestionSegment | None,
+    ) -> None:
+        if segment is None:
+            return
+        await self._safe_update_ingestion_segment(
+            segment.segment_id,
+            status="RUNNING",
+            attempt_count=segment.attempt_count + 1,
+            error_code="",
+            error_message="",
+        )
+
+    async def _mark_segment_succeeded(
+        self,
+        segment: IngestionSegment | None,
+        *,
+        artifact_path: str | None = None,
+    ) -> None:
+        if segment is None:
+            return
+        await self._safe_update_ingestion_segment(
+            segment.segment_id,
+            status="SUCCEEDED",
+            artifact_path=artifact_path,
+            error_code="",
+            error_message="",
+        )
+
+    async def _mark_segment_failed(
+        self,
+        segment: IngestionSegment | None,
+        *,
+        error: Exception | None = None,
+        status: str = "FAILED",
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        if segment is None:
+            return
+        await self._safe_update_ingestion_segment(
+            segment.segment_id,
+            status=status,
+            error_code=error_code or _segment_error_code(error),
+            error_message=(error_message or _safe_segment_error_message(error))[:500],
+        )
+
+    async def _safe_list_ingestion_segments(
+        self,
+        document_id: str,
+    ) -> list[IngestionSegment]:
+        list_segments = getattr(self._oracle, "list_ingestion_segments", None)
+        if not callable(list_segments):
+            return []
+        try:
+            return list(await list_segments(document_id))
+        except Exception as exc:
+            logger.info(
+                "ingestion_segment_checkpoint_list_skipped",
+                extra={"document_id": document_id, "error_type": type(exc).__name__},
+            )
+            return []
+
+    async def _safe_replace_ingestion_segments(
+        self,
+        document_id: str,
+        segments: Sequence[IngestionSegment],
+    ) -> None:
+        replace_segments = getattr(self._oracle, "replace_ingestion_segments", None)
+        if not callable(replace_segments):
+            return
+        try:
+            await replace_segments(document_id, segments)
+        except Exception as exc:
+            logger.info(
+                "ingestion_segment_checkpoint_replace_skipped",
+                extra={"document_id": document_id, "error_type": type(exc).__name__},
+            )
+
+    async def _safe_update_ingestion_segment(
+        self,
+        segment_id: str,
+        **updates: object,
+    ) -> None:
+        update_segment = getattr(self._oracle, "update_ingestion_segment", None)
+        if not callable(update_segment):
+            return
+        cleaned_updates = {key: value for key, value in updates.items() if value is not None}
+        try:
+            await update_segment(segment_id, **cleaned_updates)
+        except Exception as exc:
+            logger.info(
+                "ingestion_segment_checkpoint_update_skipped",
+                extra={"segment_id": segment_id, "error_type": type(exc).__name__},
+            )
+
     async def _extract_with_vlm(
         self,
         *,
         trace_id: str,
+        document_id: str,
         source_bytes: bytes,
         prompt: str,
         content_type: str,
         parser_profile: str,
+        checkpoint_segments: Sequence[IngestionSegment] = (),
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> dict[str, object]:
         """必要なら PDF を segment に分けて VLM 抽出する。"""
         segments = _pdf_segments_for_ingestion(
@@ -227,44 +945,95 @@ class IngestionPipeline:
             max_segments=self._settings.rag_pdf_max_segments,
             enabled=self._settings.rag_pdf_segmentation_enabled,
         )
+        retry_targets = _failed_retry_segments(checkpoint_segments)
         if not segments or (len(segments) == 1 and segments[0].page_count <= 1):
-            return await self._extract_single_vlm_input(
-                trace_id=trace_id,
-                source_bytes=source_bytes,
-                prompt=prompt,
-                content_type=content_type,
-                parser_profile=parser_profile,
-                stage="vlm_extraction",
-                extra_attributes={"pdf_segmented": False},
-            )
+            await _raise_if_cancelled(cancel_checker)
+            checkpoint = _checkpoint_for_source(checkpoint_segments)
+            await self._mark_segment_running(checkpoint)
+            try:
+                result = await self._extract_single_vlm_input(
+                    trace_id=trace_id,
+                    source_bytes=source_bytes,
+                    prompt=prompt,
+                    content_type=content_type,
+                    parser_profile=parser_profile,
+                    stage="vlm_extraction",
+                    extra_attributes={"pdf_segmented": False},
+                )
+            except Exception as exc:
+                await self._mark_segment_failed(checkpoint, error=exc)
+                raise
+            await self._mark_segment_succeeded(checkpoint)
+            return result
 
         segment_extractions: list[_SegmentExtraction] = []
-        for segment in segments:
+        available_ranges = {(segment.page_start, segment.page_end) for segment in segments}
+        reusable_ranges = _successful_checkpoint_ranges(
+            checkpoint_segments,
+            available_ranges=available_ranges,
+        )
+        if retry_targets:
+            target_segments = _pdf_segments_for_retry(segments, retry_targets)
+        elif reusable_ranges:
+            target_segments = [
+                segment
+                for segment in segments
+                if (segment.page_start, segment.page_end) not in reusable_ranges
+            ]
+        else:
+            target_segments = list(segments)
+        cached_segments = await self._load_cached_segment_extractions(
+            checkpoint_segments,
+            target_segments=target_segments,
+            available_ranges=available_ranges,
+        )
+        segment_extractions.extend(cached_segments.cached)
+        target_segments = _append_pdf_segments_for_ranges(
+            target_segments,
+            segments,
+            cached_segments.missing_ranges,
+        )
+        for segment in target_segments:
+            await _raise_if_cancelled(cancel_checker)
+            checkpoint = _checkpoint_for_pdf_segment(checkpoint_segments, segment)
             segment_extractions.extend(
                 await self._extract_pdf_segment(
                     trace_id=trace_id,
+                    document_id=document_id,
                     segment=segment,
                     prompt=prompt,
                     parser_profile=parser_profile,
                     original_source_bytes=len(source_bytes),
                     segment_total=len(segments),
+                    checkpoint_segment=checkpoint,
+                    cancel_checker=cancel_checker,
                 )
             )
-        return _merge_pdf_segment_extractions(segment_extractions).to_document_payload()
+        merged = _merge_pdf_segment_extractions(segment_extractions)
+        merged = _extraction_with_segment_cache_miss_context(
+            merged,
+            missing_ranges=cached_segments.missing_ranges,
+        )
+        return merged.to_document_payload()
 
     async def _extract_pdf_segment(
         self,
         *,
         trace_id: str,
+        document_id: str,
         segment: PdfPageSegment,
         prompt: str,
         parser_profile: str,
         original_source_bytes: int,
         segment_total: int,
+        checkpoint_segment: IngestionSegment | None = None,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> list[_SegmentExtraction]:
         """PDF segment を抽出し、出力上限に当たった場合は単ページへ分割して再試行する。"""
         segment_prompt = _pdf_segment_prompt(prompt, segment)
         try:
+            await _raise_if_cancelled(cancel_checker)
+            await self._mark_segment_running(checkpoint_segment)
             extracted = await self._extract_single_vlm_input(
                 trace_id=trace_id,
                 source_bytes=segment.content,
@@ -283,14 +1052,31 @@ class IngestionPipeline:
                     "segment_bytes": len(segment.content),
                 },
             )
+            segment_extraction = _validate_structured_extraction_payload(extracted)
+            segment_artifact_path = await self._cache_segment_extraction_artifact(
+                document_id=document_id,
+                trace_id=trace_id,
+                segment=checkpoint_segment,
+                extraction=segment_extraction,
+            )
+            await self._mark_segment_succeeded(
+                checkpoint_segment,
+                artifact_path=segment_artifact_path,
+            )
             return [
                 _SegmentExtraction(
                     segment=segment,
-                    extraction=StructuredExtraction.model_validate(extracted),
+                    extraction=segment_extraction,
                 )
             ]
         except EnterpriseAiIncompleteResponseError:
             if segment.page_count <= 1:
+                await self._mark_segment_failed(
+                    checkpoint_segment,
+                    status="FAILED",
+                    error_code="enterprise_ai_incomplete_response",
+                    error_message="Enterprise AI の出力が上限に達しました。",
+                )
                 raise
             page_segments = split_pdf_page_segments(
                 segment.content,
@@ -301,17 +1087,25 @@ class IngestionPipeline:
                 raise
             results: list[_SegmentExtraction] = []
             for page_segment in page_segments:
+                await _raise_if_cancelled(cancel_checker)
                 results.extend(
                     await self._extract_pdf_segment(
                         trace_id=trace_id,
+                        document_id=document_id,
                         segment=page_segment,
                         prompt=prompt,
                         parser_profile=parser_profile,
                         original_source_bytes=original_source_bytes,
                         segment_total=segment_total,
+                        checkpoint_segment=None,
+                        cancel_checker=cancel_checker,
                     )
                 )
+            await self._mark_segment_succeeded(checkpoint_segment)
             return results
+        except Exception as exc:
+            await self._mark_segment_failed(checkpoint_segment, error=exc)
+            raise
 
     async def _extract_single_vlm_input(
         self,
@@ -353,10 +1147,15 @@ class IngestionPipeline:
         extraction: StructuredExtraction,
         chunks: list[Chunk],
         vectors: list[list[float]],
+        *,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         """抽出本文とチャンクを一貫した indexing stage として保存する。"""
+        await _raise_if_cancelled(cancel_checker)
         await self._oracle.save_extraction(document_id, extraction)
+        await _raise_if_cancelled(cancel_checker)
         await self._oracle.save_chunks(document_id, chunks, vectors)
+        await _raise_if_cancelled(cancel_checker)
         if not getattr(self._settings, "rag_graph_enabled", False):
             return
         try:
@@ -401,6 +1200,188 @@ def _safe_persistent_error_message(error: Exception) -> str:
     return INGESTION_INTERNAL_ERROR_MESSAGE
 
 
+def _segment_error_code(error: Exception | None) -> str:
+    """segment checkpoint に保存する低 cardinality の error code を返す。"""
+    if error is None:
+        return "error"
+    code = getattr(error, "error_code", None)
+    if isinstance(code, str) and code.strip():
+        return code.strip()[:80]
+    if isinstance(error, ValidationError):
+        return "structured_extraction_validation_error"
+    return type(error).__name__
+
+
+def _safe_segment_error_message(error: Exception | None) -> str:
+    """segment UI に出してよい原因メッセージへ正規化する。"""
+    if error is None:
+        return ""
+    if isinstance(error, ValidationError):
+        return _validation_error_message(error)
+    if getattr(error, "safe_for_user", False):
+        return str(error)
+    return INGESTION_INTERNAL_ERROR_MESSAGE
+
+
+def _validate_structured_extraction_payload(payload: Mapping[str, object]) -> StructuredExtraction:
+    """抽出 payload を検証し、ValidationError を利用者向けに変換する。"""
+    try:
+        return StructuredExtraction.model_validate(payload)
+    except ValidationError as exc:
+        raise EnterpriseAiValidationError(_validation_error_message(exc)) from exc
+
+
+def _validation_error_message(error: ValidationError) -> str:
+    """Pydantic validation error から非機密な原因摘要を作る。"""
+    details: list[str] = []
+    for item in error.errors(include_url=False, include_context=False, include_input=False)[:3]:
+        location = ".".join(str(part) for part in item.get("loc", ()) if part != "__root__")
+        error_type = str(item.get("type") or "validation_error")
+        message = str(item.get("msg") or "schema validation failed")
+        details.append(f"{location}: {error_type} ({message})" if location else message)
+    if error.error_count() > len(details):
+        details.append(f"ほか {error.error_count() - len(details)} 件")
+    joined = " / ".join(details) if details else "StructuredExtraction schema validation failed"
+    return (
+        "Enterprise AI の抽出結果が保存用 schema と一致しません。"
+        f"失敗項目: {joined}。"
+        "VLM response path / payload template と raw_text・confidence・elements の形式を"
+        "確認して再実行してください。"
+    )
+
+
+async def _raise_if_cancelled(
+    cancel_checker: Callable[[], Awaitable[bool]] | None,
+) -> None:
+    """job が cancel 済みなら以降の stage を止める。"""
+    if cancel_checker is None:
+        return
+    if await cancel_checker():
+        raise IngestionCancelledError(INGESTION_JOB_CANCELLED_MESSAGE)
+
+
+def _unsupported_parser_message(result: ParserRegistryResult) -> str:
+    """parser registry の未対応理由を利用者向け文言へ寄せる。"""
+    if result.unsupported_reason == "audio_transcription_not_configured":
+        return (
+            "音声ファイルの取込は現在未対応です。"
+            "承認済みの音声文字起こし経路を設定してから再試行してください。"
+        )
+    if result.unsupported_reason == "tiff_image_not_supported":
+        return (
+            "TIFF 画像の取込は現在未対応です。"
+            "PNG/JPEG/WEBP へ変換してから再アップロードしてください。"
+        )
+    if result.unsupported_reason == "legacy_office_binary_not_supported":
+        return (
+            "旧形式の Office バイナリ文書は現在未対応です。"
+            "DOCX/PPTX/XLSX へ変換してから再アップロードしてください。"
+        )
+    return "このファイル形式は取込に対応していません。"
+
+
+def _parser_result_attributes(result: ParserRegistryResult) -> Mapping[str, object]:
+    """parser registry 結果から非機密な trace attribute を作る。"""
+    extraction = result.extraction
+    return {
+        "parser_backend": result.parser_backend,
+        "parser_version": result.parser_version,
+        "parser_fallback_used": result.fallback_used,
+        "chunk_template": result.template,
+        "parser_warning_count": len(result.warnings),
+        "parser_unsupported": result.unsupported_reason is not None,
+        "element_count": len(extraction.elements) if extraction is not None else 0,
+        "page_count": len(extraction.pages) if extraction is not None else 0,
+        "table_count": len(extraction.tables) if extraction is not None else 0,
+    }
+
+
+def _checkpoint_parser_backend(
+    parser_result: ParserRegistryResult,
+    source_profile: SourceProfile | None,
+) -> str:
+    """checkpoint には実際に使う予定の parser backend を残す。"""
+    if _uses_external_adapter_extraction(parser_result):
+        return parser_result.parser_backend
+    if source_profile is not None and source_profile.parser_backend == "local_partition":
+        return source_profile.parser_backend
+    return parser_result.parser_backend
+
+
+def _uses_external_adapter_extraction(parser_result: ParserRegistryResult) -> bool:
+    """任意 external adapter が実際に extraction を返したかを判定する。"""
+    return parser_result.extraction is not None and _is_external_adapter_backend(
+        parser_result.parser_backend
+    )
+
+
+def _is_external_adapter_backend(parser_backend: str) -> bool:
+    return parser_backend in {"docling", "marker", "unstructured"}
+
+
+def _extraction_with_parser_context(
+    extraction: StructuredExtraction,
+    *,
+    parser_result: ParserRegistryResult,
+    fallback_template: str,
+    source_parser: str,
+) -> StructuredExtraction:
+    """抽出結果へ parser/chunk template lineage を付与する。"""
+    chunk_template = (
+        parser_result.template
+        if parser_result.template != "enterprise_ai_fallback"
+        else fallback_template
+    )
+    effective_source_parser = _source_parser_name(
+        extraction,
+        parser_result=parser_result,
+        fallback=source_parser,
+    )
+    elements = [
+        element.model_copy(
+            update={
+                "source_parser": element.source_parser or effective_source_parser,
+                "metadata": {
+                    **element.metadata,
+                    "source_parser": element.source_parser or effective_source_parser,
+                    "chunk_template": element.metadata.get("chunk_template") or chunk_template,
+                },
+            }
+        )
+        for element in extraction.elements
+    ]
+    parser_artifacts = {
+        **extraction.parser_artifacts,
+        "parser_backend": parser_result.parser_backend,
+        "parser_version": parser_result.parser_version,
+        "fallback_used": parser_result.fallback_used,
+        "chunk_template": chunk_template,
+        "source_parser": effective_source_parser,
+    }
+    return extraction.model_copy(
+        update={
+            "warnings": _dedupe_text([*extraction.warnings, *parser_result.warnings]),
+            "elements": elements,
+            "parser_artifacts": parser_artifacts,
+        }
+    )
+
+
+def _source_parser_name(
+    extraction: StructuredExtraction,
+    *,
+    parser_result: ParserRegistryResult,
+    fallback: str,
+) -> str:
+    """抽出 payload / parser result から source parser 名を決める。"""
+    value = extraction.parser_artifacts.get("source_parser")
+    if isinstance(value, str) and value.strip():
+        return value.strip()[:80]
+    if parser_result.parser_backend == "local_partition":
+        return parser_result.template[:80]
+    return fallback[:80]
+
+
 def _text_for_chunking(extraction: StructuredExtraction) -> str:
     """抽出結果から索引用テキストを作る。"""
     return extraction.raw_text.strip()
@@ -429,6 +1410,350 @@ def _pdf_segments_for_ingestion(
     return segments
 
 
+def _checkpoint_segments_for_source(
+    *,
+    document_id: str,
+    source_bytes: bytes,
+    content_type: str,
+    source_profile: SourceProfile | None,
+    parser_backend: str,
+    parser_profile: str,
+    max_pages_per_segment: int,
+    max_segments: int,
+    segmentation_enabled: bool,
+) -> list[IngestionSegment]:
+    """source bytes から永続 checkpoint の初期 segment を作る。"""
+    pdf_segments = _pdf_segments_for_ingestion(
+        source_bytes,
+        content_type=content_type,
+        max_pages_per_segment=max_pages_per_segment,
+        max_segments=max_segments,
+        enabled=segmentation_enabled,
+    )
+    if pdf_segments and not (len(pdf_segments) == 1 and pdf_segments[0].page_count <= 1):
+        return [
+            IngestionSegment(
+                segment_id=_pdf_checkpoint_segment_id(document_id, segment),
+                document_id=document_id,
+                status="QUEUED",
+                parser_backend=parser_backend,
+                parser_profile=parser_profile,
+                page_start=segment.page_start,
+                page_end=segment.page_end,
+            )
+            for segment in pdf_segments
+        ]
+    office_segments = _office_checkpoint_segments_for_source(
+        document_id=document_id,
+        source_bytes=source_bytes,
+        content_type=content_type,
+        source_profile=source_profile,
+        parser_backend=parser_backend,
+        parser_profile=parser_profile,
+        max_segments=max_segments,
+    )
+    if office_segments:
+        return office_segments
+    return [
+        IngestionSegment(
+            segment_id=f"{document_id}:source",
+            document_id=document_id,
+            status="QUEUED",
+            parser_backend=parser_backend,
+            parser_profile=parser_profile,
+            page_start=(
+                1 if _observability_content_type(content_type).startswith("image/") else None
+            ),
+            page_end=1 if _observability_content_type(content_type).startswith("image/") else None,
+        )
+    ]
+
+
+def _office_checkpoint_segments_for_source(
+    *,
+    document_id: str,
+    source_bytes: bytes,
+    content_type: str,
+    source_profile: SourceProfile | None,
+    parser_backend: str,
+    parser_profile: str,
+    max_segments: int,
+) -> list[IngestionSegment]:
+    """OpenXML Office を slide/sheet 単位の checkpoint にする。"""
+    office_kind = _office_checkpoint_kind(
+        content_type=content_type,
+        source_profile=source_profile,
+    )
+    if office_kind is None:
+        return []
+    if office_kind == "slide":
+        numbers = _openxml_member_numbers(source_bytes, r"ppt/slides/slide(\d+)\.xml")
+    else:
+        numbers = _openxml_member_numbers(source_bytes, r"xl/worksheets/sheet(\d+)\.xml")
+    if not numbers:
+        return []
+    if len(numbers) > max_segments:
+        raise IngestionUserError(
+            "Office の論理 segment 数が上限を超えています。"
+            f"max_segments={max_segments}, actual={len(numbers)}"
+        )
+    return [
+        IngestionSegment(
+            segment_id=f"{document_id}:{office_kind}{number}",
+            document_id=document_id,
+            status="QUEUED",
+            parser_backend=parser_backend,
+            parser_profile=parser_profile,
+            page_start=number,
+            page_end=number,
+        )
+        for number in numbers
+    ]
+
+
+def _office_checkpoint_kind(
+    *,
+    content_type: str,
+    source_profile: SourceProfile | None,
+) -> str | None:
+    extension = (source_profile.extension if source_profile is not None else None) or ""
+    normalized = _observability_content_type(content_type)
+    if extension == ".pptx" or normalized.endswith("officedocument.presentationml.presentation"):
+        return "slide"
+    if extension == ".xlsx" or normalized.endswith("officedocument.spreadsheetml.sheet"):
+        return "sheet"
+    return None
+
+
+def _openxml_member_numbers(source_bytes: bytes, pattern: str) -> list[int]:
+    regex = re.compile(pattern)
+    try:
+        with zipfile.ZipFile(BytesIO(source_bytes)) as archive:
+            numbers = []
+            for name in archive.namelist():
+                match = regex.fullmatch(name)
+                if match:
+                    numbers.append(int(match.group(1)))
+    except (zipfile.BadZipFile, ValueError):
+        return []
+    return sorted(set(numbers))
+
+
+def _failed_retry_segments(
+    checkpoint_segments: Sequence[IngestionSegment],
+) -> list[IngestionSegment]:
+    """今回 failed segment retry として絞り込む checkpoint を返す。"""
+    return [
+        segment
+        for segment in checkpoint_segments
+        if segment.page_start is not None
+        and segment.page_end is not None
+        and (segment.status == "FAILED" or segment.error_code == "retry_failed_segment")
+    ]
+
+
+def _failed_checkpoint_count(checkpoint_segments: Sequence[IngestionSegment]) -> int:
+    return sum(
+        1
+        for segment in checkpoint_segments
+        if segment.status == "FAILED" or segment.error_code == "retry_failed_segment"
+    )
+
+
+def _successful_checkpoint_ranges(
+    checkpoint_segments: Sequence[IngestionSegment],
+    *,
+    available_ranges: set[tuple[int, int]],
+) -> set[tuple[int, int]]:
+    """現行 segmentation と一致し、artifact を再利用できる checkpoint 範囲。"""
+    ranges: set[tuple[int, int]] = set()
+    for segment in checkpoint_segments:
+        if (
+            segment.status != "SUCCEEDED"
+            or not segment.artifact_path
+            or segment.page_start is None
+            or segment.page_end is None
+        ):
+            continue
+        segment_range = (segment.page_start, segment.page_end)
+        if segment_range in available_ranges:
+            ranges.add(segment_range)
+    return ranges
+
+
+def _pdf_segments_for_retry(
+    segments: Sequence[PdfPageSegment],
+    retry_targets: Sequence[IngestionSegment],
+) -> list[PdfPageSegment]:
+    """failed checkpoint があれば該当 page range の PDF segment だけ返す。"""
+    if not retry_targets:
+        return list(segments)
+    ranges = {
+        (target.page_start, target.page_end)
+        for target in retry_targets
+        if target.page_start is not None and target.page_end is not None
+    }
+    selected = [segment for segment in segments if (segment.page_start, segment.page_end) in ranges]
+    return selected or list(segments)
+
+
+def _append_pdf_segments_for_ranges(
+    selected_segments: Sequence[PdfPageSegment],
+    all_segments: Sequence[PdfPageSegment],
+    ranges: set[tuple[int, int]],
+) -> list[PdfPageSegment]:
+    """cache miss した PDF segment を再処理対象へ追加する。"""
+    result = list(selected_segments)
+    seen = {(segment.page_start, segment.page_end) for segment in result}
+    for segment in all_segments:
+        segment_range = (segment.page_start, segment.page_end)
+        if segment_range not in ranges or segment_range in seen:
+            continue
+        result.append(segment)
+        seen.add(segment_range)
+    return result
+
+
+def _office_segments_for_retry(
+    segments: Sequence[OfficeSegmentExtraction],
+    retry_targets: Sequence[IngestionSegment],
+) -> list[OfficeSegmentExtraction]:
+    """failed checkpoint があれば該当 slide/sheet だけ返す。"""
+    if not retry_targets:
+        return list(segments)
+    numbers = {
+        target.page_start
+        for target in retry_targets
+        if target.page_start is not None and target.page_start == target.page_end
+    }
+    return [segment for segment in segments if segment.number in numbers]
+
+
+def _append_office_segments_for_ranges(
+    selected_segments: Sequence[OfficeSegmentExtraction],
+    all_segments: Sequence[OfficeSegmentExtraction],
+    ranges: set[tuple[int, int]],
+) -> list[OfficeSegmentExtraction]:
+    """cache miss した Office segment を再処理対象へ追加する。"""
+    result = list(selected_segments)
+    seen = {(segment.number, segment.number) for segment in result}
+    for segment in all_segments:
+        segment_range = (segment.number, segment.number)
+        if segment_range not in ranges or segment_range in seen:
+            continue
+        result.append(segment)
+        seen.add(segment_range)
+    return result
+
+
+def _office_failures_for_ranges(
+    failures: Sequence[OfficeSegmentFailure],
+    target_ranges: set[tuple[int, int]],
+) -> list[OfficeSegmentFailure]:
+    """本回で実処理する Office segment の failure だけ返す。"""
+    return [failure for failure in failures if (failure.number, failure.number) in target_ranges]
+
+
+def _has_office_checkpoint_segments(
+    checkpoint_segments: Sequence[IngestionSegment],
+) -> bool:
+    return any(
+        segment.segment_id.rsplit(":", 1)[-1].startswith(("slide", "sheet"))
+        for segment in checkpoint_segments
+    )
+
+
+def _office_segment_page(segment: OfficeSegmentExtraction) -> PdfPageSegment:
+    return PdfPageSegment(
+        index=segment.number - 1,
+        page_start=segment.number,
+        page_end=segment.number,
+        content=b"",
+    )
+
+
+def _extraction_with_artifact_cache_metadata(
+    extraction: StructuredExtraction,
+    *,
+    artifact_kind: str,
+    document_id: str,
+    trace_id: str,
+    segment: IngestionSegment | None = None,
+) -> StructuredExtraction:
+    """Object Storage cache payload を後方互換な parser_artifacts で自描述にする。"""
+    parser_artifacts: dict[str, ExtractionMetadataValue] = {
+        **extraction.parser_artifacts,
+        "extraction_artifact_schema_version": EXTRACTION_ARTIFACT_SCHEMA_VERSION,
+        "extraction_artifact_kind": artifact_kind,
+        "extraction_artifact_document_id": document_id,
+        "extraction_artifact_trace_id": trace_id,
+    }
+    if segment is not None:
+        parser_artifacts["extraction_artifact_segment_id"] = segment.segment_id
+        if segment.page_start is not None:
+            parser_artifacts["extraction_artifact_page_start"] = segment.page_start
+        if segment.page_end is not None:
+            parser_artifacts["extraction_artifact_page_end"] = segment.page_end
+    return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
+
+
+def _checkpoint_for_source(
+    checkpoint_segments: Sequence[IngestionSegment],
+) -> IngestionSegment | None:
+    return next((segment for segment in checkpoint_segments if segment.page_start is None), None)
+
+
+def _checkpoint_for_pdf_segment(
+    checkpoint_segments: Sequence[IngestionSegment],
+    pdf_segment: PdfPageSegment,
+) -> IngestionSegment | None:
+    return next(
+        (
+            segment
+            for segment in checkpoint_segments
+            if segment.page_start == pdf_segment.page_start
+            and segment.page_end == pdf_segment.page_end
+        ),
+        None,
+    )
+
+
+def _checkpoint_for_office_failure(
+    checkpoint_segments: Sequence[IngestionSegment],
+    failure: OfficeSegmentFailure,
+) -> IngestionSegment | None:
+    return next(
+        (
+            segment
+            for segment in checkpoint_segments
+            if segment.page_start == failure.number and segment.page_end == failure.number
+        ),
+        None,
+    )
+
+
+def _pdf_checkpoint_segment_id(document_id: str, segment: PdfPageSegment) -> str:
+    return f"{document_id}:p{segment.page_start}-{segment.page_end}"
+
+
+def _safe_artifact_key_part(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in value)
+    if cleaned in {".", ".."}:
+        return "segment"
+    return cleaned[:160] or "segment"
+
+
+def _safe_artifact_prefix(value: object) -> str:
+    """Object Storage artifact prefix を監査しやすい key path へ正規化する。"""
+    raw = str(value or "").replace("\\", "/")
+    parts = [
+        _safe_artifact_key_part(part)
+        for part in raw.strip().strip("/").split("/")
+        if part.strip() not in {"", ".", ".."}
+    ]
+    return "/".join(parts) or "artifacts/extractions"
+
+
 def _pdf_segment_prompt(prompt: str, segment: PdfPageSegment) -> str:
     """元 PDF 上の page range を VLM へ明示する。"""
     if segment.page_start == segment.page_end:
@@ -449,17 +1774,37 @@ def _merge_pdf_segment_extractions(
     segment_extractions: Sequence[_SegmentExtraction],
 ) -> StructuredExtraction:
     """複数 PDF segment の抽出結果を 1 つの StructuredExtraction へ統合する。"""
+    return _merge_segment_extractions(
+        segment_extractions,
+        warning_code="pdf_segmented_extraction",
+    )
+
+
+def _merge_segment_extractions(
+    segment_extractions: Sequence[_SegmentExtraction],
+    *,
+    warning_code: str,
+) -> StructuredExtraction:
+    """複数 segment の抽出結果を 1 つの StructuredExtraction へ統合する。"""
     if not segment_extractions:
         return StructuredExtraction()
 
     raw_parts: list[str] = []
     elements: list[DocumentElement] = []
-    warnings: list[str] = ["pdf_segmented_extraction"]
+    pages: list[ExtractionPage] = []
+    tables: list[ExtractionTable] = []
+    assets: list[ExtractionAsset] = []
+    warnings: list[str] = [warning_code]
     confidence_values: list[float] = []
     document_type = "ドキュメント"
     next_order = 0
 
-    for segment_extraction in segment_extractions:
+    ordered_segment_extractions = sorted(
+        segment_extractions,
+        key=lambda item: (item.segment.page_start, item.segment.page_end, item.segment.index),
+    )
+
+    for segment_extraction in ordered_segment_extractions:
         segment = segment_extraction.segment
         extraction = segment_extraction.extraction
         if extraction.document_type and extraction.document_type != "ドキュメント":
@@ -469,10 +1814,23 @@ def _merge_pdf_segment_extractions(
         text = extraction.raw_text.strip()
         if text:
             raw_parts.append(f"{_page_marker(segment)}\n{text}")
+        element_id_map = _segment_element_id_map(
+            extraction.elements,
+            segment=segment,
+            starting_order=next_order,
+        )
         for element in extraction.elements:
-            adjusted = _element_with_absolute_page(element, segment, order=next_order)
+            adjusted = _element_with_absolute_page(
+                element,
+                segment,
+                order=next_order,
+                element_id_map=element_id_map,
+            )
             elements.append(adjusted)
             next_order += 1
+        pages.extend(_pages_with_absolute_page(extraction.pages, segment, element_id_map))
+        tables.extend(_tables_with_absolute_page(extraction.tables, segment, element_id_map))
+        assets.extend(_assets_with_absolute_page(extraction.assets, segment))
 
     confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
     return StructuredExtraction(
@@ -481,6 +1839,33 @@ def _merge_pdf_segment_extractions(
         confidence=confidence,
         warnings=_dedupe_text(warnings),
         elements=elements,
+        pages=_merge_extraction_pages(pages),
+        tables=tables,
+        assets=assets,
+        parser_artifacts=_merged_segment_parser_artifacts(
+            ordered_segment_extractions,
+            warning_code=warning_code,
+        ),
+    )
+
+
+def _extraction_with_segment_cache_miss_context(
+    extraction: StructuredExtraction,
+    *,
+    missing_ranges: set[tuple[int, int]],
+) -> StructuredExtraction:
+    """成功 checkpoint の artifact 欠落を非機密 warning として残す。"""
+    if not missing_ranges:
+        return extraction
+    parser_artifacts = {
+        **extraction.parser_artifacts,
+        "segment_extraction_artifact_cache_miss_count": len(missing_ranges),
+    }
+    warnings = _dedupe_text(
+        [*extraction.warnings, "segment_extraction_artifact_cache_miss"]
+    )
+    return extraction.model_copy(
+        update={"parser_artifacts": parser_artifacts, "warnings": warnings}
     )
 
 
@@ -494,14 +1879,243 @@ def _element_with_absolute_page(
     segment: PdfPageSegment,
     *,
     order: int,
+    element_id_map: Mapping[str, str] | None = None,
 ) -> DocumentElement:
-    """segment 内 page_number を元 PDF の絶対ページ番号へ寄せる。"""
+    """segment 内 page_number と element lineage を元文書スコープへ寄せる。"""
+    source_element_id = _element_source_id(element)
+    scoped_element_id = (
+        element_id_map.get(source_element_id, source_element_id)
+        if element_id_map is not None
+        else source_element_id
+    )
+    parent_id = (
+        element_id_map.get(element.parent_id, element.parent_id)
+        if element.parent_id is not None and element_id_map is not None
+        else element.parent_id
+    )
+    metadata = dict(element.metadata)
+    if scoped_element_id != source_element_id:
+        metadata.setdefault("source_element_id", source_element_id)
     return element.model_copy(
         update={
             "order": order,
+            "element_id": scoped_element_id,
+            "parent_id": parent_id,
             "page_number": _absolute_page_number(element.page_number, segment),
+            "metadata": metadata,
         }
     )
+
+
+def _segment_element_id_map(
+    elements: Sequence[DocumentElement],
+    *,
+    segment: PdfPageSegment,
+    starting_order: int,
+) -> dict[str, str]:
+    """segment-local element id を文書全体で一意な id に写像する。"""
+    prefix = _segment_lineage_prefix(segment)
+    result: dict[str, str] = {}
+    used: set[str] = set()
+    for offset, element in enumerate(elements):
+        source_id = _element_source_id(element)
+        scoped_id = _segment_scoped_identifier(
+            prefix,
+            source_id,
+            fallback_order=starting_order + offset,
+        )
+        if scoped_id in used:
+            scoped_id = _segment_scoped_identifier(
+                prefix,
+                f"{source_id}-{offset}",
+                fallback_order=starting_order + offset,
+            )
+        result[source_id] = scoped_id
+        used.add(scoped_id)
+    return result
+
+
+def _pages_with_absolute_page(
+    pages: Sequence[ExtractionPage],
+    segment: PdfPageSegment,
+    element_id_map: Mapping[str, str],
+) -> list[ExtractionPage]:
+    """segment page metadata を元文書の page metadata に変換する。"""
+    result: list[ExtractionPage] = []
+    for page in pages:
+        page_number = _absolute_page_number(page.page_number, segment)
+        result.append(
+            page.model_copy(
+                update={
+                    "page_number": page_number,
+                    "label": _absolute_page_label(page.label, page_number),
+                    "element_ids": _mapped_element_ids(page.element_ids, element_id_map),
+                }
+            )
+        )
+    return result
+
+
+def _tables_with_absolute_page(
+    tables: Sequence[ExtractionTable],
+    segment: PdfPageSegment,
+    element_id_map: Mapping[str, str],
+) -> list[ExtractionTable]:
+    """segment table metadata の page/element/table id を文書スコープへ変換する。"""
+    prefix = _segment_lineage_prefix(segment)
+    result: list[ExtractionTable] = []
+    for index, table in enumerate(tables):
+        page_number = _absolute_optional_page_number(table.page_number, segment)
+        result.append(
+            table.model_copy(
+                update={
+                    "table_id": _segment_scoped_identifier(
+                        prefix,
+                        table.table_id,
+                        fallback_order=index,
+                    ),
+                    "element_id": _mapped_optional_element_id(
+                        table.element_id,
+                        element_id_map,
+                    ),
+                    "page_number": page_number,
+                }
+            )
+        )
+    return result
+
+
+def _assets_with_absolute_page(
+    assets: Sequence[ExtractionAsset],
+    segment: PdfPageSegment,
+) -> list[ExtractionAsset]:
+    """segment asset metadata の page/asset id を文書スコープへ変換する。"""
+    prefix = _segment_lineage_prefix(segment)
+    result: list[ExtractionAsset] = []
+    for index, asset in enumerate(assets):
+        result.append(
+            asset.model_copy(
+                update={
+                    "asset_id": _segment_scoped_identifier(
+                        prefix,
+                        asset.asset_id,
+                        fallback_order=index,
+                    ),
+                    "page_number": _absolute_optional_page_number(asset.page_number, segment),
+                }
+            )
+        )
+    return result
+
+
+def _merge_extraction_pages(pages: Sequence[ExtractionPage]) -> list[ExtractionPage]:
+    """同じ絶対 page の metadata を element_ids 中心に統合する。"""
+    by_page: dict[int, ExtractionPage] = {}
+    for page in pages:
+        existing = by_page.get(page.page_number)
+        if existing is None:
+            by_page[page.page_number] = page.model_copy(
+                update={"element_ids": _dedupe_text(page.element_ids)}
+            )
+            continue
+        by_page[page.page_number] = existing.model_copy(
+            update={
+                "label": existing.label or page.label,
+                "width": existing.width or page.width,
+                "height": existing.height or page.height,
+                "rotation": existing.rotation if existing.rotation is not None else page.rotation,
+                "element_ids": _dedupe_text([*existing.element_ids, *page.element_ids]),
+                "metadata": {**page.metadata, **existing.metadata},
+            }
+        )
+    return [by_page[page_number] for page_number in sorted(by_page)]
+
+
+def _merged_segment_parser_artifacts(
+    segment_extractions: Sequence[_SegmentExtraction],
+    *,
+    warning_code: str,
+) -> dict[str, ExtractionMetadataValue]:
+    """segment merge の構造情報を非機密 metadata として残す。"""
+    page_starts = [item.segment.page_start for item in segment_extractions]
+    page_ends = [item.segment.page_end for item in segment_extractions]
+    artifacts: dict[str, ExtractionMetadataValue] = {
+        "segment_merge": True,
+        "segment_merge_warning": warning_code,
+        "segment_count": len(segment_extractions),
+        "segment_page_start": min(page_starts) if page_starts else None,
+        "segment_page_end": max(page_ends) if page_ends else None,
+    }
+    source_parsers = _dedupe_text(
+        [
+            str(value)
+            for item in segment_extractions
+            if (
+                value := item.extraction.parser_artifacts.get("source_parser")
+                or item.extraction.parser_artifacts.get("parser_backend")
+            )
+            is not None
+        ]
+    )
+    if source_parsers:
+        artifacts["segment_source_parsers"] = ",".join(source_parsers)[:200]
+    return artifacts
+
+
+def _element_source_id(element: DocumentElement) -> str:
+    """segment 内で parser が付けた元 element id を読む。"""
+    if element.element_id:
+        return element.element_id
+    for key in ("element_id", "id"):
+        value = element.metadata.get(key)
+        if isinstance(value, str | int):
+            cleaned = str(value).strip()
+            if cleaned:
+                return cleaned[:128]
+    return f"el-{element.order:04d}"
+
+
+def _mapped_element_ids(
+    element_ids: Sequence[str],
+    element_id_map: Mapping[str, str],
+) -> list[str]:
+    """page/table metadata 内の element ids を merge 後の id にそろえる。"""
+    return _dedupe_text([element_id_map.get(element_id, element_id) for element_id in element_ids])
+
+
+def _mapped_optional_element_id(
+    element_id: str | None,
+    element_id_map: Mapping[str, str],
+) -> str | None:
+    if element_id is None:
+        return None
+    return element_id_map.get(element_id, element_id)
+
+
+def _segment_lineage_prefix(segment: PdfPageSegment) -> str:
+    """segment lineage id の page-range prefix を作る。"""
+    return f"p{segment.page_start}-{segment.page_end}"
+
+
+def _segment_scoped_identifier(prefix: str, value: str, *, fallback_order: int) -> str:
+    """segment-local id を JSON/metadata に扱いやすい短い id へ変換する。"""
+    cleaned = _safe_artifact_key_part(value)
+    if cleaned == "segment":
+        cleaned = f"el-{fallback_order:04d}"
+    return f"{prefix}-{cleaned}"[:128]
+
+
+def _absolute_optional_page_number(
+    page_number: int | None,
+    segment: PdfPageSegment,
+) -> int:
+    return _absolute_page_number(page_number, segment)
+
+
+def _absolute_page_label(label: str | None, page_number: int) -> str:
+    if label is None or re.fullmatch(r"(?i)page\s+\d+", label.strip()):
+        return f"page {page_number}"
+    return label
 
 
 def _absolute_page_number(page_number: int | None, segment: PdfPageSegment) -> int:
@@ -626,36 +2240,130 @@ def _graph_index_result_attributes(graph_index: GraphIndex) -> Mapping[str, obje
 
 def _extraction_structure_attributes(extraction: StructuredExtraction) -> Mapping[str, object]:
     """構造化抽出から非機密な件数だけを trace attribute にする。"""
-    pages = {
-        element.page_number for element in extraction.elements if element.page_number is not None
-    }
+    quality = extraction.quality_report or build_ingestion_quality_report(extraction)
     return {
         "element_count": len(extraction.elements),
-        "table_count": sum(1 for element in extraction.elements if element.kind == "table"),
-        "page_count": len(pages),
+        "table_count": quality.table_count,
+        "figure_count": quality.figure_count,
+        "formula_count": quality.formula_count,
+        "page_count": quality.page_count,
+        "asset_count": max(
+            len(extraction.assets),
+            _raw_artifact_count(extraction.parser_artifacts, STRUCTURE_ASSET_COUNT_KEYS),
+        ),
+        "low_confidence_count": quality.low_confidence_count,
+        "failed_segment_count": quality.failed_segment_count,
     }
 
 
 def _raw_extraction_structure_attributes(extracted: Mapping[str, object]) -> Mapping[str, object]:
     """VLM 生 payload から本文を見ずに構造件数だけを読む。"""
-    elements = extracted.get("elements")
-    if not isinstance(elements, list):
-        return {"element_count": 0, "table_count": 0, "page_count": 0}
-    table_count = 0
+    elements = _raw_mapping_items(extracted.get("elements"))
+    pages_payload = _raw_mapping_items(extracted.get("pages"))
+    tables = _raw_mapping_items(extracted.get("tables"))
+    assets = _raw_mapping_items(extracted.get("assets"))
+    artifacts = _raw_mapping(extracted.get("parser_artifacts"))
     pages: set[int] = set()
+    table_count = sum(1 for item in elements if _raw_mapping_label(item.get("kind")) == "table")
+    figure_count = sum(
+        1
+        for item in elements
+        if _raw_mapping_label(item.get("kind")) in {"figure", "figure_caption"}
+    )
+    formula_count = sum(
+        1
+        for item in elements
+        if _raw_mapping_label(item.get("kind")) in {"formula", "equation"}
+        or _raw_mapping_label(item.get("content_kind")) == "equation"
+    )
     for item in elements:
-        if not isinstance(item, Mapping):
-            continue
-        if str(item.get("kind", "")).strip().casefold() == "table":
-            table_count += 1
-        page = item.get("page_number")
-        if isinstance(page, int) and not isinstance(page, bool) and page >= 1:
-            pages.add(page)
+        if page_number := _raw_page_number(item.get("page_number")):
+            pages.add(page_number)
+    for page_payload in pages_payload:
+        if _raw_string_items(page_payload.get("element_ids")):
+            page_number = _raw_page_number(page_payload.get("page_number"))
+            if page_number is not None:
+                pages.add(page_number)
+    for container in (*tables, *assets):
+        page_number = _raw_page_number(container.get("page_number"))
+        if page_number is not None:
+            pages.add(page_number)
+    declared_page_count = max(
+        len(pages_payload),
+        _raw_artifact_count(artifacts, STRUCTURE_PAGE_COUNT_KEYS),
+    )
     return {
         "element_count": len(elements),
-        "table_count": table_count,
-        "page_count": len(pages),
+        "table_count": max(
+            table_count,
+            len(tables),
+            _raw_artifact_count(artifacts, STRUCTURE_TABLE_COUNT_KEYS),
+        ),
+        "figure_count": max(
+            figure_count,
+            sum(1 for asset in assets if _raw_is_figure_asset_kind(asset.get("kind"))),
+            _raw_artifact_count(artifacts, STRUCTURE_FIGURE_COUNT_KEYS),
+        ),
+        "formula_count": max(
+            formula_count,
+            _raw_artifact_count(artifacts, STRUCTURE_FORMULA_COUNT_KEYS),
+        ),
+        "page_count": max(declared_page_count, len(pages)),
+        "asset_count": max(
+            len(assets),
+            _raw_artifact_count(artifacts, STRUCTURE_ASSET_COUNT_KEYS),
+        ),
     }
+
+
+def _raw_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _raw_mapping_items(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, list):
+        return []
+    items: list[Mapping[str, object]] = []
+    for item in value:
+        if isinstance(item, Mapping):
+            items.append(item)
+    return items
+
+
+def _raw_string_items(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item.strip()]
+
+
+def _raw_mapping_label(value: object) -> str:
+    return str(value).strip().casefold() if value is not None else ""
+
+
+def _raw_page_number(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    return None
+
+
+def _raw_artifact_count(artifacts: Mapping[str, object], keys: Sequence[str]) -> int:
+    return max((_raw_positive_int(artifacts.get(key)) for key in keys), default=0)
+
+
+def _raw_positive_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value if value > 0 else 0
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and value > 0 else 0
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
+
+
+def _raw_is_figure_asset_kind(kind: object) -> bool:
+    return _raw_mapping_label(kind) in FIGURE_ASSET_KINDS
 
 
 def _observability_document_type(value: object) -> str | None:

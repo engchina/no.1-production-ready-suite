@@ -5,15 +5,72 @@ from pathlib import PurePath
 
 from charset_normalizer import from_bytes
 
-from app.schemas.document import SourceModality, SourceProfile
+from app.schemas.document import SourceModality, SourcePreviewKind, SourceProfile
 
 LARGE_FILE_WARNING_BYTES = 50 * 1024 * 1024
 
 TEXT_MEDIA_TYPES = {
     "application/json",
+    "application/jsonl",
+    "application/jsonlines",
+    "application/ndjson",
     "application/xml",
     "application/csv",
     "application/x-ndjson",
+}
+
+TEXT_EXTENSIONS = {
+    ".csv",
+    ".jsonl",
+    ".md",
+    ".markdown",
+    ".ndjson",
+    ".tsv",
+    ".txt",
+}
+
+HTML_MEDIA_TYPES = {
+    "text/html",
+    "application/xhtml+xml",
+}
+
+EMAIL_MEDIA_TYPES = {
+    "message/rfc822",
+    "application/eml",
+}
+
+OUTLOOK_MSG_MEDIA_TYPES = {
+    "application/vnd.ms-outlook",
+    "application/x-msg",
+}
+
+IMAGE_EXTENSIONS = {
+    ".gif",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
+
+TIFF_IMAGE_EXTENSIONS = {
+    ".tif",
+    ".tiff",
+}
+
+TIFF_IMAGE_MEDIA_TYPES = {
+    "image/tif",
+    "image/tiff",
+}
+
+AUDIO_EXTENSIONS = {
+    ".aac",
+    ".flac",
+    ".m4a",
+    ".mp3",
+    ".ogg",
+    ".wav",
 }
 
 OFFICE_EXTENSIONS = {
@@ -23,6 +80,30 @@ OFFICE_EXTENSIONS = {
     ".pptx",
     ".xls",
     ".xlsx",
+}
+
+LEGACY_OFFICE_EXTENSIONS = {
+    ".doc",
+    ".ppt",
+    ".xls",
+}
+
+LEGACY_OFFICE_MEDIA_TYPES = {
+    "application/msword",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.ms-excel",
+}
+
+OPENXML_OFFICE_EXTENSIONS = {
+    ".docx",
+    ".pptx",
+    ".xlsx",
+}
+
+OPENXML_OFFICE_MEDIA_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
 WHATWG_LABELS = {
@@ -62,6 +143,7 @@ def build_source_profile(
     warnings = _quality_warnings(
         content_type=normalized_content_type,
         inferred_content_type=inferred_content_type,
+        extension=extension,
         file_size_bytes=file_size_bytes or 0,
         modality=modality,
         duplicate_of_document_id=duplicate_of_document_id,
@@ -80,9 +162,29 @@ def build_source_profile(
         file_size_bytes=file_size_bytes or 0,
         content_sha256=content_sha256 or "",
         modality=modality,
-        parser_profile=_parser_profile(modality),
+        parser_profile=_parser_profile(
+            modality,
+            extension=extension,
+            content_type=normalized_content_type,
+        ),
+        parser_backend=_parser_backend(
+            modality,
+            extension=extension,
+            content_type=normalized_content_type,
+        ),
+        parser_version="v1",
+        preview_kind=_preview_kind(
+            modality,
+            extension=extension,
+            content_type=normalized_content_type,
+        ),
         text_charset=text_charset,
         duplicate_of_document_id=duplicate_of_document_id,
+        unsupported_reason=_unsupported_reason(
+            modality,
+            extension=extension,
+            content_type=normalized_content_type,
+        ),
         quality_status="warning" if warnings else "ready",
         quality_warnings=warnings,
     )
@@ -102,9 +204,19 @@ def _inferred_content_type(file_name: str) -> str | None:
 def _source_modality(content_type: str, extension: str | None) -> SourceModality:
     if content_type == "application/pdf" or extension == ".pdf":
         return SourceModality.PDF
-    if content_type.startswith("image/"):
+    if content_type.startswith("image/") or extension in IMAGE_EXTENSIONS:
         return SourceModality.IMAGE
-    if _is_text_media_type(content_type) or extension in {".txt", ".md", ".markdown", ".csv"}:
+    if content_type in HTML_MEDIA_TYPES or extension in {".html", ".htm", ".xhtml"}:
+        return SourceModality.HTML
+    if (
+        content_type in EMAIL_MEDIA_TYPES
+        or content_type in OUTLOOK_MSG_MEDIA_TYPES
+        or extension in {".eml", ".msg"}
+    ):
+        return SourceModality.EMAIL
+    if content_type.startswith("audio/") or extension in AUDIO_EXTENSIONS:
+        return SourceModality.AUDIO
+    if _is_text_media_type(content_type) or extension in TEXT_EXTENSIONS:
         return SourceModality.TEXT
     if extension in OFFICE_EXTENSIONS or content_type in {
         "application/msword",
@@ -118,22 +230,133 @@ def _source_modality(content_type: str, extension: str | None) -> SourceModality
     return SourceModality.UNKNOWN
 
 
-def _parser_profile(modality: SourceModality) -> str:
+def _parser_profile(
+    modality: SourceModality,
+    *,
+    extension: str | None,
+    content_type: str,
+) -> str:
     if modality == SourceModality.PDF:
         return "enterprise_ai_pdf_layout"
     if modality == SourceModality.IMAGE:
+        if _is_unsupported_tiff_image(extension=extension, content_type=content_type):
+            return "unsupported_tiff_image"
         return "enterprise_ai_image_ocr"
     if modality == SourceModality.TEXT:
-        return "enterprise_ai_text_structure"
+        return "local_text_structure"
+    if modality == SourceModality.HTML:
+        return "local_html_semantic"
+    if modality == SourceModality.EMAIL:
+        if _is_outlook_msg(extension=extension, content_type=content_type):
+            return "unsupported_outlook_msg"
+        return "local_email_thread"
     if modality == SourceModality.OFFICE:
-        return "enterprise_ai_office_structure"
+        if _is_openxml_office(extension=extension, content_type=content_type):
+            return "local_office_structure"
+        if _is_legacy_office_binary(extension=extension, content_type=content_type):
+            return "unsupported_legacy_office_binary"
+        return "enterprise_ai_generic"
+    if modality == SourceModality.AUDIO:
+        return "unsupported_audio"
     return "enterprise_ai_generic"
+
+
+def _parser_backend(
+    modality: SourceModality,
+    *,
+    extension: str | None,
+    content_type: str,
+) -> str:
+    """v1 parser registry の既定 backend。"""
+    if modality in {SourceModality.TEXT, SourceModality.HTML, SourceModality.EMAIL}:
+        if modality == SourceModality.EMAIL and _is_outlook_msg(
+            extension=extension,
+            content_type=content_type,
+        ):
+            return "unsupported"
+        return "local_partition"
+    if modality == SourceModality.IMAGE and _is_unsupported_tiff_image(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "unsupported"
+    if modality == SourceModality.OFFICE and _is_openxml_office(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "local_partition"
+    if modality == SourceModality.OFFICE and _is_legacy_office_binary(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "unsupported"
+    if modality == SourceModality.AUDIO:
+        return "unsupported"
+    return "enterprise_ai"
+
+
+def _preview_kind(
+    modality: SourceModality,
+    *,
+    extension: str | None,
+    content_type: str,
+) -> SourcePreviewKind:
+    """UI で使う原本 preview 種別。"""
+    if modality == SourceModality.PDF:
+        return SourcePreviewKind.PDF
+    if modality == SourceModality.IMAGE:
+        if _is_unsupported_tiff_image(extension=extension, content_type=content_type):
+            return SourcePreviewKind.UNSUPPORTED
+        return SourcePreviewKind.IMAGE
+    if modality == SourceModality.TEXT:
+        return SourcePreviewKind.TEXT
+    if modality == SourceModality.HTML:
+        return SourcePreviewKind.HTML
+    if modality == SourceModality.EMAIL:
+        if _is_outlook_msg(extension=extension, content_type=content_type):
+            return SourcePreviewKind.UNSUPPORTED
+        return SourcePreviewKind.EMAIL
+    if modality == SourceModality.OFFICE:
+        if _is_legacy_office_binary(extension=extension, content_type=content_type):
+            return SourcePreviewKind.UNSUPPORTED
+        return SourcePreviewKind.OFFICE
+    return SourcePreviewKind.UNSUPPORTED
+
+
+def _unsupported_reason(
+    modality: SourceModality,
+    *,
+    extension: str | None,
+    content_type: str,
+) -> str | None:
+    """v1 で明示的に未対応にする入力の理由。"""
+    if modality == SourceModality.EMAIL and _is_outlook_msg(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "outlook_msg_not_supported"
+    if modality == SourceModality.IMAGE and _is_unsupported_tiff_image(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "tiff_image_not_supported"
+    if modality == SourceModality.OFFICE and _is_legacy_office_binary(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "legacy_office_binary_not_supported"
+    if modality == SourceModality.AUDIO:
+        return "audio_transcription_not_configured"
+    if modality == SourceModality.UNKNOWN:
+        return "unknown_file_type"
+    return None
 
 
 def _quality_warnings(
     *,
     content_type: str,
     inferred_content_type: str | None,
+    extension: str | None,
     file_size_bytes: int,
     modality: SourceModality,
     duplicate_of_document_id: str | None,
@@ -150,6 +373,23 @@ def _quality_warnings(
         warnings.append("content_type_extension_mismatch")
     if file_size_bytes >= LARGE_FILE_WARNING_BYTES:
         warnings.append("large_file")
+    if modality == SourceModality.AUDIO:
+        warnings.append("unsupported_audio")
+    if modality == SourceModality.EMAIL and _is_outlook_msg(
+        extension=extension,
+        content_type=content_type,
+    ):
+        warnings.append("unsupported_outlook_msg")
+    if modality == SourceModality.IMAGE and _is_unsupported_tiff_image(
+        extension=extension,
+        content_type=content_type,
+    ):
+        warnings.append("unsupported_tiff_image")
+    if modality == SourceModality.OFFICE and _is_legacy_office_binary(
+        extension=extension,
+        content_type=content_type,
+    ):
+        warnings.append("unsupported_legacy_office_binary")
     if modality == SourceModality.UNKNOWN:
         warnings.append("unknown_modality")
     return warnings
@@ -160,11 +400,37 @@ def _content_types_compatible(actual: str, inferred: str) -> bool:
         return True
     if actual.startswith("text/") and inferred in TEXT_MEDIA_TYPES:
         return True
+    if actual.startswith("text/") and inferred in HTML_MEDIA_TYPES:
+        return True
+    if actual in EMAIL_MEDIA_TYPES and inferred in EMAIL_MEDIA_TYPES:
+        return True
+    if actual in OUTLOOK_MSG_MEDIA_TYPES and inferred in OUTLOOK_MSG_MEDIA_TYPES:
+        return True
     return actual.startswith("image/") and inferred.startswith("image/")
 
 
 def _is_text_media_type(media_type: str) -> bool:
     return media_type.startswith("text/") or media_type in TEXT_MEDIA_TYPES
+
+
+def _is_unsupported_tiff_image(*, extension: str | None, content_type: str) -> bool:
+    """v1 ではブラウザ preview / Enterprise AI image payload と未整合の TIFF か判定する。"""
+    return extension in TIFF_IMAGE_EXTENSIONS or content_type in TIFF_IMAGE_MEDIA_TYPES
+
+
+def _is_openxml_office(*, extension: str | None, content_type: str) -> bool:
+    """標準ライブラリで構造化抽出できる OpenXML Office か判定する。"""
+    return extension in OPENXML_OFFICE_EXTENSIONS or content_type in OPENXML_OFFICE_MEDIA_TYPES
+
+
+def _is_legacy_office_binary(*, extension: str | None, content_type: str) -> bool:
+    """v1 local parser が扱えない旧バイナリ Office か判定する。"""
+    return extension in LEGACY_OFFICE_EXTENSIONS or content_type in LEGACY_OFFICE_MEDIA_TYPES
+
+
+def _is_outlook_msg(*, extension: str | None, content_type: str) -> bool:
+    """v1 local email parser が扱えない Outlook MSG 形式か判定する。"""
+    return extension == ".msg" or content_type in OUTLOOK_MSG_MEDIA_TYPES
 
 
 def _detect_text_charset(data: bytes) -> str:

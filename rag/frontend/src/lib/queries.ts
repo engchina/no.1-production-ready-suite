@@ -18,6 +18,7 @@ import {
   type KnowledgeBaseUpdateRequest,
   type ModelSettingsPayload,
   type ModelSettingsTestRequest,
+  type ParserAdapterSettingsData,
   type SelectAiRequestBody,
   type UploadIngestionMode,
   type UploadStorageSettingsUpdate,
@@ -36,6 +37,9 @@ export const queryKeys = {
   }) =>
     ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
+  documentChunks: (id: string) => ["documents", id, "chunks"] as const,
+  documentIngestionSegments: (id: string) =>
+    ["documents", id, "ingestion-segments"] as const,
   documentKnowledgeBases: (id: string) => ["documents", id, "knowledge-bases"] as const,
   documentStats: ["documents", "stats"] as const,
   ingestionJobs: (params: { status?: IngestionJobStatus; limit?: number; offset?: number }) =>
@@ -50,6 +54,7 @@ export const queryKeys = {
   databaseSettings: ["settings", "database"] as const,
   adbInfo: ["settings", "database", "adb"] as const,
   uploadStorageSettings: ["settings", "upload-storage"] as const,
+  parserAdapterSettings: ["settings", "parser-adapters"] as const,
 };
 
 /** データベース利用可否(DB ゲート用)。設定ページ以外を開く前に参照する。 */
@@ -103,6 +108,32 @@ export function useDocument(
     queryFn: () => api.getDocument(id as string),
     enabled: id != null,
     refetchInterval: options.refetchInterval,
+  });
+}
+
+/** 文書 chunk/citation 可視化。 */
+export function useDocumentChunks(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.documentChunks(id ?? ""),
+    queryFn: () => api.listDocumentChunks(id as string),
+    enabled: id != null,
+    retry: false,
+  });
+}
+
+/** 文書取込 segment/checkpoint 状態。 */
+export function useDocumentIngestionSegments(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.documentIngestionSegments(id ?? ""),
+    queryFn: () => api.listDocumentIngestionSegments(id as string),
+    enabled: id != null,
+    retry: false,
+    refetchInterval: (query) => {
+      const hasActive = query.state.data?.some(
+        (segment) => segment.status === "QUEUED" || segment.status === "RUNNING"
+      );
+      return hasActive ? 2000 : false;
+    },
   });
 }
 
@@ -319,6 +350,7 @@ export function useEnqueueDocumentIngestionJob() {
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
@@ -350,6 +382,7 @@ export function useRetryIngestionJob() {
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
@@ -506,6 +539,15 @@ export function useUploadStorageSettings() {
   return useQuery({
     queryKey: queryKeys.uploadStorageSettings,
     queryFn: api.getUploadStorageSettings,
+  });
+}
+
+/** 任意 parser adapter の runtime readiness。 */
+export function useParserAdapterSettings() {
+  return useQuery<ParserAdapterSettingsData>({
+    queryKey: queryKeys.parserAdapterSettings,
+    queryFn: api.getParserAdapterSettings,
+    retry: false,
   });
 }
 

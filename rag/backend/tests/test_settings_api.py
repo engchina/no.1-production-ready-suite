@@ -14,6 +14,7 @@ from app.api.routes import settings as settings_routes
 from app.clients.oracle import OracleConnectionTimeoutError, OracleWalletPasswordRequiredError
 from app.config import Settings, get_settings, load_persisted_model_settings
 from app.main import app
+from app.rag import parser_adapter_readiness
 from app.schemas.settings import EnterpriseAiModelSettings
 from tests.support import AsgiTestClient
 
@@ -22,12 +23,71 @@ LLM_TEMPLATE = '{"input":"${user_message}"}'
 VLM_TEMPLATE = '{"input":"${data_base64}"}'
 
 
+async def _run_inline(operation: Any) -> Any:
+    """テスト用 fake SDK 呼び出しをスレッドへ逃がさず同期実行する。"""
+    return operation()
+
+
 def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
     """Vision モデルの接続テストには provider が受理できる JPEG を使う。"""
     data = settings_routes.MODEL_TEST_IMAGE_BYTES
 
     assert data.startswith(b"\xff\xd8")
     assert len(data) > 1024
+
+
+def test_parser_adapter_settings_reports_flags_and_package_status(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """adapter readiness は flag と Python package 有無を非機密に返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "auto")
+    monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
+    monkeypatch.setattr(settings, "rag_parser_marker_enabled", True)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+
+    def package_info(package_name: str) -> tuple[bool, str | None]:
+        return (package_name == "docling", "1.2.3" if package_name == "docling" else None)
+
+    monkeypatch.setattr(parser_adapter_readiness, "_package_info", package_info)
+
+    resp = client.get("/api/settings/parser-adapters")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["adapter_backend"] == "auto"
+    assert body["effective_order"] == ["docling", "marker"]
+    by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
+    assert by_backend["docling"]["status"] == "active"
+    assert by_backend["docling"]["version"] == "1.2.3"
+    assert by_backend["marker"]["status"] == "missing"
+    assert by_backend["marker"]["warning_code"] == "adapter_package_missing"
+    assert by_backend["unstructured"]["status"] == "disabled"
+
+
+def test_parser_adapter_settings_explicit_backend_requires_feature_flag(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """backend を明示しても flag が false なら実行順から外し警告する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "marker")
+    monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
+    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(parser_adapter_readiness, "_package_info", lambda _package: (False, None))
+
+    resp = client.get("/api/settings/parser-adapters")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
+    assert body["adapter_backend"] == "marker"
+    assert body["effective_order"] == []
+    assert by_backend["marker"]["selected"] is True
+    assert by_backend["marker"]["enabled"] is False
+    assert by_backend["marker"]["status"] == "disabled"
+    assert by_backend["marker"]["warning_code"] == "adapter_feature_flag_disabled"
+    assert by_backend["docling"]["status"] == "ignored"
 
 
 def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> None:
@@ -1679,7 +1739,11 @@ def _patch_adb_client(
     fake_client = _make_fake_database_client(lifecycle_state, calls)()
 
     def _factory(settings: Settings | None = None) -> OciDatabaseClient:
-        return OciDatabaseClient(settings=settings, database_client=fake_client)
+        return OciDatabaseClient(
+            settings=settings,
+            database_client=fake_client,
+            sdk_call_runner=_run_inline,
+        )
 
     monkeypatch.setattr(settings_routes, "OciDatabaseClient", _factory)
 

@@ -15,6 +15,7 @@ from app.schemas.document import (
     FileStatus,
     IngestionJob,
     IngestionJobStatus,
+    IngestionSegment,
 )
 from app.schemas.knowledge_base import KnowledgeBaseRef
 from tests.support import AsgiTestClient
@@ -28,6 +29,8 @@ class FakeWorkspaceOracle:
     def __init__(self) -> None:
         self.documents: dict[str, DocumentDetail] = {}
         self.ingestion_jobs: dict[str, IngestionJob] = {}
+        self.ingestion_segments: dict[str, list[IngestionSegment]] = {}
+        self.knowledge_base_assignments: set[tuple[str, str]] = set()
 
     async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
         for detail in self.documents.values():
@@ -64,7 +67,39 @@ class FakeWorkspaceOracle:
             knowledge_bases=knowledge_bases,
         )
         self.documents[document_id] = detail
+        for knowledge_base in knowledge_bases:
+            self.knowledge_base_assignments.add((knowledge_base.id, document_id))
         return detail
+
+    async def assign_documents_to_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        document_ids: list[str],
+    ) -> object:
+        for document_id in document_ids:
+            detail = self.documents[document_id]
+            if not any(ref.id == knowledge_base_id for ref in detail.knowledge_bases):
+                detail = detail.model_copy(
+                    update={
+                        "knowledge_bases": [
+                            *detail.knowledge_bases,
+                            KnowledgeBaseRef(
+                                id=knowledge_base_id,
+                                name=f"KB {knowledge_base_id}",
+                            ),
+                        ]
+                    }
+                )
+                self.documents[document_id] = detail
+            self.knowledge_base_assignments.add((knowledge_base_id, document_id))
+        return object()
+
+    async def list_document_chunks(self, document_id: str) -> list[object]:
+        _ = document_id
+        return []
+
+    async def list_ingestion_segments(self, document_id: str) -> list[IngestionSegment]:
+        return list(self.ingestion_segments.get(document_id, []))
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.documents.get(document_id)
@@ -73,6 +108,7 @@ class FakeWorkspaceOracle:
         if document_id not in self.documents:
             return False
         del self.documents[document_id]
+        self.ingestion_segments.pop(document_id, None)
         self.ingestion_jobs = {
             job_id: job
             for job_id, job in self.ingestion_jobs.items()
@@ -227,7 +263,9 @@ class FakeWorkspaceIngestionPipeline:
         *,
         content_type: str = "application/octet-stream",
         source_profile: object | None = None,
+        cancel_checker: object | None = None,
     ) -> DocumentDetail:
+        _ = prompt, content_type, source_profile, cancel_checker
         detail = await self._oracle.get_document(document_id)
         assert detail is not None
         raw_text = image_bytes.decode("utf-8", errors="replace")
@@ -289,10 +327,34 @@ def test_document_upload_returns_source_profile() -> None:
     assert profile["extension"] == ".txt"
     assert profile["content_type"] == "text/plain"
     assert profile["modality"] == "text"
-    assert profile["parser_profile"] == "enterprise_ai_text_structure"
+    assert profile["parser_profile"] == "local_text_structure"
     assert profile["text_charset"] == "utf-8"
     assert profile["quality_status"] == "ready"
     assert profile["quality_warnings"] == []
+
+
+def test_document_upload_accepts_tsv_as_local_text_table_source() -> None:
+    """TSV upload は unknown 扱いにせず local table parser へ渡す。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={
+            "file": (
+                "metrics.tsv",
+                b"name\tamount\nalpha\t1200\n",
+                "text/tab-separated-values",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    profile = resp.json()["data"]["source_profile"]
+    assert profile["extension"] == ".tsv"
+    assert profile["content_type"] == "text/tab-separated-values"
+    assert profile["modality"] == "text"
+    assert profile["parser_profile"] == "local_text_structure"
+    assert profile["parser_backend"] == "local_partition"
+    assert profile["preview_kind"] == "text"
+    assert profile["unsupported_reason"] is None
 
 
 def test_document_upload_auto_ingestion_starts_background_pipeline() -> None:
@@ -313,7 +375,7 @@ def test_document_upload_auto_ingestion_starts_background_pipeline() -> None:
     body = resp.json()["data"]
     assert body["ingestion_started"] is True
     assert body["ingestion_job"]["status"] == "QUEUED"
-    assert body["ingestion_job"]["parser_profile"] == "enterprise_ai_text_structure"
+    assert body["ingestion_job"]["parser_profile"] == "local_text_structure"
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
@@ -325,6 +387,157 @@ def test_document_upload_auto_ingestion_starts_background_pipeline() -> None:
     assert job_detail.status_code == 200
     assert job_detail.json()["data"]["status"] == "SUCCEEDED"
     assert job_detail.json()["data"]["attempt_count"] == 1
+
+
+def test_document_upload_auto_ingestion_skips_unsupported_audio() -> None:
+    """未対応 audio は auto 指定でも取込 pipeline を開始せず skipped にする。"""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"ingestion_mode": "auto"},
+        files={"file": ("voice.mp3", b"ID3", "audio/mpeg")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert body["source_profile"]["modality"] == "audio"
+    assert body["source_profile"]["parser_profile"] == "unsupported_audio"
+    assert body["source_profile"]["unsupported_reason"] == "audio_transcription_not_configured"
+    assert "unsupported_audio" in body["source_profile"]["quality_warnings"]
+    assert body["ingestion_job"]["status"] == "SKIPPED"
+    assert body["ingestion_job"]["skip_reason"] == "audio_transcription_not_configured"
+
+    detail = client.get(f"/api/documents/{body['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+
+def test_document_upload_auto_ingestion_skips_common_audio_mime_variant() -> None:
+    """M4A などの一般的な音声 MIME も 415 ではなく skipped reason を返す。"""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"ingestion_mode": "auto"},
+        files={"file": ("meeting.m4a", b"m4a bytes", "audio/mp4")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert body["source_profile"]["modality"] == "audio"
+    assert body["source_profile"]["parser_profile"] == "unsupported_audio"
+    assert body["source_profile"]["unsupported_reason"] == "audio_transcription_not_configured"
+    assert "unsupported_audio" in body["source_profile"]["quality_warnings"]
+    assert body["ingestion_job"]["status"] == "SKIPPED"
+    assert body["ingestion_job"]["skip_reason"] == "audio_transcription_not_configured"
+
+
+def test_document_upload_rejects_unknown_octet_stream_before_storage() -> None:
+    """application/octet-stream でも拡張子から未知の binary は保存前に 415 にする。"""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"ingestion_mode": "auto"},
+        files={"file": ("payload.bin", b"\x00\x01\x02", "application/octet-stream")},
+    )
+
+    assert resp.status_code == 415
+    assert resp.json()["error_messages"] == ["対応していないファイル形式です。"]
+
+
+def test_document_upload_accepts_recognized_octet_stream_for_explicit_skip() -> None:
+    """MIME が欠落した M4A は audio と判定し、明示的な skipped reason を返す。"""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"ingestion_mode": "auto"},
+        files={"file": ("meeting.m4a", b"m4a bytes", "application/octet-stream")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["source_profile"]["modality"] == "audio"
+    assert body["source_profile"]["parser_profile"] == "unsupported_audio"
+    assert body["ingestion_job"]["status"] == "SKIPPED"
+    assert body["ingestion_job"]["skip_reason"] == "audio_transcription_not_configured"
+
+
+def test_document_upload_auto_ingestion_skips_unsupported_outlook_msg() -> None:
+    """Outlook MSG は未対応 email として auto 取込を開始しない。"""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"ingestion_mode": "auto"},
+        files={
+            "file": (
+                "approval.msg",
+                b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1outlook msg",
+                "application/vnd.ms-outlook",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert body["source_profile"]["modality"] == "email"
+    assert body["source_profile"]["parser_profile"] == "unsupported_outlook_msg"
+    assert body["source_profile"]["parser_backend"] == "unsupported"
+    assert body["source_profile"]["preview_kind"] == "unsupported"
+    assert body["source_profile"]["unsupported_reason"] == "outlook_msg_not_supported"
+    assert "unsupported_outlook_msg" in body["source_profile"]["quality_warnings"]
+    assert body["ingestion_job"]["status"] == "SKIPPED"
+    assert body["ingestion_job"]["skip_reason"] == "outlook_msg_not_supported"
+
+    detail = client.get(f"/api/documents/{body['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+
+def test_document_upload_auto_ingestion_skips_unsupported_tiff_image() -> None:
+    """TIFF 画像は auto 指定でも VLM に送らず skipped にする。"""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"ingestion_mode": "auto"},
+        files={"file": ("scan.tiff", b"II*\x00tiff", "image/tiff")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert body["source_profile"]["modality"] == "image"
+    assert body["source_profile"]["parser_profile"] == "unsupported_tiff_image"
+    assert body["source_profile"]["parser_backend"] == "unsupported"
+    assert body["source_profile"]["preview_kind"] == "unsupported"
+    assert body["source_profile"]["unsupported_reason"] == "tiff_image_not_supported"
+    assert "unsupported_tiff_image" in body["source_profile"]["quality_warnings"]
+    assert body["ingestion_job"]["status"] == "SKIPPED"
+    assert body["ingestion_job"]["skip_reason"] == "tiff_image_not_supported"
+
+    detail = client.get(f"/api/documents/{body['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+
+def test_document_upload_auto_ingestion_skips_unsupported_legacy_office() -> None:
+    """旧バイナリ Office は auto 指定でも VLM に送らず skipped にする。"""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"ingestion_mode": "auto"},
+        files={"file": ("legacy.doc", b"legacy office", "application/msword")},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert body["source_profile"]["modality"] == "office"
+    assert body["source_profile"]["parser_profile"] == "unsupported_legacy_office_binary"
+    assert body["source_profile"]["parser_backend"] == "unsupported"
+    assert body["source_profile"]["preview_kind"] == "unsupported"
+    assert body["source_profile"]["unsupported_reason"] == "legacy_office_binary_not_supported"
+    assert "unsupported_legacy_office_binary" in body["source_profile"]["quality_warnings"]
+    assert body["ingestion_job"]["status"] == "SKIPPED"
+    assert body["ingestion_job"]["skip_reason"] == "legacy_office_binary_not_supported"
+
+    detail = client.get(f"/api/documents/{body['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
 
 
 def test_document_upload_auto_ingestion_skips_duplicate_source() -> None:
@@ -381,12 +594,38 @@ def test_batch_upload_auto_queues_ingestion_jobs() -> None:
     listed = jobs.json()["data"]["items"]
     assert len(listed) == 2
     assert {job["status"] for job in listed} == {"SUCCEEDED"}
-    assert {job["parser_profile"] for job in listed} == {"enterprise_ai_text_structure"}
+    assert {job["parser_profile"] for job in listed} == {"local_text_structure"}
 
     for item in data["items"]:
         detail = client.get(f"/api/documents/{item['id']}")
         assert detail.status_code == 200
         assert detail.json()["data"]["status"] == "INDEXED"
+
+
+def test_batch_upload_failed_item_includes_source_profile() -> None:
+    """batch-upload の失敗 item は判定できた source profile を返す。"""
+    resp = client.post(
+        "/api/documents/batch-upload",
+        files=[
+            ("files", ("policy-ok.txt", b"OK", "text/plain")),
+            ("files", ("policy.exe", b"MZ", "application/x-msdownload")),
+        ],
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["total_count"] == 2
+    assert data["uploaded_count"] == 1
+    assert data["failed_count"] == 1
+    assert data["items"][0]["file_name"] == "policy-ok.txt"
+    failed = data["failed_items"][0]
+    assert failed["file_name"] == "policy.exe"
+    assert failed["status_code"] == 415
+    assert failed["source_profile"]["modality"] == "unknown"
+    assert failed["source_profile"]["parser_profile"] == "enterprise_ai_generic"
+    assert failed["source_profile"]["preview_kind"] == "unsupported"
+    assert failed["source_profile"]["unsupported_reason"] == "unknown_file_type"
+    assert "unknown_modality" in failed["source_profile"]["quality_warnings"]
 
 
 def test_document_ingestion_job_endpoint_queues_existing_document() -> None:
@@ -403,7 +642,7 @@ def test_document_ingestion_job_endpoint_queues_existing_document() -> None:
     job = resp.json()["data"]
     assert job["document_id"] == document_id
     assert job["status"] == "QUEUED"
-    assert job["parser_profile"] == "enterprise_ai_text_structure"
+    assert job["parser_profile"] == "local_text_structure"
 
     detail = client.get(f"/api/documents/{document_id}")
     assert detail.status_code == 200
@@ -460,6 +699,82 @@ def test_document_ingestion_job_endpoint_skips_indexed_without_force() -> None:
     assert job["skip_reason"] == "already_indexed"
 
 
+def test_document_ingestion_job_endpoint_skips_unsupported_audio() -> None:
+    """未対応 audio の手動 job 投入も skipped 履歴だけ残す。"""
+    document_id = _upload("voice.mp3", b"ID3", "audio/mpeg")
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["status"] == "SKIPPED"
+    assert job["parser_profile"] == "unsupported_audio"
+    assert job["skip_reason"] == "audio_transcription_not_configured"
+    assert "unsupported_audio" in job["quality_warnings"]
+
+    detail = client.get(f"/api/documents/{document_id}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+
+def test_document_ingestion_job_endpoint_skips_unsupported_outlook_msg() -> None:
+    """未対応 Outlook MSG の手動 job 投入も skipped 履歴だけ残す。"""
+    document_id = _upload(
+        "approval.msg",
+        b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1outlook msg",
+        "application/octet-stream",
+    )
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["status"] == "SKIPPED"
+    assert job["parser_profile"] == "unsupported_outlook_msg"
+    assert job["skip_reason"] == "outlook_msg_not_supported"
+    assert "unsupported_outlook_msg" in job["quality_warnings"]
+
+    detail = client.get(f"/api/documents/{document_id}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+
+def test_document_ingestion_job_endpoint_skips_unsupported_tiff_image() -> None:
+    """TIFF 画像の手動 job 投入も skipped 履歴だけ残す。"""
+    document_id = _upload("scan.tiff", b"II*\x00tiff", "image/tiff")
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["status"] == "SKIPPED"
+    assert job["parser_profile"] == "unsupported_tiff_image"
+    assert job["skip_reason"] == "tiff_image_not_supported"
+    assert "unsupported_tiff_image" in job["quality_warnings"]
+
+    detail = client.get(f"/api/documents/{document_id}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+
+def test_document_ingestion_job_endpoint_skips_unsupported_legacy_office() -> None:
+    """旧バイナリ Office の手動 job 投入も skipped 履歴だけ残す。"""
+    document_id = _upload("legacy.doc", b"legacy office", "application/msword")
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["status"] == "SKIPPED"
+    assert job["parser_profile"] == "unsupported_legacy_office_binary"
+    assert job["skip_reason"] == "legacy_office_binary_not_supported"
+    assert "unsupported_legacy_office_binary" in job["quality_warnings"]
+
+    detail = client.get(f"/api/documents/{document_id}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+
 def test_drain_queued_ingestion_jobs_runs_persisted_jobs(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
@@ -473,7 +788,7 @@ def test_drain_queued_ingestion_jobs_runs_persisted_jobs(
         id="job-queued",
         document_id=document_id,
         status=IngestionJobStatus.QUEUED,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         queued_at=datetime.now(UTC),
     )
     fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
@@ -508,7 +823,7 @@ def test_retry_ingestion_job_creates_new_job_for_failed_document(
         id="job-failed",
         document_id=document_id,
         status=IngestionJobStatus.FAILED,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         error_message="前回失敗",
         queued_at=datetime.now(UTC),
         finished_at=datetime.now(UTC),
@@ -545,7 +860,7 @@ def test_retry_ingestion_job_rejects_running_job(
         id="job-running",
         document_id=document_id,
         status=IngestionJobStatus.RUNNING,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         queued_at=datetime.now(UTC),
         started_at=datetime.now(UTC),
     )
@@ -570,7 +885,7 @@ def test_cancel_queued_ingestion_job(
         id="job-cancel-queued",
         document_id=document_id,
         status=IngestionJobStatus.QUEUED,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         queued_at=datetime.now(UTC),
     )
     fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
@@ -601,7 +916,7 @@ def test_cancel_running_ingestion_job(
         id="job-cancel-running",
         document_id=document_id,
         status=IngestionJobStatus.RUNNING,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         queued_at=datetime.now(UTC),
         started_at=datetime.now(UTC),
     )
@@ -632,7 +947,7 @@ def test_cancel_ingestion_job_rejects_terminal_status(
         id="job-cancel-terminal",
         document_id=document_id,
         status=IngestionJobStatus.SUCCEEDED,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         queued_at=datetime.now(UTC),
         finished_at=datetime.now(UTC),
     )
@@ -661,7 +976,7 @@ def test_running_ingestion_job_does_not_overwrite_cancelled_status(
         id="job-cancel-race",
         document_id=document_id,
         status=IngestionJobStatus.QUEUED,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         queued_at=datetime.now(UTC),
     )
     fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
@@ -670,8 +985,9 @@ def test_running_ingestion_job_does_not_overwrite_cancelled_status(
         document_id: str,
         *,
         force: bool = False,
+        cancel_checker: object | None = None,
     ) -> DocumentDetail:
-        _ = force
+        _ = force, cancel_checker
         job = fake_document_dependencies.ingestion_jobs[queued_job.id]
         fake_document_dependencies.ingestion_jobs[queued_job.id] = job.model_copy(
             update={
@@ -712,7 +1028,7 @@ def test_recover_and_drain_ingestion_jobs_recovers_stale_running_jobs(
         id="job-stale",
         document_id=runnable_document_id,
         status=IngestionJobStatus.RUNNING,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         attempt_count=1,
         max_attempts=3,
         queued_at=old_started_at,
@@ -722,7 +1038,7 @@ def test_recover_and_drain_ingestion_jobs_recovers_stale_running_jobs(
         id="job-maxed",
         document_id=maxed_document_id,
         status=IngestionJobStatus.RUNNING,
-        parser_profile="enterprise_ai_text_structure",
+        parser_profile="local_text_structure",
         attempt_count=3,
         max_attempts=3,
         queued_at=old_started_at,
@@ -825,6 +1141,56 @@ def test_document_content_returns_404_for_unknown_document() -> None:
     assert resp.json()["error_messages"] == ["ドキュメントが見つかりません。"]
 
 
+def test_ingestion_segments_fallback_uses_table_and_asset_pages(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """checkpoint 未永続化でも table/asset lineage から page range を返す。"""
+    document_id = _upload("layout.pdf", b"%PDF-1.7\nsample", "application/pdf")
+    artifact_path = f"artifacts/extractions/{document_id}/full.json"
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "indexed_at": datetime.now(UTC),
+            "extraction": {
+                "raw_text": "売上表と説明図を含む PDF",
+                "elements": [],
+                "tables": [
+                    {
+                        "table_id": "tbl-1",
+                        "page_number": 3,
+                        "caption": "四半期売上",
+                    }
+                ],
+                "assets": [
+                    {
+                        "asset_id": "fig-1",
+                        "kind": "figure",
+                        "page_number": 5,
+                    }
+                ],
+                "quality_report": {
+                    "parser_backend": "docling",
+                    "parser_profile": "enterprise_ai_pdf_layout",
+                },
+                "parser_artifacts": {
+                    "extraction_artifact_path": artifact_path,
+                },
+            },
+        }
+    )
+
+    resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
+
+    assert resp.status_code == 200
+    segments = resp.json()["data"]
+    assert len(segments) == 1
+    assert segments[0]["page_start"] == 3
+    assert segments[0]["page_end"] == 5
+    assert segments[0]["parser_backend"] == "docling"
+    assert segments[0]["artifact_path"] == artifact_path
+
+
 def test_delete_document_removes_record_and_original_file(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
@@ -846,6 +1212,72 @@ def test_delete_document_removes_record_and_original_file(
     with pytest.raises(FileNotFoundError):
         anyio.run(ObjectStorageClient().get, detail.object_storage_path)
     assert client.get(f"/api/documents/{document_id}").status_code == 404
+
+
+def test_delete_document_removes_extraction_artifacts(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """document 削除 API は抽出 artifact cache と segment artifact も best-effort で削除する。"""
+    document_id = _upload("policy.txt", b"sample policy", "text/plain")
+    full_artifact_path = anyio.run(
+        ObjectStorageClient().put,
+        f"artifacts/extractions/{document_id}/full.json",
+        b'{"raw_text":"redacted"}',
+        "application/json",
+    )
+    segment_artifact_path = anyio.run(
+        ObjectStorageClient().put,
+        f"artifacts/extractions/{document_id}/segments/p1.json",
+        b'{"raw_text":"redacted segment"}',
+        "application/json",
+    )
+    duplicate_segment_artifact_path = full_artifact_path
+    original_path = fake_document_dependencies.documents[document_id].object_storage_path
+    assert original_path is not None
+    fake_document_dependencies.documents[document_id] = fake_document_dependencies.documents[
+        document_id
+    ].model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": {
+                "parser_artifacts": {"extraction_artifact_path": full_artifact_path}
+            },
+        }
+    )
+    fake_document_dependencies.ingestion_segments[document_id] = [
+        IngestionSegment(
+            segment_id=f"{document_id}:p1",
+            document_id=document_id,
+            status="SUCCEEDED",
+            artifact_path=segment_artifact_path,
+        ),
+        IngestionSegment(
+            segment_id=f"{document_id}:full",
+            document_id=document_id,
+            status="SUCCEEDED",
+            artifact_path=duplicate_segment_artifact_path,
+        ),
+        IngestionSegment(
+            segment_id=f"{document_id}:source",
+            document_id=document_id,
+            status="SUCCEEDED",
+            artifact_path=original_path,
+        ),
+    ]
+
+    resp = client.delete(f"/api/documents/{document_id}")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["object_deleted"] is True
+    assert data["artifact_deleted_count"] == 2
+    assert data["artifact_delete_failed_count"] == 0
+    with pytest.raises(FileNotFoundError):
+        anyio.run(ObjectStorageClient().get, full_artifact_path)
+    with pytest.raises(FileNotFoundError):
+        anyio.run(ObjectStorageClient().get, segment_artifact_path)
+    with pytest.raises(FileNotFoundError):
+        anyio.run(ObjectStorageClient().get, original_path)
 
 
 def test_delete_document_blocks_active_ingestion_job(

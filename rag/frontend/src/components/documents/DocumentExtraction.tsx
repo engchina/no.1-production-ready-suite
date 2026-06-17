@@ -1,11 +1,13 @@
 import {
   BookOpen,
+  CircleAlert,
   FileText,
   Layers3,
   ListChecks,
   Table2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useEffect, useRef, type Ref } from "react";
 
 import { Banner } from "@/components/ui/banner";
 import type { DocumentElement } from "@/lib/api";
@@ -13,6 +15,7 @@ import {
   parseStructuredExtraction,
   summarizeDocumentElements,
 } from "@/lib/extraction";
+import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 
@@ -32,15 +35,35 @@ const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
 };
 
 /** RAG 取込で得た構造化要素・本文・軽量メタデータを表示する。 */
-export function DocumentExtraction({ extraction }: { extraction: Record<string, unknown> }) {
+export function DocumentExtraction({
+  extraction,
+  selectedElementId = null,
+  focusRequestKey = null,
+  focusSelectedElement = false,
+  onElementSelect,
+}: {
+  extraction: Record<string, unknown>;
+  selectedElementId?: string | null;
+  focusRequestKey?: string | null;
+  focusSelectedElement?: boolean;
+  onElementSelect?: (elementId: string) => void;
+}) {
   const parsed = parseStructuredExtraction(extraction);
   const stats = summarizeDocumentElements(parsed.elements);
+  const selectedElementRef = useRef<HTMLButtonElement | null>(null);
   const hasSummary =
     parsed.rawText ||
     parsed.documentType ||
     parsed.confidence != null ||
     parsed.warnings.length > 0 ||
     parsed.elements.length > 0;
+
+  useEffect(() => {
+    if (!focusRequestKey || !selectedElementId || !selectedElementRef.current) return;
+    scrollFocusedControlIntoView(selectedElementRef.current, {
+      focus: focusSelectedElement,
+    });
+  }, [focusRequestKey, focusSelectedElement, selectedElementId]);
 
   if (!hasSummary) {
     return <p className="text-sm text-muted">{t("flow.extraction.empty")}</p>;
@@ -103,7 +126,15 @@ export function DocumentExtraction({ extraction }: { extraction: Record<string, 
             </h4>
             <ol className="max-h-[520px] space-y-3 overflow-auto pr-1">
               {parsed.elements.map((element) => (
-                <ElementItem key={`${element.order}-${element.kind}`} element={element} />
+                <ElementItem
+                  key={elementKey(element)}
+                  element={element}
+                  selected={elementKey(element) === selectedElementId}
+                  buttonRef={
+                    elementKey(element) === selectedElementId ? selectedElementRef : undefined
+                  }
+                  onSelect={onElementSelect}
+                />
               ))}
             </ol>
           </section>
@@ -144,32 +175,68 @@ function StatTile({
   );
 }
 
-function ElementItem({ element }: { element: DocumentElement }) {
+function ElementItem({
+  element,
+  selected,
+  buttonRef,
+  onSelect,
+}: {
+  element: DocumentElement;
+  selected: boolean;
+  buttonRef?: Ref<HTMLButtonElement>;
+  onSelect?: (elementId: string) => void;
+}) {
+  const id = elementKey(element);
+  const lowConfidence = typeof element.confidence === "number" && element.confidence < 0.65;
   return (
-    <li className="rounded-md border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-          {elementKindLabel(element.kind)}
-        </span>
-        {typeof element.page_number === "number" ? (
-          <span className="tnum rounded-full bg-background px-2 py-0.5 text-xs text-muted">
-            {t("flow.extraction.page", { page: element.page_number })}
+    <li>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+          selected ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-background"
+        }`}
+        aria-pressed={selected}
+        onClick={() => onSelect?.(id)}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+            {elementKindLabel(element.kind)}
           </span>
-        ) : null}
-        {element.section_path?.length ? (
-          <span className="min-w-0 max-w-full rounded-full bg-info-bg px-2 py-0.5 text-xs text-info">
-            <span className="break-words">{element.section_path.join(" > ")}</span>
-          </span>
-        ) : null}
-        {typeof element.confidence === "number" ? (
-          <span className="tnum rounded-full bg-success-bg px-2 py-0.5 text-xs text-success">
-            {confidenceText(element.confidence)}
-          </span>
-        ) : null}
-      </div>
-      <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
-        {element.text}
-      </p>
+          {element.content_kind ? (
+            <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+              {element.content_kind}
+            </span>
+          ) : null}
+          {typeof element.page_number === "number" ? (
+            <span className="tnum rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+              {t("flow.extraction.page", { page: element.page_number })}
+            </span>
+          ) : null}
+          {element.section_path?.length ? (
+            <span className="min-w-0 max-w-full rounded-full bg-info-bg px-2 py-0.5 text-xs text-info">
+              <span className="break-words">{element.section_path.join(" > ")}</span>
+            </span>
+          ) : null}
+          {typeof element.confidence === "number" ? (
+            <span
+              className={`tnum inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
+                lowConfidence ? "bg-warning-bg text-warning" : "bg-success-bg text-success"
+              }`}
+            >
+              {lowConfidence ? <CircleAlert size={12} aria-hidden /> : null}
+              {confidenceText(element.confidence)}
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
+          {element.text}
+        </p>
+        <p className="tnum mt-2 break-all text-xs text-muted">
+          {id}
+          {element.source_parser ? ` / ${element.source_parser}` : ""}
+        </p>
+      </button>
     </li>
   );
 }
@@ -211,6 +278,10 @@ function RawTextBlock({ rawText, compact }: { rawText: string; compact: boolean 
 
 function elementKindLabel(kind: string): string {
   return t(KIND_LABELS[kind] ?? "flow.extraction.kind.other");
+}
+
+function elementKey(element: DocumentElement): string {
+  return element.element_id || `el-${String(element.order).padStart(4, "0")}`;
 }
 
 function confidenceText(value: number | null): string {

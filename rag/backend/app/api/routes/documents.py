@@ -5,6 +5,7 @@ import hashlib
 import logging
 import mimetypes
 import re
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import PurePath
@@ -29,12 +30,19 @@ from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.db_degradation import load_or_degrade
-from app.rag.ingestion import IngestionPipeline, IngestionTimeoutError, IngestionUserError
+from app.rag.ingestion import (
+    IngestionCancelledError,
+    IngestionPipeline,
+    IngestionTimeoutError,
+    IngestionUserError,
+)
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.source_profile import build_source_profile
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
+    BatchUploadFailedItem,
     BatchUploadResult,
+    DocumentChunkView,
     DocumentDeleteResult,
     DocumentDetail,
     DocumentStats,
@@ -42,6 +50,7 @@ from app.schemas.document import (
     FileStatus,
     IngestionJob,
     IngestionJobStatus,
+    IngestionSegment,
     SourceProfile,
     UploadResult,
 )
@@ -53,9 +62,7 @@ logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
-ACTIVE_INGESTION_STATUSES = frozenset(
-    {IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING}
-)
+ACTIVE_INGESTION_STATUSES = frozenset({IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING})
 
 
 class UploadIngestionMode(StrEnum):
@@ -93,14 +100,42 @@ async def batch_upload_documents(
     if not files:
         raise HTTPException(status_code=400, detail="アップロード対象ファイルを選択してください。")
     items: list[UploadResult] = []
+    failed_items: list[BatchUploadFailedItem] = []
     for file in files:
-        result = await _store_uploaded_document(file, knowledge_base_ids)
-        items.append(await _attach_ingestion_job(result, ingestion_mode, background_tasks))
+        try:
+            result = await _store_uploaded_document(file, knowledge_base_ids)
+            items.append(await _attach_ingestion_job(result, ingestion_mode, background_tasks))
+        except HTTPException as exc:
+            source_profile = await _failed_upload_source_profile(file)
+            failed_items.append(
+                BatchUploadFailedItem(
+                    file_name=_safe_display_filename(file.filename),
+                    status_code=exc.status_code,
+                    message=str(exc.detail),
+                    source_profile=source_profile,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "batch_upload_item_failed",
+                extra={"file_name": _safe_display_filename(file.filename)},
+            )
+            source_profile = await _failed_upload_source_profile(file)
+            failed_items.append(
+                BatchUploadFailedItem(
+                    file_name=_safe_display_filename(file.filename),
+                    status_code=500,
+                    message="アップロード処理に失敗しました。",
+                    source_profile=source_profile,
+                )
+            )
     return ApiResponse(
         data=BatchUploadResult(
             items=items,
-            total_count=len(items),
+            failed_items=failed_items,
+            total_count=len(files),
             uploaded_count=len(items),
+            failed_count=len(failed_items),
             queued_count=sum(
                 1
                 for item in items
@@ -117,6 +152,72 @@ async def batch_upload_documents(
     )
 
 
+async def _failed_upload_source_profile(file: UploadFile) -> SourceProfile | None:
+    """batch upload の失敗 item に返す source profile を best-effort で作る。"""
+    settings = get_settings()
+    original_file_name = file.filename or "document.bin"
+    file_name = _safe_display_filename(original_file_name)
+    content_type = _normalized_content_type(file.content_type)
+    data: bytes | None = None
+    file_size_bytes = _upload_file_size_hint(file)
+    content_sha256 = ""
+    try:
+        if file_size_bytes is None or file_size_bytes <= settings.max_upload_bytes:
+            await file.seek(0)
+            data = await file.read(settings.max_upload_bytes + 1)
+            await file.seek(0)
+            file_size_bytes = len(data)
+            if len(data) <= settings.max_upload_bytes:
+                content_sha256 = _sha256_hex(data)
+            else:
+                data = None
+    except Exception:
+        data = None
+    try:
+        return build_source_profile(
+            original_file_name=original_file_name,
+            sanitized_file_name=file_name,
+            content_type=content_type,
+            file_size_bytes=file_size_bytes or 0,
+            content_sha256=content_sha256,
+            duplicate_of_document_id=None,
+            data=data,
+        )
+    except Exception:
+        return None
+
+
+def _upload_file_size_hint(file: UploadFile) -> int | None:
+    """Starlette UploadFile の size hint を安全に読む。"""
+    size = getattr(file, "size", None)
+    if isinstance(size, bool) or not isinstance(size, int):
+        return None
+    return max(size, 0)
+
+
+def _is_allowed_upload_content_type(
+    content_type: str,
+    *,
+    sanitized_file_name: str,
+    allowed_content_types: list[str],
+) -> bool:
+    """MIME whitelist と拡張子 profile を組み合わせて upload 可否を判定する。"""
+    normalized_allowed = {_normalized_content_type(allowed) for allowed in allowed_content_types}
+    if content_type not in normalized_allowed:
+        return False
+    if content_type != "application/octet-stream":
+        return True
+    profile = build_source_profile(
+        original_file_name=sanitized_file_name,
+        sanitized_file_name=sanitized_file_name,
+        content_type=content_type,
+        file_size_bytes=0,
+        content_sha256="",
+        data=None,
+    )
+    return profile.unsupported_reason != "unknown_file_type"
+
+
 async def _store_uploaded_document(
     file: UploadFile,
     knowledge_base_ids: list[str] | None,
@@ -124,10 +225,13 @@ async def _store_uploaded_document(
     """単一 UploadFile を保存し、取込前の upload result を返す。"""
     settings = get_settings()
     content_type = _normalized_content_type(file.content_type)
-    allowed_content_types = {
-        _normalized_content_type(allowed) for allowed in settings.allowed_upload_content_types
-    }
-    if content_type not in allowed_content_types:
+    original_file_name = file.filename or "document.bin"
+    file_name = _safe_display_filename(original_file_name)
+    if not _is_allowed_upload_content_type(
+        content_type,
+        sanitized_file_name=file_name,
+        allowed_content_types=settings.allowed_upload_content_types,
+    ):
         raise HTTPException(status_code=415, detail="対応していないファイル形式です。")
 
     data = await _read_upload_file(file, settings.max_upload_bytes)
@@ -136,8 +240,6 @@ async def _store_uploaded_document(
 
     storage = ObjectStorageClient()
     oracle = OracleClient()
-    original_file_name = file.filename or "document.bin"
-    file_name = _safe_display_filename(original_file_name)
     content_sha256 = _sha256_hex(data)
     selected_knowledge_base_ids = _normalize_upload_knowledge_base_ids(knowledge_base_ids)
     duplicate = await oracle.find_document_by_content_hash(content_sha256)
@@ -170,6 +272,12 @@ async def _store_uploaded_document(
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if duplicate is not None:
+        await _assign_duplicate_canonical_to_knowledge_bases(
+            oracle=oracle,
+            canonical_document_id=duplicate.id,
+            knowledge_base_ids=[knowledge_base.id for knowledge_base in detail.knowledge_bases],
+        )
     return UploadResult(
         id=detail.id,
         file_name=detail.file_name,
@@ -180,6 +288,28 @@ async def _store_uploaded_document(
         knowledge_bases=detail.knowledge_bases,
         source_profile=source_profile,
     )
+
+
+async def _assign_duplicate_canonical_to_knowledge_bases(
+    *,
+    oracle: OracleClient,
+    canonical_document_id: str,
+    knowledge_base_ids: list[str],
+) -> None:
+    """重複 upload 時、検索対象の canonical document を選択 KB に追加する。"""
+    for knowledge_base_id in knowledge_base_ids:
+        try:
+            await oracle.assign_documents_to_knowledge_base(
+                knowledge_base_id,
+                [canonical_document_id],
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="重複元ドキュメントまたはナレッジベースが見つかりません。",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("", response_model=ApiResponse[Page[DocumentSummary]])
@@ -374,6 +504,37 @@ async def enqueue_document_ingestion_job(
     return ApiResponse(data=job)
 
 
+@router.get("/{document_id}/chunks", response_model=ApiResponse[list[DocumentChunkView]])
+async def list_document_chunks(document_id: str) -> ApiResponse[list[DocumentChunkView]]:
+    """文書 preview workspace 用に chunk/citation metadata を返す。"""
+    oracle = OracleClient()
+    if await oracle.get_document(document_id) is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    return ApiResponse(data=await oracle.list_document_chunks(document_id))
+
+
+@router.get(
+    "/{document_id}/ingestion-segments",
+    response_model=ApiResponse[list[IngestionSegment]],
+)
+async def list_document_ingestion_segments(
+    document_id: str,
+) -> ApiResponse[list[IngestionSegment]]:
+    """文書 preview workspace 用に取込 segment/checkpoint 状態を返す。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    try:
+        persisted_segments = await oracle.list_ingestion_segments(document_id)
+    except Exception:
+        persisted_segments = []
+    if persisted_segments:
+        return ApiResponse(data=persisted_segments)
+    jobs = await oracle.list_document_ingestion_jobs(document_id)
+    return ApiResponse(data=_document_ingestion_segments(detail, jobs))
+
+
 @router.get("/{document_id}", response_model=ApiResponse[DocumentDetail])
 async def get_document(document_id: str) -> ApiResponse[DocumentDetail]:
     """ドキュメント詳細（抽出本文含む）を返す。"""
@@ -396,16 +557,20 @@ async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]
             status_code=409,
             detail="取込ジョブが待機中または実行中のため削除できません。先にキャンセルしてください。",
         )
+    artifact_paths = await _document_artifact_paths(oracle, detail)
 
     deleted = await oracle.delete_document(document_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
 
     object_deleted = False
+    artifact_deleted_count = 0
+    artifact_delete_failed_count = 0
     warning_messages: list[str] = []
+    storage = ObjectStorageClient()
     if detail.object_storage_path:
         try:
-            object_deleted = await ObjectStorageClient().delete(detail.object_storage_path)
+            object_deleted = await storage.delete(detail.object_storage_path)
             if not object_deleted:
                 warning_messages.append("原本ファイルは既に存在しませんでした。")
         except FileNotFoundError:
@@ -424,6 +589,21 @@ async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]
             warning_messages.append(
                 "文書は削除しましたが、原本ファイルの削除に失敗しました。保存先を確認してください。"
             )
+    for artifact_path in artifact_paths:
+        try:
+            if await storage.delete(artifact_path):
+                artifact_deleted_count += 1
+        except Exception:
+            artifact_delete_failed_count += 1
+            artifact_ref_hash = _sha256_hex(artifact_path.encode())[:16]
+            logger.info(
+                "document_artifact_delete_failed",
+                extra={"document_id": document_id, "artifact_ref_hash": artifact_ref_hash},
+            )
+    if artifact_delete_failed_count:
+        warning_messages.append(
+            "文書は削除しましたが、一部の抽出 artifact cache の削除に失敗しました。"
+        )
 
     return ApiResponse(
         data=DocumentDeleteResult(
@@ -431,6 +611,8 @@ async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]
             file_name=detail.file_name,
             object_storage_path=detail.object_storage_path,
             object_deleted=object_deleted,
+            artifact_deleted_count=artifact_deleted_count,
+            artifact_delete_failed_count=artifact_delete_failed_count,
         ),
         warning_messages=warning_messages,
     )
@@ -494,7 +676,12 @@ async def ingest_document(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-async def _ingest_existing_document(document_id: str, *, force: bool = False) -> DocumentDetail:
+async def _ingest_existing_document(
+    document_id: str,
+    *,
+    force: bool = False,
+    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+) -> DocumentDetail:
     """保存済み原本を検証して取込パイプラインへ渡す。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
@@ -541,6 +728,7 @@ async def _ingest_existing_document(document_id: str, *, force: bool = False) ->
         prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
         content_type=detail.content_type or "application/octet-stream",
         source_profile=source_profile,
+        cancel_checker=cancel_checker,
     )
 
 
@@ -587,6 +775,15 @@ async def _enqueue_ingestion_job_for_document(
             status=IngestionJobStatus.SKIPPED,
             skip_reason="duplicate_content",
         )
+    if source_profile.unsupported_reason and not force:
+        return await _create_ingestion_job_record(
+            oracle=oracle,
+            document_id=document_id,
+            parser_profile=source_profile.parser_profile,
+            quality_warnings=source_profile.quality_warnings,
+            status=IngestionJobStatus.SKIPPED,
+            skip_reason=source_profile.unsupported_reason,
+        )
     if detail.status == FileStatus.INDEXED and not force:
         return await _create_ingestion_job_record(
             oracle=oracle,
@@ -620,15 +817,17 @@ async def _list_active_ingestion_jobs(
 
 
 async def _create_ingestion_job(result: UploadResult) -> IngestionJob:
-    """upload 結果から取込 job を作る。重複は SKIPPED として記録する。"""
+    """upload 結果から取込 job を作る。重複・未対応は SKIPPED として記録する。"""
     is_duplicate = result.duplicate_of_document_id is not None
+    unsupported_reason = result.source_profile.unsupported_reason
+    skip_reason = "duplicate_content" if is_duplicate else unsupported_reason
     return await _create_ingestion_job_record(
         oracle=OracleClient(),
         document_id=result.id,
         parser_profile=result.source_profile.parser_profile,
         quality_warnings=result.source_profile.quality_warnings,
-        status=IngestionJobStatus.SKIPPED if is_duplicate else IngestionJobStatus.QUEUED,
-        skip_reason="duplicate_content" if is_duplicate else None,
+        status=IngestionJobStatus.SKIPPED if skip_reason else IngestionJobStatus.QUEUED,
+        skip_reason=skip_reason,
     )
 
 
@@ -673,6 +872,149 @@ def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
     )
 
 
+def _document_ingestion_segments(
+    detail: DocumentDetail,
+    jobs: list[IngestionJob],
+) -> list[IngestionSegment]:
+    """保存済み extraction/job から segment view を推定する。"""
+    source_profile = _source_profile_for_detail(detail)
+    page_start, page_end = _document_page_range(detail.extraction)
+    latest_job = max(jobs, key=lambda job: job.queued_at, default=None)
+    attempt_count = latest_job.attempt_count if latest_job is not None else 0
+    status = _segment_status_from_detail(detail, latest_job)
+    error_message = detail.error_message or (latest_job.error_message if latest_job else None)
+    return [
+        IngestionSegment(
+            segment_id=f"{detail.id}:source",
+            document_id=detail.id,
+            status=status,
+            parser_backend=_parser_backend_from_extraction(detail.extraction, source_profile),
+            parser_profile=source_profile.parser_profile,
+            page_start=page_start,
+            page_end=page_end,
+            attempt_count=attempt_count,
+            artifact_path=(
+                _extraction_artifact_path(detail.extraction) or detail.object_storage_path
+            ),
+            error_code="ingestion_error" if error_message else None,
+            error_message=error_message,
+        )
+    ]
+
+
+def _document_page_range(extraction: Mapping[str, object]) -> tuple[int | None, int | None]:
+    """extraction payload からページ範囲を推定する。"""
+    pages: set[int] = set()
+    raw_pages = extraction.get("pages")
+    if isinstance(raw_pages, list):
+        for page in raw_pages:
+            if isinstance(page, Mapping):
+                page_number = page.get("page_number")
+                if isinstance(page_number, int) and page_number >= 1:
+                    pages.add(page_number)
+    raw_elements = extraction.get("elements")
+    if isinstance(raw_elements, list):
+        for element in raw_elements:
+            if isinstance(element, Mapping):
+                page_number = element.get("page_number")
+                if isinstance(page_number, int) and page_number >= 1:
+                    pages.add(page_number)
+    raw_tables = extraction.get("tables")
+    if isinstance(raw_tables, list):
+        pages.update(_page_numbers_from_mappings(raw_tables))
+    raw_assets = extraction.get("assets")
+    if isinstance(raw_assets, list):
+        pages.update(_page_numbers_from_mappings(raw_assets))
+    if not pages:
+        return None, None
+    return min(pages), max(pages)
+
+
+def _page_numbers_from_mappings(items: list[object]) -> set[int]:
+    """tables/assets の first-class metadata からページ番号を集める。"""
+    pages: set[int] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        page_number = item.get("page_number")
+        if (
+            isinstance(page_number, int)
+            and not isinstance(page_number, bool)
+            and page_number >= 1
+        ):
+            pages.add(page_number)
+    return pages
+
+
+def _parser_backend_from_extraction(
+    extraction: Mapping[str, object],
+    source_profile: SourceProfile,
+) -> str:
+    """extraction quality/parser artifacts から parser backend を読む。"""
+    for container_name in ("quality_report", "parser_artifacts"):
+        container = extraction.get(container_name)
+        if isinstance(container, Mapping):
+            value = container.get("parser_backend")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return source_profile.parser_backend
+
+
+def _extraction_artifact_path(extraction: Mapping[str, object]) -> str | None:
+    """extraction payload から artifact cache path を読む。"""
+    artifacts = extraction.get("parser_artifacts")
+    if isinstance(artifacts, Mapping):
+        value = artifacts.get("extraction_artifact_path")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+async def _document_artifact_paths(
+    oracle: OracleClient,
+    detail: DocumentDetail,
+) -> list[str]:
+    """削除対象 document に紐づく抽出 artifact cache path を重複排除して返す。"""
+    paths: list[str] = []
+    if extraction_artifact_path := _extraction_artifact_path(detail.extraction):
+        paths.append(extraction_artifact_path)
+    try:
+        segments = await oracle.list_ingestion_segments(detail.id)
+    except Exception:
+        segments = []
+    for segment in segments:
+        if segment.artifact_path:
+            paths.append(segment.artifact_path)
+    original_path = detail.object_storage_path
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        normalized = path.strip()
+        if not normalized or normalized == original_path or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _segment_status_from_detail(
+    detail: DocumentDetail,
+    latest_job: IngestionJob | None,
+) -> str:
+    """document/job status を segment status に寄せる。"""
+    if latest_job is not None and latest_job.status in {
+        IngestionJobStatus.QUEUED,
+        IngestionJobStatus.RUNNING,
+        IngestionJobStatus.CANCELLED,
+    }:
+        return latest_job.status.value
+    if detail.status == FileStatus.ERROR:
+        return "FAILED"
+    if detail.status == FileStatus.INDEXED:
+        return "SUCCEEDED"
+    return detail.status.value
+
+
 async def _run_ingestion_job(
     job_id: str,
     *,
@@ -684,8 +1026,17 @@ async def _run_ingestion_job(
     job = await oracle.claim_ingestion_job(job_id, started_at=datetime.now(UTC))
     if job is None:
         return
+
+    async def is_cancelled() -> bool:
+        current = await oracle.get_ingestion_job(job_id)
+        return current is not None and current.status == IngestionJobStatus.CANCELLED
+
     try:
-        await _ingest_existing_document(job.document_id, force=force)
+        await _ingest_existing_document(
+            job.document_id,
+            force=force,
+            cancel_checker=is_cancelled,
+        )
     except HTTPException as exc:
         await _finish_ingestion_job_unless_cancelled(
             oracle,
@@ -700,6 +1051,13 @@ async def _run_ingestion_job(
                 "document_id": job.document_id,
                 "status_code": exc.status_code,
             },
+        )
+        if propagate_errors:
+            raise
+    except IngestionCancelledError:
+        logger.info(
+            "ingestion_job_cancelled",
+            extra={"job_id": job_id, "document_id": job.document_id},
         )
         if propagate_errors:
             raise

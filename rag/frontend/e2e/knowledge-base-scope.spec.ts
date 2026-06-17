@@ -35,7 +35,7 @@ test("検索は選択した知識ベースをリクエストへ含める", async
   await page.goto("/search");
 
   await page.getByLabel(/社内規程/).check();
-  await page.getByLabel("RAG 検索").fill("経費申請の承認フロー");
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("経費申請の承認フロー");
   await page.getByRole("button", { name: "検索" }).click();
 
   await expect.poll(() => searchPayload?.knowledge_base_ids).toEqual(["kb-1"]);
@@ -99,6 +99,8 @@ test("評価実行と比較実行は選択した知識ベースを使う", async
   await page.getByLabel(/社内規程/).check();
   await page.getByRole("button", { name: "評価実行" }).click();
   await expect.poll(() => runPayload?.knowledge_base_ids).toEqual(["kb-1"]);
+  await expect(page.getByText("Segment artifact 再抽出").first()).toBeVisible();
+  await expect(page.getByText("Segment artifact 再抽出: 1")).toBeVisible();
 
   await page.getByRole("button", { name: "比較実行" }).click();
   await expect.poll(() => {
@@ -206,9 +208,10 @@ function evaluationMetrics() {
       document_count: 1,
       table_document_count: 0,
       figure_document_count: 0,
+      segment_artifact_cache_miss_document_count: 1,
       long_document_count: 0,
-      risk_counts: { high: 0, medium: 0 },
-      warning_counts: {},
+      risk_counts: { high: 0, medium: 1 },
+      warning_counts: { segment_extraction_artifact_cache_miss: 1 },
       parser_profile_counts: {},
     },
     case_results: [

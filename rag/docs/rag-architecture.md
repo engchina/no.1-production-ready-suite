@@ -2,6 +2,8 @@
 
 このリポジトリは、data ingestion、chunking、indexing、hybrid retrieval、reranking、evaluation、observability、guardrails、deployment best practices をカバーする production-ready RAG reference implementation です。Backend は OCI Enterprise AI / OCI Generative AI / Oracle 26ai を直接使い、local / oci の実行モード切り替えは持ちません。
 
+Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memory Engineering](./aidb-memory-engineering.md) を正とする。検索 runtime は `依頼 → Business Context Pack → Retrieval Plan → AIDB Retrieval → Resolver / Verifier → Context Builder → Agent Memory Loop` の順に扱い、単純な vector 類似 chunk 投入に戻さない。
+
 ## パイプライン
 
 1. ドキュメントアップロード
@@ -63,8 +65,9 @@
    - `mode=hybrid|vector|keyword` を指定できる。hybrid は vector と keyword を Reciprocal Rank Fusion で統合し、RRF 定数は `RAG_RRF_K` で調整する。
    - retrieval 前に deterministic な query expansion を行い、請求書/invoice、保管/storage、図/figure などの業務同義語を最大 `RAG_QUERY_EXPANSION_MAX_VARIANTS` 件の query variant として検索する。元 query は rerank / LLM 生成に維持し、audit / trace には query 本文や展開語ではなく `query_variant_count` だけを残す。
    - 複数 query variant の検索結果は chunk id 単位で RRF 融合し、citation metadata には `query_fusion_score`、`query_variant_count`、`matched_query_variant_count` を低機密 metadata として付与する。
-   - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path` に対応し、retrieval 前に適用する。
+   - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path`、`source_acl`、`document_version` に対応し、retrieval 前に適用する。
    - `content_kind` は `text` / `list` / `table` / `figure` の完全一致、`section_title` / `section_path` は部分一致で使い、複雑文書の章節、表、図・画像説明だけに検索候補を絞れるようにする。
+   - `source_acl` と `document_version` は Oracle chunk metadata に対する完全一致 filter として使い、AIDB RAG の Business Context Pack で tenant / ACL / dataset / version を検索前に固定する。
    - keyword score は重複を除いた query token coverage として 0.0-1.0 に正規化する。
    - vector / keyword / hybrid の同点は document id、chunk index、chunk id で安定順にし、評価の再現性を保つ。
    - citation metadata には章節 metadata に加えて `retrieval_mode`、vector/keyword の rank/score、`rrf_k`、RRF score を含め、hybrid 召回の由来を query 本文なしで追跡できるようにする。
@@ -86,7 +89,18 @@
    - `RAG_CONTEXT_NEIGHBOR_WINDOW` が 1 以上の場合は、rerank anchor の同一 document 前後 chunk を Oracle の `chunk_index` で取得し、生成 context へ低優先で追加する。既定は 0 で無効。追加件数は `context_expanded_count`、citation metadata は `context_expanded`、`context_anchor_chunk_id`、`context_neighbor_distance` で追跡する。
    - `RAG_CONTEXT_COMPRESSION_ENABLED=true` の場合は、LLM context へ入れる前に query 関連 sentence / line を抽出して長い chunk を圧縮する。既定は無効。圧縮件数と節約文字数は `context_compressed_count` / `context_compression_saved_chars` に残し、citation metadata は `context_compressed`、`context_original_chars`、`context_compressed_chars` を持つ。query 本文や除外した本文は audit / trace に残さない。
 
-9. 回答生成
+9. AIDB Memory Engineering
+   - 検索 request ごとに `BusinessContextPack` を作る。tenant/user/role は raw 値を保存せず hash の有無だけを診断し、document/category/knowledge base scope、`source_acl`、`document_version` を非機密 metadata として固定する。
+   - `Memory Router / Plan Builder` は `RetrievalPlan` を作り、`evidence -> similar -> structure -> history` の `memory_sequence`、Oracle backend、scope key、evidence rule、termination criteria、gap handling を `SearchDiagnostics` と監査へ残す。Agent は plan 外の自由検索をしない。
+   - `AIDB Retrieval` は既存の Oracle 26ai Hybrid Vector Search / Oracle Text / GraphRAG-lite / Select AI 境界へ再マップする。`structure` は Select AI 専用 endpoint または GraphRAG-lite、`history` は Oracle 26ai の `rag_agent_memories` を使う Agent Memory Search として扱い、外部 memory store は導入しない。
+   - Agent Memory は `X-User-ID` / `X-RAG-Role-ID` / `X-RAG-Agent-ID` / `X-RAG-Thread-ID` を hash 化した scope がある request でのみ検索・保存する。`memory_text` は `VECTOR(1536, FLOAT32)` に保存し、HNSW + Oracle Text index を持つ。
+   - 回答後の Memory Loop は、guardrail 通過済み回答について query 原文ではなく「回答要約 + 根拠 ID」を `rag_agent_memories` へ writeback する。helpful / not helpful は `usefulness_score` の移動平均として評価できる。
+   - `Resolver / Verifier` は取得候補をそのまま根拠化せず、citation、scope、source ACL、version、contradiction metadata を確認する。ACL 不適合、旧版、矛盾、citation 欠落は context から除外し、件数と理由だけを診断・監査へ残す。
+   - `Context Builder` は LLM context を `Evidence`、`Support`、`Structure`、`History` に分ける。回答の主張を支える必須情報は `Evidence`、理解補助は `Support`、構造関係は `Structure`、継続文脈は `History` として label 付けする。Agent Memory は `History` として追加し、rerank で一次根拠を押し出さない。
+   - 検証済み chunk metadata には `memory_plan_id`、`context_role`、`resolver_verified`、`resolver_confidence`、`resolver_necessity`、`evidence_allowed` を付与する。
+   - 検証済み候補が 0 件の場合は LLM を呼ばず、no-results と warning を返す。これは「不足時に自由検索へ逃がさない」という Retrieval Plan の termination criteria である。
+
+10. 回答生成
    - LLM は **OCI Enterprise AI**。検索根拠だけを context として渡す。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - LLM 契約は `python -m app.rag.enterprise_ai_probe --surface llm` で個別に検証できる。回答本文は probe artifact に保存せず、parse 成功と文字数だけを確認する。
@@ -161,6 +175,29 @@ CREATE INDEX rag_chunks_text_idx
 CREATE INDEX rag_chunks_tenant_document_idx
     ON rag_chunks (tenant_id_hash, document_id, chunk_index);
 
+CREATE TABLE rag_agent_memories (
+    memory_id        VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash   CHAR(64),
+    user_id_hash     CHAR(64),
+    role_id_hash     CHAR(64),
+    agent_id_hash    CHAR(64),
+    thread_id_hash   CHAR(64),
+    trace_id         VARCHAR2(64) NOT NULL,
+    memory_text      CLOB NOT NULL,
+    metadata_json    JSON,
+    embedding        VECTOR(1536, FLOAT32) NOT NULL,
+    usefulness_score NUMBER(8, 6) DEFAULT 0.5 NOT NULL,
+    eval_count       NUMBER(10) DEFAULT 0 NOT NULL,
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+);
+
+CREATE VECTOR INDEX rag_agent_memories_embedding_hnsw_idx
+    ON rag_agent_memories (embedding)
+    ORGANIZATION INMEMORY NEIGHBOR GRAPH
+    DISTANCE COSINE
+    WITH TARGET ACCURACY 95;
+
 CREATE TABLE rag_search_audit (
     audit_id              VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
     event_type            VARCHAR2(32) DEFAULT 'rag.search' NOT NULL,
@@ -169,10 +206,11 @@ CREATE TABLE rag_search_audit (
     tenant_id_hash        CHAR(64),
     user_id_hash          CHAR(64),
     outcome               VARCHAR2(32) NOT NULL,
-    mode                  VARCHAR2(16) NOT NULL,
+    search_mode           VARCHAR2(16) NOT NULL,
     query_hash            CHAR(64) NOT NULL,
     query_chars           NUMBER(10) NOT NULL,
     filter_keys           JSON,
+    memory_plan_id        VARCHAR2(32),
     top_k                 NUMBER(10),
     rerank_top_n          NUMBER(10),
     query_variant_count   NUMBER(10) DEFAULT 1 NOT NULL,
@@ -186,6 +224,15 @@ CREATE TABLE rag_search_audit (
     context_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_compressed_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_compression_saved_chars NUMBER(10) DEFAULT 0 NOT NULL,
+    agent_memory_retrieved_count NUMBER(10) DEFAULT 0 NOT NULL,
+    agent_memory_writeback_count NUMBER(10) DEFAULT 0 NOT NULL,
+    agent_memory_writeback_status VARCHAR2(32) DEFAULT 'skipped' NOT NULL,
+    evidence_count        NUMBER(10) DEFAULT 0 NOT NULL,
+    support_count         NUMBER(10) DEFAULT 0 NOT NULL,
+    structure_count       NUMBER(10) DEFAULT 0 NOT NULL,
+    history_count         NUMBER(10) DEFAULT 0 NOT NULL,
+    resolver_rejected_count NUMBER(10) DEFAULT 0 NOT NULL,
+    insufficient_context_count NUMBER(10) DEFAULT 0 NOT NULL,
     citation_count        NUMBER(10) DEFAULT 0 NOT NULL,
     context_chars         NUMBER(10) DEFAULT 0 NOT NULL,
     context_window_chars  NUMBER(10),

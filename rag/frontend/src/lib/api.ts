@@ -33,7 +33,23 @@ export type CitationFeedbackReason =
   | "not_relevant"
   | "answer_untrusted";
 export type UploadIngestionMode = "manual" | "auto";
-export type SourceModality = "pdf" | "image" | "text" | "office" | "unknown";
+export type SourceModality =
+  | "pdf"
+  | "image"
+  | "text"
+  | "html"
+  | "email"
+  | "office"
+  | "audio"
+  | "unknown";
+export type SourcePreviewKind =
+  | "pdf"
+  | "image"
+  | "text"
+  | "html"
+  | "email"
+  | "office"
+  | "unsupported";
 export type IngestionJobStatus =
   | "QUEUED"
   | "RUNNING"
@@ -55,6 +71,9 @@ export type EvaluationMetricName =
   | "mrr"
   | "answer_keyword_hit_rate"
   | "groundedness_pass_rate"
+  | "citation_traceability_coverage"
+  | "bbox_citation_coverage"
+  | "element_lineage_coverage"
   | "faithfulness"
   | "context_precision"
   | "context_recall"
@@ -70,6 +89,9 @@ export type ModelSettingsTestTargetType =
 export type UploadStorageBackend = "local" | "oci";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
 export type OciConfigTestStatus = "success" | "failed";
+export type ParserAdapterBackend = "local" | "auto" | "docling" | "marker" | "unstructured";
+export type ParserAdapterBackendName = "docling" | "marker" | "unstructured";
+export type ParserAdapterStatus = "active" | "available" | "disabled" | "ignored" | "missing";
 
 export interface ApiResponse<T> {
   data: T | null;
@@ -120,8 +142,20 @@ export interface DashboardIngestionQuality {
   structured_document_count: number;
   element_count: number;
   table_count: number;
+  figure_count: number;
+  formula_count: number;
   list_count: number;
   page_count: number;
+  low_confidence_count: number;
+  fallback_document_count: number;
+  failed_segment_document_count: number;
+  segment_artifact_cache_miss_document_count: number;
+  long_document_count: number;
+  average_page_coverage: number;
+  risk_counts: Record<string, number>;
+  parser_profile_counts: Record<string, number>;
+  parser_backend_counts: Record<string, number>;
+  warning_counts: Record<string, number>;
   chunk_profile_counts: Record<string, number>;
   content_kind_counts: Record<string, number>;
 }
@@ -181,8 +215,12 @@ export interface SourceProfile {
   content_sha256: string;
   modality: SourceModality;
   parser_profile: string;
+  parser_backend: string;
+  parser_version: string;
+  preview_kind: SourcePreviewKind;
   text_charset: string | null;
   duplicate_of_document_id: string | null;
+  unsupported_reason: string | null;
   quality_status: "ready" | "warning" | string;
   quality_warnings: string[];
 }
@@ -221,10 +259,53 @@ export interface DocumentElement {
   kind: string;
   text: string;
   order: number;
+  element_id?: string | null;
+  parent_id?: string | null;
+  content_kind?: string | null;
+  source_parser?: string | null;
   page_number?: number | null;
   bbox?: number[] | null;
   section_path?: string[];
   confidence?: number | null;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ExtractionPage {
+  page_number: number;
+  label?: string | null;
+  width?: number | null;
+  height?: number | null;
+  rotation?: number | null;
+  element_ids: string[];
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ExtractionTableCell {
+  row: number;
+  col: number;
+  text: string;
+  row_span: number;
+  col_span: number;
+  bbox?: number[] | null;
+  confidence?: number | null;
+}
+
+export interface ExtractionTable {
+  table_id: string;
+  element_id?: string | null;
+  page_number?: number | null;
+  caption?: string | null;
+  cells: ExtractionTableCell[];
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ExtractionAsset {
+  asset_id: string;
+  kind: string;
+  object_path?: string | null;
+  page_number?: number | null;
+  bbox?: number[] | null;
+  alt_text?: string | null;
   metadata?: Record<string, string | number | boolean | null>;
 }
 
@@ -234,6 +315,10 @@ export interface StructuredExtraction {
   confidence: number;
   warnings: string[];
   elements: DocumentElement[];
+  pages: ExtractionPage[];
+  tables: ExtractionTable[];
+  assets: ExtractionAsset[];
+  parser_artifacts: Record<string, string | number | boolean | null>;
 }
 
 export interface DocumentDetail extends DocumentSummary {
@@ -247,6 +332,8 @@ export interface DocumentDeleteResult {
   file_name: string;
   object_storage_path: string | null;
   object_deleted: boolean;
+  artifact_deleted_count: number;
+  artifact_delete_failed_count: number;
 }
 
 export interface UploadResult {
@@ -262,6 +349,43 @@ export interface UploadResult {
   ingestion_job: IngestionJob | null;
 }
 
+export interface BatchUploadFailedItem {
+  file_name: string;
+  status_code: number;
+  message: string;
+  source_profile: SourceProfile | null;
+}
+
+export interface DocumentChunkView {
+  document_id: string;
+  chunk_id: string;
+  chunk_index: number;
+  text: string;
+  page_start: number | null;
+  page_end: number | null;
+  bbox: number[] | null;
+  section_path: string | null;
+  content_kind: string | null;
+  chunk_group_id: string | null;
+  source_parser: string | null;
+  element_ids: string[];
+  metadata: Record<string, string | number | boolean | null>;
+}
+
+export interface IngestionSegment {
+  segment_id: string;
+  document_id: string;
+  status: string;
+  parser_backend: string;
+  parser_profile: string;
+  page_start: number | null;
+  page_end: number | null;
+  attempt_count: number;
+  artifact_path: string | null;
+  error_code: string | null;
+  error_message: string | null;
+}
+
 export interface DocumentStats {
   total: number;
   by_status: Partial<Record<FileStatus, number>>;
@@ -269,8 +393,10 @@ export interface DocumentStats {
 
 export interface BatchUploadResult {
   items: UploadResult[];
+  failed_items: BatchUploadFailedItem[];
   total_count: number;
   uploaded_count: number;
+  failed_count: number;
   queued_count: number;
   skipped_count: number;
 }
@@ -422,6 +548,9 @@ export interface EvaluationThresholds {
   mrr?: number | null;
   answer_keyword_hit_rate?: number | null;
   groundedness_pass_rate?: number | null;
+  citation_traceability_coverage?: number | null;
+  bbox_citation_coverage?: number | null;
+  element_lineage_coverage?: number | null;
   faithfulness?: number | null;
   context_precision?: number | null;
   context_recall?: number | null;
@@ -460,6 +589,9 @@ export interface EvaluationCaseResult {
   context_recall: number;
   response_relevancy: number;
   noise_sensitivity: number;
+  citation_traceability_coverage: number;
+  bbox_citation_coverage: number;
+  element_lineage_coverage: number;
   guardrail_warnings: string[];
   failure_reasons: EvaluationFailureReason[];
   diagnostics: SearchDiagnostics;
@@ -488,6 +620,9 @@ export interface EvaluationMetrics {
   context_recall: number;
   response_relevancy: number;
   noise_sensitivity: number;
+  citation_traceability_coverage: number;
+  bbox_citation_coverage: number;
+  element_lineage_coverage: number;
   passed: boolean;
   threshold_failures: EvaluationThresholdFailure[];
   failure_reason_counts: Partial<Record<EvaluationFailureReason, number>>;
@@ -499,7 +634,13 @@ export interface EvaluationIngestionQualitySummary {
   document_count: number;
   table_document_count: number;
   figure_document_count: number;
+  formula_document_count: number;
+  low_confidence_document_count: number;
+  fallback_document_count: number;
+  failed_segment_document_count: number;
+  segment_artifact_cache_miss_document_count: number;
   long_document_count: number;
+  average_page_coverage: number;
   warning_counts: Record<string, number>;
   risk_counts: Record<string, number>;
   parser_profile_counts: Record<string, number>;
@@ -694,6 +835,25 @@ export interface UploadStorageSettingsUpdate {
   local_storage_dir: string;
   object_storage_namespace?: string;
   object_storage_bucket: string;
+}
+
+// --- 設定: Parser adapter ---
+export interface ParserAdapterStatusData {
+  backend: ParserAdapterBackendName;
+  package_name: string;
+  enabled: boolean;
+  selected: boolean;
+  installed: boolean;
+  status: ParserAdapterStatus;
+  version: string | null;
+  warning_code: string | null;
+}
+
+export interface ParserAdapterSettingsData {
+  adapter_backend: ParserAdapterBackend;
+  effective_order: ParserAdapterBackendName[];
+  adapters: ParserAdapterStatusData[];
+  config_source: "runtime";
 }
 
 // --- 設定: OCI config ---
@@ -947,6 +1107,10 @@ export const api = {
     return requestDegradable<Page<DocumentSummary>>(`/api/documents${qs ? `?${qs}` : ""}`);
   },
   getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  listDocumentChunks: (id: string) =>
+    request<DocumentChunkView[]>(`/api/documents/${encodeURIComponent(id)}/chunks`),
+  listDocumentIngestionSegments: (id: string) =>
+    request<IngestionSegment[]>(`/api/documents/${encodeURIComponent(id)}/ingestion-segments`),
   deleteDocument: (id: string) =>
     request<DocumentDeleteResult>(`/api/documents/${encodeURIComponent(id)}`, {
       method: "DELETE",
@@ -1139,6 +1303,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  getParserAdapterSettings: () =>
+    request<ParserAdapterSettingsData>("/api/settings/parser-adapters"),
 
   // 設定: OCI config
   getOciSettings: () => request<OciSettingsData>("/api/settings/oci"),

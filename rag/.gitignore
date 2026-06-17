@@ -236,6 +236,8 @@ frontend/playwright-report/
 frontend/.vite/
 
 # Local agent memory / workspace notes
+.claude/
+.uv-cache/
 HEARTBEAT.md
 IDENTITY.md
 SOUL.md

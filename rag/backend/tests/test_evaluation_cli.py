@@ -164,6 +164,9 @@ def test_evaluation_gate_cli_writes_redacted_trend_output(
     assert trend["kind"] == "compare"
     assert trend["best_experiment_id"] == "hybrid-deep"
     assert trend["metrics"]["case_count"] == 1
+    assert trend["metrics"]["citation_traceability_coverage"] == 1.0
+    assert trend["metrics"]["bbox_citation_coverage"] == 0.75
+    assert trend["metrics"]["element_lineage_coverage"] == 1.0
     assert trend["experiments"][0]["id"] == "hybrid-deep"
     trend_text = json.dumps(trend, ensure_ascii=False)
     assert "承認条件はいくらですか" not in trend_text
@@ -456,6 +459,9 @@ def _metrics_payload(*, passed: bool, error_count: int = 0) -> dict[str, Any]:
         "mrr": 1.0,
         "answer_keyword_hit_rate": 1.0,
         "groundedness_pass_rate": 1.0 if passed else 0.0,
+        "citation_traceability_coverage": 1.0 if passed else 0.5,
+        "bbox_citation_coverage": 0.75 if passed else 0.25,
+        "element_lineage_coverage": 1.0 if passed else 0.5,
         "passed": passed,
         "threshold_failures": failures,
         "case_results": [],

@@ -15,9 +15,21 @@ SUPPORTED_SEARCH_FILTER_KEYS = {
     "content_kind",
     "section_title",
     "section_path",
+    "source_acl",
+    "document_version",
 }
 SUPPORTED_SEARCH_STATUS_FILTERS = {"UPLOADED", "INGESTING", "INDEXED", "ERROR"}
-SUPPORTED_CONTENT_KIND_FILTERS = {"text", "list", "table", "figure"}
+SUPPORTED_CONTENT_KIND_FILTERS = {
+    "text",
+    "list",
+    "table",
+    "figure",
+    "equation",
+    "code",
+    "email",
+    "slide",
+    "sheet",
+}
 
 
 class SearchMode(StrEnum):
@@ -116,8 +128,13 @@ class SearchDiagnostics(BaseModel):
     mode: str = ""
     retrieval_strategy: str = "hybrid"
     route_reason: str = "default_hybrid"
+    memory_plan_id: str | None = None
     graph_hit_count: int = 0
     fallback_reason: str | None = None
+    business_context: dict[str, object] = Field(default_factory=dict)
+    retrieval_plan: dict[str, object] = Field(default_factory=dict)
+    retrieved_context_pack: dict[str, object] = Field(default_factory=dict)
+    context_builder: dict[str, object] = Field(default_factory=dict)
     stream_stage_timings: dict[str, float] = Field(default_factory=dict)
     top_k: int = 0
     rerank_top_n: int = 0
@@ -129,6 +146,15 @@ class SearchDiagnostics(BaseModel):
     context_expanded_count: int = 0
     context_compressed_count: int = 0
     context_compression_saved_chars: int = 0
+    agent_memory_retrieved_count: int = 0
+    agent_memory_writeback_count: int = 0
+    agent_memory_writeback_status: str = "skipped"
+    evidence_count: int = 0
+    support_count: int = 0
+    structure_count: int = 0
+    history_count: int = 0
+    resolver_rejected_count: int = 0
+    insufficient_context_count: int = 0
     citation_count: int = 0
     context_chars: int = 0
     context_window_chars: int = 0
@@ -199,6 +225,8 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
             continue
         if key == "status":
             normalized[key] = cleaned.upper()
+        elif key == "content_kind":
+            normalized[key] = cleaned.casefold()
         elif key == "knowledge_base_id":
             formatted_ids = format_search_id_filter(parse_search_id_filter(cleaned))
             if formatted_ids:

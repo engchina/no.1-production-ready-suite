@@ -11,6 +11,7 @@ from app.clients.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
     EnterpriseAiTimeoutError,
     EnterpriseAiUnsupportedInputError,
+    EnterpriseAiValidationError,
     OciEnterpriseAiClient,
     _raise_for_status_with_body,
 )
@@ -52,6 +53,8 @@ async def test_oci_vlm_posts_structured_extraction_payload() -> None:
     payload = transport.calls[0]["payload"]
     assert payload["model"] == "enterprise-vlm"
     assert payload["instructions"]
+    assert "bbox" in payload["instructions"]
+    assert "推測で作らない" in payload["instructions"]
     input_payload = payload["input"]
     assert isinstance(input_payload, list)
     content = input_payload[0]["content"]
@@ -64,9 +67,21 @@ async def test_oci_vlm_posts_structured_extraction_payload() -> None:
     elements_schema = text_format["schema"]["properties"]["elements"]
     assert elements_schema["maxItems"] == 120
     element_properties = elements_schema["items"]["properties"]
-    assert "text" not in element_properties["kind"]["enum"]
-    assert "bbox" not in element_properties
+    assert "text" in element_properties["kind"]["enum"]
+    assert "equation" in element_properties["kind"]["enum"]
+    assert "bbox" in element_properties
+    assert "element_id" in element_properties
+    assert "parent_id" in element_properties
+    assert "content_kind" in element_properties
+    assert "confidence" in element_properties
     assert "metadata" not in element_properties
+    assert "pages" in text_format["schema"]["properties"]
+    assert "tables" in text_format["schema"]["properties"]
+    assert "assets" in text_format["schema"]["properties"]
+    table_schema = text_format["schema"]["properties"]["tables"]["items"]
+    assert "cells" in table_schema["properties"]
+    cell_properties = table_schema["properties"]["cells"]["items"]["properties"]
+    assert "bbox" in cell_properties
     assert payload["max_output_tokens"] == 65536
     assert transport.deletes[0]["url"] == "https://enterprise-ai.example/files/file-test"
 
@@ -389,6 +404,58 @@ async def test_oci_vlm_coerces_string_section_path_in_elements() -> None:
 
     elements = cast(list[dict[str, Any]], result["elements"])
     assert elements[0]["section_path"] == ["第1章", "1.2 概要"]
+
+
+async def test_oci_vlm_reports_schema_validation_details() -> None:
+    """VLM の schema 不整合は ValidationError 型名だけでなく失敗項目を返す。"""
+    transport = FakeEnterpriseAiTransport(
+        {
+            "output": (
+                '{"raw_text":"本文","document_type":"資料",'
+                '"confidence":1.4,"warnings":[]}'
+            )
+        }
+    )
+    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+
+    with pytest.raises(EnterpriseAiValidationError, match="confidence") as exc_info:
+        await client.extract_with_vlm(b"document", "prompt")
+
+    assert getattr(exc_info.value, "safe_for_user", False) is True
+    assert "StructuredExtraction schema" in str(exc_info.value)
+    assert "失敗項目" in str(exc_info.value)
+
+
+async def test_oci_vlm_retries_schema_validation_with_exponential_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """一時的な VLM schema 不整合は指数 backoff で再取得する。"""
+    delays: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("app.clients.oci_enterprise_ai.asyncio.sleep", fake_sleep)
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_max_retries = 2
+    transport = SequentialEnterpriseAiTransport(
+        [
+            {"output": '{"raw_text":"本文","confidence":1.4}'},
+            {
+                "output": (
+                    '{"raw_text":"再取得した本文","document_type":"資料",'
+                    '"confidence":0.74,"warnings":[]}'
+                )
+            },
+        ]
+    )
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    result = await client.extract_with_vlm(b"png-bytes", "OCR", mime_type="image/png")
+
+    assert result["raw_text"] == "再取得した本文"
+    assert len(transport.calls) == 2
+    assert delays == [0.25]
 
 
 async def test_oci_vlm_raises_actionable_error_when_file_input_unsupported() -> None:
@@ -982,6 +1049,33 @@ class FakeEnterpriseAiTransport:
     ) -> Mapping[str, Any]:
         self.deletes.append({"url": url, "headers": dict(headers), "timeout": timeout})
         return {"id": "file-test", "deleted": True}
+
+
+class SequentialEnterpriseAiTransport(FakeEnterpriseAiTransport):
+    """JSON POST ごとに別 response を返す fake。"""
+
+    def __init__(self, responses: list[Mapping[str, Any]]) -> None:
+        super().__init__({})
+        self._responses = responses
+
+    async def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, Any],
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> Mapping[str, Any]:
+        self.calls.append(
+            {
+                "url": url,
+                "payload": dict(payload),
+                "headers": dict(headers),
+                "timeout": timeout,
+            }
+        )
+        index = min(len(self.calls) - 1, len(self._responses) - 1)
+        return self._responses[index]
 
 
 class TimeoutEnterpriseAiTransport(FakeEnterpriseAiTransport):

@@ -52,6 +52,12 @@ class StubPipeline:
                     chunk_id="doc-1:0",
                     text="承認条件: 120000",
                     score=1.0,
+                    metadata={
+                        "page_start": 2,
+                        "page_end": 2,
+                        "element_ids": "el-approval",
+                        "bbox": "[0.1, 0.2, 0.4, 0.3]",
+                    },
                 )
             ],
             trace_id=trace_id,
@@ -66,6 +72,13 @@ class StubPipeline:
                 citation_count=1,
             ),
         )
+
+
+class EmptyQualitySource:
+    """評価 runner の補助的な取込品質サマリを空で返す。"""
+
+    async def list_document_extractions(self) -> list[dict[str, object]]:
+        return []
 
 
 async def test_evaluation_runner_computes_metrics() -> None:
@@ -96,6 +109,9 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert metrics.context_recall == 1.0
     assert metrics.response_relevancy >= 0.8
     assert metrics.noise_sensitivity == 1.0
+    assert metrics.citation_traceability_coverage == 1.0
+    assert metrics.bbox_citation_coverage == 1.0
+    assert metrics.element_lineage_coverage == 1.0
     assert metrics.passed is True
     assert metrics.threshold_failures == []
     assert metrics.failure_reason_counts == {}
@@ -120,6 +136,9 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert result.context_recall == 1.0
     assert result.response_relevancy >= 0.8
     assert result.noise_sensitivity == 1.0
+    assert result.citation_traceability_coverage == 1.0
+    assert result.bbox_citation_coverage == 1.0
+    assert result.element_lineage_coverage == 1.0
     assert result.guardrail_warnings == []
     assert result.failure_reasons == []
     assert result.diagnostics.top_k == 5
@@ -155,28 +174,55 @@ class QualitySource:
             {
                 "quality_report": {
                     "parser_profile": "enterprise_ai_pdf_layout",
+                    "parser_backend": "enterprise_ai",
+                    "fallback_used": False,
                     "risk_level": "medium",
                     "page_count": 4,
+                    "page_coverage": 0.75,
                     "table_count": 2,
                     "figure_count": 0,
+                    "formula_count": 1,
                     "element_count": 12,
+                    "low_confidence_count": 0,
+                    "failed_segment_count": 0,
                     "long_document": False,
-                    "quality_warnings": ["table_structure_review"],
+                    "quality_warnings": ["table_structure_review", "formula_review"],
                 }
             },
             {
                 "quality_report": {
                     "parser_profile": "enterprise_ai_image_ocr",
+                    "parser_backend": "enterprise_ai",
+                    "fallback_used": True,
                     "risk_level": "high",
                     "page_count": 35,
+                    "page_coverage": 0.5,
                     "table_count": 0,
                     "figure_count": 3,
+                    "formula_count": 0,
                     "element_count": 40,
+                    "low_confidence_count": 2,
+                    "failed_segment_count": 1,
                     "long_document": True,
-                    "quality_warnings": ["figure_ocr_review", "long_document"],
+                    "quality_warnings": [
+                        "figure_ocr_review",
+                        "long_document",
+                        "low_confidence_elements",
+                        "failed_segments",
+                        "parser_fallback_used",
+                        "segment_extraction_artifact_cache_miss",
+                    ],
                 }
             },
         ]
+
+
+class SlowQualitySource:
+    """補助的な取込品質サマリが遅いケースを再現する fake。"""
+
+    async def list_document_extractions(self) -> list[dict[str, object]]:
+        await asyncio.sleep(1)
+        return [{"quality_report": {"risk_level": "high"}}]
 
 
 async def test_evaluation_runner_includes_ingestion_quality_summary() -> None:
@@ -193,17 +239,50 @@ async def test_evaluation_runner_includes_ingestion_quality_summary() -> None:
     assert quality.document_count == 2
     assert quality.table_document_count == 1
     assert quality.figure_document_count == 1
+    assert quality.formula_document_count == 1
+    assert quality.low_confidence_document_count == 1
+    assert quality.fallback_document_count == 1
+    assert quality.failed_segment_document_count == 1
+    assert quality.segment_artifact_cache_miss_document_count == 1
     assert quality.long_document_count == 1
+    assert quality.average_page_coverage == 0.625
     assert quality.warning_counts == {
         "table_structure_review": 1,
+        "formula_review": 1,
         "figure_ocr_review": 1,
         "long_document": 1,
+        "low_confidence_elements": 1,
+        "failed_segments": 1,
+        "parser_fallback_used": 1,
+        "segment_extraction_artifact_cache_miss": 1,
     }
     assert quality.risk_counts == {"low": 0, "medium": 1, "high": 1}
     assert quality.parser_profile_counts == {
         "enterprise_ai_pdf_layout": 1,
         "enterprise_ai_image_ocr": 1,
     }
+
+
+async def test_evaluation_runner_times_out_ingestion_quality_summary(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """取込品質サマリが遅くても evaluation 本体は成功として返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "db_read_timeout_seconds", 0.001)
+    runner = EvaluationRunner(
+        pipeline=StubPipeline(),
+        quality_source=SlowQualitySource(),
+        settings=settings,
+    )
+
+    metrics = await runner.run(
+        cases=[EvaluationCase(id="case-quality-timeout", query="承認条件")],
+        top_k=5,
+        rerank_top_n=3,
+    )
+
+    assert metrics.error_count == 0
+    assert metrics.ingestion_quality.document_count == 0
 
 
 class DuplicateChunkPipeline:
@@ -292,6 +371,9 @@ async def test_evaluation_runner_marks_threshold_gate_passed() -> None:
             context_precision=1.0,
             context_recall=1.0,
             noise_sensitivity=1.0,
+            citation_traceability_coverage=1.0,
+            bbox_citation_coverage=1.0,
+            element_lineage_coverage=1.0,
         ),
     )
 
@@ -325,6 +407,9 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
             context_recall=0.9,
             response_relevancy=0.9,
             noise_sensitivity=0.9,
+            citation_traceability_coverage=0.9,
+            bbox_citation_coverage=0.9,
+            element_lineage_coverage=0.9,
         ),
     )
 
@@ -343,6 +428,9 @@ async def test_evaluation_runner_reports_threshold_failures() -> None:
         ("context_recall", 0.0, 0.9),
         ("response_relevancy", 0.0, 0.9),
         ("noise_sensitivity", 0.32, 0.9),
+        ("citation_traceability_coverage", 0.0, 0.9),
+        ("bbox_citation_coverage", 0.0, 0.9),
+        ("element_lineage_coverage", 0.0, 0.9),
     ]
 
 
@@ -659,6 +747,7 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
 
     monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
     runner = EvaluationRunner(
+        quality_source=EmptyQualitySource(),
         settings=Settings.model_construct(
             rag_search_timeout_seconds=30.0,
             rag_rrf_k=60,
@@ -673,7 +762,7 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
             rag_query_expansion_enabled=True,
             rag_query_expansion_max_variants=3,
             oracle_vector_target_accuracy=95,
-        )
+        ),
     )
 
     comparison = await runner.compare(

@@ -27,8 +27,23 @@ class SourceModality(StrEnum):
     PDF = "pdf"
     IMAGE = "image"
     TEXT = "text"
+    HTML = "html"
+    EMAIL = "email"
     OFFICE = "office"
+    AUDIO = "audio"
     UNKNOWN = "unknown"
+
+
+class SourcePreviewKind(StrEnum):
+    """原本プレビューの既定表示種別。"""
+
+    PDF = "pdf"
+    IMAGE = "image"
+    TEXT = "text"
+    HTML = "html"
+    EMAIL = "email"
+    OFFICE = "office"
+    UNSUPPORTED = "unsupported"
 
 
 class SourceProfile(BaseModel):
@@ -43,10 +58,23 @@ class SourceProfile(BaseModel):
     content_sha256: str
     modality: SourceModality
     parser_profile: str
+    parser_backend: str = "enterprise_ai"
+    parser_version: str = "v1"
+    preview_kind: SourcePreviewKind = SourcePreviewKind.UNSUPPORTED
     text_charset: str | None = None
     duplicate_of_document_id: str | None = None
+    unsupported_reason: str | None = None
     quality_status: str = "ready"
     quality_warnings: list[str] = Field(default_factory=list)
+
+
+class BatchUploadFailedItem(BaseModel):
+    """batch upload で個別に失敗したファイル。"""
+
+    file_name: str
+    status_code: int
+    message: str
+    source_profile: SourceProfile | None = None
 
 
 class IngestionJobStatus(StrEnum):
@@ -121,10 +149,46 @@ class BatchUploadResult(BaseModel):
     """複数ファイル upload の結果。"""
 
     items: list[UploadResult] = Field(default_factory=list)
+    failed_items: list[BatchUploadFailedItem] = Field(default_factory=list)
     total_count: int = 0
     uploaded_count: int = 0
+    failed_count: int = 0
     queued_count: int = 0
     skipped_count: int = 0
+
+
+class DocumentChunkView(BaseModel):
+    """UI で chunk/citation を可視化するための非 embedding chunk view。"""
+
+    document_id: str
+    chunk_id: str
+    chunk_index: int = 0
+    text: str
+    page_start: int | None = None
+    page_end: int | None = None
+    bbox: list[float] | None = None
+    section_path: str | None = None
+    content_kind: str | None = None
+    chunk_group_id: str | None = None
+    source_parser: str | None = None
+    element_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+class IngestionSegment(BaseModel):
+    """文書取込 segment の checkpoint/status view。"""
+
+    segment_id: str
+    document_id: str
+    status: str
+    parser_backend: str = "enterprise_ai"
+    parser_profile: str = "enterprise_ai_generic"
+    page_start: int | None = None
+    page_end: int | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    artifact_path: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class DocumentDeleteResult(BaseModel):
@@ -134,6 +198,8 @@ class DocumentDeleteResult(BaseModel):
     file_name: str
     object_storage_path: str | None = None
     object_deleted: bool = False
+    artifact_deleted_count: int = 0
+    artifact_delete_failed_count: int = 0
 
 
 class DocumentStats(BaseModel):

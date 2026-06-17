@@ -36,8 +36,30 @@ test("Dashboard で取込品質を確認できる", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "取込品質" })).toBeVisible();
   await expect(page.getByText("75%")).toBeVisible();
   await expect(page.getByText("3/4 文書")).toBeVisible();
-  await expect(page.getByText("structure_v1")).toBeVisible();
-  await expect(page.getByTitle("table")).toBeVisible();
+  await expect(page.getByText("構造メトリクス")).toBeVisible();
+  await expect(page.getByText("図", { exact: true })).toBeVisible();
+  await expect(page.getByText("数式", { exact: true })).toBeVisible();
+  await expect(page.getByText("品質ヘルス")).toBeVisible();
+  await expect(page.getByText("ページ網羅率", { exact: true })).toBeVisible();
+  await expect(page.getByText("88%", { exact: true })).toBeVisible();
+  await expect(page.getByText("フォールバック", { exact: true })).toBeVisible();
+  const segmentArtifactMetric = page.getByText("Segment artifact 再抽出", { exact: true });
+  await segmentArtifactMetric.scrollIntoViewIfNeeded();
+  await expect(segmentArtifactMetric).toBeVisible();
+  const parserBackend = page.getByText("解析 backend", { exact: true });
+  await parserBackend.scrollIntoViewIfNeeded();
+  await expect(parserBackend).toBeVisible();
+  await expect(page.getByText("ローカル partition", { exact: true })).toBeVisible();
+  const chunkProfile = page.getByText("structure_v1", { exact: true });
+  await chunkProfile.scrollIntoViewIfNeeded();
+  await expect(chunkProfile).toBeVisible();
+  const tableKind = page.getByTitle("table");
+  await tableKind.scrollIntoViewIfNeeded();
+  await expect(tableKind).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(page.getByRole("heading", { name: "取込品質" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -46,13 +68,16 @@ test("文書詳細で構造化抽出要素と raw text を確認できる", asyn
 
   await page.goto("/documents/doc-1");
 
-  await expect(page.getByRole("heading", { name: "抽出本文" })).toBeVisible();
-  await expect(page.getByText("構造化要素")).toBeVisible();
-  await expect(page.getByText("見出し")).toBeVisible();
-  await expect(page.getByText("p.2")).toBeVisible();
-  await expect(page.getByText("経費申請 > 料金表")).toBeVisible();
-  await expect(page.getByText("| 交通費 | 1000 |")).toBeVisible();
-  await expect(page.getByText("本文テキスト")).toBeVisible();
+  const extractionPanel = page
+    .getByRole("heading", { name: "抽出本文" })
+    .locator("xpath=ancestor::section[1]");
+  await expect(extractionPanel).toBeVisible();
+  await expect(extractionPanel.getByText("構造化要素")).toBeVisible();
+  await expect(extractionPanel.getByText("見出し")).toBeVisible();
+  await expect(extractionPanel.getByText("p.2", { exact: true })).toBeVisible();
+  await expect(extractionPanel.getByText("経費申請 > 料金表")).toBeVisible();
+  await expect(extractionPanel.getByText("| 交通費 | 1000 |")).toBeVisible();
+  await expect(extractionPanel.getByText("本文テキスト")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -75,6 +100,7 @@ test("文書詳細で所属知識ベースを更新できる", async ({ page }) 
 
 test("検索引用で構造 metadata chip を確認できる", async ({ page }) => {
   let feedbackPayload: Record<string, unknown> | null = null;
+  await mockDocumentDetail(page);
   await page.route("**/api/search/stream", async (route) => {
     await route.fulfill({
       status: 200,
@@ -100,7 +126,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   });
 
   await page.goto("/search");
-  await page.getByLabel("RAG 検索").fill("料金表を確認");
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
   await page.getByRole("button", { name: "検索" }).click();
 
   await expect(page.getByRole("heading", { name: /引用/ })).toBeVisible();
@@ -109,6 +135,11 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await expect(citation.locator("dl").getByText("表", { exact: true })).toBeVisible();
   await expect(citation.getByText("経費申請 > 料金表")).toBeVisible();
   await expect(citation.getByText("structure_v1")).toBeVisible();
+  const previewLink = citation.getByRole("link", { name: "policy.txt の引用位置を開く" });
+  await expect(previewLink).toHaveAttribute(
+    "href",
+    /\/documents\/doc-1\?chunk_id=doc-1%3A1&element_id=tbl-1/
+  );
   await citation.getByRole("button", { name: "この引用は役に立った" }).click();
   await expect.poll(() => feedbackPayload).toEqual({
     trace_id: "trace-1",
@@ -118,6 +149,16 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
     reason: null,
   });
   await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
+  await previewLink.click();
+  await expect(page).toHaveURL(/\/documents\/doc-1\?chunk_id=doc-1%3A1&element_id=tbl-1/);
+  const chunkPanel = page
+    .getByRole("heading", { name: "Chunk / Citation" })
+    .locator("xpath=ancestor::section[1]");
+  const linkedChunkButton = chunkPanel.getByRole("button", { name: /料金表の交通費/ });
+  await expect(linkedChunkButton).toHaveAttribute("aria-pressed", "true");
+  await expect(linkedChunkButton).toBeFocused();
+  await expect(page.getByText(/位置: p\.2 \/ bbox x=0\.0% y=0\.0% w=100\.0% h=40\.0%/)).toBeVisible();
+  await expect(page.getByTestId("bbox-preview-overlay")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -193,7 +234,11 @@ async function mockDocumentDetail(page: Page) {
                 kind: "title",
                 text: "# 経費申請",
                 order: 0,
+                element_id: "el-0000",
+                content_kind: "text",
+                source_parser: "local_text_structure",
                 page_number: 1,
+                bbox: [0, 0, 100, 20],
                 section_path: ["経費申請"],
                 confidence: 0.95,
               },
@@ -201,11 +246,41 @@ async function mockDocumentDetail(page: Page) {
                 kind: "table",
                 text: "| 項目 | 金額 |\n| 交通費 | 1000 |",
                 order: 1,
+                element_id: "tbl-1",
+                content_kind: "table",
+                source_parser: "local_text_structure",
                 page_number: 2,
+                bbox: [0, 0, 100, 40],
                 section_path: ["経費申請", "料金表"],
                 confidence: 0.88,
               },
             ],
+            pages: [
+              { page_number: 1, width: 612, height: 792, element_ids: ["el-0000"] },
+              { page_number: 2, width: 612, height: 792, element_ids: ["tbl-1"] },
+            ],
+            tables: [],
+            assets: [],
+            parser_artifacts: { parser_backend: "local_partition" },
+          },
+          source_profile: {
+            original_file_name: "policy.txt",
+            sanitized_file_name: "policy.txt",
+            extension: ".txt",
+            content_type: "text/plain",
+            inferred_content_type: "text/plain",
+            file_size_bytes: 120,
+            content_sha256: "a".repeat(64),
+            modality: "text",
+            parser_profile: "local_text_structure",
+            parser_backend: "local_partition",
+            parser_version: "local_partition_v1",
+            preview_kind: "text",
+            text_charset: "utf-8",
+            duplicate_of_document_id: null,
+            unsupported_reason: null,
+            quality_status: "ready",
+            quality_warnings: [],
           },
         },
         error_messages: [],
@@ -218,6 +293,55 @@ async function mockDocumentDetail(page: Page) {
       status: 200,
       headers: { "content-type": "text/plain" },
       body: "# 経費申請\n| 項目 | 金額 |",
+    });
+  });
+  await page.route("**/api/documents/doc-1/chunks", async (route) => {
+    await route.fulfill({
+      json: {
+        data: [
+          {
+            document_id: "doc-1",
+            chunk_id: "doc-1:0",
+            chunk_index: 0,
+            text: "# 経費申請",
+            page_start: 1,
+            page_end: 1,
+            bbox: [0, 0, 100, 20],
+            section_path: "経費申請",
+            content_kind: "text",
+            chunk_group_id: "grp-1",
+            source_parser: "local_text_structure",
+            element_ids: ["el-0000"],
+            metadata: { chunk_profile: "structure_v1", element_ids: "el-0000" },
+          },
+          {
+            document_id: "doc-1",
+            chunk_id: "doc-1:1",
+            chunk_index: 1,
+            text: "料金表の交通費は 1000 円です。",
+            page_start: 2,
+            page_end: 2,
+            bbox: [0, 0, 100, 40],
+            section_path: "経費申請 > 料金表",
+            content_kind: "table",
+            chunk_group_id: "grp-2",
+            source_parser: "local_text_structure",
+            element_ids: ["tbl-1"],
+            metadata: { chunk_profile: "structure_v1", element_ids: "tbl-1" },
+          },
+        ],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/ingestion-segments", async (route) => {
+    await route.fulfill({
+      json: {
+        data: [],
+        error_messages: [],
+        warning_messages: [],
+      },
     });
   });
   return state;
@@ -254,8 +378,20 @@ function dashboardSummary() {
       structured_document_count: 3,
       element_count: 18,
       table_count: 2,
+      figure_count: 3,
+      formula_count: 2,
       list_count: 4,
       page_count: 6,
+      low_confidence_count: 5,
+      fallback_document_count: 1,
+      failed_segment_document_count: 1,
+      segment_artifact_cache_miss_document_count: 1,
+      long_document_count: 1,
+      average_page_coverage: 0.875,
+      risk_counts: { low: 2, medium: 1, high: 1 },
+      parser_profile_counts: { enterprise_ai_pdf_layout: 2, local_text_structure: 1 },
+      parser_backend_counts: { local_partition: 2, enterprise_ai: 1 },
+      warning_counts: { parser_fallback_used: 1, failed_segments: 1 },
       chunk_profile_counts: { structure_v1: 7, text_v1: 1 },
       content_kind_counts: { text: 4, table: 2, list: 2 },
     },
@@ -285,6 +421,7 @@ function searchStreamBody(): string {
       section_title: "料金表",
       section_path: "経費申請 > 料金表",
       chunk_profile: "structure_v1",
+      element_ids: "tbl-1",
     },
   };
   return [

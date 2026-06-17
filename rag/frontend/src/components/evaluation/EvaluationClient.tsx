@@ -26,6 +26,7 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useCompareEvaluation, useRunEvaluation } from "@/lib/queries";
+import { qualityCodeLabel } from "@/lib/source-profile-labels";
 import { cn } from "@/lib/utils";
 
 const SAMPLE_REQUEST = JSON.stringify(
@@ -48,6 +49,7 @@ const SAMPLE_REQUEST = JSON.stringify(
       mrr: 0.7,
       answer_keyword_hit_rate: 0.8,
       groundedness_pass_rate: 0.9,
+      citation_traceability_coverage: 0.9,
     },
   },
   null,
@@ -81,6 +83,9 @@ const RANKING_METRICS: EvaluationMetricName[] = [
   "precision_at_k",
   "answer_keyword_hit_rate",
   "groundedness_pass_rate",
+  "citation_traceability_coverage",
+  "bbox_citation_coverage",
+  "element_lineage_coverage",
   "faithfulness",
   "context_precision",
   "context_recall",
@@ -341,6 +346,30 @@ function IngestionQualityPanel({ metrics }: { metrics: EvaluationMetrics }) {
             label={t("evaluation.ingestionQuality.longDocuments")}
             value={quality.long_document_count}
           />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.formulas")}
+            value={quality.formula_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.lowConfidence")}
+            value={quality.low_confidence_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.fallbacks")}
+            value={quality.fallback_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.failedSegments")}
+            value={quality.failed_segment_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.segmentArtifactMisses")}
+            value={quality.segment_artifact_cache_miss_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.pageCoverage")}
+            value={`${formatPercent(quality.average_page_coverage ?? 0)}`}
+          />
         </div>
 
         {quality.risk_counts.high || quality.risk_counts.medium ? (
@@ -372,7 +401,7 @@ function IngestionQualityPanel({ metrics }: { metrics: EvaluationMetrics }) {
   );
 }
 
-function QualityStat({ label, value }: { label: string; value: number }) {
+function QualityStat({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="rounded-md border border-border bg-background p-3">
       <p className="text-xs text-muted">{label}</p>
@@ -427,6 +456,18 @@ function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
       label: t("evaluation.metric.groundedness"),
       value: formatPercent(metrics.groundedness_pass_rate),
     },
+    {
+      label: t("evaluation.metric.citationTraceability"),
+      value: formatPercent(metrics.citation_traceability_coverage),
+    },
+    {
+      label: t("evaluation.metric.bboxCitation"),
+      value: formatPercent(metrics.bbox_citation_coverage),
+    },
+    {
+      label: t("evaluation.metric.elementLineage"),
+      value: formatPercent(metrics.element_lineage_coverage),
+    },
     { label: t("evaluation.metric.faithfulness"), value: formatPercent(metrics.faithfulness) },
     {
       label: t("evaluation.metric.contextPrecision"),
@@ -465,25 +506,7 @@ function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
 }
 
 function qualityLabel(value: string) {
-  const map: Record<string, string> = {
-    table_structure_review: t("evaluation.ingestionQuality.warning.table"),
-    figure_ocr_review: t("evaluation.ingestionQuality.warning.figure"),
-    long_document: t("evaluation.ingestionQuality.warning.longDocument"),
-    low_extraction_confidence: t("evaluation.ingestionQuality.warning.lowConfidence"),
-    no_structured_elements: t("evaluation.ingestionQuality.warning.noElements"),
-    content_type_missing: t("evaluation.ingestionQuality.warning.contentTypeMissing"),
-    content_type_extension_mismatch: t("evaluation.ingestionQuality.warning.contentTypeMismatch"),
-    unknown_modality: t("evaluation.ingestionQuality.warning.unknownModality"),
-    duplicate_content: t("evaluation.ingestionQuality.warning.duplicate"),
-    large_file: t("evaluation.ingestionQuality.warning.largeFile"),
-    enterprise_ai_pdf_layout: t("sourceProfile.parser.pdf"),
-    enterprise_ai_image_ocr: t("sourceProfile.parser.image"),
-    enterprise_ai_text_structure: t("sourceProfile.parser.text"),
-    enterprise_ai_office_structure: t("sourceProfile.parser.office"),
-    enterprise_ai_generic: t("sourceProfile.parser.generic"),
-    legacy: t("evaluation.ingestionQuality.parser.legacy"),
-  };
-  return map[value] ?? value;
+  return qualityCodeLabel(value);
 }
 
 function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
@@ -743,6 +766,12 @@ function metricLabel(metric: EvaluationMetricName) {
       return t("evaluation.metric.answerHit");
     case "groundedness_pass_rate":
       return t("evaluation.metric.groundedness");
+    case "citation_traceability_coverage":
+      return t("evaluation.metric.citationTraceability");
+    case "bbox_citation_coverage":
+      return t("evaluation.metric.bboxCitation");
+    case "element_lineage_coverage":
+      return t("evaluation.metric.elementLineage");
     case "faithfulness":
       return t("evaluation.metric.faithfulness");
     case "context_precision":

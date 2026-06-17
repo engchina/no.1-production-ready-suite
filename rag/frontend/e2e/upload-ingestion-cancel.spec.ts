@@ -102,7 +102,7 @@ function ingestionJob(status: string) {
     id: "job-running",
     document_id: "doc-1",
     status,
-    parser_profile: "enterprise_ai_text_structure",
+    parser_profile: "local_text_structure",
     quality_warnings: [],
     skip_reason: null,
     error_message: status === "CANCELLED" ? "利用者によりキャンセルされました。" : null,

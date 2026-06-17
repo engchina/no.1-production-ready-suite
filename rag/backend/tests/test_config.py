@@ -94,6 +94,72 @@ def test_pdf_segmentation_defaults_are_bounded() -> None:
         Settings(rag_pdf_max_segments=0)
 
 
+def test_parser_adapter_flags_default_to_local_optional() -> None:
+    """外部 parser adapter は既定で任意依存のまま無効にする。"""
+    settings = Settings()
+
+    assert settings.rag_parser_adapter_backend == "local"
+    assert settings.rag_parser_docling_enabled is False
+    assert settings.rag_parser_marker_enabled is False
+    assert settings.rag_parser_unstructured_enabled is False
+    assert Settings(rag_parser_adapter_backend="auto").rag_parser_adapter_backend == "auto"
+    assert Settings(rag_parser_adapter_backend="docling").rag_parser_adapter_backend == "docling"
+    assert Settings(rag_parser_docling_enabled=True).rag_parser_docling_enabled is True
+
+    with pytest.raises(ValidationError):
+        Settings(rag_parser_adapter_backend="llama_parse")
+
+
+def test_tsv_upload_content_type_is_allowed_by_default() -> None:
+    """TSV は table-preserving local parser と整合するため既定 upload whitelist に含める。"""
+    assert "text/tab-separated-values" in Settings().allowed_upload_content_types
+
+
+def test_json_lines_upload_content_types_are_allowed_by_default() -> None:
+    """JSONL / NDJSON は local text parser と整合するため既定 upload whitelist に含める。"""
+    allowed = set(Settings().allowed_upload_content_types)
+
+    assert {
+        "application/jsonl",
+        "application/jsonlines",
+        "application/ndjson",
+        "application/x-ndjson",
+    } <= allowed
+
+
+def test_browser_previewable_image_content_types_are_allowed_by_default() -> None:
+    """Enterprise AI image payload と整合する画像 MIME は既定 upload whitelist に含める。"""
+    allowed = set(Settings().allowed_upload_content_types)
+
+    assert {"image/gif", "image/jpeg", "image/jpg", "image/png", "image/webp"} <= allowed
+    assert {"image/tif", "image/tiff"} <= allowed
+
+
+def test_semantic_html_and_outlook_msg_content_types_are_allowed_by_default() -> None:
+    """SourceProfile が判定できる XHTML / Outlook MSG MIME は upload whitelist に含める。"""
+    allowed = set(Settings().allowed_upload_content_types)
+
+    assert "application/xhtml+xml" in allowed
+    assert {"application/vnd.ms-outlook", "application/x-msg"} <= allowed
+
+
+def test_common_audio_content_types_are_allowed_for_explicit_skip_by_default() -> None:
+    """音声は取込未対応だが、upload metadata と skipped reason を返せるよう許可する。"""
+    allowed = set(Settings().allowed_upload_content_types)
+
+    assert {
+        "audio/aac",
+        "audio/flac",
+        "audio/mp3",
+        "audio/mpeg",
+        "audio/mp4",
+        "audio/ogg",
+        "audio/wav",
+        "audio/x-m4a",
+        "application/ogg",
+    } <= allowed
+
+
 def test_enterprise_ai_response_paths_default_to_auto_detection() -> None:
     """Enterprise AI response path は既定で空にし、既知 envelope 自動判定を使う。"""
     settings = Settings()

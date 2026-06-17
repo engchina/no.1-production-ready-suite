@@ -265,6 +265,8 @@ def test_search_request_accepts_chunk_metadata_filters() -> None:
             "content_kind": "figure",
             "section_title": "料金",
             "section_path": "経費申請",
+            "source_acl": "support",
+            "document_version": "2024.05",
         },
     )
 
@@ -272,7 +274,16 @@ def test_search_request_accepts_chunk_metadata_filters() -> None:
         "content_kind": "figure",
         "section_title": "料金",
         "section_path": "経費申請",
+        "source_acl": "support",
+        "document_version": "2024.05",
     }
+
+
+def test_search_request_normalizes_content_kind_filter_case() -> None:
+    """content_kind filter は API 利用者の大小文字揺れを低 cardinality 値へ寄せる。"""
+    request = SearchRequest(query="料金表", filters={"content_kind": " Table "})
+
+    assert request.filters == {"content_kind": "table"}
 
 
 def test_search_request_rejects_unknown_content_kind_filter() -> None:

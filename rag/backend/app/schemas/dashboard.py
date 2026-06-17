@@ -28,8 +28,20 @@ class DashboardIngestionQuality(BaseModel):
     structured_document_count: int = 0
     element_count: int = 0
     table_count: int = 0
+    figure_count: int = 0
+    formula_count: int = 0
     list_count: int = 0
     page_count: int = 0
+    low_confidence_count: int = 0
+    fallback_document_count: int = 0
+    failed_segment_document_count: int = 0
+    segment_artifact_cache_miss_document_count: int = 0
+    long_document_count: int = 0
+    average_page_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    risk_counts: dict[str, int] = Field(default_factory=lambda: {"low": 0, "medium": 0, "high": 0})
+    parser_profile_counts: dict[str, int] = Field(default_factory=dict)
+    parser_backend_counts: dict[str, int] = Field(default_factory=dict)
+    warning_counts: dict[str, int] = Field(default_factory=dict)
     chunk_profile_counts: dict[str, int] = Field(default_factory=dict)
     content_kind_counts: dict[str, int] = Field(default_factory=dict)
 

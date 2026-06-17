@@ -55,12 +55,40 @@ class _ElementSpan:
     section_level: int
     section_title: str | None
     element_id: str
+    source_parser: str | None
+    bbox_json: str | None
+    bbox_coordinate_mode: str | None
+    bbox_unit: str | None
+    chunk_template: str | None
+    code_language: str | None
+    equation_delimiter: str | None
+    table_id: str | None
+    table_row_count: int | None
+    table_column_count: int | None
+
+
+@dataclass(frozen=True)
+class _TablePart:
+    """長い表を行グループ単位にした chunk 入力。"""
+
+    text: str
+    row_start: int | None
+    row_end: int | None
+    header_repeated: bool
 
 
 STRUCTURE_CHUNK_PROFILE = "structure_v1"
 TEXT_CHUNK_PROFILE = "text_v1"
+TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
 NON_INDEXED_ELEMENT_KINDS = {"header", "footer"}
 FIGURE_ELEMENT_KINDS = {"figure", "figure_caption"}
+BBOX_COORDINATE_MODE_KEYS = (
+    "bbox_coordinate_mode",
+    "bbox_mode",
+    "bbox_format",
+    "coordinate_mode",
+)
+BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
 
 
 def chunk_text(text: str, chunk_size: int = 800, overlap: int = 120) -> list[Chunk]:
@@ -255,18 +283,48 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
             element.metadata.get("section_level"),
             len(section_path) if section_path else 0,
         )
+        content_kind = _element_content_kind(element)
+        element_id = _element_id(element)
+        table_id = _metadata_label(element.metadata.get("table_id"), max_length=80)
+        if not table_id and content_kind == "table":
+            table_id = element_id
         spans.append(
             _ElementSpan(
                 text=text,
                 start_offset=start_offset,
                 end_offset=end_offset,
                 kind=element.kind,
-                content_kind=_element_content_kind(element),
+                content_kind=content_kind,
                 page_number=element.page_number,
                 section_path=section_path,
                 section_level=section_level,
                 section_title=section_path[-1] if section_path else None,
-                element_id=_element_id(element),
+                element_id=element_id,
+                source_parser=element.source_parser
+                or _metadata_label(
+                    element.metadata.get("source_parser"),
+                    max_length=80,
+                ),
+                bbox_json=_bbox_json(element.bbox),
+                bbox_coordinate_mode=_bbox_coordinate_mode(element.metadata),
+                bbox_unit=_bbox_unit(element.bbox, element.metadata),
+                chunk_template=_metadata_label(
+                    element.metadata.get("chunk_template"),
+                    max_length=80,
+                ),
+                code_language=_metadata_label(
+                    element.metadata.get("code_language"),
+                    max_length=40,
+                ),
+                equation_delimiter=_metadata_label(
+                    element.metadata.get("equation_delimiter"),
+                    max_length=40,
+                ),
+                table_id=table_id,
+                table_row_count=_metadata_positive_int(element.metadata.get("row_count")),
+                table_column_count=_metadata_positive_int(
+                    element.metadata.get("column_count")
+                ),
             )
         )
     return spans
@@ -274,10 +332,16 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
 
 def _element_content_kind(element: DocumentElement) -> str:
     """検索 metadata に保存する低 cardinality の content kind。"""
+    if element.content_kind:
+        return element.content_kind
     if element.kind == "table":
         return "table"
     if element.kind in FIGURE_ELEMENT_KINDS:
         return "figure"
+    if element.kind == "equation":
+        return "equation"
+    if element.kind == "code":
+        return "code"
     if element.kind == "list" or _content_kind(element.text) == "list":
         return "list"
     return "text"
@@ -285,6 +349,8 @@ def _element_content_kind(element: DocumentElement) -> str:
 
 def _element_id(element: DocumentElement) -> str:
     """metadata 用の安定した element id を作る。"""
+    if element.element_id:
+        return element.element_id[:80]
     for key in ("element_id", "id"):
         value = element.metadata.get(key)
         if isinstance(value, str | int):
@@ -292,6 +358,58 @@ def _element_id(element: DocumentElement) -> str:
             if cleaned:
                 return cleaned[:80]
     return f"el-{element.order:04d}"
+
+
+def _metadata_label(value: object, *, max_length: int) -> str | None:
+    """metadata の短いラベル値を読む。"""
+    if isinstance(value, str | int):
+        cleaned = str(value).strip()
+        return cleaned[:max_length] if cleaned else None
+    return None
+
+
+def _bbox_json(value: list[float] | None) -> str | None:
+    """bbox は JSON 文字列として chunk metadata に保存する。"""
+    if not value:
+        return None
+    return json.dumps([round(float(item), 6) for item in value], separators=(",", ":"))
+
+
+def _bbox_coordinate_mode(metadata: ChunkMetadata) -> str | None:
+    """metadata から明示 bbox coordinate mode を低 cardinality に寄せる。"""
+    for key in BBOX_COORDINATE_MODE_KEYS:
+        label = _metadata_label(metadata.get(key), max_length=40)
+        if not label:
+            continue
+        normalized = re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_")
+        if normalized in {"xyxy", "x1_y1_x2_y2"}:
+            return "xyxy"
+        if normalized in {"xywh", "x_y_width_height", "left_top_width_height"}:
+            return "xywh"
+    return None
+
+
+def _bbox_unit(value: list[float] | None, metadata: ChunkMetadata) -> str | None:
+    """bbox 座標単位を metadata または値域から低 cardinality に寄せる。"""
+    for key in BBOX_UNIT_KEYS:
+        label = _metadata_label(metadata.get(key), max_length=40)
+        if not label:
+            continue
+        normalized = re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_")
+        if normalized in {"ratio", "normalized", "relative"}:
+            return "ratio"
+        if normalized in {"percent", "percentage"}:
+            return "percent"
+        if normalized in {"absolute", "pixel", "pixels", "point", "points"}:
+            return "absolute"
+    if not value:
+        return None
+    max_value = max(abs(float(item)) for item in value)
+    if max_value <= 1:
+        return "ratio"
+    if max_value <= 100:
+        return "percent"
+    return "absolute"
 
 
 def _metadata_int(value: object, default: int) -> int:
@@ -305,6 +423,12 @@ def _metadata_int(value: object, default: int) -> int:
     if isinstance(value, str) and value.strip().lstrip("-").isdigit():
         return int(value)
     return default
+
+
+def _metadata_positive_int(value: object) -> int | None:
+    """metadata の正の整数値を読む。"""
+    parsed = _metadata_int(value, default=0)
+    return parsed if parsed > 0 else None
 
 
 def _can_merge_spans(group: list[_ElementSpan], span: _ElementSpan, chunk_size: int) -> bool:
@@ -377,6 +501,10 @@ def _chunk_table_span(
 ) -> list[Chunk]:
     """表は他要素と結合せず、必要な場合だけ行単位で分割する。"""
     metadata = _span_group_metadata([span])
+    source_template = metadata.get("chunk_template")
+    if source_template and source_template != TABLE_PRESERVE_ROWS_TEMPLATE:
+        metadata["source_chunk_template"] = source_template
+    metadata["chunk_template"] = TABLE_PRESERVE_ROWS_TEMPLATE
     if len(span.text) <= chunk_size:
         return _with_chunk_group_metadata(
             [
@@ -392,8 +520,8 @@ def _chunk_table_span(
             group_text=span.text,
         )
     return _with_chunk_group_metadata(
-        _chunks_from_parts(
-            _split_lines_by_size(span.text, chunk_size),
+        _chunks_from_table_parts(
+            _split_table_rows_by_size(span.text, chunk_size),
             start_index=start_index,
             start_offset=span.start_offset,
             metadata=metadata,
@@ -401,6 +529,38 @@ def _chunk_table_span(
         group_kind="table",
         group_text=span.text,
     )
+
+
+def _chunks_from_table_parts(
+    parts: list[_TablePart],
+    *,
+    start_index: int,
+    start_offset: int,
+    metadata: ChunkMetadata,
+) -> list[Chunk]:
+    """表の行グループ分割結果を Chunk にする。"""
+    chunks: list[Chunk] = []
+    cursor = start_offset
+    for part in parts:
+        if not part.text.strip():
+            continue
+        part_metadata = dict(metadata)
+        if part.row_start is not None:
+            part_metadata["table_data_row_start"] = part.row_start
+        if part.row_end is not None:
+            part_metadata["table_data_row_end"] = part.row_end
+        part_metadata["table_header_repeated"] = part.header_repeated
+        chunks.append(
+            Chunk(
+                text=part.text,
+                index=start_index + len(chunks),
+                start_offset=cursor,
+                end_offset=cursor + len(part.text),
+                metadata=part_metadata,
+            )
+        )
+        cursor += len(part.text) + 1
+    return chunks
 
 
 def _chunks_from_parts(
@@ -460,6 +620,78 @@ def _with_chunk_group_metadata(
     return grouped
 
 
+def _split_table_rows_by_size(text: str, chunk_size: int) -> list[_TablePart]:
+    """表は行を壊さず、分割後の各 chunk に表頭を繰り返す。"""
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    if not TABLE_LINE.match(lines[0]):
+        return [
+            _TablePart(text=part, row_start=None, row_end=None, header_repeated=False)
+            for part in _split_lines_by_size(text, chunk_size)
+        ]
+
+    header_line_count = _table_header_line_count(lines)
+    header_lines = lines[:header_line_count]
+    body_lines = lines[header_line_count:]
+    if not body_lines:
+        return [
+            _TablePart(
+                text="\n".join(lines),
+                row_start=None,
+                row_end=None,
+                header_repeated=False,
+            )
+        ]
+
+    parts: list[_TablePart] = []
+    current = list(header_lines)
+    current_start: int | None = None
+
+    def flush_current() -> None:
+        nonlocal current, current_start
+        if current_start is None:
+            return
+        parts.append(
+            _TablePart(
+                text="\n".join(current),
+                row_start=current_start,
+                row_end=current_start + len(current) - len(header_lines) - 1,
+                header_repeated=bool(parts),
+            )
+        )
+        current = list(header_lines)
+        current_start = None
+
+    for row_index, line in enumerate(body_lines, start=1):
+        if current_start is None:
+            current_start = row_index
+        projected = "\n".join([*current, line])
+        if len(projected) <= chunk_size or len(current) == len(header_lines):
+            current.append(line)
+            continue
+        flush_current()
+        current_start = row_index
+        current.append(line)
+    flush_current()
+    return parts
+
+
+def _table_header_line_count(lines: list[str]) -> int:
+    """Markdown 表の header + separator を検出する。"""
+    if len(lines) >= 2 and _is_markdown_table_separator(lines[1]):
+        return 2
+    return 1
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    """`| --- | :---: |` のような separator 行かを判定する。"""
+    if not TABLE_LINE.match(line):
+        return False
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells)
+
+
 def _chunk_group_id(
     chunks: list[Chunk],
     *,
@@ -515,6 +747,24 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
     """構造化 element group から chunk metadata を作る。"""
     first = group[0]
     pages = sorted({span.page_number for span in group if span.page_number is not None})
+    source_parsers = sorted({span.source_parser for span in group if span.source_parser})
+    templates = sorted({span.chunk_template for span in group if span.chunk_template})
+    bboxes = {span.bbox_json for span in group if span.bbox_json}
+    bbox_modes = {span.bbox_coordinate_mode for span in group if span.bbox_coordinate_mode}
+    bbox_units = {span.bbox_unit for span in group if span.bbox_unit}
+    code_languages = {span.code_language for span in group if span.code_language}
+    equation_delimiters = {
+        span.equation_delimiter for span in group if span.equation_delimiter
+    }
+    table_ids = sorted({span.table_id for span in group if span.table_id})
+    table_row_counts = {
+        span.table_row_count for span in group if span.table_row_count is not None
+    }
+    table_column_counts = {
+        span.table_column_count
+        for span in group
+        if span.table_column_count is not None
+    }
     metadata: ChunkMetadata = {
         "chunk_profile": STRUCTURE_CHUNK_PROFILE,
         "content_kind": first.content_kind,
@@ -522,6 +772,26 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
         "element_kinds": ",".join(sorted({span.kind for span in group})),
         "element_ids": ",".join(span.element_id for span in group),
     }
+    if source_parsers:
+        metadata["source_parser"] = source_parsers[0]
+    if templates:
+        metadata["chunk_template"] = templates[0]
+    if len(bboxes) == 1:
+        metadata["bbox"] = next(iter(bboxes))
+        if len(bbox_modes) == 1:
+            metadata["bbox_coordinate_mode"] = next(iter(bbox_modes))
+        if len(bbox_units) == 1:
+            metadata["bbox_unit"] = next(iter(bbox_units))
+    if len(code_languages) == 1:
+        metadata["code_language"] = next(iter(code_languages))
+    if len(equation_delimiters) == 1:
+        metadata["equation_delimiter"] = next(iter(equation_delimiters))
+    if len(table_ids) == 1:
+        metadata["table_id"] = table_ids[0]
+    if len(table_row_counts) == 1:
+        metadata["table_row_count"] = next(iter(table_row_counts))
+    if len(table_column_counts) == 1:
+        metadata["table_column_count"] = next(iter(table_column_counts))
     if first.section_title:
         metadata["section_title"] = first.section_title
     if first.section_path:

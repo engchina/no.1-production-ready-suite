@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
+ParserAdapterBackend = Literal["local", "auto", "docling", "marker", "unstructured"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
@@ -248,10 +249,48 @@ class Settings(BaseSettings):
     allowed_upload_content_types: list[str] = Field(
         default=[
             "application/pdf",
+            "image/gif",
             "image/jpeg",
+            "image/jpg",
             "image/png",
+            "image/tif",
+            "image/webp",
             "image/tiff",
             "text/plain",
+            "text/markdown",
+            "text/csv",
+            "text/tab-separated-values",
+            "text/html",
+            "application/xhtml+xml",
+            "application/json",
+            "application/jsonl",
+            "application/jsonlines",
+            "application/ndjson",
+            "application/xml",
+            "application/csv",
+            "application/x-ndjson",
+            "message/rfc822",
+            "application/eml",
+            "application/vnd.ms-outlook",
+            "application/x-msg",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-powerpoint",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "audio/aac",
+            "audio/flac",
+            "audio/mp3",
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/ogg",
+            "audio/wave",
+            "audio/wav",
+            "audio/x-flac",
+            "audio/x-m4a",
+            "audio/x-wav",
+            "application/ogg",
             "application/octet-stream",
         ]
     )
@@ -370,6 +409,32 @@ class Settings(BaseSettings):
             "無効時も既存 SSE event contract は維持する。"
         ),
     )
+    rag_agent_memory_search_enabled: bool = Field(
+        default=True,
+        description=(
+            "Oracle 26ai に保存した Agent Memory を履歴 memory として retrieval に加える。"
+            "user/thread/agent scope がない request では安全側で無効化する。"
+        ),
+    )
+    rag_agent_memory_writeback_enabled: bool = Field(
+        default=True,
+        description=(
+            "根拠付き回答の要約を Oracle 26ai Agent Memory へ writeback する。"
+            "user/thread/agent scope がない request では保存しない。"
+        ),
+    )
+    rag_agent_memory_top_k: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description="Agent Memory retrieval で取得する履歴 memory 数。",
+    )
+    rag_agent_memory_max_chars: int = Field(
+        default=1200,
+        ge=100,
+        le=4000,
+        description="Agent Memory に保存する回答要約 text の最大文字数。",
+    )
     dashboard_query_timeout_seconds: float = Field(
         default=8.0,
         gt=0.0,
@@ -391,6 +456,42 @@ class Settings(BaseSettings):
     )
     rag_pdf_max_pages_per_segment: int = Field(default=3, ge=1, le=50)
     rag_pdf_max_segments: int = Field(default=300, ge=1, le=2000)
+    rag_parser_adapter_backend: ParserAdapterBackend = Field(
+        default="local",
+        description=(
+            "Docling/Marker/Unstructured 互換 adapter の選択。"
+            "local は標準 parser のみ、auto は有効化 flag の adapter を順に試す。"
+        ),
+    )
+    rag_parser_docling_enabled: bool = Field(
+        default=False,
+        description=(
+            "Docling adapter を feature flag で有効化する。未導入時は安全に fallback する。"
+        ),
+    )
+    rag_parser_marker_enabled: bool = Field(
+        default=False,
+        description="Marker adapter を feature flag で有効化する。未導入時は安全に fallback する。",
+    )
+    rag_parser_unstructured_enabled: bool = Field(
+        default=False,
+        description=(
+            "Unstructured adapter を feature flag で有効化する。未導入時は安全に fallback する。"
+        ),
+    )
+    rag_segment_checkpoint_enabled: bool = Field(
+        default=True,
+        description="取込 segment checkpoint を Oracle に永続化し、失敗 segment の再試行に使う。",
+    )
+    rag_extraction_artifact_cache_enabled: bool = Field(
+        default=True,
+        description="構造化抽出 JSON artifact を chunk/embedding 前に Object Storage へ保存する。",
+    )
+    rag_extraction_artifact_prefix: str = Field(
+        default="artifacts/extractions",
+        max_length=256,
+        description="構造化抽出 artifact の Object Storage key prefix。",
+    )
 
     # --- レート制限（高コスト API の保護）---
     rate_limit_enabled: bool = Field(default=True)

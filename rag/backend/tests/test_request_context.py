@@ -16,6 +16,9 @@ def test_audit_request_context_hashes_tenant_and_user_headers() -> None:
         {
             "x-tenant-id": "tenant-a",
             "x-user-id": "user@example.com",
+            "x-rag-role-id": "finance-reviewer",
+            "x-rag-agent-id": "answer-agent",
+            "x-rag-thread-id": "thread-123",
         },
         request_id="request-1",
         settings=Settings(audit_context_hash_salt="salt-1"),
@@ -24,10 +27,19 @@ def test_audit_request_context_hashes_tenant_and_user_headers() -> None:
     assert context.request_id == "request-1"
     assert context.tenant_id_hash
     assert context.user_id_hash
+    assert context.role_id_hash
+    assert context.agent_id_hash
+    assert context.thread_id_hash
     assert len(context.tenant_id_hash) == 64
     assert len(context.user_id_hash) == 64
+    assert len(context.role_id_hash) == 64
+    assert len(context.agent_id_hash) == 64
+    assert len(context.thread_id_hash) == 64
     assert "tenant-a" not in repr(context)
     assert "user@example.com" not in repr(context)
+    assert "finance-reviewer" not in repr(context)
+    assert "answer-agent" not in repr(context)
+    assert "thread-123" not in repr(context)
 
 
 def test_audit_context_hash_salt_changes_identifier_hashes() -> None:

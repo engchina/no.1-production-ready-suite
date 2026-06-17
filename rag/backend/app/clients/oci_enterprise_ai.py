@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 import httpx
 from charset_normalizer import from_bytes
+from pydantic import ValidationError
 
 from app.config import (
     Settings,
@@ -84,19 +85,24 @@ LLM_SYSTEM_PROMPT = (
 STRUCTURED_EXTRACTION_INSTRUCTIONS = (
     "文書を日本語優先で OCR し、raw_text に読み順の本文全体を入れてください。"
     "ページ境界が分かる場合は raw_text に「--- page N ---」形式の行を入れてください。"
-    "raw_text を最優先し、本文段落を elements に重複出力しないでください。"
-    "elements は任意で、見出し・表・図キャプションなど検索補助に必要な"
-    "短い要素だけをページ順・読み順で返してください。"
-    "bbox、polygon、座標、低レベル metadata は出力しないでください。"
-    "page_number と section_path だけを必要最小限で付与してください。"
+    "elements はページ順・読み順の block として返し、検索・引用に必要な"
+    "見出し、本文、表、図、図キャプション、数式、コードを含めてください。"
+    "各 element には可能な範囲で element_id、content_kind、page_number、section_path、"
+    "confidence を付与してください。"
+    "bbox が分かる場合は [x1,y1,x2,y2] 形式で、ページ内の正規化座標(0-1)または"
+    "パーセント座標(0-100)として付与してください。"
+    "座標が不確かな場合は bbox を省略し、推測で作らないでください。"
+    "pages、tables、assets が分かる場合は要約 metadata として返してください。"
 )
 STRUCTURED_EXTRACTION_JSON_CONTRACT = (
     "出力は説明文なしの JSON object のみ返してください。"
-    "必須キー: raw_text。任意キー: document_type, confidence, warnings, elements。"
+    "必須キー: raw_text。任意キー: document_type, confidence, warnings, elements, "
+    "pages, tables, assets。"
     "confidence は 0.0 から 1.0 の数値、warnings は文字列配列、"
-    "elements は kind, text, order, page_number, section_path を持つ object 配列です。"
-    "elements.kind は title, list, table, figure, figure_caption, header, footer, other "
-    "のいずれかにしてください。"
+    "elements は kind, text, order, element_id, parent_id, content_kind, page_number, "
+    "bbox, section_path, confidence を持つ object 配列です。"
+    "elements.kind は title, text, list, table, table_caption, figure, figure_caption, "
+    "header, footer, equation, code, other のいずれかにしてください。"
 )
 
 
@@ -163,6 +169,16 @@ class EnterpriseAiIncompleteResponseError(ValueError):
     """OCI Enterprise AI が不完全な response を返したことを表すエラー。"""
 
     safe_for_user = True
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class EnterpriseAiValidationError(ValueError):
+    """OCI Enterprise AI の構造化応答がアプリ schema と合わないことを表すエラー。"""
+
+    safe_for_user = True
+    error_code = "enterprise_ai_response_validation_error"
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -343,19 +359,16 @@ class OciEnterpriseAiClient:
                 parser_profile=parser_profile,
             )
             try:
-                response = await self._post_enterprise_ai(
+                extraction = await self._post_enterprise_ai_with_schema_retry(
                     self._settings.oci_enterprise_ai_vlm_path,
                     payload,
+                    response_path=self._settings.oci_enterprise_ai_vlm_response_path,
                 )
             except httpx.HTTPStatusError as exc:
                 _raise_for_unsupported_file_input(
                     exc, model_id=enterprise_ai_vision_model_id(self._settings)
                 )
                 raise
-            extraction = _parse_structured_extraction(
-                response,
-                response_path=self._settings.oci_enterprise_ai_vlm_response_path,
-            )
             return extraction.to_document_payload()
         finally:
             if uploaded_file_id:
@@ -437,6 +450,29 @@ class OciEnterpriseAiClient:
         except httpx.TimeoutException as exc:
             raise EnterpriseAiTimeoutError("OCI Enterprise AI endpoint", timeout) from exc
 
+    async def _post_enterprise_ai_with_schema_retry(
+        self,
+        path: str,
+        payload: Mapping[str, Any],
+        *,
+        response_path: str,
+    ) -> StructuredExtraction:
+        """VLM 応答の schema 不整合は短い指数 backoff で再取得する。"""
+        attempts = self._settings.oci_enterprise_ai_max_retries + 1
+        last_error: EnterpriseAiValidationError | None = None
+        for attempt in range(attempts):
+            response = await self._post_enterprise_ai(path, payload)
+            try:
+                return _parse_structured_extraction(response, response_path=response_path)
+            except EnterpriseAiValidationError as exc:
+                last_error = exc
+                if attempt + 1 >= attempts:
+                    raise
+                await asyncio.sleep(_retry_delay(attempt))
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("OCI Enterprise AI VLM response の検証に失敗しました。")
+
     async def _post_enterprise_ai_stream(
         self,
         path: str,
@@ -478,18 +514,28 @@ class _DefaultEnterpriseAiTransport:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         attempts = self._settings.oci_enterprise_ai_max_retries + 1
         async with httpx.AsyncClient(follow_redirects=False) as client:
+            last_transport_error: httpx.TransportError | None = None
             for attempt in range(attempts):
-                response = await client.post(
-                    url,
-                    content=body,
-                    headers=headers,
-                    timeout=timeout,
-                )
+                try:
+                    response = await client.post(
+                        url,
+                        content=body,
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                except httpx.TransportError as exc:
+                    last_transport_error = exc
+                    if attempt + 1 < attempts:
+                        await asyncio.sleep(_retry_delay(attempt))
+                        continue
+                    raise
                 if response.status_code in RETRYABLE_STATUS_CODES and attempt + 1 < attempts:
-                    await asyncio.sleep(_retry_delay(attempt))
+                    await asyncio.sleep(_retry_delay(attempt, response=response))
                     continue
                 _raise_for_status_with_body(response, "OCI Enterprise AI endpoint")
                 return _json_response_object(response)
+        if last_transport_error is not None:
+            raise last_transport_error
         raise RuntimeError("OCI Enterprise AI endpoint の呼び出しに失敗しました。")
 
     async def stream_json(
@@ -504,29 +550,40 @@ class _DefaultEnterpriseAiTransport:
         attempts = self._settings.oci_enterprise_ai_max_retries + 1
         async with httpx.AsyncClient(follow_redirects=False) as client:
             for attempt in range(attempts):
-                async with client.stream(
-                    "POST",
-                    url,
-                    content=body,
-                    headers=headers,
-                    timeout=timeout,
-                ) as response:
-                    if response.status_code in RETRYABLE_STATUS_CODES and attempt + 1 < attempts:
-                        await response.aread()
+                try:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        content=body,
+                        headers=headers,
+                        timeout=timeout,
+                    ) as response:
+                        if (
+                            response.status_code in RETRYABLE_STATUS_CODES
+                            and attempt + 1 < attempts
+                        ):
+                            await response.aread()
+                            await asyncio.sleep(_retry_delay(attempt, response=response))
+                            continue
+                        if response.is_error:
+                            content = await response.aread()
+                            error_response = httpx.Response(
+                                response.status_code,
+                                content=content,
+                                headers=response.headers,
+                                request=response.request,
+                            )
+                            _raise_for_status_with_body(
+                                error_response, "OCI Enterprise AI endpoint"
+                            )
+                        async for line in response.aiter_lines():
+                            yield line
+                        return
+                except httpx.TransportError:
+                    if attempt + 1 < attempts:
                         await asyncio.sleep(_retry_delay(attempt))
                         continue
-                    if response.is_error:
-                        content = await response.aread()
-                        error_response = httpx.Response(
-                            response.status_code,
-                            content=content,
-                            headers=response.headers,
-                            request=response.request,
-                        )
-                        _raise_for_status_with_body(error_response, "OCI Enterprise AI endpoint")
-                    async for line in response.aiter_lines():
-                        yield line
-                    return
+                    raise
         raise RuntimeError("OCI Enterprise AI endpoint の streaming 呼び出しに失敗しました。")
 
     async def upload_file(
@@ -540,16 +597,28 @@ class _DefaultEnterpriseAiTransport:
         headers: Mapping[str, str],
         timeout: float,
     ) -> Mapping[str, Any]:
+        attempts = self._settings.oci_enterprise_ai_max_retries + 1
         async with httpx.AsyncClient(follow_redirects=False) as client:
-            response = await client.post(
-                url,
-                data={"purpose": purpose},
-                files={"file": (file_name, content, mime_type)},
-                headers=headers,
-                timeout=timeout,
-            )
-            _raise_for_status_with_body(response, "OCI Enterprise AI Files API")
-            return _json_response_object(response)
+            for attempt in range(attempts):
+                try:
+                    response = await client.post(
+                        url,
+                        data={"purpose": purpose},
+                        files={"file": (file_name, content, mime_type)},
+                        headers=headers,
+                        timeout=timeout,
+                    )
+                except httpx.TransportError:
+                    if attempt + 1 < attempts:
+                        await asyncio.sleep(_retry_delay(attempt))
+                        continue
+                    raise
+                if response.status_code in RETRYABLE_STATUS_CODES and attempt + 1 < attempts:
+                    await asyncio.sleep(_retry_delay(attempt, response=response))
+                    continue
+                _raise_for_status_with_body(response, "OCI Enterprise AI Files API")
+                return _json_response_object(response)
+        raise RuntimeError("OCI Enterprise AI Files API の呼び出しに失敗しました。")
 
     async def delete(
         self,
@@ -590,6 +659,12 @@ def _vlm_max_output_tokens(settings: Settings) -> int:
 
 def _vlm_structured_extraction_schema() -> dict[str, Any]:
     """VLM に渡す token 節約版 StructuredExtraction schema。"""
+    bbox_schema: dict[str, Any] = {
+        "type": "array",
+        "items": {"type": "number", "minimum": 0, "maximum": 100},
+        "minItems": 4,
+        "maxItems": 4,
+    }
     element_schema: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
@@ -598,25 +673,106 @@ def _vlm_structured_extraction_schema() -> dict[str, Any]:
                 "type": "string",
                 "enum": [
                     "title",
+                    "text",
                     "list",
                     "table",
+                    "table_caption",
                     "figure",
                     "figure_caption",
                     "header",
                     "footer",
+                    "equation",
+                    "code",
                     "other",
                 ],
             },
             "text": {"type": "string", "maxLength": 4000},
             "order": {"type": "integer", "minimum": 0},
+            "element_id": {"type": ["string", "null"], "maxLength": 128},
+            "parent_id": {"type": ["string", "null"], "maxLength": 128},
+            "content_kind": {
+                "type": ["string", "null"],
+                "enum": [
+                    "text",
+                    "list",
+                    "table",
+                    "figure",
+                    "equation",
+                    "code",
+                    "email",
+                    "slide",
+                    "sheet",
+                    None,
+                ],
+            },
             "page_number": {"type": ["integer", "null"], "minimum": 1},
+            "bbox": {"anyOf": [bbox_schema, {"type": "null"}]},
             "section_path": {
                 "type": "array",
                 "items": {"type": "string", "maxLength": 80},
                 "maxItems": 8,
             },
+            "confidence": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
         },
         "required": ["kind", "text"],
+    }
+    page_schema: dict[str, Any] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "page_number": {"type": "integer", "minimum": 1},
+            "label": {"type": ["string", "null"], "maxLength": 128},
+            "width": {"type": ["number", "null"], "exclusiveMinimum": 0},
+            "height": {"type": ["number", "null"], "exclusiveMinimum": 0},
+            "rotation": {"type": ["integer", "null"]},
+            "element_ids": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": 128},
+                "maxItems": 120,
+            },
+        },
+        "required": ["page_number"],
+    }
+    table_cell_schema: dict[str, Any] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "row": {"type": "integer", "minimum": 0},
+            "col": {"type": "integer", "minimum": 0},
+            "text": {"type": "string", "maxLength": 1000},
+            "row_span": {"type": "integer", "minimum": 1, "default": 1},
+            "col_span": {"type": "integer", "minimum": 1, "default": 1},
+            "bbox": {"anyOf": [bbox_schema, {"type": "null"}]},
+            "confidence": {"type": ["number", "null"], "minimum": 0.0, "maximum": 1.0},
+        },
+        "required": ["row", "col", "text"],
+    }
+    table_schema: dict[str, Any] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "table_id": {"type": "string", "maxLength": 128},
+            "element_id": {"type": ["string", "null"], "maxLength": 128},
+            "page_number": {"type": ["integer", "null"], "minimum": 1},
+            "caption": {"type": ["string", "null"], "maxLength": 500},
+            "cells": {"type": "array", "items": table_cell_schema, "maxItems": 600},
+        },
+        "required": ["table_id"],
+    }
+    asset_schema: dict[str, Any] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "asset_id": {"type": "string", "maxLength": 128},
+            "kind": {
+                "type": "string",
+                "enum": ["figure", "image", "attachment", "chart"],
+            },
+            "page_number": {"type": ["integer", "null"], "minimum": 1},
+            "bbox": {"anyOf": [bbox_schema, {"type": "null"}]},
+            "alt_text": {"type": ["string", "null"], "maxLength": 1000},
+        },
+        "required": ["asset_id", "kind"],
     }
     return {
         "title": "StructuredExtraction",
@@ -632,6 +788,9 @@ def _vlm_structured_extraction_schema() -> dict[str, Any]:
                 "maxItems": 20,
             },
             "elements": {"type": "array", "items": element_schema, "maxItems": 120},
+            "pages": {"type": "array", "items": page_schema, "maxItems": 400},
+            "tables": {"type": "array", "items": table_schema, "maxItems": 60},
+            "assets": {"type": "array", "items": asset_schema, "maxItems": 120},
         },
         "required": ["raw_text"],
     }
@@ -1031,9 +1190,16 @@ def _payload_shape(value: object) -> object:
     return type(value).__name__
 
 
-def _retry_delay(attempt: int) -> float:
-    """短い指数バックオフ。"""
-    return float(min(2.0, 0.25 * (2**attempt)))
+def _retry_delay(attempt: int, *, response: httpx.Response | None = None) -> float:
+    """Retry-After を尊重しつつ短い指数バックオフ秒数を返す。"""
+    if response is not None:
+        retry_after = response.headers.get("retry-after")
+        if retry_after is not None:
+            try:
+                return float(min(30.0, max(0.0, float(retry_after))))
+            except ValueError:
+                pass
+    return float(min(8.0, 0.25 * (2**attempt)))
 
 
 def _json_response_object(response: httpx.Response) -> Mapping[str, Any]:
@@ -1103,7 +1269,7 @@ def _parse_structured_extraction(
     text = _extract_text_candidate(candidate)
     if text:
         candidate = _json_string_to_object(text)
-        return StructuredExtraction.model_validate(dict(candidate))
+        return _validate_structured_extraction(candidate)
     candidate = _unwrap_response_payload(candidate)
     _raise_for_response_error(candidate)
     if isinstance(candidate, str):
@@ -1114,7 +1280,39 @@ def _parse_structured_extraction(
             candidate = _json_string_to_object(text)
     if not isinstance(candidate, Mapping):
         raise ValueError("OCI Enterprise AI VLM response に構造化抽出 object がありません。")
-    return StructuredExtraction.model_validate(dict(candidate))
+    return _validate_structured_extraction(candidate)
+
+
+def _validate_structured_extraction(candidate: Mapping[str, Any]) -> StructuredExtraction:
+    """Pydantic の詳細を非機密・actionable な VLM 応答エラーへ変換する。"""
+    try:
+        return StructuredExtraction.model_validate(dict(candidate))
+    except ValidationError as exc:
+        raise EnterpriseAiValidationError(_validation_error_message(exc)) from exc
+
+
+def _validation_error_message(error: ValidationError) -> str:
+    """StructuredExtraction の validation error を短く原因追跡できる文言へする。"""
+    details = []
+    for item in error.errors(include_url=False, include_context=False, include_input=False)[:3]:
+        location = ".".join(str(part) for part in item.get("loc", ()) if part != "__root__")
+        error_type = str(item.get("type") or "validation_error")
+        message = str(item.get("msg") or "schema validation failed")
+        if location:
+            details.append(f"{location}: {error_type} ({message})")
+        else:
+            details.append(f"{error_type} ({message})")
+    if not details:
+        details.append("StructuredExtraction schema validation failed")
+    if error.error_count() > len(details):
+        details.append(f"ほか {error.error_count() - len(details)} 件")
+    joined = " / ".join(details)
+    return (
+        "OCI Enterprise AI VLM response が StructuredExtraction schema と一致しません。"
+        f"失敗項目: {joined}。"
+        "設定 > モデル の VLM response path / payload template と、VLM 出力 JSON の"
+        " raw_text・confidence・elements 形式を確認して再実行してください。"
+    )
 
 
 def _parse_generated_text(

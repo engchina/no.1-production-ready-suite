@@ -33,6 +33,7 @@ from app.config import (
     get_settings,
     resolve_model_settings_file,
 )
+from app.rag.parser_adapter_readiness import parser_adapter_runtime_settings
 from app.readiness import READINESS_OK, oracle_readiness_check, upload_storage_readiness_checks
 from app.schemas.common import ApiResponse
 from app.schemas.settings import (
@@ -62,6 +63,8 @@ from app.schemas.settings import (
     OciPrivateKeyUploadData,
     OciSettingsData,
     OciSettingsUpdate,
+    ParserAdapterSettingsData,
+    ParserAdapterStatusData,
     UploadStorageSettingsData,
     UploadStorageSettingsUpdate,
 )
@@ -341,6 +344,12 @@ async def update_upload_storage_settings(
     _persist_upload_storage_settings(candidate)
     _apply_upload_storage_settings(settings, candidate)
     return ApiResponse(data=_upload_storage_settings_data(settings))
+
+
+@router.get("/parser-adapters", response_model=ApiResponse[ParserAdapterSettingsData])
+async def get_parser_adapter_settings() -> ApiResponse[ParserAdapterSettingsData]:
+    """任意 parser adapter の feature flag と package readiness を返す。"""
+    return ApiResponse(data=_parser_adapter_settings_data(get_settings()))
 
 
 @router.get("/oci", response_model=ApiResponse[OciSettingsData])
@@ -1434,6 +1443,29 @@ def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsDa
         object_storage_bucket=settings.object_storage_bucket,
         readiness=_upload_storage_readiness(settings),
         max_upload_bytes=settings.max_upload_bytes,
+        config_source="runtime",
+    )
+
+
+def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsData:
+    """Settings から parser adapter readiness の表示用データを作る。"""
+    runtime = parser_adapter_runtime_settings(settings)
+    return ParserAdapterSettingsData(
+        adapter_backend=runtime.adapter_backend,
+        effective_order=list(runtime.effective_order),
+        adapters=[
+            ParserAdapterStatusData(
+                backend=adapter.backend,
+                package_name=adapter.package_name,
+                enabled=adapter.enabled,
+                selected=adapter.selected,
+                installed=adapter.installed,
+                status=adapter.status,
+                version=adapter.version,
+                warning_code=adapter.warning_code,
+            )
+            for adapter in runtime.adapters
+        ],
         config_source="runtime",
     )
 

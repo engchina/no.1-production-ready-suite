@@ -24,13 +24,27 @@ def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
     diagnostics = build_search_diagnostics(
         request,
         settings=settings,
+        memory_plan_id="mp-12345678",
+        business_context={"tenant_scoped": True},
+        retrieval_plan={"memory_sequence": ["evidence", "history"]},
+        retrieved_context_pack={"rejection_reasons": ["access_denied"]},
+        context_builder={"included_count": 2},
         retrieved_count=7,
         reranked_count=3,
+        deduplicated_count=1,
         context_diversified_count=1,
         context_group_expanded_count=2,
         context_expanded_count=1,
         context_compressed_count=1,
         context_compression_saved_chars=1200,
+        agent_memory_retrieved_count=1,
+        agent_memory_writeback_count=1,
+        agent_memory_writeback_status="saved",
+        evidence_count=1,
+        support_count=1,
+        history_count=1,
+        resolver_rejected_count=1,
+        insufficient_context_count=1,
         citation_count=2,
         context_chars=812,
     )
@@ -38,14 +52,27 @@ def test_search_diagnostics_exposes_execution_shape_without_secrets() -> None:
     assert diagnostics.mode == "keyword"
     assert diagnostics.top_k == 7
     assert diagnostics.rerank_top_n == 3
+    assert diagnostics.memory_plan_id == "mp-12345678"
+    assert diagnostics.business_context == {"tenant_scoped": True}
+    assert diagnostics.retrieval_plan == {"memory_sequence": ["evidence", "history"]}
+    assert diagnostics.retrieved_context_pack == {"rejection_reasons": ["access_denied"]}
+    assert diagnostics.context_builder == {"included_count": 2}
     assert diagnostics.retrieved_count == 7
     assert diagnostics.reranked_count == 3
-    assert diagnostics.deduplicated_count == 0
+    assert diagnostics.deduplicated_count == 1
     assert diagnostics.context_diversified_count == 1
     assert diagnostics.context_group_expanded_count == 2
     assert diagnostics.context_expanded_count == 1
     assert diagnostics.context_compressed_count == 1
     assert diagnostics.context_compression_saved_chars == 1200
+    assert diagnostics.agent_memory_retrieved_count == 1
+    assert diagnostics.agent_memory_writeback_count == 1
+    assert diagnostics.agent_memory_writeback_status == "saved"
+    assert diagnostics.evidence_count == 1
+    assert diagnostics.support_count == 1
+    assert diagnostics.history_count == 1
+    assert diagnostics.resolver_rejected_count == 1
+    assert diagnostics.insufficient_context_count == 1
     assert diagnostics.citation_count == 2
     assert diagnostics.context_chars == 812
     assert diagnostics.context_window_chars == 4096
@@ -125,3 +152,15 @@ def test_rag_config_fingerprint_changes_when_context_compression_changes() -> No
 
     assert first != second
     assert first != third
+
+
+def test_rag_config_fingerprint_changes_when_agent_memory_changes() -> None:
+    """fingerprint は Agent Memory 検索・保存設定の変更も反映する。"""
+    first = rag_config_fingerprint(Settings(rag_agent_memory_search_enabled=True))
+    second = rag_config_fingerprint(Settings(rag_agent_memory_search_enabled=False))
+    third = rag_config_fingerprint(Settings(rag_agent_memory_top_k=5))
+    fourth = rag_config_fingerprint(Settings(rag_agent_memory_writeback_enabled=False))
+
+    assert first != second
+    assert first != third
+    assert first != fourth

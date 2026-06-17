@@ -43,11 +43,14 @@ API: `POST /api/evaluation/run`
 - `mrr`: 最初の relevant document が何位に出たか。
 - `answer_keyword_hit_rate`: 回答が期待キーワードを含んだ割合。
 - `groundedness_pass_rate`: 回答の token / n-gram / 数値・ID 特徴が citation context に支えられている case の割合。no-results のように citation context がない case は、根拠なし生成を避ける短絡経路として pass 扱いにする。
+- `citation_traceability_coverage`: citation が `document_id` / `chunk_id` / page range と、`element_ids`・`bbox`・`section_path` のいずれかを持つ割合。RAGFlow / Docling 的な引用追跡品質の gate に使う。
+- `bbox_citation_coverage`: citation が原本 preview へ位置決めできる `bbox` を持つ割合。画像 OCR、PDF、レイアウト文書の bbox 回帰検知に使う。
+- `element_lineage_coverage`: citation が parser / VLM 由来の `element_ids` を保持する割合。chunk から structured block/tree へ戻れるかを評価する。
 - `error_count`: 検索失敗または timeout になった evaluation case 数。
 - `passed`: 指定された `thresholds` をすべて満たし、`error_count=0` だったか。`thresholds` 未指定でも case error があれば `false`。
 - `threshold_failures`: 閾値を下回った metric、実測値、閾値の一覧。CI gate ではこの配列を失敗理由として出力する。
 
-レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の precision / recall / reciprocal rank、回答キーワード命中、groundedness pass / score / overlap count、guardrail warning、diagnostics、elapsed ms、error type を返す。aggregate が悪化したときはこの per-case 診断から、検索漏れ・リランク順序・回答生成・根拠不足のどこで落ちたかを確認する。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
+レスポンスには `case_results` も含める。各 case について `case_id`、`trace_id`、`status`、取得 document id、関連 document id、hit document id、case 単位の precision / recall / reciprocal rank、回答キーワード命中、groundedness pass / score / overlap count、citation traceability / bbox / element lineage coverage、guardrail warning、diagnostics、elapsed ms、error type を返す。aggregate が悪化したときはこの per-case 診断から、検索漏れ・リランク順序・回答生成・根拠不足・引用 lineage 欠落のどこで落ちたかを確認する。検索失敗または timeout の case は `status=error` として残し、query 本文や例外 message はレスポンスへ出さない。評価 runner が捕捉した case 失敗は `rag_search_audit` にも残し、timeout は `error_stage=timeout`、その他の case 例外は `error_stage=evaluation` とする。
 
 各 case には `failure_reasons` を付与し、集計として `failure_reason_counts` を返す。理由は `retrieval_miss`、`partial_recall`、`unexpected_retrieval`、`answer_keyword_miss`、`low_groundedness`、`guardrail_warning`、`case_error` に固定する。AutoRAG / FlashRAG 的な比較では、この分布を見ることで chunking / filter / hybrid retrieval / rerank / prompt / guardrail のどこを次に調整すべきかを切り分ける。
 

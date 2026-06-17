@@ -10,6 +10,11 @@ from app.clients.oracle import OracleClient
 from app.config import Settings, get_settings
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.file_processing_evaluation import (
+    bbox_citation_coverage,
+    citation_traceability_coverage,
+    element_lineage_coverage,
+)
 from app.rag.guardrails import evaluate_groundedness
 from app.rag.ingestion_quality import summarize_ingestion_quality
 from app.rag.observability import (
@@ -118,6 +123,9 @@ class EvaluationRunner:
                 "context_recall": ZERO_METRIC,
                 "response_relevancy": ZERO_METRIC,
                 "noise_sensitivity": ZERO_METRIC,
+                "citation_traceability_coverage": ZERO_METRIC,
+                "bbox_citation_coverage": ZERO_METRIC,
+                "element_lineage_coverage": ZERO_METRIC,
             }
             threshold_failures = _threshold_failures(thresholds, aggregate_values)
             return EvaluationMetrics(
@@ -127,7 +135,10 @@ class EvaluationRunner:
                 passed=not threshold_failures,
                 threshold_failures=threshold_failures,
                 case_results=[],
-                ingestion_quality=await _ingestion_quality_summary(self._quality_source),
+                ingestion_quality=await _ingestion_quality_summary(
+                    self._quality_source,
+                    timeout_seconds=_ingestion_quality_timeout_seconds(effective_settings),
+                ),
                 **aggregate_values,
             )
 
@@ -141,6 +152,9 @@ class EvaluationRunner:
         context_recall_total = 0.0
         response_relevancy_total = 0.0
         noise_sensitivity_total = 0.0
+        citation_traceability_total = 0.0
+        bbox_citation_total = 0.0
+        element_lineage_total = 0.0
         error_count = 0
         evaluated_k = max(1, min(top_k, rerank_top_n))
         case_results: list[EvaluationCaseResult] = []
@@ -251,11 +265,20 @@ class EvaluationRunner:
             context_recall = recall
             response_relevancy = _response_relevancy(case.query, response.answer)
             noise_sensitivity = _noise_sensitivity(failure_reasons)
+            citation_traceability = _case_citation_traceability_coverage(
+                response,
+                relevant,
+            )
+            bbox_citation = _case_bbox_citation_coverage(response, relevant)
+            element_lineage = _case_element_lineage_coverage(response, relevant)
             faithfulness_total += faithfulness
             context_precision_total += context_precision
             context_recall_total += context_recall
             response_relevancy_total += response_relevancy
             noise_sensitivity_total += noise_sensitivity
+            citation_traceability_total += citation_traceability
+            bbox_citation_total += bbox_citation
+            element_lineage_total += element_lineage
             _accumulate_failure_reasons(failure_reason_counts, failure_reasons)
             case_results.append(
                 EvaluationCaseResult(
@@ -277,6 +300,9 @@ class EvaluationRunner:
                     context_recall=round(context_recall, 4),
                     response_relevancy=round(response_relevancy, 4),
                     noise_sensitivity=round(noise_sensitivity, 4),
+                    citation_traceability_coverage=round(citation_traceability, 4),
+                    bbox_citation_coverage=round(bbox_citation, 4),
+                    element_lineage_coverage=round(element_lineage, 4),
                     guardrail_warnings=response.guardrail_warnings,
                     failure_reasons=failure_reasons,
                     diagnostics=response.diagnostics,
@@ -296,6 +322,12 @@ class EvaluationRunner:
             "context_recall": round(context_recall_total / case_count, 4),
             "response_relevancy": round(response_relevancy_total / case_count, 4),
             "noise_sensitivity": round(noise_sensitivity_total / case_count, 4),
+            "citation_traceability_coverage": round(
+                citation_traceability_total / case_count,
+                4,
+            ),
+            "bbox_citation_coverage": round(bbox_citation_total / case_count, 4),
+            "element_lineage_coverage": round(element_lineage_total / case_count, 4),
         }
         threshold_failures = _threshold_failures(thresholds, aggregate_values)
         return EvaluationMetrics(
@@ -306,7 +338,10 @@ class EvaluationRunner:
             threshold_failures=threshold_failures,
             failure_reason_counts=failure_reason_counts,
             case_results=case_results,
-            ingestion_quality=await _ingestion_quality_summary(self._quality_source),
+            ingestion_quality=await _ingestion_quality_summary(
+                self._quality_source,
+                timeout_seconds=_ingestion_quality_timeout_seconds(effective_settings),
+            ),
             **aggregate_values,
         )
 
@@ -382,6 +417,8 @@ def _settings_with_rag_overrides(
 
 async def _ingestion_quality_summary(
     source: IngestionQualitySource | None,
+    *,
+    timeout_seconds: float,
 ) -> EvaluationIngestionQualitySummary:
     """取込品質 source がある場合だけ評価結果へ集計を添付する。"""
     if source is None:
@@ -389,12 +426,21 @@ async def _ingestion_quality_summary(
     # 評価本体の gate は検索・生成品質であり、品質サマリは補助情報。
     # Oracle Wallet や監査用 schema の一時不整合で評価全体を落とさない。
     try:
-        extractions = await source.list_document_extractions()
+        extractions = await asyncio.wait_for(
+            source.list_document_extractions(),
+            timeout=timeout_seconds,
+        )
     except Exception:
         return EvaluationIngestionQualitySummary()
     return EvaluationIngestionQualitySummary.model_validate(
         summarize_ingestion_quality(extractions)
     )
+
+
+def _ingestion_quality_timeout_seconds(settings: Settings) -> float:
+    """評価の補助サマリが golden set 実行を長時間ブロックしない上限を返す。"""
+    timeout = float(getattr(settings, "db_read_timeout_seconds", 8.0))
+    return max(0.001, min(timeout, 2.0))
 
 
 def _reciprocal_rank(retrieved_ids: list[str], relevant_ids: set[str]) -> float:
@@ -414,6 +460,30 @@ def _context_precision(citations: Sequence[object], relevant_ids: set[str]) -> f
         1 for citation in citations if getattr(citation, "document_id", None) in relevant_ids
     )
     return hit_count / len(citations)
+
+
+def _case_citation_traceability_coverage(
+    response: SearchResponse,
+    relevant_ids: set[str],
+) -> float:
+    """no-results 正解を除き、citation traceability coverage を返す。"""
+    if not response.citations:
+        return 1.0 if not relevant_ids else 0.0
+    return citation_traceability_coverage(response.citations)
+
+
+def _case_bbox_citation_coverage(response: SearchResponse, relevant_ids: set[str]) -> float:
+    """no-results 正解を除き、bbox citation coverage を返す。"""
+    if not response.citations:
+        return 1.0 if not relevant_ids else 0.0
+    return bbox_citation_coverage(response.citations)
+
+
+def _case_element_lineage_coverage(response: SearchResponse, relevant_ids: set[str]) -> float:
+    """no-results 正解を除き、element lineage coverage を返す。"""
+    if not response.citations:
+        return 1.0 if not relevant_ids else 0.0
+    return element_lineage_coverage(response.citations)
 
 
 def _response_relevancy(query: str, answer: str) -> float:

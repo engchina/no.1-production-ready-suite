@@ -33,12 +33,14 @@ from app.rag.graph_index import (
 from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
 from app.schemas.document import (
+    DocumentChunkView,
     DocumentDetail,
     DocumentStats,
     DocumentSummary,
     FileStatus,
     IngestionJob,
     IngestionJobStatus,
+    IngestionSegment,
 )
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.knowledge_base import (
@@ -175,6 +177,26 @@ class StoredKnowledgeBase:
 
 
 @dataclass
+class StoredAgentMemory:
+    """Agent Memory 行。raw user/thread id ではなく hash scope だけを保持する。"""
+
+    memory_id: str
+    tenant_id_hash: str | None
+    user_id_hash: str | None
+    role_id_hash: str | None
+    agent_id_hash: str | None
+    thread_id_hash: str | None
+    trace_id: str
+    memory_text: str
+    embedding: list[float]
+    metadata: dict[str, object] = field(default_factory=dict)
+    usefulness_score: float = 0.5
+    eval_count: int = 0
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
 class LocalOracleStore:
     """Oracle row 変換などの単体テストで使う補助ストア。"""
 
@@ -183,6 +205,8 @@ class LocalOracleStore:
     knowledge_bases: dict[str, StoredKnowledgeBase] = field(default_factory=dict)
     document_knowledge_bases: set[tuple[str, str]] = field(default_factory=set)
     ingestion_jobs: dict[str, IngestionJob] = field(default_factory=dict)
+    ingestion_segments: dict[str, IngestionSegment] = field(default_factory=dict)
+    agent_memories: dict[str, StoredAgentMemory] = field(default_factory=dict)
 
 
 _LOCAL_STORE = LocalOracleStore()
@@ -545,6 +569,38 @@ class OracleClient:
             status=status,
         )
 
+    async def replace_ingestion_segments(
+        self,
+        document_id: str,
+        segments: Sequence[IngestionSegment],
+    ) -> list[IngestionSegment]:
+        """指定 document の segment checkpoint を置換する。"""
+        return await self._replace_ingestion_segments_with_oracle(document_id, segments)
+
+    async def list_ingestion_segments(self, document_id: str) -> list[IngestionSegment]:
+        """指定 document の segment checkpoint 一覧を返す。"""
+        return await self._list_ingestion_segments_with_oracle(document_id)
+
+    async def update_ingestion_segment(
+        self,
+        segment_id: str,
+        *,
+        status: str | None = None,
+        attempt_count: int | None = None,
+        artifact_path: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> IngestionSegment | None:
+        """segment checkpoint の状態を更新する。"""
+        return await self._update_ingestion_segment_with_oracle(
+            segment_id,
+            status=status,
+            attempt_count=attempt_count,
+            artifact_path=artifact_path,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
     async def count_ingestion_jobs(self, *, status: IngestionJobStatus | None = None) -> int:
         """アクセス可能な取込 job 件数を返す。"""
         return await self._count_ingestion_jobs_with_oracle(status=status)
@@ -642,6 +698,10 @@ class OracleClient:
         """指定 document の検索可能なチャンク行数を返す。"""
         return await self._count_document_chunks_with_oracle(document_id)
 
+    async def list_document_chunks(self, document_id: str) -> list[DocumentChunkView]:
+        """指定 document の chunk/citation 可視化用 metadata を返す。"""
+        return await self._list_document_chunks_with_oracle(document_id)
+
     async def document_stats(self) -> DocumentStats:
         """ドキュメント状態別の集計を返す。"""
         return await self._document_stats_with_oracle()
@@ -711,6 +771,7 @@ class OracleClient:
                     query_hash,
                     query_chars,
                     filter_keys,
+                    memory_plan_id,
                     top_k,
                     rerank_top_n,
                     query_variant_count,
@@ -724,6 +785,15 @@ class OracleClient:
                     context_expanded_count,
                     context_compressed_count,
                     context_compression_saved_chars,
+                    agent_memory_retrieved_count,
+                    agent_memory_writeback_count,
+                    agent_memory_writeback_status,
+                    evidence_count,
+                    support_count,
+                    structure_count,
+                    history_count,
+                    resolver_rejected_count,
+                    insufficient_context_count,
                     citation_count,
                     context_chars,
                     context_window_chars,
@@ -744,6 +814,7 @@ class OracleClient:
                     :query_hash,
                     :query_chars,
                     :filter_keys,
+                    :memory_plan_id,
                     :top_k,
                     :rerank_top_n,
                     :query_variant_count,
@@ -757,6 +828,15 @@ class OracleClient:
                     :context_expanded_count,
                     :context_compressed_count,
                     :context_compression_saved_chars,
+                    :agent_memory_retrieved_count,
+                    :agent_memory_writeback_count,
+                    :agent_memory_writeback_status,
+                    :evidence_count,
+                    :support_count,
+                    :structure_count,
+                    :history_count,
+                    :resolver_rejected_count,
+                    :insufficient_context_count,
                     :citation_count,
                     :context_chars,
                     :context_window_chars,
@@ -887,6 +967,192 @@ class OracleClient:
             )
         )
         return evaluation_run_id
+
+    async def agent_memory_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """Oracle 26ai Agent Memory から scoped history context を取得する。"""
+        del filters
+        if top_k <= 0 or not _agent_memory_scope_available():
+            return []
+        self._validate_embedding_width(embedding, "agent memory query embedding")
+        if _LOCAL_STORE.agent_memories and not _oracle_connection_configured(self):
+            return _local_agent_memory_search(query, embedding, top_k)
+        if not _oracle_connection_configured(self):
+            return []
+        return await self._agent_memory_search_with_oracle(query, embedding, top_k)
+
+    async def save_agent_memory(
+        self,
+        memory: Mapping[str, object],
+        embedding: list[float],
+    ) -> str | None:
+        """根拠付き回答の低機密 summary を scoped Agent Memory として保存する。"""
+        if not _agent_memory_scope_available():
+            return None
+        if not str(memory.get("memory_text") or "").strip():
+            return None
+        self._validate_embedding_width(embedding, "agent memory embedding")
+        memory_id = _audit_str(memory, "memory_id", uuid4().hex)
+        binds = _agent_memory_binds(memory, memory_id=memory_id, embedding=embedding)
+        if _LOCAL_STORE.agent_memories and not _oracle_connection_configured(self):
+            _LOCAL_STORE.agent_memories[memory_id] = _stored_agent_memory_from_binds(binds)
+            return memory_id
+        if not _oracle_connection_configured(self):
+            return None
+        await self._run_transaction(
+            lambda connection: _execute(
+                connection,
+                """
+                INSERT INTO rag_agent_memories (
+                    memory_id,
+                    tenant_id_hash,
+                    user_id_hash,
+                    role_id_hash,
+                    agent_id_hash,
+                    thread_id_hash,
+                    trace_id,
+                    memory_text,
+                    metadata_json,
+                    embedding,
+                    usefulness_score,
+                    eval_count,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    :memory_id,
+                    :tenant_id_hash,
+                    :user_id_hash,
+                    :role_id_hash,
+                    :agent_id_hash,
+                    :thread_id_hash,
+                    :trace_id,
+                    :memory_text,
+                    :metadata_json,
+                    :embedding,
+                    :usefulness_score,
+                    :eval_count,
+                    :created_at,
+                    :updated_at
+                )
+                """,
+                binds,
+            )
+        )
+        return memory_id
+
+    async def evaluate_agent_memory(
+        self,
+        memory_id: str,
+        *,
+        useful: bool,
+    ) -> None:
+        """memory feedback を usefulness_score の移動平均として保存する。"""
+        cleaned_memory_id = memory_id.strip()
+        if not cleaned_memory_id or not _agent_memory_scope_available():
+            return
+        if cleaned_memory_id in _LOCAL_STORE.agent_memories and not _oracle_connection_configured(
+            self
+        ):
+            stored = _LOCAL_STORE.agent_memories[cleaned_memory_id]
+            next_count = stored.eval_count + 1
+            next_score = (stored.usefulness_score * stored.eval_count) + (1.0 if useful else 0.0)
+            next_score = next_score / next_count
+            _LOCAL_STORE.agent_memories[cleaned_memory_id] = replace(
+                stored,
+                usefulness_score=round(next_score, 6),
+                eval_count=next_count,
+                updated_at=datetime.now(UTC),
+            )
+            return
+        if not _oracle_connection_configured(self):
+            return
+        where_sql, binds = _oracle_agent_memory_where()
+        binds.update(
+            {
+                "memory_id": cleaned_memory_id,
+                "useful_score": 1.0 if useful else 0.0,
+            }
+        )
+        await self._run_transaction(
+            lambda connection: _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_agent_memories m
+                SET usefulness_score =
+                        ROUND(
+                            ((usefulness_score * eval_count) + :useful_score)
+                            / (eval_count + 1),
+                            6
+                        ),
+                    eval_count = eval_count + 1,
+                    updated_at = SYSTIMESTAMP
+                WHERE m.memory_id = :memory_id
+                  AND {where_sql}
+                """,
+                    where_sql=where_sql,
+                ),
+                binds,
+            )
+        )
+
+    async def _agent_memory_search_with_oracle(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+    ) -> list[RetrievedChunk]:
+        """Oracle VECTOR + Text で scoped Agent Memory を検索する。"""
+        where_sql, binds = _oracle_agent_memory_where()
+        binds.update(
+            {
+                "embedding": _to_vector_bind(embedding),
+                "min_similarity": self._settings.rag_min_similarity,
+                "query": query,
+            }
+        )
+        fetch_clause = _oracle_vector_fetch_clause(
+            top_k=top_k,
+            target_accuracy=self._settings.oracle_vector_target_accuracy,
+        )
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                memory_id,
+                memory_text,
+                metadata_json,
+                usefulness_score,
+                eval_count,
+                updated_at,
+                (
+                    1 - VECTOR_DISTANCE(embedding, :embedding, COSINE)
+                ) AS vector_score,
+                (
+                    (1 - VECTOR_DISTANCE(embedding, :embedding, COSINE)) * 0.85
+                    + LEAST(NVL(usefulness_score, 0.5), 1) * 0.15
+                ) AS score
+            FROM rag_agent_memories m
+            WHERE {where_sql}
+              AND 1 - VECTOR_DISTANCE(embedding, :embedding, COSINE) >= :min_similarity
+            ORDER BY
+                VECTOR_DISTANCE(embedding, :embedding, COSINE) ASC,
+                usefulness_score DESC,
+                updated_at DESC,
+                memory_id ASC
+            {fetch_clause}
+            """,
+                where_sql=where_sql,
+                fetch_clause=fetch_clause,
+            ),
+            binds,
+        )
+        return [_agent_memory_chunk_from_row(row, rank=rank) for rank, row in enumerate(rows, 1)]
 
     async def _vector_search_with_oracle(
         self, embedding: list[float], top_k: int, filters: dict[str, str]
@@ -2067,6 +2333,219 @@ class OracleClient:
         )
         return [_ingestion_job_from_row(row) for row in rows]
 
+    async def _replace_ingestion_segments_with_oracle(
+        self,
+        document_id: str,
+        segments: Sequence[IngestionSegment],
+    ) -> list[IngestionSegment]:
+        """Oracle segment checkpoint table を document scope で置換する。"""
+        normalized_segments = [
+            segment.model_copy(update={"document_id": document_id}) for segment in segments
+        ]
+
+        def operation(connection: OracleConnectionProtocol) -> list[IngestionSegment]:
+            if _select_document(connection, document_id) is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_ingestion_segments
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_ingestion_segments.document_id
+                        AND {document_access_sql}
+                  )
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            if normalized_segments:
+                _executemany(
+                    connection,
+                    """
+                    INSERT INTO rag_ingestion_segments (
+                        segment_id,
+                        document_id,
+                        tenant_id_hash,
+                        status,
+                        parser_backend,
+                        parser_profile,
+                        page_start,
+                        page_end,
+                        attempt_count,
+                        artifact_path,
+                        error_code,
+                        error_message
+                    ) VALUES (
+                        :segment_id,
+                        :document_id,
+                        :tenant_id_hash,
+                        :status,
+                        :parser_backend,
+                        :parser_profile,
+                        :page_start,
+                        :page_end,
+                        :attempt_count,
+                        :artifact_path,
+                        :error_code,
+                        :error_message
+                    )
+                    """,
+                    [_ingestion_segment_binds(segment) for segment in normalized_segments],
+                )
+            return list(normalized_segments)
+
+        return await self._run_transaction(operation)
+
+    async def _list_ingestion_segments_with_oracle(
+        self,
+        document_id: str,
+    ) -> list[IngestionSegment]:
+        """Oracle segment checkpoint table から document scope で取得する。"""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                s.segment_id,
+                s.document_id,
+                s.status,
+                s.parser_backend,
+                s.parser_profile,
+                s.page_start,
+                s.page_end,
+                s.attempt_count,
+                s.artifact_path,
+                s.error_code,
+                s.error_message
+            FROM rag_ingestion_segments s
+            JOIN rag_documents d
+              ON d.document_id = s.document_id
+            WHERE s.document_id = :document_id
+              AND {document_access_sql}
+            ORDER BY
+                COALESCE(s.page_start, 0) ASC,
+                COALESCE(s.page_end, 0) ASC,
+                s.segment_id ASC
+            """,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        return [_ingestion_segment_from_row(row) for row in rows]
+
+    async def _update_ingestion_segment_with_oracle(
+        self,
+        segment_id: str,
+        *,
+        status: str | None,
+        attempt_count: int | None,
+        artifact_path: str | None,
+        error_code: str | None,
+        error_message: str | None,
+    ) -> IngestionSegment | None:
+        """Oracle segment checkpoint table の状態を更新する。"""
+        updates: dict[str, object] = {}
+        if status is not None:
+            updates["status"] = status
+        if attempt_count is not None:
+            updates["attempt_count"] = attempt_count
+        if artifact_path is not None:
+            updates["artifact_path"] = artifact_path
+        if error_code is not None:
+            updates["error_code"] = error_code
+        if error_message is not None:
+            updates["error_message"] = error_message
+        if not updates:
+            rows = await self._fetch_ingestion_segment_by_id(segment_id)
+            return None if not rows else _ingestion_segment_from_row(rows[0])
+        set_sql = ", ".join(f"{column} = :{column}" for column in updates)
+        binds = {"segment_id": segment_id, **updates}
+
+        def operation(connection: OracleConnectionProtocol) -> IngestionSegment | None:
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_ingestion_segments
+                SET {set_sql},
+                    updated_at = SYSTIMESTAMP
+                WHERE segment_id = :segment_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_ingestion_segments.document_id
+                        AND {document_access_sql}
+                  )
+                """,
+                    set_sql=set_sql,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind(binds),
+            )
+            rows = _fetch_all(
+                connection,
+                _render_sql(
+                    """
+                SELECT
+                    s.segment_id,
+                    s.document_id,
+                    s.status,
+                    s.parser_backend,
+                    s.parser_profile,
+                    s.page_start,
+                    s.page_end,
+                    s.attempt_count,
+                    s.artifact_path,
+                    s.error_code,
+                    s.error_message
+                FROM rag_ingestion_segments s
+                JOIN rag_documents d
+                  ON d.document_id = s.document_id
+                WHERE s.segment_id = :segment_id
+                  AND {document_access_sql}
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"segment_id": segment_id}),
+            )
+            return None if not rows else _ingestion_segment_from_row(rows[0])
+
+        return await self._run_transaction(operation)
+
+    async def _fetch_ingestion_segment_by_id(
+        self,
+        segment_id: str,
+    ) -> list[dict[str, object]]:
+        return await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                s.segment_id,
+                s.document_id,
+                s.status,
+                s.parser_backend,
+                s.parser_profile,
+                s.page_start,
+                s.page_end,
+                s.attempt_count,
+                s.artifact_path,
+                s.error_code,
+                s.error_message
+            FROM rag_ingestion_segments s
+            JOIN rag_documents d
+              ON d.document_id = s.document_id
+            WHERE s.segment_id = :segment_id
+              AND {document_access_sql}
+            """,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"segment_id": segment_id}),
+        )
+
     async def _count_ingestion_jobs_with_oracle(
         self,
         *,
@@ -2540,7 +3019,11 @@ class OracleClient:
         rows = await self._fetch_all(
             _render_sql(
                 """
-            SELECT c.metadata_json
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_index,
+                c.metadata_json
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
             WHERE {where_sql}
@@ -2549,7 +3032,7 @@ class OracleClient:
             ),
             binds,
         )
-        return [_metadata_from_json(row.get("metadata_json")) for row in rows]
+        return [_chunk_metadata_from_row(row) for row in rows]
 
     async def _count_document_chunks_with_oracle(self, document_id: str) -> int:
         """Oracle chunk/vector table の document 別検索可能件数を取得する。"""
@@ -2567,6 +3050,32 @@ class OracleClient:
             binds,
         )
         return _row_count_value(row)
+
+    async def _list_document_chunks_with_oracle(
+        self,
+        document_id: str,
+    ) -> list[DocumentChunkView]:
+        """Oracle chunk/vector table から embedding を除いた chunk view を返す。"""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE c.document_id = :document_id
+              AND {access_predicate}
+            ORDER BY c.chunk_index ASC, c.chunk_id ASC
+            """,
+                access_predicate=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        return [_document_chunk_view_from_row(row) for row in rows]
 
     async def _document_stats_with_oracle(self) -> DocumentStats:
         """Oracle document table の状態別集計を取得する。"""
@@ -2854,6 +3363,8 @@ class OracleClient:
                     "chunk_text": chunk.text,
                     "metadata_json": _json_dumps(
                         {
+                            "document_id": document_id,
+                            "chunk_id": f"{document_id}:{chunk.index}",
                             "chunk_index": chunk.index,
                             "start_offset": chunk.start_offset,
                             "end_offset": chunk.end_offset,
@@ -3365,6 +3876,7 @@ def _search_audit_binds(event: Mapping[str, object]) -> dict[str, object]:
         "query_hash": _audit_str(event, "query_hash", ""),
         "query_chars": _audit_int(event, "query_chars"),
         "filter_keys": _audit_json(event.get("filter_keys", [])),
+        "memory_plan_id": _audit_optional_str(event, "memory_plan_id"),
         "top_k": _audit_optional_int(event, "top_k"),
         "rerank_top_n": _audit_optional_int(event, "rerank_top_n"),
         "query_variant_count": _audit_int(event, "query_variant_count", default=1),
@@ -3381,6 +3893,25 @@ def _search_audit_binds(event: Mapping[str, object]) -> dict[str, object]:
             event,
             "context_compression_saved_chars",
         ),
+        "agent_memory_retrieved_count": _audit_int(
+            event,
+            "agent_memory_retrieved_count",
+        ),
+        "agent_memory_writeback_count": _audit_int(
+            event,
+            "agent_memory_writeback_count",
+        ),
+        "agent_memory_writeback_status": _audit_str(
+            event,
+            "agent_memory_writeback_status",
+            "skipped",
+        ),
+        "evidence_count": _audit_int(event, "evidence_count"),
+        "support_count": _audit_int(event, "support_count"),
+        "structure_count": _audit_int(event, "structure_count"),
+        "history_count": _audit_int(event, "history_count"),
+        "resolver_rejected_count": _audit_int(event, "resolver_rejected_count"),
+        "insufficient_context_count": _audit_int(event, "insufficient_context_count"),
         "citation_count": _audit_int(event, "citation_count"),
         "context_chars": _audit_int(event, "context_chars"),
         "context_window_chars": _audit_optional_int(event, "context_window_chars"),
@@ -3464,6 +3995,57 @@ def _evaluation_artifact_binds(
         "best_experiment_id": _audit_optional_str(artifact, "best_experiment_id"),
         "passed": 1 if bool(artifact.get("passed")) else 0,
     }
+
+
+def _agent_memory_binds(
+    memory: Mapping[str, object],
+    *,
+    memory_id: str,
+    embedding: list[float],
+) -> dict[str, object]:
+    """Agent Memory を Oracle bind 値へ変換する。scope は hash のみ保存する。"""
+    context = current_audit_request_context()
+    now = datetime.now(UTC)
+    metadata = memory.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    usefulness_score = _bounded_float(memory.get("usefulness_score"), default=0.5)
+    return {
+        "memory_id": memory_id,
+        "tenant_id_hash": _audit_optional_str(memory, "tenant_id_hash") or context.tenant_id_hash,
+        "user_id_hash": _audit_optional_str(memory, "user_id_hash") or context.user_id_hash,
+        "role_id_hash": _audit_optional_str(memory, "role_id_hash") or context.role_id_hash,
+        "agent_id_hash": _audit_optional_str(memory, "agent_id_hash") or context.agent_id_hash,
+        "thread_id_hash": _audit_optional_str(memory, "thread_id_hash") or context.thread_id_hash,
+        "trace_id": _audit_str(memory, "trace_id", ""),
+        "memory_text": str(memory.get("memory_text") or "").strip(),
+        "metadata_json": _audit_json(metadata),
+        "embedding": _to_vector_bind(embedding),
+        "embedding_list": list(embedding),
+        "usefulness_score": usefulness_score,
+        "eval_count": _audit_int(memory, "eval_count"),
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _stored_agent_memory_from_binds(binds: Mapping[str, object]) -> StoredAgentMemory:
+    return StoredAgentMemory(
+        memory_id=str(binds["memory_id"]),
+        tenant_id_hash=_optional_str(binds.get("tenant_id_hash")),
+        user_id_hash=_optional_str(binds.get("user_id_hash")),
+        role_id_hash=_optional_str(binds.get("role_id_hash")),
+        agent_id_hash=_optional_str(binds.get("agent_id_hash")),
+        thread_id_hash=_optional_str(binds.get("thread_id_hash")),
+        trace_id=str(binds.get("trace_id") or ""),
+        memory_text=str(binds.get("memory_text") or ""),
+        embedding=list(cast(Sequence[float], binds.get("embedding_list") or [])),
+        metadata=_json_loads(binds.get("metadata_json")),
+        usefulness_score=_float_value(binds.get("usefulness_score")),
+        eval_count=_int_value(binds.get("eval_count")),
+        created_at=_datetime_value(binds.get("created_at")),
+        updated_at=_datetime_value(binds.get("updated_at")),
+    )
 
 
 def _graph_entity_binds(entity: GraphEntity) -> dict[str, object]:
@@ -3562,6 +4144,12 @@ def _audit_float(event: Mapping[str, object], key: str, default: float = 0.0) ->
 def _audit_optional_float(event: Mapping[str, object], key: str) -> float | None:
     value = event.get(key)
     return float(value) if isinstance(value, int | float) else None
+
+
+def _bounded_float(value: object, *, default: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+        return default
+    return min(1.0, max(0.0, float(value)))
 
 
 def _fetch_ingestion_job_rows(
@@ -4077,9 +4665,58 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 "LIKE :filter_section_path ESCAPE '\\'"
             )
             binds["filter_section_path"] = _like_pattern(cleaned)
+        elif key == "source_acl":
+            clauses.append(
+                "LOWER(JSON_VALUE(c.metadata_json, '$.source_acl')) = :filter_source_acl"
+            )
+            binds["filter_source_acl"] = cleaned.casefold()
+        elif key == "document_version":
+            clauses.append(
+                "LOWER(JSON_VALUE(c.metadata_json, '$.document_version')) "
+                "= :filter_document_version"
+            )
+            binds["filter_document_version"] = cleaned.casefold()
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
     return " AND ".join(clauses), binds
+
+
+def _oracle_agent_memory_where() -> tuple[str, dict[str, object]]:
+    """Agent Memory の tenant/user/thread/agent scope predicate を作る。"""
+    context = current_audit_request_context()
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    if context.tenant_id_hash is not None:
+        clauses.append("m.tenant_id_hash = :agent_memory_tenant_id_hash")
+        binds["agent_memory_tenant_id_hash"] = context.tenant_id_hash
+    if context.user_id_hash is not None:
+        clauses.append("m.user_id_hash = :agent_memory_user_id_hash")
+        binds["agent_memory_user_id_hash"] = context.user_id_hash
+    if context.role_id_hash is not None:
+        clauses.append("m.role_id_hash = :agent_memory_role_id_hash")
+        binds["agent_memory_role_id_hash"] = context.role_id_hash
+    if context.agent_id_hash is not None:
+        clauses.append("m.agent_id_hash = :agent_memory_agent_id_hash")
+        binds["agent_memory_agent_id_hash"] = context.agent_id_hash
+    if context.thread_id_hash is not None:
+        clauses.append("m.thread_id_hash = :agent_memory_thread_id_hash")
+        binds["agent_memory_thread_id_hash"] = context.thread_id_hash
+    if not _agent_memory_scope_available():
+        clauses.append("1 = 0")
+    return " AND ".join(clauses or ["1 = 1"]), binds
+
+
+def _agent_memory_scope_available() -> bool:
+    """ユーザー・スレッド・エージェントのいずれかで scope できる場合だけ memory を使う。"""
+    context = current_audit_request_context()
+    return any(
+        (
+            context.user_id_hash,
+            context.role_id_hash,
+            context.agent_id_hash,
+            context.thread_id_hash,
+        )
+    )
 
 
 def _oracle_graph_community_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
@@ -4369,6 +5006,23 @@ def _ingestion_job_binds(job: IngestionJob) -> dict[str, object]:
     }
 
 
+def _ingestion_segment_binds(segment: IngestionSegment) -> dict[str, object]:
+    return {
+        "segment_id": segment.segment_id,
+        "document_id": segment.document_id,
+        "tenant_id_hash": _current_tenant_id_hash(),
+        "status": segment.status,
+        "parser_backend": segment.parser_backend,
+        "parser_profile": segment.parser_profile,
+        "page_start": segment.page_start,
+        "page_end": segment.page_end,
+        "attempt_count": segment.attempt_count,
+        "artifact_path": segment.artifact_path,
+        "error_code": segment.error_code,
+        "error_message": segment.error_message,
+    }
+
+
 def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
     return StoredDocument(
         id=str(row["document_id"]),
@@ -4424,8 +5078,26 @@ def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:
     )
 
 
+def _ingestion_segment_from_row(row: Mapping[str, object]) -> IngestionSegment:
+    return IngestionSegment(
+        segment_id=str(row["segment_id"]),
+        document_id=str(row["document_id"]),
+        status=str(row.get("status") or "QUEUED"),
+        parser_backend=str(row.get("parser_backend") or "enterprise_ai"),
+        parser_profile=str(row.get("parser_profile") or "enterprise_ai_generic"),
+        page_start=_optional_int(row.get("page_start")),
+        page_end=_optional_int(row.get("page_end")),
+        attempt_count=_int_value(row.get("attempt_count")),
+        artifact_path=_optional_str(row.get("artifact_path")),
+        error_code=_optional_str(row.get("error_code")),
+        error_message=_optional_str(row.get("error_message")),
+    )
+
+
 def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
     metadata = _metadata_from_json(row.get("metadata_json"))
+    metadata.setdefault("document_id", str(row["document_id"]))
+    metadata.setdefault("chunk_id", str(row["chunk_id"]))
     chunk_index = row.get("chunk_index")
     if "chunk_index" not in metadata and chunk_index is not None:
         metadata["chunk_index"] = _int_value(chunk_index)
@@ -4436,6 +5108,77 @@ def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
         score=round(_float_value(row.get("score", 0.0)), 6),
         file_name=_optional_str(row.get("file_name")),
         category_name=_optional_str(row.get("category_name")),
+        metadata=metadata,
+    )
+
+
+def _chunk_metadata_from_row(row: Mapping[str, object]) -> dict[str, MetadataValue]:
+    """chunk metadata listing に traceable citation lineage を補う。"""
+    metadata = _metadata_from_json(row.get("metadata_json"))
+    document_id = row.get("document_id")
+    if document_id is not None:
+        metadata.setdefault("document_id", str(document_id))
+    chunk_id = row.get("chunk_id")
+    if chunk_id is not None:
+        metadata.setdefault("chunk_id", str(chunk_id))
+    chunk_index = row.get("chunk_index")
+    if "chunk_index" not in metadata and chunk_index is not None:
+        metadata["chunk_index"] = _int_value(chunk_index)
+    return metadata
+
+
+def _agent_memory_chunk_from_row(
+    row: Mapping[str, object],
+    *,
+    rank: int,
+) -> RetrievedChunk:
+    metadata = _metadata_from_json(row.get("metadata_json"))
+    memory_id = str(row["memory_id"])
+    metadata.update(
+        {
+            "retrieval_mode": "agent_memory",
+            "context_role": "history",
+            "agent_memory_id": memory_id,
+            "agent_memory_rank": rank,
+            "agent_memory_usefulness_score": round(
+                _float_value(row.get("usefulness_score", 0.5)),
+                6,
+            ),
+            "agent_memory_eval_count": _int_value(row.get("eval_count")),
+            "agent_memory_vector_score": round(_float_value(row.get("vector_score")), 6),
+        }
+    )
+    return RetrievedChunk(
+        document_id="agent-memory",
+        chunk_id=f"agent-memory:{memory_id}",
+        text=str(row["memory_text"]),
+        score=round(_float_value(row.get("score", 0.0)), 6),
+        file_name="agent-memory",
+        metadata=metadata,
+    )
+
+
+def _document_chunk_view_from_row(row: Mapping[str, object]) -> DocumentChunkView:
+    """rag_chunks row を UI 用 chunk view へ変換する。"""
+    metadata = _metadata_from_json(row.get("metadata_json"))
+    metadata.setdefault("document_id", str(row["document_id"]))
+    metadata.setdefault("chunk_id", str(row["chunk_id"]))
+    chunk_index = _optional_metadata_int(metadata.get("chunk_index"))
+    if chunk_index is None:
+        chunk_index = _int_value(row.get("chunk_index"))
+    return DocumentChunkView(
+        document_id=str(row["document_id"]),
+        chunk_id=str(row["chunk_id"]),
+        chunk_index=chunk_index,
+        text=str(row["chunk_text"]),
+        page_start=_optional_metadata_int(metadata.get("page_start")),
+        page_end=_optional_metadata_int(metadata.get("page_end")),
+        bbox=_bbox_from_metadata(metadata.get("bbox")),
+        section_path=_metadata_str(metadata.get("section_path")),
+        content_kind=_metadata_str(metadata.get("content_kind")),
+        chunk_group_id=_metadata_str(metadata.get("chunk_group_id")),
+        source_parser=_metadata_str(metadata.get("source_parser")),
+        element_ids=_element_ids_from_metadata(metadata.get("element_ids")),
         metadata=metadata,
     )
 
@@ -4482,7 +5225,73 @@ def _coerce_metadata_value(item: object) -> MetadataValue:
         return int(item) if item == item.to_integral_value() else float(item)
     if isinstance(item, str | int | float):
         return item
+    if isinstance(item, list | dict):
+        return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
     return str(item)
+
+
+def _optional_metadata_int(value: object) -> int | None:
+    """metadata scalar から optional int を読む。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value)
+    return None
+
+
+def _metadata_str(value: object) -> str | None:
+    """metadata scalar から空でない文字列を読む。"""
+    if isinstance(value, str | int | float):
+        cleaned = str(value).strip()
+        return cleaned or None
+    return None
+
+
+def _element_ids_from_metadata(value: object) -> list[str]:
+    """chunk metadata の element_ids を list にする。"""
+    if isinstance(value, list):
+        return [
+            str(item).strip()
+            for item in value
+            if isinstance(item, str | int) and str(item).strip()
+        ]
+    text = _metadata_str(value)
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, list):
+            return [
+                str(item).strip()
+                for item in decoded
+                if isinstance(item, str | int) and str(item).strip()
+            ]
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _bbox_from_metadata(value: object) -> list[float] | None:
+    """chunk metadata の bbox JSON 文字列を list[float] に戻す。"""
+    if not isinstance(value, str):
+        return None
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(decoded, list) or len(decoded) not in {4, 8}:
+        return None
+    bbox: list[float] = []
+    for item in decoded:
+        if isinstance(item, bool) or not isinstance(item, int | float):
+            return None
+        bbox.append(float(item))
+    return bbox
 
 
 def _json_dumps(value: object) -> str:
@@ -4639,6 +5448,8 @@ def reset_local_store() -> None:
     _LOCAL_STORE.knowledge_bases.clear()
     _LOCAL_STORE.document_knowledge_bases.clear()
     _LOCAL_STORE.ingestion_jobs.clear()
+    _LOCAL_STORE.ingestion_segments.clear()
+    _LOCAL_STORE.agent_memories.clear()
 
 
 def close_oracle_pool() -> None:
@@ -4713,6 +5524,16 @@ def _oracle_connect_kwargs(
         kwargs["password"] = settings.oracle_password
     _add_wallet_kwargs(settings, kwargs)
     return kwargs
+
+
+def _oracle_connection_configured(client: OracleClient) -> bool:
+    """実 DB に接続する設定または明示 pool があるかを返す。"""
+    settings = client._settings
+    return (
+        client._pool_instance is not None
+        or bool(settings.oracle_user.strip() and settings.oracle_dsn.strip())
+        or _SHARED_ORACLE_POOL is not None
+    )
 
 
 def _oracle_connection_test_dsn(settings: Settings) -> str:
@@ -4917,6 +5738,47 @@ CREATE INDEX {table_name}_document_idx
 """.strip()
 
 
+def oracle_ingestion_segment_schema_sql(
+    table_name: str = "rag_ingestion_segments",
+    document_table: str = "rag_documents",
+) -> str:
+    """Oracle ingestion segment checkpoint table の DDL 例を返す。"""
+    return f"""
+CREATE TABLE {table_name} (
+    segment_id     VARCHAR2(128) PRIMARY KEY,
+    document_id    VARCHAR2(64) NOT NULL,
+    tenant_id_hash CHAR(64),
+    status         VARCHAR2(32) DEFAULT 'QUEUED' NOT NULL,
+    parser_backend VARCHAR2(80) DEFAULT 'enterprise_ai' NOT NULL,
+    parser_profile VARCHAR2(80) DEFAULT 'enterprise_ai_generic' NOT NULL,
+    page_start     NUMBER(10),
+    page_end       NUMBER(10),
+    attempt_count  NUMBER(5) DEFAULT 0 NOT NULL,
+    artifact_path  VARCHAR2(1024),
+    error_code     VARCHAR2(128),
+    error_message  VARCHAR2(2000),
+    created_at     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at     TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_status_ck
+        CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED')),
+    CONSTRAINT {table_name}_attempts_ck
+        CHECK (attempt_count >= 0),
+    CONSTRAINT {table_name}_page_range_ck
+        CHECK (page_start IS NULL OR page_end IS NULL OR page_start <= page_end),
+    CONSTRAINT {table_name}_document_fk
+        FOREIGN KEY (document_id)
+        REFERENCES {document_table} (document_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX {table_name}_document_status_idx
+    ON {table_name} (document_id, status, page_start, page_end);
+
+CREATE INDEX {table_name}_tenant_status_idx
+    ON {table_name} (tenant_id_hash, status, updated_at DESC);
+""".strip()
+
+
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
     """Oracle 26ai VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
     return f"""
@@ -5001,6 +5863,7 @@ CREATE TABLE {table_name} (
     query_hash            CHAR(64) NOT NULL,
     query_chars           NUMBER(10) NOT NULL,
     filter_keys           JSON,
+    memory_plan_id        VARCHAR2(32),
     top_k                 NUMBER(10),
     rerank_top_n          NUMBER(10),
     query_variant_count   NUMBER(10) DEFAULT 1 NOT NULL,
@@ -5014,6 +5877,15 @@ CREATE TABLE {table_name} (
     context_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_compressed_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_compression_saved_chars NUMBER(10) DEFAULT 0 NOT NULL,
+    agent_memory_retrieved_count NUMBER(10) DEFAULT 0 NOT NULL,
+    agent_memory_writeback_count NUMBER(10) DEFAULT 0 NOT NULL,
+    agent_memory_writeback_status VARCHAR2(32) DEFAULT 'skipped' NOT NULL,
+    evidence_count        NUMBER(10) DEFAULT 0 NOT NULL,
+    support_count         NUMBER(10) DEFAULT 0 NOT NULL,
+    structure_count       NUMBER(10) DEFAULT 0 NOT NULL,
+    history_count         NUMBER(10) DEFAULT 0 NOT NULL,
+    resolver_rejected_count NUMBER(10) DEFAULT 0 NOT NULL,
+    insufficient_context_count NUMBER(10) DEFAULT 0 NOT NULL,
     citation_count        NUMBER(10) DEFAULT 0 NOT NULL,
     context_chars         NUMBER(10) DEFAULT 0 NOT NULL,
     context_window_chars  NUMBER(10),
@@ -5027,7 +5899,9 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_outcome_ck
         CHECK (outcome IN ('success', 'blocked', 'no_results', 'error')),
     CONSTRAINT {table_name}_search_mode_ck
-        CHECK (search_mode IN ('hybrid', 'vector', 'keyword'))
+        CHECK (search_mode IN ('hybrid', 'vector', 'keyword')),
+    CONSTRAINT {table_name}_agent_memory_status_ck
+        CHECK (agent_memory_writeback_status IN ('skipped', 'saved', 'failed'))
 );
 
 CREATE INDEX {table_name}_trace_idx
@@ -5189,6 +6063,60 @@ CREATE INDEX rag_graph_entity_chunks_chunk_idx
 """.strip()
 
 
+def oracle_agent_memory_schema_sql(table_name: str = "rag_agent_memories") -> str:
+    """Agent Memory を Oracle 26ai VECTOR と hash scope で保存する DDL を返す。"""
+    return f"""
+CREATE TABLE {table_name} (
+    memory_id        VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash   CHAR(64),
+    user_id_hash     CHAR(64),
+    role_id_hash     CHAR(64),
+    agent_id_hash    CHAR(64),
+    thread_id_hash   CHAR(64),
+    trace_id         VARCHAR2(64) NOT NULL,
+    memory_text      CLOB NOT NULL,
+    metadata_json    JSON,
+    embedding        VECTOR(1536, FLOAT32) NOT NULL,
+    usefulness_score NUMBER(8, 6) DEFAULT 0.5 NOT NULL,
+    eval_count       NUMBER(10) DEFAULT 0 NOT NULL,
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_usefulness_ck
+        CHECK (usefulness_score >= 0 AND usefulness_score <= 1),
+    CONSTRAINT {table_name}_eval_count_ck
+        CHECK (eval_count >= 0)
+);
+
+CREATE VECTOR INDEX {table_name}_embedding_hnsw_idx
+    ON {table_name} (embedding)
+    ORGANIZATION INMEMORY NEIGHBOR GRAPH
+    DISTANCE COSINE
+    WITH TARGET ACCURACY 95
+    PARAMETERS (
+        TYPE HNSW,
+        NEIGHBORS 32,
+        EFCONSTRUCTION 500
+    );
+
+CREATE INDEX {table_name}_text_idx
+    ON {table_name} (memory_text)
+    INDEXTYPE IS CTXSYS.CONTEXT;
+
+CREATE INDEX {table_name}_scope_idx
+    ON {table_name} (
+        tenant_id_hash,
+        user_id_hash,
+        role_id_hash,
+        agent_id_hash,
+        thread_id_hash,
+        updated_at DESC
+    );
+
+CREATE INDEX {table_name}_trace_idx
+    ON {table_name} (trace_id);
+""".strip()
+
+
 def oracle_feedback_schema_sql(table_name: str = "rag_citation_feedback") -> str:
     """citation feedback の低機密保存 table DDL を返す。"""
     return f"""
@@ -5333,9 +6261,84 @@ def _chunk_matches_filters(chunk: StoredChunk, filters: dict[str, str] | None) -
         section_title,
     ):
         return False
-    if section_path := filters.get("section_path"):
-        return _metadata_value_contains(chunk.metadata, "section_path", section_path)
-    return True
+    if (section_path := filters.get("section_path")) and not _metadata_value_contains(
+        chunk.metadata,
+        "section_path",
+        section_path,
+    ):
+        return False
+    if (source_acl := filters.get("source_acl")) and not _metadata_value_equals(
+        chunk.metadata,
+        "source_acl",
+        source_acl,
+    ):
+        return False
+    return not (
+        (document_version := filters.get("document_version"))
+        and not _metadata_value_equals(
+            chunk.metadata,
+            "document_version",
+            document_version,
+        )
+    )
+
+
+def _local_agent_memory_search(
+    query: str,
+    embedding: list[float],
+    top_k: int,
+) -> list[RetrievedChunk]:
+    """テスト用 local store の Agent Memory 検索。"""
+    query_tokens = _tokens(query)
+    scored: list[tuple[StoredAgentMemory, float, float]] = []
+    for memory in _LOCAL_STORE.agent_memories.values():
+        if not _agent_memory_matches_current_scope(memory):
+            continue
+        vector_score = _cosine_similarity(embedding, memory.embedding)
+        keyword_score = _keyword_score(query_tokens, _tokens(memory.memory_text))
+        score = (vector_score * 0.75) + (keyword_score * 0.1) + (memory.usefulness_score * 0.15)
+        scored.append((memory, score, vector_score))
+    ranked = sorted(
+        scored,
+        key=lambda item: (
+            -item[1],
+            -item[0].usefulness_score,
+            item[0].updated_at,
+            item[0].memory_id,
+        ),
+    )[:top_k]
+    return [
+        _agent_memory_chunk_from_row(
+            {
+                "memory_id": memory.memory_id,
+                "memory_text": memory.memory_text,
+                "metadata_json": _json_dumps(memory.metadata),
+                "usefulness_score": memory.usefulness_score,
+                "eval_count": memory.eval_count,
+                "vector_score": vector_score,
+                "score": score,
+            },
+            rank=rank,
+        )
+        for rank, (memory, score, vector_score) in enumerate(ranked, start=1)
+    ]
+
+
+def _agent_memory_matches_current_scope(memory: StoredAgentMemory) -> bool:
+    context = current_audit_request_context()
+    if not _agent_memory_scope_available():
+        return False
+    if context.tenant_id_hash is not None and memory.tenant_id_hash != context.tenant_id_hash:
+        return False
+    if context.user_id_hash is not None and memory.user_id_hash != context.user_id_hash:
+        return False
+    if context.role_id_hash is not None and memory.role_id_hash != context.role_id_hash:
+        return False
+    if context.agent_id_hash is not None and memory.agent_id_hash != context.agent_id_hash:
+        return False
+    return not (
+        context.thread_id_hash is not None and memory.thread_id_hash != context.thread_id_hash
+    )
 
 
 def _metadata_value_equals(

@@ -16,12 +16,14 @@ from app.clients.oracle import (
     OracleWalletPasswordRequiredError,
     SelectAiUnavailableError,
     _test_oracle_connection_sync,
+    oracle_agent_memory_schema_sql,
     oracle_audit_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_feedback_schema_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
+    oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
     oracle_search_audit_schema_sql,
@@ -43,7 +45,7 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus
+from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus, IngestionSegment
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.knowledge_base import KnowledgeBaseStatus
 from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
@@ -482,6 +484,64 @@ async def test_oracle_client_claims_ingestion_job_with_row_lock() -> None:
     assert update_call.parameters["started_at"] == started_at
 
 
+async def test_oracle_client_replaces_and_lists_ingestion_segments() -> None:
+    """segment checkpoint は document scope で置換・取得できる。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_document_row()],
+            [_oracle_ingestion_segment_row()],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    segment = IngestionSegment(
+        segment_id="doc-1:p1-3",
+        document_id="doc-1",
+        status="QUEUED",
+        parser_backend="enterprise_ai",
+        parser_profile="enterprise_ai_pdf_layout",
+        page_start=1,
+        page_end=3,
+    )
+
+    replaced = await client.replace_ingestion_segments("doc-1", [segment])
+    listed = await client.list_ingestion_segments("doc-1")
+
+    assert replaced == [segment]
+    assert listed[0].segment_id == "doc-1:p1-3"
+    assert listed[0].page_start == 1
+    statements = [call.statement for call in pool.connection.calls]
+    assert any("DELETE FROM rag_ingestion_segments" in statement for statement in statements)
+    assert pool.connection.many_calls
+    assert "INSERT INTO rag_ingestion_segments" in pool.connection.many_calls[0].statement
+    assert pool.connection.many_calls[0].rows[0]["segment_id"] == "doc-1:p1-3"
+    list_call = pool.connection.calls[-1]
+    assert "FROM rag_ingestion_segments s" in list_call.statement
+    assert "JOIN rag_documents d" in list_call.statement
+    assert list_call.parameters["document_id"] == "doc-1"
+
+
+async def test_oracle_client_updates_ingestion_segment_status() -> None:
+    """segment checkpoint 更新は document access predicate 付きで行う。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_ingestion_segment_row(status="RUNNING")]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    updated = await client.update_ingestion_segment(
+        "doc-1:p1-3",
+        status="RUNNING",
+        attempt_count=2,
+        artifact_path="oci://namespace/bucket/artifacts/extractions/doc-1/trace.json",
+    )
+
+    assert updated is not None
+    assert updated.status == "RUNNING"
+    update_call = pool.connection.calls[0]
+    assert "UPDATE rag_ingestion_segments" in update_call.statement
+    assert "updated_at = SYSTIMESTAMP" in update_call.statement
+    assert update_call.parameters["segment_id"] == "doc-1:p1-3"
+    assert update_call.parameters["status"] == "RUNNING"
+    assert update_call.parameters["attempt_count"] == 2
+
+
 async def test_oracle_client_persists_knowledge_bases_through_pool() -> None:
     """knowledge base persistence は Oracle pool 経由で実行される。"""
     pool = FakeOraclePool()
@@ -604,6 +664,8 @@ async def test_oci_vector_search_uses_ai_vector_search_sql() -> None:
     )
 
     assert len(hits) == 1
+    assert hits[0].metadata["document_id"] == "doc-1"
+    assert hits[0].metadata["chunk_id"] == "doc-1:0"
     assert hits[0].metadata["retrieval_mode"] == "vector"
     assert hits[0].metadata["vector_rank"] == 1
     assert hits[0].metadata["vector_score"] == 0.91
@@ -897,6 +959,8 @@ async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> N
     )
 
     assert saved[0].chunk_id == "doc-1:0"
+    assert saved[0].metadata["document_id"] == "doc-1"
+    assert saved[0].metadata["chunk_id"] == "doc-1:0"
     assert saved[0].metadata["chunk_index"] == 0
     assert saved[0].metadata["section_path"] == "経費申請 > 承認"
     assert pool.connection.commits == 1
@@ -907,9 +971,106 @@ async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> N
     assert inserted["chunk_id"] == "doc-1:0"
     assert inserted["embedding"] == array("f", [1.0, 0.0, 0.0])
     metadata = json.loads(str(inserted["metadata_json"]))
+    assert metadata["document_id"] == "doc-1"
+    assert metadata["chunk_id"] == "doc-1:0"
     assert metadata["chunk_index"] == 0
     assert metadata["section_path"] == "経費申請 > 承認"
     assert metadata["content_kind"] == "text"
+
+
+async def test_oci_list_chunk_metadata_adds_traceable_lineage() -> None:
+    """metadata 一覧も citation 可視化に必要な chunk lineage を補完する。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:4",
+                    "chunk_index": 4,
+                    "metadata_json": json.dumps(
+                        {
+                            "content_kind": "table",
+                            "element_ids": "tbl-1",
+                            "page_start": 2,
+                            "page_end": 3,
+                            "bbox": "[0.1,0.2,0.8,0.9]",
+                            "chunk_group_id": "grp-table",
+                            "source_parser": "marker",
+                        }
+                    ),
+                }
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    metadata = await client.list_chunk_metadata()
+
+    assert metadata == [
+        {
+            "document_id": "doc-1",
+            "chunk_id": "doc-1:4",
+            "chunk_index": 4,
+            "content_kind": "table",
+            "element_ids": "tbl-1",
+            "page_start": 2,
+            "page_end": 3,
+            "bbox": "[0.1,0.2,0.8,0.9]",
+            "chunk_group_id": "grp-table",
+            "source_parser": "marker",
+        }
+    ]
+    call = pool.connection.calls[0]
+    assert "c.document_id" in call.statement
+    assert "c.chunk_id" in call.statement
+    assert "c.chunk_index" in call.statement
+    assert "c.metadata_json" in call.statement
+
+
+async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_metadata() -> None:
+    """chunk view は JSON array element_ids と table row-group metadata を保持する。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:7",
+                    "chunk_index": 7,
+                    "chunk_text": "|項目|金額|\n|---|---|\n|交通費|1000円|",
+                    "metadata_json": json.dumps(
+                        {
+                            "content_kind": "table",
+                            "element_ids": ["tbl-main", "row-group-1"],
+                            "page_start": 2,
+                            "page_end": 2,
+                            "chunk_group_id": "grp-table",
+                            "source_parser": "local_office_structure",
+                            "bbox_coordinate_mode": "xywh",
+                            "bbox_unit": "percent",
+                            "table_data_row_start": 1,
+                            "table_data_row_end": 12,
+                            "table_header_repeated": True,
+                        }
+                    ),
+                }
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    chunks = await client.list_document_chunks("doc-1")
+
+    assert len(chunks) == 1
+    chunk = chunks[0]
+    assert chunk.chunk_id == "doc-1:7"
+    assert chunk.element_ids == ["tbl-main", "row-group-1"]
+    assert chunk.content_kind == "table"
+    assert chunk.chunk_group_id == "grp-table"
+    assert chunk.metadata["bbox_coordinate_mode"] == "xywh"
+    assert chunk.metadata["bbox_unit"] == "percent"
+    assert chunk.metadata["table_data_row_start"] == 1
+    assert chunk.metadata["table_data_row_end"] == 12
+    assert chunk.metadata["table_header_repeated"] is True
 
 
 @IN_MEMORY_ORACLE_REMOVED
@@ -1355,6 +1516,44 @@ async def test_oci_retrieval_applies_multiple_knowledge_base_filters() -> None:
     assert call.parameters["filter_knowledge_base_id_1"] == "kb-2"
 
 
+async def test_oracle_agent_memory_search_applies_hashed_scope_predicates() -> None:
+    """Agent Memory search SQL は raw ID ではなく hash scope の bind だけで絞り込む。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    token = set_audit_request_context(
+        AuditRequestContext(
+            request_id="request-memory-sql",
+            tenant_id_hash="a" * 64,
+            user_id_hash="b" * 64,
+            role_id_hash="c" * 64,
+            agent_id_hash="d" * 64,
+            thread_id_hash="e" * 64,
+        )
+    )
+    try:
+        hits = await client.agent_memory_search(
+            "承認条件",
+            [1.0, 0.0, 0.0],
+            top_k=3,
+        )
+    finally:
+        reset_audit_request_context(token)
+
+    assert hits == []
+    call = pool.connection.calls[0]
+    assert "FROM rag_agent_memories m" in call.statement
+    assert "m.tenant_id_hash = :agent_memory_tenant_id_hash" in call.statement
+    assert "m.user_id_hash = :agent_memory_user_id_hash" in call.statement
+    assert "m.role_id_hash = :agent_memory_role_id_hash" in call.statement
+    assert "m.agent_id_hash = :agent_memory_agent_id_hash" in call.statement
+    assert "m.thread_id_hash = :agent_memory_thread_id_hash" in call.statement
+    assert call.parameters["agent_memory_tenant_id_hash"] == "a" * 64
+    assert call.parameters["agent_memory_user_id_hash"] == "b" * 64
+    assert call.parameters["agent_memory_role_id_hash"] == "c" * 64
+    assert call.parameters["agent_memory_agent_id_hash"] == "d" * 64
+    assert call.parameters["agent_memory_thread_id_hash"] == "e" * 64
+
+
 @IN_MEMORY_ORACLE_REMOVED
 async def test_local_update_missing_document_raises_key_error() -> None:
     """存在しない document の状態更新は明示的に失敗する。"""
@@ -1465,6 +1664,18 @@ def test_oracle_ingestion_job_schema_includes_queue_table() -> None:
     assert "ON rag_ingestion_jobs (tenant_id_hash, status, queued_at DESC)" in ddl
 
 
+def test_oracle_ingestion_segment_schema_includes_checkpoint_table() -> None:
+    """segment checkpoint は document 単位で page range / artifact path を永続化する。"""
+    ddl = oracle_ingestion_segment_schema_sql()
+
+    assert "CREATE TABLE rag_ingestion_segments" in ddl
+    assert "segment_id     VARCHAR2(128) PRIMARY KEY" in ddl
+    assert "artifact_path  VARCHAR2(1024)" in ddl
+    assert "REFERENCES rag_documents (document_id)" in ddl
+    assert "rag_ingestion_segments_document_status_idx" in ddl
+    assert "CHECK (page_start IS NULL OR page_end IS NULL OR page_start <= page_end)" in ddl
+
+
 def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     """chunk/vector DDL 例は tenant filter 用の列と索引を含む。"""
     ddl = oracle_vector_schema_sql()
@@ -1505,18 +1716,45 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
     assert "context_expanded_count number(10) default 0 not null" in normalized
     assert "context_compressed_count number(10) default 0 not null" in normalized
     assert "context_compression_saved_chars number(10) default 0 not null" in normalized
+    assert "agent_memory_retrieved_count number(10) default 0 not null" in normalized
+    assert "agent_memory_writeback_count number(10) default 0 not null" in normalized
+    assert "agent_memory_writeback_status varchar2(32) default 'skipped' not null" in normalized
     assert "context_chars         number(10) default 0 not null" in normalized
     assert "config_fingerprint    char(64)" in normalized
     assert "document_ids          json" in normalized
     assert "knowledge_base_ids    json" in normalized
     assert "check (outcome in ('success', 'blocked', 'no_results', 'error'))" in normalized
     assert "check (search_mode in ('hybrid', 'vector', 'keyword'))" in normalized
+    assert "check (agent_memory_writeback_status in ('skipped', 'saved', 'failed'))" in normalized
     assert "rag_search_audit_created_outcome_idx" in ddl
     assert "rag_search_audit_tenant_created_idx" in ddl
     assert "rag_search_audit_config_idx" in ddl
     assert "query_text" not in normalized
     assert "prompt" not in normalized
     assert " mode " not in normalized
+
+
+def test_oracle_agent_memory_schema_uses_vector_and_hashed_scope() -> None:
+    """Agent Memory は Oracle 26ai 内の vector table と hash scope で保持する。"""
+    ddl = oracle_agent_memory_schema_sql()
+    normalized = ddl.lower()
+
+    assert "create table rag_agent_memories" in normalized
+    assert "tenant_id_hash   char(64)" in normalized
+    assert "user_id_hash     char(64)" in normalized
+    assert "role_id_hash     char(64)" in normalized
+    assert "agent_id_hash    char(64)" in normalized
+    assert "thread_id_hash   char(64)" in normalized
+    assert "memory_text      clob not null" in normalized
+    assert "embedding        vector(1536, float32) not null" in normalized
+    assert "create vector index rag_agent_memories_embedding_hnsw_idx" in normalized
+    assert "organization inmemory neighbor graph" in normalized
+    assert "indextype is ctxsys.context" in normalized
+    assert "rag_agent_memories_scope_idx" in ddl
+    assert "raw_user_id" not in normalized
+    assert "thread_id " not in normalized
+    assert "qdrant" not in normalized
+    assert "pgvector" not in normalized
 
 
 def test_oracle_ingestion_audit_schema_redacts_ocr_body() -> None:
@@ -2146,6 +2384,26 @@ def _oracle_ingestion_job_row(
         "queued_at": datetime(2026, 1, 2, tzinfo=UTC),
         "started_at": started_at,
         "finished_at": finished_at,
+    }
+
+
+def _oracle_ingestion_segment_row(
+    *,
+    segment_id: str = "doc-1:p1-3",
+    status: str = "SUCCEEDED",
+) -> dict[str, object]:
+    return {
+        "segment_id": segment_id,
+        "document_id": "doc-1",
+        "status": status,
+        "parser_backend": "enterprise_ai",
+        "parser_profile": "enterprise_ai_pdf_layout",
+        "page_start": 1,
+        "page_end": 3,
+        "attempt_count": 1,
+        "artifact_path": "oci://namespace/bucket/artifacts/extractions/doc-1/trace.json",
+        "error_code": None,
+        "error_message": None,
     }
 
 

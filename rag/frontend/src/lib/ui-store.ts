@@ -29,6 +29,9 @@ function initialSidebarCollapsed(): boolean {
   if (typeof window === "undefined") {
     return false;
   }
+  if (window.matchMedia("(max-width: 640px)").matches) {
+    return true;
+  }
   return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
 }
 

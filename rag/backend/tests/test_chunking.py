@@ -67,6 +67,43 @@ def test_structured_extraction_infers_elements_from_raw_text() -> None:
     assert raw_start >= 0
 
 
+def test_structured_extraction_infers_code_and_equation_blocks() -> None:
+    """Markdown/LaTeX block を code/equation element として保持する。"""
+    extraction = StructuredExtraction(
+        raw_text="""# 実装メモ
+```python
+def answer() -> int:
+    return 42
+```
+
+$$
+E = mc^2
+$$
+"""
+    )
+
+    assert [element.kind for element in extraction.elements] == ["title", "code", "equation"]
+    code_element = extraction.elements[1]
+    equation_element = extraction.elements[2]
+    assert code_element.content_kind == "code"
+    assert code_element.metadata["code_language"] == "python"
+    assert "return 42" in code_element.text
+    assert equation_element.content_kind == "equation"
+    assert equation_element.metadata["equation_delimiter"] == "$$"
+
+    chunks = chunk_extraction(extraction, chunk_size=80, overlap=0)
+
+    code_chunk = next(chunk for chunk in chunks if "return 42" in chunk.text)
+    equation_chunk = next(chunk for chunk in chunks if "E = mc^2" in chunk.text)
+    assert code_chunk.metadata["content_kind"] == "code"
+    assert code_chunk.metadata["element_kinds"] == "code"
+    assert code_chunk.metadata["section_title"] == "実装メモ"
+    assert code_chunk.metadata["code_language"] == "python"
+    assert equation_chunk.metadata["content_kind"] == "equation"
+    assert equation_chunk.metadata["element_kinds"] == "equation"
+    assert equation_chunk.metadata["equation_delimiter"] == "$$"
+
+
 def test_structured_extraction_builds_raw_text_from_elements() -> None:
     """elements だけの VLM 出力でも raw_text fallback を合成する。"""
     extraction = StructuredExtraction(
@@ -91,7 +128,12 @@ def test_chunk_extraction_isolates_tables_and_adds_element_metadata() -> None:
                 kind="table",
                 text="|項目|条件|\n|期限|月末|",
                 page_number=2,
-                metadata={"element_id": "tbl-1"},
+                metadata={
+                    "element_id": "tbl-1",
+                    "table_id": "sheet-a-table-1",
+                    "row_count": 2,
+                    "column_count": 2,
+                },
             ),
             DocumentElement(kind="text", text="補足説明です。", page_number=3),
         ]
@@ -107,7 +149,37 @@ def test_chunk_extraction_isolates_tables_and_adds_element_metadata() -> None:
     assert table_chunk.metadata["page_start"] == 2
     assert table_chunk.metadata["page_end"] == 2
     assert table_chunk.metadata["element_ids"] == "tbl-1"
+    assert table_chunk.metadata["table_id"] == "sheet-a-table-1"
+    assert table_chunk.metadata["table_row_count"] == 2
+    assert table_chunk.metadata["table_column_count"] == 2
     assert table_chunk.metadata["text_chars"] == len(table_chunk.text)
+
+
+def test_chunk_extraction_preserves_bbox_coordinate_metadata() -> None:
+    """bbox の coordinate mode / unit は citation-to-preview 用 metadata に残す。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(kind="title", text="## 料金表", page_number=2),
+            DocumentElement(
+                kind="table",
+                text="交通費は1000円です。",
+                page_number=2,
+                bbox=[25, 10, 50, 40],
+                metadata={
+                    "element_id": "tbl-bbox",
+                    "bbox_coordinate_mode": "x,y,width,height",
+                    "bbox_unit": "percent",
+                },
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=80, overlap=0)
+
+    table_chunk = next(chunk for chunk in chunks if "交通費" in chunk.text)
+    assert table_chunk.metadata["bbox"] == "[25.0,10.0,50.0,40.0]"
+    assert table_chunk.metadata["bbox_coordinate_mode"] == "xywh"
+    assert table_chunk.metadata["bbox_unit"] == "percent"
 
 
 def test_chunk_extraction_does_not_overlap_across_sections() -> None:
@@ -171,7 +243,13 @@ def test_chunk_extraction_adds_parent_group_metadata_to_split_table() -> None:
                 kind="table",
                 text="|項目|金額|\n|A|100|\n|B|200|\n|C|300|",
                 page_number=1,
-                metadata={"element_id": "tbl-price"},
+                metadata={
+                    "element_id": "tbl-price",
+                    "table_id": "xlsx-sheet-1",
+                    "row_count": 4,
+                    "column_count": 2,
+                    "chunk_template": "office_sheet",
+                },
             ),
         ]
     )
@@ -196,3 +274,51 @@ def test_chunk_extraction_adds_parent_group_metadata_to_split_table() -> None:
         part_counts.add(part_count)
     assert part_counts == {len(table_chunks)}
     assert all(chunk.metadata["element_ids"] == "tbl-price" for chunk in table_chunks)
+    assert all(chunk.metadata["table_id"] == "xlsx-sheet-1" for chunk in table_chunks)
+    assert all(chunk.metadata["table_row_count"] == 4 for chunk in table_chunks)
+    assert all(chunk.metadata["table_column_count"] == 2 for chunk in table_chunks)
+    assert all(chunk.metadata["chunk_template"] == "table_preserve_rows" for chunk in table_chunks)
+    assert all(chunk.metadata["source_chunk_template"] == "office_sheet" for chunk in table_chunks)
+
+
+def test_chunk_extraction_repeats_table_header_for_row_group_chunks() -> None:
+    """長い表は後続 chunk にも表頭を入れ、列名を失わず QA できるようにする。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(kind="title", text="## 経費明細", page_number=1),
+            DocumentElement(
+                kind="table",
+                text=(
+                    "|項目|金額|\n"
+                    "|---|---|\n"
+                    "|交通費|1000円|\n"
+                    "|宿泊費|2000円|\n"
+                    "|会議費|3000円|"
+                ),
+                page_number=1,
+                metadata={
+                    "element_id": "tbl-expenses",
+                    "row_count": 5,
+                    "column_count": 2,
+                },
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=28, overlap=0)
+    table_chunks = [chunk for chunk in chunks if chunk.metadata["content_kind"] == "table"]
+
+    assert len(table_chunks) >= 2
+    assert table_chunks[0].text.startswith("|項目|金額|\n|---|---|")
+    assert table_chunks[0].metadata["table_header_repeated"] is False
+    assert table_chunks[0].metadata["table_data_row_start"] == 1
+    assert table_chunks[0].metadata["table_id"] == "tbl-expenses"
+    assert table_chunks[0].metadata["table_row_count"] == 5
+    assert table_chunks[0].metadata["table_column_count"] == 2
+    for chunk in table_chunks[1:]:
+        assert chunk.text.startswith("|項目|金額|\n|---|---|\n")
+        assert chunk.metadata["table_header_repeated"] is True
+        assert chunk.metadata["element_ids"] == "tbl-expenses"
+        assert chunk.metadata["chunk_group_id"] == table_chunks[0].metadata["chunk_group_id"]
+    assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [1, 2, 3]
+    assert [chunk.metadata["table_data_row_end"] for chunk in table_chunks] == [1, 2, 3]

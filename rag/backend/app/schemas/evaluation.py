@@ -57,6 +57,9 @@ class EvaluationMetrics(BaseModel):
     context_recall: float = 0.0
     response_relevancy: float = 0.0
     noise_sensitivity: float = 0.0
+    citation_traceability_coverage: float = 0.0
+    bbox_citation_coverage: float = 0.0
+    element_lineage_coverage: float = 0.0
     passed: bool = True
     threshold_failures: list["EvaluationThresholdFailure"] = Field(default_factory=list)
     failure_reason_counts: dict[EvaluationFailureReason, int] = Field(default_factory=dict)
@@ -72,7 +75,13 @@ class EvaluationIngestionQualitySummary(BaseModel):
     document_count: int = 0
     table_document_count: int = 0
     figure_document_count: int = 0
+    formula_document_count: int = 0
+    low_confidence_document_count: int = 0
+    fallback_document_count: int = 0
+    failed_segment_document_count: int = 0
+    segment_artifact_cache_miss_document_count: int = 0
     long_document_count: int = 0
+    average_page_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
     warning_counts: dict[str, int] = Field(default_factory=dict)
     risk_counts: dict[str, int] = Field(default_factory=lambda: {"low": 0, "medium": 0, "high": 0})
     parser_profile_counts: dict[str, int] = Field(default_factory=dict)
@@ -100,6 +109,9 @@ class EvaluationCaseResult(BaseModel):
     context_recall: float = 0.0
     response_relevancy: float = 0.0
     noise_sensitivity: float = 0.0
+    citation_traceability_coverage: float = 0.0
+    bbox_citation_coverage: float = 0.0
+    element_lineage_coverage: float = 0.0
     guardrail_warnings: list[str] = Field(default_factory=list)
     failure_reasons: list[EvaluationFailureReason] = Field(default_factory=list)
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
@@ -119,6 +131,9 @@ EvaluationMetricName = Literal[
     "context_recall",
     "response_relevancy",
     "noise_sensitivity",
+    "citation_traceability_coverage",
+    "bbox_citation_coverage",
+    "element_lineage_coverage",
 ]
 
 
@@ -135,6 +150,9 @@ class EvaluationThresholds(BaseModel):
     context_recall: float | None = Field(default=None, ge=0.0, le=1.0)
     response_relevancy: float | None = Field(default=None, ge=0.0, le=1.0)
     noise_sensitivity: float | None = Field(default=None, ge=0.0, le=1.0)
+    citation_traceability_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    bbox_citation_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    element_lineage_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class EvaluationThresholdFailure(BaseModel):

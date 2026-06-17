@@ -20,15 +20,24 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "CREATE TABLE rag_document_knowledge_bases" in sql
     assert "-- section: ingestion_jobs" in sql
     assert "CREATE TABLE rag_ingestion_jobs" in sql
+    assert "-- section: ingestion_segments" in sql
+    assert "CREATE TABLE rag_ingestion_segments" in sql
     assert "CREATE TABLE rag_chunks" in sql
     assert "embedding       VECTOR(1536, FLOAT32)" in sql
     assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in sql
     assert "TYPE HNSW" in sql
     assert "WITH TARGET ACCURACY 95" in sql
     assert "CREATE TABLE rag_search_audit" in sql
+    assert "memory_plan_id        VARCHAR2(32)" in sql
+    assert "resolver_rejected_count NUMBER(10) DEFAULT 0 NOT NULL" in sql
     assert "CREATE TABLE rag_ingestion_audit" in sql
     assert "-- section: knowledge_graph" in sql
     assert "CREATE TABLE rag_graph_entities" in sql
+    assert "-- section: agent_memory" in sql
+    assert "CREATE TABLE rag_agent_memories" in sql
+    assert "role_id_hash     CHAR(64)" in sql
+    assert "embedding        VECTOR(1536, FLOAT32) NOT NULL" in sql
+    assert "CREATE VECTOR INDEX rag_agent_memories_embedding_hnsw_idx" in sql
     assert "-- section: citation_feedback" in sql
     assert "CREATE TABLE rag_citation_feedback" in sql
     assert "-- section: evaluation_artifacts" in sql
@@ -60,10 +69,12 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "documents",
         "knowledge_bases",
         "ingestion_jobs",
+        "ingestion_segments",
         "chunks",
         "search_audit",
         "ingestion_audit",
         "knowledge_graph",
+        "agent_memory",
         "citation_feedback",
         "evaluation_artifacts",
     ]
@@ -107,7 +118,18 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260616_003_ingestion_jobs_cancelled_status" in sql
     assert "rag_ingestion_jobs_status_ck" in sql
     assert "''CANCELLED''" in sql
-    assert len(statements) == 6
+    assert "-- migration: 20260616_004_ingestion_segments" in sql
+    assert "CREATE TABLE rag_ingestion_segments" in sql
+    assert "-- migration: 20260616_005_search_audit_memory_engineering" in sql
+    assert "column_name = p_column_name" in sql
+    assert "MEMORY_PLAN_ID" in sql
+    assert "RESOLVER_REJECTED_COUNT" in sql
+    assert "AGENT_MEMORY_RETRIEVED_COUNT" in sql
+    assert "-- migration: 20260616_006_agent_memories" in sql
+    assert "CREATE TABLE rag_agent_memories" in sql
+    assert "ROLE_ID_HASH" in sql
+    assert "CREATE VECTOR INDEX rag_agent_memories_embedding_hnsw_idx" in sql
+    assert len(statements) == 9
     assert all(statement.startswith(("-- migration:", "DECLARE")) for statement in statements)
 
 
@@ -120,7 +142,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260616_003"
+    assert manifest["migration_artifact_version"] == "20260616_006"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -128,6 +150,9 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260616_001_search_audit_search_mode",
         "20260616_002_evaluation_runs_result_sha256",
         "20260616_003_ingestion_jobs_cancelled_status",
+        "20260616_004_ingestion_segments",
+        "20260616_005_search_audit_memory_engineering",
+        "20260616_006_agent_memories",
     ]
 
 
