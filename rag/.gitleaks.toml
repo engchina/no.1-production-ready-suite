@@ -1,0 +1,37 @@
+# gitleaks 設定 — シークレット混入検出(pre-commit hook / CI 共用)
+#
+# 既定ルールセットを継承し、テスト/E2E の意図的なダミー値(プレースホルダ鍵・
+# 偽バケット名)のみを allowlist で除外する。実シークレットは検出させる。
+# ローカル実行用の gitignore 済みファイル(backend/model-settings.json 等)は
+# pre-commit の staged 走査対象外なので、ここでは扱わない。
+
+title = "Production Ready RAG - gitleaks"
+
+[extend]
+useDefault = true
+
+# --- プロジェクト全体の allowlist(誤検知のみを限定的に除外)---
+
+[[allowlists]]
+description = "テスト/E2E fixture は意図的なダミー鍵を含むため除外(CI の secret-scan 除外と同じ方針)"
+paths = [
+  '''backend/tests/.*''',
+  '''frontend/e2e/.*''',
+  '''frontend/src/lib/api\.test\.ts''',
+]
+
+[[allowlists]]
+description = "テンプレート/サンプル設定ファイルは空 placeholder のみ"
+paths = [
+  '''.*\.env\.example''',
+]
+
+[[allowlists]]
+description = "テスト/ドキュメント中の明確なダミー値のみ限定除外(広い stopword は実鍵を隠すため使わない)"
+regexes = [
+  # `\nabc\n` を本体とする例示専用のダミー PRIVATE KEY ブロック
+  '''-----BEGIN (ENCRYPTED |RSA |EC |OPENSSH )?PRIVATE KEY-----\\?n?abc\\?n?-----END''',
+]
+stopwords = [
+  "my-private-bucket",
+]

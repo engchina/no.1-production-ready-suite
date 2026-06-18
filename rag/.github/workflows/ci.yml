@@ -11,6 +11,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # full history を走査して過去コミットの混入も検出する
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # pre-commit hook と同一の設定/ルールで走査する
+          GITLEAKS_CONFIG: .gitleaks.toml
+          # OSS リポジトリ向けライセンスは不要(private の場合のみ要設定)
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
   backend:
     name: Backend
     runs-on: ubuntu-latest
@@ -20,14 +38,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Secret scan
-        working-directory: .
-        run: |
-          if git grep -n -E '(sk-[A-Za-z0-9]{20,}|-----BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY-----|[A-Za-z0-9_]*API_KEY[[:space:]]*=[[:space:]]*[^[:space:]#]+)' -- ':!backend/tests/**' ':!frontend/e2e/**' ':!frontend/src/lib/api.test.ts' ':!frontend/src/lib/i18n.ts' ':!.github/workflows/ci.yml'; then
-            echo "Potential secret material found in tracked source files."
-            exit 1
-          fi
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
