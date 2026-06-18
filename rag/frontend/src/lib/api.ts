@@ -106,7 +106,15 @@ export type ModelSettingsTestTargetType =
 export type UploadStorageBackend = "local" | "oci";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
 export type OciConfigTestStatus = "success" | "failed";
-export type ParserAdapterBackend = "local" | "auto" | "docling" | "marker" | "unstructured";
+export type ParserAdapterBackend =
+  | "local"
+  | "auto"
+  | "docling"
+  | "marker"
+  | "unstructured"
+  | "enterprise_ai_vlm"
+  | "oci_document_understanding";
+export type ParserServiceBackendName = "enterprise_ai_vlm" | "oci_document_understanding";
 export type ParserAdapterBackendName = "docling" | "marker" | "unstructured";
 export type ParserAdapterStatus = "active" | "available" | "disabled" | "ignored" | "missing";
 export type ParserAdapterScoreBackend = "local" | "docling" | "marker" | "unstructured";
@@ -1117,10 +1125,18 @@ export interface ParserAdapterContractData {
   config_source: "runtime";
 }
 
+export interface ParserServiceBackendData {
+  backend: ParserServiceBackendName;
+  selected: boolean;
+  configured: boolean;
+  warning_code: string | null;
+}
+
 export interface ParserAdapterSettingsData {
   adapter_backend: ParserAdapterBackend;
   effective_order: ParserAdapterBackendName[];
   adapters: ParserAdapterStatusData[];
+  service_backends: ParserServiceBackendData[];
   scorecard: ParserAdapterScorecardData;
   source_routes: ParserAdapterSourceRouteData[];
   backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;

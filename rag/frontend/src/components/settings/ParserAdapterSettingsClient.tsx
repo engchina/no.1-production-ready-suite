@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  AlertTriangle,
   CheckCircle2,
+  Cloud,
   PackageCheck,
   PackageX,
   Plug,
@@ -32,6 +34,8 @@ import {
   type ParserAdapterSourceRouteData,
   type ParserAdapterStatus,
   type ParserAdapterStatusData,
+  type ParserServiceBackendData,
+  type ParserServiceBackendName,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
@@ -54,7 +58,19 @@ const BACKEND_OPTIONS: ParserAdapterBackend[] = [
   "docling",
   "marker",
   "unstructured",
+  // service 系 backend(OCI クラウドサービス直呼び。package readiness 対象外)。
+  "enterprise_ai_vlm",
+  "oci_document_understanding",
 ];
+
+const SERVICE_BACKENDS: ParserServiceBackendName[] = [
+  "enterprise_ai_vlm",
+  "oci_document_understanding",
+];
+
+function isServiceBackend(backend: ParserAdapterBackend): backend is ParserServiceBackendName {
+  return (SERVICE_BACKENDS as ParserAdapterBackend[]).includes(backend);
+}
 
 /** Optional parser adapter の runtime 設定と readiness を管理する設定画面。 */
 export function ParserAdapterSettingsClient() {
@@ -200,6 +216,13 @@ function OverviewCard({
       })),
     []
   );
+  const serviceByName = useMemo(
+    () =>
+      new Map<ParserServiceBackendName, ParserServiceBackendData>(
+        (settings.service_backends ?? []).map((item) => [item.backend, item])
+      ),
+    [settings.service_backends]
+  );
   return (
     <Card>
       <CardHeader>
@@ -223,10 +246,13 @@ function OverviewCard({
           <div
             role="radiogroup"
             aria-label={t("settings.parserAdapters.backend")}
-            className="grid grid-cols-1 gap-2 md:grid-cols-5"
+            className="grid grid-cols-1 gap-2 md:grid-cols-3 lg:grid-cols-4"
           >
             {backendOptions.map((option) => {
               const selected = form.adapter_backend === option.backend;
+              const service = isServiceBackend(option.backend)
+                ? serviceByName.get(option.backend)
+                : undefined;
               return (
                 <button
                   key={option.backend}
@@ -242,14 +268,34 @@ function OverviewCard({
                       : "border-border bg-card text-foreground hover:bg-background"
                   )}
                 >
-                  <span className="block text-sm font-semibold">{option.label}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-sm font-semibold">{option.label}</span>
+                    {service ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-sm bg-info-bg px-1.5 py-0.5 text-[10px] font-medium text-info"
+                        title={t("settings.parserAdapters.serviceBackend.tag")}
+                      >
+                        <Cloud size={11} aria-hidden />
+                        {t("settings.parserAdapters.serviceBackend.tag")}
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="mt-1 block text-xs leading-relaxed text-muted">
                     {option.description}
                   </span>
+                  {service && !service.configured ? (
+                    <span className="mt-1.5 inline-flex items-center gap-1 rounded-sm bg-warning-bg px-1.5 py-0.5 text-[11px] font-medium text-warning">
+                      <AlertTriangle size={12} aria-hidden />
+                      {t("settings.parserAdapters.serviceBackend.unconfigured")}
+                    </span>
+                  ) : null}
                 </button>
               );
             })}
           </div>
+          <p className="text-xs leading-relaxed text-muted">
+            {t("settings.parserAdapters.serviceBackend.note")}
+          </p>
         </div>
         <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <RuntimeFact
@@ -1000,6 +1046,10 @@ function adapterLabel(adapter: ParserAdapterBackendName) {
 function backendLabel(backend: ParserAdapterBackend) {
   if (backend === "local") return t("settings.parserAdapters.backend.local");
   if (backend === "auto") return t("settings.parserAdapters.backend.auto");
+  if (backend === "enterprise_ai_vlm")
+    return t("settings.parserAdapters.backend.enterprise_ai_vlm");
+  if (backend === "oci_document_understanding")
+    return t("settings.parserAdapters.backend.oci_document_understanding");
   return adapterLabel(backend);
 }
 

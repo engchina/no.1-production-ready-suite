@@ -130,6 +130,16 @@ export const ja = {
   "settings.parserAdapters.backend.docling.description": "Docling を優先",
   "settings.parserAdapters.backend.marker.description": "Marker を優先",
   "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
+  "settings.parserAdapters.backend.enterprise_ai_vlm": "Enterprise AI VLM",
+  "settings.parserAdapters.backend.enterprise_ai_vlm.description":
+    "OCI Enterprise AI VLM を明示選択(fallback ではなく直接 OCR/抽出)",
+  "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
+  "settings.parserAdapters.backend.oci_document_understanding.description":
+    "OCI Document Understanding の非同期 job で日本語 OCR/表抽出",
+  "settings.parserAdapters.serviceBackend.tag": "OCI サービス",
+  "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
+  "settings.parserAdapters.serviceBackend.note":
+    "「OCI サービス」backend は Python package ではなく OCI クラウドサービスを直接呼びます。未設定のときは選択しても安全に既存フロー(ローカル / Enterprise AI VLM)へ縮退します。",
   "settings.parserAdapters.effectiveOrder": "実行順",
   "settings.parserAdapters.noEffectiveOrder": "外部 adapter なし",
   "settings.parserAdapters.source": "設定元",

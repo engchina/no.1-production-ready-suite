@@ -45,6 +45,12 @@ for (const viewport of [
     await expect(page.getByText("package 未導入", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("導入: pip install marker-pdf[full]==1.10.2")).toBeVisible();
     await expect(page.getByText("backend 選択外", { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /OCI Document Understanding/ })
+    ).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Enterprise AI VLM/ })).toBeVisible();
+    await expect(page.getByText("未設定", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("OCI サービス", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Source routing matrix")).toBeVisible();
     await expect(page.getByText("PDF", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Docling -> Marker -> Unstructured")).toBeVisible();
@@ -380,6 +386,20 @@ function parserAdapterEnvelope(data: object) {
   return {
     data: {
       source_routes: sourceRoutes,
+      service_backends: [
+        {
+          backend: "enterprise_ai_vlm",
+          selected: false,
+          configured: true,
+          warning_code: null,
+        },
+        {
+          backend: "oci_document_understanding",
+          selected: false,
+          configured: false,
+          warning_code: "oci_document_understanding_unconfigured",
+        },
+      ],
       backend_source_kind_matrix: {
         evidence_source: "runtime_routes",
         required_source_kinds: ["pdf", "image", "office", "html", "email", "audio", "text", "unknown"],
