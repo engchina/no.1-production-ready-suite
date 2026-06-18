@@ -367,6 +367,55 @@ def test_update_parser_adapter_settings_rejects_unknown_backend() -> None:
     assert resp.status_code == 422
 
 
+def test_preprocess_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
+    """前処理設定 API は選択プロファイル・サービス状態・プロファイル一覧を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_preprocess_profile", "text_normalize")
+    monkeypatch.setattr(settings, "rag_preprocess_enabled", False)
+
+    resp = client.get("/api/settings/preprocess")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["profile"] == "text_normalize"
+    assert body["service_enabled"] is False
+    assert body["config_source"] == "runtime"
+    names = [item["name"] for item in body["profiles"]]
+    assert names == [
+        "passthrough",
+        "text_normalize",
+        "office_to_pdf",
+        "pdf_to_page_images",
+        "auto",
+    ]
+    by_name = {item["name"]: item for item in body["profiles"]}
+    assert by_name["office_to_pdf"]["available"] is False
+    selected = [item["name"] for item in body["profiles"] if item["selected"]]
+    assert selected == ["text_normalize"]
+
+
+def test_update_preprocess_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_preprocess_profile", "passthrough")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/preprocess", json={"profile": "office_to_pdf"})
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["profile"] == "office_to_pdf"
+    assert settings.rag_preprocess_profile == "office_to_pdf"
+    assert "RAG_PREPROCESS_PROFILE=office_to_pdf" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_preprocess_settings_rejects_unknown_profile() -> None:
+    resp = client.patch("/api/settings/preprocess", json={"profile": "ocr_magic"})
+    assert resp.status_code == 422
+
+
 def test_chunking_settings_reports_runtime_strategy_and_params(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -398,6 +447,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
         "hierarchical_parent_child",
         "markdown_heading",
         "page_level",
+        "fixed_size",
     ]
     selected = [item["name"] for item in body["strategies"] if item["selected"]]
     assert selected == ["sentence_window"]

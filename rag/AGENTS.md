@@ -73,7 +73,7 @@
 - 折りたたみ可能な**サイドナビ**。4 セクション構成:
   - **データ取込**: ダッシュボード/アップロード/文書インデックス/知識ベース管理。
   - **RAG**: RAG 検索/RAG 評価。
-  - **RAG パイプライン**: RAG パイプラインの各段階を切り替えるアダプター群を**パイプライン順**に並べる — Parser(解析)→ Chunking(分割)→ Vector Index(索引)→ Retrieval(検索)→ Grounding(後処理)→ Generation(生成)→ Guardrail(ガードレール)→ Evaluation(評価)→ GraphRAG → Agentic。**これらは「設定」ではなくパイプライン挙動の切替であるため独立セクションに置く**(インフラ設定と混在させない)。
+  - **RAG パイプライン**: RAG パイプラインの各段階を切り替えるアダプター群を**パイプライン順**に並べる — 前処理(Preprocess)→ Parser(解析)→ Chunking(分割)→ Vector Index(索引)→ Retrieval(検索)→ Grounding(後処理)→ Generation(生成)→ Guardrail(ガードレール)→ Evaluation(評価)→ GraphRAG → Agentic。**これらは「設定」ではなくパイプライン挙動の切替であるため独立セクションに置く**(インフラ設定と混在させない)。
   - **システム設定**: OCI 認証/アップロード保存先(Object Storage)/モデル/データベース。
 - サイドナビのラベルは**日本語第一**とし、パイプライン各段階は `解析 (Parser)` のように「日本語+英語正式名」併記の短縮形(`sidebarLabelKey`)で表示する。一方**ページタイトル/`aria-label` は AGENTS.md 準拠の正式名(例: `Parser アダプター`)を維持**する(`nav.*` と `nav.*.sidebar` の二段管理。新アダプター追加時も同様にする)。
 - レイアウト構成要素: header / footer / breadcrumb / sideTabBar / tabs。
@@ -146,6 +146,26 @@ docker-compose.yml        backend + ingestion-worker + parser サービス群 + 
 - monorepo の path 依存(`rag-parser-core`)を使うため、依存追加時は **`uv lock` の再生成が必要**
   (Docker は build context = リポジトリ root)。
 
+### service 系 parser backend(OCI クラウドサービス直呼び)
+
+外部 parser マイクロサービス(上記)とは別に、**OCI クラウドサービスを backend から直接呼ぶ
+service 系 backend** を `RAG_PARSER_ADAPTER_BACKEND` で明示選択できる。core(`rag_parser_core`)は
+決定論・非 network を保つため実行せず sentinel(`extraction=None`)を返し、実呼び出しは backend の
+ingestion が担う(`SERVICE_ADAPTER_BACKENDS`)。
+
+- **`enterprise_ai_vlm`**: OCI Enterprise AI VLM を **fallback ではなく明示選択**する。選択時は
+  ローカル/外部 adapter を飛ばして直接 VLM 抽出する(設定は既存 Enterprise AI を再利用、追加 env 不要)。
+- **`oci_document_understanding`**: **別 OCI サービス OCI Document Understanding(`oci.ai_document`)**
+  の**非同期 processor job** で日本語 OCR/表抽出する。入出力は Object Storage 経由
+  (`app.clients.oci_document_understanding.OciDocumentUnderstandingClient`)。**未設定/SDK 失敗/job
+  失敗/timeout 時は `None` を返し、既存のローカル/Enterprise AI VLM フローへ安全に縮退**。
+  これは確定スタックに無い **追加 OCI サービス**(LLM/VLM=Enterprise AI、OCR は Enterprise AI VLM 再
+  マップという従来方針からの拡張)であり、**ユーザ明示要望による**。別 LLM provider・外部ベクトル DB は
+  導入しない。設定は `OCI_DOCUMENT_UNDERSTANDING_*`(compartment/namespace/bucket/prefix/language/
+  poll/timeout)。空欄は汎用 `OCI_COMPARTMENT_ID` / `OBJECT_STORAGE_*` を使う。
+- 設定 API `GET/PATCH /api/settings/parser-adapters` は両 backend を選択値として受理し、GET 応答の
+  `service_backends[]` で選択状態と設定可用性(`configured` / `warning_code`)を返す。
+
 ## 検証済みコマンド（雛形は両方ビルド通過）
 
 ```bash
@@ -199,3 +219,4 @@ npm run lint && npm run build
 14. 変更後は該当範囲の lint・型チェック・テストを実行してから完了とする。
 15. UI/UX に関わる変更は Playwright で画面確認とテストを実施してから完了とする。
 16. このスタックから外れる提案(別 LLM プロバイダ、別 DB 等)をする場合は、必ず理由を添えてユーザに確認する。
+17. **parse 前の原本変換は前処理アダプター(`rag_preprocess_profile`)で手動選択**する。passthrough(既定・変換なし=現行挙動)/ text_normalize(文字コード・Unicode・空白の正規化、in-process)/ office_to_pdf(LibreOffice、マイクロサービス)/ pdf_to_page_images(PDF をページ画像 PDF へラスタライズ、マイクロサービス)/ auto(modality で決定論選択)。**原本は必ず保全し、変換物(正規化原本)から原本へ追跡できる派生系譜(`SourceDerivation`)を残す**(溯源)。重い変換は `services/preprocess` マイクロサービスへ HTTP 委譲し、未達/失敗時は warning を付けて passthrough へ安全に縮退する。設定 API `GET/PATCH /api/settings/preprocess` と専用設定画面(パイプラインの Parser の前)で切替し、KB 単位上書きは取込時スナップショット。外部 LLM provider / 外部ベクトル DB は導入しない。`fixed_size` 固定長 chunking を Chunking アダプターに追加し、KB 単位で chunk_size/overlap を固定設定できる。

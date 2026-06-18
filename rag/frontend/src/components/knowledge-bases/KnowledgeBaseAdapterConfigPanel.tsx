@@ -16,6 +16,7 @@ import {
   type GuardrailPolicyName,
   type KnowledgeBaseAdapterConfig,
   type ParserAdapterBackend,
+  type PreprocessProfileName,
   type PostRetrievalPipelineName,
   type RetrievalStrategyName,
   type VectorIndexProfileName,
@@ -25,6 +26,13 @@ import { useUpdateKnowledgeBase } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
 /** 各カテゴリ選択肢(value と日本語ラベル)。グローバル設定画面の選択肢と整合させる。 */
+const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = [
+  { value: "passthrough", label: "passthrough(変換なし)" },
+  { value: "text_normalize", label: "text_normalize(テキスト正規化)" },
+  { value: "office_to_pdf", label: "office_to_pdf(Office→PDF)" },
+  { value: "pdf_to_page_images", label: "pdf_to_page_images(PDF→画像PDF)" },
+  { value: "auto", label: "auto(modality 自動)" },
+];
 const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = [
   { value: "local", label: "local(内蔵パーサ)" },
   { value: "auto", label: "auto(source 別自動ルーティング)" },
@@ -39,6 +47,7 @@ const CHUNKING_OPTIONS: SelectFieldOption<ChunkingStrategyName>[] = [
   { value: "hierarchical_parent_child", label: "hierarchical_parent_child(親子)" },
   { value: "markdown_heading", label: "markdown_heading(章節)" },
   { value: "page_level", label: "page_level(ページ単位)" },
+  { value: "fixed_size", label: "fixed_size(固定長)" },
 ];
 const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalStrategyName>[] = [
   { value: "hybrid_rrf", label: "hybrid_rrf(既定)" },
@@ -145,6 +154,15 @@ export function KnowledgeBaseAdapterConfigPanel({
           <SectionHeading
             title={t("knowledgeBases.adapter.section.ingestion")}
             hint={t("knowledgeBases.adapter.section.ingestionHint")}
+          />
+          <AdapterSelectRow
+            id={`kb-adapter-preprocess-${knowledgeBaseId}`}
+            label={t("knowledgeBases.adapter.field.preprocessProfile")}
+            value={form.ingestion.preprocess_profile}
+            options={PREPROCESS_OPTIONS}
+            disabled={disabled}
+            defaultOnOverride="text_normalize"
+            onChange={(value) => updateIngestion({ preprocess_profile: value })}
           />
           <AdapterSelectRow
             id={`kb-adapter-parser-${knowledgeBaseId}`}

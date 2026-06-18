@@ -1,6 +1,7 @@
 """取込: VLM 抽出 -> チャンク分割 -> 埋め込み -> Oracle 26ai へ索引。"""
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -9,8 +10,10 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
 from time import perf_counter
+from uuid import uuid4
 
 from pydantic import ValidationError
+from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
 
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
@@ -23,6 +26,7 @@ from app.clients.oci_enterprise_ai import (
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.clients.parser_service import ParserServiceClient
+from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import Settings, enterprise_ai_vision_model_id, get_settings
 from app.rag.asset_summary import summarize_assets
 from app.rag.audit import record_rag_ingestion_audit
@@ -63,6 +67,7 @@ from app.rag.parsers import (
     template_for_source_profile,
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
+from app.rag.preprocess_strategy import resolve_preprocess_profile
 from app.schemas.document import DocumentDetail, FileStatus, IngestionSegment, SourceProfile
 from app.schemas.extraction import (
     DocumentElement,
@@ -167,6 +172,8 @@ class IngestionPipeline:
         self._object_storage = object_storage or ObjectStorageClient(settings=self._settings)
         # 外部 adapter は同一プロセスで import せず parser マイクロサービスへ HTTP 委譲する。
         self._parser_service = ParserServiceClient(settings=self._settings)
+        # 前処理(parse 前の原本変換)。軽量正規化は in-process、重い変換はサービスへ委譲。
+        self._preprocess = PreprocessServiceClient(self._settings)
         # service 系 backend(OCI Document Understanding)を backend から直接呼ぶ。
         self._document_understanding = document_understanding or OciDocumentUnderstandingClient(
             settings=self._settings
@@ -193,13 +200,23 @@ class IngestionPipeline:
         checkpoint_segments: list[IngestionSegment] = []
         try:
             await _raise_if_cancelled(cancel_checker)
+            # 前処理(Preprocess): parse の前に原本を一度だけ canonical な中間物へ変換し、
+            # 派生系譜(SourceDerivation)を残す。passthrough(既定)は原本そのまま。
+            parse_bytes, parse_content_type, source_derivation = await self._preprocess_source(
+                trace_id=trace_id,
+                document_id=document_id,
+                source_bytes=image_bytes,
+                content_type=content_type,
+                source_profile=source_profile,
+            )
+            await _raise_if_cancelled(cancel_checker)
             parser_result = await _observe_cpu_ingestion_stage(
                 trace_id,
                 "source_partition",
                 lambda: parse_with_registry(
-                    image_bytes,
+                    parse_bytes,
                     source_profile=source_profile,
-                    content_type=content_type,
+                    content_type=parse_content_type,
                     adapter_backend=getattr(
                         self._settings,
                         "rag_parser_adapter_backend",
@@ -223,11 +240,13 @@ class IngestionPipeline:
                     external_adapter_runner=self._parser_service.runner,
                 ),
                 attributes={
-                    "content_type": _observability_content_type(content_type),
+                    "content_type": _observability_content_type(parse_content_type),
                     "source_modality": (
                         source_profile.modality.value if source_profile is not None else "unknown"
                     ),
                     "parser_profile": strategy.parser_profile,
+                    "preprocess_profile": source_derivation.preprocess_profile,
+                    "preprocess_converted": source_derivation.converted,
                 },
                 result_attributes=_parser_result_attributes,
             )
@@ -235,8 +254,8 @@ class IngestionPipeline:
                 raise IngestionUserError(_unsupported_parser_message(parser_result))
             checkpoint_segments = await self._prepare_segment_checkpoints(
                 document_id=document_id,
-                source_bytes=image_bytes,
-                content_type=content_type,
+                source_bytes=parse_bytes,
+                content_type=parse_content_type,
                 source_profile=source_profile,
                 parser_backend=_checkpoint_parser_backend(parser_result, source_profile),
                 parser_profile=strategy.parser_profile,
@@ -253,9 +272,9 @@ class IngestionPipeline:
                         service_backend,
                         trace_id=trace_id,
                         document_id=document_id,
-                        source_bytes=image_bytes,
+                        source_bytes=parse_bytes,
                         prompt=strategy.prompt,
-                        content_type=content_type,
+                        content_type=parse_content_type,
                         parser_profile=strategy.parser_profile,
                         checkpoint_segments=checkpoint_segments,
                         cancel_checker=cancel_checker,
@@ -270,7 +289,7 @@ class IngestionPipeline:
                     office_extraction = await self._extract_local_office_segments(
                         document_id=document_id,
                         trace_id=trace_id,
-                        source_bytes=image_bytes,
+                        source_bytes=parse_bytes,
                         source_profile=source_profile,
                         checkpoint_segments=checkpoint_segments,
                         cancel_checker=cancel_checker,
@@ -289,9 +308,9 @@ class IngestionPipeline:
                             extracted = await self._extract_with_vlm(
                                 trace_id=trace_id,
                                 document_id=document_id,
-                                source_bytes=image_bytes,
+                                source_bytes=parse_bytes,
                                 prompt=strategy.prompt,
-                                content_type=content_type,
+                                content_type=parse_content_type,
                                 parser_profile=strategy.parser_profile,
                                 checkpoint_segments=checkpoint_segments,
                                 cancel_checker=cancel_checker,
@@ -310,6 +329,8 @@ class IngestionPipeline:
                 fallback_template=template_for_source_profile(source_profile),
                 source_parser=strategy.parser_profile,
             )
+            # 派生系譜(溯源)を抽出 metadata へ刻む。artifact cache / document payload 経由で永続。
+            extraction = _extraction_with_source_derivation(extraction, source_derivation)
             quality_report = build_ingestion_quality_report(
                 extraction,
                 source_profile=source_profile,
@@ -516,6 +537,8 @@ class IngestionPipeline:
         )
         if not chunks:
             raise IngestionUserError("索引用チャンクを作成できませんでした。")
+        # 派生系譜(溯源)を chunk metadata へ貫通させ、citation → 派生原本 → 原本を追跡可能にする。
+        chunks = _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
         await _raise_if_cancelled(cancel_checker)
         vectors = await _observe_ingestion_stage(
             trace_id,
@@ -564,6 +587,112 @@ class IngestionPipeline:
             elapsed_ms=elapsed_ms(started_at),
         )
         return detail
+
+    async def _preprocess_source(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        source_bytes: bytes,
+        content_type: str,
+        source_profile: SourceProfile | None,
+    ) -> tuple[bytes, str, SourceDerivation]:
+        """parse の前に原本を canonical な中間物へ変換し、(canonical bytes, content_type,
+        派生系譜)を返す。
+
+        passthrough(既定)は変換せず原本をそのまま返す(現行挙動と一致)。それ以外は
+        in-process(text_normalize)または前処理マイクロサービスへ委譲し、変換物を
+        Object Storage へ保存して派生系譜(SourceDerivation)に object path / sha を残す。
+        失敗・未対応は passthrough へ安全に縮退する。
+        """
+        profile = resolve_preprocess_profile(self._settings)
+        source_sha = hashlib.sha256(source_bytes).hexdigest()
+        if profile == "passthrough":
+            return source_bytes, content_type, _passthrough_derivation(
+                profile=profile, source_sha=source_sha, content_type=content_type
+            )
+        outcome: ConvertOutcome = await _observe_cpu_ingestion_stage(
+            trace_id,
+            "preprocess",
+            lambda: self._preprocess.convert(
+                source_bytes,
+                content_type=content_type,
+                source_profile=source_profile,
+                profile=profile,
+            ),
+            attributes={
+                "preprocess_profile": profile,
+                "content_type": _observability_content_type(content_type),
+                "source_bytes": len(source_bytes),
+            },
+            result_attributes=lambda result: {
+                "preprocess_converted": result.converted,
+                "preprocess_converter": result.converter_name,
+            },
+        )
+        if not outcome.converted or outcome.derived_bytes is None:
+            return source_bytes, content_type, _passthrough_derivation(
+                profile=profile,
+                source_sha=source_sha,
+                content_type=content_type,
+                converter_name=outcome.converter_name,
+                warnings=list(outcome.warnings),
+            )
+        derived_bytes = outcome.derived_bytes
+        derived_content_type = outcome.derived_content_type or content_type
+        derived_sha = hashlib.sha256(derived_bytes).hexdigest()
+        derived_path = await self._cache_canonical_artifact(
+            document_id=document_id,
+            trace_id=trace_id,
+            derived_bytes=derived_bytes,
+            content_type=derived_content_type,
+        )
+        derivation = SourceDerivation(
+            derivation_id=uuid4().hex,
+            preprocess_profile=profile,
+            converted=True,
+            converter_name=outcome.converter_name,
+            converter_version=outcome.converter_version,
+            source_content_type=content_type,
+            source_sha256=source_sha,
+            derived_object_path=derived_path,
+            derived_content_type=derived_content_type,
+            derived_sha256=derived_sha,
+            page_map={str(key): int(value) for key, value in outcome.page_map.items()},
+            warnings=list(outcome.warnings),
+        )
+        return derived_bytes, derived_content_type, derivation
+
+    async def _cache_canonical_artifact(
+        self,
+        *,
+        document_id: str,
+        trace_id: str,
+        derived_bytes: bytes,
+        content_type: str,
+    ) -> str | None:
+        """前処理で生成した正規化原本(canonical source)を Object Storage へ保存する。"""
+        if not getattr(self._settings, "rag_extraction_artifact_cache_enabled", True):
+            return None
+        key_prefix = _safe_artifact_prefix(
+            getattr(self._settings, "rag_canonical_artifact_prefix", "artifacts/canonical")
+        )
+        document_key = _safe_artifact_key_part(document_id)
+        trace_key = _safe_artifact_key_part(trace_id)
+        extension = _canonical_artifact_extension(content_type)
+        key = f"{key_prefix}/{document_key}/{trace_key}/canonical{extension}"
+        try:
+            return await self._object_storage.put(
+                key,
+                derived_bytes,
+                content_type=content_type or "application/octet-stream",
+            )
+        except Exception as exc:  # noqa: BLE001 - 保存失敗は派生系譜を path 無しで残し取込を続ける
+            logger.warning(
+                "canonical_artifact_cache_failed",
+                extra={"document_id": document_id, "error_type": type(exc).__name__},
+            )
+            return None
 
     async def _prepare_segment_checkpoints(
         self,
@@ -1738,6 +1867,75 @@ def _extraction_with_parser_context(
             "parser_artifacts": parser_artifacts,
         }
     )
+
+
+def _passthrough_derivation(
+    *,
+    profile: str,
+    source_sha: str,
+    content_type: str,
+    converter_name: str = "passthrough",
+    warnings: list[str] | None = None,
+) -> SourceDerivation:
+    """変換しない(passthrough / no-op / 縮退)場合の派生系譜。derived は原本と同一を指す。"""
+    return SourceDerivation(
+        derivation_id=uuid4().hex,
+        preprocess_profile=profile,
+        converted=False,
+        converter_name=converter_name,
+        converter_version="v1",
+        source_content_type=content_type,
+        source_sha256=source_sha,
+        derived_content_type=content_type,
+        derived_sha256=source_sha,
+        warnings=warnings or [],
+    )
+
+
+def _extraction_with_source_derivation(
+    extraction: StructuredExtraction,
+    derivation: SourceDerivation,
+) -> StructuredExtraction:
+    """派生系譜(溯源)を抽出 metadata(parser_artifacts)へ刻む。"""
+    parser_artifacts = {
+        **extraction.parser_artifacts,
+        "source_derivation": derivation.model_dump(mode="json"),
+    }
+    return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
+
+
+def _source_derivation_id(extraction: StructuredExtraction) -> str | None:
+    """抽出 metadata から派生系譜 ID を取り出す(無ければ None)。"""
+    derivation = extraction.parser_artifacts.get("source_derivation")
+    if isinstance(derivation, Mapping):
+        value = derivation.get("derivation_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _chunks_with_source_derivation(chunks: list[Chunk], derivation_id: str | None) -> list[Chunk]:
+    """各 chunk metadata へ派生系譜 ID を付与する(chunk → 派生原本 → 原本の追跡)。"""
+    if not derivation_id:
+        return chunks
+    for chunk in chunks:
+        chunk.metadata["source_derivation_id"] = derivation_id
+    return chunks
+
+
+def _canonical_artifact_extension(content_type: str) -> str:
+    """canonical artifact の保存拡張子を content_type から決める(表示・取り回し用)。"""
+    normalized = (content_type or "").split(";", 1)[0].strip().casefold()
+    mapping = {
+        "application/pdf": ".pdf",
+        "text/plain": ".txt",
+        "text/markdown": ".md",
+        "text/html": ".html",
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "application/zip": ".zip",
+    }
+    return mapping.get(normalized, ".bin")
 
 
 def _source_parser_name(

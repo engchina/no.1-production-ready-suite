@@ -76,6 +76,8 @@ export const ja = {
   "nav.settingsOci": "OCI 認証設定",
   "nav.settingsOci.sidebar": "OCI 認証",
   "nav.settingsUploadStorage": "アップロード保存先",
+  "nav.settingsPreprocess": "前処理 アダプター",
+  "nav.settingsPreprocess.sidebar": "前処理 (Preprocess)",
   "nav.settingsParserAdapters": "Parser アダプター",
   "nav.settingsParserAdapters.sidebar": "解析 (Parser)",
   "nav.settingsChunking": "Chunking アダプター",
@@ -309,6 +311,9 @@ export const ja = {
   "settings.chunking.strategy.page_level": "ページ単位",
   "settings.chunking.strategy.page_level.description":
     "ページ単位の粗粒度 chunk(PageIndex 風)",
+  "settings.chunking.strategy.fixed_size": "固定長",
+  "settings.chunking.strategy.fixed_size.description":
+    "章節・文境界を無視し chunk サイズで機械的に固定長分割(RAGFlow General 風)",
   "settings.chunking.params.title": "多様化パラメータ",
   "settings.chunking.params.description":
     "戦略に応じた chunk サイズや窓幅を調整します。overlap / child_size / min_chars は chunk_size 未満にしてください。",
@@ -327,6 +332,45 @@ export const ja = {
   "settings.chunking.actions.unsaved": "未保存の変更があります。",
   "settings.chunking.loadError": "Chunking 設定を取得できませんでした。",
   "settings.chunking.saveError": "Chunking 設定を保存できませんでした。",
+  "settings.preprocess.subtitle":
+    "parse の前に原本を一度だけ変換する前処理(Preprocess)アダプターを選択します。",
+  "settings.preprocess.overview.title": "前処理プロファイル",
+  "settings.preprocess.overview.description":
+    "原本を canonical な中間物へ変換し、原本を保全したまま派生系譜(溯源)を残してから解析します。",
+  "settings.preprocess.profile": "変換プロファイル",
+  "settings.preprocess.selected": "選択中",
+  "settings.preprocess.recommendedFor": "推奨用途",
+  "settings.preprocess.origin": "由来",
+  "settings.preprocess.source": "設定元",
+  "settings.preprocess.inProcess": "in-process",
+  "settings.preprocess.requiresService": "サービス必須",
+  "settings.preprocess.unavailable": "サービス無効のため利用不可",
+  "settings.preprocess.serviceEnabled": "前処理サービス",
+  "settings.preprocess.serviceEnabled.on": "有効",
+  "settings.preprocess.serviceEnabled.off": "無効(in-process のみ)",
+  "settings.preprocess.canonicalPrefix": "正規化原本の保存先",
+  "settings.preprocess.profile.passthrough": "変換なし",
+  "settings.preprocess.profile.passthrough.description":
+    "原本をそのまま解析(既定・現行挙動と一致)",
+  "settings.preprocess.profile.text_normalize": "テキスト正規化",
+  "settings.preprocess.profile.text_normalize.description":
+    "文字コード→UTF-8 + Unicode NFKC + 空白正規化(in-process)",
+  "settings.preprocess.profile.office_to_pdf": "Office→PDF",
+  "settings.preprocess.profile.office_to_pdf.description":
+    "Office を PDF へ変換してから解析(LibreOffice・サービス)",
+  "settings.preprocess.profile.pdf_to_page_images": "PDF→画像PDF",
+  "settings.preprocess.profile.pdf_to_page_images.description":
+    "各ページをラスタライズし VLM/OCR 経路へ(スキャン向け・サービス)",
+  "settings.preprocess.profile.auto": "自動",
+  "settings.preprocess.profile.auto.description":
+    "modality で変換を決定論選択(Office→PDF / テキスト正規化 / それ以外は変換なし)",
+  "settings.preprocess.actions.save": "保存",
+  "settings.preprocess.actions.saving": "保存中",
+  "settings.preprocess.actions.saved": "前処理設定を保存しました。",
+  "settings.preprocess.actions.reset": "変更を破棄",
+  "settings.preprocess.actions.unsaved": "未保存の変更があります。",
+  "settings.preprocess.loadError": "前処理設定を取得できませんでした。",
+  "settings.preprocess.saveError": "前処理設定を保存できませんでした。",
   "settings.retrieval.subtitle":
     "検索段階の Retrieval アダプター(検索戦略)を選択します。",
   "settings.retrieval.overview.title": "検索戦略",
@@ -1270,6 +1314,7 @@ export const ja = {
   "knowledgeBases.adapter.section.query": "クエリアダプター(検索時に適用)",
   "knowledgeBases.adapter.section.queryHint":
     "検索・回答生成・評価の各段は、この知識ベースだけを指定した検索で次回から即反映されます。",
+  "knowledgeBases.adapter.field.preprocessProfile": "前処理プロファイル",
   "knowledgeBases.adapter.field.parserBackend": "Parser バックエンド",
   "knowledgeBases.adapter.field.chunkingStrategy": "Chunking 戦略",
   "knowledgeBases.adapter.field.retrievalStrategy": "Retrieval 戦略",
@@ -1378,6 +1423,13 @@ export const ja = {
   "sourceProfile.hash": "SHA-256",
   "sourceProfile.unsupportedReason": "未対応理由",
   "sourceProfile.ready": "原本メタデータに追加の確認事項はありません。",
+  "provenance.title": "派生系譜(溯源)",
+  "provenance.converted": "変換あり",
+  "provenance.passthrough": "変換なし",
+  "provenance.original": "原本(保全)",
+  "provenance.canonical": "正規化原本(前処理)",
+  "provenance.pageMap": "ページ対応",
+  "provenance.noConversion": "前処理は行われず、原本をそのまま解析しました。",
   "sourceProfile.modality.pdf": "PDF",
   "sourceProfile.modality.image": "画像",
   "sourceProfile.modality.text": "テキスト",

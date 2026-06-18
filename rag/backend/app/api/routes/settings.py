@@ -71,6 +71,7 @@ from app.rag.parser_adapter_scorecard import (
     build_parser_adapter_scorecard,
     build_parser_adapter_source_routes,
 )
+from app.rag.preprocess_strategy import normalize_preprocess_profile, preprocess_runtime_settings
 from app.rag.prompt_versions import (
     activate_prompt_version,
     create_prompt_version,
@@ -149,6 +150,9 @@ from app.schemas.settings import (
     ParserAdapterSourceRouteData,
     ParserAdapterStatusData,
     ParserServiceBackendData,
+    PreprocessProfileStatusData,
+    PreprocessSettingsData,
+    PreprocessSettingsUpdate,
     PromptVersionCreate,
     PromptVersionData,
     PromptVersionsData,
@@ -464,6 +468,24 @@ async def update_parser_adapter_settings(
     _persist_parser_adapter_settings(candidate)
     _apply_parser_adapter_settings(settings, candidate)
     return ApiResponse(data=_parser_adapter_settings_data(settings))
+
+
+@router.get("/preprocess", response_model=ApiResponse[PreprocessSettingsData])
+async def get_preprocess_settings() -> ApiResponse[PreprocessSettingsData]:
+    """前処理(Preprocess)アダプター(parse 前の原本変換)の選択と利用可否を返す。"""
+    return ApiResponse(data=_preprocess_settings_data(get_settings()))
+
+
+@router.patch("/preprocess", response_model=ApiResponse[PreprocessSettingsData])
+async def update_preprocess_settings(
+    payload: PreprocessSettingsUpdate,
+) -> ApiResponse[PreprocessSettingsData]:
+    """前処理アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = _preprocess_settings_candidate(settings, payload)
+    _persist_preprocess_settings(candidate)
+    _apply_preprocess_settings(settings, candidate)
+    return ApiResponse(data=_preprocess_settings_data(settings))
 
 
 @router.get("/chunking", response_model=ApiResponse[ChunkingSettingsData])
@@ -2361,6 +2383,55 @@ def _persist_grounding_settings(settings: Settings) -> None:
         {"RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline},
         section_comment="# Grounding アダプター",
         error_detail="Grounding アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _preprocess_settings_data(settings: Settings) -> PreprocessSettingsData:
+    """Settings から前処理アダプター設定の表示用データを作る。"""
+    runtime = preprocess_runtime_settings(settings)
+    return PreprocessSettingsData(
+        profile=runtime.profile,
+        service_enabled=runtime.service_enabled,
+        service_url=runtime.service_url,
+        canonical_artifact_prefix=runtime.canonical_artifact_prefix,
+        profiles=[
+            PreprocessProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                in_process=status.in_process,
+                requires_service=status.requires_service,
+                available=status.available,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _preprocess_settings_candidate(
+    base: Settings,
+    payload: PreprocessSettingsUpdate,
+) -> Settings:
+    """前処理アダプター更新 payload から保存候補 settings を作る。"""
+    return base.model_copy(
+        update={"rag_preprocess_profile": normalize_preprocess_profile(payload.profile)}
+    )
+
+
+def _apply_preprocess_settings(target: Settings, source: Settings) -> None:
+    """保存済み前処理アダプター設定を現在プロセスへ反映する。"""
+    target.rag_preprocess_profile = source.rag_preprocess_profile
+
+
+def _persist_preprocess_settings(settings: Settings) -> None:
+    """前処理アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_PREPROCESS_PROFILE": settings.rag_preprocess_profile},
+        section_comment="# 前処理(Preprocess)アダプター",
+        error_detail="前処理アダプター設定を backend/.env へ保存できませんでした。",
     )
 
 

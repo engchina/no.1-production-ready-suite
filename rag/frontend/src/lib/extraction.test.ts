@@ -81,6 +81,37 @@ describe("parseStructuredExtraction", () => {
     expect(parsed.warnings).toEqual([]);
     expect(parsed.elements).toEqual([]);
   });
+
+  it("派生系譜(source_derivation)を parser_artifacts から取り出す", () => {
+    const parsed = parseStructuredExtraction({
+      raw_text: "本文",
+      parser_artifacts: {
+        source_derivation: {
+          derivation_id: "d1",
+          preprocess_profile: "office_to_pdf",
+          converted: true,
+          converter_name: "libreoffice",
+          converter_version: "v1",
+          source_sha256: "aaa",
+          derived_object_path: "artifacts/canonical/doc/trace/canonical.pdf",
+          derived_content_type: "application/pdf",
+          derived_sha256: "bbb",
+          page_map: { "1": 1, "2": 2 },
+          warnings: [],
+        },
+      },
+    });
+
+    expect(parsed.sourceDerivation?.derivationId).toBe("d1");
+    expect(parsed.sourceDerivation?.converted).toBe(true);
+    expect(parsed.sourceDerivation?.preprocessProfile).toBe("office_to_pdf");
+    expect(parsed.sourceDerivation?.pageMap).toEqual({ "1": 1, "2": 2 });
+  });
+
+  it("派生系譜が無ければ null を返す", () => {
+    const parsed = parseStructuredExtraction({ raw_text: "本文" });
+    expect(parsed.sourceDerivation).toBeNull();
+  });
 });
 
 describe("summarizeDocumentElements", () => {

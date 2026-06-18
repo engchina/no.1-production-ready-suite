@@ -35,6 +35,7 @@ from app.config import (
     GuardrailPolicyName,
     ParserAdapterBackend,
     PostRetrievalPipeline,
+    PreprocessProfile,
     RetrievalStrategy,
     Settings,
     VectorIndexProfile,
@@ -52,6 +53,7 @@ AdapterConfigScope = Literal["ingestion", "query"]
 # KB 設定フィールド -> Settings フィールドのマッピング(scope ごとの allowlist)。
 # ここに載っていない Settings フィールドは KB 単位で上書きできない。
 _INGESTION_FIELD_MAP: dict[str, str] = {
+    "preprocess_profile": "rag_preprocess_profile",
     "parser_adapter_backend": "rag_parser_adapter_backend",
     "parser_docling_enabled": "rag_parser_docling_enabled",
     "parser_marker_enabled": "rag_parser_marker_enabled",
@@ -91,6 +93,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    preprocess_profile: PreprocessProfile | None = None
     parser_adapter_backend: ParserAdapterBackend | None = None
     parser_docling_enabled: bool | None = None
     parser_marker_enabled: bool | None = None

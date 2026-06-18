@@ -10,6 +10,7 @@ export const APP_ROUTES = {
   evaluation: "/evaluation",
   settingsOci: "/settings/oci",
   settingsUploadStorage: "/settings/upload-storage",
+  settingsPreprocess: "/settings/preprocess",
   settingsParserAdapters: "/settings/parser-adapters",
   settingsChunking: "/settings/chunking",
   settingsRetrieval: "/settings/retrieval",

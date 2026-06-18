@@ -225,6 +225,7 @@ CHUNKING_STRATEGIES: tuple[str, ...] = (
     "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
+    "fixed_size",
 )
 _DEFAULT_CHUNKING_STRATEGY = "structure_aware"
 
@@ -269,6 +270,8 @@ def chunk_extraction_with_strategy(
         chunks = _chunk_markdown_heading(extraction, chunk_size=chunk_size, overlap=overlap)
     elif normalized_strategy == "page_level":
         chunks = _chunk_page_level(extraction, chunk_size=chunk_size, overlap=overlap)
+    elif normalized_strategy == "fixed_size":
+        chunks = _chunk_fixed_size(extraction, chunk_size=chunk_size, overlap=overlap)
     else:
         chunks = chunk_extraction(extraction, chunk_size=chunk_size, overlap=overlap)
     absorbed = _absorb_small_chunks(chunks, min_chars=min_chars, chunk_size=chunk_size)
@@ -283,6 +286,52 @@ def _chunk_recursive_character(
 ) -> list[Chunk]:
     """LangChain RecursiveCharacterTextSplitter 風に raw_text を固定長で分割する。"""
     return chunk_text(extraction.raw_text, chunk_size=chunk_size, overlap=overlap)
+
+
+def _chunk_fixed_size(
+    extraction: StructuredExtraction,
+    *,
+    chunk_size: int,
+    overlap: int,
+) -> list[Chunk]:
+    """RAGFlow / Dify の "General(固定長)" 風に、章節・文境界を無視して全文を固定長窓で分割する。
+
+    `recursive_character` が章節・文境界を尊重するのに対し、本戦略は決定論的に
+    `chunk_size` 文字ごと(`overlap` 文字ぶん戻して再開)へ純粋に切る。KB 単位で
+    chunk_size / overlap を固定したい運用(機械的に揃った chunk 長が欲しい場合)向け。
+    トークン化ライブラリに依存しないため CI でも安定する。
+    """
+    source = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"\s+", " ", source).strip()
+    if not normalized:
+        return []
+    metadata: ChunkMetadata = {
+        "chunk_template": TEXT_CHUNK_PROFILE,
+        "chunk_fixed_size": True,
+    }
+    step = max(1, chunk_size - overlap)
+    chunks: list[Chunk] = []
+    cursor = 0
+    length = len(normalized)
+    while cursor < length:
+        piece = normalized[cursor : cursor + chunk_size].strip()
+        if piece:
+            chunks.append(
+                Chunk(
+                    text=piece,
+                    index=len(chunks),
+                    start_offset=cursor,
+                    end_offset=cursor + len(piece),
+                    metadata=dict(metadata),
+                )
+            )
+        cursor += step
+    final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
+    return _with_chunk_size_compliance_metadata(
+        final_chunks,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
 
 
 def _chunk_markdown_heading(

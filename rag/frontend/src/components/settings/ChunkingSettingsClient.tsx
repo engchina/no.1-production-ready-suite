@@ -28,6 +28,7 @@ const STRATEGY_ORDER: ChunkingStrategyName[] = [
   "hierarchical_parent_child",
   "markdown_heading",
   "page_level",
+  "fixed_size",
 ];
 
 /** Chunking アダプター(分割戦略)の runtime 設定とパラメータを管理する設定画面。 */

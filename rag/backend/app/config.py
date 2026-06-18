@@ -29,6 +29,13 @@ ParserAdapterBackend = Literal[
     "enterprise_ai_vlm",
     "oci_document_understanding",
 ]
+PreprocessProfile = Literal[
+    "passthrough",
+    "text_normalize",
+    "office_to_pdf",
+    "pdf_to_page_images",
+    "auto",
+]
 ChunkingStrategy = Literal[
     "structure_aware",
     "recursive_character",
@@ -36,6 +43,7 @@ ChunkingStrategy = Literal[
     "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
+    "fixed_size",
 ]
 RetrievalStrategy = Literal[
     "hybrid_rrf",
@@ -435,7 +443,8 @@ class Settings(BaseSettings):
             "chunks 段階の分割戦略(Chunking アダプター)。"
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
             "sentence_window は文単位、hierarchical_parent_child は親子、"
-            "markdown_heading は章節単位、page_level はページ単位。"
+            "markdown_heading は章節単位、page_level はページ単位、"
+            "fixed_size は章節・文境界を無視した純粋な固定長分割。"
         ),
     )
     rag_chunk_child_size: int = Field(
@@ -743,6 +752,42 @@ class Settings(BaseSettings):
             "fast は低レイテンシ(85)へ検索時 target accuracy を上書きする。"
             "推奨 HNSW ビルドパラメータは設定画面に表示し、適用には索引再作成が必要。"
         ),
+    )
+    # --- 前処理(Preprocess)ステージ(parse の前の原本変換)---
+    rag_preprocess_profile: PreprocessProfile = Field(
+        default="passthrough",
+        description=(
+            "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
+            "passthrough(既定)は変換せず現行挙動と一致。text_normalize は文字コード/"
+            "Unicode/空白を正規化(in-process)。office_to_pdf は Office→PDF、"
+            "pdf_to_page_images は PDF→ページ画像(いずれもマイクロサービス)。"
+            "auto は modality で上記を決定論選択する。"
+        ),
+    )
+    rag_preprocess_enabled: bool = Field(
+        default=False,
+        description=(
+            "前処理マイクロサービスへの HTTP 委譲を有効化する。OFF(既定)は in-process で "
+            "扱える profile(passthrough / text_normalize)のみ実行し、重い変換は passthrough へ "
+            "安全に縮退する。"
+        ),
+    )
+    rag_preprocess_service_url: str = Field(
+        default="http://preprocess:8000",
+        description="前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_service_timeout_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "前処理マイクロサービス呼び出しの HTTP timeout(秒)。"
+            "超過・接続失敗時は warning を付けて passthrough(原本そのまま parse)へ縮退する。"
+        ),
+    )
+    rag_canonical_artifact_prefix: str = Field(
+        default="artifacts/canonical",
+        max_length=256,
+        description="前処理で生成した正規化原本(canonical source)の Object Storage key prefix。",
     )
     rag_parser_adapter_backend: ParserAdapterBackend = Field(
         default="local",

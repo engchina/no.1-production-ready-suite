@@ -22,6 +22,7 @@ CHUNKING_STRATEGY_ORDER: tuple[ChunkingStrategyName, ...] = (
     "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
+    "fixed_size",
 )
 
 
@@ -68,6 +69,11 @@ CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
         name="page_level",
         origin="pageindex_coarse",
         recommended_for=("pdf", "scan"),
+    ),
+    "fixed_size": ChunkingStrategySpec(
+        name="fixed_size",
+        origin="ragflow_general_fixed",
+        recommended_for=("text", "generic"),
     ),
 }
 

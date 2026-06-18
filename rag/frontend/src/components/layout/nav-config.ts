@@ -12,6 +12,7 @@ import {
   Plug,
   Scissors,
   Search,
+  Shuffle,
   Settings,
   Share2,
   ShieldAlert,
@@ -64,6 +65,12 @@ export const NAV_SECTIONS: NavSection[] = [
     // RAG パイプラインの各段階を切り替えるアダプター群（パイプライン順に整列）。
     titleKey: "nav.section.pipeline",
     items: [
+      {
+        href: APP_ROUTES.settingsPreprocess,
+        labelKey: "nav.settingsPreprocess",
+        sidebarLabelKey: "nav.settingsPreprocess.sidebar",
+        icon: Shuffle,
+      },
       {
         href: APP_ROUTES.settingsParserAdapters,
         labelKey: "nav.settingsParserAdapters",

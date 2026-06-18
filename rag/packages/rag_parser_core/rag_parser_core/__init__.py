@@ -9,6 +9,16 @@
 本 package 自体の依存は pydantic + charset-normalizer のみに保つ。
 """
 
+from rag_parser_core.preprocess import (
+    DEFAULT_PREPROCESS_PROFILE,
+    PREPROCESS_PROFILES,
+    ConvertHealth,
+    ConvertOutcome,
+    ConvertResponse,
+    SourceDerivation,
+    normalize_preprocess_profile,
+    supported_profiles_from,
+)
 from rag_parser_core.registry import (
     ParserRegistryResult,
     parse_with_registry,
@@ -16,8 +26,16 @@ from rag_parser_core.registry import (
 from rag_parser_core.result import ParseHealth, ParseResponse
 
 __all__ = [
+    "DEFAULT_PREPROCESS_PROFILE",
+    "PREPROCESS_PROFILES",
+    "ConvertHealth",
+    "ConvertOutcome",
+    "ConvertResponse",
     "ParseHealth",
     "ParseResponse",
     "ParserRegistryResult",
+    "SourceDerivation",
+    "normalize_preprocess_profile",
     "parse_with_registry",
+    "supported_profiles_from",
 ]

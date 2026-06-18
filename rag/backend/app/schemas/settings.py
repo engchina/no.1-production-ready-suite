@@ -17,6 +17,7 @@ from app.config import (
     GuardrailPolicyName,
     ParserAdapterBackend,
     PostRetrievalPipeline,
+    PreprocessProfile,
     RetrievalStrategy,
     UploadStorageBackend,
     VectorIndexProfile,
@@ -518,6 +519,35 @@ class ParserAdapterSettingsUpdate(BaseModel):
 
 
 ChunkingStrategyName = ChunkingStrategy
+
+
+class PreprocessProfileStatusData(BaseModel):
+    """前処理(Preprocess)段階の 1 変換プリセットの選択状態と実行基盤。"""
+
+    name: PreprocessProfile
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    in_process: bool = False
+    requires_service: bool = False
+    available: bool = True
+
+
+class PreprocessSettingsData(BaseModel):
+    """前処理アダプター設定の非機密 runtime snapshot。"""
+
+    profile: PreprocessProfile
+    service_enabled: bool
+    service_url: str
+    canonical_artifact_prefix: str
+    profiles: list[PreprocessProfileStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class PreprocessSettingsUpdate(BaseModel):
+    """前処理アダプター設定の更新 payload。"""
+
+    profile: PreprocessProfile
 
 
 class ChunkingStrategyStatusData(BaseModel):

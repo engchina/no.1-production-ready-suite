@@ -5,6 +5,7 @@ import {
   Check,
   FileSearch,
   FileText,
+  GitBranch,
   ListTree,
   LocateFixed,
   Pencil,
@@ -43,7 +44,7 @@ import {
   type KnowledgeBaseRef,
   type SourceProfile,
 } from "@/lib/api";
-import { parseStructuredExtraction } from "@/lib/extraction";
+import { parseStructuredExtraction, type SourceDerivationView } from "@/lib/extraction";
 import {
   useDocument,
   useDocumentChunks,
@@ -59,7 +60,7 @@ import {
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import {
@@ -596,6 +597,13 @@ export function DocumentWorkspace({
         </dl>
 
         {sourceProfile ? <SourceProfilePanel profile={sourceProfile} /> : null}
+
+        {parsedExtraction.sourceDerivation ? (
+          <SourceDerivationPanel
+            derivation={parsedExtraction.sourceDerivation}
+            originalFileName={sourceProfile?.original_file_name ?? doc.file_name}
+          />
+        ) : null}
 
         <DocumentKnowledgeBaseEditor
           documentId={documentId}
@@ -1136,6 +1144,74 @@ function DocumentChunksPanel({
         );
       })}
     </ol>
+  );
+}
+
+function SourceDerivationPanel({
+  derivation,
+  originalFileName,
+}: {
+  derivation: SourceDerivationView;
+  originalFileName: string;
+}) {
+  const pageCount = Object.keys(derivation.pageMap).length;
+  return (
+    <section className="rounded-md border border-border bg-background p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <GitBranch size={16} className="text-primary" aria-hidden />
+          {t("provenance.title")}
+        </h3>
+        <span className="rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground">
+          {derivation.converted
+            ? t("provenance.converted")
+            : t("provenance.passthrough")}
+        </span>
+      </div>
+      {/* 原本 → 正規化原本 → 抽出 の系譜(溯源)。原本は保全され、変換物から追跡できる。 */}
+      <ol className="mt-3 space-y-2 text-sm">
+        <li className="rounded-md border border-border bg-card px-3 py-2">
+          <div className="text-xs text-muted">{t("provenance.original")}</div>
+          <div className="mt-0.5 break-all font-medium text-foreground">{originalFileName}</div>
+          {derivation.sourceSha256 ? (
+            <div className="tnum mt-0.5 break-all text-xs text-muted">
+              sha256: {derivation.sourceSha256.slice(0, 16)}…
+            </div>
+          ) : null}
+        </li>
+        <li className="rounded-md border border-border bg-card px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs text-muted">{t("provenance.canonical")}</div>
+            <span className="rounded bg-info-bg px-1.5 py-0.5 text-[11px] font-medium text-info">
+              {t(`settings.preprocess.profile.${derivation.preprocessProfile}` as I18nKey)}
+            </span>
+          </div>
+          {derivation.converted ? (
+            <>
+              <div className="mt-0.5 break-all font-medium text-foreground">
+                {derivation.derivedObjectPath ?? derivation.derivedContentType ?? "-"}
+              </div>
+              <div className="tnum mt-0.5 break-all text-xs text-muted">
+                {derivation.converterName} {derivation.converterVersion}
+                {derivation.derivedSha256
+                  ? ` · sha256: ${derivation.derivedSha256.slice(0, 16)}…`
+                  : ""}
+                {pageCount ? ` · ${t("provenance.pageMap")}: ${pageCount}` : ""}
+              </div>
+            </>
+          ) : (
+            <div className="mt-0.5 text-xs text-muted">{t("provenance.noConversion")}</div>
+          )}
+        </li>
+      </ol>
+      {derivation.warnings.length > 0 ? (
+        <ul className="mt-3 space-y-1 text-xs text-warning">
+          {derivation.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 

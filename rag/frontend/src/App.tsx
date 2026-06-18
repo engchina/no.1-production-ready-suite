@@ -27,6 +27,7 @@ import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
 import { ChunkingSettingsClient } from "@/components/settings/ChunkingSettingsClient";
+import { PreprocessSettingsClient } from "@/components/settings/PreprocessSettingsClient";
 import { RetrievalSettingsClient } from "@/components/settings/RetrievalSettingsClient";
 import { GroundingSettingsClient } from "@/components/settings/GroundingSettingsClient";
 import { GenerationSettingsClient } from "@/components/settings/GenerationSettingsClient";
@@ -82,6 +83,7 @@ export function App() {
           path={APP_ROUTES.settingsParserAdapters}
           element={<SettingsParserAdaptersRoute />}
         />
+        <Route path={APP_ROUTES.settingsPreprocess} element={<SettingsPreprocessRoute />} />
         <Route path={APP_ROUTES.settingsChunking} element={<SettingsChunkingRoute />} />
         <Route path={APP_ROUTES.settingsRetrieval} element={<SettingsRetrievalRoute />} />
         <Route path={APP_ROUTES.settingsGrounding} element={<SettingsGroundingRoute />} />
@@ -305,6 +307,18 @@ function SettingsParserAdaptersRoute() {
         subtitle={t("settings.parserAdapters.subtitle")}
       />
       <ParserAdapterSettingsClient />
+    </div>
+  );
+}
+
+function SettingsPreprocessRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsPreprocess")}
+        subtitle={t("settings.preprocess.subtitle")}
+      />
+      <PreprocessSettingsClient />
     </div>
   );
 }

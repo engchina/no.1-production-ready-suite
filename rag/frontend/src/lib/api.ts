@@ -510,6 +510,7 @@ export interface KnowledgeBaseSummary extends KnowledgeBaseRef {
 
 /** KB 単位の取込上書き(Parser/Chunking)。null はグローバル継承。 */
 export interface KnowledgeBaseIngestionConfig {
+  preprocess_profile: PreprocessProfileName | null;
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
   parser_marker_enabled: boolean | null;
@@ -1157,7 +1158,39 @@ export type ChunkingStrategyName =
   | "sentence_window"
   | "hierarchical_parent_child"
   | "markdown_heading"
-  | "page_level";
+  | "page_level"
+  | "fixed_size";
+
+// --- 設定: 前処理(Preprocess)アダプター ---
+export type PreprocessProfileName =
+  | "passthrough"
+  | "text_normalize"
+  | "office_to_pdf"
+  | "pdf_to_page_images"
+  | "auto";
+
+export interface PreprocessProfileStatusData {
+  name: PreprocessProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  in_process: boolean;
+  requires_service: boolean;
+  available: boolean;
+}
+
+export interface PreprocessSettingsData {
+  profile: PreprocessProfileName;
+  service_enabled: boolean;
+  service_url: string;
+  canonical_artifact_prefix: string;
+  profiles: PreprocessProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface PreprocessSettingsUpdate {
+  profile: PreprocessProfileName;
+}
 
 export interface ChunkingStrategyStatusData {
   name: ChunkingStrategyName;
@@ -1914,6 +1947,12 @@ export const api = {
     }),
 
   // 設定: Chunking アダプター
+  getPreprocessSettings: () => request<PreprocessSettingsData>("/api/settings/preprocess"),
+  updatePreprocessSettings: (body: PreprocessSettingsUpdate) =>
+    request<PreprocessSettingsData>("/api/settings/preprocess", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   getChunkingSettings: () => request<ChunkingSettingsData>("/api/settings/chunking"),
   updateChunkingSettings: (body: ChunkingSettingsUpdate) =>
     request<ChunkingSettingsData>("/api/settings/chunking", {

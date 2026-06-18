@@ -25,6 +25,8 @@ import {
   type ParserAdapterSettingsData,
   type ChunkingSettingsData,
   type ChunkingSettingsUpdate,
+  type PreprocessSettingsData,
+  type PreprocessSettingsUpdate,
   type RetrievalSettingsData,
   type RetrievalSettingsUpdate,
   type GroundingSettingsData,
@@ -83,6 +85,7 @@ export const queryKeys = {
   uploadStorageSettings: ["settings", "upload-storage"] as const,
   parserAdapterSettings: ["settings", "parser-adapters"] as const,
   parserAdapterContract: ["settings", "parser-adapters", "contract"] as const,
+  preprocessSettings: ["settings", "preprocess"] as const,
   chunkingSettings: ["settings", "chunking"] as const,
   retrievalSettings: ["settings", "retrieval"] as const,
   groundingSettings: ["settings", "grounding"] as const,
@@ -859,6 +862,26 @@ export function useUpdateGroundingSettings() {
 }
 
 /** Chunking アダプター(分割戦略)の runtime 設定。 */
+export function usePreprocessSettings() {
+  return useQuery<PreprocessSettingsData>({
+    queryKey: queryKeys.preprocessSettings,
+    queryFn: api.getPreprocessSettings,
+    retry: false,
+  });
+}
+
+/** 前処理(Preprocess)アダプター設定をランタイム保存。 */
+export function useUpdatePreprocessSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PreprocessSettingsUpdate) => api.updatePreprocessSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.preprocessSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
 export function useChunkingSettings() {
   return useQuery<ChunkingSettingsData>({
     queryKey: queryKeys.chunkingSettings,
