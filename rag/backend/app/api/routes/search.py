@@ -10,10 +10,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.clients.oracle import OracleClient, SelectAiUnavailableError
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.guardrails import GuardrailPolicy
+from app.rag.kb_adapter_config import apply_adapter_config_or_global
 from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
 from app.rag.pipeline import RagPipeline, SearchStageProgress, SearchTokenDelta
 from app.rag.rate_limit import enforce_rate_limit
@@ -122,19 +123,48 @@ async def stream_search(
     )
 
 
+async def _resolve_query_settings(
+    request: SearchRequest,
+    global_settings: Settings,
+) -> tuple[Settings, str | None]:
+    """単一 KB 指定時に KB の query 上書きを重ねた有効 Settings を返す。
+
+    request 明示パラメータが最優先という解決順は pipeline 側で保たれる。KB 指定が
+    0 件 / 複数件のときは設定が競合しうるためグローバル既定を使う。戻り値 2 番目は
+    実際に上書きが効いた KB id(効かなければ None)。
+    """
+    knowledge_base_ids = request.knowledge_base_ids
+    if len(knowledge_base_ids) != 1:
+        return global_settings, None
+    knowledge_base = await OracleClient().get_knowledge_base(knowledge_base_ids[0])
+    if knowledge_base is None:
+        return global_settings, None
+    effective, applied = apply_adapter_config_or_global(
+        global_settings,
+        knowledge_base.adapter_config,
+        scope="query",
+    )
+    return effective, (knowledge_base_ids[0] if applied else None)
+
+
 async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
     """検索 pipeline をリクエスト単位の timeout 付きで実行する。"""
-    settings = get_settings()
+    settings, applied_kb = await _resolve_query_settings(request, get_settings())
     timeout = settings.rag_search_timeout_seconds
     started_at = perf_counter()
     trace_id = new_trace_id()
     try:
-        return await asyncio.wait_for(
-            RagPipeline().run(request, trace_id=trace_id), timeout=timeout
+        result = await asyncio.wait_for(
+            RagPipeline(settings=settings).run(request, trace_id=trace_id), timeout=timeout
         )
+        if applied_kb is not None:
+            result.diagnostics.kb_adapter_config_applied = applied_kb
+        return result
     except TimeoutError as exc:
         elapsed = elapsed_ms(started_at)
         diagnostics = build_search_diagnostics(request, settings=settings)
+        if applied_kb is not None:
+            diagnostics.kb_adapter_config_applied = applied_kb
         record_rag_request(request.mode.value, "error", elapsed / 1000, 0)
         record_rag_search_audit(
             trace_id=trace_id,
@@ -155,7 +185,7 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
 
 async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIterator[str]:
     """stage progress を即時 SSE で返しながら検索 pipeline を実行する。"""
-    settings = get_settings()
+    settings, applied_kb = await _resolve_query_settings(request, get_settings())
     timeout = settings.rag_search_timeout_seconds
     started_at = perf_counter()
     trace_id = new_trace_id()
@@ -189,7 +219,7 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
     async def produce() -> None:
         try:
             result = await asyncio.wait_for(
-                RagPipeline().run(
+                RagPipeline(settings=settings).run(
                     request,
                     trace_id=trace_id,
                     progress_callback=emit_progress,
@@ -197,6 +227,8 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
                 ),
                 timeout=timeout,
             )
+            if applied_kb is not None:
+                result.diagnostics.kb_adapter_config_applied = applied_kb
             await queue.put(("result", result))
         except TimeoutError as exc:
             elapsed = elapsed_ms(started_at)
@@ -205,6 +237,8 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
                 settings=settings,
                 stream_stage_timings=stage_timings,
             )
+            if applied_kb is not None:
+                diagnostics.kb_adapter_config_applied = applied_kb
             record_rag_request(request.mode.value, "error", elapsed / 1000, 0)
             record_rag_search_audit(
                 trace_id=trace_id,

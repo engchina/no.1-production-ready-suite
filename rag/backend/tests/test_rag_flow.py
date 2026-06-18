@@ -8,6 +8,7 @@ from typing import Any, cast
 import pytest
 from pytest import LogCaptureFixture, MonkeyPatch
 
+from app.api.routes import documents as documents_route
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
@@ -35,6 +36,56 @@ def setup_function() -> None:
     reset_local_store()
 
 
+def _enqueue_ingestion(
+    document_id: str,
+    *,
+    force: bool = False,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    params = {"force": "true"} if force else None
+    response = client.post(
+        f"/api/documents/{document_id}/ingest",
+        params=params,
+        headers=headers,
+    )
+    assert response.status_code == 200
+    job = response.json()["data"]
+    assert job["document_id"] == document_id
+    return cast(dict[str, Any], job)
+
+
+def _run_ingestion_job(job_id: str) -> None:
+    asyncio.run(documents_route._run_ingestion_job(job_id))
+
+
+def _ingest_document(
+    document_id: str,
+    *,
+    force: bool = False,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    job = _enqueue_ingestion(document_id, force=force, headers=headers)
+    if job["status"] == "QUEUED":
+        _run_ingestion_job(cast(str, job["id"]))
+    return client.get(f"/api/documents/{document_id}", headers=headers)
+
+
+def _run_ingestion_and_get_job(
+    document_id: str,
+    *,
+    force: bool = False,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    job = _enqueue_ingestion(document_id, force=force, headers=headers)
+    if job["status"] == "QUEUED":
+        _run_ingestion_job(cast(str, job["id"]))
+    job_response = client.get(
+        f"/api/documents/ingestion-jobs/{job['id']}", headers=headers
+    )
+    assert job_response.status_code == 200
+    return cast(dict[str, Any], job_response.json()["data"])
+
+
 def test_upload_ingest_search_flow() -> None:
     """アップロードから取込・検索までの最小フローを確認する。"""
     sample = (
@@ -50,7 +101,7 @@ def test_upload_ingest_search_flow() -> None:
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
 
-    ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+    ingest_resp = _ingest_document(document_id)
     assert ingest_resp.status_code == 200
     indexed = ingest_resp.json()["data"]
     assert indexed["status"] == "INDEXED"
@@ -93,7 +144,7 @@ def test_ingest_emits_ingestion_audit_without_raw_text(caplog: LogCaptureFixture
     document_id = upload_resp.json()["data"]["id"]
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+        ingest_resp = _ingest_document(document_id)
 
     assert ingest_resp.status_code == 200
     audit_record = next(
@@ -308,13 +359,13 @@ async def test_ingestion_normalizes_untrusted_document_type_in_logs(
     assert "INV-SECRET" not in str(audit_event)
 
 
-async def test_ingestion_rejects_chunk_count_above_limit() -> None:
-    """chunk 数が上限を超える文書は索引せず ERROR 状態にする。"""
+async def test_ingestion_indexes_documents_with_many_chunks() -> None:
+    """chunk 数が多い文書も総数上限では拒否せず索引する。"""
     oracle = OracleClient()
     with audit_request_context():
         document = await oracle.create_document(
-            file_name="too-many-chunks.txt",
-            object_storage_path="local://uploaded/too-many-chunks.txt",
+            file_name="many-chunks.txt",
+            object_storage_path="local://uploaded/many-chunks.txt",
             content_type="text/plain",
             file_size_bytes=4,
             content_sha256=hashlib.sha256(b"test").hexdigest(),
@@ -322,7 +373,6 @@ async def test_ingestion_rejects_chunk_count_above_limit() -> None:
         settings = Settings.model_construct(
             rag_chunk_size=200,
             rag_chunk_overlap=20,
-            rag_max_chunks_per_document=1,
         )
         pipeline = IngestionPipeline(
             vlm=LongTextVlm(),
@@ -331,19 +381,13 @@ async def test_ingestion_rejects_chunk_count_above_limit() -> None:
             settings=settings,
         )
 
-        try:
-            await pipeline.ingest(document.id, b"test", "prompt")
-        except ValueError as exc:
-            assert "索引用チャンク数が上限を超えています" in str(exc)
-        else:
-            raise AssertionError("chunk 数上限超過は ValueError にする")
+        await pipeline.ingest(document.id, b"test", "prompt")
 
-        failed = await oracle.get_document(document.id)
-        assert failed is not None
-        assert failed.status == FileStatus.ERROR
-        assert failed.error_message is not None
-        assert "索引用チャンク数が上限を超えています" in failed.error_message
-        assert await oracle.count_document_chunks(document.id) == 0
+        indexed = await oracle.get_document(document.id)
+        assert indexed is not None
+        assert indexed.status == FileStatus.INDEXED
+        assert indexed.error_message is None
+        assert await oracle.count_document_chunks(document.id) > 1
 
 
 async def test_ingestion_redacts_internal_error_messages(
@@ -543,7 +587,7 @@ def test_search_filters_are_applied_to_retrieval() -> None:
         assert upload_resp.status_code == 200
         document_id = upload_resp.json()["data"]["id"]
         document_ids.append(document_id)
-        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+        ingest_resp = _ingest_document(document_id)
         assert ingest_resp.status_code == 200
 
     response = client.post(
@@ -562,6 +606,70 @@ def test_search_filters_are_applied_to_retrieval() -> None:
     assert {citation["document_id"] for citation in citations} == {document_ids[1]}
 
 
+def test_search_scalar_prefilters_are_applied_to_retrieval() -> None:
+    """scalar / 日付 / カテゴリ pre-filter（PoweRAG 由来）が実検索候補に適用される。"""
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("scalar.txt", "社内規程 クラウド利用料 明細".encode(), "text/plain")},
+    )
+    assert upload_resp.status_code == 200
+    document_id = upload_resp.json()["data"]["id"]
+    assert _ingest_document(document_id).status_code == 200
+
+    def _search(filters: dict[str, str]) -> list[dict[str, object]]:
+        response = client.post(
+            "/api/search",
+            json={"query": "クラウド利用料", "top_k": 10, "rerank_top_n": 5, "filters": filters},
+        )
+        assert response.status_code == 200
+        return response.json()["data"]["citations"]
+
+    # content_kinds: text を含むので一致、table のみ指定すると除外される。
+    assert {c["document_id"] for c in _search({"content_kinds": "text"})} == {document_id}
+    assert _search({"content_kinds": "table"}) == []
+
+    # page_number range: text には page_number metadata が無いため、scalar 述語は NULL を
+    # 除外する（SQL 標準挙動）。ページ番号で絞り込むと候補から外れる。
+    assert _search({"page_number_min": "1"}) == []
+
+    # uploaded_at 日付 range: 過去〜未来は一致、過去で閉じると除外。
+    assert {
+        c["document_id"]
+        for c in _search({"uploaded_from": "2000-01-01", "uploaded_to": "2999-12-31"})
+    } == {document_id}
+    assert _search({"uploaded_to": "2000-01-01"}) == []
+
+
+def test_document_navigation_tree_is_built_from_headings() -> None:
+    """取込済み文書の章節 navigation tree（Knowhere 由来）を API から取得できる。"""
+    markdown = (
+        "# 第1章 概要\n\n"
+        "クラウド利用料の概要を説明します。\n\n"
+        "## 1.1 詳細\n\n"
+        "月次の明細内訳について述べます。\n\n"
+        "# 第2章 結論\n\n"
+        "コスト最適化の結論をまとめます。\n"
+    )
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("nav.md", markdown.encode(), "text/markdown")},
+    )
+    assert upload_resp.status_code == 200
+    document_id = upload_resp.json()["data"]["id"]
+    assert _ingest_document(document_id).status_code == 200
+
+    nav_resp = client.get(f"/api/documents/{document_id}/navigation")
+    assert nav_resp.status_code == 200
+    nodes = nav_resp.json()["data"]
+    assert nodes, "見出しから navigation node が構築されるはず"
+    titles = {node["title"] for node in nodes}
+    assert any("第1章" in title for title in titles)
+    # depth1 の親 node は parent を持たず、子 section を link する。
+    roots = [node for node in nodes if node["depth"] == 1]
+    assert roots
+    assert all(node["parent_section_id"] is None for node in roots)
+
+
 def test_search_status_filter_is_case_insensitive() -> None:
     """status filter は小文字でも正規化されて検索に使われる。"""
     upload_resp = client.post(
@@ -570,7 +678,7 @@ def test_search_status_filter_is_case_insensitive() -> None:
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
-    ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+    ingest_resp = _ingest_document(document_id)
     assert ingest_resp.status_code == 200
 
     response = client.post(
@@ -595,7 +703,7 @@ def test_stream_search_returns_sse_events() -> None:
     )
     assert upload_resp.status_code == 200
     document_id = upload_resp.json()["data"]["id"]
-    assert client.post(f"/api/documents/{document_id}/ingest").status_code == 200
+    assert _ingest_document(document_id).status_code == 200
 
     response = client.post(
         "/api/search/stream",
@@ -834,12 +942,8 @@ def test_documents_and_search_are_scoped_by_tenant_header() -> None:
     document_a_id = upload_a.json()["data"]["id"]
     document_b_id = upload_b.json()["data"]["id"]
 
-    assert (
-        client.post(f"/api/documents/{document_a_id}/ingest", headers=tenant_a).status_code == 200
-    )
-    assert (
-        client.post(f"/api/documents/{document_b_id}/ingest", headers=tenant_b).status_code == 200
-    )
+    assert _ingest_document(document_a_id, headers=tenant_a).status_code == 200
+    assert _ingest_document(document_b_id, headers=tenant_b).status_code == 200
 
     list_a = client.get("/api/documents", headers=tenant_a)
     list_b = client.get("/api/documents", headers=tenant_b)
@@ -882,8 +986,8 @@ def test_documents_and_search_are_scoped_by_access_scope_header() -> None:
     document_a_id = upload_a.json()["data"]["id"]
     document_b_id = upload_b.json()["data"]["id"]
 
-    assert client.post(f"/api/documents/{document_a_id}/ingest").status_code == 200
-    assert client.post(f"/api/documents/{document_b_id}/ingest").status_code == 200
+    assert _ingest_document(document_a_id).status_code == 200
+    assert _ingest_document(document_b_id).status_code == 200
 
     access_a = {"X-RAG-Allowed-Document-Ids": document_a_id}
     list_a = client.get("/api/documents", headers=access_a)
@@ -1011,7 +1115,7 @@ def test_ingest_rejects_document_already_ingesting() -> None:
 
 
 def test_ingest_is_idempotent_for_already_indexed_document() -> None:
-    """INDEXED は force なしなら原本取得せず既存結果を返す。"""
+    """INDEXED は force なしなら原本取得せず SKIPPED job を返す。"""
     with audit_request_context():
         detail = asyncio.run(
             OracleClient().create_document(
@@ -1026,8 +1130,9 @@ def test_ingest_is_idempotent_for_already_indexed_document() -> None:
 
         assert response.status_code == 200
         data = response.json()["data"]
-        assert data["id"] == detail.id
-        assert data["status"] == "INDEXED"
+        assert data["document_id"] == detail.id
+        assert data["status"] == "SKIPPED"
+        assert data["skip_reason"] == "already_indexed"
         stored = asyncio.run(OracleClient().get_document(detail.id))
         assert stored is not None
         assert stored.status == FileStatus.INDEXED
@@ -1045,14 +1150,14 @@ def test_force_ingest_retries_already_indexed_document() -> None:
         )
         asyncio.run(OracleClient().update_document_status(detail.id, FileStatus.INDEXED))
 
-        response = client.post(
-            f"/api/documents/{detail.id}/ingest",
-            params={"force": "true"},
+        job = _run_ingestion_and_get_job(
+            detail.id,
+            force=True,
             headers=NO_TENANT_HEADERS,
         )
 
-        assert response.status_code == 409
-        assert response.json()["error_messages"] == ["原本ファイルが見つかりません。"]
+        assert job["status"] == "FAILED"
+        assert job["error_message"] == "原本ファイルが見つかりません。"
         stored = asyncio.run(OracleClient().get_document(detail.id))
         assert stored is not None
         assert stored.status == FileStatus.ERROR
@@ -1073,13 +1178,15 @@ def test_indexed_document_is_idempotent_without_force() -> None:
         response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
 
         assert response.status_code == 200
-        assert response.json()["data"]["status"] == "INDEXED"
+        data = response.json()["data"]
+        assert data["status"] == "SKIPPED"
+        assert data["skip_reason"] == "already_indexed"
 
 
 def test_ingest_marks_document_error_when_local_extraction_is_empty(
     caplog: LogCaptureFixture,
 ) -> None:
-    """ローカル抽出でテキスト化できない場合は 422 と ERROR 状態にする。"""
+    """ローカル抽出でテキスト化できない場合は FAILED job と ERROR 状態にする。"""
     upload_resp = client.post(
         "/api/documents/upload",
         files={"file": ("blank.txt", b"   \n\t", "text/plain")},
@@ -1088,9 +1195,10 @@ def test_ingest_marks_document_error_when_local_extraction_is_empty(
     document_id = upload_resp.json()["data"]["id"]
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+        job = _run_ingestion_and_get_job(document_id)
 
-    assert ingest_resp.status_code == 422
+    assert job["status"] == "FAILED"
+    assert job["error_message"] == "抽出可能なテキストが見つかりませんでした。"
     stored = asyncio.run(OracleClient().get_document(document_id))
     assert stored is not None
     assert stored.status == FileStatus.ERROR
@@ -1110,7 +1218,7 @@ def test_ingest_returns_504_when_enterprise_ai_times_out(
     monkeypatch: MonkeyPatch,
     caplog: LogCaptureFixture,
 ) -> None:
-    """VLM timeout は未処理 500 ではなく 504 と文書 ERROR 状態にする。"""
+    """VLM timeout は FAILED job と文書 ERROR 状態にする。"""
     monkeypatch.setattr("app.rag.ingestion.OciEnterpriseAiClient", TimeoutEnterpriseAi)
     upload_resp = client.post(
         "/api/documents/upload",
@@ -1120,10 +1228,10 @@ def test_ingest_returns_504_when_enterprise_ai_times_out(
     document_id = upload_resp.json()["data"]["id"]
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+        job = _run_ingestion_and_get_job(document_id)
 
-    assert ingest_resp.status_code == 504
-    assert "タイムアウト" in ingest_resp.json()["error_messages"][0]
+    assert job["status"] == "FAILED"
+    assert "タイムアウト" in job["error_message"]
     stored = asyncio.run(OracleClient().get_document(document_id))
     assert stored is not None
     assert stored.status == FileStatus.ERROR
@@ -1141,7 +1249,7 @@ def test_ingest_returns_422_when_enterprise_ai_output_is_incomplete(
     monkeypatch: MonkeyPatch,
     caplog: LogCaptureFixture,
 ) -> None:
-    """VLM の max_output_tokens incomplete は 422 と文書 ERROR 状態にする。"""
+    """VLM の max_output_tokens incomplete は FAILED job と文書 ERROR 状態にする。"""
     monkeypatch.setattr("app.rag.ingestion.OciEnterpriseAiClient", IncompleteEnterpriseAi)
     upload_resp = client.post(
         "/api/documents/upload",
@@ -1151,10 +1259,10 @@ def test_ingest_returns_422_when_enterprise_ai_output_is_incomplete(
     document_id = upload_resp.json()["data"]["id"]
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
-        ingest_resp = client.post(f"/api/documents/{document_id}/ingest")
+        job = _run_ingestion_and_get_job(document_id)
 
-    assert ingest_resp.status_code == 422
-    assert "max_output_tokens" in ingest_resp.json()["error_messages"][0]
+    assert job["status"] == "FAILED"
+    assert "max_output_tokens" in job["error_message"]
     stored = asyncio.run(OracleClient().get_document(document_id))
     assert stored is not None
     assert stored.status == FileStatus.ERROR
@@ -1179,9 +1287,10 @@ def test_ingest_marks_document_error_when_source_object_is_missing() -> None:
             )
         )
 
-        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
+        job = _run_ingestion_and_get_job(detail.id, headers=NO_TENANT_HEADERS)
 
-        assert response.status_code == 409
+        assert job["status"] == "FAILED"
+        assert job["error_message"] == "原本ファイルが見つかりません。"
         stored = asyncio.run(OracleClient().get_document(detail.id))
         assert stored is not None
         assert stored.status == FileStatus.ERROR
@@ -1205,12 +1314,10 @@ def test_ingest_rejects_source_size_mismatch() -> None:
             )
         )
 
-        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
+        job = _run_ingestion_and_get_job(detail.id, headers=NO_TENANT_HEADERS)
 
-        assert response.status_code == 409
-        assert response.json()["error_messages"] == [
-            "原本ファイルのサイズがアップロード時と一致しません。"
-        ]
+        assert job["status"] == "FAILED"
+        assert job["error_message"] == "原本ファイルのサイズがアップロード時と一致しません。"
         stored = asyncio.run(OracleClient().get_document(detail.id))
         assert stored is not None
         assert stored.status == FileStatus.ERROR
@@ -1234,12 +1341,10 @@ def test_ingest_rejects_source_hash_mismatch() -> None:
             )
         )
 
-        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
+        job = _run_ingestion_and_get_job(detail.id, headers=NO_TENANT_HEADERS)
 
-        assert response.status_code == 409
-        assert response.json()["error_messages"] == [
-            "原本ファイルの SHA-256 がアップロード時と一致しません。"
-        ]
+        assert job["status"] == "FAILED"
+        assert job["error_message"] == "原本ファイルの SHA-256 がアップロード時と一致しません。"
         stored = asyncio.run(OracleClient().get_document(detail.id))
         assert stored is not None
         assert stored.status == FileStatus.ERROR
@@ -1257,10 +1362,10 @@ def test_ingest_rejects_non_local_uri_in_local_upload_storage_backend() -> None:
             )
         )
 
-        response = client.post(f"/api/documents/{detail.id}/ingest", headers=NO_TENANT_HEADERS)
+        job = _run_ingestion_and_get_job(detail.id, headers=NO_TENANT_HEADERS)
 
-        assert response.status_code == 400
-        assert response.json()["error_messages"] == ["原本ファイルの参照パスが不正です。"]
+        assert job["status"] == "FAILED"
+        assert job["error_message"] == "原本ファイルの参照パスが不正です。"
         stored = asyncio.run(OracleClient().get_document(detail.id))
         assert stored is not None
         assert stored.status == FileStatus.ERROR
@@ -1297,3 +1402,4 @@ class IncompleteEnterpriseAi(OciEnterpriseAiClient):
         raise EnterpriseAiIncompleteResponseError(
             "OCI Enterprise AI の出力が max_output_tokens 上限で途中終了しました。"
         )
+

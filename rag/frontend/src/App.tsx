@@ -26,6 +26,15 @@ import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsCl
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
+import { ChunkingSettingsClient } from "@/components/settings/ChunkingSettingsClient";
+import { RetrievalSettingsClient } from "@/components/settings/RetrievalSettingsClient";
+import { GroundingSettingsClient } from "@/components/settings/GroundingSettingsClient";
+import { GenerationSettingsClient } from "@/components/settings/GenerationSettingsClient";
+import { GuardrailSettingsClient } from "@/components/settings/GuardrailSettingsClient";
+import { VectorIndexSettingsClient } from "@/components/settings/VectorIndexSettingsClient";
+import { EvaluationSettingsClient } from "@/components/settings/EvaluationSettingsClient";
+import { GraphSettingsClient } from "@/components/settings/GraphSettingsClient";
+import { AgenticSettingsClient } from "@/components/settings/AgenticSettingsClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -73,6 +82,15 @@ export function App() {
           path={APP_ROUTES.settingsParserAdapters}
           element={<SettingsParserAdaptersRoute />}
         />
+        <Route path={APP_ROUTES.settingsChunking} element={<SettingsChunkingRoute />} />
+        <Route path={APP_ROUTES.settingsRetrieval} element={<SettingsRetrievalRoute />} />
+        <Route path={APP_ROUTES.settingsGrounding} element={<SettingsGroundingRoute />} />
+        <Route path={APP_ROUTES.settingsGeneration} element={<SettingsGenerationRoute />} />
+        <Route path={APP_ROUTES.settingsGuardrail} element={<SettingsGuardrailRoute />} />
+        <Route path={APP_ROUTES.settingsVectorIndex} element={<SettingsVectorIndexRoute />} />
+        <Route path={APP_ROUTES.settingsEvaluation} element={<SettingsEvaluationRoute />} />
+        <Route path={APP_ROUTES.settingsGraph} element={<SettingsGraphRoute />} />
+        <Route path={APP_ROUTES.settingsAgentic} element={<SettingsAgenticRoute />} />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
@@ -287,6 +305,108 @@ function SettingsParserAdaptersRoute() {
         subtitle={t("settings.parserAdapters.subtitle")}
       />
       <ParserAdapterSettingsClient />
+    </div>
+  );
+}
+
+function SettingsChunkingRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsChunking")}
+        subtitle={t("settings.chunking.subtitle")}
+      />
+      <ChunkingSettingsClient />
+    </div>
+  );
+}
+
+function SettingsRetrievalRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsRetrieval")}
+        subtitle={t("settings.retrieval.subtitle")}
+      />
+      <RetrievalSettingsClient />
+    </div>
+  );
+}
+
+function SettingsGroundingRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsGrounding")}
+        subtitle={t("settings.grounding.subtitle")}
+      />
+      <GroundingSettingsClient />
+    </div>
+  );
+}
+
+function SettingsGenerationRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsGeneration")}
+        subtitle={t("settings.generation.subtitle")}
+      />
+      <GenerationSettingsClient />
+    </div>
+  );
+}
+
+function SettingsGuardrailRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsGuardrail")}
+        subtitle={t("settings.guardrail.subtitle")}
+      />
+      <GuardrailSettingsClient />
+    </div>
+  );
+}
+
+function SettingsVectorIndexRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsVectorIndex")}
+        subtitle={t("settings.vectorIndex.subtitle")}
+      />
+      <VectorIndexSettingsClient />
+    </div>
+  );
+}
+
+function SettingsEvaluationRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsEvaluation")}
+        subtitle={t("settings.evaluation.subtitle")}
+      />
+      <EvaluationSettingsClient />
+    </div>
+  );
+}
+
+function SettingsGraphRoute() {
+  return (
+    <div>
+      <PageHeader title={t("nav.settingsGraph")} subtitle={t("settings.graph.subtitle")} />
+      <GraphSettingsClient />
+    </div>
+  );
+}
+
+function SettingsAgenticRoute() {
+  return (
+    <div>
+      <PageHeader title={t("nav.settingsAgentic")} subtitle={t("settings.agentic.subtitle")} />
+      <AgenticSettingsClient />
     </div>
   );
 }

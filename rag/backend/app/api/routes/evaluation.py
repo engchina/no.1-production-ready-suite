@@ -8,7 +8,9 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from app.clients.oracle import OracleClient
+from app.config import get_settings
 from app.rag.evaluation import EvaluationRunner
+from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import (
@@ -25,6 +27,26 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+async def _resolve_evaluation_suite_name(
+    request_suite: str | None,
+    knowledge_base_ids: Sequence[str],
+) -> str:
+    """評価スイート名を解決順 request > KB 設定 > グローバル既定で決める。
+
+    検索系と異なり評価は ``rag_overrides`` で RAG 構成を明示制御するため、KB の query
+    上書きのうち評価固有の ``evaluation_suite`` だけを反映する。単一 KB 指定時のみ有効。
+    """
+    if request_suite:
+        return normalize_evaluation_suite(request_suite)
+    if len(knowledge_base_ids) == 1:
+        knowledge_base = await OracleClient().get_knowledge_base(knowledge_base_ids[0])
+        if knowledge_base is not None:
+            kb_suite = knowledge_base.adapter_config.query.evaluation_suite
+            if kb_suite is not None:
+                return normalize_evaluation_suite(kb_suite)
+    return normalize_evaluation_suite(get_settings().rag_evaluation_suite)
+
+
 @router.post("/run", response_model=ApiResponse[EvaluationMetrics])
 async def run_evaluation(
     http_request: Request,
@@ -32,6 +54,14 @@ async def run_evaluation(
 ) -> ApiResponse[EvaluationMetrics]:
     """golden set を使って RAG 評価を実行する。"""
     enforce_rate_limit("evaluation", http_request)
+    suite_name = await _resolve_evaluation_suite_name(
+        request.suite, request.knowledge_base_ids
+    )
+    effective_thresholds = (
+        request.thresholds
+        if request.thresholds is not None
+        else resolve_evaluation_suite(suite_name)
+    )
     metrics = await EvaluationRunner().run(
         cases=request.cases,
         top_k=request.top_k,
@@ -39,9 +69,10 @@ async def run_evaluation(
         mode=request.mode,
         filters=request.filters,
         knowledge_base_ids=request.knowledge_base_ids,
-        thresholds=request.thresholds,
+        thresholds=effective_thresholds,
         rag_overrides=request.rag_overrides,
     )
+    metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
     await _save_evaluation_artifact(
         request_summary=_run_request_summary(request),
         result_summary=metrics.model_dump(mode="json"),
@@ -59,11 +90,19 @@ async def compare_evaluation(
 ) -> ApiResponse[EvaluationCompareResponse]:
     """複数 RAG 設定を同じ golden set で比較する。"""
     enforce_rate_limit("evaluation", http_request)
+    suite_name = await _resolve_evaluation_suite_name(
+        request.suite, _compare_knowledge_base_ids(request.experiments)
+    )
+    effective_thresholds = (
+        request.thresholds
+        if request.thresholds is not None
+        else resolve_evaluation_suite(suite_name)
+    )
     comparison = await EvaluationRunner().compare(
         cases=request.cases,
         experiments=request.experiments,
         ranking_metric=request.ranking_metric,
-        thresholds=request.thresholds,
+        thresholds=effective_thresholds,
     )
     await _save_evaluation_artifact(
         request_summary=_compare_request_summary(request),

@@ -55,16 +55,32 @@ class _ElementSpan:
     section_level: int
     section_title: str | None
     element_id: str
+    parent_id: str | None
     source_parser: str | None
+    link_urls: tuple[str, ...]
+    link_texts: tuple[str, ...]
+    page_width: float | None
+    page_height: float | None
+    page_rotation: int | None
     bbox_json: str | None
     bbox_coordinate_mode: str | None
     bbox_unit: str | None
     chunk_template: str | None
     code_language: str | None
     equation_delimiter: str | None
+    equation_format: str | None
+    formula_count: int | None
+    formula_cell_refs: tuple[str, ...]
+    formula_cells: tuple[str, ...]
+    formula_cell_row: int | None
+    formula_cell_col: int | None
+    formula_value: str | None
     table_id: str | None
+    table_caption: str | None
     table_row_count: int | None
     table_column_count: int | None
+    asset_id: str | None
+    asset_kind: str | None
 
 
 @dataclass(frozen=True)
@@ -132,8 +148,14 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 120) -> list[Chu
         )
 
     if overlap == 0 or len(chunks) <= 1:
-        return [_with_chunk_metadata(chunk) for chunk in chunks]
-    return [_with_chunk_metadata(chunk) for chunk in _apply_overlap(chunks, overlap)]
+        final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
+    else:
+        final_chunks = [_with_chunk_metadata(chunk) for chunk in _apply_overlap(chunks, overlap)]
+    return _with_chunk_size_compliance_metadata(
+        final_chunks,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
 
 
 def chunk_extraction(
@@ -187,7 +209,397 @@ def chunk_extraction(
         buffer = [span]
 
     flush_buffer()
-    return [_with_chunk_metadata(chunk) for chunk in chunks]
+    return _with_chunk_size_compliance_metadata(
+        _with_table_row_tree_metadata(
+            _with_table_continuity_metadata([_with_chunk_metadata(chunk) for chunk in chunks])
+        ),
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
+
+
+CHUNKING_STRATEGIES: tuple[str, ...] = (
+    "structure_aware",
+    "recursive_character",
+    "sentence_window",
+    "hierarchical_parent_child",
+    "markdown_heading",
+    "page_level",
+)
+_DEFAULT_CHUNKING_STRATEGY = "structure_aware"
+
+
+def chunk_extraction_with_strategy(
+    extraction: StructuredExtraction,
+    *,
+    strategy: str = _DEFAULT_CHUNKING_STRATEGY,
+    chunk_size: int = 800,
+    overlap: int = 120,
+    child_size: int = 320,
+    sentence_window_size: int = 3,
+    min_chars: int = 0,
+) -> list[Chunk]:
+    """選択された chunking 戦略(Chunking アダプター)で構造化抽出を分割する。
+
+    業界の代表的な chunking 手法(LangChain / LlamaIndex / PageIndex 等)を外部依存なしで
+    本プロジェクトの `StructuredExtraction` に再マップし、chunks 段階で手動選択できるようにする。
+    未知 / 既定の戦略は structure_aware へ安全に fallback する。
+    """
+    _validate_chunk_settings(chunk_size, overlap)
+    normalized_strategy = (
+        strategy if strategy in CHUNKING_STRATEGIES else _DEFAULT_CHUNKING_STRATEGY
+    )
+    if normalized_strategy == "recursive_character":
+        chunks = _chunk_recursive_character(extraction, chunk_size=chunk_size, overlap=overlap)
+    elif normalized_strategy == "sentence_window":
+        chunks = _chunk_sentence_window(
+            extraction,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            window=max(1, sentence_window_size),
+        )
+    elif normalized_strategy == "hierarchical_parent_child":
+        chunks = _chunk_hierarchical_parent_child(
+            extraction,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            child_size=max(1, min(child_size, chunk_size - 1)),
+        )
+    elif normalized_strategy == "markdown_heading":
+        chunks = _chunk_markdown_heading(extraction, chunk_size=chunk_size, overlap=overlap)
+    elif normalized_strategy == "page_level":
+        chunks = _chunk_page_level(extraction, chunk_size=chunk_size, overlap=overlap)
+    else:
+        chunks = chunk_extraction(extraction, chunk_size=chunk_size, overlap=overlap)
+    absorbed = _absorb_small_chunks(chunks, min_chars=min_chars, chunk_size=chunk_size)
+    return _with_chunk_strategy_metadata(absorbed, normalized_strategy)
+
+
+def _chunk_recursive_character(
+    extraction: StructuredExtraction,
+    *,
+    chunk_size: int,
+    overlap: int,
+) -> list[Chunk]:
+    """LangChain RecursiveCharacterTextSplitter 風に raw_text を固定長で分割する。"""
+    return chunk_text(extraction.raw_text, chunk_size=chunk_size, overlap=overlap)
+
+
+def _chunk_markdown_heading(
+    extraction: StructuredExtraction,
+    *,
+    chunk_size: int,
+    overlap: int,
+) -> list[Chunk]:
+    """章節(見出し)単位で 1 chunk にまとめ、超過時のみ size 分割する。"""
+    source = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    if not source.strip():
+        return []
+    chunks: list[Chunk] = []
+    for segment in _section_segments(source):
+        normalized = re.sub(r"\s+", " ", segment.text).strip()
+        if not normalized:
+            continue
+        metadata = _segment_metadata(segment)
+        if len(normalized) <= chunk_size:
+            segment_chunks = [
+                Chunk(
+                    text=normalized,
+                    index=len(chunks),
+                    start_offset=segment.start_offset,
+                    end_offset=segment.start_offset + len(normalized),
+                    metadata=dict(metadata),
+                )
+            ]
+        else:
+            segment_chunks = _chunk_normalized_text(
+                normalized,
+                chunk_size=chunk_size,
+                overlap=overlap,
+                base_offset=segment.start_offset,
+                metadata=metadata,
+                start_index=len(chunks),
+            )
+        chunks.extend(
+            _with_chunk_group_metadata(
+                segment_chunks,
+                group_kind="section",
+                group_text=normalized,
+            )
+        )
+    final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
+    return _with_chunk_size_compliance_metadata(
+        final_chunks,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
+
+
+def _chunk_sentence_window(
+    extraction: StructuredExtraction,
+    *,
+    chunk_size: int,
+    overlap: int,
+    window: int,
+) -> list[Chunk]:
+    """LlamaIndex SentenceWindow 風に章節内で固定文数ごとの小 chunk を作る。"""
+    source = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    if not source.strip():
+        return []
+    chunks: list[Chunk] = []
+    for segment in _section_segments(source):
+        normalized = re.sub(r"\s+", " ", segment.text).strip()
+        if not normalized:
+            continue
+        metadata = _segment_metadata(segment)
+        metadata["sentence_window_size"] = window
+        sentences = _split_sentences(normalized)
+        segment_chunks: list[Chunk] = []
+        cursor = segment.start_offset
+        for start in range(0, len(sentences), window):
+            text = " ".join(sentences[start : start + window]).strip()
+            if not text:
+                continue
+            if len(text) <= chunk_size:
+                segment_chunks.append(
+                    Chunk(
+                        text=text,
+                        index=len(chunks) + len(segment_chunks),
+                        start_offset=cursor,
+                        end_offset=cursor + len(text),
+                        metadata=dict(metadata),
+                    )
+                )
+                cursor += len(text) + 1
+                continue
+            for part in _split_long_sentence(text, chunk_size, overlap):
+                segment_chunks.append(
+                    Chunk(
+                        text=part,
+                        index=len(chunks) + len(segment_chunks),
+                        start_offset=cursor,
+                        end_offset=cursor + len(part),
+                        metadata=dict(metadata),
+                    )
+                )
+                cursor += max(1, len(part) - overlap)
+        chunks.extend(
+            _with_chunk_group_metadata(
+                segment_chunks,
+                group_kind="section",
+                group_text=normalized,
+            )
+        )
+    final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
+    return _with_chunk_size_compliance_metadata(
+        final_chunks,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
+
+
+def _chunk_hierarchical_parent_child(
+    extraction: StructuredExtraction,
+    *,
+    chunk_size: int,
+    overlap: int,
+    child_size: int,
+) -> list[Chunk]:
+    """LlamaIndex AutoMerging 風に親 chunk を子 chunk へ再分割し、子を索引する。"""
+    parents = chunk_extraction(extraction, chunk_size=chunk_size, overlap=overlap)
+    children: list[Chunk] = []
+    for parent in parents:
+        parent_sha = str(parent.metadata.get("text_sha256") or "")
+        parent_id = (
+            str(parent.metadata.get("chunk_group_id") or "")
+            or parent_sha
+            or f"parent-{parent.index:04d}"
+        )[:32]
+        if parent.metadata.get("content_kind") == "table" or len(parent.text) <= child_size:
+            parts = [parent.text]
+        else:
+            normalized = re.sub(r"\s+", " ", parent.text).strip()
+            sub_chunks = _chunk_normalized_text(
+                normalized,
+                chunk_size=child_size,
+                overlap=min(overlap, child_size - 1),
+                base_offset=parent.start_offset,
+                metadata={},
+                start_index=0,
+            )
+            parts = [chunk.text for chunk in sub_chunks] or [parent.text]
+        part_count = len(parts)
+        for part_index, part in enumerate(parts, start=1):
+            metadata = {
+                key: value
+                for key, value in parent.metadata.items()
+                if key not in {"text_sha256", "text_chars"}
+            }
+            metadata.update(
+                {
+                    "chunk_level": "child",
+                    "parent_chunk_id": parent_id,
+                    "parent_chunk_chars": len(parent.text),
+                    "chunk_group_id": parent_id,
+                    "chunk_group_kind": "parent_child",
+                    "chunk_part_index": part_index,
+                    "chunk_part_count": part_count,
+                }
+            )
+            children.append(
+                Chunk(
+                    text=part,
+                    index=len(children),
+                    start_offset=parent.start_offset,
+                    end_offset=parent.start_offset + len(part),
+                    metadata=metadata,
+                )
+            )
+    final_chunks = [_with_chunk_metadata(chunk) for chunk in children]
+    return _with_chunk_size_compliance_metadata(
+        final_chunks,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
+
+
+def _chunk_page_level(
+    extraction: StructuredExtraction,
+    *,
+    chunk_size: int,
+    overlap: int,
+) -> list[Chunk]:
+    """PageIndex 風にページ単位で 1 chunk にまとめる。無ページ文書は章節へ fallback する。"""
+    spans = [
+        span
+        for span in _element_spans(extraction.elements)
+        if span.kind not in NON_INDEXED_ELEMENT_KINDS
+    ]
+    if not spans:
+        return _chunk_markdown_heading(extraction, chunk_size=chunk_size, overlap=overlap)
+    if all(span.page_number is None for span in spans):
+        return _chunk_markdown_heading(extraction, chunk_size=chunk_size, overlap=overlap)
+
+    chunks: list[Chunk] = []
+    buffer: list[_ElementSpan] = []
+    buffer_page: int | None = None
+
+    def flush_buffer() -> None:
+        nonlocal buffer, buffer_page
+        if not buffer:
+            return
+        chunks.extend(
+            _chunk_span_group(
+                buffer,
+                chunk_size=chunk_size,
+                overlap=overlap,
+                start_index=len(chunks),
+            )
+        )
+        buffer = []
+        buffer_page = None
+
+    for span in spans:
+        if span.content_kind == "table":
+            flush_buffer()
+            chunks.extend(_chunk_table_span(span, chunk_size=chunk_size, start_index=len(chunks)))
+            continue
+        if buffer and span.page_number != buffer_page:
+            flush_buffer()
+        if not buffer:
+            buffer_page = span.page_number
+        buffer.append(span)
+    flush_buffer()
+    return _with_chunk_size_compliance_metadata(
+        _with_table_row_tree_metadata(
+            _with_table_continuity_metadata([_with_chunk_metadata(chunk) for chunk in chunks])
+        ),
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
+
+
+def _absorb_small_chunks(
+    chunks: list[Chunk],
+    *,
+    min_chars: int,
+    chunk_size: int,
+) -> list[Chunk]:
+    """min_chars 未満の微小 chunk を、同一 chunk group 内の直前 chunk へ吸収する。"""
+    if min_chars <= 0 or len(chunks) <= 1:
+        return chunks
+    merged: list[Chunk] = []
+    for chunk in chunks:
+        previous = merged[-1] if merged else None
+        if (
+            previous is not None
+            and len(chunk.text) < min_chars
+            and chunk.metadata.get("content_kind") != "table"
+            and previous.metadata.get("content_kind") != "table"
+            and previous.metadata.get("chunk_group_id") == chunk.metadata.get("chunk_group_id")
+            and previous.metadata.get("chunk_group_id") is not None
+        ):
+            joined = f"{previous.text}\n{chunk.text}".strip()
+            merged[-1] = _restamp_merged_chunk(
+                Chunk(
+                    text=joined,
+                    index=previous.index,
+                    start_offset=previous.start_offset,
+                    end_offset=chunk.end_offset,
+                    metadata=dict(previous.metadata),
+                ),
+                chunk_size=chunk_size,
+            )
+            continue
+        merged.append(chunk)
+    return [
+        Chunk(
+            text=chunk.text,
+            index=index,
+            start_offset=chunk.start_offset,
+            end_offset=chunk.end_offset,
+            metadata=chunk.metadata,
+        )
+        for index, chunk in enumerate(merged)
+    ]
+
+
+def _restamp_merged_chunk(chunk: Chunk, *, chunk_size: int) -> Chunk:
+    """吸収で本文が変わった chunk の sha / 文字数 / size compliance を再計算する。"""
+    metadata = dict(chunk.metadata)
+    metadata["text_sha256"] = hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()
+    metadata["text_chars"] = len(chunk.text)
+    limit = _metadata_int(metadata.get("chunk_size_limit"), chunk_size)
+    if len(chunk.text) <= limit:
+        metadata["chunk_size_compliance"] = "within_limit"
+        metadata.pop("chunk_size_overflow_reason", None)
+    elif reason := _chunk_size_overflow_reason(chunk):
+        metadata["chunk_size_compliance"] = "overflow_justified"
+        metadata["chunk_size_overflow_reason"] = reason
+    else:
+        metadata["chunk_size_compliance"] = "overflow"
+        metadata.pop("chunk_size_overflow_reason", None)
+    return Chunk(
+        text=chunk.text,
+        index=chunk.index,
+        start_offset=chunk.start_offset,
+        end_offset=chunk.end_offset,
+        metadata=metadata,
+    )
+
+
+def _with_chunk_strategy_metadata(chunks: list[Chunk], strategy: str) -> list[Chunk]:
+    """全 chunk に選択された chunking 戦略名を刻む。"""
+    return [
+        Chunk(
+            text=chunk.text,
+            index=chunk.index,
+            start_offset=chunk.start_offset,
+            end_offset=chunk.end_offset,
+            metadata={**chunk.metadata, "chunk_strategy": strategy},
+        )
+        for chunk in chunks
+    ]
 
 
 def _validate_chunk_settings(chunk_size: int, overlap: int) -> None:
@@ -300,11 +712,18 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                 section_level=section_level,
                 section_title=section_path[-1] if section_path else None,
                 element_id=element_id,
+                parent_id=element.parent_id
+                or _metadata_label(element.metadata.get("parent_id"), max_length=80),
                 source_parser=element.source_parser
                 or _metadata_label(
                     element.metadata.get("source_parser"),
                     max_length=80,
                 ),
+                link_urls=_metadata_text_tuple(element.metadata.get("link_urls")),
+                link_texts=_metadata_text_tuple(element.metadata.get("link_texts")),
+                page_width=_metadata_float(element.metadata.get("page_width")),
+                page_height=_metadata_float(element.metadata.get("page_height")),
+                page_rotation=_metadata_optional_int(element.metadata.get("page_rotation")),
                 bbox_json=_bbox_json(element.bbox),
                 bbox_coordinate_mode=_bbox_coordinate_mode(element.metadata),
                 bbox_unit=_bbox_unit(element.bbox, element.metadata),
@@ -320,11 +739,34 @@ def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
                     element.metadata.get("equation_delimiter"),
                     max_length=40,
                 ),
+                equation_format=_metadata_label(
+                    element.metadata.get("equation_format"),
+                    max_length=40,
+                ),
+                formula_count=_metadata_positive_int(element.metadata.get("formula_count")),
+                formula_cell_refs=_formula_cell_refs(element.metadata),
+                formula_cells=_metadata_text_tuple(element.metadata.get("formula_cells")),
+                formula_cell_row=_metadata_optional_int(
+                    element.metadata.get("formula_cell_row")
+                ),
+                formula_cell_col=_metadata_optional_int(
+                    element.metadata.get("formula_cell_col")
+                ),
+                formula_value=_metadata_label(
+                    element.metadata.get("formula_value"),
+                    max_length=500,
+                ),
                 table_id=table_id,
+                table_caption=_metadata_label(
+                    element.metadata.get("table_caption"),
+                    max_length=500,
+                ),
                 table_row_count=_metadata_positive_int(element.metadata.get("row_count")),
                 table_column_count=_metadata_positive_int(
                     element.metadata.get("column_count")
                 ),
+                asset_id=_metadata_label(element.metadata.get("asset_id"), max_length=80),
+                asset_kind=_metadata_label(element.metadata.get("asset_kind"), max_length=40),
             )
         )
     return spans
@@ -334,7 +776,7 @@ def _element_content_kind(element: DocumentElement) -> str:
     """検索 metadata に保存する低 cardinality の content kind。"""
     if element.content_kind:
         return element.content_kind
-    if element.kind == "table":
+    if element.kind in {"table", "table_caption"}:
         return "table"
     if element.kind in FIGURE_ELEMENT_KINDS:
         return "figure"
@@ -366,6 +808,38 @@ def _metadata_label(value: object, *, max_length: int) -> str | None:
         cleaned = str(value).strip()
         return cleaned[:max_length] if cleaned else None
     return None
+
+
+def _metadata_text_tuple(value: object) -> tuple[str, ...]:
+    """metadata の改行区切り文字列を短い tuple として読む。"""
+    if not isinstance(value, str):
+        return ()
+    items: list[str] = []
+    for raw in value.splitlines():
+        cleaned = raw.strip()
+        if cleaned:
+            items.append(cleaned[:500])
+    return tuple(_ordered_unique(items))
+
+
+def _formula_cell_refs(metadata: ChunkMetadata) -> tuple[str, ...]:
+    """table / equation metadata から Excel formula cell refs を集約する。"""
+    refs = list(_metadata_text_tuple(metadata.get("formula_cell_refs")))
+    single_ref = _metadata_label(metadata.get("formula_cell_ref"), max_length=80)
+    if single_ref is not None:
+        refs.append(single_ref)
+    return tuple(_ordered_unique(refs))
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _bbox_json(value: list[float] | None) -> str | None:
@@ -429,6 +903,35 @@ def _metadata_positive_int(value: object) -> int | None:
     """metadata の正の整数値を読む。"""
     parsed = _metadata_int(value, default=0)
     return parsed if parsed > 0 else None
+
+
+def _metadata_optional_int(value: object) -> int | None:
+    """metadata の任意整数値を読む。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value)
+    return None
+
+
+def _metadata_float(value: object) -> float | None:
+    """metadata の正の数値を読む。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+        return number if number > 0 else None
+    if isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+        return number if number > 0 else None
+    return None
 
 
 def _can_merge_spans(group: list[_ElementSpan], span: _ElementSpan, chunk_size: int) -> bool:
@@ -589,6 +1092,358 @@ def _chunks_from_parts(
     return chunks
 
 
+def _with_table_continuity_metadata(chunks: list[Chunk]) -> list[Chunk]:
+    """同一 table_id が複数ページにまたがる場合、table continuity metadata を付ける。"""
+    table_chunks_by_id: dict[str, list[Chunk]] = {}
+    for chunk in chunks:
+        if chunk.metadata.get("content_kind") != "table":
+            continue
+        table_id = chunk.metadata.get("table_id")
+        if not isinstance(table_id, str) or not table_id.strip():
+            continue
+        table_chunks_by_id.setdefault(table_id, []).append(chunk)
+
+    replacements: dict[int, Chunk] = {}
+    for table_id, table_chunks in table_chunks_by_id.items():
+        pages = sorted(
+            {
+                page
+                for chunk in table_chunks
+                for page in _chunk_page_range(chunk)
+            }
+        )
+        if len(pages) <= 1:
+            continue
+        ordered = sorted(
+            table_chunks,
+            key=lambda chunk: (
+                _metadata_int(chunk.metadata.get("page_start"), chunk.index),
+                _metadata_int(chunk.metadata.get("table_data_row_start"), chunk.index),
+                chunk.index,
+            ),
+        )
+        group_id = _table_continuity_group_id(table_id, ordered, pages=pages)
+        row_offsets = _table_row_offsets_by_page(ordered)
+        part_count = len(ordered)
+        for part_index, chunk in enumerate(ordered, start=1):
+            metadata = dict(chunk.metadata)
+            page_start = _metadata_int(metadata.get("page_start"), pages[0])
+            row_offset = row_offsets.get(page_start, 0)
+            row_start = _metadata_positive_int(metadata.get("table_data_row_start"))
+            row_end = _metadata_positive_int(metadata.get("table_data_row_end"))
+            inferred_body_rows = _table_body_row_count(chunk.text)
+            effective_row_start = row_start or (1 if inferred_body_rows else None)
+            effective_row_end = row_end or inferred_body_rows or effective_row_start
+            if effective_row_start is not None:
+                metadata["table_data_row_start"] = row_offset + effective_row_start
+            if effective_row_end is not None:
+                metadata["table_data_row_end"] = row_offset + effective_row_end
+            metadata.update(
+                {
+                    "chunk_group_id": group_id,
+                    "chunk_group_kind": "table_continuity",
+                    "chunk_part_index": part_index,
+                    "chunk_part_count": part_count,
+                    "table_continuity_group_id": group_id,
+                    "table_cross_page": True,
+                    "table_page_start": pages[0],
+                    "table_page_end": pages[-1],
+                    "table_page_count": len(pages),
+                    "table_continuation_index": part_index,
+                    "table_continuation_count": part_count,
+                    "table_header_repeated": bool(part_index > 1)
+                    or metadata.get("table_header_repeated") is True,
+                }
+            )
+            replacements[chunk.index] = Chunk(
+                text=chunk.text,
+                index=chunk.index,
+                start_offset=chunk.start_offset,
+                end_offset=chunk.end_offset,
+                metadata=metadata,
+            )
+    if not replacements:
+        return chunks
+    return [replacements.get(chunk.index, chunk) for chunk in chunks]
+
+
+def _with_table_row_tree_metadata(chunks: list[Chunk]) -> list[Chunk]:
+    """表 chunk に row-level key-value lineage metadata を付ける。"""
+    annotated: list[Chunk] = []
+    for chunk in chunks:
+        if chunk.metadata.get("content_kind") != "table":
+            annotated.append(chunk)
+            continue
+        row_tree = _table_row_tree_metadata(chunk)
+        if not row_tree:
+            annotated.append(chunk)
+            continue
+        annotated.append(
+            Chunk(
+                text=chunk.text,
+                index=chunk.index,
+                start_offset=chunk.start_offset,
+                end_offset=chunk.end_offset,
+                metadata={**chunk.metadata, **row_tree},
+            )
+        )
+    return annotated
+
+
+def _table_row_tree_metadata(chunk: Chunk) -> ChunkMetadata:
+    rows = _table_rows_without_separator(chunk.text)
+    if len(rows) < 2:
+        return {}
+    column_count = max(
+        _metadata_positive_int(chunk.metadata.get("table_column_count")) or 0,
+        *(len(row) for row in rows),
+    )
+    if column_count <= 0:
+        return {}
+    column_keys = _table_column_keys(rows[0], column_count=column_count)
+    data_rows = rows[1:]
+    row_blocks = _table_key_value_rows(column_keys, data_rows)
+    if not row_blocks:
+        return {}
+    row_start = _metadata_positive_int(chunk.metadata.get("table_data_row_start")) or 1
+    row_end = _metadata_positive_int(chunk.metadata.get("table_data_row_end")) or (
+        row_start + len(row_blocks) - 1
+    )
+    header_json = json.dumps(
+        column_keys,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    row_hashes = [
+        _stable_sha256({"columns": column_keys, "row": row_block}) for row_block in row_blocks
+    ]
+    cell_refs = _table_cell_refs_for_row_group(
+        row_start=row_start,
+        row_count=len(row_blocks),
+        column_count=len(column_keys),
+    )
+    return {
+        "table_row_tree_version": "row_tree_v1",
+        "table_row_tree_format": "key_value_rows",
+        "table_row_tree_column_count": len(column_keys),
+        "table_row_tree_row_count": len(row_blocks),
+        "table_row_tree_row_start": row_start,
+        "table_row_tree_row_end": row_end,
+        "table_row_tree_column_keys": header_json,
+        "table_row_tree_header_sha256": hashlib.sha256(
+            header_json.encode("utf-8")
+        ).hexdigest(),
+        "table_row_tree_row_hashes": json.dumps(
+            row_hashes,
+            separators=(",", ":"),
+        ),
+        "table_row_tree_kv_sha256": _stable_sha256(
+            {"columns": column_keys, "rows": row_blocks}
+        ),
+        "table_row_tree_dense": all(len(row) == len(column_keys) for row in data_rows),
+        "table_cell_ref_format": "a1",
+        "table_cell_ref_count": len(cell_refs),
+        "table_cell_refs": "\n".join(cell_refs)[:4000],
+    }
+
+
+def _table_cell_refs_for_row_group(
+    *,
+    row_start: int,
+    row_count: int,
+    column_count: int,
+) -> list[str]:
+    """table data row range から A1 形式 cell refs を生成する。"""
+    refs: list[str] = []
+    for data_row_index in range(row_start, row_start + row_count):
+        sheet_row = data_row_index + 1
+        for col_index in range(column_count):
+            refs.append(f"{_spreadsheet_column_label(col_index)}{sheet_row}")
+    return refs
+
+
+def _spreadsheet_column_label(col_index: int) -> str:
+    index = max(0, col_index)
+    letters: list[str] = []
+    while True:
+        index, remainder = divmod(index, 26)
+        letters.append(chr(ord("A") + remainder))
+        if index == 0:
+            break
+        index -= 1
+    return "".join(reversed(letters))
+
+
+def _table_rows_without_separator(text: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not TABLE_LINE.match(stripped) or _is_markdown_table_separator(stripped):
+            continue
+        cells = _table_cells(stripped)
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def _table_cells(line: str) -> list[str]:
+    body = line.strip().strip("|")
+    return [
+        _clean_table_cell(cell.replace("\\|", "|"))
+        for cell in re.split(r"(?<!\\)\|", body)
+    ]
+
+
+def _clean_table_cell(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _table_column_keys(header_cells: list[str], *, column_count: int) -> list[str]:
+    raw_keys = [
+        _clean_table_column_key(header_cells[index] if index < len(header_cells) else "")
+        for index in range(column_count)
+    ]
+    keys: list[str] = []
+    seen: dict[str, int] = {}
+    for index, key in enumerate(raw_keys, start=1):
+        base = key or f"column_{index}"
+        seen[base] = seen.get(base, 0) + 1
+        keys.append(base if seen[base] == 1 else f"{base}_{seen[base]}")
+    return keys
+
+
+def _clean_table_column_key(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    return cleaned[:80]
+
+
+def _table_key_value_rows(
+    column_keys: list[str],
+    data_rows: list[list[str]],
+) -> list[dict[str, str]]:
+    row_blocks: list[dict[str, str]] = []
+    for row in data_rows:
+        values = [*row, *([""] * max(0, len(column_keys) - len(row)))]
+        row_blocks.append(
+            {
+                column_key: values[index] if index < len(values) else ""
+                for index, column_key in enumerate(column_keys)
+            }
+        )
+    return row_blocks
+
+
+def _stable_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _with_chunk_size_compliance_metadata(
+    chunks: list[Chunk],
+    *,
+    chunk_size: int,
+    overlap: int,
+) -> list[Chunk]:
+    """Adaptive chunking 評価向けに size compliance metadata を付ける。"""
+    limit = chunk_size + max(0, overlap)
+    annotated: list[Chunk] = []
+    for chunk in chunks:
+        metadata = {
+            **chunk.metadata,
+            "chunk_size_target": chunk_size,
+            "chunk_size_limit": limit,
+        }
+        text_chars = len(chunk.text)
+        if text_chars <= limit:
+            metadata["chunk_size_compliance"] = "within_limit"
+        elif reason := _chunk_size_overflow_reason(chunk):
+            metadata["chunk_size_compliance"] = "overflow_justified"
+            metadata["chunk_size_overflow_reason"] = reason
+        else:
+            metadata["chunk_size_compliance"] = "overflow"
+        annotated.append(
+            Chunk(
+                text=chunk.text,
+                index=chunk.index,
+                start_offset=chunk.start_offset,
+                end_offset=chunk.end_offset,
+                metadata=metadata,
+            )
+        )
+    return annotated
+
+
+def _chunk_size_overflow_reason(chunk: Chunk) -> str | None:
+    """構造を壊さないために chunk_size を超えることを許容できる理由を返す。"""
+    content_kind = chunk.metadata.get("content_kind")
+    if content_kind in {"table", "code", "equation", "figure"}:
+        return "atomic_block"
+    return None
+
+
+def _chunk_page_range(chunk: Chunk) -> range:
+    page_start = _metadata_positive_int(chunk.metadata.get("page_start"))
+    page_end = _metadata_positive_int(chunk.metadata.get("page_end")) or page_start
+    if page_start is None or page_end is None or page_end < page_start:
+        return range(0)
+    return range(page_start, page_end + 1)
+
+
+def _table_continuity_group_id(
+    table_id: str,
+    chunks: list[Chunk],
+    *,
+    pages: list[int],
+) -> str:
+    payload = {
+        "group_kind": "table_continuity",
+        "table_id": table_id,
+        "pages": pages,
+        "element_ids": [
+            chunk.metadata.get("element_ids")
+            for chunk in chunks
+            if chunk.metadata.get("element_ids")
+        ],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:32]
+
+
+def _table_row_offsets_by_page(chunks: list[Chunk]) -> dict[int, int]:
+    """各ページの table_data_row_* を table 全体の行番号へ寄せる offset を返す。"""
+    row_max_by_page: dict[int, int] = {}
+    for chunk in chunks:
+        page_start = _metadata_positive_int(chunk.metadata.get("page_start"))
+        row_end = _metadata_positive_int(chunk.metadata.get("table_data_row_end")) or (
+            _table_body_row_count(chunk.text) or None
+        )
+        if page_start is None or row_end is None:
+            continue
+        row_max_by_page[page_start] = max(row_max_by_page.get(page_start, 0), row_end)
+    offsets: dict[int, int] = {}
+    offset = 0
+    for page in sorted(row_max_by_page):
+        offsets[page] = offset
+        offset += row_max_by_page[page]
+    return offsets
+
+
+def _table_body_row_count(text: str) -> int:
+    """Markdown table の body row 数を数える。"""
+    lines = [line.strip() for line in text.splitlines() if TABLE_LINE.match(line.strip())]
+    if not lines:
+        return 0
+    body_lines = lines[1:]
+    if body_lines and _is_markdown_table_separator(body_lines[0]):
+        body_lines = body_lines[1:]
+    return len(body_lines)
+
+
 def _with_chunk_group_metadata(
     chunks: list[Chunk],
     *,
@@ -625,6 +1480,14 @@ def _split_table_rows_by_size(text: str, chunk_size: int) -> list[_TablePart]:
     lines = [line.rstrip() for line in text.splitlines() if line.strip()]
     if not lines:
         return []
+    prefix_lines: list[str] = []
+    while lines and not TABLE_LINE.match(lines[0]):
+        prefix_lines.append(lines.pop(0))
+    if not lines and prefix_lines:
+        return [
+            _TablePart(text=part, row_start=None, row_end=None, header_repeated=False)
+            for part in _split_lines_by_size(text, chunk_size)
+        ]
     if not TABLE_LINE.match(lines[0]):
         return [
             _TablePart(text=part, row_start=None, row_end=None, header_repeated=False)
@@ -632,12 +1495,12 @@ def _split_table_rows_by_size(text: str, chunk_size: int) -> list[_TablePart]:
         ]
 
     header_line_count = _table_header_line_count(lines)
-    header_lines = lines[:header_line_count]
+    header_lines = [*prefix_lines, *lines[:header_line_count]]
     body_lines = lines[header_line_count:]
     if not body_lines:
         return [
             _TablePart(
-                text="\n".join(lines),
+                text="\n".join([*prefix_lines, *lines]),
                 row_start=None,
                 row_end=None,
                 header_repeated=False,
@@ -749,14 +1612,41 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
     pages = sorted({span.page_number for span in group if span.page_number is not None})
     source_parsers = sorted({span.source_parser for span in group if span.source_parser})
     templates = sorted({span.chunk_template for span in group if span.chunk_template})
+    link_urls = _ordered_unique([url for span in group for url in span.link_urls])
+    link_texts = _ordered_unique([text for span in group for text in span.link_texts])
     bboxes = {span.bbox_json for span in group if span.bbox_json}
     bbox_modes = {span.bbox_coordinate_mode for span in group if span.bbox_coordinate_mode}
     bbox_units = {span.bbox_unit for span in group if span.bbox_unit}
+    page_widths = {span.page_width for span in group if span.page_width is not None}
+    page_heights = {span.page_height for span in group if span.page_height is not None}
+    page_rotations = {
+        span.page_rotation for span in group if span.page_rotation is not None
+    }
     code_languages = {span.code_language for span in group if span.code_language}
     equation_delimiters = {
         span.equation_delimiter for span in group if span.equation_delimiter
     }
+    equation_formats = {span.equation_format for span in group if span.equation_format}
+    formula_counts = {
+        span.formula_count for span in group if span.formula_count is not None
+    }
+    formula_cell_refs = _ordered_unique(
+        [cell_ref for span in group for cell_ref in span.formula_cell_refs]
+    )
+    formula_cells = _ordered_unique([cell for span in group for cell in span.formula_cells])
+    formula_cell_rows = {
+        span.formula_cell_row for span in group if span.formula_cell_row is not None
+    }
+    formula_cell_cols = {
+        span.formula_cell_col for span in group if span.formula_cell_col is not None
+    }
+    formula_values = _ordered_unique(
+        [span.formula_value for span in group if span.formula_value]
+    )
     table_ids = sorted({span.table_id for span in group if span.table_id})
+    table_captions = _ordered_unique([span.table_caption for span in group if span.table_caption])
+    asset_ids = sorted({span.asset_id for span in group if span.asset_id})
+    asset_kinds = sorted({span.asset_kind for span in group if span.asset_kind})
     table_row_counts = {
         span.table_row_count for span in group if span.table_row_count is not None
     }
@@ -765,6 +1655,8 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
         for span in group
         if span.table_column_count is not None
     }
+    parent_ids = sorted({span.parent_id for span in group if span.parent_id})
+    dependency_edges = _span_dependency_edges(group)
     metadata: ChunkMetadata = {
         "chunk_profile": STRUCTURE_CHUNK_PROFILE,
         "content_kind": first.content_kind,
@@ -772,22 +1664,66 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
         "element_kinds": ",".join(sorted({span.kind for span in group})),
         "element_ids": ",".join(span.element_id for span in group),
     }
+    if parent_ids:
+        metadata["parent_element_ids"] = ",".join(parent_ids)
+    if dependency_edges:
+        metadata["dependency_edges"] = json.dumps(
+            dependency_edges,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        metadata["dependency_edge_count"] = len(dependency_edges)
     if source_parsers:
         metadata["source_parser"] = source_parsers[0]
     if templates:
         metadata["chunk_template"] = templates[0]
+    if link_urls:
+        metadata["link_count"] = len(link_urls)
+        metadata["link_urls"] = "\n".join(link_urls)[:1000]
+    if link_texts:
+        metadata["link_texts"] = "\n".join(link_texts)[:1000]
     if len(bboxes) == 1:
         metadata["bbox"] = next(iter(bboxes))
         if len(bbox_modes) == 1:
             metadata["bbox_coordinate_mode"] = next(iter(bbox_modes))
         if len(bbox_units) == 1:
             metadata["bbox_unit"] = next(iter(bbox_units))
+        if len(page_widths) == 1:
+            metadata["page_width"] = next(iter(page_widths))
+        if len(page_heights) == 1:
+            metadata["page_height"] = next(iter(page_heights))
+        if len(page_rotations) == 1:
+            metadata["page_rotation"] = next(iter(page_rotations))
     if len(code_languages) == 1:
         metadata["code_language"] = next(iter(code_languages))
     if len(equation_delimiters) == 1:
         metadata["equation_delimiter"] = next(iter(equation_delimiters))
+    if len(equation_formats) == 1:
+        metadata["equation_format"] = next(iter(equation_formats))
+    if len(formula_counts) == 1:
+        metadata["formula_count"] = next(iter(formula_counts))
+    elif formula_cell_refs:
+        metadata["formula_count"] = len(formula_cell_refs)
+    if formula_cell_refs:
+        metadata["formula_cell_count"] = len(formula_cell_refs)
+        metadata["formula_cell_refs"] = "\n".join(formula_cell_refs)[:1000]
+    if formula_cells:
+        metadata["formula_cells"] = "\n".join(formula_cells)[:4000]
+    if len(formula_cell_rows) == 1:
+        metadata["formula_cell_row"] = next(iter(formula_cell_rows))
+    if len(formula_cell_cols) == 1:
+        metadata["formula_cell_col"] = next(iter(formula_cell_cols))
+    if len(formula_values) == 1:
+        metadata["formula_value"] = formula_values[0]
     if len(table_ids) == 1:
         metadata["table_id"] = table_ids[0]
+    if len(table_captions) == 1:
+        metadata["table_caption"] = table_captions[0]
+    if len(asset_ids) == 1:
+        metadata["asset_id"] = asset_ids[0]
+    if len(asset_kinds) == 1:
+        metadata["asset_kind"] = asset_kinds[0]
     if len(table_row_counts) == 1:
         metadata["table_row_count"] = next(iter(table_row_counts))
     if len(table_column_counts) == 1:
@@ -800,6 +1736,22 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
         metadata["page_start"] = pages[0]
         metadata["page_end"] = pages[-1]
     return metadata
+
+
+def _span_dependency_edges(group: list[_ElementSpan]) -> list[dict[str, str]]:
+    """同一 chunk 内に閉じた parent-child dependency を citation metadata 化する。"""
+    element_ids = {span.element_id for span in group}
+    edges: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for span in group:
+        if not span.parent_id or span.parent_id not in element_ids:
+            continue
+        key = (span.parent_id, span.element_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append({"parent_id": span.parent_id, "child_id": span.element_id})
+    return edges
 
 
 def _split_sentences(text: str) -> list[str]:

@@ -4,7 +4,11 @@ import hashlib
 import json
 
 from app.config import Settings, get_settings
-from app.schemas.search import SearchDiagnostics, SearchRequest
+from app.schemas.search import (
+    SUPPORTED_SCALAR_SEARCH_FILTER_KEYS,
+    SearchDiagnostics,
+    SearchRequest,
+)
 
 
 def build_search_diagnostics(
@@ -12,10 +16,21 @@ def build_search_diagnostics(
     *,
     settings: Settings | None = None,
     retrieval_strategy: str | None = None,
+    retrieval_strategy_adapter: str | None = None,
+    post_retrieval_pipeline: str | None = None,
+    generation_profile: str | None = None,
+    guardrail_policy: str | None = None,
+    vector_index_profile: str | None = None,
+    graph_profile: str | None = None,
+    agentic_profile: str | None = None,
+    agentic_subquery_count: int = 0,
+    agentic_hops: int = 0,
     route_reason: str | None = None,
     memory_plan_id: str | None = None,
     graph_hit_count: int = 0,
     fallback_reason: str | None = None,
+    gap_stopped: bool = False,
+    corrective_retried: bool = False,
     business_context: dict[str, object] | None = None,
     retrieval_plan: dict[str, object] | None = None,
     retrieved_context_pack: dict[str, object] | None = None,
@@ -27,8 +42,11 @@ def build_search_diagnostics(
     context_diversified_count: int = 0,
     context_group_expanded_count: int = 0,
     context_expanded_count: int = 0,
+    context_adaptive_expanded_count: int = 0,
+    context_dependency_promoted_count: int = 0,
     context_compressed_count: int = 0,
     context_compression_saved_chars: int = 0,
+    business_fit_reordered_count: int = 0,
     agent_memory_retrieved_count: int = 0,
     agent_memory_writeback_count: int = 0,
     agent_memory_writeback_status: str = "skipped",
@@ -47,10 +65,21 @@ def build_search_diagnostics(
     return SearchDiagnostics(
         mode=request.mode.value,
         retrieval_strategy=retrieval_strategy or request.mode.value,
+        retrieval_strategy_adapter=retrieval_strategy_adapter or "hybrid_rrf",
+        post_retrieval_pipeline=post_retrieval_pipeline or "custom",
+        generation_profile=generation_profile or "grounded_concise",
+        guardrail_policy=guardrail_policy or "standard",
+        vector_index_profile=vector_index_profile or "balanced",
+        graph_profile=graph_profile or "off",
+        agentic_profile=agentic_profile or "off",
+        agentic_subquery_count=agentic_subquery_count,
+        agentic_hops=agentic_hops,
         route_reason=route_reason or "default_hybrid",
         memory_plan_id=memory_plan_id,
         graph_hit_count=graph_hit_count,
         fallback_reason=fallback_reason,
+        gap_stopped=gap_stopped,
+        corrective_retried=corrective_retried,
         business_context=business_context or {},
         retrieval_plan=retrieval_plan or {},
         retrieved_context_pack=retrieved_context_pack or {},
@@ -64,8 +93,11 @@ def build_search_diagnostics(
         context_diversified_count=context_diversified_count,
         context_group_expanded_count=context_group_expanded_count,
         context_expanded_count=context_expanded_count,
+        context_adaptive_expanded_count=context_adaptive_expanded_count,
+        context_dependency_promoted_count=context_dependency_promoted_count,
         context_compressed_count=context_compressed_count,
         context_compression_saved_chars=context_compression_saved_chars,
+        business_fit_reordered_count=business_fit_reordered_count,
         agent_memory_retrieved_count=agent_memory_retrieved_count,
         agent_memory_writeback_count=agent_memory_writeback_count,
         agent_memory_writeback_status=agent_memory_writeback_status,
@@ -82,6 +114,9 @@ def build_search_diagnostics(
         query_variant_count=query_variant_count,
         oracle_vector_target_accuracy=resolved_settings.oracle_vector_target_accuracy,
         filter_keys=sorted(request.filters),
+        scalar_filter_keys=sorted(
+            set(request.filters) & SUPPORTED_SCALAR_SEARCH_FILTER_KEYS
+        ),
         knowledge_base_count=len(request.knowledge_base_ids),
         config_fingerprint=rag_config_fingerprint(resolved_settings),
     )
@@ -101,6 +136,17 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "context_diversity_lambda": resolved_settings.rag_context_diversity_lambda,
         "context_group_expansion_enabled": (resolved_settings.rag_context_group_expansion_enabled),
         "context_group_max_chunks": resolved_settings.rag_context_group_max_chunks,
+        "context_adaptive_expansion_enabled": (
+            resolved_settings.rag_context_adaptive_expansion_enabled
+        ),
+        "context_adaptive_neighbor_window": (
+            resolved_settings.rag_context_adaptive_neighbor_window
+        ),
+        "context_adaptive_min_overlap": resolved_settings.rag_context_adaptive_min_overlap,
+        "context_dependency_promotion_enabled": (
+            resolved_settings.rag_context_dependency_promotion_enabled
+        ),
+        "context_dependency_max_chunks": resolved_settings.rag_context_dependency_max_chunks,
         "context_compression_enabled": resolved_settings.rag_context_compression_enabled,
         "context_compression_max_sentences": (
             resolved_settings.rag_context_compression_max_sentences
@@ -108,7 +154,6 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "context_compression_max_chars_per_chunk": (
             resolved_settings.rag_context_compression_max_chars_per_chunk
         ),
-        "max_chunks_per_document": resolved_settings.rag_max_chunks_per_document,
         "min_similarity": resolved_settings.rag_min_similarity,
         "rrf_k": resolved_settings.rag_rrf_k,
         "query_expansion_enabled": resolved_settings.rag_query_expansion_enabled,

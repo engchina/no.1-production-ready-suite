@@ -33,19 +33,93 @@ from app.config import (
     get_settings,
     resolve_model_settings_file,
 )
+from app.rag.agentic_adapter import (
+    agentic_adapter_runtime_settings,
+    normalize_agentic_profile,
+)
+from app.rag.chunking_strategy import chunking_runtime_settings, normalize_chunking_strategy
+from app.rag.evaluation_adapter import (
+    evaluation_adapter_runtime_settings,
+    normalize_evaluation_suite,
+)
+from app.rag.extraction_field_adapter import (
+    FieldDefinition,
+    load_field_schema,
+    save_field_schema,
+)
+from app.rag.generation_adapter import (
+    generation_adapter_runtime_settings,
+    normalize_generation_profile,
+)
+from app.rag.graph_adapter import graph_adapter_runtime_settings, normalize_graph_profile
+from app.rag.grounding_adapter import (
+    grounding_adapter_runtime_settings,
+    normalize_post_retrieval_pipeline,
+)
+from app.rag.guardrail_adapter import (
+    guardrail_adapter_runtime_settings,
+    normalize_guardrail_policy,
+)
+from app.rag.parser_adapter_contract import (
+    parser_adapter_contract_artifact_payload,
+    run_parser_adapter_compatibility_matrix,
+)
 from app.rag.parser_adapter_readiness import parser_adapter_runtime_settings
+from app.rag.parser_adapter_scorecard import (
+    ParserAdapterSourceRoute,
+    build_parser_adapter_scorecard,
+    build_parser_adapter_source_routes,
+)
+from app.rag.prompt_versions import (
+    activate_prompt_version,
+    create_prompt_version,
+    list_prompt_versions,
+)
+from app.rag.retrieval_adapter import (
+    normalize_retrieval_strategy,
+    retrieval_adapter_runtime_settings,
+)
+from app.rag.vector_index_adapter import (
+    normalize_vector_index_profile,
+    vector_index_adapter_runtime_settings,
+)
 from app.readiness import READINESS_OK, oracle_readiness_check, upload_storage_readiness_checks
 from app.schemas.common import ApiResponse
+from app.schemas.evaluation import EvaluationThresholds
 from app.schemas.settings import (
     AdbInfoData,
     AdbOperationStatus,
     AdbSettingsUpdate,
+    AgenticProfileStatusData,
+    AgenticSettingsData,
+    AgenticSettingsUpdate,
+    ChunkingSettingsData,
+    ChunkingSettingsUpdate,
+    ChunkingStrategyStatusData,
     DatabaseConnectionTestResult,
     DatabaseSettingsData,
     DatabaseSettingsUpdate,
     EnterpriseAiModelEntrySettings,
     EnterpriseAiModelSettings,
+    EvaluationSettingsData,
+    EvaluationSettingsUpdate,
+    EvaluationSuiteStatusData,
+    ExtractionFieldsSettingsData,
+    ExtractionFieldsSettingsUpdate,
+    FieldDefinitionData,
+    GenerationProfileStatusData,
+    GenerationSettingsData,
+    GenerationSettingsUpdate,
     GenerativeAiModelSettings,
+    GraphProfileStatusData,
+    GraphSettingsData,
+    GraphSettingsUpdate,
+    GroundingPipelineStatusData,
+    GroundingSettingsData,
+    GroundingSettingsUpdate,
+    GuardrailPolicyStatusData,
+    GuardrailSettingsData,
+    GuardrailSettingsUpdate,
     ModelSettingsCheckStatus,
     ModelSettingsData,
     ModelSettingsPayload,
@@ -63,10 +137,27 @@ from app.schemas.settings import (
     OciPrivateKeyUploadData,
     OciSettingsData,
     OciSettingsUpdate,
+    ParserAdapterBackendSourceMatrixData,
+    ParserAdapterContractCaseData,
+    ParserAdapterContractData,
+    ParserAdapterContractSummaryData,
+    ParserAdapterScorecardData,
+    ParserAdapterScorecardEntryData,
     ParserAdapterSettingsData,
+    ParserAdapterSettingsUpdate,
+    ParserAdapterSourceRouteData,
     ParserAdapterStatusData,
+    PromptVersionCreate,
+    PromptVersionData,
+    PromptVersionsData,
+    RetrievalSettingsData,
+    RetrievalSettingsUpdate,
+    RetrievalStrategyStatusData,
     UploadStorageSettingsData,
     UploadStorageSettingsUpdate,
+    VectorIndexProfileStatusData,
+    VectorIndexSettingsData,
+    VectorIndexSettingsUpdate,
 )
 
 router = APIRouter()
@@ -352,6 +443,292 @@ async def get_parser_adapter_settings() -> ApiResponse[ParserAdapterSettingsData
     return ApiResponse(data=_parser_adapter_settings_data(get_settings()))
 
 
+@router.get(
+    "/parser-adapters/contract",
+    response_model=ApiResponse[ParserAdapterContractData],
+)
+async def get_parser_adapter_contract() -> ApiResponse[ParserAdapterContractData]:
+    """任意 parser adapter の schema remap compatibility matrix を返す。"""
+    return ApiResponse(data=_parser_adapter_contract_data(get_settings()))
+
+
+@router.patch("/parser-adapters", response_model=ApiResponse[ParserAdapterSettingsData])
+async def update_parser_adapter_settings(
+    payload: ParserAdapterSettingsUpdate,
+) -> ApiResponse[ParserAdapterSettingsData]:
+    """任意 parser adapter の backend/feature flag を .env と runtime へ反映する。"""
+    settings = get_settings()
+    candidate = _parser_adapter_settings_candidate(settings, payload)
+    _persist_parser_adapter_settings(candidate)
+    _apply_parser_adapter_settings(settings, candidate)
+    return ApiResponse(data=_parser_adapter_settings_data(settings))
+
+
+@router.get("/chunking", response_model=ApiResponse[ChunkingSettingsData])
+async def get_chunking_settings() -> ApiResponse[ChunkingSettingsData]:
+    """Chunking アダプター(分割戦略)の選択と多様化パラメータを返す。"""
+    return ApiResponse(data=_chunking_settings_data(get_settings()))
+
+
+@router.patch("/chunking", response_model=ApiResponse[ChunkingSettingsData])
+async def update_chunking_settings(
+    payload: ChunkingSettingsUpdate,
+) -> ApiResponse[ChunkingSettingsData]:
+    """Chunking アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = _chunking_settings_candidate(settings, payload)
+    _persist_chunking_settings(candidate)
+    _apply_chunking_settings(settings, candidate)
+    return ApiResponse(data=_chunking_settings_data(settings))
+
+
+@router.get("/retrieval", response_model=ApiResponse[RetrievalSettingsData])
+async def get_retrieval_settings() -> ApiResponse[RetrievalSettingsData]:
+    """Retrieval アダプター(検索戦略)の選択と解決内容を返す。"""
+    return ApiResponse(data=_retrieval_settings_data(get_settings()))
+
+
+@router.patch("/retrieval", response_model=ApiResponse[RetrievalSettingsData])
+async def update_retrieval_settings(
+    payload: RetrievalSettingsUpdate,
+) -> ApiResponse[RetrievalSettingsData]:
+    """Retrieval アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_retrieval_strategy": normalize_retrieval_strategy(payload.strategy)}
+    )
+    _persist_retrieval_settings(candidate)
+    settings.rag_retrieval_strategy = candidate.rag_retrieval_strategy
+    return ApiResponse(data=_retrieval_settings_data(settings))
+
+
+@router.get("/grounding", response_model=ApiResponse[GroundingSettingsData])
+async def get_grounding_settings() -> ApiResponse[GroundingSettingsData]:
+    """Grounding アダプター(検索後処理)の選択と解決内容を返す。"""
+    return ApiResponse(data=_grounding_settings_data(get_settings()))
+
+
+@router.patch("/grounding", response_model=ApiResponse[GroundingSettingsData])
+async def update_grounding_settings(
+    payload: GroundingSettingsUpdate,
+) -> ApiResponse[GroundingSettingsData]:
+    """Grounding アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_post_retrieval_pipeline": normalize_post_retrieval_pipeline(payload.pipeline)}
+    )
+    _persist_grounding_settings(candidate)
+    settings.rag_post_retrieval_pipeline = candidate.rag_post_retrieval_pipeline
+    return ApiResponse(data=_grounding_settings_data(settings))
+
+
+@router.get("/generation", response_model=ApiResponse[GenerationSettingsData])
+async def get_generation_settings() -> ApiResponse[GenerationSettingsData]:
+    """Generation アダプター(回答生成プロファイル)の選択と解決内容を返す。"""
+    return ApiResponse(data=_generation_settings_data(get_settings()))
+
+
+@router.patch("/generation", response_model=ApiResponse[GenerationSettingsData])
+async def update_generation_settings(
+    payload: GenerationSettingsUpdate,
+) -> ApiResponse[GenerationSettingsData]:
+    """Generation アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_generation_profile": normalize_generation_profile(payload.profile)}
+    )
+    _persist_generation_settings(candidate)
+    settings.rag_generation_profile = candidate.rag_generation_profile
+    return ApiResponse(data=_generation_settings_data(settings))
+
+
+def _prompt_versions_data() -> PromptVersionsData:
+    """prompt 版 store を非機密 API 形へ変換する。"""
+    store = list_prompt_versions()
+    return PromptVersionsData(
+        active_version_id=store.active_version_id,
+        versions=[
+            PromptVersionData(
+                version_id=version.version_id,
+                name=version.name,
+                system_prompt=version.system_prompt,
+                note=version.note,
+                created_at=version.created_at,
+                created_by=version.created_by,
+                active=version.version_id == store.active_version_id,
+            )
+            for version in store.versions
+        ],
+    )
+
+
+@router.get("/prompts", response_model=ApiResponse[PromptVersionsData])
+async def get_prompt_versions() -> ApiResponse[PromptVersionsData]:
+    """回答生成 system prompt の版一覧と有効版を返す(custom profile が使用)。"""
+    return ApiResponse(data=_prompt_versions_data())
+
+
+@router.post("/prompts", response_model=ApiResponse[PromptVersionsData])
+async def create_prompt_version_endpoint(
+    payload: PromptVersionCreate,
+) -> ApiResponse[PromptVersionsData]:
+    """新しい prompt 版を作成する(activate=true で即時有効化)。"""
+    create_prompt_version(
+        name=payload.name,
+        system_prompt=payload.system_prompt,
+        note=payload.note,
+        activate=payload.activate,
+    )
+    return ApiResponse(data=_prompt_versions_data())
+
+
+@router.post("/prompts/{version_id}/activate", response_model=ApiResponse[PromptVersionsData])
+async def activate_prompt_version_endpoint(
+    version_id: str,
+) -> ApiResponse[PromptVersionsData]:
+    """指定 prompt 版を有効化する(rollback = 旧版を再有効化)。"""
+    try:
+        activate_prompt_version(version_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="指定の prompt 版が見つかりません。") from exc
+    return ApiResponse(data=_prompt_versions_data())
+
+
+def _extraction_fields_data() -> ExtractionFieldsSettingsData:
+    """field schema 定義を非機密 API 形へ変換する。"""
+    store = load_field_schema()
+    return ExtractionFieldsSettingsData(
+        fields=[
+            FieldDefinitionData(
+                name=field.name, description=field.description, value_type=field.value_type
+            )
+            for field in store.fields
+        ]
+    )
+
+
+@router.get("/extraction-fields", response_model=ApiResponse[ExtractionFieldsSettingsData])
+async def get_extraction_fields_settings() -> ApiResponse[ExtractionFieldsSettingsData]:
+    """field 抽出 schema 定義(抽出対象 field の一覧)を返す。"""
+    return ApiResponse(data=_extraction_fields_data())
+
+
+@router.patch("/extraction-fields", response_model=ApiResponse[ExtractionFieldsSettingsData])
+async def update_extraction_fields_settings(
+    payload: ExtractionFieldsSettingsUpdate,
+) -> ApiResponse[ExtractionFieldsSettingsData]:
+    """field 抽出 schema 定義を保存する(name 重複は 422)。"""
+    definitions = [
+        FieldDefinition(name=field.name, description=field.description, value_type=field.value_type)
+        for field in payload.fields
+    ]
+    try:
+        save_field_schema(definitions)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=_extraction_fields_data())
+
+
+@router.get("/guardrail", response_model=ApiResponse[GuardrailSettingsData])
+async def get_guardrail_settings() -> ApiResponse[GuardrailSettingsData]:
+    """Guardrail アダプター(安全ポリシー)の選択と解決内容を返す。"""
+    return ApiResponse(data=_guardrail_settings_data(get_settings()))
+
+
+@router.patch("/guardrail", response_model=ApiResponse[GuardrailSettingsData])
+async def update_guardrail_settings(
+    payload: GuardrailSettingsUpdate,
+) -> ApiResponse[GuardrailSettingsData]:
+    """Guardrail アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_guardrail_policy": normalize_guardrail_policy(payload.policy)}
+    )
+    _persist_guardrail_settings(candidate)
+    settings.rag_guardrail_policy = candidate.rag_guardrail_policy
+    return ApiResponse(data=_guardrail_settings_data(settings))
+
+
+@router.get("/vector-index", response_model=ApiResponse[VectorIndexSettingsData])
+async def get_vector_index_settings() -> ApiResponse[VectorIndexSettingsData]:
+    """Vector Index アダプター(索引/検索精度)の選択と解決内容を返す。"""
+    return ApiResponse(data=_vector_index_settings_data(get_settings()))
+
+
+@router.patch("/vector-index", response_model=ApiResponse[VectorIndexSettingsData])
+async def update_vector_index_settings(
+    payload: VectorIndexSettingsUpdate,
+) -> ApiResponse[VectorIndexSettingsData]:
+    """Vector Index アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_vector_index_profile": normalize_vector_index_profile(payload.profile)}
+    )
+    _persist_vector_index_settings(candidate)
+    settings.rag_vector_index_profile = candidate.rag_vector_index_profile
+    return ApiResponse(data=_vector_index_settings_data(settings))
+
+
+@router.get("/evaluation-suite", response_model=ApiResponse[EvaluationSettingsData])
+async def get_evaluation_settings() -> ApiResponse[EvaluationSettingsData]:
+    """Evaluation アダプター(評価スイート/閾値)の選択と解決内容を返す。"""
+    return ApiResponse(data=_evaluation_settings_data(get_settings()))
+
+
+@router.patch("/evaluation-suite", response_model=ApiResponse[EvaluationSettingsData])
+async def update_evaluation_settings(
+    payload: EvaluationSettingsUpdate,
+) -> ApiResponse[EvaluationSettingsData]:
+    """Evaluation アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_evaluation_suite": normalize_evaluation_suite(payload.suite)}
+    )
+    _persist_evaluation_settings(candidate)
+    settings.rag_evaluation_suite = candidate.rag_evaluation_suite
+    return ApiResponse(data=_evaluation_settings_data(settings))
+
+
+@router.get("/graph", response_model=ApiResponse[GraphSettingsData])
+async def get_graph_settings() -> ApiResponse[GraphSettingsData]:
+    """GraphRAG アダプター(知識グラフ構築)の選択と解決内容を返す。"""
+    return ApiResponse(data=_graph_settings_data(get_settings()))
+
+
+@router.patch("/graph", response_model=ApiResponse[GraphSettingsData])
+async def update_graph_settings(
+    payload: GraphSettingsUpdate,
+) -> ApiResponse[GraphSettingsData]:
+    """GraphRAG アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_graph_profile": normalize_graph_profile(payload.profile)}
+    )
+    _persist_graph_settings(candidate)
+    settings.rag_graph_profile = candidate.rag_graph_profile
+    return ApiResponse(data=_graph_settings_data(settings))
+
+
+@router.get("/agentic", response_model=ApiResponse[AgenticSettingsData])
+async def get_agentic_settings() -> ApiResponse[AgenticSettingsData]:
+    """Agentic アダプター(クエリ計画)の選択と解決内容を返す。"""
+    return ApiResponse(data=_agentic_settings_data(get_settings()))
+
+
+@router.patch("/agentic", response_model=ApiResponse[AgenticSettingsData])
+async def update_agentic_settings(
+    payload: AgenticSettingsUpdate,
+) -> ApiResponse[AgenticSettingsData]:
+    """Agentic アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_agentic_profile": normalize_agentic_profile(payload.profile)}
+    )
+    _persist_agentic_settings(candidate)
+    settings.rag_agentic_profile = candidate.rag_agentic_profile
+    return ApiResponse(data=_agentic_settings_data(settings))
+
+
 @router.get("/oci", response_model=ApiResponse[OciSettingsData])
 async def get_oci_settings() -> ApiResponse[OciSettingsData]:
     """OCI 認証設定画面の初期表示に使う runtime 設定を返す。"""
@@ -449,6 +826,7 @@ def _payload_from_settings(settings: Settings) -> ModelSettingsPayload:
             ],
             default_model_id=enterprise_ai_default_model_id(settings),
             api_path=api_path or "/responses",
+            vlm_input_mode=settings.oci_enterprise_ai_vlm_input_mode,
             text_payload_template=settings.oci_enterprise_ai_llm_payload_template,
             vision_payload_template=settings.oci_enterprise_ai_vlm_payload_template,
             text_response_path=settings.oci_enterprise_ai_llm_response_path,
@@ -508,6 +886,7 @@ def _apply_model_settings(settings: Settings, request: ModelSettingsPayload) -> 
     settings.oci_enterprise_ai_vlm_model = vision_model
     settings.oci_enterprise_ai_llm_path = enterprise_ai.api_path
     settings.oci_enterprise_ai_vlm_path = enterprise_ai.api_path
+    settings.oci_enterprise_ai_vlm_input_mode = enterprise_ai.vlm_input_mode
     settings.oci_enterprise_ai_llm_payload_template = enterprise_ai.text_payload_template
     settings.oci_enterprise_ai_vlm_payload_template = enterprise_ai.vision_payload_template
     settings.oci_enterprise_ai_llm_response_path = enterprise_ai.text_response_path
@@ -588,6 +967,7 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]
             ],
             "default_model_id": enterprise_ai.default_model_id,
             "api_path": enterprise_ai.api_path,
+            "vlm_input_mode": enterprise_ai.vlm_input_mode,
             "text_payload_template": enterprise_ai.text_payload_template,
             "vision_payload_template": enterprise_ai.vision_payload_template,
             "text_response_path": enterprise_ai.text_response_path,
@@ -1450,6 +1830,9 @@ def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsDa
 def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsData:
     """Settings から parser adapter readiness の表示用データを作る。"""
     runtime = parser_adapter_runtime_settings(settings)
+    scorecard = build_parser_adapter_scorecard(runtime)
+    source_routes = build_parser_adapter_source_routes(runtime)
+    route_data = [_parser_adapter_source_route_data(route) for route in source_routes]
     return ParserAdapterSettingsData(
         adapter_backend=runtime.adapter_backend,
         effective_order=list(runtime.effective_order),
@@ -1457,6 +1840,9 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
             ParserAdapterStatusData(
                 backend=adapter.backend,
                 package_name=adapter.package_name,
+                import_name=adapter.import_name,
+                distribution_name=adapter.distribution_name,
+                install_package=adapter.install_package,
                 enabled=adapter.enabled,
                 selected=adapter.selected,
                 installed=adapter.installed,
@@ -1466,8 +1852,169 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
             )
             for adapter in runtime.adapters
         ],
+        scorecard=ParserAdapterScorecardData(
+            selected_backend=scorecard.selected_backend,
+            recommended_backend=scorecard.recommended_backend,
+            metrics_source=scorecard.metrics_source,
+            metrics_applied_to=scorecard.metrics_applied_to,
+            entries=[
+                ParserAdapterScorecardEntryData(
+                    backend=entry.backend,
+                    rank=entry.rank,
+                    score=entry.score,
+                    status=entry.status,
+                    recommended=entry.recommended,
+                    executable=entry.executable,
+                    selected=entry.selected,
+                    enabled=entry.enabled,
+                    installed=entry.installed,
+                    metric_source=entry.metric_source,
+                    metric_count=entry.metric_count,
+                    signals=dict(entry.signals),
+                    reason_codes=list(entry.reason_codes),
+                    warning_codes=list(entry.warning_codes),
+                )
+                for entry in scorecard.entries
+            ],
+        ),
+        source_routes=route_data,
+        backend_source_kind_matrix=_parser_adapter_backend_source_matrix(route_data),
         config_source="runtime",
     )
+
+
+def _parser_adapter_contract_data(settings: Settings) -> ParserAdapterContractData:
+    """Settings から parser adapter compatibility matrix の表示用データを作る。"""
+    matrix = run_parser_adapter_compatibility_matrix(settings)
+    payload = parser_adapter_contract_artifact_payload(matrix)
+    raw_summary = payload.get("summary")
+    summary = raw_summary if isinstance(raw_summary, dict) else {}
+    raw_cases = payload.get("cases")
+    artifact_cases = [
+        case for case in raw_cases if isinstance(case, dict)
+    ] if isinstance(raw_cases, list | tuple) else []
+    return ParserAdapterContractData(
+        passed=matrix.passed,
+        fixture_root=str(payload["fixture_root"]),
+        source_kinds=list(matrix.source_kinds),
+        backends=list(matrix.backends),
+        case_count=matrix.case_count,
+        blocking_failure_count=matrix.blocking_failure_count,
+        cases=[
+            ParserAdapterContractCaseData(
+                backend=case["backend"],
+                source_kind=str(case["source_kind"]),
+                fixture_name=str(case["fixture_name"]),
+                content_type=str(case["content_type"]),
+                status=case["status"],
+                blocking=bool(case["blocking"]),
+                parser_backend=(
+                    str(case["parser_backend"]) if "parser_backend" in case else None
+                ),
+                parser_version=(
+                    str(case["parser_version"]) if "parser_version" in case else None
+                ),
+                adapter_import_name=(
+                    str(case["adapter_import_name"])
+                    if "adapter_import_name" in case
+                    else None
+                ),
+                adapter_distribution_name=(
+                    str(case["adapter_distribution_name"])
+                    if "adapter_distribution_name" in case
+                    else None
+                ),
+                adapter_package_version=(
+                    str(case["adapter_package_version"])
+                    if "adapter_package_version" in case
+                    else None
+                ),
+                template=str(case["template"]) if "template" in case else None,
+                element_count=_int_value(case.get("element_count")),
+                page_count=_int_value(case.get("page_count")),
+                table_count=_int_value(case.get("table_count")),
+                table_cell_count=_int_value(case.get("table_cell_count")),
+                asset_count=_int_value(case.get("asset_count")),
+                bbox_count=_int_value(case.get("bbox_count")),
+                warning_codes=_string_list(case.get("warning_codes")),
+                reason_codes=_string_list(case.get("reason_codes")),
+            )
+            for case in artifact_cases
+        ],
+        summary=ParserAdapterContractSummaryData.model_validate(summary),
+        config_source="runtime",
+    )
+
+
+def _int_value(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list | tuple | set | frozenset):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _parser_adapter_source_route_data(
+    route: ParserAdapterSourceRoute,
+) -> ParserAdapterSourceRouteData:
+    return ParserAdapterSourceRouteData(
+        source_kind=route.source_kind,
+        candidate_order=list(route.candidate_order),
+        attempted_order=list(route.attempted_order),
+        active_order=list(route.active_order),
+        selected_backend=route.selected_backend,
+        reason_codes=list(route.reason_codes),
+        warning_codes=list(route.warning_codes),
+    )
+
+
+def _parser_adapter_backend_source_matrix(
+    routes: list[ParserAdapterSourceRouteData],
+) -> ParserAdapterBackendSourceMatrixData:
+    backend_source_kinds: dict[str, list[str]] = {}
+    covered_source_kinds: list[str] = []
+    for route in routes:
+        backend_source_kinds.setdefault(route.selected_backend, []).append(route.source_kind)
+        covered_source_kinds.append(route.source_kind)
+    normalized_backend_source_kinds = {
+        backend: sorted(set(source_kinds))
+        for backend, source_kinds in sorted(backend_source_kinds.items())
+    }
+    required_source_kinds = sorted({route.source_kind for route in routes})
+    covered = sorted(set(covered_source_kinds))
+    return ParserAdapterBackendSourceMatrixData(
+        evidence_source="runtime_routes",
+        required_source_kinds=required_source_kinds,
+        covered_source_kinds=covered,
+        missing_source_kinds=sorted(set(required_source_kinds) - set(covered)),
+        backend_source_kinds=normalized_backend_source_kinds,
+        route_evidence=routes,
+    )
+
+
+def _parser_adapter_settings_candidate(
+    base: Settings,
+    payload: ParserAdapterSettingsUpdate,
+) -> Settings:
+    """parser adapter 更新 payload から保存候補 settings を作る。"""
+    return base.model_copy(
+        update={
+            "rag_parser_adapter_backend": payload.adapter_backend,
+            "rag_parser_docling_enabled": payload.docling_enabled,
+            "rag_parser_marker_enabled": payload.marker_enabled,
+            "rag_parser_unstructured_enabled": payload.unstructured_enabled,
+        }
+    )
+
+
+def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
+    """保存済み parser adapter 設定を現在プロセスへ反映する。"""
+    target.rag_parser_adapter_backend = source.rag_parser_adapter_backend
+    target.rag_parser_docling_enabled = source.rag_parser_docling_enabled
+    target.rag_parser_marker_enabled = source.rag_parser_marker_enabled
+    target.rag_parser_unstructured_enabled = source.rag_parser_unstructured_enabled
 
 
 def _upload_storage_settings_candidate(
@@ -1504,6 +2051,387 @@ def _persist_upload_storage_settings(settings: Settings) -> None:
         section_comment="# アップロード保存先",
         error_detail="アップロード保存先設定を backend/.env へ保存できませんでした。",
     )
+
+
+def _graph_settings_data(settings: Settings) -> GraphSettingsData:
+    """Settings から GraphRAG アダプター設定の表示用データを作る。"""
+    runtime = graph_adapter_runtime_settings(settings)
+    return GraphSettingsData(
+        profile=runtime.profile,
+        enabled=runtime.enabled,
+        build_claims=runtime.build_claims,
+        build_community_summaries=runtime.build_community_summaries,
+        profiles=[
+            GraphProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                enabled=status.enabled,
+                build_claims=status.build_claims,
+                build_community_summaries=status.build_community_summaries,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_graph_settings(settings: Settings) -> None:
+    """GraphRAG アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_GRAPH_PROFILE": settings.rag_graph_profile},
+        section_comment="# GraphRAG アダプター",
+        error_detail="GraphRAG アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _agentic_settings_data(settings: Settings) -> AgenticSettingsData:
+    """Settings から Agentic アダプター設定の表示用データを作る。"""
+    runtime = agentic_adapter_runtime_settings(settings)
+    return AgenticSettingsData(
+        profile=runtime.profile,
+        enabled=runtime.enabled,
+        rewrite=runtime.rewrite,
+        decompose=runtime.decompose,
+        multi_hop=runtime.multi_hop,
+        max_subqueries=runtime.max_subqueries,
+        profiles=[
+            AgenticProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                enabled=status.enabled,
+                rewrite=status.rewrite,
+                decompose=status.decompose,
+                multi_hop=status.multi_hop,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_agentic_settings(settings: Settings) -> None:
+    """Agentic アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_AGENTIC_PROFILE": settings.rag_agentic_profile},
+        section_comment="# Agentic アダプター",
+        error_detail="Agentic アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _evaluation_settings_data(settings: Settings) -> EvaluationSettingsData:
+    """Settings から Evaluation アダプター設定の表示用データを作る。"""
+    runtime = evaluation_adapter_runtime_settings(settings)
+
+    def _thresholds_dict(thresholds: EvaluationThresholds | None) -> dict[str, float]:
+        if thresholds is None:
+            return {}
+        return {
+            key: float(value)
+            for key, value in thresholds.model_dump(exclude_none=True).items()
+        }
+
+    return EvaluationSettingsData(
+        suite=runtime.suite,
+        thresholds=_thresholds_dict(runtime.thresholds),
+        focus_metrics=list(runtime.focus_metrics),
+        suites=[
+            EvaluationSuiteStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                thresholds=_thresholds_dict(status.thresholds),
+                focus_metrics=list(status.focus_metrics),
+            )
+            for status in runtime.suites
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_evaluation_settings(settings: Settings) -> None:
+    """Evaluation アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_EVALUATION_SUITE": settings.rag_evaluation_suite},
+        section_comment="# Evaluation アダプター",
+        error_detail="Evaluation アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
+    """Settings から Vector Index アダプター設定の表示用データを作る。"""
+    runtime = vector_index_adapter_runtime_settings(settings)
+    return VectorIndexSettingsData(
+        profile=runtime.profile,
+        target_accuracy=runtime.target_accuracy,
+        neighbors=runtime.neighbors,
+        efconstruction=runtime.efconstruction,
+        distance=runtime.distance,
+        requires_reprovision=runtime.requires_reprovision,
+        profiles=[
+            VectorIndexProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                target_accuracy=status.target_accuracy,
+                neighbors=status.neighbors,
+                efconstruction=status.efconstruction,
+                distance=status.distance,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_vector_index_settings(settings: Settings) -> None:
+    """Vector Index アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_VECTOR_INDEX_PROFILE": settings.rag_vector_index_profile},
+        section_comment="# Vector Index アダプター",
+        error_detail="Vector Index アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _generation_settings_data(settings: Settings) -> GenerationSettingsData:
+    """Settings から Generation アダプター設定の表示用データを作る。"""
+    runtime = generation_adapter_runtime_settings(settings)
+    return GenerationSettingsData(
+        profile=runtime.profile,
+        structured_output=runtime.structured_output,
+        profiles=[
+            GenerationProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                structured_output=status.structured_output,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_generation_settings(settings: Settings) -> None:
+    """Generation アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_GENERATION_PROFILE": settings.rag_generation_profile},
+        section_comment="# Generation アダプター",
+        error_detail="Generation アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
+    """Settings から Guardrail アダプター設定の表示用データを作る。"""
+    runtime = guardrail_adapter_runtime_settings(settings)
+    return GuardrailSettingsData(
+        policy=runtime.policy,
+        block_prompt_injection=runtime.block_prompt_injection,
+        mask_sensitive_identifiers=runtime.mask_sensitive_identifiers,
+        max_query_chars=runtime.max_query_chars,
+        grounding_min_overlap=runtime.grounding_min_overlap,
+        grounding_min_ratio=runtime.grounding_min_ratio,
+        audit_emphasis=runtime.audit_emphasis,
+        policies=[
+            GuardrailPolicyStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                grounding_min_overlap=status.grounding_min_overlap,
+                grounding_min_ratio=status.grounding_min_ratio,
+                audit_emphasis=status.audit_emphasis,
+            )
+            for status in runtime.policies
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_guardrail_settings(settings: Settings) -> None:
+    """Guardrail アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_GUARDRAIL_POLICY": settings.rag_guardrail_policy},
+        section_comment="# Guardrail アダプター",
+        error_detail="Guardrail アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
+    """Settings から Retrieval アダプター設定の表示用データを作る。"""
+    runtime = retrieval_adapter_runtime_settings(settings)
+    return RetrievalSettingsData(
+        strategy=runtime.strategy,
+        query_expansion=runtime.query_expansion,
+        gap_stop=runtime.gap_stop,
+        corrective_retrieval=runtime.corrective_retrieval,
+        business_fit_weighting=runtime.business_fit_weighting,
+        strategies=[
+            RetrievalStrategyStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                gap_stop=status.gap_stop,
+                corrective_retrieval=status.corrective_retrieval,
+                business_fit_weighting=status.business_fit_weighting,
+            )
+            for status in runtime.strategies
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_retrieval_settings(settings: Settings) -> None:
+    """Retrieval アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_RETRIEVAL_STRATEGY": settings.rag_retrieval_strategy},
+        section_comment="# Retrieval アダプター",
+        error_detail="Retrieval アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
+    """Settings から Grounding アダプター設定の表示用データを作る。"""
+    runtime = grounding_adapter_runtime_settings(settings)
+    return GroundingSettingsData(
+        pipeline=runtime.pipeline,
+        dependency_promotion_enabled=runtime.dependency_promotion_enabled,
+        diversity_enabled=runtime.diversity_enabled,
+        expansion_mode=runtime.expansion_mode,
+        compression_enabled=runtime.compression_enabled,
+        pipelines=[
+            GroundingPipelineStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                dependency_promotion=status.dependency_promotion,
+                diversity=status.diversity,
+                expansion_mode=status.expansion_mode,
+                compression=status.compression,
+            )
+            for status in runtime.pipelines
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_grounding_settings(settings: Settings) -> None:
+    """Grounding アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline},
+        section_comment="# Grounding アダプター",
+        error_detail="Grounding アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
+    """Settings から Chunking アダプター設定の表示用データを作る。"""
+    runtime = chunking_runtime_settings(settings)
+    return ChunkingSettingsData(
+        strategy=runtime.strategy,
+        chunk_size=runtime.chunk_size,
+        overlap=runtime.overlap,
+        child_size=runtime.child_size,
+        sentence_window_size=runtime.sentence_window_size,
+        min_chars=runtime.min_chars,
+        strategies=[
+            ChunkingStrategyStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                uses_child_size=status.uses_child_size,
+                uses_sentence_window=status.uses_sentence_window,
+            )
+            for status in runtime.strategies
+        ],
+        config_source="runtime",
+    )
+
+
+def _chunking_settings_candidate(
+    base: Settings,
+    payload: ChunkingSettingsUpdate,
+) -> Settings:
+    """Chunking アダプター更新 payload から保存候補 settings を作る。"""
+    return base.model_copy(
+        update={
+            "rag_chunking_strategy": normalize_chunking_strategy(payload.strategy),
+            "rag_chunk_size": payload.chunk_size,
+            "rag_chunk_overlap": payload.overlap,
+            "rag_chunk_child_size": payload.child_size,
+            "rag_chunk_sentence_window_size": payload.sentence_window_size,
+            "rag_chunk_min_chars": payload.min_chars,
+        }
+    )
+
+
+def _apply_chunking_settings(target: Settings, source: Settings) -> None:
+    """保存済み Chunking アダプター設定を現在プロセスへ反映する。"""
+    target.rag_chunking_strategy = source.rag_chunking_strategy
+    target.rag_chunk_size = source.rag_chunk_size
+    target.rag_chunk_overlap = source.rag_chunk_overlap
+    target.rag_chunk_child_size = source.rag_chunk_child_size
+    target.rag_chunk_sentence_window_size = source.rag_chunk_sentence_window_size
+    target.rag_chunk_min_chars = source.rag_chunk_min_chars
+
+
+def _persist_chunking_settings(settings: Settings) -> None:
+    """Chunking アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_CHUNKING_STRATEGY": settings.rag_chunking_strategy,
+            "RAG_CHUNK_SIZE": str(settings.rag_chunk_size),
+            "RAG_CHUNK_OVERLAP": str(settings.rag_chunk_overlap),
+            "RAG_CHUNK_CHILD_SIZE": str(settings.rag_chunk_child_size),
+            "RAG_CHUNK_SENTENCE_WINDOW_SIZE": str(settings.rag_chunk_sentence_window_size),
+            "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
+        },
+        section_comment="# Chunking アダプター",
+        error_detail="Chunking アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _persist_parser_adapter_settings(settings: Settings) -> None:
+    """任意 parser adapter 設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_PARSER_ADAPTER_BACKEND": settings.rag_parser_adapter_backend,
+            "RAG_PARSER_DOCLING_ENABLED": _format_env_bool(
+                settings.rag_parser_docling_enabled
+            ),
+            "RAG_PARSER_MARKER_ENABLED": _format_env_bool(
+                settings.rag_parser_marker_enabled
+            ),
+            "RAG_PARSER_UNSTRUCTURED_ENABLED": _format_env_bool(
+                settings.rag_parser_unstructured_enabled
+            ),
+        },
+        section_comment="# Parser adapters",
+        error_detail="Parser adapter 設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _format_env_bool(value: bool) -> str:
+    return "true" if value else "false"
 
 
 def _persist_oci_settings(settings: Settings, payload: OciSettingsUpdate) -> None:

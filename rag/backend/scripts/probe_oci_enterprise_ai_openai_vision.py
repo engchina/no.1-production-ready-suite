@@ -14,8 +14,9 @@ from __future__ import annotations
 import base64
 import os
 import sys
+from typing import Any
 
-from openai import OpenAI  # type: ignore[import-not-found]
+from openai import OpenAI
 
 TEST_IMAGE_JPEG_BASE64 = (
     "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsO"
@@ -87,26 +88,27 @@ def main() -> int:
         timeout=60.0,
         max_retries=2,
     )
+    request_input: Any = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": (
+                        "The image contains one large colored square on a white background. "
+                        "Return only the square color in English."
+                    ),
+                },
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/jpeg;base64,{TEST_IMAGE_JPEG_BASE64}",
+                },
+            ],
+        }
+    ]
     response = client.responses.create(
         model=model,
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": (
-                            "The image contains one large colored square on a white background. "
-                            "Return only the square color in English."
-                        ),
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{TEST_IMAGE_JPEG_BASE64}",
-                    },
-                ],
-            }
-        ],
+        input=request_input,
     )
 
     output_text = str(getattr(response, "output_text", "")).strip()

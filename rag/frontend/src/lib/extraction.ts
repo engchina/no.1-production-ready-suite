@@ -156,8 +156,10 @@ function parseTableCells(value: unknown): ExtractionTableCell[] {
         text: stringValue(source.text),
         row_span: integerValue(source.row_span, 1) ?? 1,
         col_span: integerValue(source.col_span, 1) ?? 1,
+        page_number: integerValue(source.page_number, 1),
         bbox: numberArrayValue(source.bbox),
         confidence: numberValue(source.confidence, 0, 1),
+        metadata: metadataValue(source.metadata),
       };
     })
     .filter((item): item is ExtractionTableCell => item != null);

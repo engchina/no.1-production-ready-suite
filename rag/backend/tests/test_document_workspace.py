@@ -10,17 +10,48 @@ from app.api.routes import documents as documents_route
 from app.clients.object_storage import ObjectStorageClient
 from app.main import app
 from app.schemas.document import (
+    DocumentChunkView,
     DocumentDetail,
+    DocumentExtractionExportFormat,
     DocumentSummary,
     FileStatus,
     IngestionJob,
     IngestionJobStatus,
     IngestionSegment,
 )
+from app.schemas.extraction import ExtractionTable, ExtractionTableCell
 from app.schemas.knowledge_base import KnowledgeBaseRef
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+
+
+def test_structured_table_html_preserves_formula_cell_metadata() -> None:
+    """review HTML は table cell formula lineage を data 属性として安全に出す。"""
+    table = ExtractionTable(
+        table_id="tbl-1",
+        cells=[
+            ExtractionTableCell(
+                row=1,
+                col=1,
+                text="<INDEXED>",
+                metadata={
+                    "formula_cell_ref": "B2",
+                    "equation_format": "excel_formula",
+                    "formula": 'IF(A2="状態","<INDEXED>","ERROR")',
+                    "formula_value": "<INDEXED>",
+                },
+            )
+        ],
+    )
+
+    html = documents_route._structured_table_html(table, "")
+
+    assert 'data-formula-ref="B2"' in html
+    assert 'data-formula-format="excel_formula"' in html
+    assert 'data-formula-value="&lt;INDEXED&gt;"' in html
+    assert "&lt;INDEXED&gt;" in html
+    assert "<INDEXED>" not in html
 
 
 class FakeWorkspaceOracle:
@@ -28,6 +59,7 @@ class FakeWorkspaceOracle:
 
     def __init__(self) -> None:
         self.documents: dict[str, DocumentDetail] = {}
+        self.chunks: dict[str, list[DocumentChunkView]] = {}
         self.ingestion_jobs: dict[str, IngestionJob] = {}
         self.ingestion_segments: dict[str, list[IngestionSegment]] = {}
         self.knowledge_base_assignments: set[tuple[str, str]] = set()
@@ -94,9 +126,12 @@ class FakeWorkspaceOracle:
             self.knowledge_base_assignments.add((knowledge_base_id, document_id))
         return object()
 
-    async def list_document_chunks(self, document_id: str) -> list[object]:
-        _ = document_id
-        return []
+    async def list_document_chunks(self, document_id: str) -> list[DocumentChunkView]:
+        return list(self.chunks.get(document_id, []))
+
+    async def get_owning_knowledge_base(self, document_id: str) -> None:
+        # この fake は KB 別の取込上書きを使わない(グローバル設定で取込する)。
+        return None
 
     async def list_ingestion_segments(self, document_id: str) -> list[IngestionSegment]:
         return list(self.ingestion_segments.get(document_id, []))
@@ -252,8 +287,9 @@ class FakeWorkspaceOracle:
 class FakeWorkspaceIngestionPipeline:
     """取込 API テストで外部 AI/embedding を呼ばずに抽出結果を保存する fake。"""
 
-    def __init__(self, *, oracle: FakeWorkspaceOracle) -> None:
+    def __init__(self, *, oracle: FakeWorkspaceOracle, settings: object | None = None) -> None:
         self._oracle = oracle
+        self._settings = settings
 
     async def ingest(
         self,
@@ -358,7 +394,7 @@ def test_document_upload_accepts_tsv_as_local_text_table_source() -> None:
 
 
 def test_document_upload_auto_ingestion_starts_background_pipeline() -> None:
-    """auto 指定時は upload 後に取込パイプラインを開始する。"""
+    """auto 指定時は upload 後に取込 job をキュー投入する。"""
     resp = client.post(
         "/api/documents/upload",
         data={"ingestion_mode": "auto"},
@@ -377,6 +413,15 @@ def test_document_upload_auto_ingestion_starts_background_pipeline() -> None:
     assert body["ingestion_job"]["status"] == "QUEUED"
     assert body["ingestion_job"]["parser_profile"] == "local_text_structure"
 
+    detail = client.get(f"/api/documents/{body['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+    job_detail = client.get(f"/api/documents/ingestion-jobs/{body['ingestion_job']['id']}")
+    assert job_detail.status_code == 200
+    assert job_detail.json()["data"]["status"] == "QUEUED"
+
+    anyio.run(documents_route._run_ingestion_job, body["ingestion_job"]["id"])
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
     indexed = detail.json()["data"]
@@ -593,10 +638,16 @@ def test_batch_upload_auto_queues_ingestion_jobs() -> None:
     assert jobs.status_code == 200
     listed = jobs.json()["data"]["items"]
     assert len(listed) == 2
-    assert {job["status"] for job in listed} == {"SUCCEEDED"}
+    assert {job["status"] for job in listed} == {"QUEUED"}
     assert {job["parser_profile"] for job in listed} == {"local_text_structure"}
 
     for item in data["items"]:
+        detail = client.get(f"/api/documents/{item['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["data"]["status"] == "UPLOADED"
+
+    for item in data["items"]:
+        anyio.run(documents_route._run_ingestion_job, item["ingestion_job"]["id"])
         detail = client.get(f"/api/documents/{item['id']}")
         assert detail.status_code == 200
         assert detail.json()["data"]["status"] == "INDEXED"
@@ -646,6 +697,15 @@ def test_document_ingestion_job_endpoint_queues_existing_document() -> None:
 
     detail = client.get(f"/api/documents/{document_id}")
     assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "UPLOADED"
+
+    job_detail = client.get(f"/api/documents/ingestion-jobs/{job['id']}")
+    assert job_detail.status_code == 200
+    assert job_detail.json()["data"]["status"] == "QUEUED"
+
+    anyio.run(documents_route._run_ingestion_job, job["id"])
+    detail = client.get(f"/api/documents/{document_id}")
+    assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "INDEXED"
 
     job_detail = client.get(f"/api/documents/ingestion-jobs/{job['id']}")
@@ -690,6 +750,7 @@ def test_document_ingestion_job_endpoint_skips_indexed_without_force() -> None:
     )
     first = client.post(f"/api/documents/{document_id}/ingestion-jobs")
     assert first.status_code == 200
+    anyio.run(documents_route._run_ingestion_job, first.json()["data"]["id"])
 
     second = client.post(f"/api/documents/{document_id}/ingestion-jobs")
 
@@ -778,7 +839,7 @@ def test_document_ingestion_job_endpoint_skips_unsupported_legacy_office() -> No
 def test_drain_queued_ingestion_jobs_runs_persisted_jobs(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """永続化済み QUEUED job は drain API から再実行できる。"""
+    """永続化済み QUEUED job は drain API からワーカーへ通知できる。"""
     document_id = _upload(
         "queued-policy.txt",
         "再起動後の queued job".encode(),
@@ -802,8 +863,16 @@ def test_drain_queued_ingestion_jobs_runs_persisted_jobs(
 
     detail = client.get(f"/api/documents/{document_id}")
     assert detail.status_code == 200
-    assert detail.json()["data"]["status"] == "INDEXED"
+    assert detail.json()["data"]["status"] == "UPLOADED"
 
+    job_detail = client.get("/api/documents/ingestion-jobs/job-queued")
+    assert job_detail.status_code == 200
+    assert job_detail.json()["data"]["status"] == "QUEUED"
+
+    anyio.run(documents_route._run_ingestion_job, "job-queued")
+    detail = client.get(f"/api/documents/{document_id}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["status"] == "INDEXED"
     job_detail = client.get("/api/documents/ingestion-jobs/job-queued")
     assert job_detail.status_code == 200
     assert job_detail.json()["data"]["status"] == "SUCCEEDED"
@@ -840,6 +909,11 @@ def test_retry_ingestion_job_creates_new_job_for_failed_document(
 
     job_detail = client.get(f"/api/documents/ingestion-jobs/{retry_job['id']}")
     assert job_detail.status_code == 200
+    assert job_detail.json()["data"]["status"] == "QUEUED"
+
+    anyio.run(documents_route._run_ingestion_job, retry_job["id"])
+    job_detail = client.get(f"/api/documents/ingestion-jobs/{retry_job['id']}")
+    assert job_detail.status_code == 200
     assert job_detail.json()["data"]["status"] == "SUCCEEDED"
 
     original_job = client.get("/api/documents/ingestion-jobs/job-failed")
@@ -870,6 +944,84 @@ def test_retry_ingestion_job_rejects_running_job(
 
     assert resp.status_code == 409
     assert resp.json()["error_messages"] == ["この取込ジョブはまだ実行中です。"]
+
+
+def test_retry_failed_ingestion_segments_creates_retry_job(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """FAILED checkpoint がある場合だけ segment retry job を投入する。"""
+    document_id = _upload(
+        "segment-failed.pdf",
+        b"%PDF-1.4\nsegment retry target",
+        "application/pdf",
+    )
+    fake_document_dependencies.ingestion_segments[document_id] = [
+        IngestionSegment(
+            segment_id=f"{document_id}:p1-2",
+            document_id=document_id,
+            status="SUCCEEDED",
+            parser_backend="enterprise_ai",
+            parser_profile="enterprise_ai_pdf_layout",
+            page_start=1,
+            page_end=2,
+            artifact_path=f"oci://namespace/bucket/artifacts/extractions/{document_id}/p1-2.json",
+        ),
+        IngestionSegment(
+            segment_id=f"{document_id}:p3-4",
+            document_id=document_id,
+            status="FAILED",
+            parser_backend="enterprise_ai",
+            parser_profile="enterprise_ai_pdf_layout",
+            page_start=3,
+            page_end=4,
+            attempt_count=1,
+            error_code="enterprise_ai_response_validation_error",
+            error_message="前回の segment 抽出に失敗しました。",
+        ),
+    ]
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-segments/retry")
+
+    assert resp.status_code == 200
+    retry_job = resp.json()["data"]
+    assert retry_job["document_id"] == document_id
+    assert retry_job["status"] == "QUEUED"
+    job_detail = client.get(f"/api/documents/ingestion-jobs/{retry_job['id']}")
+    assert job_detail.status_code == 200
+    assert job_detail.json()["data"]["status"] == "QUEUED"
+
+    anyio.run(documents_route._run_ingestion_job, retry_job["id"])
+    job_detail = client.get(f"/api/documents/ingestion-jobs/{retry_job['id']}")
+    assert job_detail.status_code == 200
+    assert job_detail.json()["data"]["status"] == "SUCCEEDED"
+
+
+def test_retry_failed_ingestion_segments_requires_failed_checkpoint(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """FAILED checkpoint がない文書は segment retry として受け付けない。"""
+    document_id = _upload(
+        "segment-ok.pdf",
+        b"%PDF-1.4\nno failed segment",
+        "application/pdf",
+    )
+    fake_document_dependencies.ingestion_segments[document_id] = [
+        IngestionSegment(
+            segment_id=f"{document_id}:p1-2",
+            document_id=document_id,
+            status="SUCCEEDED",
+            parser_backend="enterprise_ai",
+            parser_profile="enterprise_ai_pdf_layout",
+            page_start=1,
+            page_end=2,
+            artifact_path=f"oci://namespace/bucket/artifacts/extractions/{document_id}/p1-2.json",
+        )
+    ]
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-segments/retry")
+
+    assert resp.status_code == 409
+    assert resp.json()["error_messages"] == ["再試行対象の失敗 segment がありません。"]
 
 
 def test_cancel_queued_ingestion_job(
@@ -1280,17 +1432,48 @@ def test_delete_document_removes_extraction_artifacts(
         anyio.run(ObjectStorageClient().get, original_path)
 
 
-def test_delete_document_blocks_active_ingestion_job(
+def test_delete_document_removes_queued_ingestion_state(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """未完了の取込 job がある document は誤削除を止める。"""
-    document_id = _upload("policy.txt", b"sample", "text/plain")
-    fake_document_dependencies.ingestion_jobs["job-queued"] = IngestionJob(
-        id="job-queued",
+    """待機中の投入 job / segment は document 削除と同時に消す。"""
+    document_id = _upload("queued-policy.txt", b"queued sample", "text/plain")
+    fake_document_dependencies.ingestion_jobs["job-queued-delete"] = IngestionJob(
+        id="job-queued-delete",
         document_id=document_id,
         status=IngestionJobStatus.QUEUED,
         parser_profile="enterprise_ai_generic",
         queued_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_segments[document_id] = [
+        IngestionSegment(
+            segment_id=f"{document_id}:p1",
+            document_id=document_id,
+            status="QUEUED",
+            page_start=1,
+            page_end=1,
+        )
+    ]
+
+    resp = client.delete(f"/api/documents/{document_id}")
+
+    assert resp.status_code == 200
+    assert document_id not in fake_document_dependencies.documents
+    assert "job-queued-delete" not in fake_document_dependencies.ingestion_jobs
+    assert document_id not in fake_document_dependencies.ingestion_segments
+
+
+def test_delete_document_blocks_running_ingestion_job(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """実行中の取込 job がある document は worker 競合を避けて削除を止める。"""
+    document_id = _upload("policy.txt", b"sample", "text/plain")
+    fake_document_dependencies.ingestion_jobs["job-running"] = IngestionJob(
+        id="job-running",
+        document_id=document_id,
+        status=IngestionJobStatus.RUNNING,
+        parser_profile="enterprise_ai_generic",
+        queued_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
     )
 
     resp = client.delete(f"/api/documents/{document_id}")
@@ -1317,13 +1500,18 @@ def test_delete_document_clears_duplicate_references(
 
 
 def test_document_detail_returns_extraction_after_ingest() -> None:
-    """取込後の詳細 API は抽出本文とメタデータを返す。"""
+    """取込 job 実行後の詳細 API は抽出本文とメタデータを返す。"""
     document_id = _upload(
         "policy.txt",
         "社内規程: 経費申請\n部門長が承認します。".encode(),
         "text/plain",
     )
-    assert client.post(f"/api/documents/{document_id}/ingest").status_code == 200
+    ingest = client.post(f"/api/documents/{document_id}/ingest")
+    assert ingest.status_code == 200
+    job = ingest.json()["data"]
+    assert job["document_id"] == document_id
+    assert job["status"] == "QUEUED"
+    anyio.run(documents_route._run_ingestion_job, job["id"])
 
     detail = client.get(f"/api/documents/{document_id}")
     assert detail.status_code == 200
@@ -1335,6 +1523,312 @@ def test_document_detail_returns_extraction_after_ingest() -> None:
     jobs = client.get("/api/documents/ingestion-jobs", params={"status": "SUCCEEDED"})
     assert jobs.status_code == 200
     assert any(job["document_id"] == document_id for job in jobs.json()["data"]["items"])
+
+
+def test_document_extraction_export_returns_markdown_view(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """保存済み StructuredExtraction を Markdown で監査できる。"""
+    document_id = _upload("manual.html", "<h1>検索運用</h1>".encode(), "text/html")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": {
+                "raw_text": "検索運用\nインデックスを確認します。",
+                "document_type": "運用マニュアル",
+                "confidence": 0.91,
+                "elements": [
+                    {
+                        "kind": "title",
+                        "text": "検索運用",
+                        "order": 0,
+                        "element_id": "h1",
+                        "page_number": 1,
+                        "section_path": ["検索運用"],
+                    },
+                    {
+                        "kind": "code",
+                        "text": "ragctl reindex",
+                        "order": 1,
+                        "element_id": "code-1",
+                        "page_number": 1,
+                        "section_path": ["検索運用"],
+                        "metadata": {"code_language": "bash"},
+                    },
+                    {
+                        "kind": "table",
+                        "text": "|項目|値|\n|-|-|\n|状態|INDEXED|",
+                        "order": 2,
+                        "element_id": "tbl-1",
+                        "page_number": 2,
+                        "section_path": ["検索運用", "確認表"],
+                    },
+                ],
+                "assets": [
+                    {
+                        "asset_id": "fig-1",
+                        "kind": "figure",
+                        "page_number": 2,
+                        "bbox": {"x": 10, "y": 20, "w": 30, "h": 40},
+                        "alt_text": "検索フロー図",
+                    }
+                ],
+                "quality_report": {
+                    "parser_backend": "local_partition",
+                    "parser_profile": "local_html_semantic",
+                    "page_count": 2,
+                    "page_coverage": 1.0,
+                    "element_count": 3,
+                },
+            },
+        }
+    )
+
+    resp = client.get(
+        f"/api/documents/{document_id}/extraction-export",
+        params={"format": DocumentExtractionExportFormat.MARKDOWN.value},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["format"] == "markdown"
+    assert data["content_type"].startswith("text/markdown")
+    assert data["parser_backend"] == "local_partition"
+    assert data["parser_profile"] == "local_html_semantic"
+    assert data["page_count"] == 2
+    assert data["element_count"] == 3
+    assert data["asset_count"] == 1
+    assert "<!-- page: 1 -->" in data["content"]
+    assert "# 検索運用" in data["content"]
+    assert "```bash\nragctl reindex\n```" in data["content"]
+    assert "|状態|INDEXED|" in data["content"]
+    assert "> Asset: figure `fig-1`" in data["content"]
+    assert "> bbox: 10,20,40,60" in data["content"]
+    assert "> alt: 検索フロー図" in data["content"]
+    assert data["payload"] == {}
+
+
+def test_document_extraction_export_returns_html_view(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """HTML export は保存済み extraction から escaped review HTML を返す。"""
+    document_id = _upload("manual.html", b"<h1>html</h1>", "text/html")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": {
+                "raw_text": "検索運用\n<script>alert(1)</script>",
+                "document_type": "運用マニュアル",
+                "elements": [
+                    {
+                        "kind": "title",
+                        "text": "検索運用",
+                        "order": 0,
+                        "element_id": "title-1",
+                        "page_number": 1,
+                        "bbox": [0, 0, 100, 20],
+                    },
+                    {
+                        "kind": "text",
+                        "text": "<script>alert(1)</script>",
+                        "order": 1,
+                        "element_id": "txt-1",
+                        "page_number": 1,
+                        "content_kind": "text",
+                    },
+                    {
+                        "kind": "code",
+                        "text": "ragctl reindex",
+                        "order": 2,
+                        "element_id": "code-1",
+                        "page_number": 1,
+                        "metadata": {"code_language": "bash"},
+                    },
+                    {
+                        "kind": "table",
+                        "text": "|項目|値|\n|-|-|\n|状態|INDEXED|",
+                        "order": 3,
+                        "element_id": "tbl-1",
+                        "page_number": 2,
+                    },
+                ],
+                "tables": [
+                    {
+                        "table_id": "tbl-1",
+                        "element_id": "tbl-1",
+                        "page_number": 2,
+                        "caption": "検索状態表",
+                        "cells": [
+                            {"row": 0, "col": 0, "text": "項目"},
+                            {"row": 0, "col": 1, "text": "値"},
+                            {
+                                "row": 1,
+                                "col": 0,
+                                "text": "状態",
+                                "bbox": {
+                                    "left": 10,
+                                    "top": 20,
+                                    "right": 30,
+                                    "bottom": 40,
+                                },
+                            },
+                            {
+                                "row": 1,
+                                "col": 1,
+                                "text": "<INDEXED>",
+                                "metadata": {
+                                    "formula_cell_ref": "B2",
+                                    "equation_format": "excel_formula",
+                                    "formula": 'IF(A2="状態","<INDEXED>","ERROR")',
+                                    "formula_value": "<INDEXED>",
+                                },
+                            },
+                        ],
+                    }
+                ],
+                "assets": [
+                    {
+                        "asset_id": "fig-1",
+                        "kind": "figure",
+                        "object_path": "oci://namespace/bucket/internal/figure.png",
+                        "page_number": 2,
+                        "bbox": {"x": 5, "y": 10, "w": 25, "h": 35},
+                        "alt_text": "<画像プレビュー>",
+                    }
+                ],
+                "quality_report": {
+                    "parser_backend": "local_partition",
+                    "parser_profile": "local_html_semantic",
+                    "page_count": 2,
+                    "page_coverage": 1.0,
+                    "element_count": 4,
+                },
+            },
+        }
+    )
+
+    resp = client.get(
+        f"/api/documents/{document_id}/extraction-export",
+        params={"format": DocumentExtractionExportFormat.HTML.value},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["format"] == "html"
+    assert data["content_type"].startswith("text/html")
+    assert data["payload"] == {}
+    assert '<article data-document-type="運用マニュアル">' in data["content"]
+    assert '<p class="page-marker" data-page="1">page 1</p>' in data["content"]
+    assert '<h1 data-element-id="title-1"' in data["content"]
+    assert 'data-bbox="0,0,100,20"' in data["content"]
+    assert ">検索運用</h1>" in data["content"]
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in data["content"]
+    assert "<script>alert(1)</script>" not in data["content"]
+    assert '<code class="language-bash">ragctl reindex</code>' in data["content"]
+    assert '<p class="table-caption" data-table-id="tbl-1">検索状態表</p>' in data["content"]
+    assert '<table data-element-id="tbl-1"' in data["content"]
+    assert 'class="table-block" data-table-id="tbl-1"' in data["content"]
+    assert '<th data-table-id="tbl-1" data-row="0" data-col="0">項目</th>' in data["content"]
+    assert 'data-bbox="10,20,30,40"' in data["content"]
+    assert 'data-formula-ref="B2"' in data["content"]
+    assert 'data-formula-format="excel_formula"' in data["content"]
+    escaped_formula = (
+        'data-formula="IF(A2=&quot;状態&quot;,&quot;&lt;INDEXED&gt;&quot;,&quot;ERROR&quot;)"'
+    )
+    assert escaped_formula in data["content"]
+    assert 'data-formula-value="&lt;INDEXED&gt;"' in data["content"]
+    assert 'class="asset-block"' in data["content"]
+    assert 'data-asset-id="fig-1"' in data["content"]
+    assert 'data-kind="figure"' in data["content"]
+    assert 'data-page="2"' in data["content"]
+    assert 'data-bbox="5,10,30,45"' in data["content"]
+    assert "&lt;画像プレビュー&gt;" in data["content"]
+    assert "oci://namespace/bucket/internal/figure.png" not in data["content"]
+    assert "&lt;INDEXED&gt;" in data["content"]
+    assert "<INDEXED>" not in data["content"]
+
+
+def test_document_extraction_export_returns_json_payload(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """JSON export は保存済み extraction payload を機械可読に返す。"""
+    document_id = _upload("policy.txt", b"policy", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": {
+                "raw_text": "部門長が承認します。",
+                "document_type": "社内規程",
+                "confidence": 0.9,
+                "elements": [
+                    {
+                        "kind": "text",
+                        "text": "部門長が承認します。",
+                        "order": 0,
+                        "element_id": "el-1",
+                    }
+                ],
+                "parser_artifacts": {"parser_backend": "local_partition"},
+            },
+        }
+    )
+
+    resp = client.get(
+        f"/api/documents/{document_id}/extraction-export",
+        params={"format": DocumentExtractionExportFormat.JSON.value},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["format"] == "json"
+    assert data["content_type"].startswith("application/json")
+    assert data["payload"]["document_type"] == "社内規程"
+    assert data["payload"]["elements"][0]["element_id"] == "el-1"
+    assert '"document_type": "社内規程"' in data["content"]
+
+
+def test_document_extraction_export_returns_chunk_view_without_embeddings(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """chunks export は embedding なしの可視化 metadata だけを返す。"""
+    document_id = _upload("policy.txt", b"policy", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": {"raw_text": "承認条件", "document_type": "社内規程"},
+        }
+    )
+    fake_document_dependencies.chunks[document_id] = [
+        DocumentChunkView(
+            document_id=document_id,
+            chunk_id=f"{document_id}:0",
+            chunk_index=0,
+            text="承認条件: 部門長",
+            page_start=1,
+            page_end=1,
+            section_path="経費申請 > 承認",
+            content_kind="text",
+            element_ids=["el-1"],
+            metadata={"chunk_template": "markdown_by_heading"},
+        )
+    ]
+
+    resp = client.get(
+        f"/api/documents/{document_id}/extraction-export",
+        params={"format": DocumentExtractionExportFormat.CHUNKS.value},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["format"] == "chunks"
+    assert data["content_type"].startswith("application/json")
+    assert data["chunks"][0]["chunk_id"] == f"{document_id}:0"
+    assert data["chunks"][0]["element_ids"] == ["el-1"]
+    assert "embedding" not in data["content"].casefold()
 
 
 def test_fields_edit_endpoint_is_not_available() -> None:

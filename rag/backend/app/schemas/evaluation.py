@@ -4,7 +4,9 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.config import EvaluationSuite
 from app.schemas.search import (
+    SUPPORTED_CONTENT_KIND_FILTERS,
     SearchDiagnostics,
     SearchMode,
     format_search_id_filter,
@@ -15,6 +17,8 @@ from app.schemas.search import (
     validate_rerank_top_n,
 )
 
+EvaluationSuiteName = EvaluationSuite
+
 EvaluationFailureReason = Literal[
     "retrieval_miss",
     "partial_recall",
@@ -22,6 +26,8 @@ EvaluationFailureReason = Literal[
     "answer_keyword_miss",
     "low_groundedness",
     "guardrail_warning",
+    "content_kind_miss",
+    "section_miss",
     "case_error",
 ]
 
@@ -33,6 +39,8 @@ class EvaluationCase(BaseModel):
     query: str = Field(..., min_length=1)
     relevant_document_ids: list[str] = Field(default_factory=list)
     expected_answer_keywords: list[str] = Field(default_factory=list)
+    expected_content_kind: str | None = None
+    expected_section_paths: list[str] = Field(default_factory=list)
 
     @field_validator("query")
     @classmethod
@@ -40,12 +48,40 @@ class EvaluationCase(BaseModel):
         """SearchRequest と同じ規則で query を正規化する。"""
         return normalize_query_text(query)
 
+    @field_validator("expected_content_kind")
+    @classmethod
+    def validate_expected_content_kind(cls, value: str | None) -> str | None:
+        """期待 content_kind を検索 filter と同じ語彙に寄せる。"""
+        if value is None:
+            return None
+        normalized = value.strip().casefold()
+        if not normalized:
+            return None
+        if normalized not in SUPPORTED_CONTENT_KIND_FILTERS:
+            raise ValueError("expected_content_kind は対応済み content_kind を指定してください。")
+        return normalized
+
+    @field_validator("expected_section_paths")
+    @classmethod
+    def validate_expected_section_paths(cls, values: list[str]) -> list[str]:
+        """section_path 期待値を重複排除し、空値を落とす。"""
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for value in values:
+            cleaned = " > ".join(part.strip() for part in value.split(">") if part.strip())
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            normalized.append(cleaned)
+        return normalized
+
 
 class EvaluationMetrics(BaseModel):
     """評価結果の集計指標。"""
 
     case_count: int
     error_count: int = 0
+    evaluation_suite: str = "request_only"
     evaluated_k: int
     precision_at_k: float
     recall_at_k: float
@@ -60,6 +96,8 @@ class EvaluationMetrics(BaseModel):
     citation_traceability_coverage: float = 0.0
     bbox_citation_coverage: float = 0.0
     element_lineage_coverage: float = 0.0
+    content_kind_hit_rate: float = 0.0
+    section_coverage: float = 0.0
     passed: bool = True
     threshold_failures: list["EvaluationThresholdFailure"] = Field(default_factory=list)
     failure_reason_counts: dict[EvaluationFailureReason, int] = Field(default_factory=dict)
@@ -112,6 +150,8 @@ class EvaluationCaseResult(BaseModel):
     citation_traceability_coverage: float = 0.0
     bbox_citation_coverage: float = 0.0
     element_lineage_coverage: float = 0.0
+    content_kind_hit_rate: float = 0.0
+    section_coverage: float = 0.0
     guardrail_warnings: list[str] = Field(default_factory=list)
     failure_reasons: list[EvaluationFailureReason] = Field(default_factory=list)
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
@@ -134,6 +174,8 @@ EvaluationMetricName = Literal[
     "citation_traceability_coverage",
     "bbox_citation_coverage",
     "element_lineage_coverage",
+    "content_kind_hit_rate",
+    "section_coverage",
 ]
 
 
@@ -153,6 +195,8 @@ class EvaluationThresholds(BaseModel):
     citation_traceability_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
     bbox_citation_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
     element_lineage_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
+    content_kind_hit_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    section_coverage: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class EvaluationThresholdFailure(BaseModel):
@@ -172,8 +216,13 @@ class EvaluationRagOverrides(BaseModel):
     context_window_chars: int | None = Field(default=None, ge=1000, le=100000)
     context_neighbor_window: int | None = Field(default=None, ge=0, le=5)
     context_diversity_lambda: float | None = Field(default=None, ge=0.0, le=1.0)
+    context_adaptive_expansion_enabled: bool | None = None
+    context_adaptive_neighbor_window: int | None = Field(default=None, ge=0, le=5)
+    context_adaptive_min_overlap: float | None = Field(default=None, ge=0.0, le=1.0)
     context_group_expansion_enabled: bool | None = None
     context_group_max_chunks: int | None = Field(default=None, ge=1, le=20)
+    context_dependency_promotion_enabled: bool | None = None
+    context_dependency_max_chunks: int | None = Field(default=None, ge=1, le=20)
     context_compression_enabled: bool | None = None
     context_compression_max_sentences: int | None = Field(default=None, ge=1, le=10)
     context_compression_max_chars_per_chunk: int | None = Field(
@@ -251,6 +300,7 @@ class EvaluationCompareRequest(BaseModel):
     experiments: list[EvaluationExperiment] = Field(..., min_length=1, max_length=20)
     ranking_metric: EvaluationMetricName = "mrr"
     thresholds: EvaluationThresholds | None = None
+    suite: EvaluationSuiteName | None = None
 
     @model_validator(mode="after")
     def validate_unique_experiment_ids(self) -> Self:
@@ -274,6 +324,7 @@ class EvaluationRunRequest(BaseModel):
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     thresholds: EvaluationThresholds | None = None
+    suite: EvaluationSuiteName | None = None
     rag_overrides: EvaluationRagOverrides | None = None
 
     @field_validator("filters")

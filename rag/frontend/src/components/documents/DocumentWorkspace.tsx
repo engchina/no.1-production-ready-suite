@@ -1,21 +1,27 @@
 "use client";
 
 import {
+  Braces,
+  Check,
   FileSearch,
   FileText,
   ListTree,
   LocateFixed,
+  Pencil,
   RotateCcw,
   Route,
   Save,
   Send,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { DocumentPreview } from "./DocumentPreview";
+import { IngestionConfigDriftBanner } from "@/components/knowledge-bases/IngestionConfigDriftBanner";
 import { DocumentExtraction } from "./DocumentExtraction";
+import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { FlowStepper } from "@/components/upload/FlowStepper";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -27,8 +33,12 @@ import { ErrorState } from "@/components/StateViews";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
+  type DocumentApproveRequest,
   type DocumentElement,
   type DocumentChunkView,
+  type DocumentExtractionExportFormat,
+  type ExtractionTable,
+  type ExtractionTableCell,
   type IngestionSegment,
   type KnowledgeBaseRef,
   type SourceProfile,
@@ -37,16 +47,32 @@ import { parseStructuredExtraction } from "@/lib/extraction";
 import {
   useDocument,
   useDocumentChunks,
+  useDocumentExtractionExport,
   useDocumentIngestionSegments,
   useDocumentKnowledgeBases,
+  useApproveDocument,
   useEnqueueDocumentIngestionJob,
   useIngestionJob,
+  useRejectDocument,
   useReplaceDocumentKnowledgeBases,
+  useRetryFailedDocumentIngestionSegments,
 } from "@/lib/queries";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { toast } from "@/lib/toast";
 import { t } from "@/lib/i18n";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
-import { bboxCoordinateModeFromMetadata } from "@/lib/bbox";
+import {
+  type BboxCoordinateMode,
+  type BboxOverlayUnit,
+  type BboxPageSize,
+  bboxCoordinateModeFromMetadata,
+  bboxFromMetadata,
+  bboxPageRotationFromMetadata,
+  bboxPageSizeFromMetadata,
+  bboxUnitFromMetadata,
+  withBboxPageRotation,
+} from "@/lib/bbox";
 import {
   parserProfileKey,
   sourceModalityKey,
@@ -54,6 +80,12 @@ import {
   sourceWarningKey,
   unsupportedReasonLabel,
 } from "@/lib/source-profile-labels";
+import {
+  findTableCellTarget,
+  tableCellKey,
+  type TableCellFocusTarget,
+} from "@/lib/table-cell-focus";
+import { cn } from "@/lib/utils";
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -63,9 +95,69 @@ function workspaceElementKey(element: DocumentElement): string {
   return element.element_id || `el-${String(element.order).padStart(4, "0")}`;
 }
 
+function integerSearchParam(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function numberSearchParam(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function bboxSearchParam(value: string | null): number[] | null {
+  return bboxFromMetadata(value ? { bbox: value } : null);
+}
+
+function bboxModeSearchParam(value: string | null): BboxCoordinateMode | null {
+  return value === "xyxy" || value === "xywh" ? value : null;
+}
+
+function bboxUnitSearchParam(value: string | null): BboxOverlayUnit | null {
+  return value === "ratio" || value === "percent" || value === "absolute" ? value : null;
+}
+
+function pageSizeSearchParams(
+  width: string | null,
+  height: string | null,
+  rotation: string | null
+): BboxPageSize | null {
+  const parsedWidth = numberSearchParam(width);
+  const parsedHeight = numberSearchParam(height);
+  return withBboxPageRotation(
+    parsedWidth && parsedHeight ? { width: parsedWidth, height: parsedHeight } : null,
+    integerSearchParam(rotation)
+  );
+}
+
+function findTableCellByKey(
+  tables: ExtractionTable[],
+  key: string | null
+): TableCellFocusTarget | null {
+  if (!key) return null;
+  for (const table of tables) {
+    for (const cell of table.cells) {
+      const candidateKey = tableCellKey(table.table_id, cell);
+      if (candidateKey === key) return { key, table, cell };
+    }
+  }
+  return null;
+}
+
 type WorkspaceFocusRequest = {
   key: string;
-  target: "chunk" | "element";
+  target: "chunk" | "element" | "table_cell";
+};
+
+type UrlFallbackFocus = {
+  key: string;
+  page: number | null;
+  bbox: number[] | null;
+  bboxMode: BboxCoordinateMode | null;
+  bboxUnit: BboxOverlayUnit | null;
+  pageSize: BboxPageSize | null;
 };
 
 /** 文書プレビュー作業領域：原本プレビュー｜抽出本文＋取込アクション。 */
@@ -81,17 +173,73 @@ export function DocumentWorkspace({
   const query = useDocument(documentId);
   const chunksQuery = useDocumentChunks(documentId);
   const segmentsQuery = useDocumentIngestionSegments(documentId);
+  const [exportFormat, setExportFormat] =
+    useState<DocumentExtractionExportFormat>("markdown");
+  const extractionExportQuery = useDocumentExtractionExport(documentId, exportFormat);
   const [searchParams] = useSearchParams();
   const enqueueIngestion = useEnqueueDocumentIngestionJob();
+  const approveDocument = useApproveDocument();
+  const rejectDocument = useRejectDocument();
+  const confirm = useConfirm();
+  const retryFailedSegments = useRetryFailedDocumentIngestionSegments();
   const queuedJob = useIngestionJob(enqueueIngestion.data?.id ?? null);
+  const retriedSegmentJob = useIngestionJob(retryFailedSegments.data?.id ?? null);
   const [localWatchProcessing, setLocalWatchProcessing] = useState(false);
+  const [editingReview, setEditingReview] = useState(false);
+  const [reviewEdits, setReviewEdits] = useState<DocumentApproveRequest | null>(null);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
-  const [previewFocusSource, setPreviewFocusSource] = useState<"chunk" | "element">("chunk");
+  const [selectedTableCellKey, setSelectedTableCellKey] = useState<string | null>(null);
+  const [previewFocusSource, setPreviewFocusSource] =
+    useState<"chunk" | "element" | "table_cell">("chunk");
   const [focusRequest, setFocusRequest] = useState<WorkspaceFocusRequest | null>(null);
+  const [urlFallbackFocus, setUrlFallbackFocus] = useState<UrlFallbackFocus | null>(null);
   const appliedFocusRequestRef = useRef<string | null>(null);
   const requestedChunkId = searchParams.get("chunk_id");
   const requestedElementId = searchParams.get("element_id");
+  const requestedTableId = searchParams.get("table_id");
+  const requestedCellRefParam = searchParams.get("cell_ref");
+  const requestedFormulaCellRef = searchParams.get("formula_cell_ref");
+  const requestedCellRef = requestedFormulaCellRef ?? requestedCellRefParam;
+  const requestedCellRow = integerSearchParam(searchParams.get("cell_row"));
+  const requestedCellCol = integerSearchParam(searchParams.get("cell_col"));
+  const requestedUrlFocus = useMemo<UrlFallbackFocus | null>(() => {
+    const page = integerSearchParam(searchParams.get("page"));
+    const bbox = bboxSearchParam(searchParams.get("bbox"));
+    if (!page && !bbox) return null;
+    return {
+      key: [
+        "citation",
+        requestedChunkId ?? "",
+        requestedElementId ?? "",
+        requestedTableId ?? "",
+        requestedFormulaCellRef ?? "",
+        requestedCellRef ?? "",
+        String(requestedCellRow ?? ""),
+        String(requestedCellCol ?? ""),
+        String(page ?? ""),
+        searchParams.get("bbox") ?? "",
+      ].join("\u0000"),
+      page,
+      bbox,
+      bboxMode: bboxModeSearchParam(searchParams.get("bbox_mode")),
+      bboxUnit: bboxUnitSearchParam(searchParams.get("bbox_unit")),
+      pageSize: pageSizeSearchParams(
+        searchParams.get("page_width"),
+        searchParams.get("page_height"),
+        searchParams.get("page_rotation")
+      ),
+    };
+  }, [
+    requestedCellCol,
+    requestedCellRef,
+    requestedCellRow,
+    requestedChunkId,
+    requestedElementId,
+    requestedFormulaCellRef,
+    requestedTableId,
+    searchParams,
+  ]);
   const status = query.data?.status;
   const parsedExtraction = useMemo(
     () => parseStructuredExtraction(query.data?.extraction ?? {}),
@@ -109,41 +257,133 @@ export function DocumentWorkspace({
       null,
     [parsedExtraction.elements, selectedElementId]
   );
+  const selectedTableCell = useMemo(
+    () => findTableCellByKey(parsedExtraction.tables, selectedTableCellKey),
+    [parsedExtraction.tables, selectedTableCellKey]
+  );
   const focusPage =
-    previewFocusSource === "element"
-      ? selectedElement?.page_number ?? selectedChunk?.page_start ?? null
-      : selectedChunk?.page_start ?? selectedElement?.page_number ?? null;
+    previewFocusSource === "table_cell"
+      ? selectedTableCell?.cell.page_number ??
+        selectedTableCell?.table.page_number ??
+        selectedElement?.page_number ??
+        selectedChunk?.page_start ??
+        null
+      : previewFocusSource === "element"
+        ? selectedElement?.page_number ?? selectedChunk?.page_start ?? null
+        : selectedChunk?.page_start ?? selectedElement?.page_number ?? null;
+  const effectiveFocusPage = focusPage ?? urlFallbackFocus?.page ?? null;
+  const selectedChunkBbox = selectedChunk?.bbox ?? bboxFromMetadata(selectedChunk?.metadata);
+  const selectedElementBbox =
+    selectedElement?.bbox ?? bboxFromMetadata(selectedElement?.metadata);
+  const selectedTableCellBbox =
+    selectedTableCell?.cell.bbox ?? bboxFromMetadata(selectedTableCell?.cell.metadata);
   const focusBbox =
-    previewFocusSource === "element"
-      ? selectedElement?.bbox ?? selectedChunk?.bbox ?? null
-      : selectedChunk?.bbox ?? selectedElement?.bbox ?? null;
+    previewFocusSource === "table_cell"
+      ? selectedTableCellBbox ?? selectedElementBbox ?? selectedChunkBbox ?? null
+      : previewFocusSource === "element"
+        ? selectedElementBbox ?? selectedChunkBbox ?? null
+        : selectedChunkBbox ?? selectedElementBbox ?? null;
+  const effectiveFocusBbox = focusBbox ?? urlFallbackFocus?.bbox ?? null;
   const focusBboxMode =
-    previewFocusSource === "element"
-      ? bboxCoordinateModeFromMetadata(selectedElement?.metadata) ??
+    previewFocusSource === "table_cell"
+      ? bboxCoordinateModeFromMetadata(selectedTableCell?.cell.metadata) ??
+        bboxCoordinateModeFromMetadata(selectedTableCell?.table.metadata) ??
+        bboxCoordinateModeFromMetadata(selectedElement?.metadata) ??
         bboxCoordinateModeFromMetadata(selectedChunk?.metadata)
-      : bboxCoordinateModeFromMetadata(selectedChunk?.metadata) ??
-        bboxCoordinateModeFromMetadata(selectedElement?.metadata);
+      : previewFocusSource === "element"
+        ? bboxCoordinateModeFromMetadata(selectedElement?.metadata) ??
+          bboxCoordinateModeFromMetadata(selectedChunk?.metadata)
+        : bboxCoordinateModeFromMetadata(selectedChunk?.metadata) ??
+          bboxCoordinateModeFromMetadata(selectedElement?.metadata);
+  const effectiveFocusBboxMode = focusBboxMode ?? urlFallbackFocus?.bboxMode ?? null;
+  const focusBboxUnit =
+    previewFocusSource === "table_cell"
+      ? bboxUnitFromMetadata(selectedTableCell?.cell.metadata) ??
+        bboxUnitFromMetadata(selectedTableCell?.table.metadata) ??
+        bboxUnitFromMetadata(selectedElement?.metadata) ??
+        bboxUnitFromMetadata(selectedChunk?.metadata)
+      : previewFocusSource === "element"
+        ? bboxUnitFromMetadata(selectedElement?.metadata) ??
+          bboxUnitFromMetadata(selectedChunk?.metadata)
+        : bboxUnitFromMetadata(selectedChunk?.metadata) ??
+          bboxUnitFromMetadata(selectedElement?.metadata);
+  const effectiveFocusBboxUnit = focusBboxUnit ?? urlFallbackFocus?.bboxUnit ?? null;
+  const focusPageSizeFromMetadata =
+    previewFocusSource === "table_cell"
+      ? bboxPageSizeFromMetadata(selectedTableCell?.cell.metadata) ??
+        bboxPageSizeFromMetadata(selectedTableCell?.table.metadata) ??
+        bboxPageSizeFromMetadata(selectedElement?.metadata) ??
+        bboxPageSizeFromMetadata(selectedChunk?.metadata)
+      : previewFocusSource === "element"
+        ? bboxPageSizeFromMetadata(selectedElement?.metadata) ??
+          bboxPageSizeFromMetadata(selectedChunk?.metadata)
+        : bboxPageSizeFromMetadata(selectedChunk?.metadata) ??
+          bboxPageSizeFromMetadata(selectedElement?.metadata);
+  const focusPageRotationFromMetadata =
+    previewFocusSource === "table_cell"
+      ? bboxPageRotationFromMetadata(selectedTableCell?.cell.metadata) ??
+        bboxPageRotationFromMetadata(selectedTableCell?.table.metadata) ??
+        bboxPageRotationFromMetadata(selectedElement?.metadata) ??
+        bboxPageRotationFromMetadata(selectedChunk?.metadata)
+      : previewFocusSource === "element"
+        ? bboxPageRotationFromMetadata(selectedElement?.metadata) ??
+          bboxPageRotationFromMetadata(selectedChunk?.metadata)
+        : bboxPageRotationFromMetadata(selectedChunk?.metadata) ??
+          bboxPageRotationFromMetadata(selectedElement?.metadata);
   const focusPageSize = useMemo(() => {
-    if (!focusPage) return null;
-    const page = parsedExtraction.pages.find((item) => item.page_number === focusPage);
-    if (!page?.width || !page?.height) return null;
-    return { width: page.width, height: page.height };
-  }, [focusPage, parsedExtraction.pages]);
+    if (!effectiveFocusPage) return null;
+    const page = parsedExtraction.pages.find((item) => item.page_number === effectiveFocusPage);
+    if (page?.width && page?.height) {
+      return withBboxPageRotation(
+        { width: page.width, height: page.height },
+        page.rotation ?? focusPageRotationFromMetadata ?? urlFallbackFocus?.pageSize?.rotation
+      );
+    }
+    return withBboxPageRotation(
+      focusPageSizeFromMetadata ?? urlFallbackFocus?.pageSize ?? null,
+      focusPageRotationFromMetadata ?? urlFallbackFocus?.pageSize?.rotation
+    );
+  }, [
+    effectiveFocusPage,
+    focusPageRotationFromMetadata,
+    focusPageSizeFromMetadata,
+    parsedExtraction.pages,
+    urlFallbackFocus,
+  ]);
   function selectElement(elementId: string) {
     const linkedChunk = chunksQuery.data?.find((chunk) => chunk.element_ids.includes(elementId));
+    setUrlFallbackFocus(null);
     setSelectedElementId(elementId);
+    setSelectedTableCellKey(null);
     if (chunksQuery.data) {
       setSelectedChunkId(linkedChunk?.chunk_id ?? null);
     }
     setPreviewFocusSource("element");
   }
 
+  function selectTableCell(table: ExtractionTable, cell: ExtractionTableCell) {
+    const key = tableCellKey(table.table_id, cell);
+    const linkedElementId = table.element_id ?? null;
+    const linkedChunk = linkedElementId
+      ? chunksQuery.data?.find((chunk) => chunk.element_ids.includes(linkedElementId))
+      : chunksQuery.data?.find((chunk) => chunk.content_kind === "table");
+    setSelectedTableCellKey(key);
+    setUrlFallbackFocus(null);
+    setSelectedElementId(linkedElementId);
+    if (chunksQuery.data) {
+      setSelectedChunkId(linkedChunk?.chunk_id ?? selectedChunkId ?? null);
+    }
+    setPreviewFocusSource("table_cell");
+  }
+
   useEffect(() => {
+    // REVIEW(確認待ち)は人手の操作待ちなので polling を止める。
+    const isWatchTerminal =
+      status === "INDEXED" || status === "ERROR" || status === "REVIEW";
     const shouldPoll =
       status === "INGESTING" ||
-      ((watchProcessing || localWatchProcessing) &&
-        status !== "INDEXED" &&
-        status !== "ERROR");
+      status === "INDEXING" ||
+      ((watchProcessing || localWatchProcessing) && !isWatchTerminal);
     if (!shouldPoll) return;
     const timer = window.setInterval(() => {
       void query.refetch();
@@ -152,20 +392,68 @@ export function DocumentWorkspace({
   }, [localWatchProcessing, query, status, watchProcessing]);
 
   useEffect(() => {
-    if (status === "INDEXED" || status === "ERROR") {
+    if (status === "INDEXED" || status === "ERROR" || status === "REVIEW") {
       setLocalWatchProcessing(false);
     }
   }, [status]);
 
   useEffect(() => {
     const chunks = chunksQuery.data ?? [];
-    if (!chunks.length && !requestedElementId) return;
-    const requestedFocusKey = requestedChunkId
+    if (
+      !chunks.length &&
+      !requestedChunkId &&
+      !requestedElementId &&
+      !requestedTableId &&
+      !requestedUrlFocus
+    ) {
+      return;
+    }
+    const requestedCellLocator =
+      requestedCellRef || requestedCellRow != null || requestedCellCol != null
+        ? {
+            tableId: requestedTableId,
+            cellRef: requestedCellRef,
+            row: requestedCellRow,
+            col: requestedCellCol,
+          }
+        : null;
+    const requestedCell = requestedCellLocator
+      ? findTableCellTarget(parsedExtraction.tables, requestedCellLocator)
+      : null;
+    const hasRequestedStructuredFocus = Boolean(
+      requestedChunkId ||
+        requestedElementId ||
+        requestedTableId ||
+        requestedCellRef ||
+        requestedCellRow != null ||
+        requestedCellCol != null
+    );
+    const requestedFocusKey = requestedCell
+      ? `table_cell:${requestedCell.key}\u0000${requestedChunkId ?? ""}\u0000${
+          requestedElementId ?? ""
+        }`
+      : requestedChunkId
       ? `chunk:${requestedChunkId}\u0000${requestedElementId ?? ""}`
       : requestedElementId
         ? `element:${requestedElementId}`
         : null;
     if (requestedFocusKey && appliedFocusRequestRef.current !== requestedFocusKey) {
+      if (requestedCell) {
+        const linkedElementId = requestedCell.table.element_id ?? requestedElementId;
+        const linkedChunk = requestedChunkId
+          ? chunks.find((chunk) => chunk.chunk_id === requestedChunkId)
+          : linkedElementId
+            ? chunks.find((chunk) => chunk.element_ids.includes(linkedElementId))
+            : null;
+        setSelectedChunkId(linkedChunk?.chunk_id ?? null);
+        setSelectedElementId(linkedElementId ?? null);
+        setSelectedTableCellKey(requestedCell.key);
+        setUrlFallbackFocus(requestedUrlFocus);
+        setPreviewFocusSource("table_cell");
+        setFocusRequest({ key: requestedFocusKey, target: "table_cell" });
+        appliedFocusRequestRef.current = requestedFocusKey;
+        return;
+      }
       if (requestedChunkId) {
         const requestedChunk = chunks.find((chunk) => chunk.chunk_id === requestedChunkId);
         if (requestedChunk) {
@@ -175,6 +463,8 @@ export function DocumentWorkspace({
               ? requestedElementId
               : requestedChunk.element_ids[0] ?? null
           );
+          setSelectedTableCellKey(null);
+          setUrlFallbackFocus(requestedUrlFocus);
           setPreviewFocusSource("chunk");
           setFocusRequest({ key: requestedFocusKey, target: "chunk" });
           appliedFocusRequestRef.current = requestedFocusKey;
@@ -190,12 +480,28 @@ export function DocumentWorkspace({
         if (requestedElement || linkedChunk) {
           setSelectedChunkId(linkedChunk?.chunk_id ?? null);
           setSelectedElementId(requestedElementId);
+          setSelectedTableCellKey(null);
+          setUrlFallbackFocus(requestedUrlFocus);
           setPreviewFocusSource("element");
           setFocusRequest({ key: requestedFocusKey, target: "element" });
           appliedFocusRequestRef.current = requestedFocusKey;
           return;
         }
       }
+      if (requestedUrlFocus) {
+        setUrlFallbackFocus(requestedUrlFocus);
+        appliedFocusRequestRef.current = requestedUrlFocus.key;
+        return;
+      }
+    }
+    if (
+      requestedUrlFocus &&
+      !requestedFocusKey &&
+      appliedFocusRequestRef.current !== requestedUrlFocus.key
+    ) {
+      setUrlFallbackFocus(requestedUrlFocus);
+      appliedFocusRequestRef.current = requestedUrlFocus.key;
+      return;
     }
     if (requestedElementId && selectedElementId === requestedElementId) {
       const linkedChunk = chunks.find((chunk) => chunk.element_ids.includes(requestedElementId));
@@ -207,15 +513,26 @@ export function DocumentWorkspace({
     if (selectedChunkId && chunks.some((chunk) => chunk.chunk_id === selectedChunkId)) {
       return;
     }
+    if (hasRequestedStructuredFocus) {
+      return;
+    }
     const firstChunk = chunks[0];
     if (!firstChunk) return;
     setSelectedChunkId(firstChunk.chunk_id);
     setSelectedElementId(firstChunk.element_ids[0] ?? null);
+    setSelectedTableCellKey(null);
   }, [
     chunksQuery.data,
     parsedExtraction.elements,
+    parsedExtraction.tables,
+    requestedCellCol,
+    requestedCellRef,
+    requestedCellRow,
     requestedChunkId,
     requestedElementId,
+    requestedFormulaCellRef,
+    requestedTableId,
+    requestedUrlFocus,
     selectedChunkId,
     selectedElementId,
   ]);
@@ -255,6 +572,7 @@ export function DocumentWorkspace({
         {watchProcessing && doc.status !== "INDEXED" && doc.status !== "ERROR" ? (
           <Banner severity="info">{t("upload.autoIngest.running")}</Banner>
         ) : null}
+        <IngestionConfigDriftBanner documentId={documentId} />
 
         <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
           <div>
@@ -288,10 +606,10 @@ export function DocumentWorkspace({
           segments={segmentsQuery.data ?? []}
           loading={segmentsQuery.isPending}
           error={segmentsQuery.isError}
-          retrying={enqueueIngestion.isPending}
+          retrying={retryFailedSegments.isPending}
           onRetryFailedSegments={() =>
-            enqueueIngestion.mutate(
-              { id: documentId, force: doc.status === "INDEXED" },
+            retryFailedSegments.mutate(
+              documentId,
               {
                 onSuccess: (job) => {
                   setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
@@ -322,6 +640,22 @@ export function DocumentWorkspace({
             {queuedJob.data.error_message ?? t("flow.ingestFailed")}
           </Banner>
         ) : null}
+        {retryFailedSegments.isError ? (
+          <Banner severity="danger">
+            {errorMessage(retryFailedSegments.error, t("flow.segments.retryFailedError"))}
+          </Banner>
+        ) : null}
+        {retryFailedSegments.data ? (
+          <FormStatus
+            tone="success"
+            message={t("flow.segments.retryQueued")}
+          />
+        ) : null}
+        {retriedSegmentJob.data?.status === "FAILED" ? (
+          <Banner severity="danger">
+            {retriedSegmentJob.data.error_message ?? t("flow.ingestFailed")}
+          </Banner>
+        ) : null}
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)]">
           <section>
@@ -330,9 +664,10 @@ export function DocumentWorkspace({
               documentId={documentId}
               fileName={doc.file_name}
               sourceProfile={sourceProfile}
-              focusPage={focusPage}
-              focusBbox={focusBbox}
-              focusBboxMode={focusBboxMode}
+              focusPage={effectiveFocusPage}
+              focusBbox={effectiveFocusBbox}
+              focusBboxMode={effectiveFocusBboxMode}
+              focusBboxUnit={effectiveFocusBboxUnit}
               focusPageSize={focusPageSize}
             />
           </section>
@@ -340,12 +675,44 @@ export function DocumentWorkspace({
             <h3 className="mb-2 text-sm font-semibold text-foreground">
               {t("flow.extraction.title")}
             </h3>
-            <DocumentExtraction
-              extraction={doc.extraction}
-              selectedElementId={selectedElementId}
-              focusRequestKey={focusRequest?.key ?? null}
-              focusSelectedElement={focusRequest?.target === "element"}
-              onElementSelect={selectElement}
+            {doc.status === "REVIEW" ? (
+              <div className="mb-2 flex justify-end">
+                <Button
+                  size="sm"
+                  variant={editingReview ? "secondary" : "ghost"}
+                  onClick={() => setEditingReview((prev) => !prev)}
+                  aria-pressed={editingReview}
+                >
+                  <Pencil size={14} aria-hidden />
+                  {editingReview
+                    ? t("flow.review.edit.close")
+                    : t("flow.review.edit.open")}
+                </Button>
+              </div>
+            ) : null}
+            {doc.status === "REVIEW" && editingReview ? (
+              <ReviewTextEditor extraction={doc.extraction} onChange={setReviewEdits} />
+            ) : (
+              <DocumentExtraction
+                extraction={doc.extraction}
+                selectedElementId={selectedElementId}
+                selectedTableCellKey={selectedTableCellKey}
+                focusRequestKey={focusRequest?.key ?? null}
+                focusSelectedElement={focusRequest?.target === "element"}
+                focusSelectedTableCell={focusRequest?.target === "table_cell"}
+                onElementSelect={selectElement}
+                onTableCellSelect={selectTableCell}
+              />
+            )}
+            <DocumentExtractionExportPanel
+              format={exportFormat}
+              onFormatChange={setExportFormat}
+              content={extractionExportQuery.data?.content ?? ""}
+              loading={extractionExportQuery.isPending}
+              error={extractionExportQuery.isError}
+              pageCount={extractionExportQuery.data?.page_count ?? 0}
+              elementCount={extractionExportQuery.data?.element_count ?? 0}
+              chunkCount={extractionExportQuery.data?.chunks.length ?? 0}
             />
           </section>
           <section>
@@ -359,8 +726,10 @@ export function DocumentWorkspace({
               selectedChunkId={selectedChunkId}
               focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
               onSelect={(chunk) => {
+                setUrlFallbackFocus(null);
                 setSelectedChunkId(chunk.chunk_id);
                 setSelectedElementId(chunk.element_ids[0] ?? null);
+                setSelectedTableCellKey(null);
                 setPreviewFocusSource("chunk");
               }}
             />
@@ -371,7 +740,77 @@ export function DocumentWorkspace({
           <Banner severity="success">{t("flow.indexed")}</Banner>
         ) : null}
 
+        {doc.status === "REVIEW" ? (
+          <Banner severity="info">{t("flow.review.description")}</Banner>
+        ) : null}
+
+        {approveDocument.isError ? (
+          <Banner severity="danger">
+            {errorMessage(approveDocument.error, t("flow.approveFailed"))}
+          </Banner>
+        ) : null}
+        {rejectDocument.isError ? (
+          <Banner severity="danger">
+            {errorMessage(rejectDocument.error, t("flow.rejectFailed"))}
+          </Banner>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+          {doc.status === "REVIEW" && (
+            <>
+              <Button
+                onClick={() =>
+                  approveDocument.mutate(
+                    {
+                      id: documentId,
+                      payload:
+                        editingReview &&
+                        reviewEdits &&
+                        ((reviewEdits.element_edits?.length ?? 0) > 0 ||
+                          (reviewEdits.table_cell_edits?.length ?? 0) > 0 ||
+                          reviewEdits.raw_text != null)
+                          ? reviewEdits
+                          : undefined,
+                    },
+                    {
+                      onSuccess: (job) => {
+                        setLocalWatchProcessing(
+                          job.status === "QUEUED" || job.status === "RUNNING"
+                        );
+                        toast.success(t("flow.approved"));
+                      },
+                    }
+                  )
+                }
+                loading={approveDocument.isPending}
+                disabled={rejectDocument.isPending}
+              >
+                {!approveDocument.isPending ? <Check size={15} aria-hidden /> : null}
+                {approveDocument.isPending ? t("action.queueing") : t("flow.approve")}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  const confirmed = await confirm({
+                    title: t("flow.rejectConfirm.title"),
+                    description: t("flow.rejectConfirm.description"),
+                    confirmLabel: t("flow.reject"),
+                    tone: "warning",
+                  });
+                  if (!confirmed) return;
+                  rejectDocument.mutate(
+                    { id: documentId },
+                    { onSuccess: () => toast.success(t("flow.rejected")) }
+                  );
+                }}
+                loading={rejectDocument.isPending}
+                disabled={approveDocument.isPending}
+              >
+                {!rejectDocument.isPending ? <X size={15} aria-hidden /> : null}
+                {rejectDocument.isPending ? t("action.processing") : t("flow.reject")}
+              </Button>
+            </>
+          )}
           {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
             <Button
               onClick={() =>
@@ -465,11 +904,14 @@ function IngestionSegmentsPanel({
           ) : null}
         </div>
       </div>
-      <ol className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+      <ol
+        aria-label={t("flow.segments.title")}
+        className="bounded-scroll-area mt-3 grid grid-cols-1 gap-2 rounded-md border border-border bg-card/40 p-2 lg:grid-cols-2"
+      >
         {segments.map((segment) => (
           <li
             key={segment.segment_id}
-            className="rounded-md border border-border bg-card p-3 text-sm"
+            className="rounded-md border border-border bg-background p-3 text-sm"
           >
             <div className="flex flex-wrap items-center gap-2">
               <span className={segmentStatusClass(segment.status)}>
@@ -512,6 +954,92 @@ function IngestionSegmentsPanel({
       </ol>
     </section>
   );
+}
+
+function DocumentExtractionExportPanel({
+  format,
+  onFormatChange,
+  content,
+  loading,
+  error,
+  pageCount,
+  elementCount,
+  chunkCount,
+}: {
+  format: DocumentExtractionExportFormat;
+  onFormatChange: (format: DocumentExtractionExportFormat) => void;
+  content: string;
+  loading: boolean;
+  error: boolean;
+  pageCount: number;
+  elementCount: number;
+  chunkCount: number;
+}) {
+  const formats: DocumentExtractionExportFormat[] = ["markdown", "html", "json", "chunks"];
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-background p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Braces size={15} className="text-primary" aria-hidden />
+          {t("flow.extractionExport.title")}
+        </h4>
+        <div
+          className="inline-flex flex-wrap rounded-md border border-border bg-card p-0.5"
+          role="group"
+          aria-label={t("flow.extractionExport.format")}
+        >
+          {formats.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={cn(
+                "h-8 rounded px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                item === format
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted hover:bg-background hover:text-foreground"
+              )}
+              aria-pressed={item === format}
+              onClick={() => onFormatChange(item)}
+            >
+              {extractionExportFormatLabel(item)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <ExportMetric label={t("flow.extraction.stats.pages")} value={pageCount} />
+        <ExportMetric label={t("flow.extraction.stats.elements")} value={elementCount} />
+        <ExportMetric label={t("flow.extractionExport.chunks")} value={chunkCount} />
+      </dl>
+      {loading ? (
+        <Skeleton className="mt-3 h-36 w-full rounded-md" />
+      ) : error ? (
+        <Banner severity="warning" title={t("flow.extractionExport.loadError")}>
+          {t("flow.extractionExport.loadErrorHint")}
+        </Banner>
+      ) : (
+        <pre className="mt-3 max-h-72 overflow-auto rounded-md border border-border bg-card p-3 text-xs leading-relaxed text-foreground">
+          <code>{content || t("flow.extractionExport.empty")}</code>
+        </pre>
+      )}
+    </section>
+  );
+}
+
+function ExportMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-border bg-card px-2.5 py-2">
+      <dt className="text-muted">{label}</dt>
+      <dd className="tnum mt-1 font-semibold text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+function extractionExportFormatLabel(format: DocumentExtractionExportFormat): string {
+  if (format === "json") return t("flow.extractionExport.json");
+  if (format === "html") return t("flow.extractionExport.html");
+  if (format === "chunks") return t("flow.extractionExport.chunks");
+  return t("flow.extractionExport.markdown");
 }
 
 function DocumentChunksPanel({

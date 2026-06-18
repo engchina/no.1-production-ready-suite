@@ -248,7 +248,7 @@ function BatchUploadSummary({
           <BatchMetric label={t("upload.batch.skipped")} value={skippedCount} />
           <BatchMetric label={t("upload.batch.failed")} value={failedItems.length} />
         </div>
-        <div className="divide-y divide-border rounded-md border border-border bg-background">
+        <div className="bounded-scroll-area divide-y divide-border rounded-md border border-border bg-background">
           {items.map((item) => {
             const selected = item.id === selectedId;
             return (
@@ -299,7 +299,7 @@ function BatchUploadFailureList({
 }) {
   return (
     <Banner severity="warning" title={t("upload.batch.failedTitle")}>
-      <ul className="space-y-2 text-sm">
+      <ul className="bounded-scroll-area space-y-2 pr-1 text-sm">
         {failedItems.map((item) => (
           <li key={`${item.file_name}-${item.status_code}`} className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">

@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -40,6 +40,28 @@ test("検索は選択した知識ベースをリクエストへ含める", async
 
   await expect.poll(() => searchPayload?.knowledge_base_ids).toEqual(["kb-1"]);
   await expectNoHorizontalOverflow(page);
+});
+
+test("狭い画面幅(375px)でも検索ページがページを横スクロール(崩れ)させない", async ({ page }) => {
+  await page.route("**/api/search/stream", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: searchStreamBody(),
+    });
+  });
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/search");
+
+  await expect(page.getByRole("textbox", { name: "RAG 検索" })).toBeVisible();
+  // 検索前(結果カラムが空)の初期表示で横はみ出しが無いこと。
+  await expectNoPageOverflow(page);
+
+  // 検索実行後(結果・引用カードが出た状態)でも横はみ出しが無いこと。
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("経費申請の承認フロー");
+  await page.getByRole("button", { name: "検索" }).click();
+  await expectNoPageOverflow(page);
 });
 
 test("文書インデックスは知識ベースで絞り込み、所属を表示する", async ({ page }) => {
@@ -201,6 +223,16 @@ function evaluationMetrics() {
     mrr: 1,
     answer_keyword_hit_rate: 1,
     groundedness_pass_rate: 1,
+    faithfulness: 1,
+    context_precision: 1,
+    context_recall: 1,
+    response_relevancy: 1,
+    noise_sensitivity: 1,
+    citation_traceability_coverage: 1,
+    bbox_citation_coverage: 1,
+    element_lineage_coverage: 1,
+    content_kind_hit_rate: 1,
+    section_coverage: 1,
     passed: true,
     threshold_failures: [],
     failure_reason_counts: {},
@@ -230,6 +262,16 @@ function evaluationMetrics() {
         groundedness_score: 1,
         grounding_overlap_count: 2,
         grounding_answer_feature_count: 2,
+        faithfulness: 1,
+        context_precision: 1,
+        context_recall: 1,
+        response_relevancy: 1,
+        noise_sensitivity: 1,
+        citation_traceability_coverage: 1,
+        bbox_citation_coverage: 1,
+        element_lineage_coverage: 1,
+        content_kind_hit_rate: 1,
+        section_coverage: 1,
         guardrail_warnings: [],
         failure_reasons: [],
         diagnostics: {},
@@ -263,9 +305,5 @@ function comparisonResult() {
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth
-    )
-  ).toBe(true);
+  await expectNoPageOverflow(page);
 }

@@ -35,6 +35,7 @@ function createModelSettings() {
         ],
         default_model_id: "enterprise-llm",
         api_path: "/responses",
+        vlm_input_mode: "files_api",
         text_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
         vision_payload_template: '{"input":{"document":"${data_base64}"}}',
         text_response_path: "",
@@ -103,6 +104,9 @@ for (const viewport of [
       "true"
     );
     await expect(page.getByLabel("API パス")).toHaveValue("/responses");
+    await expect(page.getByRole("combobox", { name: "VLM 入力方式" })).toContainText(
+      "Files API"
+    );
     await expect(page.getByLabel("最大リトライ回数")).toHaveValue("3");
     await expect(page.getByText("カスタム gateway payload")).toHaveCount(0);
     await expect(page.getByLabel("回答生成 payload template")).toHaveCount(0);
@@ -138,6 +142,9 @@ for (const viewport of [
     await expect(page.getByLabel("JSON プレビュー")).toContainText(
       '"api_key": "<保存済み secret>"'
     );
+    await expect(page.getByLabel("JSON プレビュー")).toContainText(
+      '"vlm_input_mode": "files_api"'
+    );
     await expect(page.getByRole("heading", { name: "運用メモ" })).toBeVisible();
     await expectActionInsideCard(page, "OCI Generative AI", saveButton);
     await expectActionInsideCard(page, "OCI Enterprise AI", enterpriseTestButton);
@@ -167,6 +174,8 @@ test("モデル設定は未充足の構成でも運用メモに注意を出し�
   });
   await page.goto("/settings/model");
 
+  await page.getByRole("combobox", { name: "VLM 入力方式" }).click();
+  await page.getByRole("option", { name: /Auto/ }).click();
   await page.getByLabel("モデル ID 1").fill("");
   await page.getByLabel("モデル ID 2").fill("");
   const saveButton = page.getByRole("button", { name: "モデル設定: 保存" });
@@ -185,6 +194,7 @@ test("モデル設定は未充足の構成でも運用メモに注意を出し�
   await expect(page.getByText("モデル設定を保存しました。")).toBeVisible();
   expect(savedPayload).toMatchObject({
     enterprise_ai: {
+      vlm_input_mode: "auto",
       models: [
         { model_id: "" },
         { model_id: "" },

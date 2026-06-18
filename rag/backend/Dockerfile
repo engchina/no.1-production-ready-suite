@@ -1,22 +1,27 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim AS base
+# build context = リポジトリ root(共有 package rag_parser_core を含めるため)。
+# 重い parser 依存は backend に載せない。外部 adapter は parser マイクロサービスへ HTTP 委譲する。
+FROM python:3.12.11-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_CACHE_DIR=/tmp/uv-cache
 
 # uv をインストール
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
 
-WORKDIR /app
-COPY pyproject.toml uv.lock ./
+# 共有 contract package を repo 相対レイアウトで配置し、
+# backend pyproject の path source(../packages/rag_parser_core)を解決可能にする。
+COPY packages/rag_parser_core /build/packages/rag_parser_core
+WORKDIR /build/backend
+COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /u01/production-ready-rag /tmp/uv-cache \
-    && chown -R appuser:appuser /u01/production-ready-rag /tmp/uv-cache
+    && chown -R appuser:appuser /u01/production-ready-rag /tmp/uv-cache /build
 
-COPY --chown=appuser:appuser app ./app
-RUN chown appuser:appuser /app
+COPY --chown=appuser:appuser backend/app ./app
+RUN chown appuser:appuser /build/backend
 
 EXPOSE 8000
 USER appuser

@@ -11,7 +11,7 @@ from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.readiness import readiness_checks, readiness_checks_are_ok
-from app.schemas.common import ApiResponse
+from app.schemas.common import ApiResponse, JsonValue
 from app.schemas.dashboard import (
     DashboardActivity,
     DashboardIngestionQuality,
@@ -38,7 +38,7 @@ type DashboardData = tuple[
     list[DocumentSummary],
     int,
     list[dict[str, object]],
-    list[dict[str, str | int | float | bool | None]],
+    list[dict[str, JsonValue]],
 ]
 
 
@@ -142,7 +142,7 @@ def _ingestion_quality(
     *,
     documents: list[DocumentSummary],
     extractions: list[dict[str, object]],
-    chunk_metadata: list[dict[str, str | int | float | bool | None]],
+    chunk_metadata: list[dict[str, JsonValue]],
 ) -> DashboardIngestionQuality:
     """extraction と chunk metadata から構造化取込の集計を作る。"""
     document_count = len(documents)
@@ -294,7 +294,7 @@ def _normalized_elements(extraction: dict[str, object]) -> list[DocumentElement]
 
 
 def _metadata_counts(
-    rows: list[dict[str, str | int | float | bool | None]],
+    rows: list[dict[str, JsonValue]],
     key: str,
 ) -> dict[str, int]:
     """chunk metadata の低 cardinality 値を件数化する。"""

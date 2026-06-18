@@ -79,6 +79,17 @@ def test_validate_answer_warns_when_grounding_overlap_is_low() -> None:
     assert result.warnings == ["回答と検索根拠の重なりが少ないため、引用を確認してください。"]
 
 
+def test_regulated_policy_escalates_low_groundedness_to_error() -> None:
+    """regulated ポリシーは低根拠を warning ではなく error 扱いにする(監査強調)。"""
+    result = GuardrailPolicy(Settings(rag_guardrail_policy="regulated")).validate_answer(
+        "明日の天気は晴れです。",
+        context="[policy.txt#doc-1:0]\n承認条件: 120000 円。クラウド利用料。",
+    )
+
+    findings = [finding for finding in result.findings if finding.code == "low_groundedness"]
+    assert findings and findings[0].severity == "error"
+
+
 def test_validate_answer_accepts_grounded_numeric_answer() -> None:
     """金額や ID が citation context と一致する回答は warning なしで通す。"""
     result = GuardrailPolicy().validate_answer(

@@ -31,6 +31,9 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "memory_plan_id        VARCHAR2(32)" in sql
     assert "resolver_rejected_count NUMBER(10) DEFAULT 0 NOT NULL" in sql
     assert "CREATE TABLE rag_ingestion_audit" in sql
+    assert "parser_backend         VARCHAR2(80)" in sql
+    assert "segment_count          NUMBER(10) DEFAULT 0 NOT NULL" in sql
+    assert "failed_segment_count   NUMBER(10) DEFAULT 0 NOT NULL" in sql
     assert "-- section: knowledge_graph" in sql
     assert "CREATE TABLE rag_graph_entities" in sql
     assert "-- section: agent_memory" in sql
@@ -129,7 +132,26 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "CREATE TABLE rag_agent_memories" in sql
     assert "ROLE_ID_HASH" in sql
     assert "CREATE VECTOR INDEX rag_agent_memories_embedding_hnsw_idx" in sql
-    assert len(statements) == 9
+    assert "-- migration: 20260617_001_ingestion_audit_file_processing_metrics" in sql
+    assert "table_name = 'RAG_INGESTION_AUDIT'" in sql
+    assert "PARSER_BACKEND" in sql
+    assert "PARSER_PROFILE" in sql
+    assert "SEGMENT_COUNT" in sql
+    assert "FAILED_SEGMENT_COUNT" in sql
+    assert "rag_ingestion_audit_parser_created_idx" in sql
+    assert "-- migration: 20260617_002_search_audit_adaptive_context" in sql
+    assert "table_name = 'RAG_SEARCH_AUDIT'" in sql
+    assert "CONTEXT_ADAPTIVE_EXPANDED_COUNT" in sql
+    assert "-- migration: 20260617_003_search_audit_dependency_context" in sql
+    assert "CONTEXT_DEPENDENCY_PROMOTED_COUNT" in sql
+    assert "-- migration: 20260618_001_documents_review_status" in sql
+    assert "rag_documents_status_ck" in sql
+    assert "''REVIEW''" in sql
+    assert "''INDEXING''" in sql
+    assert "-- migration: 20260618_002_ingestion_jobs_phase" in sql
+    assert "rag_ingestion_jobs_phase_ck" in sql
+    assert "(phase IN (''EXTRACT'', ''INDEX''))" in sql
+    assert len(statements) == 14
     assert all(statement.startswith(("-- migration:", "DECLARE")) for statement in statements)
 
 
@@ -142,7 +164,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260616_006"
+    assert manifest["migration_artifact_version"] == "20260618_002"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -153,6 +175,11 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260616_004_ingestion_segments",
         "20260616_005_search_audit_memory_engineering",
         "20260616_006_agent_memories",
+        "20260617_001_ingestion_audit_file_processing_metrics",
+        "20260617_002_search_audit_adaptive_context",
+        "20260617_003_search_audit_dependency_context",
+        "20260618_001_documents_review_status",
+        "20260618_002_ingestion_jobs_phase",
     ]
 
 

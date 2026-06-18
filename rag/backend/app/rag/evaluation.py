@@ -126,6 +126,8 @@ class EvaluationRunner:
                 "citation_traceability_coverage": ZERO_METRIC,
                 "bbox_citation_coverage": ZERO_METRIC,
                 "element_lineage_coverage": ZERO_METRIC,
+                "content_kind_hit_rate": ZERO_METRIC,
+                "section_coverage": ZERO_METRIC,
             }
             threshold_failures = _threshold_failures(thresholds, aggregate_values)
             return EvaluationMetrics(
@@ -155,6 +157,8 @@ class EvaluationRunner:
         citation_traceability_total = 0.0
         bbox_citation_total = 0.0
         element_lineage_total = 0.0
+        content_kind_hit_total = 0.0
+        section_coverage_total = 0.0
         error_count = 0
         evaluated_k = max(1, min(top_k, rerank_top_n))
         case_results: list[EvaluationCaseResult] = []
@@ -252,6 +256,18 @@ class EvaluationRunner:
             groundedness = evaluate_groundedness(response.answer, grounding_context)
             if groundedness.grounded:
                 groundedness_passes += 1
+            faithfulness = groundedness.score
+            context_precision = _context_precision(response.citations, relevant)
+            context_recall = recall
+            response_relevancy = _response_relevancy(case.query, response.answer)
+            citation_traceability = _case_citation_traceability_coverage(
+                response,
+                relevant,
+            )
+            bbox_citation = _case_bbox_citation_coverage(response, relevant)
+            element_lineage = _case_element_lineage_coverage(response, relevant)
+            content_kind_hit = _case_content_kind_hit_rate(response, relevant, case)
+            section_coverage = _case_section_coverage(response, relevant, case)
             failure_reasons = _case_failure_reasons(
                 relevant=relevant,
                 retrieved_ids=retrieved_ids,
@@ -259,18 +275,12 @@ class EvaluationRunner:
                 answer_keyword_hit=answer_keyword_hit,
                 groundedness_passed=groundedness.grounded,
                 guardrail_warnings=response.guardrail_warnings,
+                content_kind_hit=content_kind_hit,
+                content_kind_required=case.expected_content_kind is not None,
+                section_coverage=section_coverage,
+                section_required=bool(case.expected_section_paths),
             )
-            faithfulness = groundedness.score
-            context_precision = _context_precision(response.citations, relevant)
-            context_recall = recall
-            response_relevancy = _response_relevancy(case.query, response.answer)
             noise_sensitivity = _noise_sensitivity(failure_reasons)
-            citation_traceability = _case_citation_traceability_coverage(
-                response,
-                relevant,
-            )
-            bbox_citation = _case_bbox_citation_coverage(response, relevant)
-            element_lineage = _case_element_lineage_coverage(response, relevant)
             faithfulness_total += faithfulness
             context_precision_total += context_precision
             context_recall_total += context_recall
@@ -279,6 +289,8 @@ class EvaluationRunner:
             citation_traceability_total += citation_traceability
             bbox_citation_total += bbox_citation
             element_lineage_total += element_lineage
+            content_kind_hit_total += content_kind_hit
+            section_coverage_total += section_coverage
             _accumulate_failure_reasons(failure_reason_counts, failure_reasons)
             case_results.append(
                 EvaluationCaseResult(
@@ -303,6 +315,8 @@ class EvaluationRunner:
                     citation_traceability_coverage=round(citation_traceability, 4),
                     bbox_citation_coverage=round(bbox_citation, 4),
                     element_lineage_coverage=round(element_lineage, 4),
+                    content_kind_hit_rate=round(content_kind_hit, 4),
+                    section_coverage=round(section_coverage, 4),
                     guardrail_warnings=response.guardrail_warnings,
                     failure_reasons=failure_reasons,
                     diagnostics=response.diagnostics,
@@ -328,6 +342,8 @@ class EvaluationRunner:
             ),
             "bbox_citation_coverage": round(bbox_citation_total / case_count, 4),
             "element_lineage_coverage": round(element_lineage_total / case_count, 4),
+            "content_kind_hit_rate": round(content_kind_hit_total / case_count, 4),
+            "section_coverage": round(section_coverage_total / case_count, 4),
         }
         threshold_failures = _threshold_failures(thresholds, aggregate_values)
         return EvaluationMetrics(
@@ -403,8 +419,13 @@ def _settings_with_rag_overrides(
         "context_window_chars": "rag_context_window_chars",
         "context_neighbor_window": "rag_context_neighbor_window",
         "context_diversity_lambda": "rag_context_diversity_lambda",
+        "context_adaptive_expansion_enabled": "rag_context_adaptive_expansion_enabled",
+        "context_adaptive_neighbor_window": "rag_context_adaptive_neighbor_window",
+        "context_adaptive_min_overlap": "rag_context_adaptive_min_overlap",
         "context_group_expansion_enabled": "rag_context_group_expansion_enabled",
         "context_group_max_chunks": "rag_context_group_max_chunks",
+        "context_dependency_promotion_enabled": "rag_context_dependency_promotion_enabled",
+        "context_dependency_max_chunks": "rag_context_dependency_max_chunks",
         "context_compression_enabled": "rag_context_compression_enabled",
         "context_compression_max_sentences": ("rag_context_compression_max_sentences"),
         "context_compression_max_chars_per_chunk": ("rag_context_compression_max_chars_per_chunk"),
@@ -484,6 +505,91 @@ def _case_element_lineage_coverage(response: SearchResponse, relevant_ids: set[s
     if not response.citations:
         return 1.0 if not relevant_ids else 0.0
     return element_lineage_coverage(response.citations)
+
+
+def _case_content_kind_hit_rate(
+    response: SearchResponse,
+    relevant_ids: set[str],
+    case: EvaluationCase,
+) -> float:
+    """期待 content_kind を citation metadata で満たしたかを case 単位で返す。"""
+    if case.expected_content_kind is None:
+        return 1.0
+    citations = _scoped_citations(response, relevant_ids)
+    if not citations:
+        return 0.0
+    expected = case.expected_content_kind
+    if any(_citation_content_kind(citation) == expected for citation in citations):
+        return 1.0
+    return 0.0
+
+
+def _case_section_coverage(
+    response: SearchResponse,
+    relevant_ids: set[str],
+    case: EvaluationCase,
+) -> float:
+    """期待 section_path が citation metadata にどれだけ含まれるかを返す。"""
+    if not case.expected_section_paths:
+        return 1.0
+    citations = _scoped_citations(response, relevant_ids)
+    if not citations:
+        return 0.0
+    observed_sections = _citation_sections(citations)
+    if not observed_sections:
+        return 0.0
+    expected_sections = [_normalize_section_label(value) for value in case.expected_section_paths]
+    hit_count = sum(
+        1
+        for expected in expected_sections
+        if any(_section_matches(expected, observed) for observed in observed_sections)
+    )
+    return hit_count / len(expected_sections)
+
+
+def _scoped_citations(
+    response: SearchResponse,
+    relevant_ids: set[str],
+) -> list[object]:
+    """relevant document が指定されている場合は該当 citation だけを評価対象にする。"""
+    if not relevant_ids:
+        return list(response.citations)
+    return [
+        citation
+        for citation in response.citations
+        if getattr(citation, "document_id", None) in relevant_ids
+    ]
+
+
+def _citation_content_kind(citation: object) -> str:
+    metadata = getattr(citation, "metadata", {})
+    if not isinstance(metadata, dict):
+        return ""
+    value = metadata.get("content_kind")
+    return value.strip().casefold() if isinstance(value, str) else ""
+
+
+def _citation_sections(citations: Sequence[object]) -> set[str]:
+    sections: set[str] = set()
+    for citation in citations:
+        metadata = getattr(citation, "metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        for key in ("section_path", "section_title"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                sections.add(_normalize_section_label(value))
+    return sections
+
+
+def _normalize_section_label(value: str) -> str:
+    return " > ".join(part.strip().casefold() for part in value.split(">") if part.strip())
+
+
+def _section_matches(expected: str, observed: str) -> bool:
+    if expected == observed:
+        return True
+    return observed.endswith(f" > {expected}") or expected.endswith(f" > {observed}")
 
 
 def _response_relevancy(query: str, answer: str) -> float:
@@ -614,6 +720,10 @@ def _case_failure_reasons(
     answer_keyword_hit: bool,
     groundedness_passed: bool,
     guardrail_warnings: list[str],
+    content_kind_hit: float,
+    content_kind_required: bool,
+    section_coverage: float,
+    section_required: bool,
 ) -> list[EvaluationFailureReason]:
     """case 単位の失敗原因を安全なカテゴリへ分類する。"""
     reasons: list[EvaluationFailureReason] = []
@@ -632,6 +742,10 @@ def _case_failure_reasons(
     expected_no_results = not relevant and not retrieved_ids
     if guardrail_warnings and not expected_no_results:
         reasons.append("guardrail_warning")
+    if content_kind_required and content_kind_hit < 1.0:
+        reasons.append("content_kind_miss")
+    if section_required and section_coverage < 1.0:
+        reasons.append("section_miss")
     return reasons
 
 

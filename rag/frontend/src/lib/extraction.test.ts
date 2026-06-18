@@ -31,7 +31,21 @@ describe("parseStructuredExtraction", () => {
         },
       ],
       pages: [{ page_number: 2, element_ids: ["tbl-1"] }],
-      tables: [{ table_id: "table-1", element_id: "tbl-1", cells: [{ row: 0, col: 0, text: "項目" }] }],
+      tables: [
+        {
+          table_id: "table-1",
+          element_id: "tbl-1",
+          cells: [
+            {
+              row: 0,
+              col: 0,
+              text: "項目",
+              page_number: 2,
+              metadata: { formula_cell_ref: "B2", nested: { ignored: true } },
+            },
+          ],
+        },
+      ],
       assets: [{ asset_id: "fig-1", kind: "figure", page_number: 2 }],
       parser_artifacts: { parser_backend: "local_partition" },
     });
@@ -48,6 +62,8 @@ describe("parseStructuredExtraction", () => {
     expect(parsed.elements[1].metadata).toEqual({ raw_start: 10 });
     expect(parsed.pages[0].element_ids).toEqual(["tbl-1"]);
     expect(parsed.tables[0].cells[0].text).toBe("項目");
+    expect(parsed.tables[0].cells[0].page_number).toBe(2);
+    expect(parsed.tables[0].cells[0].metadata).toEqual({ formula_cell_ref: "B2" });
     expect(parsed.assets[0].asset_id).toBe("fig-1");
     expect(parsed.parserArtifacts.parser_backend).toBe("local_partition");
   });

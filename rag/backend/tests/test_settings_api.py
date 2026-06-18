@@ -2,6 +2,7 @@
 
 import json
 import stat
+from collections.abc import Sequence
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,8 +47,15 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     monkeypatch.setattr(settings, "rag_parser_marker_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
 
-    def package_info(package_name: str) -> tuple[bool, str | None]:
-        return (package_name == "docling", "1.2.3" if package_name == "docling" else None)
+    def package_info(
+        import_name: str,
+        _distribution_names: Sequence[str],
+    ) -> tuple[bool, str | None, str | None]:
+        return (
+            import_name == "docling",
+            "1.2.3" if import_name == "docling" else None,
+            "docling" if import_name == "docling" else None,
+        )
 
     monkeypatch.setattr(parser_adapter_readiness, "_package_info", package_info)
 
@@ -59,10 +67,149 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert body["effective_order"] == ["docling", "marker"]
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
     assert by_backend["docling"]["status"] == "active"
+    assert by_backend["docling"]["import_name"] == "docling"
+    assert by_backend["docling"]["distribution_name"] == "docling"
+    assert by_backend["docling"]["install_package"] == "docling==2.103.0"
     assert by_backend["docling"]["version"] == "1.2.3"
     assert by_backend["marker"]["status"] == "missing"
+    assert by_backend["marker"]["install_package"] == "marker-pdf[full]==1.10.2"
     assert by_backend["marker"]["warning_code"] == "adapter_package_missing"
+    assert by_backend["unstructured"]["install_package"] == "unstructured[all-docs]==0.23.1"
     assert by_backend["unstructured"]["status"] == "disabled"
+    assert body["scorecard"]["selected_backend"] == "auto"
+    assert body["scorecard"]["recommended_backend"] == "docling"
+    score_by_backend = {
+        entry["backend"]: entry for entry in body["scorecard"]["entries"]
+    }
+    assert score_by_backend["docling"]["recommended"] is True
+    assert score_by_backend["marker"]["warning_codes"] == ["adapter_package_missing"]
+    route_by_kind = {route["source_kind"]: route for route in body["source_routes"]}
+    assert route_by_kind["pdf"]["candidate_order"] == [
+        "docling",
+        "marker",
+        "unstructured",
+        "mineru",
+    ]
+    assert route_by_kind["pdf"]["selected_backend"] == "docling"
+    assert route_by_kind["email"]["selected_backend"] == "local"
+    assert "unstructured_adapter_feature_flag_disabled" in route_by_kind["email"]["warning_codes"]
+    matrix = body["backend_source_kind_matrix"]
+    assert matrix["evidence_source"] == "runtime_routes"
+    assert "pdf" in matrix["backend_source_kinds"]["docling"]
+    assert "email" in matrix["backend_source_kinds"]["local"]
+    assert "audio" in matrix["backend_source_kinds"]["local"]
+    assert matrix["missing_source_kinds"] == []
+    assert "raw_text" not in str(matrix)
+
+
+def test_parser_adapter_contract_endpoint_reports_non_sensitive_matrix(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """adapter contract endpoint は fixture 本文なしで実行証跡を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
+    monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda *_args: (False, None, None),
+    )
+
+    resp = client.get("/api/settings/parser-adapters/contract")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["passed"] is True
+    assert body["case_count"] == len(body["cases"])
+    assert body["blocking_failure_count"] == 0
+    assert body["summary"]["case_count"] == body["case_count"]
+    assert body["summary"]["blocking_failure_count"] == 0
+    assert body["summary"]["backend_source_status"]["docling"]["pdf"] == "disabled"
+    assert body["summary"]["source_kind_status_counts"]["pdf"]["disabled"] > 0
+    assert body["summary"]["missing_source_kinds"]
+    assert body["summary"]["blocking_failure_source_kinds"] == []
+    assert body["summary"]["blocking_failure_backends"] == []
+    assert body["summary"]["reason_code_counts"]["adapter_disabled"] > 0
+    assert body["summary"]["warning_code_counts"] == {}
+    assert body["summary"]["blocking_failure_reason_counts"] == {}
+    assert all(case["blocking"] is False for case in body["cases"])
+    assert body["fixture_root"].startswith("fixture_root:")
+    assert all(":" in case["fixture_name"] for case in body["cases"])
+    assert body["config_source"] == "runtime"
+    assert "raw_text" not in resp.text
+    assert "policy-ja.pdf" not in resp.text
+    assert "file-processing-fixtures" not in resp.text
+
+
+def test_parser_adapter_contract_endpoint_blocks_enabled_missing_adapter(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """有効化された adapter package がない場合は contract summary で失敗を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "docling")
+    monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
+    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda *_args: (False, None, None),
+    )
+
+    resp = client.get("/api/settings/parser-adapters/contract")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["passed"] is False
+    assert body["blocking_failure_count"] > 0
+    assert body["summary"]["blocking_failure_count"] == body["blocking_failure_count"]
+    assert body["summary"]["backend_status_counts"]["docling"]["missing"] > 0
+    assert "pdf" in body["summary"]["blocking_failure_source_kinds"]
+    assert body["summary"]["blocking_failure_backends"] == ["docling"]
+    assert body["summary"]["warning_code_counts"]["adapter_package_missing"] > 0
+    assert body["summary"]["blocking_failure_reason_counts"]["adapter_missing"] > 0
+    assert any(
+        failure["backend"] == "docling" and failure["status"] == "missing"
+        for failure in body["summary"]["blocking_failures"]
+    )
+    assert "adapter_package_missing" in resp.text
+
+
+def test_parser_adapter_settings_reports_marker_distribution_name(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Marker は import 名 marker と配布 package marker-pdf を分けて表示する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "marker")
+    monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_marker_enabled", True)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+
+    def package_info(
+        import_name: str,
+        distribution_names: Sequence[str],
+    ) -> tuple[bool, str | None, str | None]:
+        if import_name != "marker":
+            return False, None, None
+        assert import_name == "marker"
+        assert tuple(distribution_names) == ("marker-pdf", "marker")
+        return True, "5.0.0", "marker-pdf"
+
+    monkeypatch.setattr(parser_adapter_readiness, "_package_info", package_info)
+
+    resp = client.get("/api/settings/parser-adapters")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    marker = {adapter["backend"]: adapter for adapter in body["adapters"]}["marker"]
+    assert marker["status"] == "active"
+    assert marker["package_name"] == "marker"
+    assert marker["import_name"] == "marker"
+    assert marker["distribution_name"] == "marker-pdf"
+    assert marker["install_package"] == "marker-pdf[full]==1.10.2"
+    assert marker["version"] == "5.0.0"
 
 
 def test_parser_adapter_settings_explicit_backend_requires_feature_flag(
@@ -74,7 +221,11 @@ def test_parser_adapter_settings_explicit_backend_requires_feature_flag(
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(parser_adapter_readiness, "_package_info", lambda _package: (False, None))
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda *_args: (False, None, None),
+    )
 
     resp = client.get("/api/settings/parser-adapters")
 
@@ -88,6 +239,579 @@ def test_parser_adapter_settings_explicit_backend_requires_feature_flag(
     assert by_backend["marker"]["status"] == "disabled"
     assert by_backend["marker"]["warning_code"] == "adapter_feature_flag_disabled"
     assert by_backend["docling"]["status"] == "ignored"
+
+
+def test_update_parser_adapter_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """parser adapter 設定は .env と現在プロセスの ingestion 設定へ反映する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
+    monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda *_args: (False, None, None),
+    )
+    env_file = _settings_env_file(
+        monkeypatch,
+        tmp_path,
+        "\n".join(
+            [
+                "# Parser adapters",
+                "RAG_PARSER_ADAPTER_BACKEND=local",
+                "RAG_PARSER_DOCLING_ENABLED=false",
+                "",
+            ]
+        ),
+    )
+
+    resp = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "auto",
+            "docling_enabled": True,
+            "marker_enabled": False,
+            "unstructured_enabled": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["adapter_backend"] == "auto"
+    assert body["effective_order"] == ["docling", "unstructured"]
+    assert settings.rag_parser_adapter_backend == "auto"
+    assert settings.rag_parser_docling_enabled is True
+    assert settings.rag_parser_marker_enabled is False
+    assert settings.rag_parser_unstructured_enabled is True
+    persisted = env_file.read_text(encoding="utf-8")
+    assert "RAG_PARSER_ADAPTER_BACKEND=auto" in persisted
+    assert "RAG_PARSER_DOCLING_ENABLED=true" in persisted
+    assert "RAG_PARSER_MARKER_ENABLED=false" in persisted
+    assert "RAG_PARSER_UNSTRUCTURED_ENABLED=true" in persisted
+
+
+def test_update_parser_adapter_settings_does_not_mutate_runtime_when_env_write_fails(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """parser adapter 設定保存に失敗したら runtime を変更しない。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
+    monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path)
+
+    resp = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "docling",
+            "docling_enabled": True,
+            "marker_enabled": True,
+            "unstructured_enabled": True,
+        },
+    )
+
+    assert resp.status_code == 500
+    assert settings.rag_parser_adapter_backend == "local"
+    assert settings.rag_parser_docling_enabled is False
+    assert settings.rag_parser_marker_enabled is False
+    assert settings.rag_parser_unstructured_enabled is False
+
+
+def test_update_parser_adapter_settings_rejects_unknown_backend() -> None:
+    resp = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "llama_parse",
+            "docling_enabled": True,
+            "marker_enabled": False,
+            "unstructured_enabled": False,
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+def test_chunking_settings_reports_runtime_strategy_and_params(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Chunking 設定 API は選択戦略・パラメータ・戦略一覧を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_chunking_strategy", "sentence_window")
+    monkeypatch.setattr(settings, "rag_chunk_size", 900)
+    monkeypatch.setattr(settings, "rag_chunk_overlap", 150)
+    monkeypatch.setattr(settings, "rag_chunk_child_size", 280)
+    monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 4)
+    monkeypatch.setattr(settings, "rag_chunk_min_chars", 50)
+
+    resp = client.get("/api/settings/chunking")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["strategy"] == "sentence_window"
+    assert body["chunk_size"] == 900
+    assert body["overlap"] == 150
+    assert body["child_size"] == 280
+    assert body["sentence_window_size"] == 4
+    assert body["min_chars"] == 50
+    assert body["config_source"] == "runtime"
+    names = [item["name"] for item in body["strategies"]]
+    assert names == [
+        "structure_aware",
+        "recursive_character",
+        "sentence_window",
+        "hierarchical_parent_child",
+        "markdown_heading",
+        "page_level",
+    ]
+    selected = [item["name"] for item in body["strategies"] if item["selected"]]
+    assert selected == ["sentence_window"]
+
+
+def test_update_chunking_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Chunking 設定は .env と現在プロセスの取込設定へ反映する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_chunking_strategy", "structure_aware")
+    monkeypatch.setattr(settings, "rag_chunk_size", 800)
+    monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
+    monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
+    monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 3)
+    monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "hierarchical_parent_child",
+            "chunk_size": 1000,
+            "overlap": 100,
+            "child_size": 300,
+            "sentence_window_size": 5,
+            "min_chars": 40,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["strategy"] == "hierarchical_parent_child"
+    assert body["chunk_size"] == 1000
+    assert settings.rag_chunking_strategy == "hierarchical_parent_child"
+    assert settings.rag_chunk_size == 1000
+    assert settings.rag_chunk_child_size == 300
+    assert settings.rag_chunk_min_chars == 40
+    persisted = env_file.read_text(encoding="utf-8")
+    assert "RAG_CHUNKING_STRATEGY=hierarchical_parent_child" in persisted
+    assert "RAG_CHUNK_SIZE=1000" in persisted
+    assert "RAG_CHUNK_CHILD_SIZE=300" in persisted
+    assert "RAG_CHUNK_MIN_CHARS=40" in persisted
+
+
+def test_update_chunking_settings_rejects_unknown_strategy() -> None:
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "semantic_double_pass",
+            "chunk_size": 800,
+            "overlap": 120,
+            "child_size": 320,
+            "sentence_window_size": 3,
+            "min_chars": 0,
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+def test_update_chunking_settings_rejects_overlap_not_smaller_than_size() -> None:
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "structure_aware",
+            "chunk_size": 400,
+            "overlap": 400,
+            "child_size": 320,
+            "sentence_window_size": 3,
+            "min_chars": 0,
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+def test_retrieval_settings_reports_runtime_strategy(monkeypatch: MonkeyPatch) -> None:
+    """Retrieval 設定 API は選択戦略・解決手法・戦略一覧を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_retrieval_strategy", "business_context_strict")
+
+    resp = client.get("/api/settings/retrieval")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["strategy"] == "business_context_strict"
+    assert body["gap_stop"] is True
+    assert body["business_fit_weighting"] is True
+    names = [item["name"] for item in body["strategies"]]
+    assert names[0] == "hybrid_rrf"
+    assert "corrective_multi_query" in names
+    selected = [item["name"] for item in body["strategies"] if item["selected"]]
+    assert selected == ["business_context_strict"]
+
+
+def test_update_retrieval_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_retrieval_strategy", "hybrid_rrf")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/retrieval", json={"strategy": "corrective_multi_query"})
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["strategy"] == "corrective_multi_query"
+    assert body["corrective_retrieval"] is True
+    assert settings.rag_retrieval_strategy == "corrective_multi_query"
+    assert "RAG_RETRIEVAL_STRATEGY=corrective_multi_query" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_retrieval_settings_rejects_unknown_strategy() -> None:
+    resp = client.patch("/api/settings/retrieval", json={"strategy": "hyde_fusion"})
+    assert resp.status_code == 422
+
+
+def test_grounding_settings_reports_runtime_pipeline(monkeypatch: MonkeyPatch) -> None:
+    """Grounding 設定 API は選択プリセット・解決段・プリセット一覧を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_post_retrieval_pipeline", "full_governed")
+
+    resp = client.get("/api/settings/grounding")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["pipeline"] == "full_governed"
+    assert body["dependency_promotion_enabled"] is True
+    assert body["expansion_mode"] == "adaptive"
+    assert body["compression_enabled"] is True
+    names = [item["name"] for item in body["pipelines"]]
+    assert names[0] == "custom"
+    selected = [item["name"] for item in body["pipelines"] if item["selected"]]
+    assert selected == ["full_governed"]
+
+
+def test_update_grounding_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_post_retrieval_pipeline", "custom")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/grounding", json={"pipeline": "verified_context"})
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["pipeline"] == "verified_context"
+    assert body["diversity_enabled"] is True
+    assert settings.rag_post_retrieval_pipeline == "verified_context"
+    assert "RAG_POST_RETRIEVAL_PIPELINE=verified_context" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_grounding_settings_rejects_unknown_pipeline() -> None:
+    resp = client.patch("/api/settings/grounding", json={"pipeline": "agentic_loop"})
+    assert resp.status_code == 422
+
+
+def test_generation_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_generation_profile", "structured_json")
+
+    resp = client.get("/api/settings/generation")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["profile"] == "structured_json"
+    assert body["structured_output"] is True
+    names = [item["name"] for item in body["profiles"]]
+    assert names[0] == "grounded_concise"
+    selected = [item["name"] for item in body["profiles"] if item["selected"]]
+    assert selected == ["structured_json"]
+
+
+def test_update_generation_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_generation_profile", "grounded_concise")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/generation", json={"profile": "detailed_cited"})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["profile"] == "detailed_cited"
+    assert settings.rag_generation_profile == "detailed_cited"
+    assert "RAG_GENERATION_PROFILE=detailed_cited" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_generation_settings_rejects_unknown_profile() -> None:
+    resp = client.patch("/api/settings/generation", json={"profile": "chain_of_thought"})
+    assert resp.status_code == 422
+
+
+def test_guardrail_settings_reports_runtime_policy(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_guardrail_policy", "strict")
+
+    resp = client.get("/api/settings/guardrail")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["policy"] == "strict"
+    assert body["grounding_min_overlap"] > 3
+    names = [item["name"] for item in body["policies"]]
+    assert names[0] == "standard"
+    selected = [item["name"] for item in body["policies"] if item["selected"]]
+    assert selected == ["strict"]
+
+
+def test_update_guardrail_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_guardrail_policy", "standard")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/guardrail", json={"policy": "regulated"})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["policy"] == "regulated"
+    assert resp.json()["data"]["audit_emphasis"] is True
+    assert settings.rag_guardrail_policy == "regulated"
+    assert "RAG_GUARDRAIL_POLICY=regulated" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_guardrail_settings_rejects_unknown_policy() -> None:
+    resp = client.patch("/api/settings/guardrail", json={"policy": "paranoid"})
+    assert resp.status_code == 422
+
+
+def test_vector_index_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_vector_index_profile", "accurate")
+    monkeypatch.setattr(settings, "oracle_vector_target_accuracy", 95)
+
+    resp = client.get("/api/settings/vector-index")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["profile"] == "accurate"
+    assert body["target_accuracy"] == 98
+    assert body["requires_reprovision"] is True
+    names = [item["name"] for item in body["profiles"]]
+    assert names[0] == "balanced"
+    selected = [item["name"] for item in body["profiles"] if item["selected"]]
+    assert selected == ["accurate"]
+
+
+def test_vector_index_balanced_reports_existing_accuracy(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_vector_index_profile", "balanced")
+    monkeypatch.setattr(settings, "oracle_vector_target_accuracy", 92)
+
+    resp = client.get("/api/settings/vector-index")
+
+    body = resp.json()["data"]
+    assert body["profile"] == "balanced"
+    assert body["target_accuracy"] == 92
+    assert body["requires_reprovision"] is False
+
+
+def test_update_vector_index_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_vector_index_profile", "balanced")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/vector-index", json={"profile": "fast"})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["profile"] == "fast"
+    assert resp.json()["data"]["target_accuracy"] == 85
+    assert settings.rag_vector_index_profile == "fast"
+    assert "RAG_VECTOR_INDEX_PROFILE=fast" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_vector_index_settings_rejects_unknown_profile() -> None:
+    resp = client.patch("/api/settings/vector-index", json={"profile": "ivf_flat"})
+    assert resp.status_code == 422
+
+
+def test_evaluation_settings_reports_runtime_suite(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "balanced")
+
+    resp = client.get("/api/settings/evaluation-suite")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["suite"] == "balanced"
+    assert body["thresholds"]["groundedness_pass_rate"] == 0.9
+    assert "groundedness_pass_rate" in body["focus_metrics"]
+    names = [item["name"] for item in body["suites"]]
+    assert names[0] == "request_only"
+    selected = [item["name"] for item in body["suites"] if item["selected"]]
+    assert selected == ["balanced"]
+
+
+def test_evaluation_settings_request_only_has_no_thresholds(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "request_only")
+
+    resp = client.get("/api/settings/evaluation-suite")
+
+    body = resp.json()["data"]
+    assert body["suite"] == "request_only"
+    assert body["thresholds"] == {}
+
+
+def test_update_evaluation_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_evaluation_suite", "request_only")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/evaluation-suite", json={"suite": "strict_ci"})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["suite"] == "strict_ci"
+    assert settings.rag_evaluation_suite == "strict_ci"
+    assert "RAG_EVALUATION_SUITE=strict_ci" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_evaluation_settings_rejects_unknown_suite() -> None:
+    resp = client.patch("/api/settings/evaluation-suite", json={"suite": "autorag_tuner"})
+    assert resp.status_code == 422
+
+
+def test_graph_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_graph_profile", "entities")
+    monkeypatch.setattr(settings, "rag_graph_enabled", False)
+
+    resp = client.get("/api/settings/graph")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["profile"] == "entities"
+    assert body["enabled"] is True
+    assert body["build_claims"] is False
+    assert body["build_community_summaries"] is False
+    names = [item["name"] for item in body["profiles"]]
+    assert names == ["off", "entities", "full"]
+    selected = [item["name"] for item in body["profiles"] if item["selected"]]
+    assert selected == ["entities"]
+
+
+def test_graph_settings_off_disables_build(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_graph_profile", "off")
+    monkeypatch.setattr(settings, "rag_graph_enabled", False)
+
+    resp = client.get("/api/settings/graph")
+
+    body = resp.json()["data"]
+    assert body["profile"] == "off"
+    assert body["enabled"] is False
+
+
+def test_update_graph_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_graph_profile", "off")
+    monkeypatch.setattr(settings, "rag_graph_enabled", False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/graph", json={"profile": "full"})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["profile"] == "full"
+    assert resp.json()["data"]["build_community_summaries"] is True
+    assert settings.rag_graph_profile == "full"
+    assert "RAG_GRAPH_PROFILE=full" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_graph_settings_rejects_unknown_profile() -> None:
+    resp = client.patch("/api/settings/graph", json={"profile": "neo4j"})
+    assert resp.status_code == 422
+
+
+def test_agentic_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_agentic_profile", "decompose")
+    monkeypatch.setattr(settings, "rag_agentic_max_subqueries", 4)
+
+    resp = client.get("/api/settings/agentic")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["profile"] == "decompose"
+    assert body["enabled"] is True
+    assert body["decompose"] is True
+    assert body["multi_hop"] is False
+    assert body["max_subqueries"] == 4
+    names = [item["name"] for item in body["profiles"]]
+    assert names == ["off", "query_rewrite", "decompose", "multi_hop"]
+    selected = [item["name"] for item in body["profiles"] if item["selected"]]
+    assert selected == ["decompose"]
+
+
+def test_agentic_settings_off_disables_planning(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_agentic_profile", "off")
+
+    resp = client.get("/api/settings/agentic")
+
+    body = resp.json()["data"]
+    assert body["profile"] == "off"
+    assert body["enabled"] is False
+
+
+def test_update_agentic_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_agentic_profile", "off")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/agentic", json={"profile": "multi_hop"})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["profile"] == "multi_hop"
+    assert resp.json()["data"]["multi_hop"] is True
+    assert settings.rag_agentic_profile == "multi_hop"
+    assert "RAG_AGENTIC_PROFILE=multi_hop" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_agentic_settings_rejects_unknown_profile() -> None:
+    resp = client.patch("/api/settings/agentic", json={"profile": "react_agent"})
+    assert resp.status_code == 422
 
 
 def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> None:
@@ -138,6 +862,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
     ]
     assert body["settings"]["enterprise_ai"]["default_model_id"] == "enterprise-llm"
     assert body["settings"]["enterprise_ai"]["api_path"] == "/responses"
+    assert body["settings"]["enterprise_ai"]["vlm_input_mode"] == "auto"
     assert body["settings"]["enterprise_ai"]["text_payload_template"] == LLM_TEMPLATE
     assert body["settings"]["enterprise_ai"]["vision_payload_template"] == VLM_TEMPLATE
     assert body["settings"]["enterprise_ai"]["text_response_path"] == "/data/text"
@@ -175,6 +900,7 @@ def test_update_model_settings_mutates_runtime_settings() -> None:
     assert settings.oci_enterprise_ai_default_model == "enterprise-llm"
     assert settings.oci_enterprise_ai_llm_path == "/responses"
     assert settings.oci_enterprise_ai_vlm_path == "/responses"
+    assert settings.oci_enterprise_ai_vlm_input_mode == "files_api"
     assert settings.oci_enterprise_ai_llm_payload_template == LLM_TEMPLATE
     assert settings.oci_enterprise_ai_vlm_payload_template == VLM_TEMPLATE
     assert settings.oci_enterprise_ai_llm_response_path == "/data/text"
@@ -215,6 +941,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
         },
     ]
     assert persisted["enterprise_ai"]["default_model_id"] == "enterprise-llm"
+    assert persisted["enterprise_ai"]["vlm_input_mode"] == "files_api"
     assert persisted["enterprise_ai"]["llm_max_output_tokens"] == 1600
     assert persisted["enterprise_ai"]["vlm_max_output_tokens"] == 64000
     assert persisted["generative_ai"]["embedding_dim"] == 1536
@@ -245,6 +972,7 @@ def test_load_persisted_model_settings_applies_saved_model_catalog(tmp_path: Pat
                     ],
                     "default_model_id": "persisted-text",
                     "api_path": "/responses",
+                    "vlm_input_mode": "inline_image",
                     "text_payload_template": LLM_TEMPLATE,
                     "vision_payload_template": VLM_TEMPLATE,
                     "text_response_path": "/payload/text",
@@ -276,6 +1004,7 @@ def test_load_persisted_model_settings_applies_saved_model_catalog(tmp_path: Pat
     assert settings.oci_enterprise_ai_default_model == "persisted-text"
     assert settings.oci_enterprise_ai_llm_model == "persisted-text"
     assert settings.oci_enterprise_ai_vlm_model == "persisted-vision"
+    assert settings.oci_enterprise_ai_vlm_input_mode == "inline_image"
     assert settings.oci_enterprise_ai_llm_response_path == "/payload/text"
     assert settings.oci_enterprise_ai_vlm_response_path == "/payload/document"
     assert settings.oci_enterprise_ai_timeout_seconds == 42
@@ -534,6 +1263,7 @@ def test_model_settings_requires_enterprise_ai_model_catalog() -> None:
 def test_enterprise_ai_model_settings_defaults_max_retries_to_three() -> None:
     """設定 API スキーマの最大リトライ回数既定値は 3。"""
     assert EnterpriseAiModelSettings().max_retries == 3
+    assert EnterpriseAiModelSettings().vlm_input_mode == "auto"
     assert EnterpriseAiModelSettings().llm_max_output_tokens == 1200
     assert EnterpriseAiModelSettings().vlm_max_output_tokens == 65536
 
@@ -2099,6 +2829,7 @@ def _payload() -> dict[str, Any]:
             ],
             "default_model_id": "enterprise-llm",
             "api_path": "/responses",
+            "vlm_input_mode": "files_api",
             "text_payload_template": LLM_TEMPLATE,
             "vision_payload_template": VLM_TEMPLATE,
             "text_response_path": "/data/text",

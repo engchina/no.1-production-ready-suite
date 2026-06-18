@@ -7,8 +7,17 @@ import {
   Cloud,
   KeyRound,
   LayoutDashboard,
+  Boxes,
+  ClipboardCheck,
   Plug,
+  Scissors,
+  Search,
   Settings,
+  Share2,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  Workflow,
   Upload,
   type LucideIcon,
 } from "lucide-react";
@@ -52,17 +61,92 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    titleKey: "nav.section.settings",
+    // RAG パイプラインの各段階を切り替えるアダプター群（パイプライン順に整列）。
+    titleKey: "nav.section.pipeline",
     items: [
-      { href: APP_ROUTES.settingsOci, labelKey: "nav.settingsOci", icon: KeyRound },
-      { href: APP_ROUTES.settingsUploadStorage, labelKey: "nav.settingsUploadStorage", icon: Cloud },
       {
         href: APP_ROUTES.settingsParserAdapters,
         labelKey: "nav.settingsParserAdapters",
+        sidebarLabelKey: "nav.settingsParserAdapters.sidebar",
         icon: Plug,
       },
-      { href: APP_ROUTES.settingsModel, labelKey: "nav.settingsModel", icon: Settings },
-      { href: APP_ROUTES.settingsDatabase, labelKey: "nav.settingsDatabase", icon: Database },
+      {
+        href: APP_ROUTES.settingsChunking,
+        labelKey: "nav.settingsChunking",
+        sidebarLabelKey: "nav.settingsChunking.sidebar",
+        icon: Scissors,
+      },
+      {
+        href: APP_ROUTES.settingsVectorIndex,
+        labelKey: "nav.settingsVectorIndex",
+        sidebarLabelKey: "nav.settingsVectorIndex.sidebar",
+        icon: Boxes,
+      },
+      {
+        href: APP_ROUTES.settingsRetrieval,
+        labelKey: "nav.settingsRetrieval",
+        sidebarLabelKey: "nav.settingsRetrieval.sidebar",
+        icon: Search,
+      },
+      {
+        href: APP_ROUTES.settingsGrounding,
+        labelKey: "nav.settingsGrounding",
+        sidebarLabelKey: "nav.settingsGrounding.sidebar",
+        icon: ShieldCheck,
+      },
+      {
+        href: APP_ROUTES.settingsGeneration,
+        labelKey: "nav.settingsGeneration",
+        sidebarLabelKey: "nav.settingsGeneration.sidebar",
+        icon: Sparkles,
+      },
+      {
+        href: APP_ROUTES.settingsGuardrail,
+        labelKey: "nav.settingsGuardrail",
+        sidebarLabelKey: "nav.settingsGuardrail.sidebar",
+        icon: ShieldAlert,
+      },
+      {
+        href: APP_ROUTES.settingsEvaluation,
+        labelKey: "nav.settingsEvaluation",
+        sidebarLabelKey: "nav.settingsEvaluation.sidebar",
+        icon: ClipboardCheck,
+      },
+      {
+        href: APP_ROUTES.settingsGraph,
+        labelKey: "nav.settingsGraph",
+        icon: Share2,
+      },
+      {
+        href: APP_ROUTES.settingsAgentic,
+        labelKey: "nav.settingsAgentic",
+        icon: Workflow,
+      },
+    ],
+  },
+  {
+    // インフラ・接続まわりのシステム設定。
+    titleKey: "nav.section.settings",
+    items: [
+      {
+        href: APP_ROUTES.settingsOci,
+        labelKey: "nav.settingsOci",
+        sidebarLabelKey: "nav.settingsOci.sidebar",
+        icon: KeyRound,
+      },
+      { href: APP_ROUTES.settingsUploadStorage, labelKey: "nav.settingsUploadStorage", icon: Cloud },
+      {
+        href: APP_ROUTES.settingsModel,
+        labelKey: "nav.settingsModel",
+        sidebarLabelKey: "nav.settingsModel.sidebar",
+        icon: Settings,
+      },
+      {
+        href: APP_ROUTES.settingsDatabase,
+        labelKey: "nav.settingsDatabase",
+        sidebarLabelKey: "nav.settingsDatabase.sidebar",
+        icon: Database,
+      },
     ],
   },
 ];

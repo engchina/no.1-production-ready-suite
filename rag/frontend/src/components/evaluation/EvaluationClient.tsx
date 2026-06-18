@@ -37,6 +37,8 @@ const SAMPLE_REQUEST = JSON.stringify(
         query: "経費申請の承認フローを教えてください。",
         relevant_document_ids: ["doc-expense-policy"],
         expected_answer_keywords: ["部門長", "承認"],
+        expected_content_kind: "text",
+        expected_section_paths: ["経費申請 > 承認フロー"],
       },
     ],
     top_k: 10,
@@ -50,6 +52,8 @@ const SAMPLE_REQUEST = JSON.stringify(
       answer_keyword_hit_rate: 0.8,
       groundedness_pass_rate: 0.9,
       citation_traceability_coverage: 0.9,
+      content_kind_hit_rate: 0.8,
+      section_coverage: 0.8,
     },
   },
   null,
@@ -86,6 +90,8 @@ const RANKING_METRICS: EvaluationMetricName[] = [
   "citation_traceability_coverage",
   "bbox_citation_coverage",
   "element_lineage_coverage",
+  "content_kind_hit_rate",
+  "section_coverage",
   "faithfulness",
   "context_precision",
   "context_recall",
@@ -162,7 +168,7 @@ export function EvaluationClient() {
           </CardContent>
         </Card>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
           <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -468,6 +474,14 @@ function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
       label: t("evaluation.metric.elementLineage"),
       value: formatPercent(metrics.element_lineage_coverage),
     },
+    {
+      label: t("evaluation.metric.contentKindHit"),
+      value: formatPercent(metrics.content_kind_hit_rate),
+    },
+    {
+      label: t("evaluation.metric.sectionCoverage"),
+      value: formatPercent(metrics.section_coverage),
+    },
     { label: t("evaluation.metric.faithfulness"), value: formatPercent(metrics.faithfulness) },
     {
       label: t("evaluation.metric.contextPrecision"),
@@ -569,7 +583,10 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
         ) : null}
       </div>
       <div className="overflow-hidden rounded-lg border border-border bg-card">
-        <div className="overflow-x-auto">
+        {/* contain:paint で横スクロール領域を確実に封じ込める。main の [contain:layout] 配下では
+            縦スクロールが発生しない scroll container が min-width をもつ表を祖先へ伝播させ、
+            ページが横スクロール(崩れ)するため(決定論的に再現・検証済み)。 */}
+        <div className="overflow-auto [contain:paint]">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="bg-background text-xs text-muted">
               <tr>
@@ -772,6 +789,10 @@ function metricLabel(metric: EvaluationMetricName) {
       return t("evaluation.metric.bboxCitation");
     case "element_lineage_coverage":
       return t("evaluation.metric.elementLineage");
+    case "content_kind_hit_rate":
+      return t("evaluation.metric.contentKindHit");
+    case "section_coverage":
+      return t("evaluation.metric.sectionCoverage");
     case "faithfulness":
       return t("evaluation.metric.faithfulness");
     case "context_precision":

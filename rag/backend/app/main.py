@@ -44,39 +44,55 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     configure_trace_exporter(settings)
-    recovery_task: asyncio.Task[None] | None = None
-    if settings.ingestion_queue_startup_recovery_enabled:
-        recovery_task = asyncio.create_task(_recover_ingestion_jobs_on_startup(settings))
+    worker_task: asyncio.Task[None] | None = None
+    worker_stop: asyncio.Event | None = None
+    if (
+        settings.ingestion_queue_dedicated_worker_enabled
+        and settings.ingestion_queue_inprocess_worker_enabled
+    ):
+        # ローカル開発の既定: API プロセス内では軽量 dispatcher だけを起動し、
+        # job 本体は subprocess へ隔離する。別 worker service へ完全に切り出す場合は
+        # inprocess を無効化する（この分岐に入らない）。
+        from app.rag.ingestion_worker import IngestionQueueWorker
+
+        # in-process ワーカーは Gunicorn worker ごとに 1 つ起動する。複数 worker で
+        # 動かすと実効同時取込数が WEB_CONCURRENCY 倍になり OCI/Oracle を過負荷にし得る。
+        # 単一プロセス運用にするか、別プロセスワーカー（INPROCESS=false）へ切り出すこと。
+        logger.warning(
+            "ingestion_inprocess_worker_enabled",
+            extra={
+                "worker_concurrency": settings.ingestion_queue_worker_concurrency,
+                "advice": (
+                    "in-process worker runs per process; "
+                    "use WEB_CONCURRENCY=1 or a dedicated worker process"
+                ),
+            },
+        )
+        worker = IngestionQueueWorker(settings=settings)
+        worker_stop = asyncio.Event()
+        worker_task = asyncio.create_task(worker.run_forever(stop_event=worker_stop))
+    elif (
+        not settings.ingestion_queue_dedicated_worker_enabled
+        and settings.ingestion_queue_startup_recovery_enabled
+    ):
+        logger.warning(
+            "ingestion_worker_disabled",
+            extra={
+                "advice": (
+                    "ingestion jobs remain queued until an ingestion worker process is running"
+                )
+            },
+        )
     try:
         yield
     finally:
-        if recovery_task is not None and not recovery_task.done():
-            recovery_task.cancel()
+        if worker_task is not None:
+            if worker_stop is not None:
+                worker_stop.set()
             with suppress(asyncio.CancelledError):
-                await recovery_task
+                await worker_task
         close_trace_exporter()
         close_oracle_pool()
-
-
-async def _recover_ingestion_jobs_on_startup(settings: Any) -> None:
-    """起動時に永続化済み取込 job を回復する。失敗しても API 起動は止めない。"""
-    try:
-        from app.api.routes.documents import recover_and_drain_ingestion_jobs
-
-        jobs = await recover_and_drain_ingestion_jobs(
-            limit=settings.ingestion_queue_startup_drain_limit,
-            stale_running_seconds=settings.ingestion_queue_stale_running_seconds,
-            concurrency=settings.ingestion_queue_worker_concurrency,
-        )
-        if jobs:
-            logger.info(
-                "ingestion_jobs_startup_drained",
-                extra={"job_count": len(jobs)},
-            )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("ingestion_jobs_startup_recovery_failed")
 
 
 def _route_path(request: Request) -> str:

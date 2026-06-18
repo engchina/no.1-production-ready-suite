@@ -7,6 +7,7 @@ import { api, type SourcePreviewKind, type SourceProfile } from "@/lib/api";
 import {
   type BboxCoordinateMode,
   type BboxOverlayRect,
+  type BboxOverlayUnit,
   type BboxPageSize,
   bboxPageAspectRatio,
   formatBboxPercent,
@@ -28,6 +29,15 @@ function kindOf(fileName: string, sourceProfile?: SourceProfile | null): Kind {
   return "unsupported";
 }
 
+export function pdfPreviewUrl(url: string, focusPage?: number | null): string {
+  const [baseUrl, existingHash = ""] = url.split("#", 2);
+  const params = new URLSearchParams(existingHash);
+  if (focusPage) params.set("page", String(focusPage));
+  params.set("pagemode", "none");
+  params.set("navpanes", "0");
+  return `${baseUrl}#${params.toString()}`;
+}
+
 /** 原本ファイルのプレビュー（画像 / PDF / テキスト）。 */
 export function DocumentPreview({
   documentId,
@@ -36,6 +46,7 @@ export function DocumentPreview({
   focusPage = null,
   focusBbox = null,
   focusBboxMode = null,
+  focusBboxUnit = null,
   focusPageSize = null,
 }: {
   documentId: string;
@@ -44,6 +55,7 @@ export function DocumentPreview({
   focusPage?: number | null;
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
+  focusBboxUnit?: BboxOverlayUnit | null;
   focusPageSize?: BboxPageSize | null;
 }) {
   const url = api.documentContentUrl(documentId);
@@ -56,6 +68,7 @@ export function DocumentPreview({
         fileName={fileName}
         focusBbox={focusBbox}
         focusBboxMode={focusBboxMode}
+        focusBboxUnit={focusBboxUnit}
         focusPage={focusPage}
         focusPageSize={focusPageSize}
       />
@@ -63,11 +76,12 @@ export function DocumentPreview({
   }
 
   if (kind === "pdf") {
-    const pdfUrl = focusPage ? `${url}#page=${focusPage}` : url;
+    const pdfUrl = pdfPreviewUrl(url, focusPage);
     return (
       <PreviewFrame
         focusBbox={focusBbox}
         focusBboxMode={focusBboxMode}
+        focusBboxUnit={focusBboxUnit}
         focusPage={focusPage}
         focusPageSize={focusPageSize}
       >
@@ -85,6 +99,7 @@ export function DocumentPreview({
       <PreviewFrame
         focusBbox={focusBbox}
         focusBboxMode={focusBboxMode}
+        focusBboxUnit={focusBboxUnit}
         focusPage={focusPage}
         focusPageSize={focusPageSize}
       >
@@ -105,6 +120,7 @@ function ImagePreview({
   fileName,
   focusBbox,
   focusBboxMode,
+  focusBboxUnit,
   focusPage,
   focusPageSize,
 }: {
@@ -112,6 +128,7 @@ function ImagePreview({
   fileName: string;
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
+  focusBboxUnit?: BboxOverlayUnit | null;
   focusPage?: number | null;
   focusPageSize?: BboxPageSize | null;
 }) {
@@ -121,6 +138,7 @@ function ImagePreview({
       <PreviewFrame
         focusBbox={focusBbox}
         focusBboxMode={focusBboxMode}
+        focusBboxUnit={focusBboxUnit}
         focusPage={focusPage}
         focusPageSize={pageSize}
       showContentOverlay
@@ -150,8 +168,16 @@ function ImagePreview({
 }
 
 function imagePreviewMaxWidth(pageSize?: BboxPageSize | null): string {
-  const width = Number(pageSize?.width);
-  const height = Number(pageSize?.height);
+  const width = Number(
+    pageSize?.rotation === 90 || pageSize?.rotation === 270
+      ? pageSize?.height
+      : pageSize?.width
+  );
+  const height = Number(
+    pageSize?.rotation === 90 || pageSize?.rotation === 270
+      ? pageSize?.width
+      : pageSize?.height
+  );
   const ratio =
     Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
       ? width / height
@@ -163,6 +189,7 @@ function PreviewFrame({
   children,
   focusBbox,
   focusBboxMode = null,
+  focusBboxUnit = null,
   focusPage = null,
   focusPageSize = null,
   showContentOverlay = false,
@@ -170,11 +197,17 @@ function PreviewFrame({
   children: ReactNode;
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
+  focusBboxUnit?: BboxOverlayUnit | null;
   focusPage?: number | null;
   focusPageSize?: BboxPageSize | null;
   showContentOverlay?: boolean;
 }) {
-  const overlayRect = normalizeBboxForPreview(focusBbox, focusPageSize, focusBboxMode);
+  const overlayRect = normalizeBboxForPreview(
+    focusBbox,
+    focusPageSize,
+    focusBboxMode,
+    focusBboxUnit
+  );
   const style = overlayRect ? bboxOverlayStyle(overlayRect) : null;
   const showPreviewOverlay = Boolean(style && !showContentOverlay);
   return (

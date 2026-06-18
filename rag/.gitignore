@@ -162,6 +162,12 @@ venv.bak/
 # Local model settings saved by the backend UI
 backend/model-settings.json
 
+# Prompt version store saved by the backend (prompt versioning)
+backend/prompt-versions.json
+
+# Field extraction schema saved by the backend (schema-driven field extraction)
+backend/extraction-fields.json
+
 # Spyder project settings
 .spyderproject
 .spyproject

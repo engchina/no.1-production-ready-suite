@@ -27,9 +27,11 @@ import {
   useAssignDocumentsToKnowledgeBase,
   useCreateKnowledgeBase,
   useDocuments,
+  useKnowledgeBase,
   useKnowledgeBases,
   useRemoveDocumentFromKnowledgeBase,
 } from "@/lib/queries";
+import { KnowledgeBaseAdapterConfigPanel } from "./KnowledgeBaseAdapterConfigPanel";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -97,8 +99,8 @@ export function KnowledgeBaseManagementClient() {
   return (
     <div>
       <PageHeader title={t("nav.knowledgeBases")} subtitle={t("knowledgeBases.subtitle")} />
-      <div className="grid gap-5 p-8 xl:grid-cols-[minmax(0,1fr)_25rem]">
-        <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-5 p-8 xl:grid-cols-[minmax(0,1fr)_25rem]">
+        <div className="min-w-0 space-y-4">
           <DegradedBanner
             messages={page?.warning_messages}
             onRetry={() => void query.refetch()}
@@ -123,7 +125,7 @@ export function KnowledgeBaseManagementClient() {
                 </ToggleChip>
               ))}
             </div>
-            <div className="relative">
+            <div className="relative w-full sm:w-auto">
               <Search
                 size={15}
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
@@ -139,7 +141,7 @@ export function KnowledgeBaseManagementClient() {
                 onBlur={() => resetView(() => setQ(search.trim()))}
                 placeholder={t("knowledgeBases.search.placeholder")}
                 aria-label={t("knowledgeBases.search.placeholder")}
-                className="h-9 w-64 rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-primary"
+                className="h-9 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-primary sm:w-64"
               />
             </div>
           </div>
@@ -158,30 +160,32 @@ export function KnowledgeBaseManagementClient() {
           ) : items.length > 0 ? (
             <>
               <Card className="overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-background text-left text-muted">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.name")}</th>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.status")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.documents")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.indexed")}</th>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.updated")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((knowledgeBase) => (
-                      <KnowledgeBaseRow
-                        key={knowledgeBase.id}
-                        knowledgeBase={knowledgeBase}
-                        selected={selected?.id === knowledgeBase.id}
-                        archiving={archive.isPending && archive.variables === knowledgeBase.id}
-                        onSelect={() => setSelectedId(knowledgeBase.id)}
-                        onArchive={() => void handleArchive(knowledgeBase)}
-                      />
-                    ))}
-                  </tbody>
-                </table>
+                <div className="bounded-scroll-area-lg overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-sm">
+                    <thead className="sticky top-0 z-10 bg-background text-left text-muted shadow-[inset_0_-1px_0_var(--border)]">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.name")}</th>
+                        <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.status")}</th>
+                        <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.documents")}</th>
+                        <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.indexed")}</th>
+                        <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.updated")}</th>
+                        <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.actions")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((knowledgeBase) => (
+                        <KnowledgeBaseRow
+                          key={knowledgeBase.id}
+                          knowledgeBase={knowledgeBase}
+                          selected={selected?.id === knowledgeBase.id}
+                          archiving={archive.isPending && archive.variables === knowledgeBase.id}
+                          onSelect={() => setSelectedId(knowledgeBase.id)}
+                          onArchive={() => void handleArchive(knowledgeBase)}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </Card>
 
               <div className="flex items-center justify-between">
@@ -225,9 +229,31 @@ export function KnowledgeBaseManagementClient() {
           )}
         </div>
 
-        <KnowledgeBaseDetailPanel knowledgeBase={selected} />
+        <div className="space-y-4">
+          <KnowledgeBaseDetailPanel knowledgeBase={selected} />
+          {selected ? <KnowledgeBaseAdapterConfigSection knowledgeBase={selected} /> : null}
+        </div>
       </div>
     </div>
+  );
+}
+
+/** 選択中 KB の詳細を取得し、アダプター設定パネルを表示する。 */
+function KnowledgeBaseAdapterConfigSection({
+  knowledgeBase,
+}: {
+  knowledgeBase: KnowledgeBaseSummary;
+}) {
+  const detail = useKnowledgeBase(knowledgeBase.id);
+  if (!detail.data) {
+    return <Card className="h-32 animate-pulse" aria-hidden />;
+  }
+  return (
+    <KnowledgeBaseAdapterConfigPanel
+      knowledgeBaseId={detail.data.id}
+      adapterConfig={detail.data.adapter_config}
+      disabled={detail.data.status !== "ACTIVE"}
+    />
   );
 }
 
@@ -574,7 +600,7 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
       ) : documents.isPending ? (
         <KnowledgeBaseDocumentsSkeleton />
       ) : documents.data.items.length > 0 ? (
-        <ul className="max-h-72 divide-y divide-border overflow-y-auto rounded-md border border-border [scrollbar-gutter:stable]">
+        <ul className="bounded-scroll-area divide-y divide-border rounded-md border border-border">
           {documents.data.items.map((document) => (
             <li key={document.id} className="flex items-center justify-between gap-3 px-3 py-2">
               <Link

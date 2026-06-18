@@ -85,6 +85,26 @@ def test_build_graph_index_creates_entities_claims_and_summary() -> None:
     assert summary.source_document_ids == ["doc-1"]
 
 
+def test_build_graph_index_suppresses_claims_and_summaries_for_entities_profile() -> None:
+    """entities profile 相当の build flags は claims/community summary を抑制する(軽量)。"""
+    extraction = StructuredExtraction(raw_text="本文です。", document_type="メモ", confidence=0.8)
+    chunks = [Chunk(text="本文です。", index=0, start_offset=0, end_offset=5)]
+
+    graph = build_graph_index(
+        document_id="doc-light",
+        knowledge_base_ids=["kb-1"],
+        extraction=extraction,
+        chunks=chunks,
+        build_claims=False,
+        build_community_summaries=False,
+    )
+
+    # entities + relationships は残るが claims / community summary は構築しない。
+    assert len(graph.entities) >= 1
+    assert graph.claims == []
+    assert graph.community_summaries == []
+
+
 def test_build_graph_index_uses_default_scope_without_knowledge_base() -> None:
     """KB 未所属 document でも fallback graph scope を生成できる。"""
     extraction = StructuredExtraction(raw_text="本文です。", document_type="メモ", confidence=0.8)

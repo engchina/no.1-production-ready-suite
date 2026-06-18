@@ -1,15 +1,37 @@
+# parser は独立マイクロサービス化している(services/parsers/<name>)。
+# backend / ingestion-worker は重い parser 依存を持たず、取込時に各 parser サービスへ
+# HTTP 委譲する(未達時は local / Enterprise AI VLM へ安全に fallback)。
+# CPU parser(docling/marker/unstructured)は既定起動、GPU parser(mineru/dots_ocr)は
+# `--profile gpu` で opt-in する。
+
+x-parser-service-urls: &parser-service-urls
+  RAG_PARSER_DOCLING_SERVICE_URL: http://parser-docling:8000
+  RAG_PARSER_MARKER_SERVICE_URL: http://parser-marker:8000
+  RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000
+  RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
+  RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
+
 services:
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     env_file:
       - path: ./backend/.env
         required: false
     environment:
-      - LOCAL_STORAGE_DIR=/u01/production-ready-rag
-      - MODEL_SETTINGS_FILE=model-settings.json
-      - OCI_CONFIG_FILE=/home/appuser/.oci/config
-      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
-      - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-60}
+      <<: *parser-service-urls
+      LOCAL_STORAGE_DIR: /u01/production-ready-rag
+      MODEL_SETTINGS_FILE: model-settings.json
+      OCI_CONFIG_FILE: /home/appuser/.oci/config
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-60}
+      # 取込は専用ワーカーへ切り出す。API プロセスはキュー投入のみ行い、
+      # event loop を取込処理で塞がない。
+      INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
+      INGESTION_QUEUE_INPROCESS_WORKER_ENABLED: "false"
+      # readiness 画面は parser サービスの /health で導入状況・version を表示する。
+      RAG_PARSER_READINESS_PROBE_ENABLED: "true"
     ports:
       - "8000:8000"
     # OCI 設定 / Oracle wallet をマウント
@@ -25,6 +47,79 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      <<: *parser-service-urls
+      LOCAL_STORAGE_DIR: /u01/production-ready-rag
+      MODEL_SETTINGS_FILE: model-settings.json
+      OCI_CONFIG_FILE: /home/appuser/.oci/config
+      INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
+      INGESTION_QUEUE_WORKER_CONCURRENCY: ${INGESTION_QUEUE_WORKER_CONCURRENCY:-2}
+      INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED: "false"
+    # 取込キューを消費する専用ワーカープロセス。水平スケールは replicas を増やす
+    # （claim_ingestion_job の row lock で同一ジョブの二重実行は起きない）。
+    command:
+      - sh
+      - -c
+      - "exec uv run --no-sync python -m app.rag.ingestion_worker"
+    volumes:
+      - ~/.oci:/home/appuser/.oci:ro
+      - backend-local-storage:/u01/production-ready-rag
+
+  # ---- parser マイクロサービス(CPU・既定起動)----
+  parser-docling:
+    build:
+      context: .
+      dockerfile: services/parsers/docling/Dockerfile
+    restart: unless-stopped
+
+  parser-marker:
+    build:
+      context: .
+      dockerfile: services/parsers/marker/Dockerfile
+    restart: unless-stopped
+
+  parser-unstructured:
+    build:
+      context: .
+      dockerfile: services/parsers/unstructured/Dockerfile
+    restart: unless-stopped
+
+  # ---- parser マイクロサービス(GPU・`--profile gpu` で opt-in)----
+  parser-mineru:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/mineru/Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  parser-dots-ocr:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/dots_ocr/Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
 
   frontend:
     build: ./frontend

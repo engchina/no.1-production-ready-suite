@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.schemas.search import SearchMode
 
 
@@ -41,6 +42,13 @@ class KnowledgeBaseDetail(KnowledgeBaseSummary):
     """詳細表示用のナレッジベース情報。"""
 
     retrieval_config: dict[str, object] = Field(default_factory=dict)
+    adapter_config: KnowledgeBaseAdapterConfig = Field(
+        default_factory=KnowledgeBaseAdapterConfig,
+        description=(
+            "KB 単位のアダプター上書き設定(Parser/Chunking は取込時、Retrieval 系は"
+            "クエリ時に効く)。None フィールドはグローバル設定を継承する。"
+        ),
+    )
 
 
 class KnowledgeBaseCreateRequest(BaseModel):
@@ -50,6 +58,10 @@ class KnowledgeBaseCreateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     default_search_mode: SearchMode = SearchMode.HYBRID
     retrieval_config: dict[str, object] = Field(default_factory=dict)
+    adapter_config: KnowledgeBaseAdapterConfig | None = Field(
+        default=None,
+        description="KB 単位のアダプター上書き設定。未指定ならグローバル設定を全継承する。",
+    )
 
     @field_validator("name")
     @classmethod
@@ -71,6 +83,10 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     default_search_mode: SearchMode | None = None
     retrieval_config: dict[str, object] | None = None
+    adapter_config: KnowledgeBaseAdapterConfig | None = Field(
+        default=None,
+        description="KB 単位のアダプター上書き設定。指定時は既存設定を置換する。",
+    )
 
     @field_validator("name")
     @classmethod

@@ -8,26 +8,81 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 from app.config import ParserAdapterBackend, Settings
 
-ParserAdapterName = Literal["docling", "marker", "unstructured"]
+logger = logging.getLogger(__name__)
+
+# adapter ごとの parser サービス URL を持つ Settings フィールド名。
+_SERVICE_URL_FIELDS: dict[str, str] = {
+    "docling": "rag_parser_docling_service_url",
+    "marker": "rag_parser_marker_service_url",
+    "unstructured": "rag_parser_unstructured_service_url",
+    "mineru": "rag_parser_mineru_service_url",
+    "dots_ocr": "rag_parser_dots_ocr_service_url",
+}
+
+ParserAdapterName = Literal["docling", "marker", "unstructured", "mineru", "dots_ocr"]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 
-ADAPTER_PACKAGES: dict[ParserAdapterName, str] = {
-    "docling": "docling",
-    "marker": "marker",
-    "unstructured": "unstructured",
+
+@dataclass(frozen=True)
+class ParserAdapterPackageSpec:
+    """optional adapter の import 名と配布 package 名を分けて管理する。"""
+
+    import_name: str
+    distribution_names: tuple[str, ...]
+    install_package: str
+
+
+ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
+    "docling": ParserAdapterPackageSpec(
+        import_name="docling",
+        distribution_names=("docling",),
+        install_package="docling==2.103.0",
+    ),
+    "marker": ParserAdapterPackageSpec(
+        import_name="marker",
+        distribution_names=("marker-pdf", "marker"),
+        install_package="marker-pdf[full]==1.10.2",
+    ),
+    "unstructured": ParserAdapterPackageSpec(
+        import_name="unstructured",
+        distribution_names=("unstructured",),
+        install_package="unstructured[all-docs]==0.23.1",
+    ),
+    # PoweRAG 由来の OCR/解析エンジン。未導入時は missing として安全に fallback する。
+    "mineru": ParserAdapterPackageSpec(
+        import_name="mineru",
+        distribution_names=("mineru", "magic-pdf"),
+        install_package="mineru[core]==3.4.0",
+    ),
+    # dots.ocr は PyPI 配布がなく GitHub からの editable install が公式手順。
+    "dots_ocr": ParserAdapterPackageSpec(
+        import_name="dots_ocr",
+        distribution_names=("dots-ocr", "dots_ocr"),
+        install_package="git+https://github.com/rednote-hilab/dots.ocr.git",
+    ),
 }
-ADAPTER_ORDER: tuple[ParserAdapterName, ...] = ("docling", "marker", "unstructured")
+ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
+    "docling",
+    "marker",
+    "unstructured",
+    "mineru",
+    "dots_ocr",
+)
 ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "local",
     "auto",
     "docling",
     "marker",
     "unstructured",
+    "mineru",
+    "dots_ocr",
 )
 
 
@@ -37,6 +92,9 @@ class ParserAdapterRuntimeStatus:
 
     backend: ParserAdapterName
     package_name: str
+    import_name: str
+    distribution_name: str | None
+    install_package: str
     enabled: bool
     selected: bool
     installed: bool
@@ -86,11 +144,19 @@ def _adapter_status(
     backend: ParserAdapterName,
     adapter_backend: ParserAdapterBackend,
 ) -> ParserAdapterRuntimeStatus:
-    package_name = ADAPTER_PACKAGES[backend]
+    package_spec = ADAPTER_PACKAGES[backend]
     enabled = _adapter_flag(settings, backend)
     explicitly_selected = adapter_backend == backend
     selected = explicitly_selected or backend in _effective_adapter_order(settings, adapter_backend)
-    installed, version = _package_info(package_name)
+    if settings.rag_parser_readiness_probe_enabled:
+        # 本番/compose: parser サービスの /health で導入状況・version を解決する。
+        installed, version, distribution_name = _probe_service_health(settings, backend)
+    else:
+        # 開発/テスト: backend プロセス内の import 検出にフォールバックする。
+        installed, version, distribution_name = _package_info(
+            package_spec.import_name,
+            package_spec.distribution_names,
+        )
     status: ParserAdapterStatus
     warning_code: str | None = None
 
@@ -112,7 +178,10 @@ def _adapter_status(
 
     return ParserAdapterRuntimeStatus(
         backend=backend,
-        package_name=package_name,
+        package_name=package_spec.import_name,
+        import_name=package_spec.import_name,
+        distribution_name=distribution_name,
+        install_package=package_spec.install_package,
         enabled=enabled,
         selected=selected,
         installed=installed,
@@ -133,11 +202,47 @@ def _normalize_adapter_backend(value: object) -> ParserAdapterBackend:
     return "local"
 
 
-def _package_info(package_name: str) -> tuple[bool, str | None]:
-    if importlib.util.find_spec(package_name) is None:
-        return False, None
+def _package_info(
+    import_name: str,
+    distribution_names: Sequence[str],
+) -> tuple[bool, str | None, str | None]:
+    if importlib.util.find_spec(import_name) is None:
+        return False, None, None
+    for distribution_name in distribution_names:
+        try:
+            version = importlib.metadata.version(distribution_name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        return True, version, distribution_name
+    return True, None, None
+
+
+def _probe_service_health(
+    settings: Settings,
+    backend: ParserAdapterName,
+) -> tuple[bool, str | None, str | None]:
+    """parser サービスの /health を best-effort で問い合わせ、(installed, version, dist) を返す。
+
+    サービス未設定・未達・degraded のときは installed=False を返し、readiness は missing 表示に
+    縮退する(httpx は遅延 import、短 timeout、例外は握り潰す)。
+    """
+    field = _SERVICE_URL_FIELDS.get(backend)
+    url = str(getattr(settings, field, "") or "").strip().rstrip("/") if field else ""
+    if not url:
+        return False, None, None
     try:
-        version = importlib.metadata.version(package_name)
-    except importlib.metadata.PackageNotFoundError:
-        version = None
-    return True, version
+        import httpx
+
+        with httpx.Client(timeout=float(settings.rag_parser_readiness_probe_timeout_seconds)) as c:
+            response = c.get(f"{url}/health")
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:  # noqa: BLE001 - readiness は到達不可でも安全に missing 表示する
+        logger.debug("parser readiness probe failed: backend=%s url=%s error=%s", backend, url, exc)
+        return False, None, None
+    installed = str(payload.get("status", "")).lower() == "ok"
+    version = payload.get("package_version")
+    distribution_name = payload.get("package_name")
+    return installed, version if isinstance(version, str) else None, (
+        distribution_name if isinstance(distribution_name, str) else None
+    )

@@ -2,12 +2,14 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import mimetypes
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from html import escape
 from pathlib import PurePath
 from typing import Annotated
 from urllib.parse import quote
@@ -16,7 +18,6 @@ from uuid import uuid4
 from charset_normalizer import from_bytes
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     File,
     Form,
     HTTPException,
@@ -27,8 +28,8 @@ from fastapi import (
 )
 
 from app.clients.object_storage import ObjectStorageClient
-from app.clients.oracle import OracleClient
-from app.config import get_settings
+from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, OracleClient
+from app.config import Settings, get_settings
 from app.db_degradation import load_or_degrade
 from app.rag.ingestion import (
     IngestionCancelledError,
@@ -36,25 +37,47 @@ from app.rag.ingestion import (
     IngestionTimeoutError,
     IngestionUserError,
 )
+from app.rag.ingestion_worker import request_ingestion_worker_wakeup
+from app.rag.kb_adapter_config import apply_adapter_config_or_global
+from app.rag.navigation import build_navigation_tree
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.source_profile import build_source_profile
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
     BatchUploadFailedItem,
     BatchUploadResult,
+    DocumentApproveRequest,
     DocumentChunkView,
     DocumentDeleteResult,
     DocumentDetail,
+    DocumentExtractionExport,
+    DocumentExtractionExportFormat,
+    DocumentIngestionConfigData,
     DocumentStats,
     DocumentSummary,
+    DocumentTableCellTextEdit,
     FileStatus,
     IngestionJob,
+    IngestionJobPhase,
     IngestionJobStatus,
     IngestionSegment,
     SourceProfile,
     UploadResult,
 )
-from app.schemas.knowledge_base import DocumentKnowledgeBaseReplaceRequest, KnowledgeBaseRef
+from app.schemas.extraction import (
+    DocumentElement,
+    DocumentNavigationNode,
+    ExtractionAsset,
+    ExtractionField,
+    ExtractionTable,
+    ExtractionTableCell,
+    StructuredExtraction,
+)
+from app.schemas.knowledge_base import (
+    DocumentKnowledgeBaseReplaceRequest,
+    KnowledgeBaseDetail,
+    KnowledgeBaseRef,
+)
 from app.schemas.search import normalize_search_id_list
 
 router = APIRouter()
@@ -62,7 +85,7 @@ logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
-ACTIVE_INGESTION_STATUSES = frozenset({IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING})
+DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
 
 
 class UploadIngestionMode(StrEnum):
@@ -75,7 +98,6 @@ class UploadIngestionMode(StrEnum):
 @router.post("/upload", response_model=ApiResponse[UploadResult])
 async def upload_document(
     http_request: Request,
-    background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File(...)],
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
     ingestion_mode: Annotated[UploadIngestionMode, Form()] = UploadIngestionMode.MANUAL,
@@ -83,14 +105,13 @@ async def upload_document(
     """ドキュメントファイルをアップロードし、Object Storage へ保管する。"""
     enforce_rate_limit("upload", http_request)
     result = await _store_uploaded_document(file, knowledge_base_ids)
-    result = await _attach_ingestion_job(result, ingestion_mode, background_tasks)
+    result = await _attach_ingestion_job(result, ingestion_mode)
     return ApiResponse(data=result)
 
 
 @router.post("/batch-upload", response_model=ApiResponse[BatchUploadResult])
 async def batch_upload_documents(
     http_request: Request,
-    background_tasks: BackgroundTasks,
     files: Annotated[list[UploadFile], File(...)],
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
     ingestion_mode: Annotated[UploadIngestionMode, Form()] = UploadIngestionMode.MANUAL,
@@ -104,7 +125,7 @@ async def batch_upload_documents(
     for file in files:
         try:
             result = await _store_uploaded_document(file, knowledge_base_ids)
-            items.append(await _attach_ingestion_job(result, ingestion_mode, background_tasks))
+            items.append(await _attach_ingestion_job(result, ingestion_mode))
         except HTTPException as exc:
             source_profile = await _failed_upload_source_profile(file)
             failed_items.append(
@@ -415,7 +436,6 @@ async def list_ingestion_jobs(
 @router.post("/ingestion-jobs/drain", response_model=ApiResponse[list[IngestionJob]])
 async def drain_queued_ingestion_jobs(
     http_request: Request,
-    background_tasks: BackgroundTasks,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> ApiResponse[list[IngestionJob]]:
     """永続化済み QUEUED job をバックグラウンド実行へ戻す。"""
@@ -426,14 +446,13 @@ async def drain_queued_ingestion_jobs(
         offset=0,
     )
     for job in jobs:
-        background_tasks.add_task(_run_ingestion_job, job.id)
+        _dispatch_ingestion_job(job.id)
     return ApiResponse(data=jobs)
 
 
 @router.post("/ingestion-jobs/{job_id}/retry", response_model=ApiResponse[IngestionJob])
 async def retry_ingestion_job(
     http_request: Request,
-    background_tasks: BackgroundTasks,
     job_id: str,
     force: bool = Query(default=False),
 ) -> ApiResponse[IngestionJob]:
@@ -447,7 +466,6 @@ async def retry_ingestion_job(
     retry_job = await _enqueue_ingestion_job_for_document(
         job.document_id,
         force=force,
-        background_tasks=background_tasks,
     )
     return ApiResponse(data=retry_job)
 
@@ -474,7 +492,13 @@ async def cancel_ingestion_job(
     if cancelled is None:
         raise HTTPException(status_code=404, detail="取込ジョブが見つかりません。")
     if job.status == IngestionJobStatus.RUNNING:
-        await oracle.update_document_status(job.document_id, FileStatus.UPLOADED)
+        # INDEX フェーズの取消は抽出をやり直さないよう REVIEW へ戻す。
+        restore_status = (
+            FileStatus.REVIEW
+            if job.phase == IngestionJobPhase.INDEX
+            else FileStatus.UPLOADED
+        )
+        await oracle.update_document_status(job.document_id, restore_status)
     return ApiResponse(data=cancelled)
 
 
@@ -490,7 +514,6 @@ async def get_ingestion_job(job_id: str) -> ApiResponse[IngestionJob]:
 @router.post("/{document_id}/ingestion-jobs", response_model=ApiResponse[IngestionJob])
 async def enqueue_document_ingestion_job(
     http_request: Request,
-    background_tasks: BackgroundTasks,
     document_id: str,
     force: bool = Query(default=False),
 ) -> ApiResponse[IngestionJob]:
@@ -499,7 +522,22 @@ async def enqueue_document_ingestion_job(
     job = await _enqueue_ingestion_job_for_document(
         document_id,
         force=force,
-        background_tasks=background_tasks,
+    )
+    return ApiResponse(data=job)
+
+
+@router.post(
+    "/{document_id}/ingestion-segments/retry",
+    response_model=ApiResponse[IngestionJob],
+)
+async def retry_failed_document_ingestion_segments(
+    http_request: Request,
+    document_id: str,
+) -> ApiResponse[IngestionJob]:
+    """FAILED checkpoint がある文書だけ、失敗 segment 再試行 job として再投入する。"""
+    enforce_rate_limit("ingest", http_request)
+    job = await _enqueue_failed_segment_retry_job_for_document(
+        document_id,
     )
     return ApiResponse(data=job)
 
@@ -511,6 +549,142 @@ async def list_document_chunks(document_id: str) -> ApiResponse[list[DocumentChu
     if await oracle.get_document(document_id) is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return ApiResponse(data=await oracle.list_document_chunks(document_id))
+
+
+@router.get(
+    "/{document_id}/ingestion-config",
+    response_model=ApiResponse[DocumentIngestionConfigData],
+)
+async def get_document_ingestion_config(
+    document_id: str,
+) -> ApiResponse[DocumentIngestionConfigData]:
+    """owning KB の現行取込設定と、取込済みチャンクのドリフト状況を返す。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+
+    effective_settings, owning = await _resolve_ingestion_settings(oracle, document_id)
+    is_indexed = detail.status == FileStatus.INDEXED
+
+    observed_strategy: str | None = None
+    observed_parser: str | None = None
+    if is_indexed:
+        chunks = await oracle.list_document_chunks(document_id)
+        if chunks:
+            first = chunks[0]
+            strategy_value = first.metadata.get("chunk_strategy")
+            observed_strategy = str(strategy_value) if strategy_value is not None else None
+            observed_parser = first.source_parser or (
+                str(first.metadata["parser_backend"])
+                if "parser_backend" in first.metadata
+                else None
+            )
+
+    # ドリフト判定は取込済みで観測値があるときのみ。chunking strategy 差が主シグナル。
+    config_drift = bool(
+        is_indexed
+        and observed_strategy is not None
+        and observed_strategy != effective_settings.rag_chunking_strategy
+    )
+
+    return ApiResponse(
+        data=DocumentIngestionConfigData(
+            document_id=document_id,
+            is_indexed=is_indexed,
+            owning_knowledge_base=(
+                KnowledgeBaseRef(id=owning.id, name=owning.name) if owning is not None else None
+            ),
+            effective_chunking_strategy=effective_settings.rag_chunking_strategy,
+            effective_parser_adapter_backend=effective_settings.rag_parser_adapter_backend,
+            observed_chunking_strategy=observed_strategy,
+            observed_parser_backend=observed_parser,
+            config_drift=config_drift,
+        )
+    )
+
+
+@router.get(
+    "/{document_id}/extraction-export",
+    response_model=ApiResponse[DocumentExtractionExport],
+)
+async def export_document_extraction(
+    document_id: str,
+    format: Annotated[DocumentExtractionExportFormat, Query()] = (
+        DocumentExtractionExportFormat.MARKDOWN
+    ),
+) -> ApiResponse[DocumentExtractionExport]:
+    """保存済み extraction を JSON / Markdown / HTML / chunks 形式で監査用に返す。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    extraction = _structured_extraction_from_detail(detail)
+    payload = extraction.to_document_payload()
+    chunks: list[DocumentChunkView] = []
+    if format == DocumentExtractionExportFormat.CHUNKS:
+        chunks = await oracle.list_document_chunks(document_id)
+        payload = {"chunks": [chunk.model_dump(mode="json") for chunk in chunks]}
+    content = _document_extraction_export_content(format, extraction, payload)
+    return ApiResponse(
+        data=DocumentExtractionExport(
+            document_id=document_id,
+            file_name=detail.file_name,
+            format=format,
+            content_type=_document_extraction_export_content_type(format),
+            content=content,
+            payload=payload
+            if format
+            not in {DocumentExtractionExportFormat.MARKDOWN, DocumentExtractionExportFormat.HTML}
+            else {},
+            chunks=chunks,
+            parser_backend=_extraction_parser_backend(extraction),
+            parser_profile=_extraction_parser_profile(extraction),
+            page_count=len(extraction.pages),
+            element_count=len(extraction.elements),
+            table_count=len(extraction.tables),
+            asset_count=len(extraction.assets),
+        )
+    )
+
+
+@router.get(
+    "/{document_id}/navigation",
+    response_model=ApiResponse[list[DocumentNavigationNode]],
+)
+async def get_document_navigation(
+    document_id: str,
+) -> ApiResponse[list[DocumentNavigationNode]]:
+    """文書の章節 navigation tree（progressive disclosure 用）を返す。
+
+    取込時に要約付きで永続化されていればそれを返し、未保存の旧文書では保存済み
+    extraction から決定論的に tree を再構築する（要約なし）。
+    """
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    extraction = _structured_extraction_from_detail(detail)
+    nodes = extraction.navigation or build_navigation_tree(extraction)
+    return ApiResponse(data=nodes)
+
+
+@router.get(
+    "/{document_id}/extracted-fields",
+    response_model=ApiResponse[list[ExtractionField]],
+)
+async def get_document_extracted_fields(
+    document_id: str,
+) -> ApiResponse[list[ExtractionField]]:
+    """文書から schema 駆動で抽出した named field/entity を返す(PoweRAG 由来)。
+
+    帳票項目の編集 endpoint(`/fields`)とは別概念で、こちらは読み取り専用。
+    """
+    detail = await OracleClient().get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    extraction = _structured_extraction_from_detail(detail)
+    return ApiResponse(data=extraction.fields)
 
 
 @router.get(
@@ -546,20 +720,23 @@ async def get_document(document_id: str) -> ApiResponse[DocumentDetail]:
 
 @router.delete("/{document_id}", response_model=ApiResponse[DocumentDeleteResult])
 async def delete_document(document_id: str) -> ApiResponse[DocumentDeleteResult]:
-    """ドキュメント本体、検索 index、原本ファイル参照を削除する。"""
+    """ドキュメント本体、検索 index、投入関連行、原本ファイル参照を削除する。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    active_jobs = await _list_active_ingestion_jobs(oracle, document_id)
-    if active_jobs:
+    blocking_jobs = await _list_delete_blocking_ingestion_jobs(oracle, document_id)
+    if blocking_jobs:
         raise HTTPException(
             status_code=409,
-            detail="取込ジョブが待機中または実行中のため削除できません。先にキャンセルしてください。",
+            detail="取込ジョブが実行中のため削除できません。先にキャンセルしてください。",
         )
     artifact_paths = await _document_artifact_paths(oracle, detail)
 
-    deleted = await oracle.delete_document(document_id)
+    try:
+        deleted = await oracle.delete_document(document_id)
+    except DocumentDeleteBlockedByRunningIngestionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
 
@@ -650,30 +827,144 @@ async def replace_document_knowledge_bases(
     return ApiResponse(data=refs)
 
 
-@router.post("/{document_id}/ingest", response_model=ApiResponse[DocumentDetail])
+@router.post("/{document_id}/ingest", response_model=ApiResponse[IngestionJob])
 async def ingest_document(
     http_request: Request,
     document_id: str,
     force: bool = Query(default=False),
-) -> ApiResponse[DocumentDetail]:
-    """OCI Enterprise AI の VLM で OCR・本文抽出し、チャンク→埋め込み→索引まで行う。"""
+) -> ApiResponse[IngestionJob]:
+    """旧互換入口。HTTP では実行せず、取込 job をキュー投入して即時に返す。"""
     enforce_rate_limit("ingest", http_request)
-    try:
-        job = await _enqueue_ingestion_job_for_document(
-            document_id,
-            force=force,
-            background_tasks=None,
+    job = await _enqueue_ingestion_job_for_document(document_id, force=force)
+    return ApiResponse(data=job)
+
+
+@router.post("/{document_id}/approve", response_model=ApiResponse[IngestionJob])
+async def approve_document(
+    http_request: Request,
+    document_id: str,
+    body: DocumentApproveRequest | None = None,
+) -> ApiResponse[IngestionJob]:
+    """REVIEW(プレビュー確認待ち)の文書を承認し、後段(index)を投入する。
+
+    body に REVIEW 中のテキスト修正(raw_text / element_edits / table_cell_edits)を
+    含む場合は、bbox・構造を保持したままテキストのみ差し替えて保存してから index する。
+    """
+    enforce_rate_limit("ingest", http_request)
+    if body is not None and (
+        body.element_edits or body.table_cell_edits or body.raw_text is not None
+    ):
+        await _apply_review_text_edits(document_id, body)
+    job = await _enqueue_index_phase_job_for_document(document_id)
+    return ApiResponse(data=job)
+
+
+async def _apply_review_text_edits(
+    document_id: str,
+    edits: DocumentApproveRequest,
+) -> None:
+    """REVIEW 中の人手テキスト修正を保存済み抽出へ適用する(テキストのみ)。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status != FileStatus.REVIEW:
+        raise HTTPException(
+            status_code=409,
+            detail="プレビュー確認待ちの文書のみ修正できます。",
         )
-        if job.status == IngestionJobStatus.QUEUED:
-            await _run_ingestion_job(job.id, force=force, propagate_errors=True)
-        detail = await OracleClient().get_document(document_id)
-        if detail is None:
-            raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-        return ApiResponse(data=detail)
-    except IngestionTimeoutError as exc:
-        raise HTTPException(status_code=504, detail=str(exc)) from exc
-    except IngestionUserError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not detail.extraction:
+        raise HTTPException(status_code=409, detail="修正対象の抽出結果がありません。")
+    extraction = StructuredExtraction.model_validate(detail.extraction)
+    text_by_element_id = {edit.element_id: edit.text for edit in edits.element_edits}
+    unknown_ids = sorted(
+        text_by_element_id.keys()
+        - {element.element_id for element in extraction.elements if element.element_id}
+    )
+    if unknown_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="存在しない要素 ID が含まれています。",
+        )
+    if text_by_element_id:
+        updated_elements = [
+            (
+                element.model_copy(update={"text": text_by_element_id[element.element_id]})
+                if element.element_id in text_by_element_id
+                else element
+            )
+            for element in extraction.elements
+        ]
+        extraction = extraction.model_copy(update={"elements": updated_elements})
+    if edits.table_cell_edits:
+        extraction = _apply_table_cell_edits(extraction, edits.table_cell_edits)
+    if edits.raw_text is not None:
+        extraction = extraction.model_copy(update={"raw_text": edits.raw_text})
+    # 正規化(raw_text/element の整合補完)を再実行してから保存する。
+    normalized = StructuredExtraction.model_validate(extraction.model_dump())
+    await oracle.save_extraction(document_id, normalized)
+
+
+def _apply_table_cell_edits(
+    extraction: StructuredExtraction,
+    cell_edits: list[DocumentTableCellTextEdit],
+) -> StructuredExtraction:
+    """表セルのテキストのみを差し替える(row/col/span・bbox・構造は保持)。"""
+    text_by_cell_key = {
+        (edit.table_id, edit.row, edit.col): edit.text for edit in cell_edits
+    }
+    valid_cell_keys = {
+        (table.table_id, cell.row, cell.col)
+        for table in extraction.tables
+        for cell in table.cells
+    }
+    unknown_cells = sorted(
+        f"{table_id}:{row},{col}"
+        for (table_id, row, col) in text_by_cell_key.keys() - valid_cell_keys
+    )
+    if unknown_cells:
+        raise HTTPException(
+            status_code=400,
+            detail="存在しない表セルが含まれています。",
+        )
+    updated_tables = [
+        table.model_copy(
+            update={
+                "cells": [
+                    (
+                        cell.model_copy(
+                            update={"text": text_by_cell_key[(table.table_id, cell.row, cell.col)]}
+                        )
+                        if (table.table_id, cell.row, cell.col) in text_by_cell_key
+                        else cell
+                    )
+                    for cell in table.cells
+                ]
+            }
+        )
+        for table in extraction.tables
+    ]
+    return extraction.model_copy(update={"tables": updated_tables})
+
+
+@router.post("/{document_id}/reject", response_model=ApiResponse[DocumentDetail])
+async def reject_document(
+    http_request: Request,
+    document_id: str,
+) -> ApiResponse[DocumentDetail]:
+    """REVIEW の文書を却下し、UPLOADED へ戻す(抽出結果は保持・再取込で上書き)。"""
+    enforce_rate_limit("ingest", http_request)
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status != FileStatus.REVIEW:
+        raise HTTPException(
+            status_code=409,
+            detail="プレビュー確認待ちの文書のみ却下できます。",
+        )
+    updated = await oracle.update_document_status(document_id, FileStatus.UPLOADED)
+    return ApiResponse(data=updated)
 
 
 async def _ingest_existing_document(
@@ -687,7 +978,7 @@ async def _ingest_existing_document(
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status == FileStatus.INGESTING:
+    if detail.status in (FileStatus.INGESTING, FileStatus.INDEXING):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
     if detail.status == FileStatus.INDEXED and not force:
         return detail
@@ -721,7 +1012,10 @@ async def _ingest_existing_document(
         duplicate_of_document_id=detail.duplicate_of_document_id,
         data=data,
     )
-    pipeline = IngestionPipeline(oracle=oracle)
+    # owning KB(最古割当)の取込上書きをスナップショットとして適用する。
+    # 後から KB を変えても再 enqueue しない限り既存チャンクは作り直されない。
+    effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+    pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
     return await pipeline.ingest(
         document_id=document_id,
         image_bytes=data,
@@ -732,17 +1026,66 @@ async def _ingest_existing_document(
     )
 
 
+async def _index_reviewed_document(
+    document_id: str,
+    *,
+    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+) -> DocumentDetail:
+    """REVIEW で承認済みの文書を後段(index)だけ実行する。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status not in (FileStatus.REVIEW, FileStatus.INDEXING):
+        raise HTTPException(
+            status_code=409,
+            detail="プレビュー確認待ちの文書のみ索引できます。",
+        )
+    effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+    pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
+    return await pipeline.index_reviewed(document_id, cancel_checker=cancel_checker)
+
+
+async def _resolve_ingestion_settings(
+    oracle: OracleClient,
+    document_id: str,
+) -> tuple[Settings, KnowledgeBaseDetail | None]:
+    """owning KB の取込上書きを重ねた有効 Settings と owning KB detail を返す。
+
+    所属が無い・設定が無い・グローバルと矛盾する場合はグローバル設定へ縮退する。
+    """
+    global_settings = get_settings()
+    owning = await oracle.get_owning_knowledge_base(document_id)
+    if owning is None:
+        return global_settings, None
+    effective, _applied = apply_adapter_config_or_global(
+        global_settings,
+        owning.adapter_config,
+        scope="ingestion",
+    )
+    return effective, owning
+
+
+def _dispatch_ingestion_job(
+    job_id: str,
+    *,
+    force: bool = False,
+) -> None:
+    """QUEUED ジョブの消費をワーカーへ通知する。HTTP 内では実行しない。"""
+    _ = (job_id, force)
+    request_ingestion_worker_wakeup()
+
+
 async def _attach_ingestion_job(
     result: UploadResult,
     ingestion_mode: UploadIngestionMode,
-    background_tasks: BackgroundTasks,
 ) -> UploadResult:
     """auto 指定時に取込 job を作り、upload result に添付する。"""
     if ingestion_mode != UploadIngestionMode.AUTO:
         return result
     job = await _create_ingestion_job(result)
     if job.status == IngestionJobStatus.QUEUED:
-        background_tasks.add_task(_run_ingestion_job, job.id)
+        _dispatch_ingestion_job(job.id)
     return result.model_copy(
         update={
             "ingestion_started": job.status == IngestionJobStatus.QUEUED,
@@ -755,14 +1098,13 @@ async def _enqueue_ingestion_job_for_document(
     document_id: str,
     *,
     force: bool,
-    background_tasks: BackgroundTasks | None,
 ) -> IngestionJob:
     """既存ドキュメントを job 化し、必要ならバックグラウンド実行へ渡す。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status == FileStatus.INGESTING:
+    if detail.status in (FileStatus.INGESTING, FileStatus.INDEXING):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
 
     source_profile = _source_profile_for_detail(detail)
@@ -800,18 +1142,64 @@ async def _enqueue_ingestion_job_for_document(
         parser_profile=source_profile.parser_profile,
         quality_warnings=source_profile.quality_warnings,
     )
-    if background_tasks is not None:
-        background_tasks.add_task(_run_ingestion_job, job.id, force=force)
+    _dispatch_ingestion_job(job.id, force=force)
     return job
 
 
-async def _list_active_ingestion_jobs(
+async def _enqueue_index_phase_job_for_document(
+    document_id: str,
+) -> IngestionJob:
+    """REVIEW 承認済みの文書に対し INDEX フェーズ job を投入する。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status != FileStatus.REVIEW:
+        raise HTTPException(
+            status_code=409,
+            detail="プレビュー確認待ちの文書のみ承認できます。",
+        )
+    source_profile = _source_profile_for_detail(detail)
+    job = await _create_ingestion_job_record(
+        oracle=oracle,
+        document_id=document_id,
+        parser_profile=source_profile.parser_profile,
+        quality_warnings=source_profile.quality_warnings,
+        phase=IngestionJobPhase.INDEX,
+    )
+    _dispatch_ingestion_job(job.id)
+    return job
+
+
+async def _enqueue_failed_segment_retry_job_for_document(
+    document_id: str,
+) -> IngestionJob:
+    """FAILED segment checkpoint のみを対象にした再試行 job を投入する。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None or detail.object_storage_path is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status in (FileStatus.INGESTING, FileStatus.INDEXING):
+        raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
+    segments = await oracle.list_ingestion_segments(document_id)
+    if not any(segment.status == "FAILED" for segment in segments):
+        raise HTTPException(
+            status_code=409,
+            detail="再試行対象の失敗 segment がありません。",
+        )
+    return await _enqueue_ingestion_job_for_document(
+        document_id,
+        force=True,
+    )
+
+
+async def _list_delete_blocking_ingestion_jobs(
     oracle: OracleClient,
     document_id: str,
 ) -> list[IngestionJob]:
-    """削除を止めるべき未完了の取込 job を返す。"""
+    """削除を止めるべき実行中の取込 job を返す。"""
     jobs: list[IngestionJob] = []
-    for status in ACTIVE_INGESTION_STATUSES:
+    for status in DELETE_BLOCKING_INGESTION_STATUSES:
         jobs.extend(await oracle.list_document_ingestion_jobs(document_id, status=status))
     return jobs
 
@@ -838,6 +1226,7 @@ async def _create_ingestion_job_record(
     parser_profile: str,
     quality_warnings: list[str],
     status: IngestionJobStatus = IngestionJobStatus.QUEUED,
+    phase: IngestionJobPhase = IngestionJobPhase.EXTRACT,
     skip_reason: str | None = None,
 ) -> IngestionJob:
     """取込 job を永続化する。"""
@@ -847,6 +1236,7 @@ async def _create_ingestion_job_record(
         id=uuid4().hex,
         document_id=document_id,
         status=status,
+        phase=phase,
         parser_profile=parser_profile,
         quality_warnings=quality_warnings,
         skip_reason=skip_reason,
@@ -970,6 +1360,371 @@ def _extraction_artifact_path(extraction: Mapping[str, object]) -> str | None:
     return None
 
 
+def _structured_extraction_from_detail(detail: DocumentDetail) -> StructuredExtraction:
+    """保存済み extraction JSON を export 用 StructuredExtraction へ正規化する。"""
+    try:
+        return StructuredExtraction.model_validate(detail.extraction)
+    except Exception:
+        raw_text = (
+            detail.extraction.get("raw_text")
+            if isinstance(detail.extraction, Mapping)
+            else ""
+        )
+        document_type = (
+            detail.extraction.get("document_type")
+            if isinstance(detail.extraction, Mapping)
+            else None
+        )
+        return StructuredExtraction(
+            raw_text=raw_text if isinstance(raw_text, str) else "",
+            document_type=document_type if isinstance(document_type, str) else "ドキュメント",
+        )
+
+
+def _document_extraction_export_content(
+    export_format: DocumentExtractionExportFormat,
+    extraction: StructuredExtraction,
+    payload: Mapping[str, object],
+) -> str:
+    """export format に応じた文字列表現を返す。"""
+    if export_format in {
+        DocumentExtractionExportFormat.JSON,
+        DocumentExtractionExportFormat.CHUNKS,
+    }:
+        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+    if export_format == DocumentExtractionExportFormat.HTML:
+        return _extraction_html(extraction)
+    return _extraction_markdown(extraction)
+
+
+def _document_extraction_export_content_type(
+    export_format: DocumentExtractionExportFormat,
+) -> str:
+    """export payload の media type を返す。"""
+    if export_format == DocumentExtractionExportFormat.MARKDOWN:
+        return "text/markdown; charset=utf-8"
+    if export_format == DocumentExtractionExportFormat.HTML:
+        return "text/html; charset=utf-8"
+    return "application/json; charset=utf-8"
+
+
+def _extraction_parser_backend(extraction: StructuredExtraction) -> str | None:
+    """quality_report / parser_artifacts から parser backend を読む。"""
+    if extraction.quality_report is not None and extraction.quality_report.parser_backend:
+        return extraction.quality_report.parser_backend
+    value = extraction.parser_artifacts.get("parser_backend")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _extraction_parser_profile(extraction: StructuredExtraction) -> str | None:
+    """quality_report / parser_artifacts から parser profile を読む。"""
+    if extraction.quality_report is not None and extraction.quality_report.parser_profile:
+        return extraction.quality_report.parser_profile
+    value = extraction.parser_artifacts.get("parser_profile")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _extraction_markdown(extraction: StructuredExtraction) -> str:
+    """StructuredExtraction を human review しやすい Markdown へ変換する。"""
+    lines: list[str] = []
+    current_page: int | None = None
+    if not extraction.elements and extraction.raw_text:
+        lines.append(extraction.raw_text)
+    for element in sorted(extraction.elements, key=lambda item: item.order):
+        if element.page_number is not None and element.page_number != current_page:
+            current_page = element.page_number
+            if lines:
+                lines.append("")
+            lines.append(f"<!-- page: {current_page} -->")
+        rendered = _element_markdown(element)
+        if rendered:
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append(rendered)
+    for asset in sorted(extraction.assets, key=_asset_sort_key):
+        if asset.page_number is not None and asset.page_number != current_page:
+            current_page = asset.page_number
+            if lines:
+                lines.append("")
+            lines.append(f"<!-- page: {current_page} -->")
+        rendered = _asset_markdown(asset)
+        if rendered:
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append(rendered)
+    return "\n".join(lines).strip() or extraction.raw_text
+
+
+def _element_markdown(element: DocumentElement) -> str:
+    """1 element を Markdown block へ変換する。"""
+    text = element.text.strip()
+    if not text:
+        return ""
+    if element.kind == "title":
+        if text.startswith("#"):
+            return text
+        level = _markdown_heading_level(element)
+        return f"{'#' * level} {text}"
+    if element.kind == "code":
+        language = _metadata_str(element.metadata.get("code_language"))
+        return f"```{language}\n{text}\n```"
+    if element.kind == "equation":
+        return f"$$\n{text}\n$$"
+    if element.kind == "figure":
+        return f"> 図: {text}"
+    if element.kind == "figure_caption":
+        return f"> 図注: {text}"
+    if element.kind == "table_caption":
+        return f"> 表注: {text}"
+    return text
+
+
+def _asset_markdown(asset: ExtractionAsset) -> str:
+    """first-class asset を Markdown 監査行として返す。"""
+    labels = [f"> Asset: {asset.kind} `{asset.asset_id}`"]
+    if asset.page_number is not None:
+        labels.append(f"> page: {asset.page_number}")
+    if asset.bbox:
+        labels.append(f"> bbox: {','.join(f'{value:g}' for value in asset.bbox)}")
+    if asset.alt_text:
+        labels.append(f"> alt: {asset.alt_text.strip()}")
+    return "\n".join(labels)
+
+
+def _extraction_html(extraction: StructuredExtraction) -> str:
+    """StructuredExtraction を安全に escaped HTML へ変換する。"""
+    title = escape(extraction.document_type or "ドキュメント")
+    tables_by_element_id = _tables_by_element_id(extraction)
+    if not extraction.elements and not extraction.assets:
+        body = _html_text_block(extraction.raw_text)
+        return f'<article data-document-type="{title}">\n{body}\n</article>'
+    lines = [f'<article data-document-type="{title}">']
+    current_page: int | None = None
+    if not extraction.elements and extraction.raw_text:
+        lines.append(_html_text_block(extraction.raw_text))
+    for element in sorted(extraction.elements, key=lambda item: item.order):
+        if element.page_number is not None and element.page_number != current_page:
+            current_page = element.page_number
+            lines.append(
+                f'  <p class="page-marker" data-page="{current_page}">'
+                f"page {current_page}</p>"
+            )
+        rendered = _element_html(element, tables_by_element_id=tables_by_element_id)
+        if rendered:
+            lines.append(rendered)
+    for asset in sorted(extraction.assets, key=_asset_sort_key):
+        if asset.page_number is not None and asset.page_number != current_page:
+            current_page = asset.page_number
+            lines.append(
+                f'  <p class="page-marker" data-page="{current_page}">'
+                f"page {current_page}</p>"
+            )
+        lines.append(_asset_html(asset))
+    lines.append("</article>")
+    return "\n".join(lines)
+
+
+def _asset_html(asset: ExtractionAsset) -> str:
+    """first-class asset を実体埋め込みなしの安全な HTML へ変換する。"""
+    attrs = _asset_html_attrs(asset)
+    label = asset.alt_text.strip() if asset.alt_text else asset.kind
+    return f'  <aside{attrs} class="asset-block">{_html_inline(label)}</aside>'
+
+
+def _element_html(
+    element: DocumentElement,
+    *,
+    tables_by_element_id: Mapping[str, ExtractionTable],
+) -> str:
+    """1 element を HTML block へ変換する。source text は必ず escape する。"""
+    text = element.text.strip()
+    attrs = _element_html_attrs(element)
+    if element.kind == "table":
+        table = tables_by_element_id.get(element.element_id or "")
+        if table is not None and table.cells:
+            return _structured_table_html(table, attrs)
+    if not text:
+        return ""
+    if element.kind == "title":
+        level = _markdown_heading_level(element)
+        return f"  <h{level}{attrs}>{_html_inline(text)}</h{level}>"
+    if element.kind == "code":
+        language = _metadata_str(element.metadata.get("code_language"))
+        class_attr = f' class="language-{escape(language, quote=True)}"' if language else ""
+        return f"  <pre{attrs}><code{class_attr}>{escape(text)}</code></pre>"
+    if element.kind == "equation":
+        return f'  <div{attrs} class="equation">{escape(text)}</div>'
+    if element.kind == "figure":
+        return f"  <figure{attrs}><figcaption>{_html_inline(text)}</figcaption></figure>"
+    if element.kind == "figure_caption":
+        return f'  <p{attrs} class="figure-caption">{_html_inline(text)}</p>'
+    if element.kind == "table_caption":
+        return f'  <p{attrs} class="table-caption">{_html_inline(text)}</p>'
+    if element.kind == "table":
+        return f'  <pre{attrs} class="table-block">{escape(text)}</pre>'
+    if element.kind == "list":
+        return f'  <div{attrs} class="list-block">{_html_text_lines(text)}</div>'
+    return f"  <p{attrs}>{_html_text_lines(text)}</p>"
+
+
+def _asset_html_attrs(asset: ExtractionAsset) -> str:
+    attrs: list[tuple[str, str]] = [
+        ("data-asset-id", asset.asset_id),
+        ("data-kind", asset.kind),
+    ]
+    if asset.page_number is not None:
+        attrs.append(("data-page", str(asset.page_number)))
+    if asset.bbox:
+        attrs.append(("data-bbox", ",".join(f"{value:g}" for value in asset.bbox)))
+    return "".join(f' {name}="{escape(value, quote=True)}"' for name, value in attrs)
+
+
+def _asset_sort_key(asset: ExtractionAsset) -> tuple[int, str]:
+    page_number = asset.page_number if asset.page_number is not None else 1_000_000
+    return page_number, asset.asset_id
+
+
+def _tables_by_element_id(extraction: StructuredExtraction) -> dict[str, ExtractionTable]:
+    """element_id から first-class table metadata を参照できるようにする。"""
+    tables: dict[str, ExtractionTable] = {}
+    for table in extraction.tables:
+        if table.element_id:
+            tables.setdefault(table.element_id, table)
+        tables.setdefault(table.table_id, table)
+    return tables
+
+
+def _structured_table_html(
+    table: ExtractionTable,
+    element_attrs: str,
+) -> str:
+    """ExtractionTable.cells を実 table として安全に HTML 化する。"""
+    table_id_attr = escape(table.table_id, quote=True)
+    table_attrs = f'{element_attrs} class="table-block" data-table-id="{table_id_attr}"'
+    lines: list[str] = []
+    if table.caption:
+        lines.append(
+            f'  <p class="table-caption" data-table-id="{table_id_attr}">'
+            f"{_html_inline(table.caption)}</p>"
+        )
+    lines.append(f"  <table{table_attrs}>")
+    lines.append("    <tbody>")
+    for row_index, cells in _table_cells_by_row(table).items():
+        lines.append(f'      <tr data-row="{row_index}">')
+        for cell in cells:
+            tag = "th" if row_index == 0 else "td"
+            cell_attrs = _table_cell_html_attrs(table, cell)
+            lines.append(f"        <{tag}{cell_attrs}>{_html_text_lines(cell.text)}</{tag}>")
+        lines.append("      </tr>")
+    lines.append("    </tbody>")
+    lines.append("  </table>")
+    return "\n".join(lines)
+
+
+def _table_cells_by_row(table: ExtractionTable) -> dict[int, list[ExtractionTableCell]]:
+    rows: dict[int, list[ExtractionTableCell]] = {}
+    for cell in sorted(table.cells, key=lambda item: (item.row, item.col)):
+        rows.setdefault(cell.row, []).append(cell)
+    return rows
+
+
+def _table_cell_html_attrs(table: ExtractionTable, cell: ExtractionTableCell) -> str:
+    row = cell.row
+    col = cell.col
+    row_span = cell.row_span
+    col_span = cell.col_span
+    bbox = cell.bbox
+    attrs = [
+        ("data-table-id", table.table_id),
+        ("data-row", str(row)),
+        ("data-col", str(col)),
+    ]
+    if row_span != 1:
+        attrs.append(("rowspan", str(row_span)))
+    if col_span != 1:
+        attrs.append(("colspan", str(col_span)))
+    if isinstance(bbox, list) and bbox:
+        attrs.append(("data-bbox", ",".join(f"{value:g}" for value in bbox)))
+    if formula_ref := _table_cell_metadata_label(cell, "formula_cell_ref"):
+        attrs.append(("data-formula-ref", formula_ref))
+    if formula_format := _table_cell_metadata_label(cell, "equation_format"):
+        attrs.append(("data-formula-format", formula_format))
+    if formula := _table_cell_metadata_label(cell, "formula"):
+        attrs.append(("data-formula", formula))
+    if formula_value := _table_cell_metadata_label(cell, "formula_value"):
+        attrs.append(("data-formula-value", formula_value))
+    return "".join(f' {name}="{escape(value, quote=True)}"' for name, value in attrs)
+
+
+def _table_cell_metadata_label(cell: ExtractionTableCell, key: str) -> str | None:
+    value = cell.metadata.get(key)
+    if isinstance(value, str | int | float):
+        cleaned = str(value).strip()
+        return cleaned[:1000] if cleaned else None
+    return None
+
+
+def _element_html_attrs(element: DocumentElement) -> str:
+    """レビュー時に lineage を追える最小限の data 属性を作る。"""
+    attrs: list[tuple[str, str]] = []
+    if element.element_id:
+        attrs.append(("data-element-id", element.element_id))
+    if element.parent_id:
+        attrs.append(("data-parent-id", element.parent_id))
+    if element.content_kind:
+        attrs.append(("data-content-kind", element.content_kind))
+    elif element.kind:
+        attrs.append(("data-content-kind", element.kind))
+    if element.source_parser:
+        attrs.append(("data-source-parser", element.source_parser))
+    if element.page_number is not None:
+        attrs.append(("data-page", str(element.page_number)))
+    if element.bbox:
+        attrs.append(("data-bbox", ",".join(f"{value:g}" for value in element.bbox)))
+    if not attrs:
+        return ""
+    return "".join(f' {name}="{escape(value, quote=True)}"' for name, value in attrs)
+
+
+def _html_text_block(text: str) -> str:
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    return f"  <p>{_html_text_lines(cleaned)}</p>"
+
+
+def _html_text_lines(text: str) -> str:
+    return "<br>\n".join(escape(line) for line in text.splitlines())
+
+
+def _html_inline(text: str) -> str:
+    return escape(" ".join(line.strip() for line in text.splitlines() if line.strip()))
+
+
+def _markdown_heading_level(element: DocumentElement) -> int:
+    """element metadata / section_path から Markdown heading level を決める。"""
+    metadata_level = _metadata_int(element.metadata.get("section_level"))
+    if metadata_level is not None:
+        return max(1, min(metadata_level, 6))
+    if element.section_path:
+        return max(1, min(len(element.section_path), 6))
+    return 1
+
+
+def _metadata_str(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _metadata_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 async def _document_artifact_paths(
     oracle: OracleClient,
     detail: DocumentDetail,
@@ -1018,7 +1773,6 @@ def _segment_status_from_detail(
 async def _run_ingestion_job(
     job_id: str,
     *,
-    force: bool = False,
     propagate_errors: bool = False,
 ) -> None:
     """キュー投入済み取込 job を実行する。"""
@@ -1032,11 +1786,17 @@ async def _run_ingestion_job(
         return current is not None and current.status == IngestionJobStatus.CANCELLED
 
     try:
-        await _ingest_existing_document(
-            job.document_id,
-            force=force,
-            cancel_checker=is_cancelled,
-        )
+        if job.phase == IngestionJobPhase.INDEX:
+            await _index_reviewed_document(
+                job.document_id,
+                cancel_checker=is_cancelled,
+            )
+        else:
+            await _ingest_existing_document(
+                job.document_id,
+                force=True,
+                cancel_checker=is_cancelled,
+            )
     except HTTPException as exc:
         await _finish_ingestion_job_unless_cancelled(
             oracle,

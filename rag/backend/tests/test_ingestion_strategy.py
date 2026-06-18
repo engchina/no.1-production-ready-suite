@@ -45,6 +45,7 @@ class FakeOracle:
     def __init__(self) -> None:
         self.saved_extraction: StructuredExtraction | None = None
         self.saved_chunk_count = 0
+        self.atomic_index_save_count = 0
         self.saved_graph_index: GraphIndex | None = None
         self.graph_document_id: str | None = None
         self.statuses: list[FileStatus] = []
@@ -84,6 +85,18 @@ class FakeOracle:
         vectors: list[list[float]],
     ) -> None:
         _ = document_id, vectors
+        self.saved_chunk_count = len(chunks)
+
+    async def save_index(
+        self,
+        document_id: str,
+        extraction: StructuredExtraction,
+        chunks: list[Any],
+        vectors: list[list[float]],
+    ) -> None:
+        _ = document_id, vectors
+        self.atomic_index_save_count += 1
+        self.saved_extraction = extraction
         self.saved_chunk_count = len(chunks)
 
     async def list_document_knowledge_bases(
@@ -779,6 +792,7 @@ async def test_ingestion_pipeline_keeps_successful_external_adapter_for_office(
     )
 
     assert detail.status == FileStatus.INDEXED
+    assert oracle.atomic_index_save_count == 1
     assert oracle.saved_extraction is not None
     assert oracle.saved_extraction.raw_text == "Docling adapter が抽出した Office 本文"
     assert oracle.saved_extraction.parser_artifacts["parser_backend"] == "docling"
@@ -816,6 +830,7 @@ async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index() 
         )
 
     assert oracle.statuses == [FileStatus.INGESTING]
+    assert oracle.atomic_index_save_count == 0
     assert oracle.saved_extraction is None
     assert oracle.saved_chunk_count == 0
 
@@ -827,7 +842,6 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
         rag_graph_enabled=True,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -868,7 +882,6 @@ async def test_ingestion_pipeline_splits_pdf_into_page_segments() -> None:
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -907,7 +920,6 @@ async def test_ingestion_pipeline_retries_truncated_pdf_segment_per_page() -> No
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -956,7 +968,6 @@ async def test_ingestion_pipeline_retries_only_failed_checkpoint_segment() -> No
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -999,7 +1010,6 @@ async def test_ingestion_pipeline_preserves_succeeded_segment_on_later_failure()
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1043,7 +1053,6 @@ async def test_ingestion_pipeline_records_schema_validation_detail_on_failed_seg
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1126,7 +1135,6 @@ async def test_ingestion_pipeline_merges_cached_succeeded_segments_on_failed_ret
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1201,7 +1209,6 @@ async def test_ingestion_pipeline_reuses_all_succeeded_segment_artifacts() -> No
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1287,7 +1294,6 @@ async def test_ingestion_pipeline_merges_segment_structure_with_unique_lineage()
             rag_pdf_max_segments=10,
             rag_chunk_size=800,
             rag_chunk_overlap=120,
-            rag_max_chunks_per_document=512,
             oci_genai_embedding_model="cohere.embed-v4.0",
             oci_enterprise_ai_models=[],
             oci_enterprise_ai_default_model="",
@@ -1369,7 +1375,6 @@ async def test_ingestion_pipeline_reextracts_missing_succeeded_segment_artifact(
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",

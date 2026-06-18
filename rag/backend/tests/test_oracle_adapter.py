@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from app.clients.oracle import (
+    DocumentDeleteBlockedByRunningIngestionError,
     OracleClient,
     OracleWalletPasswordRequiredError,
     SelectAiUnavailableError,
@@ -426,6 +427,53 @@ async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
     update_statements = [call.statement for call in pool.connection.calls[1:]]
     assert any("SET status = 'QUEUED'" in statement for statement in update_statements)
     assert any("SET status = 'FAILED'" in statement for statement in update_statements)
+    # 固着防止: 再キュー/失敗時は文書状態も復旧する。
+    document_updates = [
+        call for call in pool.connection.calls if "UPDATE rag_documents" in call.statement
+    ]
+    document_statuses = {call.parameters.get("status") for call in document_updates}
+    assert "UPLOADED" in document_statuses  # 再キューした EXTRACT job の文書
+    assert "ERROR" in document_statuses  # 試行上限超過 job の文書
+    assert any(
+        "DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls
+    )
+
+
+async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
+    """active な job が無いのに INGESTING で取り残された文書を ERROR へ復旧する。"""
+    stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[
+            [],  # stale RUNNING job は無い
+            [{"document_id": "doc-stuck"}],  # orphan 文書
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    recovered = await client.recover_stale_ingestion_jobs(stale_before=stale_at, limit=10)
+
+    assert recovered == []
+    orphan_select = next(
+        call
+        for call in pool.connection.calls
+        if "FROM rag_documents d" in call.statement
+        and "NOT EXISTS" in call.statement
+        and call.statement.strip().startswith("SELECT")
+    )
+    assert "d.status IN ('INGESTING', 'INDEXING')" in orphan_select.statement
+    chunk_delete = next(
+        call for call in pool.connection.calls if "DELETE FROM rag_chunks" in call.statement
+    )
+    assert chunk_delete.parameters["document_id"] == "doc-stuck"
+    document_update = next(
+        call
+        for call in pool.connection.calls
+        if "UPDATE rag_documents" in call.statement
+        and call.parameters.get("document_id") == "doc-stuck"
+    )
+    assert document_update.parameters["status"] == "ERROR"
+    assert "status IN ('INGESTING', 'INDEXING')" in document_update.statement
+    assert pool.connection.commits == 1
 
 
 async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_column() -> None:
@@ -978,6 +1026,45 @@ async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> N
     assert metadata["content_kind"] == "text"
 
 
+async def test_oci_save_index_persists_extraction_and_chunks_atomically() -> None:
+    """index 保存は extraction と chunk/vector を 1 transaction で置換する。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    saved = await client.save_index(
+        "doc-1",
+        StructuredExtraction(raw_text="新しい抽出本文", confidence=0.98),
+        [
+            Chunk(
+                index=0,
+                text="新しい抽出本文",
+                start_offset=0,
+                end_offset=7,
+                metadata={"section_path": "本文", "content_kind": "text"},
+            )
+        ],
+        [[0.1, 0.2, 0.3]],
+    )
+
+    assert saved[0].chunk_id == "doc-1:0"
+    assert saved[0].metadata["content_kind"] == "text"
+    assert pool.connection.commits == 1
+    statements = [call.statement for call in pool.connection.calls]
+    update_index = next(
+        index for index, statement in enumerate(statements) if "UPDATE rag_documents" in statement
+    )
+    delete_index = next(
+        index for index, statement in enumerate(statements) if "DELETE FROM rag_chunks" in statement
+    )
+    assert update_index < delete_index
+    update_call = pool.connection.calls[update_index]
+    extraction_payload = json.loads(str(update_call.parameters["extraction"]))
+    assert extraction_payload["raw_text"] == "新しい抽出本文"
+    inserted = pool.connection.many_calls[0].rows[0]
+    assert inserted["chunk_id"] == "doc-1:0"
+    assert inserted["embedding"] == array("f", [0.1, 0.2, 0.3])
+
+
 async def test_oci_list_chunk_metadata_adds_traceable_lineage() -> None:
     """metadata 一覧も citation 可視化に必要な chunk lineage を補完する。"""
     pool = FakeOraclePool(
@@ -1043,10 +1130,14 @@ async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_m
                             "element_ids": ["tbl-main", "row-group-1"],
                             "page_start": 2,
                             "page_end": 2,
+                            "bbox": [10, 20, 80, 40],
                             "chunk_group_id": "grp-table",
                             "source_parser": "local_office_structure",
                             "bbox_coordinate_mode": "xywh",
                             "bbox_unit": "percent",
+                            "dependency_edges": [
+                                {"parent_id": "tbl-main", "child_id": "row-group-1"}
+                            ],
                             "table_data_row_start": 1,
                             "table_data_row_end": 12,
                             "table_header_repeated": True,
@@ -1064,8 +1155,14 @@ async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_m
     chunk = chunks[0]
     assert chunk.chunk_id == "doc-1:7"
     assert chunk.element_ids == ["tbl-main", "row-group-1"]
+    assert chunk.bbox == [10.0, 20.0, 80.0, 40.0]
     assert chunk.content_kind == "table"
     assert chunk.chunk_group_id == "grp-table"
+    assert chunk.metadata["element_ids"] == ["tbl-main", "row-group-1"]
+    assert chunk.metadata["bbox"] == [10, 20, 80, 40]
+    assert chunk.metadata["dependency_edges"] == [
+        {"parent_id": "tbl-main", "child_id": "row-group-1"}
+    ]
     assert chunk.metadata["bbox_coordinate_mode"] == "xywh"
     assert chunk.metadata["bbox_unit"] == "percent"
     assert chunk.metadata["table_data_row_start"] == 1
@@ -1372,6 +1469,85 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     assert call.parameters["max_chunks_per_group"] == 2
 
 
+async def test_oci_context_dependency_chunks_uses_dependency_metadata_sql() -> None:
+    """OCI mode の dependency context は anchor lineage token で候補を絞り込む。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "document_id": "doc-1",
+                    "chunk_id": "doc-1:3",
+                    "chunk_text": "キャプション: 120000 円以上は部門長承認。",
+                    "metadata_json": json.dumps(
+                        {
+                            "chunk_index": 3,
+                            "element_ids": "fig-1-caption",
+                            "parent_element_ids": "fig-1",
+                            "dependency_edges": [
+                                {"parent_id": "fig-1", "child_id": "fig-1-caption"}
+                            ],
+                        }
+                    ),
+                    "chunk_index": 3,
+                    "file_name": "approval.pdf",
+                    "category_name": "社内規程",
+                    "score": 0,
+                }
+            ]
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    anchor = RetrievedChunk(
+        document_id="doc-1",
+        chunk_id="doc-1:2",
+        text="図: 承認フロー。",
+        score=0.91,
+        file_name="approval.pdf",
+        metadata={"chunk_index": 2, "element_ids": "fig-1"},
+    )
+
+    chunks = await client.context_dependency_chunks([anchor], max_chunks_per_anchor=2)
+
+    assert [chunk.chunk_id for chunk in chunks] == ["doc-1:3"]
+    assert chunks[0].score == 0.91
+    assert chunks[0].metadata["parent_element_ids"] == "fig-1"
+    call = pool.connection.calls[0]
+    assert "d.status = 'INDEXED'" in call.statement
+    assert "d.document_id = :filter_document_id" in call.statement
+    assert "c.chunk_id <> :anchor_chunk_id" in call.statement
+    assert "JSON_SERIALIZE(c.metadata_json RETURNING VARCHAR2(32767))" in call.statement
+    assert "LIKE :dependency_token_0 ESCAPE '\\'" in call.statement
+    assert "ROWNUM <= :candidate_limit" in call.statement
+    assert call.parameters["filter_document_id"] == "doc-1"
+    assert call.parameters["anchor_index"] == 2
+    assert call.parameters["anchor_chunk_id"] == "doc-1:2"
+    assert call.parameters["candidate_limit"] == 16
+    assert call.parameters["dependency_token_0"] == "%fig-1%"
+
+
+async def test_oci_context_dependency_chunks_falls_back_without_anchor_lineage() -> None:
+    """旧 metadata で anchor lineage がない場合は従来の lineage metadata 候補へ戻す。"""
+    pool = FakeOraclePool(execute_results=[[]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    anchor = RetrievedChunk(
+        document_id="doc-1",
+        chunk_id="doc-1:2",
+        text="図: 承認フロー。",
+        score=0.91,
+        file_name="approval.pdf",
+        metadata={"chunk_index": 2},
+    )
+
+    chunks = await client.context_dependency_chunks([anchor], max_chunks_per_anchor=2)
+
+    assert chunks == []
+    call = pool.connection.calls[0]
+    assert "JSON_EXISTS(c.metadata_json, '$.element_ids')" in call.statement
+    assert "JSON_EXISTS(c.metadata_json, '$.parent_element_ids')" in call.statement
+    assert "JSON_EXISTS(c.metadata_json, '$.dependency_edges')" in call.statement
+    assert "dependency_token_0" not in call.parameters
+
+
 async def test_oci_update_error_status_clears_chunks_and_extraction() -> None:
     """ERROR への状態遷移では Oracle 側でも古い chunk と抽出 JSON を外す。"""
     errored = _oracle_document_row(status="ERROR", extraction=None)
@@ -1423,17 +1599,59 @@ async def test_oci_delete_document_removes_chunks_and_document_with_access_scope
     )
     assert "duplicate_of_document_id = :document_id" in duplicate_clear.statement
     assert duplicate_clear.parameters["document_id"] == "doc-1"
-    assert any("DELETE FROM rag_chunks" in statement for statement in statements)
+    segment_delete_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if "DELETE FROM rag_ingestion_segments" in statement
+    )
+    job_delete_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if "DELETE FROM rag_ingestion_jobs" in statement
+    )
+    chunk_delete_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if "DELETE FROM rag_chunks" in statement
+    )
     document_delete = next(
         call
         for call in pool.connection.calls
         if call.statement.startswith("DELETE FROM rag_documents")
     )
+    document_delete_index = statements.index(document_delete.statement)
+    assert segment_delete_index < document_delete_index
+    assert job_delete_index < document_delete_index
+    assert chunk_delete_index < document_delete_index
+    assert "d.document_id IN (:access_document_id_0)" in statements[segment_delete_index]
+    assert "d.document_id IN (:access_document_id_0)" in statements[job_delete_index]
     assert "document_id = :document_id" in document_delete.statement
     assert "document_id IN (:access_document_id_0)" in document_delete.statement
     assert document_delete.parameters["document_id"] == "doc-1"
     assert document_delete.parameters["access_document_id_0"] == "doc-1"
     assert pool.connection.commits == 1
+
+
+async def test_oci_delete_document_rolls_back_when_running_job_appears() -> None:
+    """削除 transaction 中に RUNNING job が見えたら document 物理削除へ進まない。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [_oracle_document_row()],
+            [],
+            [{"job_id": "job-running"}],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with pytest.raises(DocumentDeleteBlockedByRunningIngestionError):
+        await client.delete_document("doc-1")
+
+    statements = [call.statement for call in pool.connection.calls]
+    assert any("DELETE FROM rag_ingestion_jobs" in statement for statement in statements)
+    assert any("j.status = 'RUNNING'" in statement for statement in statements)
+    assert not any(statement.startswith("DELETE FROM rag_documents") for statement in statements)
+    assert pool.connection.commits == 0
+    assert pool.connection.rollbacks == 1
 
 
 async def test_oci_select_ai_uses_dbms_cloud_ai_generate_with_binds() -> None:
@@ -1630,6 +1848,10 @@ def test_oracle_document_schema_includes_ingestion_metadata_columns() -> None:
     assert "duplicate_of_document_id VARCHAR2(64)" in ddl
     assert "rag_documents_content_sha256_idx" in ddl
     assert "rag_documents_tenant_status_uploaded_idx" in ddl
+    assert (
+        "CHECK (status IN ('UPLOADED', 'INGESTING', 'REVIEW', "
+        "'INDEXING', 'INDEXED', 'ERROR'))" in ddl
+    )
 
 
 def test_oracle_knowledge_base_schema_includes_membership_tables() -> None:
@@ -1655,10 +1877,12 @@ def test_oracle_ingestion_job_schema_includes_queue_table() -> None:
     assert "quality_warnings JSON" in ddl
     assert "attempt_count    NUMBER(5) DEFAULT 0 NOT NULL" in ddl
     assert "max_attempts     NUMBER(5) DEFAULT 3 NOT NULL" in ddl
+    assert "phase            VARCHAR2(16) DEFAULT 'EXTRACT' NOT NULL" in ddl
     assert (
         "CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED'))"
         in ddl
     )
+    assert "CHECK (phase IN ('EXTRACT', 'INDEX'))" in ddl
     assert "CHECK (attempt_count >= 0 AND max_attempts >= 1)" in ddl
     assert "REFERENCES rag_documents (document_id)" in ddl
     assert "ON rag_ingestion_jobs (tenant_id_hash, status, queued_at DESC)" in ddl
@@ -1714,6 +1938,8 @@ def test_oracle_search_audit_schema_redacts_query_body() -> None:
     assert "context_diversified_count number(10) default 0 not null" in normalized
     assert "context_group_expanded_count number(10) default 0 not null" in normalized
     assert "context_expanded_count number(10) default 0 not null" in normalized
+    assert "context_adaptive_expanded_count number(10) default 0 not null" in normalized
+    assert "context_dependency_promoted_count number(10) default 0 not null" in normalized
     assert "context_compressed_count number(10) default 0 not null" in normalized
     assert "context_compression_saved_chars number(10) default 0 not null" in normalized
     assert "agent_memory_retrieved_count number(10) default 0 not null" in normalized
@@ -1769,13 +1995,65 @@ def test_oracle_ingestion_audit_schema_redacts_ocr_body() -> None:
     assert "document_id            varchar2(64) not null" in normalized
     assert "source_sha256          char(64) not null" in normalized
     assert "source_bytes           number(19) not null" in normalized
+    assert "parser_backend         varchar2(80)" in normalized
+    assert "parser_profile         varchar2(80)" in normalized
+    assert "segment_count          number(10) default 0 not null" in normalized
+    assert "fallback_count         number(10) default 0 not null" in normalized
+    assert "failed_segment_count   number(10) default 0 not null" in normalized
     assert "chunk_count            number(10) default 0 not null" in normalized
     assert "vector_count           number(10) default 0 not null" in normalized
     assert "check (outcome in ('success', 'error'))" in normalized
     assert "rag_ingestion_audit_tenant_created_idx" in ddl
     assert "rag_ingestion_audit_document_created_idx" in ddl
+    assert "rag_ingestion_audit_parser_created_idx" in ddl
     assert "raw_text" not in normalized
     assert "ocr_text" not in normalized
+
+
+async def test_oci_ingestion_audit_persists_file_processing_metrics() -> None:
+    """Oracle 取込監査は parser / segment の低機密集計を保存する。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.save_ingestion_audit_event(
+        {
+            "event_type": "rag.ingestion",
+            "trace_id": "trace-ingest",
+            "request_id": "request-1",
+            "tenant_id_hash": "a" * 64,
+            "user_id_hash": "b" * 64,
+            "document_id": "doc-1",
+            "outcome": "success",
+            "source_sha256": "c" * 64,
+            "source_bytes": 1024,
+            "document_type": "PDF",
+            "extraction_confidence": 0.95,
+            "parser_backend": "docling",
+            "parser_profile": "enterprise_ai_pdf_layout",
+            "segment_count": 4,
+            "fallback_count": 1,
+            "failed_segment_count": 2,
+            "chunk_count": 30,
+            "vector_count": 30,
+            "elapsed_ms": 1234.5,
+        }
+    )
+
+    call = pool.connection.calls[0]
+    assert "INSERT INTO rag_ingestion_audit" in call.statement
+    assert "parser_backend" in call.statement
+    assert "parser_profile" in call.statement
+    assert "segment_count" in call.statement
+    assert "fallback_count" in call.statement
+    assert "failed_segment_count" in call.statement
+    assert call.parameters["parser_backend"] == "docling"
+    assert call.parameters["parser_profile"] == "enterprise_ai_pdf_layout"
+    assert call.parameters["segment_count"] == 4
+    assert call.parameters["fallback_count"] == 1
+    assert call.parameters["failed_segment_count"] == 2
+    assert "raw_text" not in call.parameters
+    assert "ocr_text" not in call.parameters
+    assert pool.connection.commits == 1
 
 
 def test_oracle_audit_schema_bundle_includes_search_and_ingestion_tables() -> None:

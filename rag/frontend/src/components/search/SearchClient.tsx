@@ -12,7 +12,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { ToggleChip } from "@/components/ui/toggle-chip";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { ApiError, type RetrievedChunk, type SearchMode, type SelectAiAction } from "@/lib/api";
+import {
+  ApiError,
+  type RetrievedChunk,
+  type SearchDiagnostics,
+  type SearchMode,
+  type SelectAiAction,
+} from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
 import { t } from "@/lib/i18n";
 import { useSelectAi } from "@/lib/queries";
@@ -24,6 +30,7 @@ interface Meta {
   trace_id: string;
   elapsed_ms: number;
   guardrail_warnings: string[];
+  diagnostics: Partial<SearchDiagnostics> | null;
 }
 
 const MODES: SearchMode[] = ["hybrid", "vector", "keyword"];
@@ -118,6 +125,7 @@ export function SearchClient() {
               trace_id: m.trace_id,
               elapsed_ms: m.elapsed_ms,
               guardrail_warnings: m.guardrail_warnings,
+              diagnostics: m.diagnostics ?? null,
             }),
           onDelta: (text) => setAnswer((prev) => prev + text),
           onCitations: (list) => setCitations(list),
@@ -161,7 +169,7 @@ export function SearchClient() {
   return (
     <div>
       <PageHeader title={t("nav.search")} subtitle={t("search.initial")} />
-      <div className="grid gap-6 p-8 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.9fr)]">
+      <div className="grid grid-cols-1 gap-6 p-8 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.9fr)]">
         <section className="space-y-6">
           {/* 検索バー */}
           <div className="space-y-3">
@@ -316,14 +324,7 @@ export function SearchClient() {
                     ) : null}
                   </p>
                   {meta && phase === "done" ? (
-                    <p className="tnum mt-4 flex flex-wrap gap-x-4 border-t border-border pt-3 text-xs text-muted">
-                      <span>
-                        {t("search.meta.elapsed")}: {Math.round(meta.elapsed_ms)} ms
-                      </span>
-                      <span>
-                        {t("search.meta.trace")}: {meta.trace_id.slice(0, 12)}
-                      </span>
-                    </p>
+                    <SearchExecutionMeta meta={meta} />
                   ) : null}
                 </CardContent>
               </Card>
@@ -340,7 +341,7 @@ export function SearchClient() {
                   <h2 className="mb-3 text-sm font-semibold text-foreground">
                     {t("search.citations")}（{citations.length}）
                   </h2>
-                  <ul className="space-y-3">
+                  <ul className="bounded-scroll-area-lg space-y-3 rounded-lg border border-border bg-background p-3">
                     {citations.map((chunk, i) => (
                       <CitationCard
                         key={chunk.chunk_id}
@@ -360,6 +361,60 @@ export function SearchClient() {
       </div>
     </div>
   );
+}
+
+function SearchExecutionMeta({ meta }: { meta: Meta }) {
+  const diagnostics = meta.diagnostics ?? {};
+  const items = searchExecutionItems(diagnostics);
+  return (
+    <div className="mt-4 space-y-3 border-t border-border pt-3">
+      <p className="tnum flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+        <span>
+          {t("search.meta.elapsed")}: {Math.round(meta.elapsed_ms)} ms
+        </span>
+        <span>
+          {t("search.meta.trace")}: {meta.trace_id.slice(0, 12)}
+        </span>
+      </p>
+      {items.length ? (
+        <dl
+          aria-label={t("search.meta.execution")}
+          className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4"
+        >
+          {items.map((item) => (
+            <div
+              key={item.key}
+              className="min-w-0 rounded-md border border-border bg-background px-3 py-2"
+            >
+              <dt className="truncate text-[11px] font-medium text-muted">{item.label}</dt>
+              <dd className="tnum mt-0.5 text-sm font-semibold text-foreground">{item.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </div>
+  );
+}
+
+function searchExecutionItems(diagnostics: Partial<SearchDiagnostics>) {
+  return [
+    { key: "retrieved", label: t("search.meta.retrieved"), value: diagnostics.retrieved_count },
+    { key: "reranked", label: t("search.meta.reranked"), value: diagnostics.reranked_count },
+    { key: "citations", label: t("search.meta.citations"), value: diagnostics.citation_count },
+    {
+      key: "adaptive",
+      label: t("search.meta.adaptive"),
+      value: diagnostics.context_adaptive_expanded_count,
+    },
+    {
+      key: "dependency",
+      label: t("search.meta.dependency"),
+      value: diagnostics.context_dependency_promoted_count,
+    },
+    { key: "group", label: t("search.meta.group"), value: diagnostics.context_group_expanded_count },
+    { key: "neighbor", label: t("search.meta.neighbor"), value: diagnostics.context_expanded_count },
+    { key: "compressed", label: t("search.meta.compressed"), value: diagnostics.context_compressed_count },
+  ].flatMap((item) => (typeof item.value === "number" ? [{ ...item, value: item.value }] : []));
 }
 
 function buildSearchFilters({

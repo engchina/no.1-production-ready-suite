@@ -24,6 +24,16 @@ on:
         required: false
         default: "docs/evaluation/file-processing-golden-set.json"
         type: string
+      file_processing_trend_baseline_path:
+        description: "file-processing trend baseline path。空文字なら trend regression gate を skip します。"
+        required: false
+        default: ""
+        type: string
+      file_processing_staging_trend_baseline_path:
+        description: "file-processing staging trend baseline path。空文字なら staging trend regression gate を skip します。"
+        required: false
+        default: ""
+        type: string
       fail_on_file_processing_pending:
         description: "file-processing の staging pending check を失敗扱いにします。"
         required: false
@@ -34,6 +44,31 @@ on:
         required: false
         default: false
         type: boolean
+      require_real_world_file_processing_manifest:
+        description: "staging 実行時に staging_dataset_policy 付き real-world manifest を必須にします。"
+        required: false
+        default: true
+        type: boolean
+      install_parser_adapters:
+        description: "Docling / Marker / Unstructured optional dependencies を同期します。"
+        required: false
+        default: false
+        type: boolean
+      run_parser_adapter_contract:
+        description: "parser adapter schema remap contract artifact を出力します。"
+        required: false
+        default: true
+        type: boolean
+      parser_adapter_contract_strict:
+        description: "外部 adapter feature flags を有効化し、contract failure を gate 失敗にします。real-world staging では自動有効化されます。"
+        required: false
+        default: false
+        type: boolean
+      parser_adapter_contract_source_kinds:
+        description: "contract 対象 source kind のカンマ区切り。空なら CLI 既定を使います。"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: rag-evaluation-nightly-${{ github.ref }}
@@ -62,7 +97,28 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: uv sync --locked --dev
+        env:
+          INPUT_INSTALL_PARSER_ADAPTERS: ${{ github.event.inputs.install_parser_adapters }}
+          INPUT_PARSER_ADAPTER_CONTRACT_STRICT: ${{ github.event.inputs.parser_adapter_contract_strict }}
+          INPUT_RUN_FILE_PROCESSING_STAGING: ${{ github.event.inputs.run_file_processing_staging }}
+          INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST: ${{ github.event.inputs.require_real_world_file_processing_manifest }}
+        run: |
+          set -euo pipefail
+          strict_adapter_contract_required=false
+          if [ "${INPUT_RUN_FILE_PROCESSING_STAGING:-false}" = "true" ] && \
+             [ "${INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST:-true}" != "false" ]; then
+            strict_adapter_contract_required=true
+          fi
+          if [ "${INPUT_INSTALL_PARSER_ADAPTERS:-false}" = "true" ] || \
+             [ "${INPUT_PARSER_ADAPTER_CONTRACT_STRICT:-false}" = "true" ] || \
+             [ "$strict_adapter_contract_required" = "true" ]; then
+            # 外部 parser は services/parsers/<name> の独立サービスへ切り出した。in-process smoke
+            # では共存可能な docling + unstructured のみ導入する(marker は pillow<11 で unstructured と
+            # 共存不可のため、marker の schema-remap 検証は各サービス側で行う)。
+            uv sync --locked --dev --extra docling --extra unstructured
+          else
+            uv sync --locked --dev
+          fi
 
       - name: Run evaluation and search load gates
         env:
@@ -71,8 +127,14 @@ jobs:
           INPUT_GOLDEN_SET_PATH: ${{ github.event.inputs.golden_set_path }}
           INPUT_SEARCH_LOAD_PATH: ${{ github.event.inputs.search_load_path }}
           INPUT_FILE_PROCESSING_MANIFEST_PATH: ${{ github.event.inputs.file_processing_manifest_path }}
+          INPUT_FILE_PROCESSING_TREND_BASELINE_PATH: ${{ github.event.inputs.file_processing_trend_baseline_path }}
+          INPUT_FILE_PROCESSING_STAGING_TREND_BASELINE_PATH: ${{ github.event.inputs.file_processing_staging_trend_baseline_path }}
           INPUT_FAIL_ON_FILE_PROCESSING_PENDING: ${{ github.event.inputs.fail_on_file_processing_pending }}
           INPUT_RUN_FILE_PROCESSING_STAGING: ${{ github.event.inputs.run_file_processing_staging }}
+          INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST: ${{ github.event.inputs.require_real_world_file_processing_manifest }}
+          INPUT_RUN_PARSER_ADAPTER_CONTRACT: ${{ github.event.inputs.run_parser_adapter_contract }}
+          INPUT_PARSER_ADAPTER_CONTRACT_STRICT: ${{ github.event.inputs.parser_adapter_contract_strict }}
+          INPUT_PARSER_ADAPTER_CONTRACT_SOURCE_KINDS: ${{ github.event.inputs.parser_adapter_contract_source_kinds }}
           RAG_EVALUATION_TENANT_ID: ${{ vars.RAG_EVALUATION_TENANT_ID }}
           RAG_EVALUATION_USER_ID: ${{ vars.RAG_EVALUATION_USER_ID }}
           RAG_SEARCH_LOAD_TENANT_ID: ${{ vars.RAG_SEARCH_LOAD_TENANT_ID }}
@@ -83,14 +145,51 @@ jobs:
           golden_set_path="${INPUT_GOLDEN_SET_PATH:-evaluation/compare.example.json}"
           search_load_path="${INPUT_SEARCH_LOAD_PATH:-evaluation/search-load.example.json}"
           file_processing_manifest_path="${INPUT_FILE_PROCESSING_MANIFEST_PATH:-docs/evaluation/file-processing-golden-set.json}"
+          file_processing_trend_baseline_path="${INPUT_FILE_PROCESSING_TREND_BASELINE_PATH:-}"
+          file_processing_staging_trend_baseline_path="${INPUT_FILE_PROCESSING_STAGING_TREND_BASELINE_PATH:-}"
+          adapter_contract_strict_enabled=false
+          if [ "${INPUT_PARSER_ADAPTER_CONTRACT_STRICT:-false}" = "true" ]; then
+            adapter_contract_strict_enabled=true
+          fi
+          if [ "${INPUT_RUN_FILE_PROCESSING_STAGING:-false}" = "true" ] && \
+             [ "${INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST:-true}" != "false" ]; then
+            adapter_contract_strict_enabled=true
+          fi
           mkdir -p ../artifacts
+
+          parser_adapter_contract_status=0
+          if [ "${INPUT_RUN_PARSER_ADAPTER_CONTRACT:-true}" != "false" ]; then
+            parser_adapter_contract_args=(--output ../artifacts/parser-adapter-compatibility.json)
+            if [ -n "$file_processing_manifest_path" ]; then
+              parser_adapter_contract_args+=(--manifest "../${file_processing_manifest_path}")
+            fi
+            if [ -n "${INPUT_PARSER_ADAPTER_CONTRACT_SOURCE_KINDS:-}" ]; then
+              IFS=',' read -ra source_kinds <<< "${INPUT_PARSER_ADAPTER_CONTRACT_SOURCE_KINDS}"
+              for source_kind in "${source_kinds[@]}"; do
+                source_kind="$(echo "$source_kind" | xargs)"
+                if [ -n "$source_kind" ]; then
+                  parser_adapter_contract_args+=(--source-kind "$source_kind")
+                fi
+              done
+            fi
+            if [ "$adapter_contract_strict_enabled" = "true" ]; then
+              parser_adapter_contract_args+=(--strict)
+            fi
+            uv run python -m app.rag.parser_adapter_contract_cli \
+              "${parser_adapter_contract_args[@]}" || parser_adapter_contract_status=$?
+          else
+            echo "run_parser_adapter_contract=false のため parser adapter contract gate を skip します。"
+          fi
 
           file_processing_status=0
           file_processing_staging_status=0
+          file_processing_trend_status=0
+          file_processing_staging_trend_status=0
           if [ -n "$file_processing_manifest_path" ]; then
             file_processing_args=(
               "../${file_processing_manifest_path}"
               --output ../artifacts/file-processing-report.json
+              --trend-output ../artifacts/file-processing-trend.json
               --github-annotations
             )
             if [ "${INPUT_FAIL_ON_FILE_PROCESSING_PENDING:-false}" = "true" ]; then
@@ -98,11 +197,46 @@ jobs:
             fi
             uv run python -m app.rag.file_processing_golden_cli \
               "${file_processing_args[@]}" || file_processing_status=$?
+            if [ -n "$file_processing_trend_baseline_path" ]; then
+              if [ -f "../${file_processing_trend_baseline_path}" ]; then
+                uv run python -m app.rag.file_processing_trend_cli \
+                  ../artifacts/file-processing-trend.json \
+                  --baseline "../${file_processing_trend_baseline_path}" \
+                  --output ../artifacts/file-processing-trend-regression.json \
+                  || file_processing_trend_status=$?
+              else
+                echo "::error::file-processing trend baseline not found: ${file_processing_trend_baseline_path}"
+                file_processing_trend_status=2
+              fi
+            fi
             if [ "${INPUT_RUN_FILE_PROCESSING_STAGING:-false}" = "true" ]; then
+              staging_args=(
+                "../${file_processing_manifest_path}"
+                --output ../artifacts/file-processing-staging-report.json
+                --trend-output ../artifacts/file-processing-staging-trend.json
+                --cleanup
+              )
+              if [ "$adapter_contract_strict_enabled" = "true" ]; then
+                staging_args+=(--parser-adapter-contract-strict)
+              fi
+              if [ "${INPUT_REQUIRE_REAL_WORLD_FILE_PROCESSING_MANIFEST:-true}" != "false" ]; then
+                staging_args+=(--require-real-world-policy)
+              fi
               uv run python -m app.rag.file_processing_staging_cli \
-                "../${file_processing_manifest_path}" \
-                --output ../artifacts/file-processing-staging-report.json \
-                --cleanup || file_processing_staging_status=$?
+                "${staging_args[@]}" || file_processing_staging_status=$?
+              if [ -n "$file_processing_staging_trend_baseline_path" ]; then
+                if [ -f "../${file_processing_staging_trend_baseline_path}" ]; then
+                  uv run python -m app.rag.file_processing_trend_cli \
+                    ../artifacts/file-processing-staging-trend.json \
+                    --baseline "../${file_processing_staging_trend_baseline_path}" \
+                    --output ../artifacts/file-processing-staging-trend-regression.json \
+                    --require-promotion-ready \
+                    || file_processing_staging_trend_status=$?
+                else
+                  echo "::error::file-processing staging trend baseline not found: ${file_processing_staging_trend_baseline_path}"
+                  file_processing_staging_trend_status=2
+                fi
+              fi
             fi
           else
             echo "file_processing_manifest_path が空のため file-processing gate を skip します。"
@@ -110,13 +244,25 @@ jobs:
 
           if [ -z "$api_base_url" ]; then
             echo "RAG_EVALUATION_API_BASE_URL が未設定のため nightly evaluation を skip します。"
+            if [ "$parser_adapter_contract_status" -ne 0 ]; then
+              echo "::error::parser adapter contract gate failed with exit code ${parser_adapter_contract_status}"
+              exit "$parser_adapter_contract_status"
+            fi
             if [ "$file_processing_status" -ne 0 ]; then
               echo "::error::file-processing gate failed with exit code ${file_processing_status}"
               exit "$file_processing_status"
             fi
+            if [ "$file_processing_trend_status" -ne 0 ]; then
+              echo "::error::file-processing trend regression gate failed with exit code ${file_processing_trend_status}"
+              exit "$file_processing_trend_status"
+            fi
             if [ "$file_processing_staging_status" -ne 0 ]; then
               echo "::error::file-processing staging gate failed with exit code ${file_processing_staging_status}"
               exit "$file_processing_staging_status"
+            fi
+            if [ "$file_processing_staging_trend_status" -ne 0 ]; then
+              echo "::error::file-processing staging trend regression gate failed with exit code ${file_processing_staging_trend_status}"
+              exit "$file_processing_staging_trend_status"
             fi
             exit 0
           fi
@@ -145,9 +291,21 @@ jobs:
             echo "::error::file-processing gate failed with exit code ${file_processing_status}"
             exit "$file_processing_status"
           fi
+          if [ "$file_processing_trend_status" -ne 0 ]; then
+            echo "::error::file-processing trend regression gate failed with exit code ${file_processing_trend_status}"
+            exit "$file_processing_trend_status"
+          fi
           if [ "$file_processing_staging_status" -ne 0 ]; then
             echo "::error::file-processing staging gate failed with exit code ${file_processing_staging_status}"
             exit "$file_processing_staging_status"
+          fi
+          if [ "$file_processing_staging_trend_status" -ne 0 ]; then
+            echo "::error::file-processing staging trend regression gate failed with exit code ${file_processing_staging_trend_status}"
+            exit "$file_processing_staging_trend_status"
+          fi
+          if [ "$parser_adapter_contract_status" -ne 0 ]; then
+            echo "::error::parser adapter contract gate failed with exit code ${parser_adapter_contract_status}"
+            exit "$parser_adapter_contract_status"
           fi
           if [ "$evaluation_status" -ne 0 ]; then
             echo "::error::evaluation gate failed with exit code ${evaluation_status}"

@@ -37,7 +37,15 @@ import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
 
 const LIMIT = 20;
-const FILTERS: (FileStatus | "ALL")[] = ["ALL", "UPLOADED", "INGESTING", "INDEXED", "ERROR"];
+const FILTERS: (FileStatus | "ALL")[] = [
+  "ALL",
+  "UPLOADED",
+  "INGESTING",
+  "REVIEW",
+  "INDEXING",
+  "INDEXED",
+  "ERROR",
+];
 const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
 
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
@@ -49,7 +57,8 @@ export function FileListClient() {
   const [q, setQ] = useState("");
   const [knowledgeBaseId, setKnowledgeBaseId] = useState("ALL");
   const [offset, setOffset] = useState(0);
-  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const [bulkIngest, setBulkIngest] = useState<{ done: number; total: number } | null>(null);
+  const [bulkDelete, setBulkDelete] = useState<{ done: number; total: number } | null>(null);
 
   const selection = useSelection<string>();
   const status = filter === "ALL" ? undefined : filter;
@@ -69,9 +78,9 @@ export function FileListClient() {
   const items = page?.items ?? [];
   const pageIds = items.map((d) => d.id);
   const allSelected = pageIds.length > 0 && selection.count === pageIds.length;
-  const ingestibleSelected = items.filter(
-    (d) => selection.isSelected(d.id) && INGESTIBLE.has(d.status)
-  );
+  const selectedDocuments = items.filter((d) => selection.isSelected(d.id));
+  const ingestibleSelected = selectedDocuments.filter((d) => INGESTIBLE.has(d.status));
+  const bulkBusy = bulkIngest !== null || bulkDelete !== null;
   const knowledgeBaseOptions = useMemo<SelectFieldOption<string>[]>(
     () => [
       { value: "ALL", label: t("fileList.knowledgeBaseFilter.all") },
@@ -94,21 +103,70 @@ export function FileListClient() {
 
   const runBulkIngest = async () => {
     const targets = ingestibleSelected.map((d) => d.id);
-    if (targets.length === 0) return;
-    setBulk({ done: 0, total: targets.length });
+    if (targets.length === 0 || bulkBusy) return;
+    setBulkIngest({ done: 0, total: targets.length });
     for (const [index, id] of targets.entries()) {
       try {
         await api.enqueueDocumentIngestionJob(id);
       } catch {
         // 個別失敗は継続。状態は再取得で反映される。
       }
-      setBulk({ done: index + 1, total: targets.length });
+      setBulkIngest({ done: index + 1, total: targets.length });
     }
-    setBulk(null);
+    setBulkIngest(null);
     selection.clear();
     qc.invalidateQueries({ queryKey: ["documents"] });
     qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     qc.invalidateQueries({ queryKey: ["dashboard", "summary"] });
+  };
+
+  const runBulkDelete = async () => {
+    const targets = selectedDocuments.map((doc) => doc.id);
+    if (targets.length === 0 || bulkBusy) return;
+    const confirmed = await confirm({
+      title: t("fileList.bulkDelete.confirm.title", { count: targets.length }),
+      description: t("fileList.bulkDelete.confirm.description", { count: targets.length }),
+      confirmLabel: t("fileList.bulkDelete.confirm.confirm"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!confirmed) return;
+
+    setBulkDelete({ done: 0, total: targets.length });
+    let deleted = 0;
+    let failed = 0;
+    let firstError: string | null = null;
+    for (const [index, id] of targets.entries()) {
+      try {
+        await api.deleteDocument(id);
+        deleted += 1;
+      } catch (error) {
+        failed += 1;
+        firstError =
+          firstError ??
+          (error instanceof ApiError ? error.message : t("fileList.bulkDelete.toast.failedHint"));
+      }
+      setBulkDelete({ done: index + 1, total: targets.length });
+    }
+    setBulkDelete(null);
+    selection.clear();
+    qc.invalidateQueries({ queryKey: ["documents"] });
+    qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
+    qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
+    qc.invalidateQueries({ queryKey: ["documents", "stats"] });
+    qc.invalidateQueries({ queryKey: ["dashboard", "summary"] });
+
+    if (failed === 0) {
+      toast.success(t("fileList.bulkDelete.toast.deleted", { count: deleted }));
+    } else if (deleted > 0) {
+      toast.warning(t("fileList.bulkDelete.toast.partial", { deleted, total: targets.length }), {
+        description: firstError ?? t("fileList.bulkDelete.toast.failedHint"),
+      });
+    } else {
+      toast.error(t("fileList.bulkDelete.toast.failed"), {
+        description: firstError ?? t("fileList.bulkDelete.toast.failedHint"),
+      });
+    }
   };
 
   const runDelete = async (doc: DocumentSummary) => {
@@ -209,15 +267,33 @@ export function FileListClient() {
               <Button
                 size="sm"
                 onClick={() => void runBulkIngest()}
-                loading={bulk !== null}
-                disabled={ingestibleSelected.length === 0}
+                loading={bulkIngest !== null}
+                disabled={bulkBusy || ingestibleSelected.length === 0}
               >
-                {bulk === null ? <Sparkles size={14} aria-hidden /> : null}
-                {bulk
-                  ? t("fileList.bulkQueueRunning", { done: bulk.done, total: bulk.total })
+                {bulkIngest === null ? <Sparkles size={14} aria-hidden /> : null}
+                {bulkIngest
+                  ? t("fileList.bulkQueueRunning", {
+                      done: bulkIngest.done,
+                      total: bulkIngest.total,
+                    })
                   : `${t("fileList.bulkQueue")} (${ingestibleSelected.length})`}
               </Button>
-              <Button variant="ghost" size="sm" onClick={selection.clear}>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => void runBulkDelete()}
+                loading={bulkDelete !== null}
+                disabled={bulkBusy || selectedDocuments.length === 0}
+              >
+                {bulkDelete === null ? <Trash2 size={14} aria-hidden /> : null}
+                {bulkDelete
+                  ? t("fileList.bulkDeleteRunning", {
+                      done: bulkDelete.done,
+                      total: bulkDelete.total,
+                    })
+                  : `${t("fileList.bulkDelete")} (${selectedDocuments.length})`}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={selection.clear} disabled={bulkBusy}>
                 <X size={14} aria-hidden />
                 {t("fileList.clearSelection")}
               </Button>
@@ -235,51 +311,52 @@ export function FileListClient() {
         ) : items.length > 0 ? (
           <>
             <Card className="overflow-hidden">
-              <div className="overflow-x-auto">
-              <table className="min-w-[980px] w-full text-sm">
-                <thead className="bg-background text-left text-muted">
-                  <tr>
-                    <th className="w-10 px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={allSelected}
-                        onChange={() => selection.toggleAll(pageIds)}
-                        aria-label={t("fileList.selectAllAria")}
-                        className="cursor-pointer accent-[var(--primary)]"
+              <div className="bounded-scroll-area-lg overflow-x-auto">
+                <table className="min-w-[980px] w-full text-sm">
+                  <thead className="sticky top-0 z-10 bg-background text-left text-muted shadow-[inset_0_-1px_0_var(--border)]">
+                    <tr>
+                      <th className="w-10 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={() => selection.toggleAll(pageIds)}
+                          aria-label={t("fileList.selectAllAria")}
+                          className="cursor-pointer accent-[var(--primary)]"
+                        />
+                      </th>
+                      <th className="px-4 py-3 font-medium">{t("fileList.col.fileName")}</th>
+                      <th className="px-4 py-3 font-medium">{t("fileList.col.knowledgeBases")}</th>
+                      <th className="px-4 py-3 font-medium">{t("fileList.col.category")}</th>
+                      <th className="px-4 py-3 font-medium">{t("fileList.col.status")}</th>
+                      <th className="px-4 py-3 text-right font-medium">{t("fileList.col.size")}</th>
+                      <th className="px-4 py-3 font-medium">{t("fileList.col.uploadedAt")}</th>
+                      <th className="px-4 py-3 text-right font-medium">{t("fileList.col.actions")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((doc) => (
+                      <Row
+                        key={doc.id}
+                        doc={doc}
+                        selected={selection.isSelected(doc.id)}
+                        onToggle={() => selection.toggle(doc.id)}
+                        onIngest={(force) =>
+                          enqueueIngestion.mutate({ id: doc.id, force })
+                        }
+                        onDelete={() => void runDelete(doc)}
+                        ingesting={
+                          enqueueIngestion.isPending &&
+                          enqueueIngestion.variables?.id === doc.id
+                        }
+                        deleting={
+                          deleteDocument.isPending &&
+                          deleteDocument.variables === doc.id
+                        }
+                        actionsDisabled={bulkBusy}
                       />
-                    </th>
-                    <th className="px-4 py-3 font-medium">{t("fileList.col.fileName")}</th>
-                    <th className="px-4 py-3 font-medium">{t("fileList.col.knowledgeBases")}</th>
-                    <th className="px-4 py-3 font-medium">{t("fileList.col.category")}</th>
-                    <th className="px-4 py-3 font-medium">{t("fileList.col.status")}</th>
-                    <th className="px-4 py-3 text-right font-medium">{t("fileList.col.size")}</th>
-                    <th className="px-4 py-3 font-medium">{t("fileList.col.uploadedAt")}</th>
-                    <th className="px-4 py-3 text-right font-medium">{t("fileList.col.actions")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((doc) => (
-                    <Row
-                      key={doc.id}
-                      doc={doc}
-                      selected={selection.isSelected(doc.id)}
-                      onToggle={() => selection.toggle(doc.id)}
-                      onIngest={(force) =>
-                        enqueueIngestion.mutate({ id: doc.id, force })
-                      }
-                      onDelete={() => void runDelete(doc)}
-                      ingesting={
-                        enqueueIngestion.isPending &&
-                        enqueueIngestion.variables?.id === doc.id
-                      }
-                      deleting={
-                        deleteDocument.isPending &&
-                        deleteDocument.variables === doc.id
-                      }
-                    />
-                  ))}
-                </tbody>
-              </table>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </Card>
 
@@ -338,6 +415,7 @@ function Row({
   onDelete,
   ingesting,
   deleting,
+  actionsDisabled,
 }: {
   doc: DocumentSummary;
   selected: boolean;
@@ -346,6 +424,7 @@ function Row({
   onDelete: () => void;
   ingesting: boolean;
   deleting: boolean;
+  actionsDisabled: boolean;
 }) {
   return (
     <tr className={cn("border-t border-border", selected && "bg-info-bg/30")}>
@@ -382,7 +461,7 @@ function Row({
             <Button
               size="sm"
               loading={ingesting}
-              disabled={deleting}
+              disabled={deleting || actionsDisabled}
               onClick={() => onIngest(false)}
             >
               {!ingesting ? <Sparkles size={14} aria-hidden /> : null}
@@ -393,7 +472,7 @@ function Row({
             variant="danger"
             size="sm"
             loading={deleting}
-            disabled={ingesting}
+            disabled={ingesting || actionsDisabled}
             onClick={onDelete}
             aria-label={t("fileList.delete.aria", { name: doc.file_name })}
           >

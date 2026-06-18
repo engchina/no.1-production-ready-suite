@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Banner } from "@/components/ui/banner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -32,6 +33,7 @@ import {
   ApiError,
   type EnterpriseAiConfiguredModel,
   type EnterpriseAiModelSettings,
+  type EnterpriseAiVlmInputMode,
   type GenerativeAiModelSettings,
   type ModelSettingsCheckStatus,
   type ModelSettingsData,
@@ -80,6 +82,23 @@ const STATUS_LABEL_KEYS: Record<ModelSettingsCheckStatus, I18nKey> = {
 
 const CHECK_KEYS: CheckKey[] = ["enterprise_ai", "generative_ai", "embedding_dim"];
 const DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json";
+const VLM_INPUT_MODE_OPTIONS = [
+  {
+    value: "auto",
+    label: t("settings.model.enterprise.vlmInputMode.auto"),
+    description: t("settings.model.enterprise.vlmInputMode.auto.description"),
+  },
+  {
+    value: "files_api",
+    label: t("settings.model.enterprise.vlmInputMode.filesApi"),
+    description: t("settings.model.enterprise.vlmInputMode.filesApi.description"),
+  },
+  {
+    value: "inline_image",
+    label: t("settings.model.enterprise.vlmInputMode.inlineImage"),
+    description: t("settings.model.enterprise.vlmInputMode.inlineImage.description"),
+  },
+] as const satisfies readonly SelectFieldOption<EnterpriseAiVlmInputMode>[];
 
 /** モデル設定画面。既存 Settings のランタイム値を編集する。 */
 export function ModelSettingsClient() {
@@ -449,6 +468,15 @@ export function ModelSettingsClient() {
                   value={draft.enterprise_ai.api_path}
                   placeholder={t("settings.model.placeholder.apiPath")}
                   onChange={(value) => updateEnterprise("api_path", value)}
+                  className="md:col-span-2"
+                />
+                <SelectField
+                  id="enterprise-vlm-input-mode"
+                  label={t("settings.model.enterprise.vlmInputMode")}
+                  value={draft.enterprise_ai.vlm_input_mode}
+                  options={VLM_INPUT_MODE_OPTIONS}
+                  helper={t("settings.model.enterprise.vlmInputModeHelp")}
+                  onValueChange={(value) => updateEnterprise("vlm_input_mode", value)}
                   className="md:col-span-2"
                 />
                 <NumberField
@@ -1147,6 +1175,7 @@ function buildModelSettingsJsonPreview(draft: ModelSettingsPayload): string {
         })),
       default_model_id: draft.enterprise_ai.default_model_id,
       api_path: draft.enterprise_ai.api_path,
+      vlm_input_mode: draft.enterprise_ai.vlm_input_mode,
       text_payload_template: draft.enterprise_ai.text_payload_template,
       vision_payload_template: draft.enterprise_ai.vision_payload_template,
       text_response_path: draft.enterprise_ai.text_response_path,
@@ -1257,6 +1286,7 @@ function cloneSettings(settings: ModelSettingsPayload): ModelSettingsPayload {
   return {
     enterprise_ai: {
       ...settings.enterprise_ai,
+      vlm_input_mode: settings.enterprise_ai.vlm_input_mode ?? "auto",
       models: settings.enterprise_ai.models.map((model) => ({ ...model })),
     },
     generative_ai: { ...settings.generative_ai },

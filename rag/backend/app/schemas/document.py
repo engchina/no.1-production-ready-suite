@@ -4,68 +4,33 @@ from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
+from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
+from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
+
+__all__ = [
+    "SourceModality",
+    "SourcePreviewKind",
+    "SourceProfile",
+]
 
 
 class FileStatus(StrEnum):
     """ファイル処理状態。
 
-    RAG はアップロード後に取込(抽出→チャンク→埋め込み→索引)し、
-    成功した文書を検索対象の INDEXED として扱う。
+    RAG はアップロード後に 2 段階で取込む。前段(INGESTING)で parse/抽出を行い、
+    人手のプレビュー確認待ち(REVIEW)で停止する。承認後に後段(INDEXING)で
+    チャンク→埋め込み→索引を行い、成功した文書を検索対象の INDEXED として扱う。
+    REVIEW / INDEXING は検索対象に含めず、INDEXED のみを検索可能とする。
     """
 
     UPLOADED = "UPLOADED"
     INGESTING = "INGESTING"
+    REVIEW = "REVIEW"
+    INDEXING = "INDEXING"
     INDEXED = "INDEXED"
     ERROR = "ERROR"
-
-
-class SourceModality(StrEnum):
-    """アップロード原本の大まかな種類。"""
-
-    PDF = "pdf"
-    IMAGE = "image"
-    TEXT = "text"
-    HTML = "html"
-    EMAIL = "email"
-    OFFICE = "office"
-    AUDIO = "audio"
-    UNKNOWN = "unknown"
-
-
-class SourcePreviewKind(StrEnum):
-    """原本プレビューの既定表示種別。"""
-
-    PDF = "pdf"
-    IMAGE = "image"
-    TEXT = "text"
-    HTML = "html"
-    EMAIL = "email"
-    OFFICE = "office"
-    UNSUPPORTED = "unsupported"
-
-
-class SourceProfile(BaseModel):
-    """アップロード原本の品質・処理方針メタデータ。"""
-
-    original_file_name: str
-    sanitized_file_name: str
-    extension: str | None = None
-    content_type: str
-    inferred_content_type: str | None = None
-    file_size_bytes: int
-    content_sha256: str
-    modality: SourceModality
-    parser_profile: str
-    parser_backend: str = "enterprise_ai"
-    parser_version: str = "v1"
-    preview_kind: SourcePreviewKind = SourcePreviewKind.UNSUPPORTED
-    text_charset: str | None = None
-    duplicate_of_document_id: str | None = None
-    unsupported_reason: str | None = None
-    quality_status: str = "ready"
-    quality_warnings: list[str] = Field(default_factory=list)
 
 
 class BatchUploadFailedItem(BaseModel):
@@ -88,12 +53,24 @@ class IngestionJobStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class IngestionJobPhase(StrEnum):
+    """取込 job の処理フェーズ。
+
+    EXTRACT は parse/抽出を行い REVIEW(プレビュー確認待ち)で停止する前段、
+    INDEX は承認後にチャンク→埋め込み→索引を行う後段。
+    """
+
+    EXTRACT = "EXTRACT"
+    INDEX = "INDEX"
+
+
 class IngestionJob(BaseModel):
     """キュー投入された取込 job。"""
 
     id: str
     document_id: str
     status: IngestionJobStatus
+    phase: IngestionJobPhase = IngestionJobPhase.EXTRACT
     parser_profile: str
     quality_warnings: list[str] = Field(default_factory=list)
     skip_reason: str | None = None
@@ -128,6 +105,25 @@ class DocumentDetail(DocumentSummary):
     object_storage_path: str | None = None
     extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
+
+
+class DocumentIngestionConfigData(BaseModel):
+    """文書の取込設定スナップショットと owning KB の現行設定のドリフト状況。
+
+    Parser/Chunking は取込時にしか効かないため、owning KB の現行設定と、
+    実際に取込時へ刻まれた chunk metadata を比較し、再取込が必要かを示す。
+    """
+
+    document_id: str
+    is_indexed: bool = False
+    owning_knowledge_base: KnowledgeBaseRef | None = None
+    # owning KB の現行設定を重ねた「これから取り込むなら」の有効値。
+    effective_chunking_strategy: str
+    effective_parser_adapter_backend: str
+    # 実際に取込時へ刻まれた値(INDEXED 済みのときのみ観測できる)。
+    observed_chunking_strategy: str | None = None
+    observed_parser_backend: str | None = None
+    config_drift: bool = False
 
 
 class UploadResult(BaseModel):
@@ -172,7 +168,34 @@ class DocumentChunkView(BaseModel):
     chunk_group_id: str | None = None
     source_parser: str | None = None
     element_ids: list[str] = Field(default_factory=list)
-    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DocumentExtractionExportFormat(StrEnum):
+    """構造化抽出の監査用 export 形式。"""
+
+    JSON = "json"
+    MARKDOWN = "markdown"
+    HTML = "html"
+    CHUNKS = "chunks"
+
+
+class DocumentExtractionExport(BaseModel):
+    """Docling / Marker 風に extraction を非 embedding 形式で確認する view。"""
+
+    document_id: str
+    file_name: str
+    format: DocumentExtractionExportFormat
+    content_type: str
+    content: str = ""
+    payload: dict[str, object] = Field(default_factory=dict)
+    chunks: list[DocumentChunkView] = Field(default_factory=list)
+    parser_backend: str | None = None
+    parser_profile: str | None = None
+    page_count: int = 0
+    element_count: int = 0
+    table_count: int = 0
+    asset_count: int = 0
 
 
 class IngestionSegment(BaseModel):
@@ -189,6 +212,35 @@ class IngestionSegment(BaseModel):
     artifact_path: str | None = None
     error_code: str | None = None
     error_message: str | None = None
+
+
+class DocumentElementTextEdit(BaseModel):
+    """REVIEW 中の人手修正: 要素 1 件のテキスト差し替え。"""
+
+    element_id: str = Field(..., max_length=128)
+    text: str = Field(default="", max_length=200000)
+
+
+class DocumentTableCellTextEdit(BaseModel):
+    """REVIEW 中の人手修正: 表セル 1 件のテキスト差し替え(table_id + row + col で同定)。"""
+
+    table_id: str = Field(..., max_length=128)
+    row: int = Field(..., ge=0)
+    col: int = Field(..., ge=0)
+    text: str = Field(default="", max_length=200000)
+
+
+class DocumentApproveRequest(BaseModel):
+    """承認(index)リクエスト。任意で REVIEW 中のテキスト修正を伴う。
+
+    bbox・構造・section などはサーバ側の抽出結果を保持し、テキストのみ差し替える。
+    """
+
+    raw_text: str | None = Field(default=None, max_length=2000000)
+    element_edits: list[DocumentElementTextEdit] = Field(default_factory=list, max_length=5000)
+    table_cell_edits: list[DocumentTableCellTextEdit] = Field(
+        default_factory=list, max_length=20000
+    )
 
 
 class DocumentDeleteResult(BaseModel):

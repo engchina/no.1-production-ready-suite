@@ -48,6 +48,8 @@ class RagSearchAuditEvent(BaseModel):
     context_diversified_count: int = 0
     context_group_expanded_count: int = 0
     context_expanded_count: int = 0
+    context_adaptive_expanded_count: int = 0
+    context_dependency_promoted_count: int = 0
     context_compressed_count: int = 0
     context_compression_saved_chars: int = 0
     agent_memory_retrieved_count: int = 0
@@ -140,6 +142,12 @@ def record_rag_search_audit(
         ),
         context_expanded_count=(
             diagnostics.context_expanded_count if diagnostics is not None else 0
+        ),
+        context_adaptive_expanded_count=(
+            diagnostics.context_adaptive_expanded_count if diagnostics is not None else 0
+        ),
+        context_dependency_promoted_count=(
+            diagnostics.context_dependency_promoted_count if diagnostics is not None else 0
         ),
         context_compressed_count=(
             diagnostics.context_compressed_count if diagnostics is not None else 0

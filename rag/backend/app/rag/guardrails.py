@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
+from app.rag.guardrail_adapter import resolve_guardrail_adapter
 
 PROMPT_INJECTION_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
@@ -104,19 +105,20 @@ class GuardrailPolicy:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
+        self._params = resolve_guardrail_adapter(self._settings)
 
     def validate_query(self, query: str) -> GuardrailResult:
         """検索クエリを検査し、必要なら拒否する。"""
         sanitized = re.sub(r"\s+", " ", query).strip()
         findings: list[GuardrailFinding] = []
-        if self._settings.guardrail_mask_sensitive_identifiers:
+        if self._params.mask_sensitive_identifiers:
             sanitized, sensitive_findings = _mask_sensitive_identifiers(sanitized)
             findings.extend(sensitive_findings)
 
-        if len(sanitized) > self._settings.guardrail_max_query_chars:
+        if len(sanitized) > self._params.max_query_chars:
             return GuardrailResult(
                 allowed=False,
-                sanitized_text=sanitized[: self._settings.guardrail_max_query_chars],
+                sanitized_text=sanitized[: self._params.max_query_chars],
                 findings=[
                     *findings,
                     GuardrailFinding(
@@ -127,7 +129,7 @@ class GuardrailPolicy:
                 ],
             )
 
-        if self._settings.guardrail_block_prompt_injection:
+        if self._params.block_prompt_injection:
             for pattern in PROMPT_INJECTION_PATTERNS:
                 if pattern.search(sanitized):
                     return GuardrailResult(
@@ -172,14 +174,19 @@ class GuardrailPolicy:
                 ],
             )
         sanitized = answer
-        if self._settings.guardrail_mask_sensitive_identifiers:
+        if self._params.mask_sensitive_identifiers:
             sanitized, sensitive_findings = _mask_sensitive_identifiers(sanitized)
             findings.extend(sensitive_findings)
-        if context is not None and not evaluate_groundedness(sanitized, context).grounded:
+        if context is not None and not evaluate_groundedness(
+            sanitized,
+            context,
+            min_overlap=self._params.grounding_min_overlap,
+            min_ratio=self._params.grounding_min_ratio,
+        ).grounded:
             findings.append(
                 GuardrailFinding(
                     code="low_groundedness",
-                    severity="warning",
+                    severity="error" if self._params.audit_emphasis else "warning",
                     message="回答と検索根拠の重なりが少ないため、引用を確認してください。",
                 )
             )
@@ -214,8 +221,18 @@ def _sensitive_replacement(match: re.Match[str]) -> str:
     return f"{label}{SENSITIVE_VALUE_MASK}"
 
 
-def evaluate_groundedness(answer: str, context: str) -> GroundednessEvaluation:
-    """回答が引用 context と最低限重なっているかを軽量に評価する。"""
+def evaluate_groundedness(
+    answer: str,
+    context: str,
+    *,
+    min_overlap: int = MIN_GROUNDING_OVERLAP,
+    min_ratio: float = MIN_GROUNDING_RATIO,
+) -> GroundednessEvaluation:
+    """回答が引用 context と最低限重なっているかを軽量に評価する。
+
+    `min_overlap` / `min_ratio` は Guardrail アダプターの policy が解決する閾値。
+    既定は現行定数で、standard policy と一致する。
+    """
     if not answer.strip() or not context.strip():
         return GroundednessEvaluation(
             grounded=True,
@@ -248,7 +265,7 @@ def evaluate_groundedness(answer: str, context: str) -> GroundednessEvaluation:
         )
     score = round(min(1.0, len(overlap) / len(answer_features)), 4)
     return GroundednessEvaluation(
-        grounded=len(overlap) >= MIN_GROUNDING_OVERLAP or score >= MIN_GROUNDING_RATIO,
+        grounded=len(overlap) >= min_overlap or score >= min_ratio,
         score=score,
         overlap_count=len(overlap),
         answer_feature_count=len(answer_features),
