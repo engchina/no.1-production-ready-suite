@@ -703,6 +703,7 @@ export interface EvaluationRunRequestBody {
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
   thresholds?: EvaluationThresholds | null;
+  suite?: EvaluationSuiteName | null;
   rag_overrides?: EvaluationRagOverrides | null;
 }
 
@@ -748,6 +749,7 @@ export interface EvaluationThresholdFailure {
 export interface EvaluationMetrics {
   case_count: number;
   error_count: number;
+  evaluation_suite: EvaluationSuiteName;
   evaluated_k: number;
   precision_at_k: number;
   recall_at_k: number;
@@ -822,6 +824,7 @@ export interface EvaluationCompareRequestBody {
   experiments: EvaluationExperiment[];
   ranking_metric?: EvaluationMetricName;
   thresholds?: EvaluationThresholds | null;
+  suite?: EvaluationSuiteName | null;
 }
 
 export interface EvaluationExperimentResult {

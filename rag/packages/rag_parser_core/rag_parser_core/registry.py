@@ -54,6 +54,11 @@ EXTERNAL_ADAPTER_PACKAGES = {
     "dots_ocr": "dots_ocr",
 }
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
+# service 系 backend。外部 package / parser microservice ではなく、backend が OCI
+# クラウドサービス(Enterprise AI VLM / Document Understanding)を直接呼ぶ。core は
+# 決定論・非 network を保つため、ここでは実行せず sentinel(extraction=None)を返し、
+# 実際の呼び出しは backend(ingestion)側へ委譲する。
+SERVICE_ADAPTER_BACKENDS = frozenset({"enterprise_ai_vlm", "oci_document_understanding"})
 
 # 外部 adapter 実行の注入点。backend は HTTP runner を、service/test は in-process を渡す。
 ExternalAdapterRunner = Callable[
@@ -657,6 +662,17 @@ def parse_with_registry(
             template="unsupported_legacy_office_binary",
             warnings=("unsupported_legacy_office_binary",),
             unsupported_reason="legacy_office_binary_not_supported",
+        )
+
+    normalized_backend = adapter_backend.strip().casefold()
+    if normalized_backend in SERVICE_ADAPTER_BACKENDS:
+        # 明示選択された service backend は core では実行せず、backend(ingestion)が
+        # OCI クラウドサービスを直接呼ぶ。fallback ではなく意図的な選択なので
+        # fallback_used は立てない。
+        return ParserRegistryResult(
+            extraction=None,
+            parser_backend=normalized_backend,
+            template="enterprise_ai_fallback",
         )
 
     adapter_warnings = _external_adapter_disabled_warnings(

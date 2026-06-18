@@ -70,7 +70,12 @@
 - **技術選定は本 AGENTS.md の確定スタックを正とする。** フロントエンドのフレームワーク・ライブラリ・パターンは Vite + React Router + TypeScript + Tailwind + shadcn/ui + TanStack Query + Zustand を採用する。
 
 **ナビゲーション/画面構成**:
-- 折りたたみ可能な**サイドナビ**。セクション: 「データ取込」(ダッシュボード/アップロード/文書インデックス)・「RAG」(検索)・「設定」(OCI 認証/モデル/Object Storage/DB/プロンプト/Parser アダプター/Chunking アダプター/Retrieval アダプター/Grounding アダプター/Generation アダプター/Guardrail アダプター/Vector Index アダプター/Evaluation アダプター/GraphRAG アダプター/Agentic アダプター)。
+- 折りたたみ可能な**サイドナビ**。4 セクション構成:
+  - **データ取込**: ダッシュボード/アップロード/文書インデックス/知識ベース管理。
+  - **RAG**: RAG 検索/RAG 評価。
+  - **RAG パイプライン**: RAG パイプラインの各段階を切り替えるアダプター群を**パイプライン順**に並べる — Parser(解析)→ Chunking(分割)→ Vector Index(索引)→ Retrieval(検索)→ Grounding(後処理)→ Generation(生成)→ Guardrail(ガードレール)→ Evaluation(評価)→ GraphRAG → Agentic。**これらは「設定」ではなくパイプライン挙動の切替であるため独立セクションに置く**(インフラ設定と混在させない)。
+  - **システム設定**: OCI 認証/アップロード保存先(Object Storage)/モデル/データベース。
+- サイドナビのラベルは**日本語第一**とし、パイプライン各段階は `解析 (Parser)` のように「日本語+英語正式名」併記の短縮形(`sidebarLabelKey`)で表示する。一方**ページタイトル/`aria-label` は AGENTS.md 準拠の正式名(例: `Parser アダプター`)を維持**する(`nav.*` と `nav.*.sidebar` の二段管理。新アダプター追加時も同様にする)。
 - レイアウト構成要素: header / footer / breadcrumb / sideTabBar / tabs。
 - 主要画面: ダッシュボード(主要機能ハブ + メトリクスカード + RAG フロー + 最近のアクティビティ + システム情報)、アップロード、文書インデックス、RAG 検索、各種設定、**文書プレビュー作業領域(DocumentPreviewWorkspace)**。
 

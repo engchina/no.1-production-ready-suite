@@ -15,7 +15,19 @@ AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
 ParserAdapterBackend = Literal[
-    "local", "auto", "docling", "marker", "unstructured", "mineru", "dots_ocr"
+    "local",
+    "auto",
+    "docling",
+    "marker",
+    "unstructured",
+    "mineru",
+    "dots_ocr",
+    # service 系 backend（外部 Python package / parser microservice ではなく OCI クラウド
+    # サービスを backend から直接呼ぶ）。enterprise_ai_vlm は OCI Enterprise AI VLM を
+    # fallback ではなく明示選択し、oci_document_understanding は OCI Document Understanding
+    # の非同期 processor job で OCR/表抽出する。
+    "enterprise_ai_vlm",
+    "oci_document_understanding",
 ]
 ChunkingStrategy = Literal[
     "structure_aware",
@@ -809,6 +821,63 @@ class Settings(BaseSettings):
         default=2.0,
         gt=0,
         description="readiness の /health 問い合わせ timeout(秒)。",
+    )
+    # --- OCI Document Understanding（service 系 parser backend）---
+    # 別 OCI サービス(oci.ai_document)。非同期 processor job で日本語 OCR/表抽出する。
+    # 入出力は Object Storage 経由。未設定/失敗時は安全に既存フローへ縮退する。
+    oci_document_understanding_compartment_id: str = Field(
+        default="",
+        description=(
+            "OCI Document Understanding の compartment OCID。空のときは "
+            "oci_compartment_id を使う。"
+        ),
+    )
+    oci_document_understanding_namespace: str = Field(
+        default="",
+        description=(
+            "DU 入出力 Object Storage の namespace。空のときは object_storage_namespace を使う。"
+        ),
+    )
+    oci_document_understanding_input_bucket: str = Field(
+        default="",
+        description=(
+            "DU 入力ファイルを置く Object Storage bucket。空のときは object_storage_bucket を使う。"
+        ),
+    )
+    oci_document_understanding_output_bucket: str = Field(
+        default="",
+        description="DU 結果 JSON の出力先 bucket。空のときは入力 bucket を使う。",
+    )
+    oci_document_understanding_input_prefix: str = Field(
+        default="document-understanding/input",
+        max_length=256,
+        description="DU 入力ファイルの Object Storage key prefix。",
+    )
+    oci_document_understanding_output_prefix: str = Field(
+        default="document-understanding/output",
+        max_length=256,
+        description="DU 結果 JSON の Object Storage key prefix。",
+    )
+    oci_document_understanding_language: str = Field(
+        default="JPN",
+        max_length=8,
+        description="DU の言語ヒント(ISO 639-2、日本語は JPN)。",
+    )
+    oci_document_understanding_features: list[str] = Field(
+        default_factory=lambda: ["DOCUMENT_TEXT_EXTRACTION", "TABLE_EXTRACTION"],
+        description="DU で要求する analysis feature 種別。",
+    )
+    oci_document_understanding_poll_interval_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        le=60.0,
+        description="DU processor job の状態 poll 間隔(秒)。",
+    )
+    oci_document_understanding_timeout_seconds: float = Field(
+        default=600.0,
+        gt=0,
+        le=3600.0,
+        description="DU processor job 完了待ちの上限(秒)。超過時は安全に縮退する。",
     )
     rag_segment_checkpoint_enabled: bool = Field(
         default=True,

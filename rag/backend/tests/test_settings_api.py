@@ -102,6 +102,36 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert "raw_text" not in str(matrix)
 
 
+def test_parser_adapter_settings_reports_service_backends(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """service 系 backend(VLM 明示 / OCI Document Understanding)の選択・可用性を返す。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "enterprise_ai_vlm")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "https://ea.example.com")
+    monkeypatch.setattr(settings, "oci_compartment_id", "")
+    monkeypatch.setattr(settings, "oci_document_understanding_compartment_id", "")
+    monkeypatch.setattr(settings, "oci_document_understanding_namespace", "")
+    monkeypatch.setattr(settings, "oci_document_understanding_input_bucket", "")
+    monkeypatch.setattr(settings, "object_storage_namespace", "")
+    monkeypatch.setattr(settings, "object_storage_bucket", "")
+
+    resp = client.get("/api/settings/parser-adapters")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["adapter_backend"] == "enterprise_ai_vlm"
+    service = {item["backend"]: item for item in body["service_backends"]}
+    assert service["enterprise_ai_vlm"]["selected"] is True
+    assert service["enterprise_ai_vlm"]["configured"] is True
+    assert service["oci_document_understanding"]["selected"] is False
+    assert service["oci_document_understanding"]["configured"] is False
+    assert (
+        service["oci_document_understanding"]["warning_code"]
+        == "oci_document_understanding_unconfigured"
+    )
+
+
 def test_parser_adapter_contract_endpoint_reports_non_sensitive_matrix(
     monkeypatch: MonkeyPatch,
 ) -> None:

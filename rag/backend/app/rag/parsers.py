@@ -9,6 +9,7 @@ unstructured/mineru/dots_ocr)の実行は backend では parser マイクロサ�
 from rag_parser_core.registry import (
     EXTERNAL_ADAPTER_PACKAGES,
     LOCAL_PARSER_VERSION,
+    SERVICE_ADAPTER_BACKENDS,
     ExternalAdapterRunner,
     OfficeSegmentExtraction,
     OfficeSegmentFailure,
@@ -22,6 +23,7 @@ from rag_parser_core.registry import (
 __all__ = [
     "EXTERNAL_ADAPTER_PACKAGES",
     "LOCAL_PARSER_VERSION",
+    "SERVICE_ADAPTER_BACKENDS",
     "ExternalAdapterRunner",
     "OfficeSegmentExtraction",
     "OfficeSegmentFailure",

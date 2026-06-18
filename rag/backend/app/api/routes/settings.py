@@ -22,6 +22,7 @@ from app.clients.oci_auth import (
     resolve_oci_key_file,
 )
 from app.clients.oci_database import AutonomousDatabaseInfo, OciDatabaseClient
+from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import close_oracle_pool, test_oracle_connection
@@ -147,6 +148,7 @@ from app.schemas.settings import (
     ParserAdapterSettingsUpdate,
     ParserAdapterSourceRouteData,
     ParserAdapterStatusData,
+    ParserServiceBackendData,
     PromptVersionCreate,
     PromptVersionData,
     PromptVersionsData,
@@ -1827,6 +1829,27 @@ def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsDa
     )
 
 
+def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBackendData]:
+    """service 系 parser backend の選択状態と設定可用性を作る。"""
+    selected = str(getattr(settings, "rag_parser_adapter_backend", "local"))
+    vlm_configured = bool(settings.oci_enterprise_ai_endpoint.strip())
+    du_configured = OciDocumentUnderstandingClient(settings=settings).is_configured()
+    return [
+        ParserServiceBackendData(
+            backend="enterprise_ai_vlm",
+            selected=selected == "enterprise_ai_vlm",
+            configured=vlm_configured,
+            warning_code=None if vlm_configured else "enterprise_ai_endpoint_unconfigured",
+        ),
+        ParserServiceBackendData(
+            backend="oci_document_understanding",
+            selected=selected == "oci_document_understanding",
+            configured=du_configured,
+            warning_code=None if du_configured else "oci_document_understanding_unconfigured",
+        ),
+    ]
+
+
 def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsData:
     """Settings から parser adapter readiness の表示用データを作る。"""
     runtime = parser_adapter_runtime_settings(settings)
@@ -1836,6 +1859,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
     return ParserAdapterSettingsData(
         adapter_backend=runtime.adapter_backend,
         effective_order=list(runtime.effective_order),
+        service_backends=_parser_service_backends_data(settings),
         adapters=[
             ParserAdapterStatusData(
                 backend=adapter.backend,

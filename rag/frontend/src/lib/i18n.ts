@@ -1630,8 +1630,21 @@ export const ja = {
   "search.selectAi.error": "Select AI の実行に失敗しました。",
 
   "evaluation.subtitle": "Golden set で RAG 品質を検証します。",
+  "evaluation.suite.title": "評価スイート(Evaluation アダプター)",
+  "evaluation.suite.description":
+    "合否判定に使う閾値プリセットを選びます。スイートの閾値を採点基準として適用します。",
+  "evaluation.suite.label": "評価スイート",
+  "evaluation.suite.followDefault": "設定の既定に従う",
+  "evaluation.suite.followDefaultWith": "設定の既定に従う(現在: {suite})",
+  "evaluation.suite.thresholdsPreview": "適用される閾値",
+  "evaluation.suite.noThresholds": "プリセット閾値なし(閾値判定を行いません)",
+  "evaluation.suite.manualOverrideNote":
+    "リクエスト JSON に thresholds があるため、スイートより優先して適用されます。",
+  "evaluation.suite.settingsLink": "設定で既定スイートを変更",
+  "evaluation.suite.applied": "適用スイート",
   "evaluation.input.title": "評価リクエスト",
-  "evaluation.input.description": "cases、検索設定、thresholds を JSON で入力します。",
+  "evaluation.input.description":
+    "cases と検索設定を JSON で入力します。閾値はスイートで決まるため thresholds は任意です。",
   "evaluation.input.label": "Golden set JSON",
   "evaluation.input.placeholder":
     "{\"cases\":[{\"id\":\"case-1\",\"query\":\"質問\",\"relevant_document_ids\":[\"doc-1\"],\"expected_answer_keywords\":[\"キーワード\"]}],\"top_k\":10,\"rerank_top_n\":5,\"mode\":\"hybrid\"}",

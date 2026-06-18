@@ -482,12 +482,26 @@ class ParserAdapterContractData(BaseModel):
     config_source: Literal["runtime"]
 
 
+class ParserServiceBackendData(BaseModel):
+    """service 系 parser backend(OCI クラウドサービス直呼び)の選択状態と可用性。
+
+    package readiness の対象外。backend から OCI Enterprise AI VLM / Document
+    Understanding を直接呼ぶため、設定の完全性で「利用可能か」を示す。
+    """
+
+    backend: Literal["enterprise_ai_vlm", "oci_document_understanding"]
+    selected: bool
+    configured: bool
+    warning_code: str | None = None
+
+
 class ParserAdapterSettingsData(BaseModel):
     """任意 parser adapter 設定の非機密 runtime snapshot。"""
 
     adapter_backend: ParserAdapterBackend
     effective_order: list[ParserAdapterBackendName]
     adapters: list[ParserAdapterStatusData]
+    service_backends: list[ParserServiceBackendData] = Field(default_factory=list)
     scorecard: ParserAdapterScorecardData
     source_routes: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
     backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData

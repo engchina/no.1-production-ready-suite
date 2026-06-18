@@ -83,6 +83,10 @@ ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "unstructured",
     "mineru",
     "dots_ocr",
+    # service 系 backend(OCI クラウドサービスを backend から直接呼ぶ)。package
+    # readiness の対象外だが、選択値の正規化では受理する。
+    "enterprise_ai_vlm",
+    "oci_document_understanding",
 )
 
 

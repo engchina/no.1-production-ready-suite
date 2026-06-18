@@ -13,6 +13,7 @@ from time import perf_counter
 from pydantic import ValidationError
 
 from app.clients.object_storage import ObjectStorageClient
+from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
 from app.clients.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
     EnterpriseAiTimeoutError,
@@ -53,6 +54,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.parsers import (
+    SERVICE_ADAPTER_BACKENDS,
     OfficeSegmentExtraction,
     OfficeSegmentFailure,
     ParserRegistryResult,
@@ -155,6 +157,7 @@ class IngestionPipeline:
         genai: OciGenAiClient | None = None,
         oracle: OracleClient | None = None,
         object_storage: ObjectStorageClient | None = None,
+        document_understanding: OciDocumentUnderstandingClient | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._settings = settings or get_settings()
@@ -164,6 +167,10 @@ class IngestionPipeline:
         self._object_storage = object_storage or ObjectStorageClient(settings=self._settings)
         # 外部 adapter は同一プロセスで import せず parser マイクロサービスへ HTTP 委譲する。
         self._parser_service = ParserServiceClient(settings=self._settings)
+        # service 系 backend(OCI Document Understanding)を backend から直接呼ぶ。
+        self._document_understanding = document_understanding or OciDocumentUnderstandingClient(
+            settings=self._settings
+        )
 
     async def ingest(
         self,
@@ -235,8 +242,27 @@ class IngestionPipeline:
                 parser_profile=strategy.parser_profile,
             )
             await _raise_if_cancelled(cancel_checker)
+            extraction: StructuredExtraction | None = None
+            service_backend = _service_parser_backend(parser_result.parser_backend)
             try:
-                if parser_result.extraction is not None and _is_external_adapter_backend(
+                if service_backend is not None:
+                    # 明示選択された service backend(OCI Enterprise AI VLM /
+                    # Document Understanding)はローカル/外部 adapter を飛ばして直接呼ぶ。
+                    # DU が利用不可/失敗のときは None を返し、下の標準フローへ安全に縮退する。
+                    extraction = await self._extract_with_service_backend(
+                        service_backend,
+                        trace_id=trace_id,
+                        document_id=document_id,
+                        source_bytes=image_bytes,
+                        prompt=strategy.prompt,
+                        content_type=content_type,
+                        parser_profile=strategy.parser_profile,
+                        checkpoint_segments=checkpoint_segments,
+                        cancel_checker=cancel_checker,
+                    )
+                if extraction is not None:
+                    pass
+                elif parser_result.extraction is not None and _is_external_adapter_backend(
                     parser_result.parser_backend
                 ):
                     extraction = parser_result.extraction
@@ -275,6 +301,8 @@ class IngestionPipeline:
                 raise IngestionTimeoutError(str(exc)) from exc
             except EnterpriseAiIncompleteResponseError as exc:
                 raise IngestionUserError(str(exc)) from exc
+            # 上の分岐はいずれかで必ず extraction を確定させる。
+            assert extraction is not None
             await _raise_if_cancelled(cancel_checker)
             extraction = _extraction_with_parser_context(
                 extraction,
@@ -1190,6 +1218,77 @@ class IngestionPipeline:
                 extra={"segment_id": segment_id, "error_type": type(exc).__name__},
             )
 
+    async def _extract_with_service_backend(
+        self,
+        service_backend: str,
+        *,
+        trace_id: str,
+        document_id: str,
+        source_bytes: bytes,
+        prompt: str,
+        content_type: str,
+        parser_profile: str,
+        checkpoint_segments: Sequence[IngestionSegment],
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> StructuredExtraction | None:
+        """明示選択された service backend で抽出する。
+
+        まず再開用の cached 抽出を再利用し、無ければ各 OCI クラウドサービスを直接呼ぶ。
+        `oci_document_understanding` が利用不可/失敗のときは None を返し、呼び出し側で
+        既存のローカル/VLM フローへ安全に縮退させる。`enterprise_ai_vlm` は明示選択なので
+        常に VLM 抽出まで実行する。
+        """
+        cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
+        if cached_extraction is not None:
+            return cached_extraction
+        if service_backend == "oci_document_understanding":
+            extracted = await self._extract_with_document_understanding(
+                trace_id=trace_id,
+                document_id=document_id,
+                source_bytes=source_bytes,
+                content_type=content_type,
+                parser_profile=parser_profile,
+                checkpoint_segments=checkpoint_segments,
+                cancel_checker=cancel_checker,
+            )
+            if extracted is None:
+                return None
+            return _validate_structured_extraction_payload(extracted)
+        # enterprise_ai_vlm: fallback ではなく明示選択 → 直接 VLM 抽出。
+        extracted = await self._extract_with_vlm(
+            trace_id=trace_id,
+            document_id=document_id,
+            source_bytes=source_bytes,
+            prompt=prompt,
+            content_type=content_type,
+            parser_profile=parser_profile,
+            checkpoint_segments=checkpoint_segments,
+            cancel_checker=cancel_checker,
+        )
+        return _validate_structured_extraction_payload(extracted)
+
+    async def _extract_with_document_understanding(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        source_bytes: bytes,
+        content_type: str,
+        parser_profile: str,
+        checkpoint_segments: Sequence[IngestionSegment],
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> dict[str, object] | None:
+        """OCI Document Understanding(非同期 job)で抽出する。失敗/未設定は None。"""
+        _ = (trace_id, parser_profile, checkpoint_segments)
+        await _raise_if_cancelled(cancel_checker)
+        payload = await self._document_understanding.analyze(
+            source_bytes,
+            content_type=content_type,
+            document_id=document_id,
+        )
+        await _raise_if_cancelled(cancel_checker)
+        return payload
+
     async def _extract_with_vlm(
         self,
         *,
@@ -1586,6 +1685,11 @@ def _uses_external_adapter_extraction(parser_result: ParserRegistryResult) -> bo
 
 def _is_external_adapter_backend(parser_backend: str) -> bool:
     return parser_backend in {"docling", "marker", "unstructured"}
+
+
+def _service_parser_backend(parser_backend: str) -> str | None:
+    """parser_result が service backend(OCI クラウド直接呼び出し)の sentinel か判定する。"""
+    return parser_backend if parser_backend in SERVICE_ADAPTER_BACKENDS else None
 
 
 def _extraction_with_parser_context(
