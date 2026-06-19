@@ -665,11 +665,15 @@ async def update_guardrail_settings(
 ) -> ApiResponse[GuardrailSettingsData]:
     """Guardrail アダプター設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
-    candidate = settings.model_copy(
-        update={"rag_guardrail_policy": normalize_guardrail_policy(payload.policy)}
-    )
+    update: dict[str, object] = {
+        "rag_guardrail_policy": normalize_guardrail_policy(payload.policy)
+    }
+    if payload.backend is not None:
+        update["rag_guardrail_backend"] = payload.backend
+    candidate = settings.model_copy(update=update)
     _persist_guardrail_settings(candidate)
     settings.rag_guardrail_policy = candidate.rag_guardrail_policy
+    settings.rag_guardrail_backend = candidate.rag_guardrail_backend
     return ApiResponse(data=_guardrail_settings_data(settings))
 
 
@@ -2301,15 +2305,38 @@ def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
             )
             for status in runtime.policies
         ],
+        backend=settings.rag_guardrail_backend,
+        oci_configured=_oci_guardrails_configured(settings),
+        oci_warning_code=_oci_guardrails_warning_code(settings),
         config_source="runtime",
     )
+
+
+def _oci_guardrails_configured(settings: Settings) -> bool:
+    """OCI Guardrails の compartment が解決できるか(値の有無のみ)。"""
+    return bool(
+        str(getattr(settings, "oci_guardrails_compartment_id", "") or "").strip()
+        or str(getattr(settings, "oci_compartment_id", "") or "").strip()
+    )
+
+
+def _oci_guardrails_warning_code(settings: Settings) -> str | None:
+    """oci_guardrails 選択時に compartment 未設定なら warning code を返す。"""
+    if settings.rag_guardrail_backend == "oci_guardrails" and not _oci_guardrails_configured(
+        settings
+    ):
+        return "oci_guardrails_compartment_missing"
+    return None
 
 
 def _persist_guardrail_settings(settings: Settings) -> None:
     """Guardrail アダプター設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
-        {"RAG_GUARDRAIL_POLICY": settings.rag_guardrail_policy},
+        {
+            "RAG_GUARDRAIL_POLICY": settings.rag_guardrail_policy,
+            "RAG_GUARDRAIL_BACKEND": settings.rag_guardrail_backend,
+        },
         section_comment="# Guardrail アダプター",
         error_detail="Guardrail アダプター設定を backend/.env へ保存できませんでした。",
     )

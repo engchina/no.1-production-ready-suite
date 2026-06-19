@@ -37,6 +37,7 @@ PREPROCESS_PROFILES: tuple[str, ...] = (
     "excel_to_json",
     "url_to_markdown",
     "image_enhance",
+    "pii_redact",
 )
 DEFAULT_PREPROCESS_PROFILE = "passthrough"
 

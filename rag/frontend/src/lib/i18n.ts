@@ -440,6 +440,7 @@ export const ja = {
   "settings.services.item.preprocessExcelToJson": "Excel→JSON",
   "settings.services.item.preprocessUrlToMarkdown": "URL→Markdown",
   "settings.services.item.preprocessImageEnhance": "画像補正",
+  "settings.services.item.preprocessPiiRedact": "PIIマスク",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserMarker": "Marker",
   "settings.services.item.parserUnstructured": "Unstructured",

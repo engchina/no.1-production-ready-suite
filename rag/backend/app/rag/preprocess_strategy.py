@@ -24,6 +24,7 @@ PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "excel_to_json",
     "url_to_markdown",
     "image_enhance",
+    "pii_redact",
 )
 
 
@@ -91,6 +92,12 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         recommended_for=("image", "scan", "photo"),
         requires_service=True,
     ),
+    "pii_redact": PreprocessProfileSpec(
+        name="pii_redact",
+        origin="presidio_ja_ner",
+        recommended_for=("text", "html", "email"),
+        requires_service=True,
+    ),
 }
 
 
@@ -126,6 +133,7 @@ PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
     "excel_to_json": "rag_preprocess_excel_to_json_service_url",
     "url_to_markdown": "rag_preprocess_url_to_markdown_service_url",
     "image_enhance": "rag_preprocess_image_enhance_service_url",
+    "pii_redact": "rag_preprocess_pii_redact_service_url",
 }
 
 

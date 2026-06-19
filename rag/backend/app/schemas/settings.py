@@ -14,6 +14,7 @@ from app.config import (
     EvaluationSuite,
     GenerationProfile,
     GraphProfile,
+    GuardrailBackend,
     GuardrailPolicyName,
     ParserAdapterBackend,
     PostRetrievalPipeline,
@@ -666,6 +667,7 @@ class GroundingSettingsUpdate(BaseModel):
 
 GenerationProfileName = GenerationProfile
 GuardrailPolicyNameSchema = GuardrailPolicyName
+GuardrailBackendName = GuardrailBackend
 
 
 class GenerationProfileStatusData(BaseModel):
@@ -781,6 +783,9 @@ class GuardrailSettingsData(BaseModel):
     grounding_min_ratio: float
     audit_emphasis: bool
     policies: list[GuardrailPolicyStatusData] = Field(default_factory=list)
+    backend: GuardrailBackendName = "local"
+    oci_configured: bool = False
+    oci_warning_code: str | None = None
     config_source: Literal["runtime"]
 
 
@@ -788,6 +793,7 @@ class GuardrailSettingsUpdate(BaseModel):
     """Guardrail アダプター設定の更新 payload。"""
 
     policy: GuardrailPolicyNameSchema
+    backend: GuardrailBackendName | None = None
 
 
 VectorIndexProfileName = VectorIndexProfile

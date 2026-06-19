@@ -12,6 +12,7 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 | [excel_to_json](./excel_to_json) | `excel_to_json` | Excel(.xls/.xlsx) → 構造化 JSON | openpyxl + xlrd | `http://preprocess-excel-to-json:8000` |
 | [url_to_markdown](./url_to_markdown) | `url_to_markdown` | URL → クリーン Markdown | httpx + trafilatura | `http://preprocess-url-to-markdown:8000` |
 | [image_enhance](./image_enhance) | `image_enhance` | 画像 → OCR 向け補正画像 | OpenCV | `http://preprocess-image-enhance:8000` |
+| [pii_redact](./pii_redact) | `pii_redact` | テキスト → PII マスク済みテキスト | Presidio + 日本語 NER | `http://preprocess-pii-redact:8000` |
 
 `passthrough` / `text_normalize` は backend in-process で処理するため、サービスは呼ばれない。
 

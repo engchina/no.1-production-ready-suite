@@ -125,3 +125,72 @@ def test_evaluate_groundedness_fails_unrelated_answer_with_context() -> None:
     assert result.grounded is False
     assert result.score == 0.0
     assert result.overlap_count == 0
+
+
+# --- OCI Guardrails 増強(backend=oci_guardrails)------------------------------
+
+
+class _FakeOciClient:
+    """OciGuardrailsClient 代替。inspect_text の戻り値を固定する。"""
+
+    def __init__(self, inspection: object | None) -> None:
+        self._inspection = inspection
+        self.calls: list[str] = []
+
+    def inspect_text(self, text: str, **_kwargs: object) -> object | None:
+        self.calls.append(text)
+        return self._inspection
+
+
+def _inspection(**kwargs: object) -> object:
+    from app.clients.oci_guardrails import GuardrailInspection
+
+    return GuardrailInspection(**kwargs)  # type: ignore[arg-type]
+
+
+def test_oci_guardrails_blocks_query_on_prompt_injection() -> None:
+    client = _FakeOciClient(_inspection(prompt_injection=True, prompt_injection_score=0.9))
+    policy = GuardrailPolicy(oci_client=client)
+    result = policy.validate_query("普通の質問です")
+    assert result.allowed is False
+    assert any(f.code == "oci_prompt_injection" for f in result.findings)
+    assert client.calls  # OCI が呼ばれた
+
+
+def test_oci_guardrails_pii_label_is_warning_only_no_values() -> None:
+    client = _FakeOciClient(_inspection(pii_labels=("EMAIL_ADDRESS", "PERSON")))
+    policy = GuardrailPolicy(oci_client=client)
+    result = policy.validate_query("連絡先を教えて")
+    assert result.allowed is True  # PII は warning に留める
+    finding = next(f for f in result.findings if f.code == "oci_pii_detected")
+    assert "EMAIL_ADDRESS" in finding.message and "PERSON" in finding.message
+
+
+def test_oci_guardrails_answer_moderation_is_not_blocking() -> None:
+    client = _FakeOciClient(_inspection(moderation_categories=("HATE",)))
+    policy = GuardrailPolicy(oci_client=client)
+    result = policy.validate_answer("回答テキスト", context="回答テキスト 根拠")
+    assert result.allowed is True  # 回答側は block しない
+    assert any(f.code == "oci_content_moderation" for f in result.findings)
+
+
+def test_oci_guardrails_none_degrades_to_local() -> None:
+    # inspect が None(未設定/失敗)なら local の結果のまま。
+    client = _FakeOciClient(None)
+    policy = GuardrailPolicy(oci_client=client)
+    result = policy.validate_query("普通の質問")
+    assert result.allowed is True
+    assert all(not f.code.startswith("oci_") for f in result.findings)
+
+
+def test_default_backend_local_makes_no_oci_client() -> None:
+    # 既定 backend=local では OCI クライアントを生成しない(挙動不変)。
+    policy = GuardrailPolicy(Settings(rag_guardrail_backend="local"))
+    assert policy._oci_client is None
+
+
+def test_oci_client_built_when_backend_selected() -> None:
+    from app.clients.oci_guardrails import OciGuardrailsClient
+
+    policy = GuardrailPolicy(Settings(rag_guardrail_backend="oci_guardrails"))
+    assert isinstance(policy._oci_client, OciGuardrailsClient)

@@ -133,6 +133,12 @@ services:
       dockerfile: services/preprocess/image_enhance/Dockerfile
     restart: unless-stopped
 
+  preprocess-pii-redact:
+    build:
+      context: .
+      dockerfile: services/preprocess/pii_redact/Dockerfile
+    restart: unless-stopped
+
   # ---- parser マイクロサービス(CPU・既定起動)----
   parser-docling:
     build:

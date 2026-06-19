@@ -39,6 +39,7 @@ PreprocessProfile = Literal[
     "excel_to_json",
     "url_to_markdown",
     "image_enhance",
+    "pii_redact",
 ]
 ChunkingStrategy = Literal[
     "structure_aware",
@@ -79,6 +80,13 @@ GuardrailPolicyName = Literal[
     "strict",
     "lenient",
     "regulated",
+]
+# Guardrail のバックエンド。local(既定)は in-process 決定論ヒューリスティック。
+# oci_guardrails は OCI Generative AI Guardrails(ApplyGuardrails、検出専用 API)を併用し、
+# 未設定/失敗時は local へ安全に縮退する。
+GuardrailBackend = Literal[
+    "local",
+    "oci_guardrails",
 ]
 VectorIndexProfile = Literal[
     "balanced",
@@ -726,6 +734,29 @@ class Settings(BaseSettings):
             "strict/regulated は groundedness 厳格化、lenient は warning 抑制。"
         ),
     )
+    rag_guardrail_backend: GuardrailBackend = Field(
+        default="local",
+        description=(
+            "Guardrail のバックエンド。local(既定)は in-process 決定論ヒューリスティック"
+            "(現行挙動)。oci_guardrails は OCI Generative AI Guardrails(ApplyGuardrails、"
+            "content moderation / PII / prompt injection の検出専用 API)を併用し、未設定/失敗時"
+            "は local へ安全に縮退する。確定スタックは不変(別 LLM provider・外部 DB は不採用)。"
+        ),
+    )
+    oci_guardrails_compartment_id: str = Field(
+        default="",
+        description="OCI Guardrails の compartment OCID。空欄時は oci_compartment_id を使う。",
+    )
+    oci_guardrails_endpoint: str = Field(
+        default="",
+        description="OCI Generative AI Inference のサービスエンドポイント上書き(空欄は SDK 既定)。",
+    )
+    oci_guardrails_prompt_injection_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="prompt injection の risk score をブロック扱いにする閾値(0.0–1.0)。",
+    )
     rag_evaluation_suite: EvaluationSuite = Field(
         default="request_only",
         description=(
@@ -775,7 +806,8 @@ class Settings(BaseSettings):
             "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
             "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、url_to_markdown は "
             "URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)、image_enhance は "
-            "スキャン画像の OCR 向け補正(OpenCV)"
+            "スキャン画像の OCR 向け補正(OpenCV)、pii_redact は取込時の PII マスク"
+            "(Presidio + 日本語 NER、外部 SaaS 非使用)"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
     )
@@ -810,6 +842,10 @@ class Settings(BaseSettings):
     rag_preprocess_image_enhance_service_url: str = Field(
         default="http://preprocess-image-enhance:8000",
         description="画像補正(OCR 前処理)マイクロサービスの base URL。",
+    )
+    rag_preprocess_pii_redact_service_url: str = Field(
+        default="http://preprocess-pii-redact:8000",
+        description="PII マスク(取込時)前処理マイクロサービスの base URL。",
     )
     rag_preprocess_service_timeout_seconds: float = Field(
         default=300.0,
