@@ -17,6 +17,9 @@ from app.config import Settings
 
 ServiceCategory = Literal["preprocess", "parser"]
 ServiceProfile = Literal["cpu", "gpu"]
+# dev(ホスト)での起動方式。軽量な前処理は uv プロセス、重い ML 依存の parser は
+# (dev でも)docker compose で起動する。prod は常に docker。
+DevRunner = Literal["uv", "docker"]
 
 
 @dataclass(frozen=True)
@@ -27,7 +30,8 @@ class ServiceCatalogEntry:
     - ``url_field``: base URL を持つ Settings フィールド名(prod の /health 問い合わせ用)。
     - ``label_key``: フロントの i18n キー(表示名)。
     - ``working_dir``: リポジトリ root からの相対パス(dev の ``uv run --directory`` 起動先)。
-    - ``dev_port``: dev(uv プロセス)起動時に bind する localhost ポート。
+    - ``dev_port``: dev で localhost に bind / 公開するポート(uv プロセス、または docker の公開先)。
+    - ``dev_runner``: dev での起動方式(``uv``=ホストプロセス / ``docker``=コンテナ)。
     """
 
     service_id: str
@@ -37,6 +41,7 @@ class ServiceCatalogEntry:
     label_key: str
     working_dir: str
     dev_port: int
+    dev_runner: DevRunner
 
 
 # パイプライン順に並べる(前処理 → Parser CPU → Parser GPU)。
@@ -49,6 +54,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessOfficeToPdf",
         working_dir="services/preprocess/office_to_pdf",
         dev_port=8010,
+        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-pdf-to-page-images",
@@ -58,6 +64,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessPdfToPageImages",
         working_dir="services/preprocess/pdf_to_page_images",
         dev_port=8011,
+        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-csv-to-json",
@@ -67,6 +74,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessCsvToJson",
         working_dir="services/preprocess/csv_to_json",
         dev_port=8012,
+        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-excel-to-json",
@@ -76,6 +84,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessExcelToJson",
         working_dir="services/preprocess/excel_to_json",
         dev_port=8013,
+        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="parser-docling",
@@ -85,6 +94,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserDocling",
         working_dir="services/parsers/docling",
         dev_port=8020,
+        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-marker",
@@ -94,6 +104,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserMarker",
         working_dir="services/parsers/marker",
         dev_port=8021,
+        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-unstructured",
@@ -103,6 +114,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserUnstructured",
         working_dir="services/parsers/unstructured",
         dev_port=8022,
+        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-mineru",
@@ -112,6 +124,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserMineru",
         working_dir="services/parsers/mineru",
         dev_port=8023,
+        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-dots-ocr",
@@ -121,6 +134,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserDotsOcr",
         working_dir="services/parsers/dots_ocr",
         dev_port=8024,
+        dev_runner="docker",
     ),
 )
 
@@ -147,8 +161,9 @@ def is_dev_mode(settings: Settings) -> bool:
 def service_health_url(settings: Settings, entry: ServiceCatalogEntry) -> str:
     """エントリの base URL を返す(末尾スラッシュを除去)。未設定なら空文字。
 
-    dev(uv プロセス)では docker 名は解決できないため、catalog の ``dev_port`` から
-    ``http://127.0.0.1:<port>`` を組み立てて返す。prod は Settings の ``url_field``。
+    dev では docker 名(``parser-docling`` 等)を解決できないため、catalog の ``dev_port``
+    から ``http://127.0.0.1:<port>`` を返す(uv はホストで bind、docker は dev override で
+    同ポートを公開)。prod は Settings の ``url_field``。
     """
     if is_dev_mode(settings):
         return f"http://127.0.0.1:{entry.dev_port}"

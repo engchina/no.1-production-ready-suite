@@ -62,22 +62,30 @@ def _compose_args(
     """compose コマンドの引数配列を組み立てる(shell 補間なし)。
 
     GPU サービスは compose の profile gate を越えるため ``--profile gpu`` を付ける。
+    dev(backend がホスト)では、コンテナの 8000 を localhost の dev_port へ公開する
+    override(``docker-compose.dev.yml``)を重ね、ホスト backend が /health・/parse を
+    叩けるようにする。prod(backend もコンテナ)は base compose のみ。
     service 名は allowlist 済みエントリからのみ採る。
     """
     base = shlex.split(settings.rag_service_control_command)
     if not base:
         base = ["docker", "compose"]
+    file_args = (
+        ["-f", "docker-compose.yml", "-f", "docker-compose.dev.yml"]
+        if is_dev_mode(settings)
+        else []
+    )
     profile_args = ["--profile", "gpu"] if entry.profile == "gpu" else []
     if action == "start":
-        return [*base, *profile_args, "up", "-d", entry.service_id]
+        return [*base, *file_args, *profile_args, "up", "-d", entry.service_id]
     if action == "stop":
         # stop は profile gate の影響を受けない(既存コンテナを止めるだけ)。
-        return [*base, "stop", entry.service_id]
-    return [*base, *profile_args, "restart", entry.service_id]
+        return [*base, *file_args, "stop", entry.service_id]
+    return [*base, *file_args, *profile_args, "restart", entry.service_id]
 
 
 class DockerComposeDriver:
-    """``docker compose`` CLI を subprocess で叩く driver(ローカル開発向け)。"""
+    """``docker compose`` CLI を subprocess で叩く driver(parser 系 / prod 全般)。"""
 
     async def run(
         self,
@@ -86,6 +94,9 @@ class DockerComposeDriver:
         action: ServiceAction,
     ) -> ControlResult:
         args = _compose_args(settings, entry, action)
+        # dev はホストのリポジトリ root から compose ファイル群を解決する。
+        # prod(コンテナ)は cwd を変えず、マウント済み compose を既定の cwd から解決する。
+        cwd = str(REPO_ROOT) if is_dev_mode(settings) else None
         timeout = float(settings.rag_service_control_timeout_seconds)
         logger.info(
             "service_control_exec",
@@ -94,6 +105,7 @@ class DockerComposeDriver:
         try:
             process = await asyncio.create_subprocess_exec(
                 *args,
+                cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -282,8 +294,11 @@ class UvProcessDriver:
 class ServiceControlClient:
     """カタログ allowlist と feature flag を front に、mode 別 driver へ委譲する。
 
-    dev(ENVIRONMENT != production)は ``UvProcessDriver``(ホスト上の uv プロセス)、
-    prod は ``DockerComposeDriver``(docker compose)を使う。
+    driver の選択は mode と **エントリ単位の ``dev_runner``** で決まる:
+    - prod: 常に ``DockerComposeDriver``。
+    - dev かつ ``dev_runner == "uv"``(軽量な前処理): ``UvProcessDriver``(ホストプロセス)。
+    - dev かつ ``dev_runner == "docker"``(重い ML 依存の parser): ``DockerComposeDriver``
+      (dev override でポート公開)。host への巨大依存 sync を避ける。
     """
 
     def __init__(
@@ -301,8 +316,9 @@ class ServiceControlClient:
         action: ServiceAction,
     ) -> ControlResult:
         """allowlist 済みエントリに対し action を実行する。失敗は例外で送出する。"""
+        use_uv = is_dev_mode(settings) and entry.dev_runner == "uv"
         driver: UvProcessDriver | DockerComposeDriver = (
-            self._uv_driver if is_dev_mode(settings) else self._docker_driver
+            self._uv_driver if use_uv else self._docker_driver
         )
         result = await driver.run(settings, entry, action)
         if not result.ok:

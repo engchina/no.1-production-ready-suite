@@ -403,7 +403,7 @@ export const ja = {
   "settings.services.mode.dev": "開発 (uv)",
   "settings.services.mode.prod": "本番 (docker)",
   "settings.services.mode.dev.hint":
-    "開発モード(ENVIRONMENT=development)です。起動/停止は uv 管理のローカル Python プロセスとして実行します。",
+    "開発モード(ENVIRONMENT=development)です。前処理は uv 管理のローカル Python プロセス、Parser(重い ML 依存)は docker compose で起動します。Parser は初回にイメージ build が走るため、事前ビルドを推奨します。",
   "settings.services.mode.prod.hint":
     "本番モード(ENVIRONMENT=production)です。起動/停止は docker compose を呼びます。",
   "settings.services.refresh": "更新",

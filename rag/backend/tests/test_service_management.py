@@ -141,16 +141,18 @@ def test_probe_unconfigured_when_url_blank(monkeypatch: MonkeyPatch) -> None:
 # --- 制御層 -----------------------------------------------------------------
 
 
-def test_compose_args_gpu_gets_profile_flag() -> None:
+def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "production")  # prod: override 無し
     mineru = get_catalog_entry("parser-mineru")
     assert mineru is not None
     args = _compose_args(settings, mineru, "start")
     assert args == ["docker", "compose", "--profile", "gpu", "up", "-d", "parser-mineru"]
 
 
-def test_compose_args_cpu_start_and_stop() -> None:
+def test_compose_args_cpu_start_and_stop(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "production")  # prod: override 無し
     docling = get_catalog_entry("parser-docling")
     assert docling is not None
     assert _compose_args(settings, docling, "start") == [
@@ -165,6 +167,41 @@ def test_compose_args_cpu_start_and_stop() -> None:
         "compose",
         "stop",
         "parser-docling",
+    ]
+
+
+def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "development")
+    docling = get_catalog_entry("parser-docling")
+    assert docling is not None
+    # dev は port 公開 override を重ねてホスト backend から到達可能にする。
+    assert _compose_args(settings, docling, "start") == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.dev.yml",
+        "up",
+        "-d",
+        "parser-docling",
+    ]
+    mineru = get_catalog_entry("parser-mineru")
+    assert mineru is not None
+    # GPU は override に加えて --profile gpu。
+    assert _compose_args(settings, mineru, "start") == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.dev.yml",
+        "--profile",
+        "gpu",
+        "up",
+        "-d",
+        "parser-mineru",
     ]
 
 
@@ -366,22 +403,32 @@ class _RecordingDriver:
         return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
 
 
-def test_control_client_selects_driver_by_mode() -> None:
+def test_control_client_selects_driver_by_mode_and_runner() -> None:
     settings = get_settings()
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    docker = _RecordingDriver()
-    uv = _RecordingDriver()
-    client_obj = ServiceControlClient(docker_driver=docker, uv_driver=uv)  # type: ignore[arg-type]
+    preprocess = get_catalog_entry("preprocess-csv-to-json")  # dev_runner=uv
+    parser = get_catalog_entry("parser-docling")  # dev_runner=docker
+    assert preprocess is not None and parser is not None
 
     object.__setattr__(settings, "environment", "development")
     try:
-        asyncio.run(client_obj.control(settings, entry, "start"))
+        # dev + uv runner(前処理)→ uv driver
+        docker, uv = _RecordingDriver(), _RecordingDriver()
+        c = ServiceControlClient(docker_driver=docker, uv_driver=uv)  # type: ignore[arg-type]
+        asyncio.run(c.control(settings, preprocess, "start"))
         assert uv.calls == ["start"] and docker.calls == []
 
+        # dev + docker runner(parser)→ docker driver(ホスト巨大 sync を避ける)
+        docker, uv = _RecordingDriver(), _RecordingDriver()
+        c = ServiceControlClient(docker_driver=docker, uv_driver=uv)  # type: ignore[arg-type]
+        asyncio.run(c.control(settings, parser, "start"))
+        assert docker.calls == ["start"] and uv.calls == []
+
+        # prod は runner に関わらず docker driver
         object.__setattr__(settings, "environment", "production")
-        asyncio.run(client_obj.control(settings, entry, "stop"))
-        assert docker.calls == ["stop"] and uv.calls == ["start"]
+        docker, uv = _RecordingDriver(), _RecordingDriver()
+        c = ServiceControlClient(docker_driver=docker, uv_driver=uv)  # type: ignore[arg-type]
+        asyncio.run(c.control(settings, preprocess, "stop"))
+        assert docker.calls == ["stop"] and uv.calls == []
     finally:
         object.__setattr__(settings, "environment", "development")
 
