@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 # build context = リポジトリ root。GPU(CUDA)必須のため CUDA runtime ベースを使う。
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu24.04 AS base
+# nvidia/cuda の ubuntu24.04 cudnn-runtime は 12.6.0 以降のみ提供(12.4.x は ubuntu24.04 タグ無し)。
+# torch は cu124 wheel(CUDA ランタイム同梱)で、CUDA 12.x のマイナー互換により 12.6 ベース上で動作する。
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
