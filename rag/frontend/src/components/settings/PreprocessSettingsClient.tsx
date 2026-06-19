@@ -22,7 +22,8 @@ const PROFILE_ORDER: PreprocessProfileName[] = [
   "text_normalize",
   "office_to_pdf",
   "pdf_to_page_images",
-  "auto",
+  "csv_to_json",
+  "excel_to_json",
 ];
 
 /** 前処理(Preprocess)アダプター(parse 前の原本変換)の runtime 設定を管理する設定画面。 */

@@ -10,8 +10,11 @@ x-parser-service-urls: &parser-service-urls
   RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000
   RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
   RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
-  # 前処理(parse 前の原本変換)マイクロサービス。
-  RAG_PREPROCESS_SERVICE_URL: http://preprocess:8000
+  # 前処理(parse 前の原本変換)マイクロサービス。1 変換 = 1 独立サービス。
+  RAG_PREPROCESS_OFFICE_TO_PDF_SERVICE_URL: http://preprocess-office-to-pdf:8000
+  RAG_PREPROCESS_PDF_TO_PAGE_IMAGES_SERVICE_URL: http://preprocess-pdf-to-page-images:8000
+  RAG_PREPROCESS_CSV_TO_JSON_SERVICE_URL: http://preprocess-csv-to-json:8000
+  RAG_PREPROCESS_EXCEL_TO_JSON_SERVICE_URL: http://preprocess-excel-to-json:8000
 
 services:
   backend:
@@ -23,6 +26,8 @@ services:
         required: false
     environment:
       <<: *parser-service-urls
+      # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
+      ENVIRONMENT: production
       LOCAL_STORAGE_DIR: /u01/production-ready-rag
       MODEL_SETTINGS_FILE: model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
@@ -36,8 +41,17 @@ services:
       RAG_PARSER_READINESS_PROBE_ENABLED: "true"
       # 前処理マイクロサービスへの委譲を有効化(profile は既定 passthrough のまま)。
       RAG_PREPROCESS_ENABLED: "true"
+      # サービス管理画面: 既定は稼働状態の可視化のみ(/api/services は各 /health を集約)。
+      # 画面から起動/停止(docker compose 制御)も使う場合は、backend から docker CLI を
+      # 実行できるようにした上で RAG_SERVICE_CONTROL_ENABLED: "true" を設定する。
+      # コンテナ運用では docker socket + docker CLI のマウントが必要(下記コメント参照)。
+      # RAG_SERVICE_CONTROL_ENABLED: "true"
     ports:
       - "8000:8000"
+    # サービス管理画面から起動/停止を行う場合のみ、docker socket と compose ファイルを
+    # backend へマウントする(既定はコメントアウト=可視化のみで socket 非公開)。
+    #   - /var/run/docker.sock:/var/run/docker.sock
+    #   - ./docker-compose.yml:/app/docker-compose.yml:ro
     # OCI 設定 / Oracle wallet をマウント
     volumes:
       - ~/.oci:/home/appuser/.oci:ro
@@ -61,6 +75,7 @@ services:
         required: false
     environment:
       <<: *parser-service-urls
+      ENVIRONMENT: production
       LOCAL_STORAGE_DIR: /u01/production-ready-rag
       MODEL_SETTINGS_FILE: model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
@@ -79,12 +94,30 @@ services:
       - ~/.oci:/home/appuser/.oci:ro
       - backend-local-storage:/u01/production-ready-rag
 
-  # ---- 前処理マイクロサービス(CPU・既定起動)----
-  # parse の前に Office→PDF / PDF→画像PDF へ変換する。未達時は backend が passthrough へ縮退。
-  preprocess:
+  # ---- 前処理マイクロサービス(CPU・既定起動、1 変換 = 1 独立サービス)----
+  # parse の前に原本を変換する。未達時は backend が passthrough へ安全に縮退する。
+  preprocess-office-to-pdf:
     build:
       context: .
-      dockerfile: services/preprocess/Dockerfile
+      dockerfile: services/preprocess/office_to_pdf/Dockerfile
+    restart: unless-stopped
+
+  preprocess-pdf-to-page-images:
+    build:
+      context: .
+      dockerfile: services/preprocess/pdf_to_page_images/Dockerfile
+    restart: unless-stopped
+
+  preprocess-csv-to-json:
+    build:
+      context: .
+      dockerfile: services/preprocess/csv_to_json/Dockerfile
+    restart: unless-stopped
+
+  preprocess-excel-to-json:
+    build:
+      context: .
+      dockerfile: services/preprocess/excel_to_json/Dockerfile
     restart: unless-stopped
 
   # ---- parser マイクロサービス(CPU・既定起動)----

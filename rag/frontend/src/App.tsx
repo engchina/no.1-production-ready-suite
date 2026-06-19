@@ -17,6 +17,7 @@ import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
 import { FileListClient } from "@/components/file-list/FileListClient";
 import { KnowledgeBaseManagementClient } from "@/components/knowledge-bases/KnowledgeBaseManagementClient";
+import { BusinessViewManagementClient } from "@/components/business-views/BusinessViewManagementClient";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { CommandPalette } from "@/components/layout/CommandPalette";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
@@ -29,6 +30,7 @@ import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
 import { ChunkingSettingsClient } from "@/components/settings/ChunkingSettingsClient";
 import { PreprocessSettingsClient } from "@/components/settings/PreprocessSettingsClient";
+import { ServicesManagementClient } from "@/components/settings/ServicesManagementClient";
 import { RetrievalSettingsClient } from "@/components/settings/RetrievalSettingsClient";
 import { GroundingSettingsClient } from "@/components/settings/GroundingSettingsClient";
 import { GenerationSettingsClient } from "@/components/settings/GenerationSettingsClient";
@@ -72,6 +74,7 @@ export function App() {
         <Route path={APP_ROUTES.upload} element={<UploadWorkspace />} />
         <Route path={APP_ROUTES.fileList} element={<FileListClient />} />
         <Route path={APP_ROUTES.knowledgeBases} element={<KnowledgeBaseManagementClient />} />
+        <Route path={APP_ROUTES.businessViews} element={<BusinessViewManagementClient />} />
         <Route path={`${APP_ROUTES.documents}/:id`} element={<DocumentDetailRoute />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationClient />} />
@@ -96,6 +99,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsAgentic} element={<SettingsAgenticRoute />} />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
+        <Route path={APP_ROUTES.settingsServices} element={<SettingsServicesRoute />} />
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
       </Route>
       <Route path="*" element={<Navigate to={APP_ROUTES.dashboard} replace />} />
@@ -321,6 +325,18 @@ function SettingsPreprocessRoute() {
         subtitle={t("settings.preprocess.subtitle")}
       />
       <PreprocessSettingsClient />
+    </div>
+  );
+}
+
+function SettingsServicesRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsServices")}
+        subtitle={t("settings.services.subtitle")}
+      />
+      <ServicesManagementClient />
     </div>
   );
 }

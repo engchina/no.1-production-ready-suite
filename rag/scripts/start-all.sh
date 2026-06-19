@@ -14,19 +14,52 @@ BACKEND_READY_URL="${BACKEND_READY_URL:-${BACKEND_URL}/api/health}"
 BACKEND_READY_TIMEOUT_SECONDS="${BACKEND_READY_TIMEOUT_SECONDS:-90}"
 
 pids=()
+_cleaning=0
 
 cleanup() {
+  # 再入防止: 最初の Ctrl+C で全トラップを解除し、二度目以降の INT は無視する。
+  # (これをしないと cleanup 中の Ctrl+C で再入し「停止しています...」を繰り返す)
+  if [ "${_cleaning}" -eq 1 ]; then
+    return
+  fi
+  _cleaning=1
+  trap - INT TERM EXIT
+
   echo ""
   echo "[start-all] 停止しています..."
+
+  # まずプロセスグループへ SIGTERM(子の uvicorn --reload / vite も巻き取る)。
+  for pid in "${pids[@]}"; do
+    kill -- "-${pid}" 2>/dev/null || kill "${pid}" 2>/dev/null || true
+  done
+
+  # 最大 ~3 秒だけ graceful 終了を待ち、残っていれば SIGKILL で即時停止する。
+  local waited=0
+  while [ "${waited}" -lt 15 ]; do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "${pid}" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    if [ "${alive}" -eq 0 ]; then
+      break
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
   for pid in "${pids[@]}"; do
     if kill -0 "${pid}" 2>/dev/null; then
-      # プロセスグループごと停止する(子の uvicorn / vite も巻き取る)
-      kill -- "-${pid}" 2>/dev/null || kill "${pid}" 2>/dev/null || true
+      kill -9 -- "-${pid}" 2>/dev/null || kill -9 "${pid}" 2>/dev/null || true
     fi
   done
-  wait 2>/dev/null || true
+
+  echo "[start-all] 停止しました。"
+  exit 130
 }
-trap cleanup EXIT INT TERM
+# INT/TERM は即時停止、EXIT は正常終了時の後始末(いずれも cleanup を 1 度だけ実行)。
+trap cleanup INT TERM
+trap cleanup EXIT
 
 # 各スクリプトを独立したプロセスグループで起動する
 set -m

@@ -386,8 +386,9 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
   }, [settings.region]);
 
   const info = infoQuery.data;
-  const busy =
-    infoQuery.isFetching || saveSettings.isPending || start.isPending || stop.isPending;
+  // 遷移中は useAdbInfo が背景ポーリングするため、その isFetching で操作ボタンを
+  // 無効化しない(4 秒ごとのちらつき/無効化を避ける)。明示的な操作の最中だけ busy。
+  const busy = saveSettings.isPending || start.isPending || stop.isPending;
 
   function appendLog(result: AdbInfoData) {
     setLog((current) =>
@@ -461,12 +462,12 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             type="button"
             variant="secondary"
             size="sm"
-            loading={infoQuery.isFetching || saveSettings.isPending}
+            loading={saveSettings.isPending}
             disabled={busy}
             onClick={() => void handleRefresh()}
           >
             <RefreshCw size={15} aria-hidden />
-            {infoQuery.isFetching || saveSettings.isPending
+            {saveSettings.isPending
               ? t("settings.adb.action.refreshing")
               : t("settings.adb.action.refresh")}
           </Button>

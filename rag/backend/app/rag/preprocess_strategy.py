@@ -20,7 +20,8 @@ PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "text_normalize",
     "office_to_pdf",
     "pdf_to_page_images",
-    "auto",
+    "csv_to_json",
+    "excel_to_json",
 )
 
 
@@ -64,11 +65,16 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         recommended_for=("pdf", "scan"),
         requires_service=True,
     ),
-    "auto": PreprocessProfileSpec(
-        name="auto",
-        origin="modality_routed",
-        recommended_for=("any",),
-        in_process=True,
+    "csv_to_json": PreprocessProfileSpec(
+        name="csv_to_json",
+        origin="no1_csv2json_records",
+        recommended_for=("csv", "table"),
+        requires_service=True,
+    ),
+    "excel_to_json": PreprocessProfileSpec(
+        name="excel_to_json",
+        origin="no1_excel2json_records",
+        recommended_for=("excel", "xls", "xlsx", "table"),
         requires_service=True,
     ),
 }
@@ -96,6 +102,24 @@ class PreprocessRuntimeSettings:
     service_url: str
     canonical_artifact_prefix: str
     profiles: tuple[PreprocessProfileStatus, ...]
+
+
+# 各 service 必須プロファイルが委譲する前処理マイクロサービスの URL 設定名。
+PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
+    "office_to_pdf": "rag_preprocess_office_to_pdf_service_url",
+    "pdf_to_page_images": "rag_preprocess_pdf_to_page_images_service_url",
+    "csv_to_json": "rag_preprocess_csv_to_json_service_url",
+    "excel_to_json": "rag_preprocess_excel_to_json_service_url",
+}
+
+
+def preprocess_service_url(settings: Settings, profile: PreprocessProfileName) -> str | None:
+    """profile に対応する前処理マイクロサービスの base URL を返す(無ければ None)。"""
+    attr = PREPROCESS_SERVICE_URL_ATTRS.get(profile)
+    if attr is None:
+        return None
+    url = str(getattr(settings, attr, "") or "").strip().rstrip("/")
+    return url or None
 
 
 def normalize_preprocess_profile(value: object) -> PreprocessProfileName:
@@ -137,10 +161,18 @@ def preprocess_runtime_settings(settings: Settings) -> PreprocessRuntimeSettings
         )
         for spec in (PREPROCESS_PROFILE_SPECS[name] for name in PREPROCESS_PROFILE_ORDER)
     )
+    service_urls = ", ".join(
+        url
+        for url in (
+            preprocess_service_url(settings, name)
+            for name in PREPROCESS_SERVICE_URL_ATTRS
+        )
+        if url
+    )
     return PreprocessRuntimeSettings(
         profile=profile,
         service_enabled=service_enabled,
-        service_url=str(getattr(settings, "rag_preprocess_service_url", "")),
+        service_url=service_urls,
         canonical_artifact_prefix=str(
             getattr(settings, "rag_canonical_artifact_prefix", "artifacts/canonical")
         ),

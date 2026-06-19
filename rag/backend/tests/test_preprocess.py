@@ -166,7 +166,7 @@ def test_client_service_unreachable_degrades_to_passthrough() -> None:
     client = PreprocessServiceClient(
         Settings(
             rag_preprocess_enabled=True,
-            rag_preprocess_service_url="http://127.0.0.1:9/",
+            rag_preprocess_office_to_pdf_service_url="http://127.0.0.1:9/",
             rag_preprocess_service_timeout_seconds=0.2,
         )
     )
@@ -180,16 +180,57 @@ def test_client_service_unreachable_degrades_to_passthrough() -> None:
     assert "preprocess_service_unreachable" in outcome.warnings
 
 
-def test_auto_routes_text_to_text_normalize() -> None:
-    client = PreprocessServiceClient(Settings(rag_preprocess_profile="auto"))
-    outcome = client.convert(
-        "ＡＢＣ".encode(),
-        content_type="text/plain",
-        source_profile=_text_profile(),
-        profile="auto",
+def test_csv_to_json_profile_routes_to_dedicated_service() -> None:
+    # csv_to_json は専用サービス URL へルーティングされ、未達時は passthrough へ縮退する。
+    client = PreprocessServiceClient(
+        Settings(
+            rag_preprocess_enabled=True,
+            rag_preprocess_csv_to_json_service_url="http://127.0.0.1:9/",
+            rag_preprocess_service_timeout_seconds=0.2,
+        )
     )
-    assert outcome.converted is True
-    assert outcome.converter_name == "text_normalize"
+    outcome = client.convert(
+        b"a,b\n1,2\n",
+        content_type="text/csv",
+        source_profile=None,
+        profile="csv_to_json",
+    )
+    assert outcome.converted is False
+    assert "preprocess_service_unreachable" in outcome.warnings
+
+
+def test_csv_to_json_profile_unconfigured_degrades() -> None:
+    # サービス URL が空 → 未設定として安全に passthrough。
+    client = PreprocessServiceClient(
+        Settings(rag_preprocess_enabled=True, rag_preprocess_csv_to_json_service_url="")
+    )
+    outcome = client.convert(
+        b"a,b\n1,2\n",
+        content_type="text/csv",
+        source_profile=None,
+        profile="csv_to_json",
+    )
+    assert outcome.converted is False
+    assert "preprocess_service_unconfigured" in outcome.warnings
+
+
+def test_excel_to_json_profile_routes_to_dedicated_service() -> None:
+    # excel_to_json は専用サービス URL へルーティングされ、未達時は passthrough へ縮退する。
+    client = PreprocessServiceClient(
+        Settings(
+            rag_preprocess_enabled=True,
+            rag_preprocess_excel_to_json_service_url="http://127.0.0.1:9/",
+            rag_preprocess_service_timeout_seconds=0.2,
+        )
+    )
+    outcome = client.convert(
+        b"PK\x03\x04",
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        source_profile=None,
+        profile="excel_to_json",
+    )
+    assert outcome.converted is False
+    assert "preprocess_service_unreachable" in outcome.warnings
 
 
 # --- 固定長 chunking + KB 上書き ---

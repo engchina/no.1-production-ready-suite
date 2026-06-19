@@ -386,7 +386,8 @@ def test_preprocess_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -
         "text_normalize",
         "office_to_pdf",
         "pdf_to_page_images",
-        "auto",
+        "csv_to_json",
+        "excel_to_json",
     ]
     by_name = {item["name"]: item for item in body["profiles"]}
     assert by_name["office_to_pdf"]["available"] is False

@@ -99,6 +99,23 @@ class SearchRequest(BaseModel):
     strategy: SearchStrategy = SearchStrategy.AUTO
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
+    business_view_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "業務アシスタント(Business View)ID。指定時は参照 KB 群を検索対象へ展開し、"
+            "業務アシスタントの query 設定・persona を適用する(request 明示パラメータが最優先)。"
+        ),
+    )
+
+    @field_validator("business_view_id")
+    @classmethod
+    def validate_business_view_id(cls, value: str | None) -> str | None:
+        """空文字は未指定として扱う。"""
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
     @field_validator("query")
     @classmethod
@@ -211,6 +228,7 @@ class SearchDiagnostics(BaseModel):
     scalar_filter_keys: list[str] = Field(default_factory=list)
     knowledge_base_count: int = 0
     kb_adapter_config_applied: str | None = None
+    business_view_applied: str | None = None
     config_fingerprint: str = ""
 
 

@@ -138,6 +138,9 @@ celerybeat.pid
 *.aof
 *.pid
 
+# dev のサービス起動(UvProcessDriver)が使う pidfile / logfile 置き場
+.run/
+
 # RabbitMQ
 mnesia/
 rabbitmq/

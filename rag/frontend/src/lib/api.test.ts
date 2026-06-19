@@ -1069,3 +1069,53 @@ describe("api.request envelope", () => {
     );
   });
 });
+
+describe("api.services", () => {
+  it("getServices は /api/services から一覧を取り出す", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          control_enabled: false,
+          services: [
+            {
+              service_id: "parser-docling",
+              category: "parser",
+              profile: "cpu",
+              label_key: "settings.services.item.parserDocling",
+              status: "stopped",
+              configured: true,
+            },
+          ],
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.getServices();
+
+    expect(result.control_enabled).toBe(false);
+    expect(result.services[0].service_id).toBe("parser-docling");
+    expect(fetchMock).toHaveBeenCalledWith("/api/services", expect.anything());
+  });
+
+  it("controlService は service_id を URL エンコードして POST する", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: { service_id: "parser-mineru", action: "start", status: "running" },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.controlService("parser-mineru", "start");
+
+    expect(result.status).toBe("running");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/services/parser-mineru/start",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+});

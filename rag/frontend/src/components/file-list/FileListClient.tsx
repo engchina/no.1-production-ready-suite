@@ -2,7 +2,7 @@
 
 import { Link } from "react-router-dom";
 import { Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { PageHeader } from "@/components/PageHeader";
@@ -62,13 +62,31 @@ export function FileListClient() {
 
   const selection = useSelection<string>();
   const status = filter === "ALL" ? undefined : filter;
-  const query = useDocuments({
-    status,
-    q: q || undefined,
-    knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId,
-    limit: LIMIT,
-    offset,
-  });
+  // 投入直後は UPLOADED→INGESTING の引き継ぎに数秒かかり、その瞬間はまだ非アクティブ。
+  // この窓の間もポーリングを続けて取込開始を確実に拾う。
+  const [graceActive, setGraceActive] = useState(false);
+  const graceTimerRef = useRef<number | null>(null);
+  const startGraceWindow = () => {
+    setGraceActive(true);
+    if (graceTimerRef.current != null) window.clearTimeout(graceTimerRef.current);
+    graceTimerRef.current = window.setTimeout(() => setGraceActive(false), 30_000);
+  };
+  useEffect(
+    () => () => {
+      if (graceTimerRef.current != null) window.clearTimeout(graceTimerRef.current);
+    },
+    []
+  );
+  const query = useDocuments(
+    {
+      status,
+      q: q || undefined,
+      knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId,
+      limit: LIMIT,
+      offset,
+    },
+    { graceActive }
+  );
   const knowledgeBases = useKnowledgeBases({ status: "ACTIVE", limit: 100, offset: 0 });
 
   const enqueueIngestion = useEnqueueDocumentIngestionJob();
@@ -115,6 +133,7 @@ export function FileListClient() {
     }
     setBulkIngest(null);
     selection.clear();
+    startGraceWindow();
     qc.invalidateQueries({ queryKey: ["documents"] });
     qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
     qc.invalidateQueries({ queryKey: ["dashboard", "summary"] });
@@ -341,7 +360,10 @@ export function FileListClient() {
                         selected={selection.isSelected(doc.id)}
                         onToggle={() => selection.toggle(doc.id)}
                         onIngest={(force) =>
-                          enqueueIngestion.mutate({ id: doc.id, force })
+                          enqueueIngestion.mutate(
+                            { id: doc.id, force },
+                            { onSuccess: startGraceWindow }
+                          )
                         }
                         onDelete={() => void runDelete(doc)}
                         ingesting={

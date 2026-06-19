@@ -21,6 +21,11 @@ from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
 from app.config import Settings, get_settings
+from app.rag.business_view_config import (
+    BusinessViewConfig,
+    dump_business_view_config,
+    parse_business_view_config,
+)
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
     GraphClaim,
@@ -34,6 +39,11 @@ from app.rag.kb_adapter_config import parse_adapter_config
 from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
+from app.schemas.business_view import (
+    BusinessViewDetail,
+    BusinessViewStatus,
+    BusinessViewSummary,
+)
 from app.schemas.common import JsonValue
 from app.schemas.document import (
     DocumentChunkView,
@@ -178,6 +188,21 @@ class StoredKnowledgeBase:
     indexed_document_count: int = 0
     error_document_count: int = 0
     searchable_chunk_count: int = 0
+
+
+@dataclass
+class StoredBusinessView:
+    """業務アシスタント(Business View)行。"""
+
+    id: str
+    name: str
+    status: BusinessViewStatus
+    created_at: datetime
+    updated_at: datetime
+    tenant_id_hash: str | None = None
+    description: str | None = None
+    view_config: dict[str, object] = field(default_factory=dict)
+    archived_at: datetime | None = None
 
 
 @dataclass
@@ -571,6 +596,78 @@ class OracleClient:
         if owning_id is None:
             return None
         return await self.get_knowledge_base(owning_id)
+
+    async def create_business_view(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        config: BusinessViewConfig | None = None,
+    ) -> BusinessViewDetail:
+        """業務アシスタントを作成する。"""
+        return await self._create_business_view_with_oracle(
+            name=name,
+            description=description,
+            config=config or BusinessViewConfig(),
+        )
+
+    async def list_business_views(
+        self,
+        *,
+        status: BusinessViewStatus | None = None,
+        query: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[BusinessViewSummary]:
+        """業務アシスタント一覧を返す。"""
+        return await self._list_business_views_with_oracle(
+            status=status,
+            query=query,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_business_views(
+        self,
+        *,
+        status: BusinessViewStatus | None = None,
+        query: str | None = None,
+    ) -> int:
+        """条件に一致する業務アシスタント数を返す。"""
+        return await self._count_business_views_with_oracle(status=status, query=query)
+
+    async def get_business_view(
+        self,
+        business_view_id: str,
+    ) -> BusinessViewDetail | None:
+        """業務アシスタント詳細を返す。参照 KB の名前も解決して埋める。"""
+        view = await self._get_business_view_with_oracle(business_view_id)
+        if view is None:
+            return None
+        refs = await self._resolve_knowledge_base_refs(view.config.normalized_knowledge_base_ids())
+        return view.model_copy(update={"knowledge_bases": refs})
+
+    async def update_business_view(
+        self,
+        business_view_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        config: BusinessViewConfig | None = None,
+        update_fields: set[str] | None = None,
+    ) -> BusinessViewDetail:
+        """業務アシスタントを更新する。"""
+        return await self._update_business_view_with_oracle(
+            business_view_id=business_view_id,
+            name=name,
+            description=description,
+            config=config,
+            update_fields=update_fields,
+        )
+
+    async def archive_business_view(self, business_view_id: str) -> BusinessViewDetail:
+        """業務アシスタントをアーカイブする。参照 KB・文書は変更しない。"""
+        return await self._archive_business_view_with_oracle(business_view_id)
 
     async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
         """取込 job を永続化する。"""
@@ -2063,6 +2160,280 @@ class OracleClient:
             return _to_knowledge_base_detail(archived)
 
         return await self._run_transaction(operation)
+
+    async def _create_business_view_with_oracle(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        config: BusinessViewConfig,
+    ) -> BusinessViewDetail:
+        """Oracle business view table へ行を作成する。"""
+        now = datetime.now(UTC)
+        view = StoredBusinessView(
+            id=uuid4().hex,
+            tenant_id_hash=_current_tenant_id_hash(),
+            name=name,
+            description=description,
+            status=BusinessViewStatus.ACTIVE,
+            view_config=dump_business_view_config(config),
+            created_at=now,
+            updated_at=now,
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_business_views (
+                    business_view_id,
+                    tenant_id_hash,
+                    name,
+                    description,
+                    status,
+                    view_config,
+                    created_at,
+                    updated_at,
+                    archived_at
+                ) VALUES (
+                    :business_view_id,
+                    :tenant_id_hash,
+                    :name,
+                    :description,
+                    :status,
+                    :view_config,
+                    :created_at,
+                    :updated_at,
+                    :archived_at
+                )
+                """,
+                _business_view_binds(view),
+            )
+            return _to_business_view_detail(view)
+
+        return await self._run_transaction(operation)
+
+    async def _list_business_views_with_oracle(
+        self,
+        *,
+        status: BusinessViewStatus | None,
+        query: str | None,
+        limit: int | None,
+        offset: int,
+    ) -> list[BusinessViewSummary]:
+        """Oracle business view table から一覧取得する。"""
+        where_sql, binds = _oracle_business_view_where(status=status, query=query)
+        binds["offset"] = offset
+        if limit is not None:
+            binds["limit"] = limit
+            paging_sql = "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
+        else:
+            paging_sql = "OFFSET :offset ROWS"
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                bv.business_view_id,
+                bv.tenant_id_hash,
+                bv.name,
+                bv.description,
+                bv.status,
+                bv.view_config,
+                bv.created_at,
+                bv.updated_at,
+                bv.archived_at
+            FROM rag_business_views bv
+            WHERE {where_sql}
+            ORDER BY bv.updated_at DESC, bv.name ASC
+            {paging_sql}
+            """,
+                where_sql=where_sql,
+                paging_sql=paging_sql,
+            ),
+            binds,
+        )
+        return [_to_business_view_summary(_stored_business_view_from_row(row)) for row in rows]
+
+    async def _count_business_views_with_oracle(
+        self,
+        *,
+        status: BusinessViewStatus | None,
+        query: str | None,
+    ) -> int:
+        """Oracle business view table の件数を取得する。"""
+        where_sql, binds = _oracle_business_view_where(status=status, query=query)
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT COUNT(*) AS count_value
+            FROM rag_business_views bv
+            WHERE {where_sql}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return _row_count_value(row)
+
+    async def _get_business_view_with_oracle(
+        self,
+        business_view_id: str,
+    ) -> BusinessViewDetail | None:
+        """Oracle business view table から詳細取得する(KB 名は未解決)。"""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                bv.business_view_id,
+                bv.tenant_id_hash,
+                bv.name,
+                bv.description,
+                bv.status,
+                bv.view_config,
+                bv.created_at,
+                bv.updated_at,
+                bv.archived_at
+            FROM rag_business_views bv
+            WHERE bv.business_view_id = :business_view_id
+              AND {tenant_sql}
+            """,
+                tenant_sql=_oracle_tenant_predicate(alias="bv"),
+            ),
+            _with_tenant_bind({"business_view_id": business_view_id}),
+        )
+        if not rows:
+            return None
+        return _to_business_view_detail(_stored_business_view_from_row(rows[0]))
+
+    async def _update_business_view_with_oracle(
+        self,
+        *,
+        business_view_id: str,
+        name: str | None,
+        description: str | None,
+        config: BusinessViewConfig | None,
+        update_fields: set[str] | None,
+    ) -> BusinessViewDetail:
+        """Oracle business view table を更新する。"""
+        fields = update_fields or {
+            field_name
+            for field_name, value in {
+                "name": name,
+                "description": description,
+                "config": config,
+            }.items()
+            if value is not None
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
+            existing = _select_business_view(connection, business_view_id)
+            if existing is None:
+                raise KeyError(f"business_view_id={business_view_id} は存在しません。")
+            updated = existing
+            now = datetime.now(UTC)
+            if fields:
+                if "name" in fields and name is not None:
+                    updated = updated_copy_business_view(updated, name=name)
+                if "description" in fields:
+                    updated = updated_copy_business_view(updated, description=description)
+                if "config" in fields and config is not None:
+                    updated = updated_copy_business_view(
+                        updated,
+                        view_config=dump_business_view_config(config),
+                    )
+                updated = updated_copy_business_view(updated, updated_at=now)
+                _execute(
+                    connection,
+                    _render_sql(
+                        """
+                    UPDATE rag_business_views
+                    SET
+                        name = :name,
+                        description = :description,
+                        view_config = :view_config,
+                        updated_at = :updated_at
+                    WHERE business_view_id = :business_view_id
+                      AND {tenant_sql}
+                    """,
+                        tenant_sql=_oracle_tenant_predicate(),
+                    ),
+                    _business_view_binds(updated),
+                )
+            return _to_business_view_detail(updated)
+
+        return await self._run_transaction(operation)
+
+    async def _archive_business_view_with_oracle(
+        self,
+        business_view_id: str,
+    ) -> BusinessViewDetail:
+        """Oracle business view table の status を ARCHIVED にする。"""
+
+        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
+            existing = _select_business_view(connection, business_view_id)
+            if existing is None:
+                raise KeyError(f"business_view_id={business_view_id} は存在しません。")
+            now = datetime.now(UTC)
+            archived = updated_copy_business_view(
+                existing,
+                status=BusinessViewStatus.ARCHIVED,
+                updated_at=now,
+                archived_at=now,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_business_views
+                SET
+                    status = :status,
+                    updated_at = :updated_at,
+                    archived_at = :archived_at
+                WHERE business_view_id = :business_view_id
+                  AND {tenant_sql}
+                """,
+                    tenant_sql=_oracle_tenant_predicate(),
+                ),
+                _business_view_binds(archived),
+            )
+            return _to_business_view_detail(archived)
+
+        return await self._run_transaction(operation)
+
+    async def _resolve_knowledge_base_refs(
+        self,
+        knowledge_base_ids: Sequence[str],
+    ) -> list[KnowledgeBaseRef]:
+        """参照 KB ID 群から存在する KB の {id, name} を tenant scope で解決する。"""
+        ids = _unique_optional_sequence(knowledge_base_ids)
+        if not ids:
+            return []
+        in_sql, in_binds = _oracle_in_predicate("kb.knowledge_base_id", "ref_kb_id", ids)
+        binds = _with_tenant_bind({})
+        binds.update(in_binds)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT kb.knowledge_base_id, kb.name
+            FROM rag_knowledge_bases kb
+            WHERE {in_sql}
+              AND {tenant_sql}
+            """,
+                in_sql=in_sql,
+                tenant_sql=_oracle_tenant_predicate(alias="kb"),
+            ),
+            binds,
+        )
+        by_id = {
+            str(row["knowledge_base_id"]): str(row["name"])
+            for row in rows
+        }
+        # 入力順を保ち、存在しない KB は落とす。
+        return [
+            KnowledgeBaseRef(id=knowledge_base_id, name=by_id[knowledge_base_id])
+            for knowledge_base_id in ids
+            if knowledge_base_id in by_id
+        ]
 
     async def _assign_documents_to_knowledge_base_with_oracle(
         self,
@@ -4764,6 +5135,35 @@ def _select_knowledge_base(
     return None if not rows else _stored_knowledge_base_from_row(rows[0])
 
 
+def _select_business_view(
+    connection: OracleConnectionProtocol,
+    business_view_id: str,
+) -> StoredBusinessView | None:
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            business_view_id,
+            tenant_id_hash,
+            name,
+            description,
+            status,
+            view_config,
+            created_at,
+            updated_at,
+            archived_at
+        FROM rag_business_views
+        WHERE business_view_id = :business_view_id
+          AND {tenant_sql}
+        """,
+            tenant_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"business_view_id": business_view_id}),
+    )
+    return None if not rows else _stored_business_view_from_row(rows[0])
+
+
 def _select_knowledge_base_by_name(
     connection: OracleConnectionProtocol,
     name: str,
@@ -5062,6 +5462,25 @@ def _oracle_knowledge_base_where(
             "OR LOWER(kb.description) LIKE :knowledge_base_query ESCAPE '\\')"
         )
         binds["knowledge_base_query"] = _like_pattern(query)
+    return " AND ".join(clauses), binds
+
+
+def _oracle_business_view_where(
+    *,
+    status: BusinessViewStatus | None = None,
+    query: str | None = None,
+) -> tuple[str, dict[str, object]]:
+    clauses = [_oracle_tenant_predicate(alias="bv")]
+    binds = _with_tenant_bind({})
+    if status is not None:
+        clauses.append("bv.status = :business_view_status")
+        binds["business_view_status"] = status.value
+    if query and query.strip():
+        clauses.append(
+            "(LOWER(bv.name) LIKE :business_view_query ESCAPE '\\' "
+            "OR LOWER(bv.description) LIKE :business_view_query ESCAPE '\\')"
+        )
+        binds["business_view_query"] = _like_pattern(query)
     return " AND ".join(clauses), binds
 
 
@@ -5489,6 +5908,20 @@ def _knowledge_base_binds(knowledge_base: StoredKnowledgeBase) -> dict[str, obje
     }
 
 
+def _business_view_binds(view: StoredBusinessView) -> dict[str, object]:
+    return {
+        "business_view_id": view.id,
+        "tenant_id_hash": view.tenant_id_hash,
+        "name": view.name,
+        "description": view.description,
+        "status": view.status.value,
+        "view_config": _json_dumps(view.view_config),
+        "created_at": view.created_at,
+        "updated_at": view.updated_at,
+        "archived_at": view.archived_at,
+    }
+
+
 def _document_knowledge_base_binds(
     *,
     knowledge_base_id: str,
@@ -5575,6 +6008,20 @@ def _stored_knowledge_base_from_row(row: Mapping[str, object]) -> StoredKnowledg
         indexed_document_count=_int_value(row.get("indexed_document_count")),
         error_document_count=_int_value(row.get("error_document_count")),
         searchable_chunk_count=_int_value(row.get("searchable_chunk_count")),
+    )
+
+
+def _stored_business_view_from_row(row: Mapping[str, object]) -> StoredBusinessView:
+    return StoredBusinessView(
+        id=str(row["business_view_id"]),
+        tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
+        name=str(row["name"]),
+        description=_optional_str(row.get("description")),
+        status=_business_view_status(row.get("status")),
+        view_config=_json_loads(row.get("view_config")),
+        created_at=_datetime_value(row.get("created_at")),
+        updated_at=_datetime_value(row.get("updated_at")),
+        archived_at=_optional_datetime(row.get("archived_at")),
     )
 
 
@@ -5902,6 +6349,12 @@ def _knowledge_base_status(value: object) -> KnowledgeBaseStatus:
     return KnowledgeBaseStatus(str(value or KnowledgeBaseStatus.ACTIVE.value))
 
 
+def _business_view_status(value: object) -> BusinessViewStatus:
+    if isinstance(value, BusinessViewStatus):
+        return value
+    return BusinessViewStatus(str(value or BusinessViewStatus.ACTIVE.value))
+
+
 def _search_mode(value: object) -> SearchMode:
     if isinstance(value, SearchMode):
         return value
@@ -6225,6 +6678,40 @@ CREATE INDEX {membership_table}_document_idx
 
 CREATE INDEX {membership_table}_tenant_kb_idx
     ON {membership_table} (tenant_id_hash, knowledge_base_id, assigned_at DESC);
+""".strip()
+
+
+def oracle_business_view_schema_sql(
+    table_name: str = "rag_business_views",
+) -> str:
+    """Oracle business view(業務アシスタント)table の DDL 例を返す。
+
+    参照 KB は ``view_config`` JSON 内に ID 群として保持する(多対多。link table 不要で
+    DDL を最小化する)。query 上書きと persona も同 JSON へ束ねる。
+    """
+    return f"""
+CREATE TABLE {table_name} (
+    business_view_id   VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash     CHAR(64),
+    name               VARCHAR2(256) NOT NULL,
+    description        VARCHAR2(2000),
+    status             VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
+    view_config        JSON,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    archived_at        TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT {table_name}_status_ck
+        CHECK (status IN ('ACTIVE', 'ARCHIVED'))
+);
+
+CREATE UNIQUE INDEX {table_name}_tenant_name_uidx
+    ON {table_name} (
+        NVL(tenant_id_hash, '__GLOBAL__'),
+        LOWER(name)
+    );
+
+CREATE INDEX {table_name}_tenant_status_idx
+    ON {table_name} (tenant_id_hash, status, updated_at DESC);
 """.strip()
 
 
@@ -7201,6 +7688,36 @@ def updated_copy_knowledge_base(
     **changes: object,
 ) -> StoredKnowledgeBase:
     return replace(knowledge_base, **cast(Any, changes))
+
+
+def _to_business_view_summary(view: StoredBusinessView) -> BusinessViewSummary:
+    config = parse_business_view_config(view.view_config)
+    return BusinessViewSummary(
+        id=view.id,
+        name=view.name,
+        description=view.description,
+        status=view.status,
+        knowledge_base_count=len(config.normalized_knowledge_base_ids()),
+        created_at=view.created_at,
+        updated_at=view.updated_at,
+        archived_at=view.archived_at,
+    )
+
+
+def _to_business_view_detail(view: StoredBusinessView) -> BusinessViewDetail:
+    config = parse_business_view_config(view.view_config)
+    return BusinessViewDetail(
+        **_to_business_view_summary(view).model_dump(),
+        config=config,
+        knowledge_bases=[],
+    )
+
+
+def updated_copy_business_view(
+    view: StoredBusinessView,
+    **changes: object,
+) -> StoredBusinessView:
+    return replace(view, **cast(Any, changes))
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:

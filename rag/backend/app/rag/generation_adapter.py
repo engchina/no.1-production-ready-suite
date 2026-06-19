@@ -149,6 +149,10 @@ def resolve_generation_adapter(settings: Settings) -> GenerationAdapterParams:
         from app.rag.prompt_versions import active_custom_system_prompt
 
         system_prompt = active_custom_system_prompt()
+    # 業務アシスタント(Business View)の persona 上書きは profile prompt より優先する。
+    override = getattr(settings, "rag_generation_system_prompt_override", None)
+    if isinstance(override, str) and override.strip():
+        system_prompt = override.strip()
     return GenerationAdapterParams(
         profile=profile,
         system_prompt=system_prompt,

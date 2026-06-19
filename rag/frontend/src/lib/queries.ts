@@ -7,8 +7,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AdbSettingsUpdate,
+  type DashboardActivity,
   type DatabaseSettingsUpdate,
   type DocumentApproveRequest,
+  type DocumentSummary,
   type DocumentKnowledgeBaseReplaceRequest,
   type DocumentExtractionExportFormat,
   type EvaluationCompareRequestBody,
@@ -18,6 +20,9 @@ import {
   type KnowledgeBaseCreateRequest,
   type KnowledgeBaseStatus,
   type KnowledgeBaseUpdateRequest,
+  type BusinessViewCreateRequest,
+  type BusinessViewStatus,
+  type BusinessViewUpdateRequest,
   type ModelSettingsPayload,
   type ModelSettingsTestRequest,
   type ParserAdapterContractData,
@@ -27,6 +32,9 @@ import {
   type ChunkingSettingsUpdate,
   type PreprocessSettingsData,
   type PreprocessSettingsUpdate,
+  type ServiceAction,
+  type ServiceControlResultData,
+  type ServiceListData,
   type RetrievalSettingsData,
   type RetrievalSettingsUpdate,
   type GroundingSettingsData,
@@ -79,6 +87,13 @@ export const queryKeys = {
     offset?: number;
   }) => ["knowledge-bases", params] as const,
   knowledgeBase: (id: string) => ["knowledge-bases", id] as const,
+  businessViews: (params: {
+    status?: BusinessViewStatus;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }) => ["business-views", params] as const,
+  businessView: (id: string) => ["business-views", id] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
   adbInfo: ["settings", "database", "adb"] as const,
@@ -95,7 +110,57 @@ export const queryKeys = {
   evaluationSettings: ["settings", "evaluation-suite"] as const,
   graphSettings: ["settings", "graph"] as const,
   agenticSettings: ["settings", "agentic"] as const,
+  services: ["services"] as const,
 };
+
+/**
+ * 自動更新(条件付きポーリング)の遷移状態判定。
+ *
+ * `refetchInterval` を関数形式で使い、状態遷移中だけポーリングして安定/終了したら
+ * 止める。`useDocumentIngestionSegments` / `useIngestionJob` と同じ方針。純粋関数
+ * として切り出し Vitest で境界を検証する。
+ */
+
+/** 取込/索引が進行中で一覧を再取得すべき文書状態。 */
+export const DOCUMENT_ACTIVE_STATUSES: ReadonlySet<FileStatus> = new Set<FileStatus>([
+  "INGESTING",
+  "INDEXING",
+]);
+
+/** ADB が起動/停止などの遷移中で lifecycle を再取得すべき状態。 */
+export const ADB_TRANSITIONAL_STATES: ReadonlySet<string> = new Set<string>([
+  "STARTING",
+  "STOPPING",
+  "PROVISIONING",
+  "TERMINATING",
+  "UPDATING",
+  "RESTORING",
+  "BACKUP_IN_PROGRESS",
+  "MAINTENANCE_IN_PROGRESS",
+  "ROLE_CHANGE_IN_PROGRESS",
+]);
+
+/** ポーリング間隔(ms)。 */
+export const ACTIVE_REFETCH_INTERVAL_MS = 4000;
+
+/** 文書一覧に取込/索引進行中の文書が含まれるか。 */
+export function documentsHaveActiveWork(
+  items: ReadonlyArray<Pick<DocumentSummary, "status">> | undefined
+): boolean {
+  return Boolean(items?.some((item) => DOCUMENT_ACTIVE_STATUSES.has(item.status)));
+}
+
+/** ADB lifecycle が遷移中か。 */
+export function adbIsTransitioning(state: string | null | undefined): boolean {
+  return state != null && ADB_TRANSITIONAL_STATES.has(state);
+}
+
+/** ダッシュボードの最近のアクティビティに進行中の処理が含まれるか。 */
+export function dashboardHasActiveWork(
+  activities: ReadonlyArray<Pick<DashboardActivity, "status">> | undefined
+): boolean {
+  return Boolean(activities?.some((activity) => DOCUMENT_ACTIVE_STATUSES.has(activity.status)));
+}
 
 /** データベース利用可否(DB ゲート用)。設定ページ以外を開く前に参照する。 */
 export function useDatabaseStatus(options: { enabled?: boolean } = {}) {
@@ -109,23 +174,36 @@ export function useDatabaseStatus(options: { enabled?: boolean } = {}) {
   });
 }
 
-/** ダッシュボード集計。 */
+/** ダッシュボード集計。取込/索引が進行中の間だけ自動再取得する。 */
 export function useDashboardSummary() {
   return useQuery({
     queryKey: queryKeys.dashboardSummary,
     queryFn: api.getDashboardSummary,
     retry: false,
+    refetchInterval: (query) =>
+      dashboardHasActiveWork(query.state.data?.recent_activities)
+        ? ACTIVE_REFETCH_INTERVAL_MS
+        : false,
   });
 }
 
-/** ドキュメント一覧（ページング・絞り込み）。 */
-export function useDocuments(params: {
-  status?: FileStatus;
-  q?: string;
-  knowledge_base_id?: string;
-  limit?: number;
-  offset?: number;
-}) {
+/**
+ * ドキュメント一覧（ページング・絞り込み）。
+ *
+ * 取込/索引が進行中の文書が 1 件でもある間は自動再取得して状態バッジを更新する。
+ * `graceActive` は「取込ジョブ投入直後の UPLOADED→INGESTING 引き継ぎ窓」で、まだ
+ * アクティブ状態が現れていない間もポーリングを継続させるためにコンポーネントが渡す。
+ */
+export function useDocuments(
+  params: {
+    status?: FileStatus;
+    q?: string;
+    knowledge_base_id?: string;
+    limit?: number;
+    offset?: number;
+  },
+  options: { graceActive?: boolean } = {}
+) {
   return useQuery({
     queryKey: queryKeys.documents({
       status: params.status,
@@ -135,6 +213,10 @@ export function useDocuments(params: {
       offset: params.offset,
     }),
     queryFn: () => api.listDocuments(params),
+    refetchInterval: (query) =>
+      documentsHaveActiveWork(query.state.data?.items) || options.graceActive
+        ? ACTIVE_REFETCH_INTERVAL_MS
+        : false,
   });
 }
 
@@ -390,6 +472,62 @@ export function useArchiveKnowledgeBase() {
   });
 }
 
+/** 業務アシスタント(Business View)一覧。 */
+export function useBusinessViews(params: {
+  status?: BusinessViewStatus;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  return useQuery({
+    queryKey: queryKeys.businessViews(params),
+    queryFn: () => api.listBusinessViews(params),
+  });
+}
+
+/** 業務アシスタント詳細(config・参照 KB を含む)。 */
+export function useBusinessView(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.businessView(id ?? ""),
+    queryFn: () => api.getBusinessView(id as string),
+    enabled: id != null,
+  });
+}
+
+/** 業務アシスタント作成。 */
+export function useCreateBusinessView() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: BusinessViewCreateRequest) => api.createBusinessView(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["business-views"] });
+    },
+  });
+}
+
+/** 業務アシスタント更新。 */
+export function useUpdateBusinessView() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: BusinessViewUpdateRequest }) =>
+      api.updateBusinessView(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["business-views"] });
+    },
+  });
+}
+
+/** 業務アシスタントをアーカイブする。 */
+export function useArchiveBusinessView() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.archiveBusinessView(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["business-views"] });
+    },
+  });
+}
+
 /** 既存文書をナレッジベースへ追加する。 */
 export function useAssignDocumentsToKnowledgeBase() {
   const qc = useQueryClient();
@@ -616,11 +754,15 @@ export function useTestDatabaseSettings() {
   });
 }
 
-/** Autonomous Database 情報。 */
+/** Autonomous Database 情報。起動/停止などの遷移中だけ自動再取得する。 */
 export function useAdbInfo() {
   return useQuery({
     queryKey: queryKeys.adbInfo,
     queryFn: api.getAdbInfo,
+    refetchInterval: (query) =>
+      adbIsTransitioning(query.state.data?.lifecycle_state)
+        ? ACTIVE_REFETCH_INTERVAL_MS
+        : false,
   });
 }
 
@@ -867,6 +1009,31 @@ export function usePreprocessSettings() {
     queryKey: queryKeys.preprocessSettings,
     queryFn: api.getPreprocessSettings,
     retry: false,
+  });
+}
+
+/** マイクロサービスの稼働状態一覧。既定 5s でポーリングして稼働状況をライブ表示する。 */
+export function useServices(options: { refetchInterval?: number | false } = {}) {
+  return useQuery<ServiceListData>({
+    queryKey: queryKeys.services,
+    queryFn: api.getServices,
+    retry: false,
+    refetchInterval: options.refetchInterval ?? 5000,
+  });
+}
+
+/** サービスを起動/停止/再起動する(成功時に一覧を即時 invalidate)。 */
+export function useControlService() {
+  const qc = useQueryClient();
+  return useMutation<
+    ServiceControlResultData,
+    unknown,
+    { serviceId: string; action: ServiceAction }
+  >({
+    mutationFn: ({ serviceId, action }) => api.controlService(serviceId, action),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.services });
+    },
   });
 }
 

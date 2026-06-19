@@ -34,7 +34,8 @@ PreprocessProfile = Literal[
     "text_normalize",
     "office_to_pdf",
     "pdf_to_page_images",
-    "auto",
+    "csv_to_json",
+    "excel_to_json",
 ]
 ChunkingStrategy = Literal[
     "structure_aware",
@@ -707,6 +708,14 @@ class Settings(BaseSettings):
             "structured_json は JSON 構造化出力、bilingual_ja_en は日本語+英語要約。"
         ),
     )
+    rag_generation_system_prompt_override: str | None = Field(
+        default=None,
+        description=(
+            "回答生成 system prompt の上書き。業務アシスタント(Business View)の persona を"
+            "クエリ時に注入するための runtime 上書きで env からは設定しない(既定 None=上書きなし)。"
+            "設定時は Generation アダプターの profile prompt より優先する。"
+        ),
+    )
     rag_guardrail_policy: GuardrailPolicyName = Field(
         default="standard",
         description=(
@@ -760,21 +769,34 @@ class Settings(BaseSettings):
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
             "passthrough(既定)は変換せず現行挙動と一致。text_normalize は文字コード/"
             "Unicode/空白を正規化(in-process)。office_to_pdf は Office→PDF、"
-            "pdf_to_page_images は PDF→ページ画像(いずれもマイクロサービス)。"
-            "auto は modality で上記を決定論選択する。"
+            "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
+            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON"
+            "(いずれも各々独立した前処理マイクロサービス)。"
         ),
     )
     rag_preprocess_enabled: bool = Field(
         default=False,
         description=(
             "前処理マイクロサービスへの HTTP 委譲を有効化する。OFF(既定)は in-process で "
-            "扱える profile(passthrough / text_normalize)のみ実行し、重い変換は passthrough へ "
-            "安全に縮退する。"
+            "扱える profile(passthrough / text_normalize)のみ実行し、サービス必須の変換は "
+            "passthrough へ安全に縮退する。"
         ),
     )
-    rag_preprocess_service_url: str = Field(
-        default="http://preprocess:8000",
-        description="前処理マイクロサービスの base URL。",
+    rag_preprocess_office_to_pdf_service_url: str = Field(
+        default="http://preprocess-office-to-pdf:8000",
+        description="Office→PDF 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_pdf_to_page_images_service_url: str = Field(
+        default="http://preprocess-pdf-to-page-images:8000",
+        description="PDF→ページ画像PDF 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_csv_to_json_service_url: str = Field(
+        default="http://preprocess-csv-to-json:8000",
+        description="CSV→構造化 JSON 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_excel_to_json_service_url: str = Field(
+        default="http://preprocess-excel-to-json:8000",
+        description="Excel(.xls/.xlsx)→構造化 JSON 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_service_timeout_seconds: float = Field(
         default=300.0,
@@ -866,6 +888,36 @@ class Settings(BaseSettings):
         default=2.0,
         gt=0,
         description="readiness の /health 問い合わせ timeout(秒)。",
+    )
+    # --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
+    rag_service_control_enabled: bool = Field(
+        default=False,
+        description=(
+            "サービス管理画面からの起動/停止(docker compose 制御)を有効化する。"
+            "OFF(既定)は稼働状態の可視化のみで、制御 API は 409(control_disabled)で拒否する。"
+            "ON にする場合は backend が docker CLI を実行できる必要がある(ホスト直起動、または "
+            "docker.sock + docker CLI のマウント)。"
+        ),
+    )
+    rag_service_control_command: str = Field(
+        default="docker compose",
+        description=(
+            "サービス起動/停止に使う compose コマンドのベース(空白区切り)。"
+            "service 名はカタログの allowlist 経由でのみ付与し、任意コマンドは受け付けない。"
+        ),
+    )
+    rag_service_control_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="サービス起動/停止 subprocess の timeout(秒)。超過は失敗として構造化返却する。",
+    )
+    rag_service_status_probe_timeout_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description=(
+            "サービス管理画面が各マイクロサービスの /health を問い合わせる timeout(秒)。"
+            "接続拒否/timeout は stopped、到達したが status!=ok は degraded として表示する。"
+        ),
     )
     # --- OCI Document Understanding（service 系 parser backend）---
     # 別 OCI サービス(oci.ai_document)。非同期 processor job で日本語 OCR/表抽出する。

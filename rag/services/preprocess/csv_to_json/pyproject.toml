@@ -1,15 +1,14 @@
 [project]
-name = "preprocess-service"
+name = "preprocess-csv-to-json-service"
 version = "0.1.0"
-description = "前処理(Preprocess)microservice: parse 前の原本変換(Office→PDF / PDF→画像PDF)"
+description = "前処理(Preprocess)microservice: CSV→構造化 JSON(csv2json 再マップ)"
 requires-python = ">=3.12"
 dependencies = [
     "rag-parser-core[service]",
-    "pymupdf>=1.24,<2",
 ]
 
 [tool.uv.sources]
-rag-parser-core = { path = "../../packages/rag_parser_core", editable = true }
+rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 
 [build-system]
 requires = ["hatchling"]

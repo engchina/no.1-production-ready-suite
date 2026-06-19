@@ -61,11 +61,12 @@ def test_source_derivation_serializes_to_json_dict() -> None:
 
 
 def test_normalize_and_supported_profiles() -> None:
-    assert normalize_preprocess_profile("AUTO") == "auto"
+    assert normalize_preprocess_profile("CSV_TO_JSON") == "csv_to_json"
+    assert normalize_preprocess_profile("auto") == "passthrough"  # 廃止 → 既定へ寄せる
     assert normalize_preprocess_profile("???") == "passthrough"
-    assert supported_profiles_from(["passthrough", "passthrough", "auto"]) == [
+    assert supported_profiles_from(["passthrough", "passthrough", "csv_to_json"]) == [
         "passthrough",
-        "auto",
+        "csv_to_json",
     ]
 
 

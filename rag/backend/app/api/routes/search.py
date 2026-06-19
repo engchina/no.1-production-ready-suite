@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from app.clients.oracle import OracleClient, SelectAiUnavailableError
 from app.config import Settings, get_settings
 from app.rag.audit import record_rag_search_audit
+from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.kb_adapter_config import apply_adapter_config_or_global
@@ -123,33 +124,62 @@ async def stream_search(
     )
 
 
-async def _resolve_query_settings(
+async def _resolve_query_context(
     request: SearchRequest,
     global_settings: Settings,
-) -> tuple[Settings, str | None]:
-    """単一 KB 指定時に KB の query 上書きを重ねた有効 Settings を返す。
+) -> tuple[SearchRequest, Settings, str | None, str | None]:
+    """検索の有効 request / Settings と適用済みの KB / 業務アシスタント id を返す。
 
-    request 明示パラメータが最優先という解決順は pipeline 側で保たれる。KB 指定が
-    0 件 / 複数件のときは設定が競合しうるためグローバル既定を使う。戻り値 2 番目は
-    実際に上書きが効いた KB id(効かなければ None)。
+    解決順は request 明示 > 業務アシスタント > (単一 KB 指定時のみ)KB > グローバル既定。
+    業務アシスタント指定時は参照 KB 群を検索対象へ展開し、その query 設定・persona を適用する
+    (複数 KB の query 設定競合を業務アシスタント 1 枚で解消する)。戻り値は
+    (有効 request, 有効 Settings, 適用 KB id, 適用業務アシスタント id)。
     """
+    if request.business_view_id:
+        view = await OracleClient().get_business_view(request.business_view_id)
+        if view is not None:
+            effective_request = request
+            kb_ids = view.config.normalized_knowledge_base_ids()
+            # request 明示の KB があればそちらを優先し、無ければ参照 KB 群を展開する。
+            if not request.knowledge_base_ids and kb_ids:
+                effective_request = _with_knowledge_base_ids(request, kb_ids)
+            settings, applied = resolve_business_view_settings(global_settings, view.config)
+            applied_view = view.id if (applied or kb_ids) else None
+            return effective_request, settings, None, applied_view
+
     knowledge_base_ids = request.knowledge_base_ids
     if len(knowledge_base_ids) != 1:
-        return global_settings, None
+        return request, global_settings, None, None
     knowledge_base = await OracleClient().get_knowledge_base(knowledge_base_ids[0])
     if knowledge_base is None:
-        return global_settings, None
+        return request, global_settings, None, None
     effective, applied = apply_adapter_config_or_global(
         global_settings,
         knowledge_base.adapter_config,
         scope="query",
     )
-    return effective, (knowledge_base_ids[0] if applied else None)
+    return request, effective, (knowledge_base_ids[0] if applied else None), None
+
+
+def _with_knowledge_base_ids(
+    request: SearchRequest,
+    knowledge_base_ids: list[str],
+) -> SearchRequest:
+    """業務アシスタントの参照 KB 群を検索対象へ展開した request を作る。"""
+    payload = request.model_dump()
+    payload["knowledge_base_ids"] = knowledge_base_ids
+    filters = dict(payload.get("filters") or {})
+    # validator が knowledge_base_ids から knowledge_base_id フィルターを再構成する。
+    filters.pop("knowledge_base_id", None)
+    payload["filters"] = filters
+    return SearchRequest.model_validate(payload)
 
 
 async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
     """検索 pipeline をリクエスト単位の timeout 付きで実行する。"""
-    settings, applied_kb = await _resolve_query_settings(request, get_settings())
+    request, settings, applied_kb, applied_view = await _resolve_query_context(
+        request, get_settings()
+    )
     timeout = settings.rag_search_timeout_seconds
     started_at = perf_counter()
     trace_id = new_trace_id()
@@ -159,12 +189,16 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
         )
         if applied_kb is not None:
             result.diagnostics.kb_adapter_config_applied = applied_kb
+        if applied_view is not None:
+            result.diagnostics.business_view_applied = applied_view
         return result
     except TimeoutError as exc:
         elapsed = elapsed_ms(started_at)
         diagnostics = build_search_diagnostics(request, settings=settings)
         if applied_kb is not None:
             diagnostics.kb_adapter_config_applied = applied_kb
+        if applied_view is not None:
+            diagnostics.business_view_applied = applied_view
         record_rag_request(request.mode.value, "error", elapsed / 1000, 0)
         record_rag_search_audit(
             trace_id=trace_id,
@@ -185,7 +219,9 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
 
 async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIterator[str]:
     """stage progress を即時 SSE で返しながら検索 pipeline を実行する。"""
-    settings, applied_kb = await _resolve_query_settings(request, get_settings())
+    request, settings, applied_kb, applied_view = await _resolve_query_context(
+        request, get_settings()
+    )
     timeout = settings.rag_search_timeout_seconds
     started_at = perf_counter()
     trace_id = new_trace_id()
@@ -229,6 +265,8 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
             )
             if applied_kb is not None:
                 result.diagnostics.kb_adapter_config_applied = applied_kb
+            if applied_view is not None:
+                result.diagnostics.business_view_applied = applied_view
             await queue.put(("result", result))
         except TimeoutError as exc:
             elapsed = elapsed_ms(started_at)
@@ -239,6 +277,8 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
             )
             if applied_kb is not None:
                 diagnostics.kb_adapter_config_applied = applied_kb
+            if applied_view is not None:
+                diagnostics.business_view_applied = applied_view
             record_rag_request(request.mode.value, "error", elapsed / 1000, 0)
             record_rag_search_audit(
                 trace_id=trace_id,

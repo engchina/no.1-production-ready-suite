@@ -561,6 +561,48 @@ export interface KnowledgeBaseUpdateRequest {
   adapter_config?: KnowledgeBaseAdapterConfig | null;
 }
 
+export type BusinessViewStatus = "ACTIVE" | "ARCHIVED";
+
+export interface BusinessViewRef {
+  id: string;
+  name: string;
+}
+
+/** 業務アシスタント(Business View)の設定一式。query は KB の query 上書きを再利用。 */
+export interface BusinessViewConfig {
+  version: number;
+  knowledge_base_ids: string[];
+  query: KnowledgeBaseQueryConfig;
+  system_prompt: string | null;
+  default_language: string | null;
+}
+
+export interface BusinessViewSummary extends BusinessViewRef {
+  description: string | null;
+  status: BusinessViewStatus;
+  knowledge_base_count: number;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface BusinessViewDetail extends BusinessViewSummary {
+  config: BusinessViewConfig;
+  knowledge_bases: KnowledgeBaseRef[];
+}
+
+export interface BusinessViewCreateRequest {
+  name: string;
+  description?: string | null;
+  config?: BusinessViewConfig;
+}
+
+export interface BusinessViewUpdateRequest {
+  name?: string | null;
+  description?: string | null;
+  config?: BusinessViewConfig;
+}
+
 /** 文書の取込設定スナップショット / owning KB とのドリフト状況。 */
 export interface DocumentIngestionConfigData {
   document_id: string;
@@ -590,6 +632,7 @@ export interface SearchRequestBody {
   strategy?: SearchStrategy;
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
+  business_view_id?: string | null;
 }
 
 export interface RetrievedChunk {
@@ -631,6 +674,7 @@ export interface SearchDiagnostics {
   oracle_vector_target_accuracy: number;
   filter_keys: string[];
   knowledge_base_count: number;
+  business_view_applied?: string | null;
   config_fingerprint: string;
 }
 
@@ -1167,7 +1211,8 @@ export type PreprocessProfileName =
   | "text_normalize"
   | "office_to_pdf"
   | "pdf_to_page_images"
-  | "auto";
+  | "csv_to_json"
+  | "excel_to_json";
 
 export interface PreprocessProfileStatusData {
   name: PreprocessProfileName;
@@ -1190,6 +1235,35 @@ export interface PreprocessSettingsData {
 
 export interface PreprocessSettingsUpdate {
   profile: PreprocessProfileName;
+}
+
+// --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
+export type ServiceCategory = "preprocess" | "parser";
+export type ServiceProfile = "cpu" | "gpu";
+export type ServiceRuntimeStatus = "running" | "degraded" | "stopped" | "unconfigured";
+export type ServiceAction = "start" | "stop" | "restart";
+
+export interface ServiceStatusData {
+  service_id: string;
+  category: ServiceCategory;
+  profile: ServiceProfile;
+  label_key: string;
+  status: ServiceRuntimeStatus;
+  configured: boolean;
+}
+
+export type DeploymentMode = "dev" | "prod";
+
+export interface ServiceListData {
+  control_enabled: boolean;
+  deployment_mode: DeploymentMode;
+  services: ServiceStatusData[];
+}
+
+export interface ServiceControlResultData {
+  service_id: string;
+  action: ServiceAction;
+  status: ServiceRuntimeStatus;
 }
 
 export interface ChunkingStrategyStatusData {
@@ -1874,6 +1948,38 @@ export const api = {
       { method: "DELETE" }
     ),
 
+  // 業務アシスタント(Business View)
+  listBusinessViews: (params: {
+    status?: BusinessViewStatus;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.q) search.set("q", params.q);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return requestDegradable<Page<BusinessViewSummary>>(
+      `/api/business-views${qs ? `?${qs}` : ""}`
+    );
+  },
+  getBusinessView: (id: string) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}`),
+  createBusinessView: (body: BusinessViewCreateRequest) =>
+    request<BusinessViewDetail>("/api/business-views", jsonBody(body)),
+  updateBusinessView: (id: string, body: BusinessViewUpdateRequest) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  archiveBusinessView: (id: string) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+    }),
+
   // 検索
   search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
   selectAi: (body: SelectAiRequestBody) =>
@@ -1945,6 +2051,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+
+  // サービス管理: 前処理 / Parser マイクロサービスの稼働可視化・起動/停止
+  getServices: () => request<ServiceListData>("/api/services"),
+  controlService: (serviceId: string, action: ServiceAction) =>
+    request<ServiceControlResultData>(
+      `/api/services/${encodeURIComponent(serviceId)}/${action}`,
+      { method: "POST" }
+    ),
 
   // 設定: Chunking アダプター
   getPreprocessSettings: () => request<PreprocessSettingsData>("/api/settings/preprocess"),

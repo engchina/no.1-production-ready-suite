@@ -21,7 +21,7 @@ import {
 } from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
 import { t } from "@/lib/i18n";
-import { useSelectAi } from "@/lib/queries";
+import { useBusinessViews, useSelectAi } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
@@ -87,6 +87,7 @@ export function SearchClient() {
   const [sectionTitle, setSectionTitle] = useState("");
   const [sectionPath, setSectionPath] = useState("");
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
+  const [businessViewId, setBusinessViewId] = useState<string>("");
   const abortRef = useRef<AbortController | null>(null);
   const hasFilters =
     Boolean(contentKind) ||
@@ -116,7 +117,11 @@ export function SearchClient() {
           mode,
           top_k: 20,
           rerank_top_n: 5,
-          ...(knowledgeBaseIds.length ? { knowledge_base_ids: knowledgeBaseIds } : {}),
+          ...(businessViewId
+            ? { business_view_id: businessViewId }
+            : knowledgeBaseIds.length
+              ? { knowledge_base_ids: knowledgeBaseIds }
+              : {}),
           ...(Object.keys(filters).length ? { filters } : {}),
         },
         {
@@ -221,10 +226,16 @@ export function SearchClient() {
                 </span>
               </legend>
 
+              <BusinessViewSelect
+                value={businessViewId}
+                onChange={setBusinessViewId}
+                disabled={isStreaming}
+              />
+
               <KnowledgeBaseScopePicker
                 selectedIds={knowledgeBaseIds}
                 onChange={setKnowledgeBaseIds}
-                disabled={isStreaming}
+                disabled={isStreaming || businessViewId !== ""}
                 helper={t("search.filters.knowledgeBaseHelper")}
                 className="sm:col-span-4"
               />
@@ -589,5 +600,42 @@ function SelectAiPanel() {
         </Card>
       ) : null}
     </aside>
+  );
+}
+
+/** RAG 検索の対象業務アシスタント(Business View)選択。選ぶと参照 KB 群と方針が適用される。 */
+function BusinessViewSelect({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const query = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
+  const views = query.data?.items ?? [];
+  if (views.length === 0) return null;
+  const options: SelectFieldOption<string>[] = [
+    { value: "", label: t("businessViews.scope.none") },
+    ...views.map((view) => ({ value: view.id, label: view.name })),
+  ];
+  return (
+    <div className="space-y-1 sm:col-span-4">
+      <SelectField
+        id="search-business-view"
+        label={t("businessViews.scope.label")}
+        value={value}
+        options={options}
+        onValueChange={(next) => {
+          if (!disabled) onChange(next);
+        }}
+        className="[&_label]:text-xs"
+        buttonClassName="bg-background"
+      />
+      <p className="text-xs text-muted">
+        {value ? t("businessViews.scope.applied") : t("businessViews.scope.helper")}
+      </p>
+    </div>
   );
 }

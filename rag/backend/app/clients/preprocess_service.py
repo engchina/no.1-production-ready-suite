@@ -3,10 +3,10 @@
 parse の **前** に原本を一度だけ canonical な中間物へ変換する(`先变换、再 parse`)。
 
 - 軽量な `text_normalize`(文字コード/Unicode/空白の正規化)は backend in-process で実行する。
-- 重い変換(`office_to_pdf` / `pdf_to_page_images`)は前処理マイクロサービスへ HTTP 委譲し、
-  サービス無効・未達・timeout・5xx 時は warning を付けて **passthrough(原本そのまま parse)**
-  へ安全に縮退する(parser サービスと同じ縮退規約)。
-- `auto` は modality で具体プリセットを決定論選択する。
+- サービス必須の変換(`office_to_pdf` / `pdf_to_page_images` / `csv_to_json` / `excel_to_json`)は
+  **各々独立した**前処理マイクロサービスへ HTTP 委譲する(profile ごとに専用 base URL)。
+  サービス無効・未達・timeout・5xx 時は warning を付けて
+  **passthrough(原本そのまま parse)** へ縮退する(parser サービスと同じ縮退規約)。
 
 戻り値は `rag_parser_core.ConvertOutcome`。Object Storage 保存後の `SourceDerivation`
 (派生系譜)の確定は呼び出し側(ingestion)が行う。
@@ -22,6 +22,7 @@ import httpx
 from rag_parser_core.preprocess import ConvertOutcome, ConvertResponse, normalize_preprocess_profile
 
 from app.config import Settings
+from app.rag.preprocess_strategy import preprocess_service_url
 from app.schemas.document import SourceModality, SourceProfile
 
 logger = logging.getLogger(__name__)
@@ -82,37 +83,12 @@ def normalize_text_bytes(source_bytes: bytes, content_type: str) -> tuple[bytes,
     return normalized.encode("utf-8"), warnings
 
 
-def _resolve_concrete_profile(
-    profile: str,
-    *,
-    content_type: str,
-    source_profile: SourceProfile | None,
-) -> str:
-    """auto を modality で具体プリセットへ解決する。
-
-    office→office_to_pdf、text/html/email→text_normalize、それ以外は passthrough。
-    PDF→ページ画像は born-digital PDF への過剰変換を避けるため明示選択(pdf_to_page_images)に限る。
-    """
-    if profile != "auto":
-        return profile
-    modality = source_profile.modality if source_profile is not None else None
-    if modality == SourceModality.OFFICE:
-        return "office_to_pdf"
-    if _is_text_like(content_type, source_profile):
-        return "text_normalize"
-    return "passthrough"
-
-
 class PreprocessServiceClient:
     """前処理を実行するクライアント(in-process + マイクロサービス委譲)。"""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._timeout = float(getattr(settings, "rag_preprocess_service_timeout_seconds", 300.0))
-
-    def service_url(self) -> str | None:
-        url = str(getattr(self._settings, "rag_preprocess_service_url", "") or "").strip()
-        return url.rstrip("/") or None
 
     def convert(
         self,
@@ -128,14 +104,9 @@ class PreprocessServiceClient:
                 self._settings, "rag_preprocess_profile", "passthrough"
             )
         )
-        concrete = _resolve_concrete_profile(
-            resolved,
-            content_type=content_type,
-            source_profile=source_profile,
-        )
-        if concrete == "passthrough":
+        if resolved == "passthrough":
             return ConvertOutcome.passthrough()
-        if concrete == "text_normalize":
+        if resolved == "text_normalize":
             if not _is_text_like(content_type, source_profile):
                 # テキスト以外に text_normalize は無意味なので no-op。
                 return ConvertOutcome.passthrough()
@@ -150,9 +121,9 @@ class PreprocessServiceClient:
                 derived_content_type=content_type or "text/plain; charset=utf-8",
                 warnings=tuple(warnings),
             )
-        # office_to_pdf / pdf_to_page_images: マイクロサービスへ委譲。
+        # office_to_pdf / pdf_to_page_images / csv_to_json / excel_to_json: 各専用サービスへ委譲。
         return self._convert_via_service(
-            concrete,
+            resolved,
             source_bytes,
             content_type=content_type,
             source_profile=source_profile,
@@ -168,7 +139,7 @@ class PreprocessServiceClient:
     ) -> ConvertOutcome:
         if not getattr(self._settings, "rag_preprocess_enabled", False):
             return ConvertOutcome.passthrough(reason="preprocess_service_disabled")
-        url = self.service_url()
+        url = preprocess_service_url(self._settings, profile)  # type: ignore[arg-type]
         if url is None:
             return ConvertOutcome.passthrough(reason="preprocess_service_unconfigured")
         files = {

@@ -6,25 +6,19 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_CACHE_DIR=/tmp/uv-cache
 
-# LibreOffice headless(office_to_pdf 用)。PyMuPDF は pip(uv)で導入する。
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer \
-       libreoffice-impress libreoffice-calc fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
 
 # 共有 contract package と service を repo 相対レイアウトで配置し、
-# pyproject の path source(../../packages/rag_parser_core)を解決可能にする。
+# pyproject の path source(../../../packages/rag_parser_core)を解決可能にする。
 COPY packages/rag_parser_core /build/packages/rag_parser_core
-WORKDIR /build/services/preprocess
-COPY services/preprocess/pyproject.toml services/preprocess/README.md ./
+WORKDIR /build/services/preprocess/excel_to_json
+COPY services/preprocess/excel_to_json/pyproject.toml ./
 RUN uv sync --no-install-project \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /tmp/uv-cache \
     && chown -R appuser:appuser /tmp/uv-cache /build
 
-COPY --chown=appuser:appuser services/preprocess/app ./app
+COPY --chown=appuser:appuser services/preprocess/excel_to_json/app ./app
 
 EXPOSE 8000
 USER appuser

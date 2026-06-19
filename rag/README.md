@@ -46,6 +46,22 @@ docker compose --profile gpu up --build
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
 [AGENTS.md](./AGENTS.md) の「Parser マイクロサービス」節を参照。
 
+### サービス管理画面(マイクロサービスの稼働可視化・起動/停止)
+
+システム設定の **サービス管理**(`/settings/services`)で、前処理 / Parser マイクロサービスの
+稼働状態(`running` / `degraded` / `stopped` / `unconfigured`)を一覧表示する。状態は各サービスの
+`GET /health` を集約した `GET /api/services` を 5 秒ごとにポーリングして表示する。
+
+起動/停止(`docker compose up -d` / `stop`)も画面から行えるが、**安全のため既定は無効**
+(`RAG_SERVICE_CONTROL_ENABLED=false`、可視化のみ)。有効化するには:
+
+- ローカル(ホスト直起動 `scripts/start-backend.sh`): `RAG_SERVICE_CONTROL_ENABLED=true` を設定すれば
+  ホストの `docker compose` をそのまま使う(追加マウント不要)。
+- コンテナ運用: backend へ `docker.sock` と compose ファイルをマウントした上で同フラグを有効化
+  (`docker-compose.yml` の backend サービスにコメントで雛形を記載)。
+
+操作対象は `app/services/catalog.py` の allowlist に限定され、任意コマンドは実行できない。
+
 詳細は [backend/README.md](./backend/README.md) / [frontend/README.md](./frontend/README.md) を参照。
 
 ## 実装済みの参照フロー

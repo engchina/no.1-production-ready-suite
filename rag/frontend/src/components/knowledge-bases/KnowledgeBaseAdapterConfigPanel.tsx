@@ -31,7 +31,8 @@ const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = [
   { value: "text_normalize", label: "text_normalize(テキスト正規化)" },
   { value: "office_to_pdf", label: "office_to_pdf(Office→PDF)" },
   { value: "pdf_to_page_images", label: "pdf_to_page_images(PDF→画像PDF)" },
-  { value: "auto", label: "auto(modality 自動)" },
+  { value: "csv_to_json", label: "csv_to_json(CSV→JSON)" },
+  { value: "excel_to_json", label: "excel_to_json(Excel→JSON)" },
 ];
 const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = [
   { value: "local", label: "local(内蔵パーサ)" },

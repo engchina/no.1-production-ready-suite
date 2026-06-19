@@ -5,6 +5,7 @@ export const APP_ROUTES = {
   upload: "/upload",
   fileList: "/file-list",
   knowledgeBases: "/knowledge-bases",
+  businessViews: "/business-views",
   documents: "/documents",
   search: "/search",
   evaluation: "/evaluation",
@@ -23,5 +24,6 @@ export const APP_ROUTES = {
   settingsAgentic: "/settings/agentic",
   settingsModel: "/settings/model",
   settingsDatabase: "/settings/database",
+  settingsServices: "/settings/services",
   settingsPrompts: "/settings/prompts",
 } as const;
