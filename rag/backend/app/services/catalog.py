@@ -88,6 +88,16 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
+        service_id="preprocess-url-to-markdown",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_url_to_markdown_service_url",
+        label_key="settings.services.item.preprocessUrlToMarkdown",
+        working_dir="services/preprocess/url_to_markdown",
+        dev_port=8014,
+        dev_runner="uv",
+    ),
+    ServiceCatalogEntry(
         service_id="parser-docling",
         category="parser",
         profile="cpu",
@@ -165,11 +175,11 @@ def get_catalog_entry(service_id: str) -> ServiceCatalogEntry | None:
 def is_dev_mode(settings: Settings) -> bool:
     """local 環境が dev(uv プロセス起動)か判定する。
 
-    ``ENVIRONMENT`` を流用し、``production``/``prod`` 以外は dev とみなす
+    ``ENVIRONMENT`` を流用し、``prod``/``production`` 以外は dev とみなす
     (readiness の production 判定と整合)。dev では各サービスをホスト上の
     ``uv`` プロセスとして起動/停止し、prod では docker compose を使う。
     """
-    return settings.environment.strip().lower() not in {"production", "prod"}
+    return settings.environment.strip().lower() not in {"prod", "production"}
 
 
 def resolve_service_base_url(settings: Settings, url_field: str) -> str:

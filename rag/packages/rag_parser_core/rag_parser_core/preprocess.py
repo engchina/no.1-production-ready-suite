@@ -35,6 +35,7 @@ PREPROCESS_PROFILES: tuple[str, ...] = (
     "pdf_to_page_images",
     "csv_to_json",
     "excel_to_json",
+    "url_to_markdown",
 )
 DEFAULT_PREPROCESS_PROFILE = "passthrough"
 

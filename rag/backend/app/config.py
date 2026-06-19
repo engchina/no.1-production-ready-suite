@@ -37,6 +37,7 @@ PreprocessProfile = Literal[
     "pdf_to_page_images",
     "csv_to_json",
     "excel_to_json",
+    "url_to_markdown",
 ]
 ChunkingStrategy = Literal[
     "structure_aware",
@@ -200,7 +201,7 @@ class Settings(BaseSettings):
 
     # --- アプリ ---
     app_name: str = "production-ready-rag"
-    environment: str = Field(default="development")
+    environment: str = Field(default="dev")
     log_level: str = Field(default="INFO")
     app_version: str = Field(default="0.1.0")
     auth_mode: AuthMode = Field(
@@ -771,7 +772,8 @@ class Settings(BaseSettings):
             "passthrough(既定)は変換せず現行挙動と一致。text_normalize は文字コード/"
             "Unicode/空白を正規化(in-process)。office_to_pdf は Office→PDF、"
             "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
-            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON"
+            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、url_to_markdown は "
+            "URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
     )
@@ -798,6 +800,10 @@ class Settings(BaseSettings):
     rag_preprocess_excel_to_json_service_url: str = Field(
         default="http://preprocess-excel-to-json:8000",
         description="Excel(.xls/.xlsx)→構造化 JSON 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_url_to_markdown_service_url: str = Field(
+        default="http://preprocess-url-to-markdown:8000",
+        description="URL→クリーン Markdown 前処理マイクロサービスの base URL。",
     )
     rag_preprocess_service_timeout_seconds: float = Field(
         default=300.0,

@@ -111,6 +111,7 @@ export const ja = {
   "nav.sidebar.expand": "サイドバーを展開",
   "nav.section.toggle.collapse": "{section} を折りたたむ",
   "nav.section.toggle.expand": "{section} を展開",
+  "nav.section.containsActive": "現在のページを含む",
   "nav.command.open": "コマンドパレットを開く",
   "command.title": "ページへ移動",
   "command.search.placeholder": "ページ名で検索（Parser、検索、評価 など）",
@@ -404,9 +405,9 @@ export const ja = {
   "settings.services.mode.dev": "開発 (uv)",
   "settings.services.mode.prod": "本番 (docker)",
   "settings.services.mode.dev.hint":
-    "開発モード(ENVIRONMENT=development)です。前処理は uv 管理のローカル Python プロセス、Parser(重い ML 依存)は docker compose で起動します。Parser は初回にイメージ build が走るため、事前ビルドを推奨します。",
+    "開発モード(ENVIRONMENT=dev)です。前処理は uv 管理のローカル Python プロセス、Parser(重い ML 依存)は docker compose で起動します。Parser は初回にイメージ build が走るため、事前ビルドを推奨します。",
   "settings.services.mode.prod.hint":
-    "本番モード(ENVIRONMENT=production)です。起動/停止は docker compose を呼びます。",
+    "本番モード(ENVIRONMENT=prod)です。起動/停止は docker compose を呼びます。",
   "settings.services.refresh": "更新",
   "settings.services.refreshing": "更新中",
   "settings.services.lastUpdated": "最終更新: {time}",
@@ -437,6 +438,7 @@ export const ja = {
   "settings.services.item.preprocessPdfToPageImages": "PDF→画像PDF",
   "settings.services.item.preprocessCsvToJson": "CSV→JSON",
   "settings.services.item.preprocessExcelToJson": "Excel→JSON",
+  "settings.services.item.preprocessUrlToMarkdown": "URL→Markdown",
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserMarker": "Marker",
   "settings.services.item.parserUnstructured": "Unstructured",

@@ -28,7 +28,7 @@ services:
     environment:
       <<: *parser-service-urls
       # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
-      ENVIRONMENT: production
+      ENVIRONMENT: prod
       LOCAL_STORAGE_DIR: /u01/production-ready-rag
       MODEL_SETTINGS_FILE: model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
@@ -76,7 +76,7 @@ services:
         required: false
     environment:
       <<: *parser-service-urls
-      ENVIRONMENT: production
+      ENVIRONMENT: prod
       LOCAL_STORAGE_DIR: /u01/production-ready-rag
       MODEL_SETTINGS_FILE: model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
@@ -119,6 +119,12 @@ services:
     build:
       context: .
       dockerfile: services/preprocess/excel_to_json/Dockerfile
+    restart: unless-stopped
+
+  preprocess-url-to-markdown:
+    build:
+      context: .
+      dockerfile: services/preprocess/url_to_markdown/Dockerfile
     restart: unless-stopped
 
   # ---- parser マイクロサービス(CPU・既定起動)----

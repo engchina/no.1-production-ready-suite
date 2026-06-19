@@ -22,6 +22,7 @@ PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "pdf_to_page_images",
     "csv_to_json",
     "excel_to_json",
+    "url_to_markdown",
 )
 
 
@@ -77,6 +78,12 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         recommended_for=("excel", "xls", "xlsx", "table"),
         requires_service=True,
     ),
+    "url_to_markdown": PreprocessProfileSpec(
+        name="url_to_markdown",
+        origin="trafilatura_web_extract",
+        recommended_for=("url", "web", "html"),
+        requires_service=True,
+    ),
 }
 
 
@@ -110,6 +117,7 @@ PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
     "pdf_to_page_images": "rag_preprocess_pdf_to_page_images_service_url",
     "csv_to_json": "rag_preprocess_csv_to_json_service_url",
     "excel_to_json": "rag_preprocess_excel_to_json_service_url",
+    "url_to_markdown": "rag_preprocess_url_to_markdown_service_url",
 }
 
 
