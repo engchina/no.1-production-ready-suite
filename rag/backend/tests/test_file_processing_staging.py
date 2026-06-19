@@ -1530,6 +1530,8 @@ def test_file_processing_staging_cli_preflight_only_reports_safe_config_gap(
         "docling",
         "marker",
         "unstructured",
+        "mineru",
+        "glm_ocr",
     ]
     assert route_by_kind["email"]["candidate_order"] == ["unstructured"]
     assert "super-secret-password" not in output_path.read_text(encoding="utf-8")

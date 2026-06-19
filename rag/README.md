@@ -36,13 +36,13 @@ npm run dev                 # http://localhost:3000
 
 # まとめて（Docker。CPU parser サービス込み）
 docker compose up --build
-# GPU parser(mineru/dots_ocr)も起動する場合(CUDA host)
+# GPU parser(mineru/dots_ocr/glm_ocr)も起動する場合(CUDA host)
 docker compose --profile gpu up --build
 ```
 
-外部 parser(docling / marker / unstructured / mineru / dots_ocr)は **独立した FastAPI
+外部 parser(docling / marker / unstructured / mineru / dots_ocr / glm_ocr)は **独立した FastAPI
 マイクロサービス**(`services/parsers/<name>`)で動き、backend は取込時に HTTP 委譲する。
-各 parser は独自依存で個別に upgrade でき、mineru / dots_ocr は GPU(CUDA)で実 OCR を行う。
+各 parser は独自依存で個別に upgrade でき、mineru / dots_ocr / glm_ocr は GPU(CUDA)で実 OCR を行う。
 詳細は [services/parsers/README.md](./services/parsers/README.md) と
 [AGENTS.md](./AGENTS.md) の「Parser マイクロサービス」節を参照。
 

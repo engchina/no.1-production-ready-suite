@@ -51,7 +51,7 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
     categories = {entry.category for entry in SERVICE_CATALOG}
     assert categories == {"preprocess", "parser"}
     gpu_ids = {entry.service_id for entry in SERVICE_CATALOG if entry.profile == "gpu"}
-    assert gpu_ids == {"parser-mineru", "parser-dots-ocr"}
+    assert gpu_ids == {"parser-mineru", "parser-dots-ocr", "parser-glm-ocr"}
 
 
 def test_get_catalog_entry_allowlist() -> None:

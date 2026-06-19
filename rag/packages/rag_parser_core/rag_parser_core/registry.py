@@ -52,6 +52,10 @@ EXTERNAL_ADAPTER_PACKAGES = {
     # 返して安全に fallback する(実 OCR は OCI Enterprise AI VLM へ再マップ)。
     "mineru": "mineru",
     "dots_ocr": "dots_ocr",
+    # GLM-OCR(HuggingFace zai-org/GLM-OCR)。専用 pip package は無く、GPU サービス image
+    # では transformers で HF からモデルをロードして実 OCR する(_run_glm_ocr のフォールバック)。
+    # core は依存を増やさず(transformers は実行時 import)、未導入環境では安全に fallback する。
+    "glm_ocr": "glm_ocr",
 }
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 # service 系 backend。外部 package / parser microservice ではなく、backend が OCI
@@ -1047,6 +1051,12 @@ def _external_adapter_result(
                 source_profile=source_profile,
                 content_type=content_type,
             )
+        if backend == "glm_ocr":
+            return _glm_ocr_adapter_result(
+                source_bytes,
+                source_profile=source_profile,
+                content_type=content_type,
+            )
     except Exception:
         return _adapter_fallback_result(backend, f"{backend}_adapter_failed")
     return _adapter_fallback_result(backend, f"{backend}_adapter_unsupported")
@@ -1287,6 +1297,83 @@ def _run_dots_ocr(path: Path) -> object:
     raise RuntimeError("dots_ocr: no supported entry point")
 
 
+def _run_glm_ocr(path: Path) -> object:
+    """GLM-OCR(GPU)で 1 ファイルを OCR して markdown を得る(GPU 統合シーム)。
+
+    GLM-OCR は専用 pip package を持たず HuggingFace 配布のため、
+    1) ラッパー module `glm_ocr` があればそのエントリポイントを使い(テストの fake もこれ)、
+    2) 無ければ transformers で `GLM_OCR_MODEL_ID`(既定 zai-org/GLM-OCR)を HF からロードして
+       OCR する。重い依存は実行時 import のみで core 本体の依存は増やさない。
+    """
+    if _module_available("glm_ocr"):
+        module = importlib.import_module("glm_ocr")
+        for attr in ("parse", "ocr", "to_markdown", "convert", "infer", "run"):
+            candidate = getattr(module, attr, None)
+            if callable(candidate):
+                return candidate(str(path))
+    return _run_glm_ocr_transformers(path)
+
+
+def _run_glm_ocr_transformers(path: Path) -> object:
+    """transformers で HuggingFace の GLM-OCR モデルをロードし 1 ファイルを OCR する。
+
+    実 GPU でのみ通る経路(CI 非搭載)。remap 層のテストは fake `glm_ocr` module で
+    この経路を迂回する。
+    """
+    import os
+
+    model_id = os.environ.get("GLM_OCR_MODEL_ID", "zai-org/GLM-OCR").strip() or "zai-org/GLM-OCR"
+    processor, model = _load_glm_ocr_pipeline(model_id)
+    image_module = importlib.import_module("PIL.Image")
+    prompt = os.environ.get(
+        "GLM_OCR_PROMPT",
+        "この画像の内容をレイアウトを保ったまま Markdown で書き起こしてください。",
+    )
+    image = image_module.open(str(path)).convert("RGB")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+    inputs = processor.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    ).to(model.device)
+    max_new_tokens = int(os.environ.get("GLM_OCR_MAX_NEW_TOKENS", "8192"))
+    generated = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    trimmed = generated[:, inputs["input_ids"].shape[1] :]
+    decoded = processor.batch_decode(trimmed, skip_special_tokens=True)
+    return decoded[0] if decoded else ""
+
+
+_GLM_OCR_PIPELINE_CACHE: dict[str, tuple[object, object]] = {}
+
+
+def _load_glm_ocr_pipeline(model_id: str) -> tuple[object, object]:
+    """GLM-OCR の processor/model を遅延ロードしてプロセス内キャッシュする(重い初期化を 1 回に)。"""
+    cached = _GLM_OCR_PIPELINE_CACHE.get(model_id)
+    if cached is not None:
+        return cached
+    transformers = importlib.import_module("transformers")
+    processor = transformers.AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        torch_dtype="auto",
+        device_map="auto",
+    )
+    model.eval()
+    _GLM_OCR_PIPELINE_CACHE[model_id] = (processor, model)
+    return processor, model
+
+
 def _ocr_engine_adapter_result(
     backend: str,
     source_bytes: bytes,
@@ -1394,6 +1481,22 @@ def _dots_ocr_adapter_result(
         source_profile=source_profile,
         content_type=content_type,
         runner=_run_dots_ocr,
+    )
+
+
+def _glm_ocr_adapter_result(
+    source_bytes: bytes,
+    *,
+    source_profile: SourceProfile | None,
+    content_type: str,
+) -> ParserRegistryResult:
+    """GLM-OCR(GPU)の OCR 結果を共通抽出 schema へ再マップする。"""
+    return _ocr_engine_adapter_result(
+        "glm_ocr",
+        source_bytes,
+        source_profile=source_profile,
+        content_type=content_type,
+        runner=_run_glm_ocr,
     )
 
 

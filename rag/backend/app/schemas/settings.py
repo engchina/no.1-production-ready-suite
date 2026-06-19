@@ -29,9 +29,11 @@ ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "e
 DatabaseConnectionTestStatus = Literal["success", "failed"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
-ParserAdapterBackendName = Literal["docling", "marker", "unstructured", "mineru", "dots_ocr"]
+ParserAdapterBackendName = Literal[
+    "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
+]
 ParserAdapterScoreBackendName = Literal[
-    "local", "docling", "marker", "unstructured", "mineru", "dots_ocr"
+    "local", "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 ParserAdapterContractStatus = Literal[

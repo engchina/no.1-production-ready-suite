@@ -33,6 +33,7 @@ def _pdf_profile() -> SourceProfile:
     [
         ("mineru", "mineru", "parse_document"),
         ("dots_ocr", "dots_ocr", "parse"),
+        ("glm_ocr", "glm_ocr", "parse"),
     ],
 )
 def test_ocr_engine_markdown_remaps_to_structured_extraction(

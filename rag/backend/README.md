@@ -15,7 +15,7 @@ Dockerfile の production entrypoint は Gunicorn + `uvicorn.workers.UvicornWork
 `WEB_CONCURRENCY`、`GUNICORN_TIMEOUT`、`GUNICORN_GRACEFUL_TIMEOUT`、`GUNICORN_KEEP_ALIVE`、`PORT` で worker 数と timeout を調整できます。
 local 開発だけ `uvicorn --reload` を使います。
 
-外部 parser(Docling / Marker / Unstructured / MinerU / Dots.OCR)は **backend には載せず**、
+外部 parser(Docling / Marker / Unstructured / MinerU / Dots.OCR / GLM-OCR)は **backend には載せず**、
 独立した FastAPI マイクロサービス(`services/parsers/<name>`)で動かします。backend は取込時に
 `app.clients.parser_service` で HTTP 委譲し、未達時は local / Enterprise AI VLM へ fallback します。
 重い parser 依存は runtime / 既定 `uv sync` に入りません。marker(pillow<11)と unstructured(pillow>=11.1)は

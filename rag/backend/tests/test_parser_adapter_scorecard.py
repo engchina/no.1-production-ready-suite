@@ -244,7 +244,13 @@ def test_source_routes_are_source_aware_for_auto_runtime(
     )
     by_kind = {route.source_kind: route for route in routes}
 
-    assert by_kind["pdf"].candidate_order == ("docling", "marker", "unstructured", "mineru")
+    assert by_kind["pdf"].candidate_order == (
+        "docling",
+        "marker",
+        "unstructured",
+        "mineru",
+        "glm_ocr",
+    )
     assert by_kind["pdf"].selected_backend == "docling"
     assert by_kind["image"].candidate_order == (
         "unstructured",
@@ -252,6 +258,7 @@ def test_source_routes_are_source_aware_for_auto_runtime(
         "docling",
         "dots_ocr",
         "mineru",
+        "glm_ocr",
     )
     assert by_kind["image"].selected_backend == "unstructured"
     assert by_kind["office"].candidate_order == ("docling", "unstructured", "mineru")

@@ -21,16 +21,21 @@ from app.rag.parser_adapter_routing import adapter_order_for_source_kind
 def test_mineru_and_dots_ocr_are_registered_candidates() -> None:
     assert "mineru" in ADAPTER_PACKAGES
     assert "dots_ocr" in ADAPTER_PACKAGES
-    assert ADAPTER_ORDER[-2:] == ("mineru", "dots_ocr")
+    assert "glm_ocr" in ADAPTER_PACKAGES
+    assert ADAPTER_ORDER[-3:] == ("mineru", "dots_ocr", "glm_ocr")
     assert "mineru" in EXTERNAL_ADAPTER_PACKAGES
     assert "dots_ocr" in EXTERNAL_ADAPTER_PACKAGES
+    assert "glm_ocr" in EXTERNAL_ADAPTER_PACKAGES
 
 
 def test_routing_adds_ocr_engines_for_pdf_and_image() -> None:
-    assert adapter_order_for_source_kind("pdf")[-1] == "mineru"
+    pdf_order = adapter_order_for_source_kind("pdf")
+    assert "mineru" in pdf_order
+    assert pdf_order[-1] == "glm_ocr"
     image_order = adapter_order_for_source_kind("image")
     assert "dots_ocr" in image_order
     assert "mineru" in image_order
+    assert image_order[-1] == "glm_ocr"
 
 
 def test_readiness_reports_missing_when_package_absent() -> None:

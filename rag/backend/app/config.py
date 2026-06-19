@@ -22,6 +22,7 @@ ParserAdapterBackend = Literal[
     "unstructured",
     "mineru",
     "dots_ocr",
+    "glm_ocr",
     # service 系 backend（外部 Python package / parser microservice ではなく OCI クラウド
     # サービスを backend から直接呼ぶ）。enterprise_ai_vlm は OCI Enterprise AI VLM を
     # fallback ではなく明示選択し、oci_document_understanding は OCI Document Understanding
@@ -848,6 +849,13 @@ class Settings(BaseSettings):
             "fallback する。GPU parser マイクロサービスで実 OCR を行う。"
         ),
     )
+    rag_parser_glm_ocr_enabled: bool = Field(
+        default=False,
+        description=(
+            "GLM-OCR adapter(HuggingFace zai-org/GLM-OCR)を feature flag で有効化する。"
+            "未導入時は安全に fallback する。GPU parser マイクロサービスで実 OCR を行う。"
+        ),
+    )
     rag_parser_docling_service_url: str = Field(
         default="http://parser-docling:8000",
         description="Docling parser マイクロサービスの base URL。",
@@ -867,6 +875,10 @@ class Settings(BaseSettings):
     rag_parser_dots_ocr_service_url: str = Field(
         default="http://parser-dots-ocr:8000",
         description="Dots.OCR(GPU)parser マイクロサービスの base URL。",
+    )
+    rag_parser_glm_ocr_service_url: str = Field(
+        default="http://parser-glm-ocr:8000",
+        description="GLM-OCR(GPU)parser マイクロサービスの base URL。",
     )
     rag_parser_service_timeout_seconds: float = Field(
         default=300.0,

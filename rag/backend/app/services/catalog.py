@@ -137,6 +137,16 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         dev_port=8024,
         dev_runner="docker",
     ),
+    ServiceCatalogEntry(
+        service_id="parser-glm-ocr",
+        category="parser",
+        profile="gpu",
+        url_field="rag_parser_glm_ocr_service_url",
+        label_key="settings.services.item.parserGlmOcr",
+        working_dir="services/parsers/glm_ocr",
+        dev_port=8025,
+        dev_runner="docker",
+    ),
 )
 
 _CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {

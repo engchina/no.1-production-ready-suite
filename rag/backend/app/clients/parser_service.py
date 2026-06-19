@@ -29,6 +29,7 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
     "unstructured": "rag_parser_unstructured_service_url",
     "mineru": "rag_parser_mineru_service_url",
     "dots_ocr": "rag_parser_dots_ocr_service_url",
+    "glm_ocr": "rag_parser_glm_ocr_service_url",
 }
 
 

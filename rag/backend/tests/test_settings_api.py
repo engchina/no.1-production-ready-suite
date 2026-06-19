@@ -89,6 +89,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
         "marker",
         "unstructured",
         "mineru",
+        "glm_ocr",
     ]
     assert route_by_kind["pdf"]["selected_backend"] == "docling"
     assert route_by_kind["email"]["selected_backend"] == "local"

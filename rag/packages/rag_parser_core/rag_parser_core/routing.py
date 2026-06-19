@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 ParserAdapterRouteBackend = Literal[
-    "docling", "marker", "unstructured", "mineru", "dots_ocr"
+    "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
 ]
 ParserAdapterSourceKind = Literal[
     "pdf",
@@ -33,11 +33,11 @@ SOURCE_ROUTE_KINDS: tuple[ParserAdapterSourceKind, ...] = (
     "unknown",
 )
 
-# MinerU/Dots.OCR(PoweRAG 由来)は OCR が強みのため pdf/image の候補末尾に足す。
+# MinerU/Dots.OCR/GLM-OCR は OCR が強みのため pdf/image の候補末尾に足す。
 # 未導入時は readiness が missing として fallback するため、順序は導入後に効く。
 ADAPTER_ORDER_BY_SOURCE_KIND: AdapterOrderBySourceKind = {
-    "pdf": ("docling", "marker", "unstructured", "mineru"),
-    "image": ("unstructured", "marker", "docling", "dots_ocr", "mineru"),
+    "pdf": ("docling", "marker", "unstructured", "mineru", "glm_ocr"),
+    "image": ("unstructured", "marker", "docling", "dots_ocr", "mineru", "glm_ocr"),
     "office": ("docling", "unstructured", "mineru"),
     "html": ("docling", "unstructured"),
     "email": ("unstructured",),

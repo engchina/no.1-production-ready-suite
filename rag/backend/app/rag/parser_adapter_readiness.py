@@ -24,9 +24,12 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
     "unstructured": "rag_parser_unstructured_service_url",
     "mineru": "rag_parser_mineru_service_url",
     "dots_ocr": "rag_parser_dots_ocr_service_url",
+    "glm_ocr": "rag_parser_glm_ocr_service_url",
 }
 
-ParserAdapterName = Literal["docling", "marker", "unstructured", "mineru", "dots_ocr"]
+ParserAdapterName = Literal[
+    "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
+]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 
 
@@ -67,6 +70,13 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
         distribution_names=("dots-ocr", "dots_ocr"),
         install_package="git+https://github.com/rednote-hilab/dots.ocr.git",
     ),
+    # GLM-OCR は専用 pip package が無く、GPU サービス image で transformers から HF モデルを
+    # ロードして実 OCR する。import 検出は実行時 transformers の有無で代理する。
+    "glm_ocr": ParserAdapterPackageSpec(
+        import_name="transformers",
+        distribution_names=("transformers",),
+        install_package="transformers (zai-org/GLM-OCR via HuggingFace)",
+    ),
 }
 ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
     "docling",
@@ -74,6 +84,7 @@ ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
     "unstructured",
     "mineru",
     "dots_ocr",
+    "glm_ocr",
 )
 ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "local",
@@ -83,6 +94,7 @@ ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "unstructured",
     "mineru",
     "dots_ocr",
+    "glm_ocr",
     # service 系 backend(OCI クラウドサービスを backend から直接呼ぶ)。package
     # readiness の対象外だが、選択値の正規化では受理する。
     "enterprise_ai_vlm",

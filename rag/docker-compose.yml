@@ -10,6 +10,7 @@ x-parser-service-urls: &parser-service-urls
   RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000
   RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
   RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
+  RAG_PARSER_GLM_OCR_SERVICE_URL: http://parser-glm-ocr:8000
   # 前処理(parse 前の原本変換)マイクロサービス。1 変換 = 1 独立サービス。
   RAG_PREPROCESS_OFFICE_TO_PDF_SERVICE_URL: http://preprocess-office-to-pdf:8000
   RAG_PREPROCESS_PDF_TO_PAGE_IMAGES_SERVICE_URL: http://preprocess-pdf-to-page-images:8000
@@ -159,6 +160,20 @@ services:
     build:
       context: .
       dockerfile: services/parsers/dots_ocr/Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  parser-glm-ocr:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/glm_ocr/Dockerfile
     restart: unless-stopped
     deploy:
       resources:
