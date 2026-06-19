@@ -87,6 +87,27 @@ def _compose_args(
     return [*base, *file_args, *profile_args, "restart", entry.service_id]
 
 
+def _build_command_hint(settings: Settings, entry: ServiceCatalogEntry) -> str:
+    """未ビルド時にユーザへ案内する build コマンド(dev は override・GPU は profile 付き)。"""
+    files = "-f docker-compose.yml -f docker-compose.dev.yml " if is_dev_mode(settings) else ""
+    profile = "--profile gpu " if entry.profile == "gpu" else ""
+    return f"docker compose {files}{profile}build {entry.service_id}"
+
+
+def _friendly_compose_error(
+    detail: str, settings: Settings, entry: ServiceCatalogEntry
+) -> str:
+    """compose の生エラーを、実行可能な案内付きの分かりやすい文言へ正規化する。"""
+    low = detail.lower()
+    if "no such image" in low or "image not found" in low:
+        # --no-build のため未ビルドのイメージで up すると発生する。事前 build を促す。
+        return (
+            f"{entry.service_id} のイメージが未ビルドです。先にビルドしてください: "
+            f"{_build_command_hint(settings, entry)}"
+        )
+    return detail
+
+
 class DockerComposeDriver:
     """``docker compose`` CLI を subprocess で叩く driver(parser 系 / prod 全般)。"""
 
@@ -133,7 +154,8 @@ class DockerComposeDriver:
             )
         if process.returncode == 0:
             return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
-        detail = (stderr or stdout or b"").decode("utf-8", "replace").strip()
+        raw = (stderr or stdout or b"").decode("utf-8", "replace").strip()
+        detail = _friendly_compose_error(raw, settings, entry)
         return ControlResult(
             ok=False,
             action=action,

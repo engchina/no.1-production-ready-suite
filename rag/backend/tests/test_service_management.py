@@ -211,6 +211,31 @@ def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
     ]
 
 
+def test_friendly_compose_error_maps_missing_image(monkeypatch: MonkeyPatch) -> None:
+    from app.services.control import _friendly_compose_error
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "development")
+    docling = get_catalog_entry("parser-docling")
+    assert docling is not None
+    raw = (
+        "Error response from daemon: No such image: "
+        "no1-production-ready-rag-parser-docling:latest"
+    )
+    friendly = _friendly_compose_error(raw, settings, docling)
+    assert "未ビルド" in friendly
+    assert "docker compose" in friendly and "build parser-docling" in friendly
+    assert "docker-compose.dev.yml" in friendly  # dev は override 付きで案内
+
+    # GPU は --profile gpu を含める。
+    mineru = get_catalog_entry("parser-mineru")
+    assert mineru is not None
+    assert "--profile gpu" in _friendly_compose_error("no such image: x", settings, mineru)
+
+    # 既知でないエラーはそのまま返す。
+    assert _friendly_compose_error("boom", settings, docling) == "boom"
+
+
 class _FakeProcess:
     def __init__(self, returncode: int, stderr: bytes = b"") -> None:
         self.returncode = returncode

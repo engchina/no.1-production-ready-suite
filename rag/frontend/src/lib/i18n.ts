@@ -29,6 +29,7 @@ export const ja = {
   "common.delete": "削除",
   "common.undo": "元に戻す",
   "common.retry": "再試行",
+  "common.required": "必須",
   "common.api.timeout":
     "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
 
@@ -1377,7 +1378,8 @@ export const ja = {
     "「{name}」をアーカイブします。参照先の知識ベース・文書は削除されません。",
   "businessViews.scope.label": "対象の業務アシスタント",
   "businessViews.scope.helper": "選ぶと参照 KB 群が検索対象になり、その方針・persona で回答します。",
-  "businessViews.scope.none": "指定なし(知識ベースを直接選択)",
+  "businessViews.scope.placeholder": "業務アシスタントを選択",
+  "businessViews.scope.required": "対象の業務アシスタントを選択してください。",
   "businessViews.scope.applied": "この業務アシスタントの方針で回答します。",
   "knowledgeBases.subtitle": "文書の所属先を管理し、検索スコープごとに整理します。",
   "knowledgeBases.create.title": "知識ベースを作成",
@@ -1795,6 +1797,11 @@ export const ja = {
   "search.noResultsHint": "キーワードを変える、条件を緩めるなどして再度お試しください。",
   "search.initial": "索引済みドキュメントを自然言語で検索します。",
   "search.initialHint": "質問を入力すると、根拠付きで回答します。",
+  "search.businessViewRequired.title": "業務アシスタントを作成してください",
+  "search.businessViewRequired.hint":
+    "RAG 検索は業務アシスタント単位で行います。知識ベースを束ねた業務アシスタントを作成すると検索できます。",
+  "search.businessViewRequired.cta": "業務アシスタントを作成",
+  "search.businessViewError": "業務アシスタントを読み込めませんでした。",
   "search.guardrail": "ガードレール警告",
   "search.meta.trace": "トレースID",
   "search.meta.elapsed": "処理時間",

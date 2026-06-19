@@ -1,19 +1,27 @@
 "use client";
 
-import { DatabaseZap, Search as SearchIcon, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import {
+  DatabaseZap,
+  Plus,
+  Search as SearchIcon,
+  SlidersHorizontal,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { CitationCard } from "./CitationCard";
-import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { PageHeader } from "@/components/PageHeader";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { ToggleChip } from "@/components/ui/toggle-chip";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import {
   ApiError,
+  type BusinessViewSummary,
   type RetrievedChunk,
   type SearchDiagnostics,
   type SearchMode,
@@ -21,6 +29,7 @@ import {
 } from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews, useSelectAi } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -86,18 +95,23 @@ export function SearchClient() {
   const [contentKind, setContentKind] = useState<ContentKindFilter>("");
   const [sectionTitle, setSectionTitle] = useState("");
   const [sectionPath, setSectionPath] = useState("");
-  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
   const [businessViewId, setBusinessViewId] = useState<string>("");
+  const [scopeError, setScopeError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const navigate = useNavigate();
+  const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
+  const businessViews = businessViewsQuery.data?.items ?? [];
   const hasFilters =
-    Boolean(contentKind) ||
-    Boolean(sectionTitle.trim()) ||
-    Boolean(sectionPath.trim()) ||
-    knowledgeBaseIds.length > 0;
+    Boolean(contentKind) || Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
 
   const submit = async () => {
     const trimmed = query.trim();
     if (!trimmed || phase === "streaming") return;
+    if (!businessViewId) {
+      setScopeError(t("businessViews.scope.required"));
+      return;
+    }
+    setScopeError("");
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -117,11 +131,7 @@ export function SearchClient() {
           mode,
           top_k: 20,
           rerank_top_n: 5,
-          ...(businessViewId
-            ? { business_view_id: businessViewId }
-            : knowledgeBaseIds.length
-              ? { knowledge_base_ids: knowledgeBaseIds }
-              : {}),
+          business_view_id: businessViewId,
           ...(Object.keys(filters).length ? { filters } : {}),
         },
         {
@@ -165,7 +175,6 @@ export function SearchClient() {
     setContentKind("");
     setSectionTitle("");
     setSectionPath("");
-    setKnowledgeBaseIds([]);
   };
 
   const noResults = phase === "done" && citations.length === 0;
@@ -176,6 +185,34 @@ export function SearchClient() {
       <PageHeader title={t("nav.search")} subtitle={t("search.initial")} />
       <div className="grid grid-cols-1 gap-6 p-8 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.9fr)]">
         <section className="space-y-6">
+          {businessViewsQuery.isLoading ? (
+            <Card>
+              <CardContent className="pt-5">
+                <LoadingState rows={4} label={t("search.businessViewRequired.title")} />
+              </CardContent>
+            </Card>
+          ) : businessViewsQuery.isError ? (
+            <ErrorState
+              message={t("search.businessViewError")}
+              onRetry={() => void businessViewsQuery.refetch()}
+            />
+          ) : businessViews.length === 0 ? (
+            <Card>
+              <CardContent className="pt-5">
+                <EmptyState
+                  title={t("search.businessViewRequired.title")}
+                  hint={t("search.businessViewRequired.hint")}
+                  action={
+                    <Button onClick={() => navigate(APP_ROUTES.businessViews)}>
+                      <Plus size={16} aria-hidden />
+                      {t("search.businessViewRequired.cta")}
+                    </Button>
+                  }
+                />
+              </CardContent>
+            </Card>
+          ) : (
+            <>
           {/* 検索バー */}
           <div className="space-y-3">
             <div className="flex flex-wrap gap-2">
@@ -227,17 +264,14 @@ export function SearchClient() {
               </legend>
 
               <BusinessViewSelect
+                views={businessViews}
                 value={businessViewId}
-                onChange={setBusinessViewId}
+                onChange={(next) => {
+                  setBusinessViewId(next);
+                  if (next) setScopeError("");
+                }}
                 disabled={isStreaming}
-              />
-
-              <KnowledgeBaseScopePicker
-                selectedIds={knowledgeBaseIds}
-                onChange={setKnowledgeBaseIds}
-                disabled={isStreaming || businessViewId !== ""}
-                helper={t("search.filters.knowledgeBaseHelper")}
-                className="sm:col-span-4"
+                error={scopeError}
               />
 
               <SelectField
@@ -364,6 +398,8 @@ export function SearchClient() {
                   </ul>
                 </section>
               ) : null}
+            </>
+          )}
             </>
           )}
         </section>
@@ -603,39 +639,43 @@ function SelectAiPanel() {
   );
 }
 
-/** RAG 検索の対象業務アシスタント(Business View)選択。選ぶと参照 KB 群と方針が適用される。 */
+/**
+ * RAG 検索の対象業務アシスタント(Business View)選択。RAG 検索は業務アシスタント単位で
+ * 行うため必須。選ぶと参照 KB 群と query 方針・persona が適用される。
+ */
 function BusinessViewSelect({
+  views,
   value,
   onChange,
   disabled = false,
+  error,
 }: {
+  views: BusinessViewSummary[];
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  error?: string;
 }) {
-  const query = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
-  const views = query.data?.items ?? [];
-  if (views.length === 0) return null;
-  const options: SelectFieldOption<string>[] = [
-    { value: "", label: t("businessViews.scope.none") },
-    ...views.map((view) => ({ value: view.id, label: view.name })),
-  ];
+  const options: SelectFieldOption<string>[] = views.map((view) => ({
+    value: view.id,
+    label: view.name,
+  }));
   return (
-    <div className="space-y-1 sm:col-span-4">
-      <SelectField
-        id="search-business-view"
-        label={t("businessViews.scope.label")}
-        value={value}
-        options={options}
-        onValueChange={(next) => {
-          if (!disabled) onChange(next);
-        }}
-        className="[&_label]:text-xs"
-        buttonClassName="bg-background"
-      />
-      <p className="text-xs text-muted">
-        {value ? t("businessViews.scope.applied") : t("businessViews.scope.helper")}
-      </p>
-    </div>
+    <SelectField
+      id="search-business-view"
+      label={t("businessViews.scope.label")}
+      value={value}
+      options={options}
+      onValueChange={(next) => {
+        if (!disabled) onChange(next);
+      }}
+      required
+      requiredLabel={t("common.required")}
+      placeholder={t("businessViews.scope.placeholder")}
+      error={error}
+      helper={value ? t("businessViews.scope.applied") : t("businessViews.scope.helper")}
+      className="[&_label]:text-xs sm:col-span-4"
+      buttonClassName="bg-background"
+    />
   );
 }
