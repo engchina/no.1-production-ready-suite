@@ -26,7 +26,7 @@ from app.services.control import (
     ServiceControlClient,
     ServiceControlError,
 )
-from app.services.status import probe_service_statuses
+from app.services.status import probe_service_status, probe_service_statuses
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -93,12 +93,13 @@ async def _control(service_id: str, action: ServiceAction) -> ApiResponse[Servic
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=exc.result.detail or "サービスの操作に失敗しました。",
         ) from exc
-    statuses = await probe_service_statuses(settings)
+    # 操作対象 1 件のみ再プローブする(全件叩く必要はない)。
+    new_status = await probe_service_status(settings, entry)
     return ApiResponse(
         data=ServiceControlResultData(
             service_id=service_id,
             action=action,
-            status=statuses[service_id],
+            status=new_status,
         )
     )
 

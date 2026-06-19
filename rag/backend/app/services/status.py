@@ -11,6 +11,8 @@ import asyncio
 import logging
 from typing import Literal
 
+import httpx
+
 from app.config import Settings
 from app.services.catalog import (
     SERVICE_CATALOG,
@@ -27,15 +29,15 @@ logger = logging.getLogger(__name__)
 ServiceRuntimeStatus = Literal["running", "degraded", "stopped", "unconfigured"]
 
 
-async def _probe_one(settings: Settings, entry: ServiceCatalogEntry) -> ServiceRuntimeStatus:
+async def probe_service_status(
+    settings: Settings, entry: ServiceCatalogEntry
+) -> ServiceRuntimeStatus:
     """1 サービスの /health を問い合わせて稼働状態を返す(例外は安全に縮退)。"""
     url = service_health_url(settings, entry)
     if not url:
         return "unconfigured"
     timeout = float(settings.rag_service_status_probe_timeout_seconds)
     try:
-        import httpx
-
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(f"{url}/health")
             response.raise_for_status()
@@ -55,7 +57,7 @@ async def _probe_one(settings: Settings, entry: ServiceCatalogEntry) -> ServiceR
 async def probe_service_statuses(settings: Settings) -> dict[str, ServiceRuntimeStatus]:
     """全カタログサービスの稼働状態を並列に問い合わせて service_id→status の dict を返す。"""
     results = await asyncio.gather(
-        *(_probe_one(settings, entry) for entry in SERVICE_CATALOG)
+        *(probe_service_status(settings, entry) for entry in SERVICE_CATALOG)
     )
     return {
         entry.service_id: status
