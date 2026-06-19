@@ -18,6 +18,7 @@ import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
 import { FileListClient } from "@/components/file-list/FileListClient";
 import { KnowledgeBaseManagementClient } from "@/components/knowledge-bases/KnowledgeBaseManagementClient";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { CommandPalette } from "@/components/layout/CommandPalette";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { PageHeader } from "@/components/PageHeader";
 import { SearchClient } from "@/components/search/SearchClient";
@@ -119,6 +120,7 @@ function ProtectedLayout() {
   return (
     <div className="flex">
       <Sidebar />
+      <CommandPalette />
       <main
         ref={mainRef}
         className="h-screen min-w-0 flex-1 overflow-y-auto [contain:layout] focus:outline-none"

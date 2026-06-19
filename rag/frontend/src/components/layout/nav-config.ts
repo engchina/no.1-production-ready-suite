@@ -36,6 +36,11 @@ export interface NavItem {
 export interface NavSection {
   titleKey: I18nKey;
   items: NavItem[];
+  /**
+   * 見出しクリックでセクションを折りたたみ可能にするか（既定 true）。
+   * 展開幅サイドバーでのみ作用し、icon-only 幅では無効。
+   */
+  collapsible?: boolean;
 }
 
 /** RAG コンソールのサイドナビ構成。 */

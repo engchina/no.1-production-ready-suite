@@ -8,6 +8,13 @@ type UiState = {
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebarCollapsed: () => void;
+  /**
+   * サイドナビのセクション折りたたみ状態。キーは NavSection.titleKey。
+   * 未指定（キー無し）は「展開」を既定とし、true のときだけ折りたたむ。
+   */
+  collapsedSections: Record<string, boolean>;
+  toggleSection: (key: string) => void;
+  setSectionCollapsed: (key: string, collapsed: boolean) => void;
 };
 
 const memoryStorage = new Map<string, string>();
@@ -42,10 +49,25 @@ export const useUiStore = create<UiState>()(
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       toggleSidebarCollapsed: () =>
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+      collapsedSections: {},
+      toggleSection: (key) =>
+        set((state) => ({
+          collapsedSections: {
+            ...state.collapsedSections,
+            [key]: !state.collapsedSections[key],
+          },
+        })),
+      setSectionCollapsed: (key, collapsed) =>
+        set((state) => ({
+          collapsedSections: { ...state.collapsedSections, [key]: collapsed },
+        })),
     }),
     {
       name: UI_STORAGE_KEY,
-      partialize: (state) => ({ sidebarCollapsed: state.sidebarCollapsed }),
+      partialize: (state) => ({
+        sidebarCollapsed: state.sidebarCollapsed,
+        collapsedSections: state.collapsedSections,
+      }),
       storage: createJSONStorage(resolveStorage),
     }
   )

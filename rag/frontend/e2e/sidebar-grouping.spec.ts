@@ -52,3 +52,44 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
   // 8 アダプターは「設定」ではなく「RAG パイプライン」へ移設されている。
   await expect(sidebar.getByText("設定", { exact: true })).toHaveCount(0);
 });
+
+test("セクション見出しクリックで配下項目を開閉できる", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  // システム設定が現在地。RAG パイプラインは非アクティブなので折りたためる。
+  await page.goto("/settings/oci");
+
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const parserLink = sidebar.getByText("解析 (Parser)", { exact: true });
+  await expect(parserLink).toBeVisible();
+
+  // 折りたたむ → 配下が隠れる。
+  const collapseToggle = sidebar.getByRole("button", { name: "RAG パイプライン を折りたたむ" });
+  await expect(collapseToggle).toHaveAttribute("aria-expanded", "true");
+  await collapseToggle.click();
+  await expect(parserLink).toBeHidden();
+
+  // もう一度クリックで展開 → 配下が戻る。
+  const expandToggle = sidebar.getByRole("button", { name: "RAG パイプライン を展開" });
+  await expect(expandToggle).toHaveAttribute("aria-expanded", "false");
+  await expandToggle.click();
+  await expect(parserLink).toBeVisible();
+});
+
+test("アクティブ経路のセクションは折りたたみ状態でも自動展開する", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto("/settings/oci");
+
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  // まず RAG パイプラインを畳む（localStorage に折りたたみ状態を保持）。
+  await sidebar.getByRole("button", { name: "RAG パイプライン を折りたたむ" }).click();
+  await expect(sidebar.getByText("解析 (Parser)", { exact: true })).toBeHidden();
+
+  // パイプライン配下のページへ遷移すると、保存状態に関わらず自動展開して現在地を表示する。
+  await page.goto("/settings/retrieval");
+  await expect(sidebar.getByText("検索 (Retrieval)", { exact: true })).toBeVisible();
+  await expect(
+    sidebar.getByRole("button", { name: "RAG パイプライン を折りたたむ" })
+  ).toHaveAttribute("aria-expanded", "true");
+});
