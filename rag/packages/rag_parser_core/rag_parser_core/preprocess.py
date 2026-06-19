@@ -36,6 +36,7 @@ PREPROCESS_PROFILES: tuple[str, ...] = (
     "csv_to_json",
     "excel_to_json",
     "url_to_markdown",
+    "image_enhance",
 )
 DEFAULT_PREPROCESS_PROFILE = "passthrough"
 

@@ -161,16 +161,15 @@ def _default_fetcher(url: str) -> str:
         follow_redirects=True,
         timeout=20.0,
         headers={"User-Agent": "production-ready-rag/url-to-markdown"},
-    ) as client:
-        with client.stream("GET", url) as response:
-            response.raise_for_status()
-            chunks: list[bytes] = []
-            total = 0
-            for chunk in response.iter_bytes():
-                total += len(chunk)
-                if total > _MAX_FETCH_BYTES:
-                    break
-                chunks.append(chunk)
+    ) as client, client.stream("GET", url) as response:
+        response.raise_for_status()
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_bytes():
+            total += len(chunk)
+            if total > _MAX_FETCH_BYTES:
+                break
+            chunks.append(chunk)
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 

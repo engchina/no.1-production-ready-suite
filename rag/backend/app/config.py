@@ -38,6 +38,7 @@ PreprocessProfile = Literal[
     "csv_to_json",
     "excel_to_json",
     "url_to_markdown",
+    "image_enhance",
 ]
 ChunkingStrategy = Literal[
     "structure_aware",
@@ -773,7 +774,8 @@ class Settings(BaseSettings):
             "Unicode/空白を正規化(in-process)。office_to_pdf は Office→PDF、"
             "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
             "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、url_to_markdown は "
-            "URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)"
+            "URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)、image_enhance は "
+            "スキャン画像の OCR 向け補正(OpenCV)"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
     )
@@ -804,6 +806,10 @@ class Settings(BaseSettings):
     rag_preprocess_url_to_markdown_service_url: str = Field(
         default="http://preprocess-url-to-markdown:8000",
         description="URL→クリーン Markdown 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_image_enhance_service_url: str = Field(
+        default="http://preprocess-image-enhance:8000",
+        description="画像補正(OCR 前処理)マイクロサービスの base URL。",
     )
     rag_preprocess_service_timeout_seconds: float = Field(
         default=300.0,

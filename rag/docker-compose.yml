@@ -127,6 +127,12 @@ services:
       dockerfile: services/preprocess/url_to_markdown/Dockerfile
     restart: unless-stopped
 
+  preprocess-image-enhance:
+    build:
+      context: .
+      dockerfile: services/preprocess/image_enhance/Dockerfile
+    restart: unless-stopped
+
   # ---- parser マイクロサービス(CPU・既定起動)----
   parser-docling:
     build:

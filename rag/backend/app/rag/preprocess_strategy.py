@@ -23,6 +23,7 @@ PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "csv_to_json",
     "excel_to_json",
     "url_to_markdown",
+    "image_enhance",
 )
 
 
@@ -84,6 +85,12 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         recommended_for=("url", "web", "html"),
         requires_service=True,
     ),
+    "image_enhance": PreprocessProfileSpec(
+        name="image_enhance",
+        origin="opencv_ocr_preprocess",
+        recommended_for=("image", "scan", "photo"),
+        requires_service=True,
+    ),
 }
 
 
@@ -118,6 +125,7 @@ PREPROCESS_SERVICE_URL_ATTRS: dict[PreprocessProfileName, str] = {
     "csv_to_json": "rag_preprocess_csv_to_json_service_url",
     "excel_to_json": "rag_preprocess_excel_to_json_service_url",
     "url_to_markdown": "rag_preprocess_url_to_markdown_service_url",
+    "image_enhance": "rag_preprocess_image_enhance_service_url",
 }
 
 

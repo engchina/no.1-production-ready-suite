@@ -121,8 +121,8 @@ class PreprocessServiceClient:
                 derived_content_type=content_type or "text/plain; charset=utf-8",
                 warnings=tuple(warnings),
             )
-        # office_to_pdf / pdf_to_page_images / csv_to_json / excel_to_json / url_to_markdown:
-        # 各専用サービスへ委譲。
+        # office_to_pdf / pdf_to_page_images / csv_to_json / excel_to_json / url_to_markdown /
+        # image_enhance: 各専用サービスへ委譲。
         return self._convert_via_service(
             resolved,
             source_bytes,

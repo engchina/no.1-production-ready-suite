@@ -98,6 +98,16 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
+        service_id="preprocess-image-enhance",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_image_enhance_service_url",
+        label_key="settings.services.item.preprocessImageEnhance",
+        working_dir="services/preprocess/image_enhance",
+        dev_port=8015,
+        dev_runner="uv",
+    ),
+    ServiceCatalogEntry(
         service_id="parser-docling",
         category="parser",
         profile="cpu",
