@@ -77,10 +77,13 @@ def _compose_args(
     )
     profile_args = ["--profile", "gpu"] if entry.profile == "gpu" else []
     if action == "start":
-        return [*base, *file_args, *profile_args, "up", "-d", entry.service_id]
+        # --no-build: 数 GB のイメージ build を制御 HTTP リクエスト内で走らせない。
+        # 未ビルドなら compose が即エラーを返し、ユーザに事前 build を促す(timeout 回避)。
+        return [*base, *file_args, *profile_args, "up", "-d", "--no-build", entry.service_id]
     if action == "stop":
         # stop は profile gate の影響を受けない(既存コンテナを止めるだけ)。
         return [*base, *file_args, "stop", entry.service_id]
+    # restart も build しない(既存イメージを使う)。
     return [*base, *file_args, *profile_args, "restart", entry.service_id]
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from urllib.parse import urlparse
 
 from app.config import Settings
 
@@ -141,6 +142,9 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
 _CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {
     entry.service_id: entry for entry in SERVICE_CATALOG
 }
+_CATALOG_BY_URL_FIELD: dict[str, ServiceCatalogEntry] = {
+    entry.url_field: entry for entry in SERVICE_CATALOG
+}
 
 
 def get_catalog_entry(service_id: str) -> ServiceCatalogEntry | None:
@@ -158,13 +162,29 @@ def is_dev_mode(settings: Settings) -> bool:
     return settings.environment.strip().lower() not in {"production", "prod"}
 
 
-def service_health_url(settings: Settings, entry: ServiceCatalogEntry) -> str:
-    """エントリの base URL を返す(末尾スラッシュを除去)。未設定なら空文字。
+def resolve_service_base_url(settings: Settings, url_field: str) -> str:
+    """設定 ``url_field`` のサービス base URL を dev/prod に応じて解決する(末尾スラッシュ除去)。
 
-    dev では docker 名(``parser-docling`` 等)を解決できないため、catalog の ``dev_port``
-    から ``http://127.0.0.1:<port>`` を返す(uv はホストで bind、docker は dev override で
-    同ポートを公開)。prod は Settings の ``url_field``。
+    dev では docker compose の service 名(``parser-docling`` 等)をホストから解決できない。
+    そこで **設定が docker 既定(host が compose service 名)のときだけ** catalog の
+    ``dev_port`` から ``http://127.0.0.1:<port>`` に書き換える(uv はホストで bind、docker は
+    ``docker-compose.dev.yml`` で同ポートを公開)。空欄(=未設定)や明示上書き(localhost 等)は
+    そのまま尊重する。prod は常に設定値そのまま。
+
+    稼働プローブ(/health)と取込の HTTP 委譲(/parse・/convert)で **同じ解決**を使い、
+    dev で「画面では到達できるのに取込では docker 名で失敗」という不整合を防ぐ。
     """
-    if is_dev_mode(settings):
+    raw = str(getattr(settings, url_field, "") or "").strip().rstrip("/")
+    entry = _CATALOG_BY_URL_FIELD.get(url_field)
+    if entry is None or not is_dev_mode(settings) or not raw:
+        return raw
+    # docker 既定(host == compose service 名)のみ localhost:<dev_port> へ。明示上書きは尊重。
+    host = urlparse(raw).hostname
+    if host == entry.service_id:
         return f"http://127.0.0.1:{entry.dev_port}"
-    return str(getattr(settings, entry.url_field, "") or "").strip().rstrip("/")
+    return raw
+
+
+def service_health_url(settings: Settings, entry: ServiceCatalogEntry) -> str:
+    """エントリの /health base URL を返す(dev は 127.0.0.1:<dev_port>、prod は url_field)。"""
+    return resolve_service_base_url(settings, entry.url_field)

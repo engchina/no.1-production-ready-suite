@@ -147,7 +147,9 @@ def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
     mineru = get_catalog_entry("parser-mineru")
     assert mineru is not None
     args = _compose_args(settings, mineru, "start")
-    assert args == ["docker", "compose", "--profile", "gpu", "up", "-d", "parser-mineru"]
+    assert args == [
+        "docker", "compose", "--profile", "gpu", "up", "-d", "--no-build", "parser-mineru",
+    ]
 
 
 def test_compose_args_cpu_start_and_stop(monkeypatch: MonkeyPatch) -> None:
@@ -155,11 +157,13 @@ def test_compose_args_cpu_start_and_stop(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "environment", "production")  # prod: override 無し
     docling = get_catalog_entry("parser-docling")
     assert docling is not None
+    # start は --no-build(制御リクエスト内で build しない)。
     assert _compose_args(settings, docling, "start") == [
         "docker",
         "compose",
         "up",
         "-d",
+        "--no-build",
         "parser-docling",
     ]
     assert _compose_args(settings, docling, "stop") == [
@@ -185,6 +189,7 @@ def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
         "docker-compose.dev.yml",
         "up",
         "-d",
+        "--no-build",
         "parser-docling",
     ]
     mineru = get_catalog_entry("parser-mineru")
@@ -201,6 +206,7 @@ def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
         "gpu",
         "up",
         "-d",
+        "--no-build",
         "parser-mineru",
     ]
 
@@ -378,7 +384,83 @@ def test_service_health_url_dev_uses_dev_port(monkeypatch: MonkeyPatch) -> None:
     entry = get_catalog_entry("preprocess-csv-to-json")
     assert entry is not None
     monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, entry.url_field, "http://preprocess-csv-to-json:8000")
     assert service_health_url(settings, entry) == f"http://127.0.0.1:{entry.dev_port}"
+
+
+def test_resolve_service_base_url_dev_rewrites_docker_default(monkeypatch: MonkeyPatch) -> None:
+    from app.services.catalog import resolve_service_base_url
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "development")
+    # docker 既定(host == compose service 名)→ dev_port へ書き換え(画面プローブと一致)。
+    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
+    monkeypatch.setattr(
+        settings, "rag_preprocess_csv_to_json_service_url", "http://preprocess-csv-to-json:8000"
+    )
+    assert (
+        resolve_service_base_url(settings, "rag_parser_docling_service_url")
+        == "http://127.0.0.1:8020"
+    )
+    assert (
+        resolve_service_base_url(settings, "rag_preprocess_csv_to_json_service_url")
+        == "http://127.0.0.1:8012"
+    )
+
+
+def test_resolve_service_base_url_dev_respects_overrides(monkeypatch: MonkeyPatch) -> None:
+    from app.services.catalog import resolve_service_base_url
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "development")
+    # 明示上書き(host != service 名)は尊重する。
+    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://127.0.0.1:9999")
+    assert (
+        resolve_service_base_url(settings, "rag_parser_docling_service_url")
+        == "http://127.0.0.1:9999"
+    )
+    # 空欄(未設定)はそのまま空文字(unconfigured)。
+    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "")
+    assert resolve_service_base_url(settings, "rag_parser_docling_service_url") == ""
+
+
+def test_resolve_service_base_url_prod_uses_setting(monkeypatch: MonkeyPatch) -> None:
+    from app.services.catalog import resolve_service_base_url
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000/")
+    assert (
+        resolve_service_base_url(settings, "rag_parser_docling_service_url")
+        == "http://parser-docling:8000"
+    )
+
+
+def test_parser_client_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch) -> None:
+    from app.clients.parser_service import ParserServiceClient
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
+    monkeypatch.setattr(settings, "rag_parser_mineru_service_url", "http://parser-mineru:8000")
+    client = ParserServiceClient(settings)
+    assert client.service_url("docling") == "http://127.0.0.1:8020"
+    assert client.service_url("mineru") == "http://127.0.0.1:8023"
+
+
+def test_preprocess_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch) -> None:
+    from app.rag.preprocess_strategy import preprocess_service_url
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(
+        settings, "rag_preprocess_csv_to_json_service_url", "http://preprocess-csv-to-json:8000"
+    )
+    monkeypatch.setattr(
+        settings, "rag_preprocess_office_to_pdf_service_url", "http://preprocess-office-to-pdf:8000"
+    )
+    assert preprocess_service_url(settings, "csv_to_json") == "http://127.0.0.1:8012"
+    assert preprocess_service_url(settings, "office_to_pdf") == "http://127.0.0.1:8010"
 
 
 def test_service_health_url_prod_uses_url_field(monkeypatch: MonkeyPatch) -> None:

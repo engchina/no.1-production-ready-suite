@@ -43,8 +43,12 @@ class ParserServiceClient:
         field = _SERVICE_URL_FIELDS.get(backend)
         if field is None:
             return None
-        url = str(getattr(self._settings, field, "") or "").strip()
-        return url.rstrip("/") or None
+        # dev では catalog の dev_port から 127.0.0.1:<port> に解決する(docker 名は
+        # ホストから引けないため)。prod は設定値そのまま。
+        from app.services.catalog import resolve_service_base_url
+
+        url = resolve_service_base_url(self._settings, field)
+        return url or None
 
     def runner(
         self,
