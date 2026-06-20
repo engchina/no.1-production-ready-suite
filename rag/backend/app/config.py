@@ -58,6 +58,8 @@ RetrievalStrategy = Literal[
     "select_ai_structured",
     "business_context_strict",
     "corrective_multi_query",
+    "reasoning_tree_search",
+    "colpali_visual_retrieval",
 ]
 PostRetrievalPipeline = Literal[
     "custom",

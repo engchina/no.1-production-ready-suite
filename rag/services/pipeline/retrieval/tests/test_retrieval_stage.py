@@ -51,3 +51,13 @@ def test_corrective_multi_query_flags() -> None:
 
 def test_unknown_strategy_falls_back() -> None:
     assert _run("bogus")["strategy"] == "hybrid_rrf"
+
+
+def test_pending_strategies_resolve_without_bias_for_hybrid_degrade() -> None:
+    # reasoning_tree_search / colpali_visual_retrieval は段階導入中。strategy_bias/mode_override を
+    # 持たないため実行は hybrid へ安全縮退する(戦略名は選択値として保持)。
+    for name in ("reasoning_tree_search", "colpali_visual_retrieval"):
+        body = _run(name)
+        assert body["strategy"] == name
+        assert body["strategy_bias"] is None
+        assert body["mode_override"] is None

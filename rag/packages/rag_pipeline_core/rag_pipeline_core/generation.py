@@ -100,7 +100,10 @@ def normalize_generation_profile(value: object) -> str:
 
 
 def resolve_generation(profile: object) -> GenerationResolved:
-    """profile から静的な system prompt + 構造化出力フラグを解決する(custom/override は backend)。"""
+    """profile から静的な system prompt + 構造化出力フラグを解決する。
+
+    custom(prompt version store)と persona override は backend 側で解決後に上乗せする。
+    """
     name = normalize_generation_profile(profile)
     spec = GENERATION_SPECS[name]
     return GenerationResolved(

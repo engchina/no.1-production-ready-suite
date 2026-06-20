@@ -19,6 +19,8 @@ RETRIEVAL_STRATEGIES: tuple[str, ...] = (
     "select_ai_structured",
     "business_context_strict",
     "corrective_multi_query",
+    "reasoning_tree_search",
+    "colpali_visual_retrieval",
 )
 DEFAULT_RETRIEVAL_STRATEGY = "hybrid_rrf"
 
@@ -34,6 +36,9 @@ class RetrievalSpec:
     gap_stop: bool = False
     corrective_retrieval: bool = False
     business_fit_weighting: bool = False
+    # 実行が GPU/専用索引/LLM を要し、未配線のうちは hybrid 検索へ安全縮退する戦略
+    # (strategy_bias=None のため resolve_retrieval_strategy が自動的に HYBRID へ落とす)。
+    pending_execution: bool = False
 
 
 RETRIEVAL_SPECS: dict[str, RetrievalSpec] = {
@@ -79,6 +84,19 @@ RETRIEVAL_SPECS: dict[str, RetrievalSpec] = {
         ("recall_critical", "ambiguous"),
         query_expansion=True,
         corrective_retrieval=True,
+    ),
+    # --- 段階導入(現状は hybrid へ安全縮退。実行配線は docs/pipeline-advanced-strategies.md)---
+    "reasoning_tree_search": RetrievalSpec(
+        "reasoning_tree_search",
+        "pageindex_pending",
+        ("manual", "compliance", "long_document"),
+        pending_execution=True,
+    ),
+    "colpali_visual_retrieval": RetrievalSpec(
+        "colpali_visual_retrieval",
+        "colpali_pending_gpu",
+        ("scanned_pdf", "complex_layout"),
+        pending_execution=True,
     ),
 }
 
