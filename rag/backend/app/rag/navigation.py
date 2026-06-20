@@ -28,7 +28,10 @@ DEFAULT_SUMMARY_MIN_CHARS = 200
 
 def navigation_section_id(section_path: tuple[str, ...]) -> str:
     """section_path から安定した section_id を作る（同一 path は常に同一 id）。"""
-    digest = hashlib.sha1("\x1f".join(section_path).encode("utf-8")).hexdigest()
+    # section_id の安定生成のみに使う非暗号用途(セキュリティ用途ではない)。
+    digest = hashlib.sha1(
+        "\x1f".join(section_path).encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
     return f"nav-{digest[:16]}"
 
 

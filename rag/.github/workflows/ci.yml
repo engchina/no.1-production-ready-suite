@@ -68,10 +68,12 @@ jobs:
         run: uv run pytest --cov=app
 
       - name: Security scan
-        run: uv run bandit -r app
+        run: uv run bandit -c pyproject.toml -r app
 
       - name: Dependency audit
-        run: uv run pip-audit
+        # GHSA-537c-gmf6-5ccf(cryptography): fix は 48.0.1 だが oci SDK が cryptography を
+        # 上位制約するため bump 不可。OCI は確定スタックのため当面 ignore する。
+        run: uv run pip-audit --ignore-vuln GHSA-537c-gmf6-5ccf
 
   frontend:
     name: Frontend
