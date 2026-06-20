@@ -239,7 +239,13 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     route_by_kind = {
         route["source_kind"]: route for route in payload["parser_adapter_source_routes"]
     }
-    assert route_by_kind["pdf"]["candidate_order"] == ("docling", "marker", "unstructured")
+    assert route_by_kind["pdf"]["candidate_order"] == (
+        "docling",
+        "marker",
+        "unstructured",
+        "mineru",
+        "glm_ocr",
+    )
     assert route_by_kind["pdf"]["attempted_order"] == ()
     assert route_by_kind["pdf"]["selected_backend"] == "local"
     assert route_by_kind["email"]["candidate_order"] == ("unstructured",)
@@ -334,7 +340,9 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     }
     assert trend_route_by_kind["pdf"]["candidate_order"] == [
         "docling",
+        "glm_ocr",
         "marker",
+        "mineru",
         "unstructured",
     ]
     assert trend_route_by_kind["pdf"]["selected_backend"] == "local"
@@ -1812,6 +1820,8 @@ def test_report_payload_source_routes_are_contract_aware(
         "docling",
         "marker",
         "unstructured",
+        "mineru",
+        "glm_ocr",
     )
     assert route_by_kind["pdf"]["selected_backend"] == "marker"
     assert "contract_aware_source_route" in route_by_kind["pdf"]["reason_codes"]
