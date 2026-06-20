@@ -38,6 +38,7 @@ class AgenticAdapterParams:
     multi_hop: bool
     max_subqueries: int
     smart_routing: bool = False
+    hyde: bool = False
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ def resolve_agentic_adapter(settings: Settings) -> AgenticAdapterParams:
         decompose=resolved.decompose,
         multi_hop=resolved.multi_hop,
         smart_routing=resolved.smart_routing,
+        hyde=resolved.hyde,
         max_subqueries=int(getattr(settings, "rag_agentic_max_subqueries", 3)),
     )
 
@@ -110,6 +112,7 @@ def _resolve_static(settings: Settings, profile: str):  # type: ignore[no-untype
                 decompose=response.decompose,
                 multi_hop=response.multi_hop,
                 smart_routing=response.smart_routing,
+                hyde=response.hyde,
             )
     return resolve_agentic(profile)
 

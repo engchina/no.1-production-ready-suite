@@ -142,6 +142,7 @@ class AgenticStageResponse(BaseModel):
     decompose: bool
     multi_hop: bool
     smart_routing: bool
+    hyde: bool = False
 
 
 class GroundingStageRequest(BaseModel):

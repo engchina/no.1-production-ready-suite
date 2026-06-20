@@ -16,6 +16,7 @@ AGENTIC_PROFILES: tuple[str, ...] = (
     "off",
     "smart_routing",
     "query_rewrite",
+    "hyde",
     "decompose",
     "multi_hop",
 )
@@ -32,6 +33,7 @@ class AgenticSpec:
     decompose: bool
     multi_hop: bool
     smart_routing: bool = False
+    hyde: bool = False
 
 
 AGENTIC_SPECS: dict[str, AgenticSpec] = {
@@ -54,6 +56,16 @@ AGENTIC_SPECS: dict[str, AgenticSpec] = {
         rewrite=True,
         decompose=False,
         multi_hop=False,
+    ),
+    "hyde": AgenticSpec(
+        "hyde",
+        "hypothetical_document_embeddings",
+        ("semantic_gap", "exploratory"),
+        enabled=True,
+        rewrite=True,
+        decompose=False,
+        multi_hop=False,
+        hyde=True,
     ),
     "decompose": AgenticSpec(
         "decompose",
@@ -84,6 +96,7 @@ class AgenticResolved:
     decompose: bool
     multi_hop: bool
     smart_routing: bool
+    hyde: bool = False
 
 
 def normalize_agentic_profile(value: object) -> str:
@@ -102,4 +115,5 @@ def resolve_agentic(profile: object) -> AgenticResolved:
         decompose=spec.decompose,
         multi_hop=spec.multi_hop,
         smart_routing=spec.smart_routing,
+        hyde=spec.hyde,
     )

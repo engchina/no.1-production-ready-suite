@@ -110,6 +110,7 @@ AgenticProfile = Literal[
     "off",
     "smart_routing",
     "query_rewrite",
+    "hyde",
     "decompose",
     "multi_hop",
 ]

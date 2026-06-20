@@ -170,6 +170,7 @@ def create_agentic_app(
             decompose=resolved.decompose,
             multi_hop=resolved.multi_hop,
             smart_routing=resolved.smart_routing,
+            hyde=resolved.hyde,
         )
 
     return app

@@ -192,6 +192,7 @@ class RagPipeline:
         corrective_retried = False
         crag_confidence_score: float | None = None
         crag_fallback_triggered = False
+        hyde_generated = False
         agentic_subquery_count = 0
         agentic_hops = 0
         graph_profile = resolve_graph_adapter(self._settings).profile
@@ -225,6 +226,7 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                 route_reason=resolved_strategy.route_reason,
                 fallback_reason="gap_stop_scope_unresolved",
                 business_context=business_context.diagnostics(),
@@ -269,6 +271,9 @@ class RagPipeline:
                 if planned:
                     agentic_subquery_count = len(planned)
                     agentic_hops = 1
+                    if agentic_params.hyde:
+                        # HyDE: 仮説文書を主検索クエリにし、元クエリも残す。
+                        hyde_generated = True
                     if agentic_params.rewrite:
                         query_variants = _dedupe_strings([planned[0], *query_variants])
                     else:
@@ -370,6 +375,7 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
@@ -675,6 +681,7 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
@@ -752,6 +759,7 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                 memory_plan_id=retrieval_plan.plan_id,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
@@ -878,6 +886,7 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                 memory_plan_id=retrieval_plan.plan_id if retrieval_plan is not None else None,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,

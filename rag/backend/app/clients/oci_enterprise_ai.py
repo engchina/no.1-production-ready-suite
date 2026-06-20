@@ -93,6 +93,13 @@ _QUERY_DECOMPOSE_PROMPT = (
     '出力は JSON 文字列配列のみ(例: ["sub-question 1", "sub-question 2"])とし、'
     "説明文は付けないでください。元質問が単純なら 1 要素でも構いません。"
 )
+# HyDE: 仮説的な回答文書を 1 つ生成し、その埋め込みで検索する(query-document 意味ギャップを橋渡し)。
+_QUERY_HYDE_PROMPT = (
+    "あなたは社内文書の専門家です。次の質問に対する、社内文書に書かれていそうな"
+    "簡潔で具体的な仮説的回答(2-3 文)を日本語で 1 つ書いてください。事実か不明でも"
+    "もっともらしい記述で構いません(検索用の仮説文書として使います)。"
+    '出力は JSON 文字列配列のみ(例: ["仮説的な回答文"])とし、説明文は付けないでください。'
+)
 STRUCTURED_EXTRACTION_INSTRUCTIONS = (
     "文書を日本語優先で OCR し、raw_text に読み順の本文全体を入れてください。"
     "ページ境界が分かる場合は raw_text に「--- page N ---」形式の行を入れてください。"
@@ -313,15 +320,20 @@ class OciEnterpriseAiClient:
         JSON 文字列配列で受領し、解析失敗・空時は空 list を返して呼び出し側で元 query を使う。
         """
         # smart_routing(v1)は query_rewrite と同じ LLM 書き換え経路を使う。
+        # hyde は仮説的回答文書を 1 つ生成し、その埋め込みで検索する(別プロンプト・1 件)。
         rewrite_modes = {"query_rewrite", "smart_routing"}
-        system_prompt = (
-            _QUERY_REWRITE_PROMPT if mode in rewrite_modes else _QUERY_DECOMPOSE_PROMPT
-        )
+        single_modes = rewrite_modes | {"hyde"}
+        if mode == "hyde":
+            system_prompt = _QUERY_HYDE_PROMPT
+        elif mode in rewrite_modes:
+            system_prompt = _QUERY_REWRITE_PROMPT
+        else:
+            system_prompt = _QUERY_DECOMPOSE_PROMPT
         try:
             raw = await self.generate(query, "", system_prompt=system_prompt)
         except Exception:
             return []
-        limit = 1 if mode in rewrite_modes else max(1, max_subqueries)
+        limit = 1 if mode in single_modes else max(1, max_subqueries)
         return _parse_planned_queries(raw, limit=limit)
 
     async def generate_from_image(

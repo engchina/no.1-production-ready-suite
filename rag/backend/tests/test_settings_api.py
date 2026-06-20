@@ -861,7 +861,7 @@ def test_agentic_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> N
     assert body["multi_hop"] is False
     assert body["max_subqueries"] == 4
     names = [item["name"] for item in body["profiles"]]
-    assert names == ["off", "smart_routing", "query_rewrite", "decompose", "multi_hop"]
+    assert names == ["off", "smart_routing", "query_rewrite", "hyde", "decompose", "multi_hop"]
     selected = [item["name"] for item in body["profiles"] if item["selected"]]
     assert selected == ["decompose"]
 
