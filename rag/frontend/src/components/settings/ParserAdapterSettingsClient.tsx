@@ -52,19 +52,22 @@ type ParserAdapterForm = {
   unstructured_enabled: boolean;
 };
 
+// parser バックエンドはサービスとして起動できる parser microservice のみを並べる
+// (local/auto は廃止)。CPU/GPU adapter + OCI クラウド backend の計 8 種。
 const BACKEND_OPTIONS: ParserAdapterBackend[] = [
-  "local",
-  "auto",
   "docling",
   "marker",
   "unstructured",
+  "mineru",
+  "dots_ocr",
+  "glm_ocr",
   // service 系 backend(OCI クラウドサービス直呼び。package readiness 対象外)。
-  "enterprise_ai_vlm",
+  "oci_genai_vision",
   "oci_document_understanding",
 ];
 
 const SERVICE_BACKENDS: ParserServiceBackendName[] = [
-  "enterprise_ai_vlm",
+  "oci_genai_vision",
   "oci_document_understanding",
 ];
 
@@ -293,6 +296,11 @@ function OverviewCard({
               );
             })}
           </div>
+          {form.adapter_backend === "local" || form.adapter_backend === "auto" ? (
+            <p className="text-xs leading-relaxed text-warning">
+              {t("settings.parserAdapters.legacyBackendNotice")}
+            </p>
+          ) : null}
           <p className="text-xs leading-relaxed text-muted">
             {t("settings.parserAdapters.serviceBackend.note")}
           </p>
@@ -1046,8 +1054,14 @@ function adapterLabel(adapter: ParserAdapterBackendName) {
 function backendLabel(backend: ParserAdapterBackend) {
   if (backend === "local") return t("settings.parserAdapters.backend.local");
   if (backend === "auto") return t("settings.parserAdapters.backend.auto");
+  if (backend === "mineru") return "MinerU";
+  if (backend === "dots_ocr") return "Dots.OCR";
+  if (backend === "glm_ocr") return "GLM-OCR";
+  if (backend === "oci_genai_vision")
+    return t("settings.parserAdapters.backend.oci_genai_vision");
+  // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 表示用)。
   if (backend === "enterprise_ai_vlm")
-    return t("settings.parserAdapters.backend.enterprise_ai_vlm");
+    return t("settings.parserAdapters.backend.oci_genai_vision");
   if (backend === "oci_document_understanding")
     return t("settings.parserAdapters.backend.oci_document_understanding");
   return adapterLabel(backend);
@@ -1271,11 +1285,16 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     settings.adapters.map((adapter) => [adapter.backend, adapter.enabled])
   );
   return {
-    adapter_backend: settings.adapter_backend,
+    adapter_backend: normalizeBackend(settings.adapter_backend),
     docling_enabled: enabledByBackend.get("docling") ?? false,
     marker_enabled: enabledByBackend.get("marker") ?? false,
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
   };
+}
+
+/** 旧称 enterprise_ai_vlm を canonical な oci_genai_vision に正規化する(選択カードの一致用)。 */
+function normalizeBackend(backend: ParserAdapterBackend): ParserAdapterBackend {
+  return backend === "enterprise_ai_vlm" ? "oci_genai_vision" : backend;
 }
 
 function adapterFlagField(

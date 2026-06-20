@@ -94,7 +94,9 @@ ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "dots_ocr",
     "glm_ocr",
     # service 系 backend(OCI クラウドサービスを backend から直接呼ぶ)。package
-    # readiness の対象外だが、選択値の正規化では受理する。
+    # readiness の対象外だが、選択値の正規化では受理する。enterprise_ai_vlm は
+    # oci_genai_vision の後方互換エイリアス。
+    "oci_genai_vision",
     "enterprise_ai_vlm",
     "oci_document_understanding",
 )

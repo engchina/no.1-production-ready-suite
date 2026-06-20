@@ -112,9 +112,14 @@ export type ParserAdapterBackend =
   | "docling"
   | "marker"
   | "unstructured"
+  | "mineru"
+  | "dots_ocr"
+  | "glm_ocr"
+  | "oci_genai_vision"
+  // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 保存値の表示用)。
   | "enterprise_ai_vlm"
   | "oci_document_understanding";
-export type ParserServiceBackendName = "enterprise_ai_vlm" | "oci_document_understanding";
+export type ParserServiceBackendName = "oci_genai_vision" | "oci_document_understanding";
 export type ParserAdapterBackendName = "docling" | "marker" | "unstructured";
 export type ParserAdapterStatus = "active" | "available" | "disabled" | "ignored" | "missing";
 export type ParserAdapterScoreBackend = "local" | "docling" | "marker" | "unstructured";
@@ -1239,7 +1244,7 @@ export interface PreprocessSettingsUpdate {
 
 // --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
 export type ServiceCategory = "preprocess" | "parser";
-export type ServiceProfile = "cpu" | "gpu";
+export type ServiceProfile = "cpu" | "gpu" | "oci";
 export type ServiceRuntimeStatus = "running" | "degraded" | "stopped" | "unconfigured";
 export type ServiceAction = "start" | "stop" | "restart";
 

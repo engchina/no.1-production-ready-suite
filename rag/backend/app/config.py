@@ -24,9 +24,11 @@ ParserAdapterBackend = Literal[
     "dots_ocr",
     "glm_ocr",
     # service 系 backend（外部 Python package / parser microservice ではなく OCI クラウド
-    # サービスを backend から直接呼ぶ）。enterprise_ai_vlm は OCI Enterprise AI VLM を
-    # fallback ではなく明示選択し、oci_document_understanding は OCI Document Understanding
+    # サービスを backend から直接呼ぶ）。oci_genai_vision は OCI Generative AI(Chat/Responses
+    # + Files API)の Vision モデルで文書ページを解析する明示選択（旧称 enterprise_ai_vlm は
+    # 後方互換エイリアスとして受理）。oci_document_understanding は OCI Document Understanding
     # の非同期 processor job で OCR/表抽出する。
+    "oci_genai_vision",
     "enterprise_ai_vlm",
     "oci_document_understanding",
 ]
@@ -1120,6 +1122,20 @@ class Settings(BaseSettings):
     rag_parser_asr_service_url: str = Field(
         default="http://parser-asr:8000",
         description="ASR(GPU faster-whisper)parser マイクロサービスの base URL。",
+    )
+    rag_parser_oci_genai_vision_service_url: str = Field(
+        default="http://parser-oci-genai-vision:8000",
+        description=(
+            "OCI Generative AI(Vision)parser マイクロサービスの base URL。"
+            "OCI を呼ぶ薄いプロキシで、認証はメイン設定(OCI env)を継承する。"
+        ),
+    )
+    rag_parser_oci_document_understanding_service_url: str = Field(
+        default="http://parser-oci-document-understanding:8000",
+        description=(
+            "OCI Document Understanding parser マイクロサービスの base URL。"
+            "OCI を呼ぶ薄いプロキシで、認証はメイン設定(OCI env)を継承する。"
+        ),
     )
     rag_parser_service_timeout_seconds: float = Field(
         default=300.0,

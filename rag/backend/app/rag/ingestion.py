@@ -1413,8 +1413,8 @@ class IngestionPipeline:
 
         まず再開用の cached 抽出を再利用し、無ければ各 OCI クラウドサービスを直接呼ぶ。
         `oci_document_understanding` が利用不可/失敗のときは None を返し、呼び出し側で
-        既存のローカル/VLM フローへ安全に縮退させる。`enterprise_ai_vlm` は明示選択なので
-        常に VLM 抽出まで実行する。
+        既存のローカル/VLM フローへ安全に縮退させる。`oci_genai_vision`(旧称
+        enterprise_ai_vlm)は明示選択なので常に VLM 抽出まで実行する。
         """
         cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
         if cached_extraction is not None:
@@ -1432,7 +1432,7 @@ class IngestionPipeline:
             if extracted is None:
                 return None
             return _validate_structured_extraction_payload(extracted)
-        # enterprise_ai_vlm: fallback ではなく明示選択 → 直接 VLM 抽出。
+        # oci_genai_vision(旧 enterprise_ai_vlm): fallback ではなく明示選択 → 直接 VLM 抽出。
         extracted = await self._extract_with_vlm(
             trace_id=trace_id,
             document_id=document_id,
