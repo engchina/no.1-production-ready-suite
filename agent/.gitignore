@@ -1,0 +1,15 @@
+# --- frontend ---
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# --- backend (Python/uv) ---
+backend/.venv/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+*.log
+.DS_Store
