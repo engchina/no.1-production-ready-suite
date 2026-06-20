@@ -261,6 +261,16 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         dev_port=8035,
         dev_runner="uv",
     ),
+    ServiceCatalogEntry(
+        service_id="pipeline-grounding",
+        category="grounding",
+        profile="cpu",
+        url_field="rag_grounding_service_url",
+        label_key="settings.services.item.pipelineGrounding",
+        working_dir="services/pipeline/grounding",
+        dev_port=8036,
+        dev_runner="uv",
+    ),
 )
 
 _CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {

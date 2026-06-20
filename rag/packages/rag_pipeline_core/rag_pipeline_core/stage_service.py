@@ -14,6 +14,7 @@ from rag_pipeline_core.agentic import resolve_agentic
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
 from rag_pipeline_core.generation import resolve_generation
 from rag_pipeline_core.graph import resolve_graph_profile
+from rag_pipeline_core.grounding import resolve_grounding
 from rag_pipeline_core.guardrail import resolve_guardrail
 from rag_pipeline_core.stage import (
     AgenticStageRequest,
@@ -24,6 +25,8 @@ from rag_pipeline_core.stage import (
     GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
+    GroundingStageRequest,
+    GroundingStageResponse,
     GuardrailStageRequest,
     GuardrailStageResponse,
     StageHealth,
@@ -161,6 +164,31 @@ def create_agentic_app(
             decompose=resolved.decompose,
             multi_hop=resolved.multi_hop,
             smart_routing=resolved.smart_routing,
+        )
+
+    return app
+
+
+def create_grounding_app(
+    *, health_probe: HealthProbe | None = None, title: str = "pipeline-grounding"
+) -> FastAPI:
+    """grounding ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
+    app = FastAPI(title=title)
+    probe = health_probe or (
+        lambda: StageHealth(status="ok", stage="grounding", package_name="rag_pipeline_core")
+    )
+    _health_routes(app, probe)
+
+    @app.post("/run", response_model=GroundingStageResponse)
+    def run(request: GroundingStageRequest) -> GroundingStageResponse:
+        resolved = resolve_grounding(request.pipeline)
+        return GroundingStageResponse(
+            pipeline=resolved.pipeline,
+            dependency_promotion=resolved.dependency_promotion,
+            diversity=resolved.diversity,
+            expansion_mode=resolved.expansion_mode,
+            compression=resolved.compression,
+            corrective=resolved.corrective,
         )
 
     return app

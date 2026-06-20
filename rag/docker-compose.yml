@@ -252,6 +252,12 @@ services:
       dockerfile: services/pipeline/agentic/Dockerfile
     restart: unless-stopped
 
+  pipeline-grounding:
+    build:
+      context: .
+      dockerfile: services/pipeline/grounding/Dockerfile
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     environment:

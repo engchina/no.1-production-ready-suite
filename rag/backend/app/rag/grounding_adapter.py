@@ -1,87 +1,32 @@
 """Grounding アダプター(検索後処理の手動選択プリセット)。
 
-PDF Step5/6(取得結果を検証し根拠化する)に対応する検索後処理段を束ねる。dedupe /
-Resolver-Verifier / Context Builder は常時実行で、任意段(dependency promotion / MMR
-diversity / context expansion / compression)を preset で選ぶ。`custom` のときだけ既存の
-`rag_context_*` フラグをそのまま使い、後方互換を保つ。
+preset→検索後処理段フラグの静的解決は共有パッケージ ``rag_pipeline_core.grounding`` を単一ソース
+として使い、backend と grounding マイクロサービスが同一結果を返す。`rag_grounding_service_enabled`
+が真のとき preset 解決を pipeline-grounding サービスへ委譲し、未達/失敗時は in-process(同一
+ロジック)へ安全縮退する。`custom` は backend の legacy `rag_context_*` 設定をそのまま使う
+(後方互換)。CRAG 的 corrective(confidence-based)は verified_context/full_governed で surface する。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+
+from rag_pipeline_core.grounding import (
+    GROUNDING_PIPELINES,
+    GROUNDING_SPECS,
+    PRESET_DIVERSITY_LAMBDA,
+    ExpansionMode,
+    resolve_grounding,
+)
+from rag_pipeline_core.grounding import (
+    normalize_grounding_pipeline as _core_normalize,
+)
 
 from app.config import PostRetrievalPipeline, Settings
 
 PostRetrievalPipelineName = PostRetrievalPipeline
-ExpansionMode = Literal["none", "neighbor", "group", "adaptive"]
 DEFAULT_POST_RETRIEVAL_PIPELINE: PostRetrievalPipelineName = "custom"
-GROUNDING_PIPELINE_ORDER: tuple[PostRetrievalPipelineName, ...] = (
-    "custom",
-    "lean",
-    "verified_context",
-    "context_enrich",
-    "compact",
-    "full_governed",
-)
-_PRESET_DIVERSITY_LAMBDA = 0.7
-
-
-@dataclass(frozen=True)
-class GroundingPipelineSpec:
-    """1 検索後処理プリセットの由来と束ねる段。"""
-
-    name: PostRetrievalPipelineName
-    origin: str
-    recommended_for: tuple[str, ...]
-    dependency_promotion: bool = False
-    diversity: bool = False
-    expansion_mode: ExpansionMode = "none"
-    compression: bool = False
-
-
-GROUNDING_ADAPTER_SPECS: dict[PostRetrievalPipelineName, GroundingPipelineSpec] = {
-    "custom": GroundingPipelineSpec(
-        name="custom",
-        origin="legacy_flags",
-        recommended_for=("advanced", "manual"),
-    ),
-    "lean": GroundingPipelineSpec(
-        name="lean",
-        origin="verify_only",
-        recommended_for=("low_latency", "simple"),
-    ),
-    "verified_context": GroundingPipelineSpec(
-        name="verified_context",
-        origin="aidb_step5_6",
-        recommended_for=("general", "balanced"),
-        diversity=True,
-    ),
-    "context_enrich": GroundingPipelineSpec(
-        name="context_enrich",
-        origin="scar_m3docdep",
-        recommended_for=("multi_page", "dependency"),
-        dependency_promotion=True,
-        diversity=True,
-        expansion_mode="adaptive",
-    ),
-    "compact": GroundingPipelineSpec(
-        name="compact",
-        origin="contextual_compression",
-        recommended_for=("token_budget", "long_context"),
-        diversity=True,
-        compression=True,
-    ),
-    "full_governed": GroundingPipelineSpec(
-        name="full_governed",
-        origin="aidb_full_governance",
-        recommended_for=("compliance", "max_quality"),
-        dependency_promotion=True,
-        diversity=True,
-        expansion_mode="adaptive",
-        compression=True,
-    ),
-}
+GROUNDING_PIPELINE_ORDER: tuple[PostRetrievalPipelineName, ...] = GROUNDING_PIPELINES  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -94,6 +39,7 @@ class GroundingAdapterParams:
     expansion_mode: ExpansionMode
     neighbor_expansion_enabled: bool
     compression_enabled: bool
+    corrective_enabled: bool = False
 
     @property
     def diversity_enabled(self) -> bool:
@@ -128,17 +74,11 @@ class GroundingAdapterRuntimeSettings:
 
 def normalize_post_retrieval_pipeline(value: object) -> PostRetrievalPipelineName:
     """未知のプリセット名は既定 custom へ寄せる。"""
-    normalized = str(value).casefold()
-    if normalized in GROUNDING_ADAPTER_SPECS:
-        return normalized
-    return DEFAULT_POST_RETRIEVAL_PIPELINE
+    return _core_normalize(value)  # type: ignore[return-value]
 
 
 def _settings_expansion_mode(settings: Settings) -> ExpansionMode:
-    """既存フラグから custom の第一段 expansion mode(adaptive/group/none)を再現する。
-
-    neighbor は original では adaptive 以外のとき独立に併走するため別フラグで扱う。
-    """
+    """既存フラグから custom の第一段 expansion mode(adaptive/group/none)を再現する。"""
     if bool(getattr(settings, "rag_context_adaptive_expansion_enabled", False)):
         return "adaptive"
     if bool(getattr(settings, "rag_context_group_expansion_enabled", False)):
@@ -169,15 +109,38 @@ def resolve_grounding_adapter(settings: Settings) -> GroundingAdapterParams:
             neighbor_expansion_enabled=_settings_neighbor_enabled(settings),
             compression_enabled=bool(getattr(settings, "rag_context_compression_enabled", False)),
         )
-    spec = GROUNDING_ADAPTER_SPECS[pipeline]
+    resolved = _resolve_static(settings, pipeline)
     return GroundingAdapterParams(
         pipeline=pipeline,
-        dependency_promotion_enabled=spec.dependency_promotion,
-        diversity_lambda=_PRESET_DIVERSITY_LAMBDA if spec.diversity else 1.0,
-        expansion_mode=spec.expansion_mode,
+        dependency_promotion_enabled=resolved.dependency_promotion,
+        diversity_lambda=PRESET_DIVERSITY_LAMBDA if resolved.diversity else 1.0,
+        expansion_mode=resolved.expansion_mode,
         neighbor_expansion_enabled=False,
-        compression_enabled=spec.compression,
+        compression_enabled=resolved.compression,
+        corrective_enabled=resolved.corrective,
     )
+
+
+def _resolve_static(settings: Settings, pipeline: str):  # type: ignore[no-untyped-def]
+    """preset の静的解決を service 優先 + in-process 縮退で行う。"""
+    from rag_pipeline_core.grounding import GroundingResolved
+    from rag_pipeline_core.stage import GroundingStageRequest
+
+    from app.clients.pipeline_stage import PipelineStageClient
+
+    client = PipelineStageClient(settings)
+    if client.is_enabled("grounding"):
+        response = client.run_grounding(GroundingStageRequest(pipeline=pipeline))
+        if response is not None:
+            return GroundingResolved(
+                pipeline=response.pipeline,
+                dependency_promotion=response.dependency_promotion,
+                diversity=response.diversity,
+                expansion_mode=response.expansion_mode,  # type: ignore[arg-type]
+                compression=response.compression,
+                corrective=response.corrective,
+            )
+    return resolve_grounding(pipeline)
 
 
 def grounding_adapter_runtime_settings(settings: Settings) -> GroundingAdapterRuntimeSettings:
@@ -185,7 +148,7 @@ def grounding_adapter_runtime_settings(settings: Settings) -> GroundingAdapterRu
     params = resolve_grounding_adapter(settings)
     statuses = tuple(
         GroundingPipelineStatus(
-            name=spec.name,
+            name=spec.name,  # type: ignore[arg-type]
             origin=spec.origin,
             recommended_for=spec.recommended_for,
             selected=spec.name == params.pipeline,
@@ -194,7 +157,7 @@ def grounding_adapter_runtime_settings(settings: Settings) -> GroundingAdapterRu
             expansion_mode=spec.expansion_mode,
             compression=spec.compression,
         )
-        for spec in (GROUNDING_ADAPTER_SPECS[name] for name in GROUNDING_PIPELINE_ORDER)
+        for spec in (GROUNDING_SPECS[name] for name in GROUNDING_PIPELINES)
     )
     return GroundingAdapterRuntimeSettings(
         pipeline=params.pipeline,

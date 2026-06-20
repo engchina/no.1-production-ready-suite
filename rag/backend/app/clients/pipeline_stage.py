@@ -22,6 +22,8 @@ from rag_pipeline_core.stage import (
     GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
+    GroundingStageRequest,
+    GroundingStageResponse,
     GuardrailStageRequest,
     GuardrailStageResponse,
     VectorIndexStageRequest,
@@ -41,6 +43,7 @@ _STAGE_URL_FIELDS: dict[str, str] = {
     "generation": "rag_generation_service_url",
     "guardrail": "rag_guardrail_service_url",
     "agentic": "rag_agentic_service_url",
+    "grounding": "rag_grounding_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_enabled",
@@ -49,6 +52,7 @@ _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "generation": "rag_generation_service_enabled",
     "guardrail": "rag_guardrail_service_enabled",
     "agentic": "rag_agentic_service_enabled",
+    "grounding": "rag_grounding_service_enabled",
 }
 
 
@@ -165,6 +169,16 @@ class PipelineStageClient:
             return None
         try:
             return AgenticStageResponse.model_validate(payload)
+        except ValueError:
+            return None
+
+    def run_grounding(self, request: GroundingStageRequest) -> GroundingStageResponse | None:
+        """grounding ステージ(preset 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        payload = self._post_run("grounding", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            return GroundingStageResponse.model_validate(payload)
         except ValueError:
             return None
 

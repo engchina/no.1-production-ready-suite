@@ -1030,6 +1030,18 @@ class Settings(BaseSettings):
         default="http://pipeline-agentic:8000",
         description="agentic ステージマイクロサービスの base URL。",
     )
+    rag_grounding_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "grounding の preset 解決(検索後処理段フラグ)を grounding マイクロサービスへ委譲する。"
+            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "custom preset は backend の legacy rag_context_* 設定をそのまま使う。"
+        ),
+    )
+    rag_grounding_service_url: str = Field(
+        default="http://pipeline-grounding:8000",
+        description="grounding ステージマイクロサービスの base URL。",
+    )
     rag_graph_temporal_enabled: bool = Field(
         default=False,
         description=(

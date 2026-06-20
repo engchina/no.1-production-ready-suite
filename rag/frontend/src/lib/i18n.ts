@@ -454,6 +454,7 @@ export const ja = {
   "settings.services.item.pipelineGeneration": "Generation(回答生成)",
   "settings.services.item.pipelineGuardrail": "Guardrail(ガードレール)",
   "settings.services.item.pipelineAgentic": "Agentic(クエリ計画)",
+  "settings.services.item.pipelineGrounding": "Grounding(検索後処理)",
   "settings.services.empty": "表示できるサービスがありません。",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":

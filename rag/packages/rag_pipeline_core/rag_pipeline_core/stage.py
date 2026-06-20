@@ -142,3 +142,20 @@ class AgenticStageResponse(BaseModel):
     decompose: bool
     multi_hop: bool
     smart_routing: bool
+
+
+class GroundingStageRequest(BaseModel):
+    """``POST /run``(grounding)の入力。preset のみ(custom は backend が legacy 設定で処理)。"""
+
+    pipeline: str = "verified_context"
+
+
+class GroundingStageResponse(BaseModel):
+    """``POST /run``(grounding)の出力(検索後処理段フラグ)。"""
+
+    pipeline: str
+    dependency_promotion: bool
+    diversity: bool
+    expansion_mode: str
+    compression: bool
+    corrective: bool
