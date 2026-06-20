@@ -1,8 +1,12 @@
-"""JSON 構造化ロギング設定。"""
+"""JSON 構造化ロギング設定。
+
+実装は共有 backend インフラ `pr_backend_core` に移管。RAG 固有のノイズロガー抑制
+（pdfminer のフォント警告等）をここで注入する。
+"""
 
 import logging
 
-from pythonjsonlogger import json as jsonlogger
+from pr_backend_core import configure_logging as _configure_logging
 
 # PDF パース(pdfminer / pdfplumber 経由)が出す無害な警告でログが溢れるため抑制する。
 # 例: "Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats"
@@ -14,23 +18,6 @@ _NOISY_LOGGERS: dict[str, int] = {
 }
 
 
-def _quiet_noisy_loggers() -> None:
-    """サードパーティの過剰な警告ログのレベルを引き上げる。"""
-    for name, level in _NOISY_LOGGERS.items():
-        logging.getLogger(name).setLevel(level)
-
-
 def configure_logging(level: str = "INFO") -> None:
-    """ルートロガーを JSON 形式で構成する。"""
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        jsonlogger.JsonFormatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s",
-            rename_fields={"asctime": "timestamp", "levelname": "level"},
-        )
-    )
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.addHandler(handler)
-    root.setLevel(level.upper())
-    _quiet_noisy_loggers()
+    """ルートロガーを JSON 形式で構成する（共有実装 + RAG 固有のノイズ抑制）。"""
+    _configure_logging(level, quiet_loggers=_NOISY_LOGGERS)

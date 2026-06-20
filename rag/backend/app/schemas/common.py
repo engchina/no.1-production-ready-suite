@@ -1,37 +1,24 @@
-"""共通スキーマ。参照実装の ApiResponse 設計を踏襲。"""
+"""共通スキーマ。
+
+汎用 envelope（ApiResponse / Page / HealthData / JsonValue）は共有 backend インフラ
+`production-ready-backend-core`（pr_backend_core）へ移管した。3 サービスで同一契約を共有する。
+RAG 固有の DB ステータス型はここに残す。
+"""
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pr_backend_core.schemas import ApiResponse, HealthData, JsonValue, Page
+from pydantic import BaseModel
 
-type JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
-
-
-class ApiResponse[T](BaseModel):
-    """API 共通レスポンス形。"""
-
-    data: T | None = None
-    error_messages: list[str] = Field(default_factory=list)
-    warning_messages: list[str] = Field(default_factory=list)
-
-
-class Page[T](BaseModel):
-    """ページング済みレスポンス。"""
-
-    items: list[T]
-    total: int
-    limit: int
-    offset: int
-    has_next: bool
-
-
-class HealthData(BaseModel):
-    """ヘルスチェック結果。"""
-
-    status: str
-    version: str
-    message: str | None = None
-    checks: dict[str, str] = Field(default_factory=dict)
+# 互換のため re-export（既存の `from app.schemas.common import ApiResponse` 等を維持）。
+__all__ = [
+    "ApiResponse",
+    "Page",
+    "HealthData",
+    "JsonValue",
+    "DatabaseAvailability",
+    "DatabaseStatusData",
+]
 
 
 # Oracle 26ai の利用可否。

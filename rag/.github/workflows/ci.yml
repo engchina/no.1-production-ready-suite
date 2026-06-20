@@ -34,16 +34,29 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend
+        working-directory: no.1-production-ready-rag/backend
     steps:
-      - name: Checkout
+      # backend は共有 production-ready-backend-core（platform repo の sibling パス）に
+      # 依存するため、platform を sibling に checkout してから uv sync する。
+      # （配布へ切替後はこの sibling checkout を削除できる。）
+      - name: Checkout app
         uses: actions/checkout@v4
+        with:
+          path: no.1-production-ready-rag
+
+      - name: Checkout shared platform packages
+        uses: actions/checkout@v4
+        with:
+          repository: engchina/no.1-production-ready-platform
+          ref: main
+          path: no.1-production-ready-platform
+          token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          cache-dependency-glob: backend/uv.lock
+          cache-dependency-glob: no.1-production-ready-rag/backend/uv.lock
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -76,17 +89,41 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontend
+        working-directory: no.1-production-ready-rag/frontend
     steps:
-      - name: Checkout
+      # アプリと共有 UI パッケージを sibling に並べ、frontend の
+      # file:../../no.1-production-ready-platform/packages/ui を CI でも解決できるようにする。
+      # （GitHub Packages へ切替後はこの sibling checkout / build を削除し、npm ci のみにする。
+      #  docs: no.1-production-ready-platform/docs/consume-in-ci.md）
+      - name: Checkout app
         uses: actions/checkout@v4
+        with:
+          path: no.1-production-ready-rag
+
+      - name: Checkout shared UI package
+        uses: actions/checkout@v4
+        with:
+          repository: engchina/no.1-production-ready-platform
+          ref: main
+          path: no.1-production-ready-platform
+          # private repo の場合は read 権限の PAT を SHARED_UI_REPO_TOKEN に設定する。
+          # public repo なら既定の GITHUB_TOKEN で checkout 可。
+          token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            no.1-production-ready-rag/frontend/package-lock.json
+            no.1-production-ready-platform/package-lock.json
+
+      - name: Build shared UI package
+        working-directory: no.1-production-ready-platform
+        run: |
+          npm ci
+          npm run build
 
       - name: Install dependencies
         run: npm ci
