@@ -159,3 +159,17 @@ class GroundingStageResponse(BaseModel):
     expansion_mode: str
     compression: bool
     corrective: bool
+
+
+class EvaluationStageRequest(BaseModel):
+    """``POST /run``(evaluation)の入力。suite のみ。"""
+
+    suite: str = "request_only"
+
+
+class EvaluationStageResponse(BaseModel):
+    """``POST /run``(evaluation)の出力(CI gate 用閾値 + focus metrics)。"""
+
+    suite: str
+    thresholds: dict[str, float] | None = None
+    focus_metrics: list[str] = Field(default_factory=list)

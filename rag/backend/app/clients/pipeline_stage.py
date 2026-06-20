@@ -18,6 +18,8 @@ from rag_pipeline_core.stage import (
     AgenticStageResponse,
     ChunkingStageRequest,
     ChunkingStageResponse,
+    EvaluationStageRequest,
+    EvaluationStageResponse,
     GenerationStageRequest,
     GenerationStageResponse,
     GraphStageRequest,
@@ -44,6 +46,7 @@ _STAGE_URL_FIELDS: dict[str, str] = {
     "guardrail": "rag_guardrail_service_url",
     "agentic": "rag_agentic_service_url",
     "grounding": "rag_grounding_service_url",
+    "evaluation": "rag_evaluation_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_enabled",
@@ -53,6 +56,7 @@ _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "guardrail": "rag_guardrail_service_enabled",
     "agentic": "rag_agentic_service_enabled",
     "grounding": "rag_grounding_service_enabled",
+    "evaluation": "rag_evaluation_service_enabled",
 }
 
 
@@ -179,6 +183,16 @@ class PipelineStageClient:
             return None
         try:
             return GroundingStageResponse.model_validate(payload)
+        except ValueError:
+            return None
+
+    def run_evaluation(self, request: EvaluationStageRequest) -> EvaluationStageResponse | None:
+        """evaluation ステージ(suite→閾値解決)を remote 実行する。委譲不可/失敗時は None。"""
+        payload = self._post_run("evaluation", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            return EvaluationStageResponse.model_validate(payload)
         except ValueError:
             return None
 

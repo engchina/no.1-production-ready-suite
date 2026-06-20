@@ -1042,6 +1042,17 @@ class Settings(BaseSettings):
         default="http://pipeline-grounding:8000",
         description="grounding ステージマイクロサービスの base URL。",
     )
+    rag_evaluation_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "evaluation の suite→閾値解決を evaluation マイクロサービスへ委譲する。OFF(既定)は "
+            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+        ),
+    )
+    rag_evaluation_service_url: str = Field(
+        default="http://pipeline-evaluation:8000",
+        description="evaluation ステージマイクロサービスの base URL。",
+    )
     rag_graph_temporal_enabled: bool = Field(
         default=False,
         description=(

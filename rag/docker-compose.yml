@@ -258,6 +258,12 @@ services:
       dockerfile: services/pipeline/grounding/Dockerfile
     restart: unless-stopped
 
+  pipeline-evaluation:
+    build:
+      context: .
+      dockerfile: services/pipeline/evaluation/Dockerfile
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     environment:

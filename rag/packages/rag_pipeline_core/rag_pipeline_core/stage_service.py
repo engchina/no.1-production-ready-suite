@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from rag_pipeline_core.agentic import resolve_agentic
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
+from rag_pipeline_core.evaluation import resolve_evaluation
 from rag_pipeline_core.generation import resolve_generation
 from rag_pipeline_core.graph import resolve_graph_profile
 from rag_pipeline_core.grounding import resolve_grounding
@@ -21,6 +22,8 @@ from rag_pipeline_core.stage import (
     AgenticStageResponse,
     ChunkingStageRequest,
     ChunkingStageResponse,
+    EvaluationStageRequest,
+    EvaluationStageResponse,
     GenerationStageRequest,
     GenerationStageResponse,
     GraphStageRequest,
@@ -189,6 +192,28 @@ def create_grounding_app(
             expansion_mode=resolved.expansion_mode,
             compression=resolved.compression,
             corrective=resolved.corrective,
+        )
+
+    return app
+
+
+def create_evaluation_app(
+    *, health_probe: HealthProbe | None = None, title: str = "pipeline-evaluation"
+) -> FastAPI:
+    """evaluation ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
+    app = FastAPI(title=title)
+    probe = health_probe or (
+        lambda: StageHealth(status="ok", stage="evaluation", package_name="rag_pipeline_core")
+    )
+    _health_routes(app, probe)
+
+    @app.post("/run", response_model=EvaluationStageResponse)
+    def run(request: EvaluationStageRequest) -> EvaluationStageResponse:
+        resolved = resolve_evaluation(request.suite)
+        return EvaluationStageResponse(
+            suite=resolved.suite,
+            thresholds=resolved.thresholds,
+            focus_metrics=list(resolved.focus_metrics),
         )
 
     return app
