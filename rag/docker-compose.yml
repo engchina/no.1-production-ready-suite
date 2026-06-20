@@ -201,6 +201,20 @@ services:
               count: 1
               capabilities: ["gpu"]
 
+  parser-asr:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/asr/Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
   frontend:
     build: ./frontend
     environment:

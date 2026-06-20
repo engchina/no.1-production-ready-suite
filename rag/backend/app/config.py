@@ -928,6 +928,18 @@ class Settings(BaseSettings):
         default="http://parser-glm-ocr:8000",
         description="GLM-OCR(GPU)parser マイクロサービスの base URL。",
     )
+    rag_parser_asr_enabled: bool = Field(
+        default=True,
+        description=(
+            "音声/動画の文字起こし(ASR)を有効化する。audio source kind は OCI AI Speech →"
+            "ローカル faster-whisper(parser-asr)→ 未対応 の順で解決する。OFF にすると音声は"
+            "従来どおり未対応として扱う。"
+        ),
+    )
+    rag_parser_asr_service_url: str = Field(
+        default="http://parser-asr:8000",
+        description="ASR(GPU faster-whisper)parser マイクロサービスの base URL。",
+    )
     rag_parser_service_timeout_seconds: float = Field(
         default=300.0,
         gt=0,
@@ -1035,6 +1047,46 @@ class Settings(BaseSettings):
         gt=0,
         le=3600.0,
         description="DU processor job 完了待ちの上限(秒)。超過時は安全に縮退する。",
+    )
+    # --- OCI AI Speech(音声文字起こし。空欄はローカル faster-whisper へ縮退)---
+    oci_speech_compartment_id: str = Field(
+        default="",
+        description="OCI AI Speech の compartment OCID。空欄時は oci_compartment_id を使う。",
+    )
+    oci_speech_namespace: str = Field(
+        default="",
+        description="Speech 入出力 Object Storage の namespace。空欄は object_storage_namespace。",
+    )
+    oci_speech_input_bucket: str = Field(
+        default="",
+        description="Speech 入力 bucket。空欄は object_storage_bucket。",
+    )
+    oci_speech_output_bucket: str = Field(
+        default="",
+        description="Speech 出力 bucket。空欄は入力 bucket と同じ。",
+    )
+    oci_speech_input_prefix: str = Field(
+        default="speech/input",
+        description="Speech 入力 object の key prefix。",
+    )
+    oci_speech_output_prefix: str = Field(
+        default="speech/output",
+        description="Speech 出力 JSON の key prefix。",
+    )
+    oci_speech_language: str = Field(
+        default="ja",
+        description="文字起こしの言語コード(既定 日本語)。",
+    )
+    oci_speech_poll_interval_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="Speech transcription job の状態 poll 間隔(秒)。",
+    )
+    oci_speech_timeout_seconds: float = Field(
+        default=900.0,
+        gt=0,
+        le=7200.0,
+        description="Speech job 完了待ちの上限(秒)。超過時はローカル faster-whisper へ縮退。",
     )
     rag_segment_checkpoint_enabled: bool = Field(
         default=True,

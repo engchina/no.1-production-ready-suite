@@ -447,6 +447,7 @@ export const ja = {
   "settings.services.item.parserMineru": "MinerU",
   "settings.services.item.parserDotsOcr": "Dots.OCR",
   "settings.services.item.parserGlmOcr": "GLM-OCR",
+  "settings.services.item.parserAsr": "ASR(音声文字起こし)",
   "settings.services.empty": "表示できるサービスがありません。",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":

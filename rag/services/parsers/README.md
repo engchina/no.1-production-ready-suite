@@ -11,6 +11,7 @@
 | `mineru` | **GPU** | `--profile gpu` | 実 OCR/レイアウト解析 |
 | `dots_ocr` | **GPU** | `--profile gpu` | 実 OCR(GitHub install) |
 | `glm_ocr` | **GPU** | `--profile gpu` | 実 OCR(HuggingFace zai-org/GLM-OCR / transformers) |
+| `asr` | **GPU** | `--profile gpu` | 音声/動画の文字起こし(faster-whisper)。OCI AI Speech の fallback |
 
 ## 共通 HTTP 契約(`rag_parser_core`)
 

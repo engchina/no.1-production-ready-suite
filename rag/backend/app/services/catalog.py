@@ -177,6 +177,16 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         dev_port=8025,
         dev_runner="docker",
     ),
+    ServiceCatalogEntry(
+        service_id="parser-asr",
+        category="parser",
+        profile="gpu",
+        url_field="rag_parser_asr_service_url",
+        label_key="settings.services.item.parserAsr",
+        working_dir="services/parsers/asr",
+        dev_port=8026,
+        dev_runner="docker",
+    ),
 )
 
 _CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {

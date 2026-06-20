@@ -24,6 +24,7 @@ from app.clients.oci_enterprise_ai import (
     OciEnterpriseAiClient,
 )
 from app.clients.oci_genai import OciGenAiClient
+from app.clients.oci_speech import OciSpeechClient
 from app.clients.oracle import OracleClient
 from app.clients.parser_service import ParserServiceClient
 from app.clients.preprocess_service import PreprocessServiceClient
@@ -163,6 +164,7 @@ class IngestionPipeline:
         oracle: OracleClient | None = None,
         object_storage: ObjectStorageClient | None = None,
         document_understanding: OciDocumentUnderstandingClient | None = None,
+        speech: OciSpeechClient | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._settings = settings or get_settings()
@@ -178,6 +180,8 @@ class IngestionPipeline:
         self._document_understanding = document_understanding or OciDocumentUnderstandingClient(
             settings=self._settings
         )
+        # 音声/動画の文字起こし(OCI AI Speech 優先、未設定/失敗は parser-asr へ縮退)。
+        self._speech = speech or OciSpeechClient(settings=self._settings)
 
     async def ingest(
         self,
@@ -250,7 +254,20 @@ class IngestionPipeline:
                 },
                 result_attributes=_parser_result_attributes,
             )
-            if parser_result.unsupported_reason:
+            audio_extraction: StructuredExtraction | None = None
+            if parser_result.unsupported_reason == "audio_transcription_not_configured":
+                # 音声/動画は OCI AI Speech → ローカル faster-whisper の順で文字起こしする。
+                audio_extraction = await self._transcribe_audio(
+                    trace_id=trace_id,
+                    document_id=document_id,
+                    source_bytes=parse_bytes,
+                    content_type=parse_content_type,
+                    source_profile=source_profile,
+                    cancel_checker=cancel_checker,
+                )
+                if audio_extraction is None:
+                    raise IngestionUserError(_unsupported_parser_message(parser_result))
+            elif parser_result.unsupported_reason:
                 raise IngestionUserError(_unsupported_parser_message(parser_result))
             checkpoint_segments = await self._prepare_segment_checkpoints(
                 document_id=document_id,
@@ -261,7 +278,8 @@ class IngestionPipeline:
                 parser_profile=strategy.parser_profile,
             )
             await _raise_if_cancelled(cancel_checker)
-            extraction: StructuredExtraction | None = None
+            # 音声文字起こしが成功していれば以降の parser/VLM 経路は短絡する。
+            extraction: StructuredExtraction | None = audio_extraction
             service_backend = _service_parser_backend(parser_result.parser_backend)
             try:
                 if service_backend is not None:
@@ -1395,6 +1413,42 @@ class IngestionPipeline:
             cancel_checker=cancel_checker,
         )
         return _validate_structured_extraction_payload(extracted)
+
+    async def _transcribe_audio(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        source_bytes: bytes,
+        content_type: str,
+        source_profile: SourceProfile | None,
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> StructuredExtraction | None:
+        """音声/動画を文字起こしする。OCI AI Speech 優先、未設定/失敗は parser-asr へ縮退。
+
+        いずれも利用不可なら None を返し、呼び出し側で「未対応」として扱う。
+        """
+        _ = trace_id
+        if not getattr(self._settings, "rag_parser_asr_enabled", True):
+            return None
+        await _raise_if_cancelled(cancel_checker)
+        # 1) OCI AI Speech(設定済みのとき優先)。
+        payload = await self._speech.transcribe(
+            source_bytes, content_type=content_type, document_id=document_id
+        )
+        if payload is not None:
+            try:
+                return _validate_structured_extraction_payload(payload)
+            except Exception:  # noqa: BLE001 - schema 不一致はローカル経路へ縮退する
+                logger.warning("OCI Speech 結果の検証に失敗。ローカル ASR へ縮退します。")
+        # 2) ローカル faster-whisper(parser-asr マイクロサービス)。
+        await _raise_if_cancelled(cancel_checker)
+        result = await asyncio.to_thread(
+            self._parser_service.runner, "asr", source_bytes, source_profile, content_type
+        )
+        if result.extraction is not None:
+            return result.extraction
+        return None
 
     async def _extract_with_document_understanding(
         self,
