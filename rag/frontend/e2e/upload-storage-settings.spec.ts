@@ -164,7 +164,10 @@ test("アップロード時に選択した知識ベースへ所属できる", as
 
   await page.goto("/upload");
 
-  await page.getByLabel(/社内規程/).check();
+  const kbCombo = page.getByRole("combobox", { name: "アップロード先の知識ベース" });
+  await kbCombo.click();
+  await page.getByRole("option", { name: /社内規程/ }).click();
+  await kbCombo.press("Escape");
   await expect(page.getByText("1 件の知識ベースへ登録します。")).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({
     name: "upload.txt",

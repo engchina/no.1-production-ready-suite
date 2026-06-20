@@ -118,7 +118,13 @@ test("評価実行と比較実行は選択した知識ベースを使う", async
 
   await page.goto("/evaluation");
 
-  await page.getByLabel(/社内規程/).check();
+  const kbCombo = page.getByRole("combobox", { name: "知識ベース" });
+  await kbCombo.click();
+  await page
+    .getByRole("listbox", { name: "知識ベース" })
+    .getByRole("option", { name: /社内規程/ })
+    .click();
+  await kbCombo.press("Escape");
   await page.getByRole("button", { name: "評価実行" }).click();
   await expect.poll(() => runPayload?.knowledge_base_ids).toEqual(["kb-1"]);
   await expect(page.getByText("Segment artifact 再抽出").first()).toBeVisible();

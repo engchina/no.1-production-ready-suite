@@ -39,7 +39,9 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "業務アシスタントを作成" })).toBeVisible();
     await expect(page.getByLabel("名前", { exact: true })).toBeVisible();
     await expect(page.getByText("参照する知識ベース", { exact: false }).first()).toBeVisible();
-    await expect(page.getByLabel(/社内規程/)).toBeVisible();
+    // 知識ベースはコンボボックスを開くと候補として現れる。
+    await page.getByRole("combobox", { name: "参照する知識ベース" }).click();
+    await expect(page.getByRole("option", { name: /社内規程/ })).toBeVisible();
     await expect(page.getByLabel(/persona/)).toBeVisible();
     await expectNoPageOverflow(page);
   });
@@ -54,7 +56,8 @@ test("業務アシスタントを作成すると参照 KB と方針を含めて 
 
   await page.goto("/business-views");
 
-  await page.getByLabel(/社内規程/).check();
+  await page.getByRole("combobox", { name: "参照する知識ベース" }).click();
+  await page.getByRole("option", { name: /社内規程/ }).click();
   await page.getByLabel("名前", { exact: true }).fill("経理アシスタント");
   await page
     .getByLabel(/persona/)

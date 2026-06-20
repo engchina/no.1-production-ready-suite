@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+
 import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
@@ -14,6 +15,9 @@ const authStatus = {
 };
 
 const KB_COUNT = 20;
+// document_count = index なので index 0(ナレッジベース-01)だけが空。
+const EMPTY_COUNT = 1;
+const VISIBLE_DEFAULT = KB_COUNT - EMPTY_COUNT;
 
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
@@ -23,54 +27,63 @@ test.beforeEach(async ({ page }) => {
   await mockManyKnowledgeBases(page);
 });
 
-test("知識ベースが多い場合は絞り込み・件数・スクロール領域を表示する", async ({ page }) => {
-  await page.goto("/search");
+test("コンボボックスを開くと検索・空KB抑制・スクロール領域を備える", async ({ page }) => {
+  await page.goto("/evaluation");
 
-  // 件数が多いときだけツールバー(絞り込み入力)が現れる。
-  const filter = page.getByLabel("知識ベースを名前で絞り込む");
-  await expect(filter).toBeVisible();
-  await expect(page.getByText(`${KB_COUNT} / ${KB_COUNT} 件`)).toBeVisible();
+  // 既定はトリガーのみで、リストは畳まれている(ページを押し下げない)。
+  const combobox = page.getByRole("combobox", { name: "知識ベース" });
+  await expect(combobox).toBeVisible();
+  await expect(page.getByRole("listbox", { name: "知識ベース" })).toHaveCount(0);
 
-  // グリッドは高さ固定でスクロール可能(ページ全体を押し下げない)。
+  await combobox.click();
+  const listbox = page.getByRole("listbox", { name: "知識ベース" });
+  await expect(listbox).toBeVisible();
+
+  // 空(0 文書)の KB は既定で非表示。フッターに非表示件数が出る。
+  await expect(page.getByText(`空の知識ベース ${EMPTY_COUNT} 件を非表示中`)).toBeVisible();
+  await expect(page.getByText(`${VISIBLE_DEFAULT} / ${KB_COUNT} 件`)).toBeVisible();
+  await expect(listbox.getByRole("option")).toHaveCount(VISIBLE_DEFAULT);
+
+  // リストは高さ固定でスクロール可能。
   const scrollable = await page.evaluate(() => {
-    const group = document.querySelector('[role="group"][aria-label="知識ベース"]');
-    if (!group) return false;
-    return group.scrollHeight > group.clientHeight + 1;
+    const list = document.querySelector('[role="listbox"][aria-label="知識ベース"]');
+    if (!list) return false;
+    return list.scrollHeight > list.clientHeight + 1;
   });
   expect(scrollable).toBe(true);
 
-  // 名前で絞り込むと一致しない項目は描画されない。
-  await filter.fill("-07");
-  await expect(page.getByText("1 / 20 件")).toBeVisible();
-  await expect(page.getByText("ナレッジベース-07", { exact: true })).toBeVisible();
-  await expect(page.getByText("ナレッジベース-02", { exact: true })).toHaveCount(0);
+  // 「空のKBを隠す」を解除すると空 KB も含め全件表示。
+  await page.getByRole("checkbox", { name: "空のKBを隠す" }).uncheck();
+  await expect(listbox.getByRole("option")).toHaveCount(KB_COUNT);
 
-  await expectNoHorizontalOverflow(page);
+  // 名前で絞り込むと一致しない項目は描画されない。
+  await combobox.fill("-07");
+  await expect(listbox.getByRole("option")).toHaveCount(1);
+  await expect(listbox.getByRole("option", { name: /ナレッジベース-07/ })).toBeVisible();
+
+  await expectNoPageOverflow(page);
 });
 
-test("全選択は表示中のすべての知識ベースをリクエストへ含める", async ({ page }) => {
-  let searchPayload: Record<string, unknown> | null = null;
-  await page.route("**/api/search/stream", async (route) => {
-    searchPayload = route.request().postDataJSON() as Record<string, unknown>;
-    await route.fulfill({
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-      body: searchStreamBody(),
-    });
-  });
+test("表示中をすべて選択しチップで可視化、クリアで解除できる", async ({ page }) => {
+  await page.goto("/evaluation");
 
-  await page.goto("/search");
+  const combobox = page.getByRole("combobox", { name: "知識ベース" });
+  await combobox.click();
 
-  await page.getByRole("button", { name: "全選択" }).click();
-  await page.getByRole("textbox", { name: "RAG 検索" }).fill("経費申請の承認フロー");
-  await page.getByRole("button", { name: "検索" }).click();
+  // 空 KB を含めて全件を選択する。
+  await page.getByRole("checkbox", { name: "空のKBを隠す" }).uncheck();
+  await page.getByRole("button", { name: "表示中をすべて選択" }).click();
 
-  await expect
-    .poll(() => (searchPayload?.knowledge_base_ids as string[] | undefined)?.length)
-    .toBe(KB_COUNT);
+  // 選択は削除可能なチップで可視化される。
+  await expect(page.getByLabel("ナレッジベース-07 を選択から外す")).toBeVisible();
+  await expect(page.getByText(`${KB_COUNT} 件選択中`).first()).toBeVisible();
 
-  // クリアで選択をすべて解除できる(KB ツールバーのクリアは先頭に現れる)。
-  await page.getByRole("button", { name: "クリア" }).first().click();
+  // チップの ✕ で個別に外せる。
+  await page.getByLabel("ナレッジベース-07 を選択から外す").click();
+  await expect(page.getByText(`${KB_COUNT - 1} 件選択中`).first()).toBeVisible();
+
+  // フッターのクリアで選択をすべて解除できる。
+  await page.getByRole("button", { name: "クリア" }).click();
   await expect(page.getByText("すべての知識ベースを対象にします。")).toBeVisible();
 });
 
@@ -102,23 +115,4 @@ async function mockManyKnowledgeBases(page: Page) {
       },
     });
   });
-}
-
-function searchStreamBody(): string {
-  return [
-    `event: metadata\ndata: ${JSON.stringify({
-      trace_id: "trace-kb-grid",
-      elapsed_ms: 10,
-      guardrail_warnings: [],
-      diagnostics: {},
-    })}\n\n`,
-    `event: delta\ndata: ${JSON.stringify({ text: "承認フローを確認しました。" })}\n\n`,
-    `event: citations\ndata: ${JSON.stringify([])}\n\n`,
-    `event: done\ndata: ${JSON.stringify({ trace_id: "trace-kb-grid" })}\n\n`,
-  ].join("");
-}
-
-async function expectNoHorizontalOverflow(page: Page) {
-  // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
-  await expectNoPageOverflow(page);
 }

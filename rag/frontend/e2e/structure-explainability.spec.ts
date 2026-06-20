@@ -89,8 +89,14 @@ test("文書詳細で所属知識ベースを更新できる", async ({ page }) 
   await page.goto("/documents/doc-1");
 
   await expect(page.getByRole("heading", { name: "所属知識ベース" })).toBeVisible();
-  await expect(page.getByLabel(/社内規程/)).toBeChecked();
-  await page.getByLabel(/FAQ/).check();
+  // 既存の所属はチップで可視化される。
+  await expect(page.getByLabel("社内規程 を選択から外す")).toBeVisible();
+  // FAQ は空(0 文書)なので「空のKBを隠す」を解除してから選ぶ。
+  const kbCombo = page.getByRole("combobox", { name: "所属先" });
+  await kbCombo.click();
+  await page.getByRole("checkbox", { name: "空のKBを隠す" }).uncheck();
+  await page.getByRole("option", { name: /FAQ/ }).click();
+  await kbCombo.press("Escape");
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect
