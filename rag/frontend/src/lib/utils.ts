@@ -1,7 +1,2 @@
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-/** Tailwind クラスを安全に結合する（shadcn/ui 標準ユーティリティ）。 */
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
+// cn は共有 UI パッケージへ移管済み。互換のため re-export する。
+export { cn } from "@engchina/production-ready-ui";

@@ -1,74 +1,12 @@
-import { create } from "zustand";
-import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
+import { createUiStore } from "@engchina/production-ready-ui";
 
+// UI ストア（サイドバー開閉等）は共有 UI パッケージの factory で生成する。
+// 永続化キーは RAG 専用 namespace を維持し、旧バージョンの単独キーから移行する。
 export const UI_STORAGE_KEY = "production-ready-rag.ui";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "production-ready-rag.sidebarCollapsed";
 
-type UiState = {
-  sidebarCollapsed: boolean;
-  setSidebarCollapsed: (collapsed: boolean) => void;
-  toggleSidebarCollapsed: () => void;
-  /**
-   * サイドナビのセクション折りたたみ状態。キーは NavSection.titleKey。
-   * 未指定（キー無し）は「展開」を既定とし、true のときだけ折りたたむ。
-   */
-  collapsedSections: Record<string, boolean>;
-  toggleSection: (key: string) => void;
-  setSectionCollapsed: (key: string, collapsed: boolean) => void;
-};
-
-const memoryStorage = new Map<string, string>();
-
-const fallbackStorage: StateStorage = {
-  getItem: (name) => memoryStorage.get(name) ?? null,
-  setItem: (name, value) => memoryStorage.set(name, value),
-  removeItem: (name) => memoryStorage.delete(name),
-};
-
-function resolveStorage(): StateStorage {
-  if (typeof window === "undefined") {
-    return fallbackStorage;
-  }
-  return window.localStorage;
-}
-
-function initialSidebarCollapsed(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  if (window.matchMedia("(max-width: 640px)").matches) {
-    return true;
-  }
-  return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
-}
-
-export const useUiStore = create<UiState>()(
-  persist(
-    (set) => ({
-      sidebarCollapsed: initialSidebarCollapsed(),
-      setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
-      toggleSidebarCollapsed: () =>
-        set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-      collapsedSections: {},
-      toggleSection: (key) =>
-        set((state) => ({
-          collapsedSections: {
-            ...state.collapsedSections,
-            [key]: !state.collapsedSections[key],
-          },
-        })),
-      setSectionCollapsed: (key, collapsed) =>
-        set((state) => ({
-          collapsedSections: { ...state.collapsedSections, [key]: collapsed },
-        })),
-    }),
-    {
-      name: UI_STORAGE_KEY,
-      partialize: (state) => ({
-        sidebarCollapsed: state.sidebarCollapsed,
-        collapsedSections: state.collapsedSections,
-      }),
-      storage: createJSONStorage(resolveStorage),
-    }
-  )
-);
+export const useUiStore = createUiStore({
+  storageKey: UI_STORAGE_KEY,
+  legacyCollapsedKey: LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY,
+  mobileBreakpoint: 640,
+});

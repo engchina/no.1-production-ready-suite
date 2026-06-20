@@ -3656,6 +3656,42 @@ wheels = [
 ]
 
 [[package]]
+name = "production-ready-backend-core"
+version = "0.1.0"
+source = { editable = "../../no.1-production-ready-platform/packages/backend_core" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "prometheus-client" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "python-json-logger" },
+    { name = "starlette" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.121,<1.0" },
+    { name = "prometheus-client", specifier = ">=0.24" },
+    { name = "pydantic", specifier = ">=2.11" },
+    { name = "pydantic-settings", specifier = ">=2.7" },
+    { name = "python-json-logger", specifier = ">=4.0" },
+    { name = "starlette", specifier = ">=1.0.1,<2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.8" },
+    { name = "black", specifier = ">=25.1" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "mypy", specifier = ">=1.14" },
+    { name = "pip-audit", specifier = ">=2.9" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.25" },
+    { name = "pytest-cov", specifier = ">=6.0" },
+    { name = "ruff", specifier = ">=0.9" },
+]
+
+[[package]]
 name = "production-ready-rag-backend"
 version = "0.1.0"
 source = { editable = "." }
@@ -3667,6 +3703,7 @@ dependencies = [
     { name = "httpx" },
     { name = "oci" },
     { name = "oracledb" },
+    { name = "production-ready-backend-core" },
     { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -3714,6 +3751,7 @@ requires-dist = [
     { name = "marker-pdf", extras = ["full"], marker = "extra == 'marker'", specifier = "==1.10.2" },
     { name = "oci", specifier = ">=2.168" },
     { name = "oracledb", specifier = ">=3.4" },
+    { name = "production-ready-backend-core", editable = "../../no.1-production-ready-platform/packages/backend_core" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pydantic-settings", specifier = ">=2.7" },
