@@ -72,10 +72,12 @@ def _service_app(*, configured: bool, captured: dict[str, object]) -> TestClient
         content_type: str,
         source_profile: SourceProfile | None,
         document_id: str,
+        prompt: str,
     ) -> ParseResponse:
         captured["bytes"] = source_bytes
         captured["content_type"] = content_type
         captured["document_id"] = document_id
+        captured["prompt"] = prompt
         extraction = StructuredExtraction.model_validate(
             document_understanding_result_to_payload(_du_result_json())
         )

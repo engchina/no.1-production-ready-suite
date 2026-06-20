@@ -22,10 +22,11 @@ from rag_parser_core.result import ParseHealth, ParseResponse
 from rag_parser_core.source import SourceProfile
 
 # service 系 backend(OCI クラウド)の /parse ハンドラ。bytes + content_type +
-# source_profile + document_id を受け取り ParseResponse(StructuredExtraction wire 形式)
-# を返す。document_id は OCI 入力 object 名の一意化などに使う。
+# source_profile + document_id + prompt を受け取り ParseResponse(StructuredExtraction
+# wire 形式)を返す。document_id は OCI 入力 object 名の一意化、prompt は VLM 抽出指示に使う
+# (DU など prompt 不要な backend は無視してよい)。
 ServiceParseHandler = Callable[
-    [bytes, str, "SourceProfile | None", str], Awaitable[ParseResponse]
+    [bytes, str, "SourceProfile | None", str, str], Awaitable[ParseResponse]
 ]
 
 
@@ -140,6 +141,7 @@ def create_service_parse_app(
         content_type: Annotated[str, Form()] = "",
         source_profile: Annotated[str | None, Form()] = None,
         document_id: Annotated[str | None, Form()] = None,
+        prompt: Annotated[str, Form()] = "",
     ) -> ParseResponse:
         source_bytes = await file.read()
         profile = _parse_source_profile(source_profile)
@@ -149,6 +151,8 @@ def create_service_parse_app(
         effective_document_id = (document_id or "").strip() or (
             profile.content_sha256 if profile is not None else ""
         ) or "document"
-        return await parse(source_bytes, effective_content_type, profile, effective_document_id)
+        return await parse(
+            source_bytes, effective_content_type, profile, effective_document_id, prompt
+        )
 
     return app

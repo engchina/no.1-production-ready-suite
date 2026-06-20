@@ -268,7 +268,7 @@ def _service_success_result(backend: str, extraction: StructuredExtraction) -> P
 async def test_service_backend_enterprise_ai_vlm_calls_vlm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """enterprise_ai_vlm 明示時は cached が無ければ直接 VLM 抽出する。"""
+    """microservice 未到達時、enterprise_ai_vlm 明示は in-process VLM(分割込み)へ縮退する。"""
     pipeline = _routing_pipeline()
     calls: dict[str, bool] = {}
 
@@ -282,6 +282,11 @@ async def test_service_backend_enterprise_ai_vlm_calls_vlm(
 
     monkeypatch.setattr(pipeline, "_extract_with_vlm", _fake_vlm)
     monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
+    monkeypatch.setattr(
+        pipeline._parser_service,
+        "run_service_backend",
+        lambda *a, **k: _service_unreachable_result("oci_genai_vision"),
+    )
 
     result = await pipeline._extract_with_service_backend(
         "enterprise_ai_vlm",
@@ -298,6 +303,41 @@ async def test_service_backend_enterprise_ai_vlm_calls_vlm(
     assert "du" not in calls
     assert isinstance(result, StructuredExtraction)
     assert result.raw_text == "vlm extracted"
+
+
+async def test_service_backend_vlm_uses_microservice_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """microservice が抽出を返したら in-process VLM(分割)を呼ばずにそれを使う。"""
+    pipeline = _routing_pipeline()
+    calls: dict[str, bool] = {}
+    extraction = StructuredExtraction(raw_text="microservice vlm", document_type="ドキュメント")
+
+    async def _fake_vlm(**kwargs: Any) -> dict[str, object]:
+        calls["vlm"] = True
+        return {"raw_text": "in-process"}
+
+    monkeypatch.setattr(pipeline, "_extract_with_vlm", _fake_vlm)
+    monkeypatch.setattr(
+        pipeline._parser_service,
+        "run_service_backend",
+        lambda *a, **k: _service_success_result("oci_genai_vision", extraction),
+    )
+
+    result = await pipeline._extract_with_service_backend(
+        "oci_genai_vision",
+        trace_id="t",
+        document_id="doc",
+        source_bytes=b"x",
+        prompt="p",
+        content_type="application/pdf",
+        parser_profile="enterprise_ai_pdf_layout",
+        checkpoint_segments=(),
+        cancel_checker=None,
+    )
+    assert isinstance(result, StructuredExtraction)
+    assert result.raw_text == "microservice vlm"
+    assert "vlm" not in calls  # in-process VLM は呼ばれない
 
 
 async def test_service_backend_du_falls_back_when_none(

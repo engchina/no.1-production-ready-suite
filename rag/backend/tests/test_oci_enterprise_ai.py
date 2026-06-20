@@ -474,7 +474,8 @@ async def test_oci_vlm_retries_schema_validation_with_exponential_backoff(
     async def fake_sleep(delay: float) -> None:
         delays.append(delay)
 
-    monkeypatch.setattr("app.clients.oci_enterprise_ai.asyncio.sleep", fake_sleep)
+    # retry の sleep は共有 core(rag_parser_core)へ移設済み。
+    monkeypatch.setattr("rag_parser_core.oci_enterprise_ai.asyncio.sleep", fake_sleep)
     settings = _oci_settings()
     settings.oci_enterprise_ai_max_retries = 2
     transport = SequentialEnterpriseAiTransport(
