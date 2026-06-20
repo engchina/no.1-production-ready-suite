@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, UploadFile
@@ -20,6 +20,13 @@ from pydantic import ValidationError
 from rag_parser_core.registry import ParserRegistryResult, run_external_adapter
 from rag_parser_core.result import ParseHealth, ParseResponse
 from rag_parser_core.source import SourceProfile
+
+# service 系 backend(OCI クラウド)の /parse ハンドラ。bytes + content_type +
+# source_profile + document_id を受け取り ParseResponse(StructuredExtraction wire 形式)
+# を返す。document_id は OCI 入力 object 名の一意化などに使う。
+ServiceParseHandler = Callable[
+    [bytes, str, "SourceProfile | None", str], Awaitable[ParseResponse]
+]
 
 
 def _detect_version(
@@ -95,5 +102,53 @@ def create_parse_app(
             effective_content_type,
         )
         return ParseResponse.from_result(result)
+
+    return app
+
+
+def create_service_parse_app(
+    *,
+    backend: str,
+    parse: ServiceParseHandler,
+    is_configured: Callable[[], bool] | None = None,
+    title: str | None = None,
+) -> FastAPI:
+    """OCI クラウド service 系 backend 用の FastAPI app を生成する。
+
+    package readiness ではなく `is_configured`(OCI 設定の充足)で /health を返す。
+    `parse` は OCI を呼んで ParseResponse を返す非同期ハンドラ(env 由来 config で構築)。
+    """
+    app = FastAPI(title=title or f"parser-{backend}")
+
+    @app.get("/health", response_model=ParseHealth)
+    def health() -> ParseHealth:
+        configured = is_configured() if is_configured is not None else True
+        return ParseHealth(
+            status="ok" if configured else "degraded",
+            backend=backend,
+            package_name=None,
+            package_version=None,
+        )
+
+    @app.get("/api/ready", response_model=ParseHealth)
+    def ready() -> ParseHealth:
+        return health()
+
+    @app.post("/parse", response_model=ParseResponse)
+    async def parse_endpoint(
+        file: Annotated[UploadFile, File()],
+        content_type: Annotated[str, Form()] = "",
+        source_profile: Annotated[str | None, Form()] = None,
+        document_id: Annotated[str | None, Form()] = None,
+    ) -> ParseResponse:
+        source_bytes = await file.read()
+        profile = _parse_source_profile(source_profile)
+        effective_content_type = content_type or (
+            profile.content_type if profile is not None else ""
+        )
+        effective_document_id = (document_id or "").strip() or (
+            profile.content_sha256 if profile is not None else ""
+        ) or "document"
+        return await parse(source_bytes, effective_content_type, profile, effective_document_id)
 
     return app

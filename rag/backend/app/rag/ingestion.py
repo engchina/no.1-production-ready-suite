@@ -1420,6 +1420,18 @@ class IngestionPipeline:
         if cached_extraction is not None:
             return cached_extraction
         if service_backend == "oci_document_understanding":
+            await _raise_if_cancelled(cancel_checker)
+            # まず parser microservice へ HTTP 委譲する。
+            service_result = await asyncio.to_thread(
+                self._parser_service.run_service_backend,
+                "oci_document_understanding",
+                source_bytes,
+                content_type=content_type,
+                document_id=document_id,
+            )
+            if service_result.extraction is not None:
+                return service_result.extraction
+            # microservice 未到達/未設定/失敗 → 既存 in-process DU へ安全縮退する。
             extracted = await self._extract_with_document_understanding(
                 trace_id=trace_id,
                 document_id=document_id,

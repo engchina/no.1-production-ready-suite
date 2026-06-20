@@ -11,7 +11,11 @@ import json
 from typing import Any
 
 import pytest
-from rag_parser_core.registry import SERVICE_ADAPTER_BACKENDS, parse_with_registry
+from rag_parser_core.registry import (
+    SERVICE_ADAPTER_BACKENDS,
+    ParserRegistryResult,
+    parse_with_registry,
+)
 
 from app.clients.oci_document_understanding import (
     OciDocumentUnderstandingClient,
@@ -239,6 +243,28 @@ def _routing_pipeline() -> IngestionPipeline:
     )
 
 
+def _service_unreachable_result(backend: str) -> ParserRegistryResult:
+    """parser microservice 未到達時の fallback(extraction=None)を表す。"""
+    return ParserRegistryResult(
+        extraction=None,
+        parser_backend=backend,
+        parser_version="service_unavailable",
+        fallback_used=True,
+        template=f"{backend}_fallback",
+        warnings=(f"{backend}_adapter_service_unreachable",),
+    )
+
+
+def _service_success_result(backend: str, extraction: StructuredExtraction) -> ParserRegistryResult:
+    """parser microservice が抽出を返した場合の結果。"""
+    return ParserRegistryResult(
+        extraction=extraction,
+        parser_backend=backend,
+        parser_version=backend,
+        template=backend,
+    )
+
+
 async def test_service_backend_enterprise_ai_vlm_calls_vlm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -277,7 +303,7 @@ async def test_service_backend_enterprise_ai_vlm_calls_vlm(
 async def test_service_backend_du_falls_back_when_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """oci_document_understanding が None を返すと縮退用に None を返す(VLM は呼ばない)。"""
+    """microservice 未到達かつ in-process DU も None なら縮退用に None を返す(VLM は呼ばない)。"""
     pipeline = _routing_pipeline()
     calls: dict[str, bool] = {}
 
@@ -291,6 +317,12 @@ async def test_service_backend_du_falls_back_when_none(
 
     monkeypatch.setattr(pipeline, "_extract_with_vlm", _fake_vlm)
     monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
+    # microservice は未到達(fallback)→ in-process DU へ縮退する経路を検証する。
+    monkeypatch.setattr(
+        pipeline._parser_service,
+        "run_service_backend",
+        lambda *a, **k: _service_unreachable_result("oci_document_understanding"),
+    )
 
     result = await pipeline._extract_with_service_backend(
         "oci_document_understanding",
@@ -311,13 +343,18 @@ async def test_service_backend_du_falls_back_when_none(
 async def test_service_backend_du_success_returns_extraction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DU 成功時は remap 済み StructuredExtraction を返す。"""
+    """microservice 未到達でも in-process DU 成功なら remap 済み StructuredExtraction を返す。"""
     pipeline = _routing_pipeline()
 
     async def _fake_du(**kwargs: Any) -> dict[str, object] | None:
         return document_understanding_result_to_payload(_du_result_json())
 
     monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
+    monkeypatch.setattr(
+        pipeline._parser_service,
+        "run_service_backend",
+        lambda *a, **k: _service_unreachable_result("oci_document_understanding"),
+    )
 
     result = await pipeline._extract_with_service_backend(
         "oci_document_understanding",
@@ -332,3 +369,40 @@ async def test_service_backend_du_success_returns_extraction(
     )
     assert isinstance(result, StructuredExtraction)
     assert "請求書" in result.raw_text
+
+
+async def test_service_backend_du_uses_microservice_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """microservice が抽出を返したら in-process DU を呼ばずにそれを使う。"""
+    pipeline = _routing_pipeline()
+    calls: dict[str, bool] = {}
+    extraction = StructuredExtraction.model_validate(
+        document_understanding_result_to_payload(_du_result_json())
+    )
+
+    async def _fake_du(**kwargs: Any) -> dict[str, object] | None:
+        calls["du"] = True
+        return None
+
+    monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
+    monkeypatch.setattr(
+        pipeline._parser_service,
+        "run_service_backend",
+        lambda *a, **k: _service_success_result("oci_document_understanding", extraction),
+    )
+
+    result = await pipeline._extract_with_service_backend(
+        "oci_document_understanding",
+        trace_id="t",
+        document_id="doc",
+        source_bytes=b"x",
+        prompt="p",
+        content_type="application/pdf",
+        parser_profile="enterprise_ai_pdf_layout",
+        checkpoint_segments=(),
+        cancel_checker=None,
+    )
+    assert isinstance(result, StructuredExtraction)
+    assert "請求書" in result.raw_text
+    assert "du" not in calls  # in-process DU は呼ばれない
