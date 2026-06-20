@@ -13,3 +13,6 @@ backend/.venv/
 
 *.log
 .DS_Store
+
+# --- local agent worktrees ---
+.claude/worktrees/
