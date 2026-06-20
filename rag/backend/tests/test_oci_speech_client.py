@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.clients.oci_speech import (
     OciSpeechClient,
     _segments_from_tokens,
@@ -10,9 +12,9 @@ from app.clients.oci_speech import (
 from app.config import Settings
 
 
-def _blank_settings(**overrides: object) -> Settings:
+def _blank_settings(**overrides: Any) -> Settings:
     """.env を無視して空設定から組む(is_configured 判定をローカル環境非依存にする)。"""
-    base: dict[str, object] = {
+    base: dict[str, Any] = {
         "oci_speech_compartment_id": "",
         "oci_compartment_id": "",
         "oci_speech_namespace": "",

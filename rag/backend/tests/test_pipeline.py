@@ -1219,7 +1219,7 @@ class ExplodingLlm(OciEnterpriseAiClient):
         super().__init__()
         self.called = False
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         self.called = True
         raise AssertionError("no-results では LLM を呼び出さない")
 
@@ -1367,7 +1367,7 @@ class FailingRerankGenAiClient(OciGenAiClient):
 class SensitiveAnswerLlm(OciEnterpriseAiClient):
     """機微情報を含む回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         return "振込先の口座番号は 1234567 です。クラウド利用料です。"
 
 
@@ -2364,24 +2364,26 @@ class RejectedCandidateOracleClient(OracleClient):
 class UngroundedLlm(OciEnterpriseAiClient):
     """citation と無関係な回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         return "明日の天気は晴れです。"
 
 
 class GroundedLlm(OciEnterpriseAiClient):
     """citation に基づく回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         return "承認条件は 120000 円です。"
 
 
 class StreamingLlm(OciEnterpriseAiClient):
     """Enterprise AI streaming 回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         raise AssertionError("stream 有効時は generate_stream を使う")
 
-    async def generate_stream(self, prompt: str, context: str) -> AsyncIterator[str]:
+    async def generate_stream(
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> AsyncIterator[str]:
         _ = prompt, context
         for chunk in ("承認条件は ", "120000 円です。"):
             yield chunk
@@ -2394,7 +2396,7 @@ class CapturingLlm(OciEnterpriseAiClient):
         super().__init__()
         self.context = ""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         self.context = context
         return "承認条件は 120000 円です。"
 
@@ -2417,7 +2419,7 @@ class PlanningLlm(OciEnterpriseAiClient):
         self.plan_calls.append((query, mode, max_subqueries))
         return list(self._planned)
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         _ = prompt, context
         return "請求書原本は Object Storage に保管します。"
 
@@ -2430,7 +2432,7 @@ class CapturingPromptLlm(OciEnterpriseAiClient):
         self.prompt = ""
         self.context = ""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         self.prompt = prompt
         self.context = context
         return "請求書原本は Object Storage に保管します。"

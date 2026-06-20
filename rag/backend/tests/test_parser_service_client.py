@@ -12,7 +12,6 @@ from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import ParserRegistryResult
 from rag_parser_core.result import ParseResponse
 
-from app.clients import parser_service as parser_service_module
 from app.clients.parser_service import ParserServiceClient
 from app.config import Settings
 from app.schemas.document import SourceModality, SourceProfile
@@ -41,7 +40,7 @@ def _install_transport(
         kwargs.pop("timeout", None)
         return original(transport=handler)
 
-    monkeypatch.setattr(parser_service_module.httpx, "Client", factory)
+    monkeypatch.setattr(httpx, "Client", factory)
 
 
 def test_runner_returns_extraction_on_success(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,7 +9,6 @@ from pytest import MonkeyPatch
 from rag_parser_core.extraction import StructuredExtraction
 from rag_pipeline_core.stage import ChunkingStageRequest, ChunkingStageResponse, ChunkModel
 
-from app.clients import pipeline_stage as module
 from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings
 
@@ -51,13 +50,13 @@ def test_remote_success_returns_chunks(monkeypatch: MonkeyPatch) -> None:
         def __enter__(self) -> _FakeClient:
             return self
 
-        def __exit__(self, *a: Any) -> bool:
-            return False
+        def __exit__(self, *a: Any) -> None:
+            return None
 
         def post(self, *a: Any, **k: Any) -> _FakeResponse:
             return _FakeResponse()
 
-    monkeypatch.setattr(module.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
     client = PipelineStageClient(
         Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
     )
@@ -75,13 +74,13 @@ def test_remote_failure_degrades_to_none(monkeypatch: MonkeyPatch) -> None:
         def __enter__(self) -> _BoomClient:
             return self
 
-        def __exit__(self, *a: Any) -> bool:
-            return False
+        def __exit__(self, *a: Any) -> None:
+            return None
 
         def post(self, *a: Any, **k: Any) -> Any:
             raise httpx.ConnectError("refused")
 
-    monkeypatch.setattr(module.httpx, "Client", _BoomClient)
+    monkeypatch.setattr(httpx, "Client", _BoomClient)
     client = PipelineStageClient(
         Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
     )
@@ -107,13 +106,13 @@ def _fake_post(monkeypatch: MonkeyPatch, payload: dict[str, Any]) -> None:
         def __enter__(self) -> _Client:
             return self
 
-        def __exit__(self, *a: Any) -> bool:
-            return False
+        def __exit__(self, *a: Any) -> None:
+            return None
 
         def post(self, *a: Any, **k: Any) -> _Resp:
             return _Resp()
 
-    monkeypatch.setattr(module.httpx, "Client", _Client)
+    monkeypatch.setattr(httpx, "Client", _Client)
 
 
 def test_run_vector_index_remote(monkeypatch: MonkeyPatch) -> None:

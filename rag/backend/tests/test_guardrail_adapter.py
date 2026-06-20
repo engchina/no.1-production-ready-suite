@@ -1,9 +1,12 @@
 """Guardrail アダプター(安全ポリシー)のテスト。"""
 
-from app.config import Settings
-from app.rag.guardrail_adapter import (
+from rag_pipeline_core.guardrail import (
     DEFAULT_GROUNDING_MIN_OVERLAP,
     DEFAULT_GROUNDING_MIN_RATIO,
+)
+
+from app.config import Settings
+from app.rag.guardrail_adapter import (
     GUARDRAIL_POLICY_ORDER,
     guardrail_adapter_runtime_settings,
     normalize_guardrail_policy,

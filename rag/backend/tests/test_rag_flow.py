@@ -620,7 +620,7 @@ def test_search_scalar_prefilters_are_applied_to_retrieval() -> None:
             json={"query": "クラウド利用料", "top_k": 10, "rerank_top_n": 5, "filters": filters},
         )
         assert response.status_code == 200
-        return response.json()["data"]["citations"]
+        return cast(list[dict[str, object]], response.json()["data"]["citations"])
 
     # content_kinds: text を含むので一致、table のみ指定すると除外される。
     assert {c["document_id"] for c in _search({"content_kinds": "text"})} == {document_id}

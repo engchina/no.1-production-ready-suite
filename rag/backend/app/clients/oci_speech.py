@@ -232,7 +232,7 @@ _EXTENSION_BY_CONTENT_TYPE: dict[str, str] = {
 
 def speech_result_to_extraction(
     result: Mapping[str, object], *, language: str | None = None
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """OCI Speech の transcription JSON を StructuredExtraction 互換 payload へ remap する。
 
     OCI Speech 出力は ``transcriptions[].transcription``(全文)と ``tokens[]``(語ごとの
