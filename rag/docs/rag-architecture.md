@@ -28,9 +28,11 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - Docling / Marker / Unstructured / RAGFlow DeepDoc の「ページ・読み順・表・章節を要素として残す」ベストプラクティスは、外部 parser 依存を追加せず OCI Enterprise AI の structured output schema と軽量な raw text element 推定に再実装する。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - `python -m app.rag.enterprise_ai_probe` で LLM/VLM endpoint の request preview と実 response parsing を Oracle / Object Storage から切り離して確認できる。probe 出力には raw prompt、context、OCR 本文、回答本文を含めず、payload shape と parse summary だけを残す。
+   - `GET /api/documents/{document_id}/extraction-export?format=json|markdown|html|chunks` で保存済み `StructuredExtraction` を JSON / Markdown / escaped HTML / 非 embedding chunk view として監査できる。DocumentPreviewWorkspace では抽出本文 panel 内の「抽出エクスポート」で同じ 4 形式を切り替えて確認できる。HTML は `tables[].cells` を safe `<table>` として再構成し、row / col / bbox lineage を保持する。Marker / Docling 的な多形式出力はここで本プロジェクト schema へ再マップし、再解析や外部 LLM / vector DB 呼び出しは行わない。
    - `UPLOADED` / `ERROR` を取込対象にし、`INGESTING` は二重実行防止で 409 にする。
    - `INDEXED` は force なしなら既存結果を返す。`force=true` は `INDEXED` の再取込に使える。
-   - 取込成功時点で `INDEXED` へ遷移し、検索可能 chunk を RAG 検索対象にする。帳票項目の人手修正や登録確認ゲートは設けない。
+   - **方針(2 段階処理): parse → 人がプレビュー確認 → index。** parse/抽出の完了後はいったん `REVIEW`(プレビュー確認待ち)で停止し、`DocumentPreviewWorkspace` で抽出結果を人手で確認・承認(必要なら帳票項目を修正)してから後段の chunk/embed/index を実行する。**人手の確認・承認ゲートを通過した文書のみ `INDEXED` へ遷移し、RAG 検索対象にする。** 抽出 artifact は再利用し、確認・承認は index 実行前の必須ゲートとする。
+     - ※ 本ゲートは方針として確定(AGENTS.md 正本)。`REVIEW` 状態・承認 API・後段専用 index 経路の実装は別途行う。現行コードはまだ 1 ジョブ(`UPLOADED → INGESTING → INDEXED`)で動作するため、実装完了までは記載と挙動が一致しない点に注意する。
 
 3. チャンク分割
    - 実装: `backend/app/rag/chunking.py`
@@ -40,7 +42,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` で制御する。重複 chunk でも元章節・ページ・要素 metadata は維持する。
    - chunk metadata には `chunk_profile`、`chunk_group_id`、`chunk_group_kind`、`chunk_part_index`、`chunk_part_count`、`section_title`、`section_path`、`section_level`、`content_kind`、`page_start`、`page_end`、`element_kinds`、`element_ids`、`text_sha256`、`text_chars` を保存し、複雑文書 RAG で必要になる引用トレーサビリティと parent/child lineage を軽量に実現する。
    - `RAG_CHUNK_OVERLAP >= RAG_CHUNK_SIZE` は設定検証で拒否する。
-   - `RAG_MAX_CHUNKS_PER_DOCUMENT` を超える文書は索引せず `ERROR` にして、異常な OCR 出力や誤設定による embedding コスト急増を防ぐ。
+   - 大きな文書でも chunk 総数では拒否せず、生成された全 chunk を embedding / indexing 対象にする。
 
 4. 埋め込み
    - 実装: `backend/app/clients/oci_genai.py`
@@ -53,6 +55,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - 本番は Oracle 26ai AI Vector Search。ベクトル列は `VECTOR(1536, FLOAT32)`。
    - スキーマ成果物は HNSW 索引(`COSINE`、目標精度 `95`、neighbors `32`、efconstruction `500`)を作成する。
    - ベクトル検索は `FETCH APPROX ... WITH TARGET ACCURACY` を使い、問い合わせ側の精度は `ORACLE_VECTOR_TARGET_ACCURACY` で調整する。
+   - 検索精度は **Vector Index アダプター(`rag_vector_index_profile`)** で手動選択する。`app/rag/vector_index_adapter.py` が profile を解決し、`balanced`(既定・`ORACLE_VECTOR_TARGET_ACCURACY` をそのまま使用)/ `accurate`(98)/ `fast`(85)で検索時 target accuracy を runtime 即時に切り替える([oracle.py](backend/app/clients/oracle.py) の vector fetch clause へ反映)。推奨 HNSW ビルドパラメータ(neighbors/efconstruction/distance)は `GET/PATCH /api/settings/vector-index` と専用設定画面に参考表示し、適用には索引再作成(`requires_reprovision`)が必要。版管理された schema DDL artifact は自動変更しない。`SearchDiagnostics.vector_index_profile` に残す。
    - python-oracledb の共有 pool を遅延初期化し、document/chunk の永続化、集計、状態更新を Oracle table に対して実行する。
    - chunk 保存と vector search の入口でも embedding 幅を再検証する。
    - 検索対象の chunk は `INDEXED` の文書に限定する。
@@ -65,6 +68,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - `mode=hybrid|vector|keyword` を指定できる。hybrid は vector と keyword を Reciprocal Rank Fusion で統合し、RRF 定数は `RAG_RRF_K` で調整する。
    - retrieval 前に deterministic な query expansion を行い、請求書/invoice、保管/storage、図/figure などの業務同義語を最大 `RAG_QUERY_EXPANSION_MAX_VARIANTS` 件の query variant として検索する。元 query は rerank / LLM 生成に維持し、audit / trace には query 本文や展開語ではなく `query_variant_count` だけを残す。
    - 複数 query variant の検索結果は chunk id 単位で RRF 融合し、citation metadata には `query_fusion_score`、`query_variant_count`、`matched_query_variant_count` を低機密 metadata として付与する。
+   - 検索前のクエリ計画は **Agentic アダプター(`rag_agentic_profile`)** で手動選択する。`app/rag/agentic_adapter.py` が profile を解決し、`off`(既定・LLM 計画なし=現行挙動)/ `query_rewrite`(検索向けに 1 回書き換え)/ `decompose`(最大 `RAG_AGENTIC_MAX_SUBQUERIES` 個の sub-question へ分解)/ `multi_hop`(decompose + 根拠が弱い時に top context で 1 回追加分解、上限 1 hop・corrective retrieval と排他)を束ねる。計画は `OciEnterpriseAiClient.plan_query`(OCI Enterprise AI、JSON 配列受領・失敗時は元 query へ安全 fallback)で行い、結果を上記マルチクエリ RRF 融合経路へ追加 variant として注入する。`off` 以外は検索ごとに追加 LLM 呼び出しが発生するため明示 opt-in。`SearchDiagnostics` に `agentic_profile` / `agentic_subquery_count` / `agentic_hops` を残し、query 本文は audit / trace に出さない。設定 API `GET/PATCH /api/settings/agentic` と専用設定画面で切替する。外部 LLM provider は導入しない。
    - `filters` は `document_id`、`file_name`、`category_name`、`status` に加え、chunk metadata の `content_kind`、`section_title`、`section_path`、`source_acl`、`document_version` に対応し、retrieval 前に適用する。
    - `content_kind` は `text` / `list` / `table` / `figure` の完全一致、`section_title` / `section_path` は部分一致で使い、複雑文書の章節、表、図・画像説明だけに検索候補を絞れるようにする。
    - `source_acl` と `document_version` は Oracle chunk metadata に対する完全一致 filter として使い、AIDB RAG の Business Context Pack で tenant / ACL / dataset / version を検索前に固定する。
@@ -87,12 +91,15 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - `RAG_CONTEXT_DIVERSITY_LAMBDA` が 1.0 未満の場合は、rerank anchor を MMR 風に重排し、同質 chunk だけが先に context window を消費しないようにする。既定は 1.0 で無効。重排件数は `context_diversified_count`、順位が変わった citation は `context_diversified` / `context_original_rank` / `context_diversified_rank` に残す。
    - `RAG_CONTEXT_GROUP_EXPANSION_ENABLED=true` の場合は、rerank anchor の `chunk_group_id` と同じ sibling chunk を Oracle から取得し、分割された表・箇条書き・章節の前後文脈を生成 context へ低優先で追加する。既定は無効。anchor ごとの追加上限は `RAG_CONTEXT_GROUP_MAX_CHUNKS`、追加件数は `context_group_expanded_count`、citation metadata は `context_group_expanded` / `context_anchor_chunk_id` / `context_group_id` / `context_group_distance` で追跡する。
    - `RAG_CONTEXT_NEIGHBOR_WINDOW` が 1 以上の場合は、rerank anchor の同一 document 前後 chunk を Oracle の `chunk_index` で取得し、生成 context へ低優先で追加する。既定は 0 で無効。追加件数は `context_expanded_count`、citation metadata は `context_expanded`、`context_anchor_chunk_id`、`context_neighbor_distance` で追跡する。
+   - `RAG_CONTEXT_ADAPTIVE_EXPANSION_ENABLED=true` の場合は、同一 group sibling と隣接 chunk を query relevance / 構造連続性で絞り込み、必要な chunk だけを追加する。追加件数は `context_adaptive_expanded_count`、citation metadata は `context_adaptive_expanded` / `context_adaptive_reason` で追跡する。
+   - `RAG_CONTEXT_DEPENDENCY_PROMOTION_ENABLED=true` の場合は、rerank top_n から落ちた caption / child / parent chunk も `dependency_edges` と `element_ids` で再取得・昇格する。追加件数は `context_dependency_promoted_count`、citation metadata は `context_dependency_promoted` / `context_dependency_reason` / `context_dependency_shared_element_ids` で追跡する。
    - `RAG_CONTEXT_COMPRESSION_ENABLED=true` の場合は、LLM context へ入れる前に query 関連 sentence / line を抽出して長い chunk を圧縮する。既定は無効。圧縮件数と節約文字数は `context_compressed_count` / `context_compression_saved_chars` に残し、citation metadata は `context_compressed`、`context_original_chars`、`context_compressed_chars` を持つ。query 本文や除外した本文は audit / trace に残さない。
 
 9. AIDB Memory Engineering
    - 検索 request ごとに `BusinessContextPack` を作る。tenant/user/role は raw 値を保存せず hash の有無だけを診断し、document/category/knowledge base scope、`source_acl`、`document_version` を非機密 metadata として固定する。
    - `Memory Router / Plan Builder` は `RetrievalPlan` を作り、`evidence -> similar -> structure -> history` の `memory_sequence`、Oracle backend、scope key、evidence rule、termination criteria、gap handling を `SearchDiagnostics` と監査へ残す。Agent は plan 外の自由検索をしない。
    - `AIDB Retrieval` は既存の Oracle 26ai Hybrid Vector Search / Oracle Text / GraphRAG-lite / Select AI 境界へ再マップする。`structure` は Select AI 専用 endpoint または GraphRAG-lite、`history` は Oracle 26ai の `rag_agent_memories` を使う Agent Memory Search として扱い、外部 memory store は導入しない。
+   - GraphRAG-lite の構築深度は **GraphRAG アダプター(`rag_graph_profile`)** で手動選択する。`app/rag/graph_adapter.py` が取込側 profile を解決し、`off`(既定・KG 非構築=現行挙動)/ `entities`(entities+relationships のみ)/ `full`(claims + community summary まで)で `build_graph_index` の `build_claims` / `build_community_summaries` を切り替える(entities は軽量)。ingest の graph gate は `resolve_graph_adapter(...).enabled`、legacy `RAG_GRAPH_ENABLED=true` は `full` 相当として後方互換を保つ。検索側 routing は Retrieval アダプターの `graph_augmented`(query-time)が担い、両者は合成する。`SearchDiagnostics.graph_profile` に残し、設定 API `GET/PATCH /api/settings/graph` と専用設定画面で切替する。profile 変更は次回以降の取込に適用され、既存文書への反映には再取込が必要。外部グラフ DB は導入しない。
    - Agent Memory は `X-User-ID` / `X-RAG-Role-ID` / `X-RAG-Agent-ID` / `X-RAG-Thread-ID` を hash 化した scope がある request でのみ検索・保存する。`memory_text` は `VECTOR(1536, FLOAT32)` に保存し、HNSW + Oracle Text index を持つ。
    - 回答後の Memory Loop は、guardrail 通過済み回答について query 原文ではなく「回答要約 + 根拠 ID」を `rag_agent_memories` へ writeback する。helpful / not helpful は `usefulness_score` の移動平均として評価できる。
    - `Resolver / Verifier` は取得候補をそのまま根拠化せず、citation、scope、source ACL、version、contradiction metadata を確認する。ACL 不適合、旧版、矛盾、citation 欠落は context から除外し、件数と理由だけを診断・監査へ残す。
@@ -102,6 +109,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
 
 10. 回答生成
    - LLM は **OCI Enterprise AI**。検索根拠だけを context として渡す。
+   - 回答スタイルは **Generation アダプター(`rag_generation_profile`)** で手動選択する。`app/rag/generation_adapter.py` が profile を system prompt 変種へ決定論で解決し、`grounded_concise`(既定・現行 system prompt)/ `detailed_cited`(出典 ID 明示)/ `strict_extractive`(抽出のみ・推測禁止)/ `structured_json`(JSON 構造化出力)/ `bilingual_ja_en`(日英)を `app/clients/oci_enterprise_ai.py` の `generate` / `generate_stream` へ渡す。追加 LLM 呼び出しや別 provider は導入しない。`GET/PATCH /api/settings/generation` と専用設定画面で切替。`SearchDiagnostics.generation_profile` に残す。
    - Enterprise AI gateway の request shape が標準 payload と異なる場合は、`OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` で JSON object template を設定する。
    - LLM 契約は `python -m app.rag.enterprise_ai_probe --surface llm` で個別に検証できる。回答本文は probe artifact に保存せず、parse 成功と文字数だけを確認する。
    - retrieval / rerank 後に citation が 0 件の場合は LLM を呼ばず、固定の no-results 回答と warning を返す。

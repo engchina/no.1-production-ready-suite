@@ -7,8 +7,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   api,
   type AdbSettingsUpdate,
+  type DashboardActivity,
   type DatabaseSettingsUpdate,
+  type DocumentApproveRequest,
+  type DocumentSummary,
   type DocumentKnowledgeBaseReplaceRequest,
+  type DocumentExtractionExportFormat,
   type EvaluationCompareRequestBody,
   type EvaluationRunRequestBody,
   type FileStatus,
@@ -16,9 +20,37 @@ import {
   type KnowledgeBaseCreateRequest,
   type KnowledgeBaseStatus,
   type KnowledgeBaseUpdateRequest,
+  type BusinessViewCreateRequest,
+  type BusinessViewStatus,
+  type BusinessViewUpdateRequest,
   type ModelSettingsPayload,
   type ModelSettingsTestRequest,
+  type ParserAdapterContractData,
+  type ParserAdapterSettingsUpdate,
   type ParserAdapterSettingsData,
+  type ChunkingSettingsData,
+  type ChunkingSettingsUpdate,
+  type PreprocessSettingsData,
+  type PreprocessSettingsUpdate,
+  type ServiceAction,
+  type ServiceControlResultData,
+  type ServiceListData,
+  type RetrievalSettingsData,
+  type RetrievalSettingsUpdate,
+  type GroundingSettingsData,
+  type GroundingSettingsUpdate,
+  type GenerationSettingsData,
+  type GenerationSettingsUpdate,
+  type GuardrailSettingsData,
+  type GuardrailSettingsUpdate,
+  type VectorIndexSettingsData,
+  type VectorIndexSettingsUpdate,
+  type EvaluationSettingsData,
+  type EvaluationSettingsUpdate,
+  type GraphSettingsData,
+  type GraphSettingsUpdate,
+  type AgenticSettingsData,
+  type AgenticSettingsUpdate,
   type SelectAiRequestBody,
   type UploadIngestionMode,
   type UploadStorageSettingsUpdate,
@@ -38,8 +70,12 @@ export const queryKeys = {
     ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
   documentChunks: (id: string) => ["documents", id, "chunks"] as const,
+  documentExtractionExport: (id: string, format: DocumentExtractionExportFormat) =>
+    ["documents", id, "extraction-export", format] as const,
   documentIngestionSegments: (id: string) =>
     ["documents", id, "ingestion-segments"] as const,
+  documentIngestionConfig: (id: string) =>
+    ["documents", id, "ingestion-config"] as const,
   documentKnowledgeBases: (id: string) => ["documents", id, "knowledge-bases"] as const,
   documentStats: ["documents", "stats"] as const,
   ingestionJobs: (params: { status?: IngestionJobStatus; limit?: number; offset?: number }) =>
@@ -50,12 +86,81 @@ export const queryKeys = {
     limit?: number;
     offset?: number;
   }) => ["knowledge-bases", params] as const,
+  knowledgeBase: (id: string) => ["knowledge-bases", id] as const,
+  businessViews: (params: {
+    status?: BusinessViewStatus;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }) => ["business-views", params] as const,
+  businessView: (id: string) => ["business-views", id] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
   adbInfo: ["settings", "database", "adb"] as const,
   uploadStorageSettings: ["settings", "upload-storage"] as const,
   parserAdapterSettings: ["settings", "parser-adapters"] as const,
+  parserAdapterContract: ["settings", "parser-adapters", "contract"] as const,
+  preprocessSettings: ["settings", "preprocess"] as const,
+  chunkingSettings: ["settings", "chunking"] as const,
+  retrievalSettings: ["settings", "retrieval"] as const,
+  groundingSettings: ["settings", "grounding"] as const,
+  generationSettings: ["settings", "generation"] as const,
+  guardrailSettings: ["settings", "guardrail"] as const,
+  vectorIndexSettings: ["settings", "vector-index"] as const,
+  evaluationSettings: ["settings", "evaluation-suite"] as const,
+  graphSettings: ["settings", "graph"] as const,
+  agenticSettings: ["settings", "agentic"] as const,
+  services: ["services"] as const,
 };
+
+/**
+ * 自動更新(条件付きポーリング)の遷移状態判定。
+ *
+ * `refetchInterval` を関数形式で使い、状態遷移中だけポーリングして安定/終了したら
+ * 止める。`useDocumentIngestionSegments` / `useIngestionJob` と同じ方針。純粋関数
+ * として切り出し Vitest で境界を検証する。
+ */
+
+/** 取込/索引が進行中で一覧を再取得すべき文書状態。 */
+export const DOCUMENT_ACTIVE_STATUSES: ReadonlySet<FileStatus> = new Set<FileStatus>([
+  "INGESTING",
+  "INDEXING",
+]);
+
+/** ADB が起動/停止などの遷移中で lifecycle を再取得すべき状態。 */
+export const ADB_TRANSITIONAL_STATES: ReadonlySet<string> = new Set<string>([
+  "STARTING",
+  "STOPPING",
+  "PROVISIONING",
+  "TERMINATING",
+  "UPDATING",
+  "RESTORING",
+  "BACKUP_IN_PROGRESS",
+  "MAINTENANCE_IN_PROGRESS",
+  "ROLE_CHANGE_IN_PROGRESS",
+]);
+
+/** ポーリング間隔(ms)。 */
+export const ACTIVE_REFETCH_INTERVAL_MS = 4000;
+
+/** 文書一覧に取込/索引進行中の文書が含まれるか。 */
+export function documentsHaveActiveWork(
+  items: ReadonlyArray<Pick<DocumentSummary, "status">> | undefined
+): boolean {
+  return Boolean(items?.some((item) => DOCUMENT_ACTIVE_STATUSES.has(item.status)));
+}
+
+/** ADB lifecycle が遷移中か。 */
+export function adbIsTransitioning(state: string | null | undefined): boolean {
+  return state != null && ADB_TRANSITIONAL_STATES.has(state);
+}
+
+/** ダッシュボードの最近のアクティビティに進行中の処理が含まれるか。 */
+export function dashboardHasActiveWork(
+  activities: ReadonlyArray<Pick<DashboardActivity, "status">> | undefined
+): boolean {
+  return Boolean(activities?.some((activity) => DOCUMENT_ACTIVE_STATUSES.has(activity.status)));
+}
 
 /** データベース利用可否(DB ゲート用)。設定ページ以外を開く前に参照する。 */
 export function useDatabaseStatus(options: { enabled?: boolean } = {}) {
@@ -69,23 +174,36 @@ export function useDatabaseStatus(options: { enabled?: boolean } = {}) {
   });
 }
 
-/** ダッシュボード集計。 */
+/** ダッシュボード集計。取込/索引が進行中の間だけ自動再取得する。 */
 export function useDashboardSummary() {
   return useQuery({
     queryKey: queryKeys.dashboardSummary,
     queryFn: api.getDashboardSummary,
     retry: false,
+    refetchInterval: (query) =>
+      dashboardHasActiveWork(query.state.data?.recent_activities)
+        ? ACTIVE_REFETCH_INTERVAL_MS
+        : false,
   });
 }
 
-/** ドキュメント一覧（ページング・絞り込み）。 */
-export function useDocuments(params: {
-  status?: FileStatus;
-  q?: string;
-  knowledge_base_id?: string;
-  limit?: number;
-  offset?: number;
-}) {
+/**
+ * ドキュメント一覧（ページング・絞り込み）。
+ *
+ * 取込/索引が進行中の文書が 1 件でもある間は自動再取得して状態バッジを更新する。
+ * `graceActive` は「取込ジョブ投入直後の UPLOADED→INGESTING 引き継ぎ窓」で、まだ
+ * アクティブ状態が現れていない間もポーリングを継続させるためにコンポーネントが渡す。
+ */
+export function useDocuments(
+  params: {
+    status?: FileStatus;
+    q?: string;
+    knowledge_base_id?: string;
+    limit?: number;
+    offset?: number;
+  },
+  options: { graceActive?: boolean } = {}
+) {
   return useQuery({
     queryKey: queryKeys.documents({
       status: params.status,
@@ -95,6 +213,10 @@ export function useDocuments(params: {
       offset: params.offset,
     }),
     queryFn: () => api.listDocuments(params),
+    refetchInterval: (query) =>
+      documentsHaveActiveWork(query.state.data?.items) || options.graceActive
+        ? ACTIVE_REFETCH_INTERVAL_MS
+        : false,
   });
 }
 
@@ -121,6 +243,19 @@ export function useDocumentChunks(id: string | null) {
   });
 }
 
+/** 文書 extraction の監査用 export view。 */
+export function useDocumentExtractionExport(
+  id: string | null,
+  format: DocumentExtractionExportFormat
+) {
+  return useQuery({
+    queryKey: queryKeys.documentExtractionExport(id ?? "", format),
+    queryFn: () => api.exportDocumentExtraction(id as string, format),
+    enabled: id != null,
+    retry: false,
+  });
+}
+
 /** 文書取込 segment/checkpoint 状態。 */
 export function useDocumentIngestionSegments(id: string | null) {
   return useQuery({
@@ -137,12 +272,39 @@ export function useDocumentIngestionSegments(id: string | null) {
   });
 }
 
+/** 失敗した segment checkpoint のみを再試行する取込 job を投入する。 */
+export function useRetryFailedDocumentIngestionSegments() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.retryFailedDocumentIngestionSegments(id),
+    onSuccess: (job, documentId) => {
+      qc.invalidateQueries({ queryKey: queryKeys.document(documentId) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(documentId) });
+      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
+      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs", job.id] });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
 /** 文書が所属するナレッジベース一覧。 */
 export function useDocumentKnowledgeBases(id: string | null) {
   return useQuery({
     queryKey: queryKeys.documentKnowledgeBases(id ?? ""),
     queryFn: () => api.listDocumentKnowledgeBases(id as string),
     enabled: id != null,
+  });
+}
+
+/** 文書の取込設定スナップショットと owning KB とのドリフト状況。 */
+export function useDocumentIngestionConfig(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.documentIngestionConfig(id ?? ""),
+    queryFn: () => api.getDocumentIngestionConfig(id as string),
+    enabled: id != null,
+    // 404(削除済み/未登録の文書)はリトライしても無意味。兄弟の文書スコープ
+    // クエリ(chunks / extraction-export / ingestion-segments)と挙動を揃える。
+    retry: false,
   });
 }
 
@@ -265,6 +427,15 @@ export function useKnowledgeBases(params: {
   });
 }
 
+/** ナレッジベース詳細(adapter_config を含む)。 */
+export function useKnowledgeBase(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.knowledgeBase(id ?? ""),
+    queryFn: () => api.getKnowledgeBase(id as string),
+    enabled: id != null,
+  });
+}
+
 /** ナレッジベース作成。 */
 export function useCreateKnowledgeBase() {
   const qc = useQueryClient();
@@ -301,6 +472,62 @@ export function useArchiveKnowledgeBase() {
   });
 }
 
+/** 業務アシスタント(Business View)一覧。 */
+export function useBusinessViews(params: {
+  status?: BusinessViewStatus;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  return useQuery({
+    queryKey: queryKeys.businessViews(params),
+    queryFn: () => api.listBusinessViews(params),
+  });
+}
+
+/** 業務アシスタント詳細(config・参照 KB を含む)。 */
+export function useBusinessView(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.businessView(id ?? ""),
+    queryFn: () => api.getBusinessView(id as string),
+    enabled: id != null,
+  });
+}
+
+/** 業務アシスタント作成。 */
+export function useCreateBusinessView() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: BusinessViewCreateRequest) => api.createBusinessView(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["business-views"] });
+    },
+  });
+}
+
+/** 業務アシスタント更新。 */
+export function useUpdateBusinessView() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: BusinessViewUpdateRequest }) =>
+      api.updateBusinessView(id, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["business-views"] });
+    },
+  });
+}
+
+/** 業務アシスタントをアーカイブする。 */
+export function useArchiveBusinessView() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.archiveBusinessView(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["business-views"] });
+    },
+  });
+}
+
 /** 既存文書をナレッジベースへ追加する。 */
 export function useAssignDocumentsToKnowledgeBase() {
   const qc = useQueryClient();
@@ -332,10 +559,12 @@ export function useIngestDocument() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
-      api.ingestDocument(id, force),
-    onSuccess: (detail) => {
+      api.enqueueDocumentIngestionJob(id, force),
+    onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
-      qc.invalidateQueries({ queryKey: queryKeys.document(detail.id) });
+      qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
+      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
@@ -352,6 +581,35 @@ export function useEnqueueDocumentIngestionJob() {
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
       qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** REVIEW(確認待ち)文書を承認し、後段 index を投入する。任意でテキスト修正を伴う。 */
+export function useApproveDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload?: DocumentApproveRequest }) =>
+      api.approveDocument(id, payload),
+    onSuccess: (job) => {
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
+      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** REVIEW(確認待ち)文書を却下し、UPLOADED へ戻す。 */
+export function useRejectDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => api.rejectDocument(id),
+    onSuccess: (detail) => {
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: queryKeys.document(detail.id) });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
@@ -496,11 +754,15 @@ export function useTestDatabaseSettings() {
   });
 }
 
-/** Autonomous Database 情報。 */
+/** Autonomous Database 情報。起動/停止などの遷移中だけ自動再取得する。 */
 export function useAdbInfo() {
   return useQuery({
     queryKey: queryKeys.adbInfo,
     queryFn: api.getAdbInfo,
+    refetchInterval: (query) =>
+      adbIsTransitioning(query.state.data?.lifecycle_state)
+        ? ACTIVE_REFETCH_INTERVAL_MS
+        : false,
   });
 }
 
@@ -551,6 +813,16 @@ export function useParserAdapterSettings() {
   });
 }
 
+/** 任意 parser adapter の schema remap compatibility matrix。 */
+export function useParserAdapterContract() {
+  return useQuery<ParserAdapterContractData>({
+    queryKey: queryKeys.parserAdapterContract,
+    queryFn: api.getParserAdapterContract,
+    enabled: false,
+    retry: false,
+  });
+}
+
 /** アップロード原本の保存先設定をランタイム保存。 */
 export function useUpdateUploadStorageSettings() {
   const qc = useQueryClient();
@@ -559,6 +831,253 @@ export function useUpdateUploadStorageSettings() {
       api.updateUploadStorageSettings(payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.uploadStorageSettings });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** GraphRAG アダプター(知識グラフ構築)の runtime 設定。 */
+export function useGraphSettings() {
+  return useQuery<GraphSettingsData>({
+    queryKey: queryKeys.graphSettings,
+    queryFn: api.getGraphSettings,
+    retry: false,
+  });
+}
+
+/** GraphRAG アダプター設定をランタイム保存。 */
+export function useUpdateGraphSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: GraphSettingsUpdate) => api.updateGraphSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.graphSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** Agentic アダプター(クエリ計画)の runtime 設定。 */
+export function useAgenticSettings() {
+  return useQuery<AgenticSettingsData>({
+    queryKey: queryKeys.agenticSettings,
+    queryFn: api.getAgenticSettings,
+    retry: false,
+  });
+}
+
+/** Agentic アダプター設定をランタイム保存。 */
+export function useUpdateAgenticSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: AgenticSettingsUpdate) => api.updateAgenticSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.agenticSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** Evaluation アダプター(評価スイート/閾値)の runtime 設定。 */
+export function useEvaluationSettings() {
+  return useQuery<EvaluationSettingsData>({
+    queryKey: queryKeys.evaluationSettings,
+    queryFn: api.getEvaluationSettings,
+    retry: false,
+  });
+}
+
+/** Evaluation アダプター設定をランタイム保存。 */
+export function useUpdateEvaluationSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: EvaluationSettingsUpdate) => api.updateEvaluationSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.evaluationSettings, data);
+    },
+  });
+}
+
+/** Vector Index アダプター(索引/検索精度)の runtime 設定。 */
+export function useVectorIndexSettings() {
+  return useQuery<VectorIndexSettingsData>({
+    queryKey: queryKeys.vectorIndexSettings,
+    queryFn: api.getVectorIndexSettings,
+    retry: false,
+  });
+}
+
+/** Vector Index アダプター設定をランタイム保存。 */
+export function useUpdateVectorIndexSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: VectorIndexSettingsUpdate) => api.updateVectorIndexSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.vectorIndexSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** Generation アダプター(回答生成)の runtime 設定。 */
+export function useGenerationSettings() {
+  return useQuery<GenerationSettingsData>({
+    queryKey: queryKeys.generationSettings,
+    queryFn: api.getGenerationSettings,
+    retry: false,
+  });
+}
+
+/** Generation アダプター設定をランタイム保存。 */
+export function useUpdateGenerationSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: GenerationSettingsUpdate) => api.updateGenerationSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.generationSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** Guardrail アダプター(安全)の runtime 設定。 */
+export function useGuardrailSettings() {
+  return useQuery<GuardrailSettingsData>({
+    queryKey: queryKeys.guardrailSettings,
+    queryFn: api.getGuardrailSettings,
+    retry: false,
+  });
+}
+
+/** Guardrail アダプター設定をランタイム保存。 */
+export function useUpdateGuardrailSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: GuardrailSettingsUpdate) => api.updateGuardrailSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.guardrailSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** Retrieval アダプター(検索戦略)の runtime 設定。 */
+export function useRetrievalSettings() {
+  return useQuery<RetrievalSettingsData>({
+    queryKey: queryKeys.retrievalSettings,
+    queryFn: api.getRetrievalSettings,
+    retry: false,
+  });
+}
+
+/** Retrieval アダプター設定をランタイム保存。 */
+export function useUpdateRetrievalSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: RetrievalSettingsUpdate) => api.updateRetrievalSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.retrievalSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** Grounding アダプター(検索後処理)の runtime 設定。 */
+export function useGroundingSettings() {
+  return useQuery<GroundingSettingsData>({
+    queryKey: queryKeys.groundingSettings,
+    queryFn: api.getGroundingSettings,
+    retry: false,
+  });
+}
+
+/** Grounding アダプター設定をランタイム保存。 */
+export function useUpdateGroundingSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: GroundingSettingsUpdate) => api.updateGroundingSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.groundingSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** Chunking アダプター(分割戦略)の runtime 設定。 */
+export function usePreprocessSettings() {
+  return useQuery<PreprocessSettingsData>({
+    queryKey: queryKeys.preprocessSettings,
+    queryFn: api.getPreprocessSettings,
+    retry: false,
+  });
+}
+
+/** マイクロサービスの稼働状態一覧。既定 5s でポーリングして稼働状況をライブ表示する。 */
+export function useServices(options: { refetchInterval?: number | false } = {}) {
+  return useQuery<ServiceListData>({
+    queryKey: queryKeys.services,
+    queryFn: api.getServices,
+    retry: false,
+    refetchInterval: options.refetchInterval ?? 5000,
+  });
+}
+
+/** サービスを起動/停止/再起動する(成功時に一覧を即時 invalidate)。 */
+export function useControlService() {
+  const qc = useQueryClient();
+  return useMutation<
+    ServiceControlResultData,
+    unknown,
+    { serviceId: string; action: ServiceAction }
+  >({
+    mutationFn: ({ serviceId, action }) => api.controlService(serviceId, action),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.services });
+    },
+  });
+}
+
+/** 前処理(Preprocess)アダプター設定をランタイム保存。 */
+export function useUpdatePreprocessSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PreprocessSettingsUpdate) => api.updatePreprocessSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.preprocessSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+export function useChunkingSettings() {
+  return useQuery<ChunkingSettingsData>({
+    queryKey: queryKeys.chunkingSettings,
+    queryFn: api.getChunkingSettings,
+    retry: false,
+  });
+}
+
+/** Chunking アダプター設定をランタイム保存。 */
+export function useUpdateChunkingSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: ChunkingSettingsUpdate) => api.updateChunkingSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.chunkingSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** 任意 parser adapter 設定をランタイム保存。 */
+export function useUpdateParserAdapterSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: ParserAdapterSettingsUpdate) =>
+      api.updateParserAdapterSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.parserAdapterSettings, data);
+      qc.invalidateQueries({ queryKey: queryKeys.parserAdapterContract });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });

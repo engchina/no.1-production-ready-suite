@@ -1,10 +1,34 @@
 """検索（RAG）関連スキーマ。"""
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.schemas.common import JsonValue
+
+# PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle 26ai の JSON_VALUE 数値述語・
+# TIMESTAMP 範囲・IN 述語へ再マップし、ベクトル/hybrid 検索の候補集合を事前に絞り込む。
+SUPPORTED_SEARCH_NUMERIC_RANGE_FILTERS = {
+    "page_number_min",
+    "page_number_max",
+}
+SUPPORTED_SEARCH_DATE_RANGE_FILTERS = {
+    "uploaded_from",
+    "uploaded_to",
+    "indexed_from",
+    "indexed_to",
+}
+SUPPORTED_SEARCH_LIST_FILTERS = {
+    "content_kinds",
+}
+SUPPORTED_SCALAR_SEARCH_FILTER_KEYS = (
+    SUPPORTED_SEARCH_NUMERIC_RANGE_FILTERS
+    | SUPPORTED_SEARCH_DATE_RANGE_FILTERS
+    | SUPPORTED_SEARCH_LIST_FILTERS
+)
 
 SUPPORTED_SEARCH_FILTER_KEYS = {
     "document_id",
@@ -17,8 +41,16 @@ SUPPORTED_SEARCH_FILTER_KEYS = {
     "section_path",
     "source_acl",
     "document_version",
+    *SUPPORTED_SCALAR_SEARCH_FILTER_KEYS,
 }
-SUPPORTED_SEARCH_STATUS_FILTERS = {"UPLOADED", "INGESTING", "INDEXED", "ERROR"}
+SUPPORTED_SEARCH_STATUS_FILTERS = {
+    "UPLOADED",
+    "INGESTING",
+    "REVIEW",
+    "INDEXING",
+    "INDEXED",
+    "ERROR",
+}
 SUPPORTED_CONTENT_KIND_FILTERS = {
     "text",
     "list",
@@ -67,6 +99,23 @@ class SearchRequest(BaseModel):
     strategy: SearchStrategy = SearchStrategy.AUTO
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
+    business_view_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "業務アシスタント(Business View)ID。指定時は参照 KB 群を検索対象へ展開し、"
+            "業務アシスタントの query 設定・persona を適用する(request 明示パラメータが最優先)。"
+        ),
+    )
+
+    @field_validator("business_view_id")
+    @classmethod
+    def validate_business_view_id(cls, value: str | None) -> str | None:
+        """空文字は未指定として扱う。"""
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
     @field_validator("query")
     @classmethod
@@ -119,7 +168,7 @@ class RetrievedChunk(BaseModel):
     rerank_score: float | None = None
     file_name: str | None = None
     category_name: str | None = None
-    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class SearchDiagnostics(BaseModel):
@@ -127,10 +176,24 @@ class SearchDiagnostics(BaseModel):
 
     mode: str = ""
     retrieval_strategy: str = "hybrid"
+    retrieval_strategy_adapter: str = "hybrid_rrf"
+    post_retrieval_pipeline: str = "custom"
+    generation_profile: str = "grounded_concise"
+    guardrail_policy: str = "standard"
+    vector_index_profile: str = "balanced"
+    graph_profile: str = "off"
+    agentic_profile: str = "off"
+    agentic_subquery_count: int = 0
+    agentic_hops: int = 0
     route_reason: str = "default_hybrid"
     memory_plan_id: str | None = None
     graph_hit_count: int = 0
     fallback_reason: str | None = None
+    gap_stopped: bool = False
+    corrective_retried: bool = False
+    crag_confidence_score: float | None = None
+    crag_fallback_triggered: bool = False
+    hyde_generated: bool = False
     business_context: dict[str, object] = Field(default_factory=dict)
     retrieval_plan: dict[str, object] = Field(default_factory=dict)
     retrieved_context_pack: dict[str, object] = Field(default_factory=dict)
@@ -144,8 +207,11 @@ class SearchDiagnostics(BaseModel):
     context_diversified_count: int = 0
     context_group_expanded_count: int = 0
     context_expanded_count: int = 0
+    context_adaptive_expanded_count: int = 0
+    context_dependency_promoted_count: int = 0
     context_compressed_count: int = 0
     context_compression_saved_chars: int = 0
+    business_fit_reordered_count: int = 0
     agent_memory_retrieved_count: int = 0
     agent_memory_writeback_count: int = 0
     agent_memory_writeback_status: str = "skipped"
@@ -162,7 +228,10 @@ class SearchDiagnostics(BaseModel):
     query_variant_count: int = 1
     oracle_vector_target_accuracy: int = 0
     filter_keys: list[str] = Field(default_factory=list)
+    scalar_filter_keys: list[str] = Field(default_factory=list)
     knowledge_base_count: int = 0
+    kb_adapter_config_applied: str | None = None
+    business_view_applied: str | None = None
     config_fingerprint: str = ""
 
 
@@ -231,6 +300,13 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
             formatted_ids = format_search_id_filter(parse_search_id_filter(cleaned))
             if formatted_ids:
                 normalized[key] = formatted_ids
+        elif key in SUPPORTED_SEARCH_NUMERIC_RANGE_FILTERS:
+            normalized[key] = _normalize_filter_integer(key, cleaned)
+        elif key in SUPPORTED_SEARCH_DATE_RANGE_FILTERS:
+            normalized[key] = _normalize_filter_date(key, cleaned)
+        elif key in SUPPORTED_SEARCH_LIST_FILTERS:
+            if formatted_kinds := _normalize_content_kind_list(cleaned):
+                normalized[key] = formatted_kinds
         else:
             normalized[key] = cleaned
 
@@ -240,7 +316,70 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
         content_kind not in SUPPORTED_CONTENT_KIND_FILTERS
     ):
         raise ValueError(f"未対応の内容種別フィルターです: {content_kind}")
+    _validate_filter_range_consistency(normalized)
     return normalized
+
+
+def _normalize_filter_integer(key: str, value: str) -> str:
+    """数値 range filter を整数として検証し、正規化した文字列を返す。"""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"数値フィルターの形式が不正です: {key}={value}") from exc
+    if parsed < 0:
+        raise ValueError(f"数値フィルターは 0 以上にしてください: {key}={value}")
+    return str(parsed)
+
+
+def _normalize_filter_date(key: str, value: str) -> str:
+    """日付 range filter を ISO 8601 として検証し、入力表現を保持して返す。
+
+    Oracle 側で date-only か datetime かを判別して TIMESTAMP へ束ねるため、ここでは
+    解析可能性のみ検証し、trim した入力をそのまま保持する。
+    """
+    candidate = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    try:
+        datetime.fromisoformat(candidate)
+    except ValueError as exc:
+        raise ValueError(f"日付フィルターの形式が不正です: {key}={value}") from exc
+    return value
+
+
+def _normalize_content_kind_list(value: str) -> str:
+    """content_kinds の list membership filter を正規化する。"""
+    seen: set[str] = set()
+    kinds: list[str] = []
+    for part in value.split(","):
+        cleaned = part.strip().casefold()
+        if not cleaned or cleaned in seen:
+            continue
+        if cleaned not in SUPPORTED_CONTENT_KIND_FILTERS:
+            raise ValueError(f"未対応の内容種別フィルターです: {cleaned}")
+        seen.add(cleaned)
+        kinds.append(cleaned)
+    return ",".join(kinds)
+
+
+def _validate_filter_range_consistency(filters: dict[str, str]) -> None:
+    """min/max・from/to の範囲が逆転していないか検証する。"""
+    low = filters.get("page_number_min")
+    high = filters.get("page_number_max")
+    if low and high and int(low) > int(high):
+        raise ValueError("page_number_min は page_number_max 以下にしてください。")
+    for from_key, to_key in (("uploaded_from", "uploaded_to"), ("indexed_from", "indexed_to")):
+        start = filters.get(from_key)
+        end = filters.get(to_key)
+        if start and end and _filter_date_sort_key(start) > _filter_date_sort_key(end):
+            raise ValueError(f"{from_key} は {to_key} 以前にしてください。")
+
+
+def _filter_date_sort_key(value: str) -> datetime:
+    """検証済み日付文字列を比較用の tz-aware datetime へ変換する。"""
+    candidate = f"{value[:-1]}+00:00" if value.endswith("Z") else value
+    parsed = datetime.fromisoformat(candidate)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def normalize_search_id_list(values: Sequence[str]) -> list[str]:

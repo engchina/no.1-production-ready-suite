@@ -61,6 +61,8 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
                 context_diversified_count=1,
                 context_group_expanded_count=3,
                 context_expanded_count=2,
+                context_adaptive_expanded_count=4,
+                context_dependency_promoted_count=5,
                 context_compressed_count=1,
                 context_compression_saved_chars=120,
                 agent_memory_retrieved_count=1,
@@ -84,6 +86,8 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
     assert event.context_diversified_count == 1
     assert event.context_group_expanded_count == 3
     assert event.context_expanded_count == 2
+    assert event.context_adaptive_expanded_count == 4
+    assert event.context_dependency_promoted_count == 5
     assert event.context_compressed_count == 1
     assert event.context_compression_saved_chars == 120
     assert event.agent_memory_retrieved_count == 1
@@ -100,6 +104,8 @@ def test_rag_search_audit_redacts_query_text(caplog: LogCaptureFixture) -> None:
     logged = cast(Any, record).audit_event
     assert logged["query_hash"] == event.query_hash
     assert logged["memory_plan_id"] == "mp-audit"
+    assert logged["context_adaptive_expanded_count"] == 4
+    assert logged["context_dependency_promoted_count"] == 5
     assert logged["agent_memory_writeback_status"] == "saved"
     assert "INV-001" not in str(logged)
     assert query not in str(logged)
@@ -194,6 +200,11 @@ def test_rag_ingestion_audit_includes_hashed_request_context(
                 document_id="doc-1",
                 outcome="success",
                 source_bytes=b"policy bytes",
+                parser_backend="local_partition",
+                parser_profile="markdown_by_heading",
+                segment_count=3,
+                fallback_count=0,
+                failed_segment_count=1,
                 elapsed_ms=2.0,
             )
     finally:
@@ -202,9 +213,19 @@ def test_rag_ingestion_audit_includes_hashed_request_context(
     assert event.request_id == "request-ingestion"
     assert event.tenant_id_hash == "c" * 64
     assert event.user_id_hash == "d" * 64
+    assert event.parser_backend == "local_partition"
+    assert event.parser_profile == "markdown_by_heading"
+    assert event.segment_count == 3
+    assert event.fallback_count == 0
+    assert event.failed_segment_count == 1
 
     record = next(item for item in caplog.records if item.message == "rag_ingestion_audit")
     logged = cast(Any, record).audit_event
     assert logged["request_id"] == "request-ingestion"
     assert logged["tenant_id_hash"] == "c" * 64
     assert logged["user_id_hash"] == "d" * 64
+    assert logged["parser_backend"] == "local_partition"
+    assert logged["segment_count"] == 3
+    assert logged["failed_segment_count"] == 1
+    assert "raw_text" not in logged
+    assert "ocr_text" not in logged

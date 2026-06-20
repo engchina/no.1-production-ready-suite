@@ -5,12 +5,20 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ApiError, api, type CitationFeedbackRating, type RetrievedChunk } from "@/lib/api";
 import {
+  bboxCoordinateModeFromMetadata,
+  bboxFromMetadata,
+  bboxPageRotationFromMetadata,
+  bboxPageSizeFromMetadata,
+  bboxUnitFromMetadata,
+} from "@/lib/bbox";
+import {
   citationMetadataChips,
   firstCitationElementId,
   type CitationMetadataChip,
 } from "@/lib/chunk-metadata";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
+import { firstMetadataToken, integerMetadataValue } from "@/lib/table-cell-focus";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -138,11 +146,74 @@ export function CitationCard({
   );
 }
 
-function citationPreviewUrl(chunk: RetrievedChunk): string {
+export function citationPreviewUrl(chunk: RetrievedChunk): string {
   const params = new URLSearchParams({ chunk_id: chunk.chunk_id });
+  const page = firstIntegerMetadata(chunk.metadata, ["page_start", "page"]);
+  if (page != null) params.set("page", String(page));
+  const bbox = bboxFromMetadata(chunk.metadata);
+  if (bbox) params.set("bbox", bbox.map(compactNumber).join(","));
+  const bboxMode = bboxCoordinateModeFromMetadata(chunk.metadata);
+  if (bboxMode) params.set("bbox_mode", bboxMode);
+  const bboxUnit = bboxUnitFromMetadata(chunk.metadata);
+  if (bboxUnit) params.set("bbox_unit", bboxUnit);
+  const pageSize = bboxPageSizeFromMetadata(chunk.metadata);
+  if (pageSize?.width && pageSize?.height) {
+    params.set("page_width", compactNumber(pageSize.width));
+    params.set("page_height", compactNumber(pageSize.height));
+  }
+  const pageRotation = pageSize?.rotation ?? bboxPageRotationFromMetadata(chunk.metadata);
+  if (pageRotation != null) params.set("page_rotation", String(pageRotation));
   const elementId = firstCitationElementId(chunk.metadata.element_ids);
   if (elementId) params.set("element_id", elementId);
+  const tableId = firstTableId(chunk.metadata);
+  const formulaCellRef = firstFormulaCellRef(chunk.metadata);
+  const cellRef = firstCellRef(chunk.metadata);
+  const row = firstIntegerMetadata(chunk.metadata, ["table_cell_row", "cell_row", "row"]);
+  const col = firstIntegerMetadata(chunk.metadata, ["table_cell_col", "cell_col", "col"]);
+  if (cellRef || row != null || col != null) {
+    if (tableId) params.set("table_id", tableId);
+    if (cellRef) params.set("cell_ref", cellRef);
+    if (formulaCellRef) params.set("formula_cell_ref", formulaCellRef);
+    if (row != null) params.set("cell_row", String(row));
+    if (col != null) params.set("cell_col", String(col));
+  }
   return `${APP_ROUTES.documents}/${encodeURIComponent(chunk.document_id)}?${params.toString()}`;
+}
+
+function compactNumber(value: number): string {
+  return String(Number(value.toFixed(6)));
+}
+
+function firstTableId(metadata: RetrievedChunk["metadata"]): string | null {
+  return firstMetadataToken(metadata.table_id ?? metadata.parent_table_id, {
+    preferTableId: true,
+  });
+}
+
+function firstFormulaCellRef(metadata: RetrievedChunk["metadata"]): string | null {
+  return firstMetadataToken(metadata.formula_cell_refs ?? metadata.formula_cell_ref);
+}
+
+function firstCellRef(metadata: RetrievedChunk["metadata"]): string | null {
+  return firstMetadataToken(
+    metadata.formula_cell_refs ??
+      metadata.formula_cell_ref ??
+      metadata.table_cell_refs ??
+      metadata.cell_refs ??
+      metadata.table_cell_ref ??
+      metadata.cell_ref
+  );
+}
+
+function firstIntegerMetadata(
+  metadata: RetrievedChunk["metadata"],
+  keys: string[]
+): number | null {
+  for (const key of keys) {
+    const value = integerMetadataValue(metadata[key]);
+    if (value != null) return value;
+  }
+  return null;
 }
 
 function MetadataChip({ chip }: { chip: CitationMetadataChip }) {

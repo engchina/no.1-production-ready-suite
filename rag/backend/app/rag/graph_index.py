@@ -101,8 +101,14 @@ def build_graph_index(
     knowledge_base_ids: list[str],
     extraction: StructuredExtraction,
     chunks: list[Chunk],
+    build_claims: bool = True,
+    build_community_summaries: bool = True,
 ) -> GraphIndex:
-    """構造化抽出と chunk から軽量 KG artifact を生成する。"""
+    """構造化抽出と chunk から軽量 KG artifact を生成する。
+
+    `build_claims` / `build_community_summaries` は GraphRAG アダプターの profile で制御する。
+    既定 True は現行 full 構築と一致する。
+    """
     if not chunks:
         return GraphIndex()
     kb_ids: list[str | None] = list(knowledge_base_ids) if knowledge_base_ids else [None]
@@ -117,6 +123,8 @@ def build_graph_index(
             knowledge_base_id=knowledge_base_id,
             extraction=extraction,
             chunks=chunks,
+            build_claims=build_claims,
+            build_community_summaries=build_community_summaries,
         )
         entities.extend(kb_index.entities)
         relationships.extend(kb_index.relationships)
@@ -138,6 +146,8 @@ def _build_graph_index_for_kb(
     knowledge_base_id: str | None,
     extraction: StructuredExtraction,
     chunks: list[Chunk],
+    build_claims: bool = True,
+    build_community_summaries: bool = True,
 ) -> GraphIndex:
     document_entity = _document_entity(
         document_id=document_id,
@@ -177,7 +187,7 @@ def _build_graph_index_for_kb(
                 document_id=document_id,
                 relevance_score=_chunk_relevance(chunk),
             )
-            if len(claims) < GRAPH_CLAIM_MAX_PER_KB:
+            if build_claims and len(claims) < GRAPH_CLAIM_MAX_PER_KB:
                 claims.append(
                     _claim_for_chunk(
                         document_id=document_id,
@@ -187,18 +197,22 @@ def _build_graph_index_for_kb(
                     )
                 )
 
-    summary = _community_summary(
-        document_id=document_id,
-        knowledge_base_id=knowledge_base_id,
-        extraction=extraction,
-        entities=list(entity_by_name.values()),
-        chunks=chunks,
-    )
+    community_summaries: list[GraphCommunitySummary] = []
+    if build_community_summaries:
+        community_summaries.append(
+            _community_summary(
+                document_id=document_id,
+                knowledge_base_id=knowledge_base_id,
+                extraction=extraction,
+                entities=list(entity_by_name.values()),
+                chunks=chunks,
+            )
+        )
     return GraphIndex(
         entities=list(entity_by_name.values()),
         relationships=list(relationships.values()),
         claims=_unique_claims(claims),
-        community_summaries=[summary],
+        community_summaries=community_summaries,
         entity_chunk_links=list(links.values()),
     )
 

@@ -244,7 +244,8 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.enqueueDocumentIngestionJob("doc-1", true);
+    await api.ingestDocument("doc-1", true);
+    await api.enqueueDocumentIngestionJob("doc-2");
     await api.getIngestionJob("job-1");
     await api.retryIngestionJob("job-1");
     await api.drainIngestionJobs(25);
@@ -263,19 +264,21 @@ describe("api.request envelope", () => {
       "/api/documents/doc-1/ingestion-jobs?force=true"
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/ingestion-jobs/job-1");
-    expect(fetchMock.mock.calls[2][0]).toBe("/api/documents/ingestion-jobs/job-1/retry");
-    expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/ingestion-jobs/drain?limit=25");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc-2/ingestion-jobs");
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/documents/ingestion-jobs/job-1");
+    expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/ingestion-jobs/job-1/retry");
     expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/ingestion-jobs/job-1/cancel");
+    expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/ingestion-jobs/drain?limit=25");
     expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[5][0]).toContain("status=FAILED");
-    expect(fetchMock.mock.calls[5][0]).toContain("limit=10");
-    expect(fetchMock.mock.calls[5][0]).toContain("offset=20");
+    expect(fetchMock.mock.calls[5][0]).toBe("/api/documents/ingestion-jobs/job-1/cancel");
+    expect(fetchMock.mock.calls[5][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[6][0]).toContain("status=FAILED");
+    expect(fetchMock.mock.calls[6][0]).toContain("limit=10");
+    expect(fetchMock.mock.calls[6][0]).toContain("offset=20");
   });
 
-  it("document workspace API は chunk と segment endpoint を呼ぶ", async () => {
+  it("document workspace API は chunk / export / segment endpoint を呼ぶ", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         data: [],
@@ -286,10 +289,21 @@ describe("api.request envelope", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.listDocumentChunks("doc-1");
+    await api.exportDocumentExtraction("doc-1", "chunks");
+    await api.exportDocumentExtraction("doc-1", "html");
     await api.listDocumentIngestionSegments("doc-1");
+    await api.retryFailedDocumentIngestionSegments("doc-1");
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/chunks");
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc-1/ingestion-segments");
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/documents/doc-1/extraction-export?format=chunks"
+    );
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      "/api/documents/doc-1/extraction-export?format=html"
+    );
+    expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/doc-1/ingestion-segments");
+    expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/doc-1/ingestion-segments/retry");
+    expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: "POST" });
   });
 
   it("getReadiness は 503 の degraded envelope も data として返す", async () => {
@@ -395,6 +409,7 @@ describe("api.request envelope", () => {
         ],
         default_model_id: "enterprise-llm",
         api_path: "/responses",
+        vlm_input_mode: "files_api" as const,
         text_payload_template: '{"input":"${user_message}"}',
         vision_payload_template: '{"input":"${data_base64}"}',
         text_response_path: "/data/text",
@@ -446,6 +461,7 @@ describe("api.request envelope", () => {
           ],
           default_model_id: "enterprise-llm",
           api_path: "/responses",
+          vlm_input_mode: "auto" as const,
           text_payload_template: "",
           vision_payload_template: "",
           text_response_path: "",
@@ -574,6 +590,9 @@ describe("api.request envelope", () => {
         {
           backend: "docling",
           package_name: "docling",
+          import_name: "docling",
+          distribution_name: "docling",
+          install_package: "docling==2.103.0",
           enabled: true,
           selected: true,
           installed: true,
@@ -584,6 +603,9 @@ describe("api.request envelope", () => {
         {
           backend: "marker",
           package_name: "marker",
+          import_name: "marker",
+          distribution_name: null,
+          install_package: "marker-pdf[full]==1.10.2",
           enabled: true,
           selected: true,
           installed: false,
@@ -594,6 +616,9 @@ describe("api.request envelope", () => {
         {
           backend: "unstructured",
           package_name: "unstructured",
+          import_name: "unstructured",
+          distribution_name: null,
+          install_package: "unstructured[all-docs]==0.23.1",
           enabled: false,
           selected: false,
           installed: false,
@@ -622,6 +647,171 @@ describe("api.request envelope", () => {
       "/api/settings/parser-adapters",
       expect.objectContaining({
         credentials: "same-origin",
+      })
+    );
+  });
+
+  it("getParserAdapterContract は adapter compatibility matrix API を読む", async () => {
+    const payload = {
+      passed: false,
+      fixture_root: "/repo/evaluation/file-processing-fixtures",
+      source_kinds: ["pdf", "email"],
+      backends: ["docling", "unstructured"],
+      case_count: 4,
+      blocking_failure_count: 1,
+      cases: [
+        {
+          backend: "docling",
+          source_kind: "pdf",
+          fixture_name: "policy-ja.pdf",
+          content_type: "application/pdf",
+          status: "missing",
+          blocking: true,
+          parser_backend: null,
+          parser_version: null,
+          adapter_import_name: "docling",
+          adapter_distribution_name: null,
+          adapter_package_version: null,
+          template: null,
+          element_count: 0,
+          page_count: 0,
+          table_count: 0,
+          table_cell_count: 0,
+          asset_count: 0,
+          bbox_count: 0,
+          warning_codes: ["adapter_package_missing"],
+          reason_codes: ["adapter_missing"],
+        },
+      ],
+      summary: {
+        passed: false,
+        case_count: 4,
+        blocking_failure_count: 1,
+        source_kinds: ["pdf", "email"],
+        backends: ["docling", "unstructured"],
+        passed_source_kinds: [],
+        missing_source_kinds: ["email", "pdf"],
+        blocking_failure_source_kinds: ["pdf"],
+        blocking_failure_backends: ["docling"],
+        backend_status_counts: { docling: { missing: 1 } },
+        backend_source_status: { docling: { pdf: "missing" } },
+        source_kind_status_counts: { pdf: { missing: 1 } },
+        backend_passed_source_kinds: {},
+        reason_code_counts: { adapter_missing: 1 },
+        warning_code_counts: { adapter_package_missing: 1 },
+        blocking_failure_reason_counts: { adapter_missing: 1 },
+        blocking_failures: [
+          {
+            backend: "docling",
+            source_kind: "pdf",
+            status: "missing",
+            warning_codes: ["adapter_package_missing"],
+            reason_codes: ["adapter_missing"],
+          },
+        ],
+      },
+      config_source: "runtime",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: payload,
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.getParserAdapterContract();
+
+    expect(result.passed).toBe(false);
+    expect(result.blocking_failure_count).toBe(1);
+    expect(result.cases[0].adapter_import_name).toBe("docling");
+    expect(result.cases[0].adapter_distribution_name).toBeNull();
+    expect(result.cases[0].adapter_package_version).toBeNull();
+    expect(result.summary.backend_source_status.docling?.pdf).toBe("missing");
+    expect(result.summary.missing_source_kinds).toEqual(["email", "pdf"]);
+    expect(result.summary.blocking_failure_source_kinds).toEqual(["pdf"]);
+    expect(result.summary.blocking_failure_backends).toEqual(["docling"]);
+    expect(result.summary.source_kind_status_counts.pdf?.missing).toBe(1);
+    expect(JSON.stringify(result)).not.toContain("raw_text");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings/parser-adapters/contract",
+      expect.objectContaining({
+        credentials: "same-origin",
+      })
+    );
+  });
+
+  it("updateParserAdapterSettings は adapter backend と feature flags を保存する", async () => {
+    const requestPayload = {
+      adapter_backend: "auto" as const,
+      docling_enabled: true,
+      marker_enabled: false,
+      unstructured_enabled: true,
+    };
+    const responsePayload = {
+      adapter_backend: "auto",
+      effective_order: ["docling", "unstructured"],
+      adapters: [
+        {
+          backend: "docling",
+          package_name: "docling",
+          import_name: "docling",
+          distribution_name: null,
+          install_package: "docling==2.103.0",
+          enabled: true,
+          selected: true,
+          installed: false,
+          status: "missing",
+          version: null,
+          warning_code: "adapter_package_missing",
+        },
+        {
+          backend: "marker",
+          package_name: "marker",
+          import_name: "marker",
+          distribution_name: null,
+          install_package: "marker-pdf[full]==1.10.2",
+          enabled: false,
+          selected: false,
+          installed: false,
+          status: "disabled",
+          version: null,
+          warning_code: null,
+        },
+        {
+          backend: "unstructured",
+          package_name: "unstructured",
+          import_name: "unstructured",
+          distribution_name: null,
+          install_package: "unstructured[all-docs]==0.23.1",
+          enabled: true,
+          selected: true,
+          installed: false,
+          status: "missing",
+          version: null,
+          warning_code: "adapter_package_missing",
+        },
+      ],
+      config_source: "runtime",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: responsePayload,
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.updateParserAdapterSettings(requestPayload);
+
+    expect(result.effective_order).toEqual(["docling", "unstructured"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings/parser-adapters",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify(requestPayload),
       })
     );
   });
@@ -876,6 +1066,56 @@ describe("api.request envelope", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/evaluation/compare",
       expect.objectContaining({ method: "POST", body: JSON.stringify(payload) })
+    );
+  });
+});
+
+describe("api.services", () => {
+  it("getServices は /api/services から一覧を取り出す", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          control_enabled: false,
+          services: [
+            {
+              service_id: "parser-docling",
+              category: "parser",
+              profile: "cpu",
+              label_key: "settings.services.item.parserDocling",
+              status: "stopped",
+              configured: true,
+            },
+          ],
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.getServices();
+
+    expect(result.control_enabled).toBe(false);
+    expect(result.services[0].service_id).toBe("parser-docling");
+    expect(fetchMock).toHaveBeenCalledWith("/api/services", expect.anything());
+  });
+
+  it("controlService は service_id を URL エンコードして POST する", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: { service_id: "parser-mineru", action: "start", status: "running" },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.controlService("parser-mineru", "start");
+
+    expect(result.status).toBe("running");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/services/parser-mineru/start",
+      expect.objectContaining({ method: "POST" })
     );
   });
 });

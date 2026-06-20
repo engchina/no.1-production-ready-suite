@@ -12,13 +12,18 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings
 from app.rag.pipeline import (
+    GAP_STOP_ANSWER,
     NO_RESULTS_ANSWER,
     NO_RESULTS_WARNING,
     RagPipeline,
     SearchStageProgress,
     SearchTokenDelta,
+    _apply_business_fit_weighting,
     _build_context,
+    _business_context_scope_pinned,
+    _crag_confidence,
     _dedupe_ranked_chunks,
+    _relaxed_corrective_request,
 )
 from app.rag.request_context import (
     AuditRequestContext,
@@ -266,6 +271,45 @@ async def test_pipeline_falls_back_to_hybrid_when_graph_has_no_hits() -> None:
     assert response.diagnostics.fallback_reason == "graph_no_hits"
 
 
+async def test_pipeline_reranks_vector_search_results_with_oci_genai() -> None:
+    """vector search の候補も OCI Generative AI rerank で並び替える。"""
+    genai = VectorRerankGenAiClient()
+    oracle = VectorSearchOracleClient()
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="承認条件",
+            mode=SearchMode.VECTOR,
+            top_k=2,
+            rerank_top_n=2,
+        )
+    )
+
+    assert oracle.modes == [SearchMode.VECTOR]
+    assert genai.rerank_documents == [
+        "低優先の候補です。承認条件は 50000 円です。",
+        "優先すべき候補です。承認条件は 120000 円です。",
+    ]
+    assert [citation.chunk_id for citation in response.citations] == [
+        "doc-vector:1",
+        "doc-vector:0",
+    ]
+    assert response.citations[0].rerank_score == 0.99
+    assert response.citations[1].rerank_score == 0.2
+    assert response.diagnostics.mode == "vector"
+    assert response.diagnostics.retrieved_count == 2
+    assert response.diagnostics.reranked_count == 2
+
+
 async def test_pipeline_returns_only_citations_in_generation_context(
     caplog: LogCaptureFixture,
 ) -> None:
@@ -412,6 +456,157 @@ async def test_pipeline_expands_same_group_chunks_for_generation_context(
     assert audit_event["context_expanded_count"] == 0
     assert audit_event["citation_count"] == 3
     assert audit_event["document_ids"] == ["doc-1"]
+
+
+async def test_pipeline_adaptively_expands_only_structurally_continuous_context(
+    caplog: LogCaptureFixture,
+) -> None:
+    """adaptive expansion は同一構造 group を残し、無関係な隣接 chunk は落とす。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=AdaptiveContextOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_adaptive_expansion_enabled=True,
+            rag_context_adaptive_neighbor_window=1,
+            rag_context_group_max_chunks=3,
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(
+            SearchRequest(query="承認条件 120000", top_k=1, rerank_top_n=1)
+        )
+
+    assert [citation.chunk_id for citation in response.citations] == [
+        "doc-1:1",
+        "doc-1:0",
+        "doc-1:2",
+    ]
+    assert response.diagnostics.context_adaptive_expanded_count == 2
+    assert response.diagnostics.context_group_expanded_count == 0
+    assert response.diagnostics.context_expanded_count == 0
+    assert "表ヘッダー: 項目 / 条件。" in llm.context
+    assert "表注記: 証憑添付が必要。" in llm.context
+    assert "無関係な監査メモ" not in llm.context
+    assert response.citations[1].metadata["context_adaptive_expanded"] is True
+    assert response.citations[1].metadata["context_adaptive_reason"] == "same_structural_group"
+    assert response.citations[2].metadata["context_adaptive_expanded"] is True
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["context_adaptive_expanded_count"] == 2
+    assert audit_event["context_group_expanded_count"] == 0
+    assert audit_event["context_expanded_count"] == 0
+
+
+async def test_pipeline_promotes_dependency_linked_context_after_rerank(
+    caplog: LogCaptureFixture,
+) -> None:
+    """rerank top_n で落ちた caption chunk を dependency lineage で context へ戻す。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=DependencyPromotionOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_dependency_promotion_enabled=True,
+            rag_context_dependency_max_chunks=2,
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.audit"):
+        response = await pipeline.run(
+            SearchRequest(query="承認フロー 120000", top_k=3, rerank_top_n=1)
+        )
+
+    assert [citation.chunk_id for citation in response.citations] == [
+        "doc-figure:0",
+        "doc-figure:1",
+    ]
+    assert response.diagnostics.reranked_count == 1
+    assert response.diagnostics.context_dependency_promoted_count == 1
+    assert "図: 承認フロー。" in llm.context
+    assert "キャプション: 120000 円以上は部門長承認。" in llm.context
+    assert "無関係な監査メモ" not in llm.context
+    assert response.citations[1].metadata["context_dependency_promoted"] is True
+    assert response.citations[1].metadata["context_dependency_reason"] == "child_of_anchor"
+    assert response.citations[1].metadata["context_anchor_chunk_id"] == "doc-figure:0"
+    assert response.citations[1].metadata["context_dependency_shared_element_ids"] == "fig-1"
+
+    audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
+    audit_event = cast(Any, audit_record).audit_event
+    assert audit_event["context_dependency_promoted_count"] == 1
+    assert audit_event["citation_count"] == 2
+
+
+async def test_pipeline_fetches_dependency_context_not_in_retrieved_pool() -> None:
+    """retrieved top_k 外の dependency chunk も Oracle metadata lookup で補完する。"""
+    llm = CapturingLlm()
+    oracle = DependencyLookupOracleClient()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_dependency_promotion_enabled=True,
+            rag_context_dependency_max_chunks=2,
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(query="承認フロー 120000", top_k=1, rerank_top_n=1)
+    )
+
+    assert oracle.dependency_lookup_anchors == ["doc-figure:0"]
+    assert [citation.chunk_id for citation in response.citations] == [
+        "doc-figure:0",
+        "doc-figure:1",
+    ]
+    assert response.diagnostics.retrieved_count == 1
+    assert response.diagnostics.context_dependency_promoted_count == 1
+    assert "キャプション: 120000 円以上は部門長承認。" in llm.context
+    assert response.citations[1].metadata["context_dependency_promoted"] is True
+    assert response.citations[1].metadata["context_dependency_reason"] == "child_of_anchor"
+    assert response.citations[1].metadata["context_anchor_chunk_id"] == "doc-figure:0"
+
+
+async def test_pipeline_promotes_structured_dependency_edge_metadata() -> None:
+    """dependency_edges が JSON 文字列ではなく配列 object でも context 昇格できる。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=StructuredDependencyPromotionOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_dependency_promotion_enabled=True,
+            rag_context_dependency_max_chunks=2,
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(query="承認フロー 120000", top_k=3, rerank_top_n=1)
+    )
+
+    assert [citation.chunk_id for citation in response.citations] == [
+        "doc-figure:0",
+        "doc-figure:1",
+    ]
+    assert response.diagnostics.context_dependency_promoted_count == 1
+    assert response.citations[1].metadata["context_dependency_promoted"] is True
+    assert response.citations[1].metadata["context_dependency_reason"] == (
+        "candidate_dependency_edge"
+    )
+    assert response.citations[1].metadata["context_dependency_shared_element_ids"] == "fig-1"
 
 
 async def test_pipeline_diversifies_context_anchors_before_generation(
@@ -788,6 +983,58 @@ async def test_pipeline_can_disable_query_expansion() -> None:
     assert response.diagnostics.query_variant_count == 1
 
 
+async def test_pipeline_injects_agentic_planned_subqueries_into_retrieval() -> None:
+    """Agentic decompose は plan_query の sub-question を retrieval variant へ注入する。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = PlanningLlm(["請求書 保管 ルール"])
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=False,
+            rag_agentic_profile="decompose",
+            rag_agentic_max_subqueries=3,
+            rag_rrf_k=60,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5, rerank_top_n=2))
+
+    # 元 query は維持しつつ planned sub-question が variant に加わる。
+    assert genai.embedded_texts == ["invoice storage", "請求書 保管 ルール"]
+    assert oracle.queries == genai.embedded_texts
+    assert llm.plan_calls == [("invoice storage", "decompose", 3)]
+    assert response.diagnostics.agentic_profile == "decompose"
+    assert response.diagnostics.agentic_subquery_count == 1
+    assert response.diagnostics.agentic_hops == 1
+
+
+async def test_pipeline_skips_agentic_planning_when_profile_off() -> None:
+    """既定 off は plan_query を呼ばず現行 retrieval 挙動を保つ。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = PlanningLlm(["未使用"])
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=False,
+            rag_agentic_profile="off",
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5))
+
+    assert llm.plan_calls == []
+    assert genai.embedded_texts == ["invoice storage"]
+    assert response.diagnostics.agentic_profile == "off"
+    assert response.diagnostics.agentic_subquery_count == 0
+    assert response.diagnostics.agentic_hops == 0
+
+
 async def test_pipeline_records_stage_metrics(monkeypatch: MonkeyPatch) -> None:
     """成功した検索は主要 stage の処理時間を記録する。"""
     observed: list[tuple[str, str, str, float]] = []
@@ -1063,6 +1310,29 @@ class ThreeResultGenAiClient(OciGenAiClient):
         return [(0, 1.0), (1, 0.99), (2, 0.98)][:top_n]
 
 
+class VectorRerankGenAiClient(OciGenAiClient):
+    """vector search 候補の rerank 入力と並び替えを検証する GenAI client。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rerank_documents: list[str] = []
+
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        input_type: str = "SEARCH_DOCUMENT",
+    ) -> list[list[float]]:
+        assert input_type == "SEARCH_QUERY"
+        return [[1.0] + [0.0] * 1535 for _ in texts]
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        assert query == "承認条件"
+        assert top_n == 2
+        self.rerank_documents = list(documents)
+        return [(1, 0.99), (0, 0.2)]
+
+
 class MemoryWritebackGenAiClient(OciGenAiClient):
     """Agent Memory writeback の embedding 入力種別を記録する。"""
 
@@ -1314,6 +1584,43 @@ class EmptyGraphOracleClient(OracleClient):
         ][:top_k]
 
 
+class VectorSearchOracleClient(OracleClient):
+    """vector mode の検索候補を Oracle 取得順で返すテスト用 client。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.modes: list[SearchMode] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, filters
+        self.modes.append(mode)
+        return [
+            RetrievedChunk(
+                document_id="doc-vector",
+                chunk_id="doc-vector:0",
+                text="低優先の候補です。承認条件は 50000 円です。",
+                score=0.95,
+                file_name="vector-policy-a.txt",
+                metadata={"chunk_index": 0, "retrieval_mode": "vector"},
+            ),
+            RetrievedChunk(
+                document_id="doc-vector",
+                chunk_id="doc-vector:1",
+                text="優先すべき候補です。承認条件は 120000 円です。",
+                score=0.8,
+                file_name="vector-policy-b.txt",
+                metadata={"chunk_index": 1, "retrieval_mode": "vector"},
+            ),
+        ][:top_k]
+
+
 class LongChunkOracleClient(OracleClient):
     """context compression のために長い citation を返す Oracle client。"""
 
@@ -1538,6 +1845,279 @@ class GroupSiblingOracleClient(OracleClient):
                     "context_group_distance": 1,
                 },
             ),
+        ]
+
+
+class AdaptiveContextOracleClient(OracleClient):
+    """adaptive context expansion 用に構造 sibling と無関係 neighbor を返す。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:1",
+                text="表行: 承認条件 / 120000 円以上。",
+                score=0.9,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 1,
+                    "content_kind": "table",
+                    "chunk_group_id": "grp-table",
+                    "chunk_group_kind": "table",
+                    "chunk_part_index": 1,
+                    "chunk_part_count": 3,
+                    "section_path": "経費申請 > 承認",
+                },
+            )
+        ][:top_k]
+
+    async def context_group_siblings(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+    ) -> list[RetrievedChunk]:
+        assert max_chunks_per_group == 3
+        assert [chunk.chunk_id for chunk in anchors] == ["doc-1:1"]
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="表ヘッダー: 項目 / 条件。",
+                score=anchors[0].score,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 0,
+                    "content_kind": "table",
+                    "chunk_group_id": "grp-table",
+                    "context_group_expanded": True,
+                    "context_anchor_chunk_id": "doc-1:1",
+                    "context_group_id": "grp-table",
+                    "context_group_distance": -1,
+                    "section_path": "経費申請 > 承認",
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:2",
+                text="表注記: 証憑添付が必要。",
+                score=anchors[0].score,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 2,
+                    "content_kind": "table",
+                    "chunk_group_id": "grp-table",
+                    "context_group_expanded": True,
+                    "context_anchor_chunk_id": "doc-1:1",
+                    "context_group_id": "grp-table",
+                    "context_group_distance": 1,
+                    "section_path": "経費申請 > 承認",
+                },
+            ),
+        ]
+
+    async def context_neighbors(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        window: int,
+    ) -> list[RetrievedChunk]:
+        assert window == 1
+        assert [chunk.chunk_id for chunk in anchors] == ["doc-1:1"]
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:3",
+                text="無関係な監査メモ。ログ保持期間の補足。",
+                score=anchors[0].score,
+                file_name="policy.txt",
+                metadata={
+                    "chunk_index": 3,
+                    "content_kind": "text",
+                    "context_expanded": True,
+                    "context_anchor_chunk_id": "doc-1:1",
+                    "context_neighbor_distance": 1,
+                    "section_path": "監査 > ログ",
+                },
+            )
+        ]
+
+
+class DependencyPromotionOracleClient(OracleClient):
+    """dependency-linked context promotion 用の検索候補を返す。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-figure",
+                chunk_id="doc-figure:0",
+                text="図: 承認フロー。",
+                score=0.95,
+                file_name="approval.pdf",
+                metadata={
+                    "chunk_index": 0,
+                    "content_kind": "figure",
+                    "element_ids": "fig-1",
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-figure",
+                chunk_id="doc-figure:1",
+                text="キャプション: 120000 円以上は部門長承認。",
+                score=0.5,
+                file_name="approval.pdf",
+                metadata={
+                    "chunk_index": 1,
+                    "content_kind": "text",
+                    "element_ids": "fig-1-caption",
+                    "parent_element_ids": "fig-1",
+                    "dependency_edges": (
+                        '[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'
+                    ),
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-figure",
+                chunk_id="doc-figure:2",
+                text="無関係な監査メモ。",
+                score=0.4,
+                file_name="approval.pdf",
+                metadata={
+                    "chunk_index": 2,
+                    "content_kind": "text",
+                    "element_ids": "audit-note",
+                },
+            ),
+        ][:top_k]
+
+
+class StructuredDependencyPromotionOracleClient(OracleClient):
+    """構造化 JSON metadata の dependency edge で context promotion する候補を返す。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-figure",
+                chunk_id="doc-figure:0",
+                text="図: 承認フロー。",
+                score=0.95,
+                file_name="approval.pdf",
+                metadata={
+                    "chunk_index": 0,
+                    "content_kind": "figure",
+                    "element_ids": ["fig-1"],
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-figure",
+                chunk_id="doc-figure:1",
+                text="キャプション: 120000 円以上は部門長承認。",
+                score=0.5,
+                file_name="approval.pdf",
+                metadata={
+                    "chunk_index": 1,
+                    "content_kind": "text",
+                    "element_ids": ["fig-1-caption"],
+                    "dependency_edges": [
+                        {"parent_id": "fig-1", "child_id": "fig-1-caption"}
+                    ],
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-figure",
+                chunk_id="doc-figure:2",
+                text="無関係な監査メモ。",
+                score=0.4,
+                file_name="approval.pdf",
+                metadata={
+                    "chunk_index": 2,
+                    "content_kind": "text",
+                    "element_ids": ["audit-note"],
+                },
+            ),
+        ][:top_k]
+
+
+class DependencyLookupOracleClient(OracleClient):
+    """dependency lookup が retrieved pool 外の caption を返す Oracle client。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dependency_lookup_anchors: list[str] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-figure",
+                chunk_id="doc-figure:0",
+                text="図: 承認フロー。",
+                score=0.95,
+                file_name="approval.pdf",
+                metadata={
+                    "chunk_index": 0,
+                    "content_kind": "figure",
+                    "element_ids": "fig-1",
+                },
+            )
+        ][:top_k]
+
+    async def context_dependency_chunks(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_anchor: int,
+    ) -> list[RetrievedChunk]:
+        assert max_chunks_per_anchor == 2
+        self.dependency_lookup_anchors = [chunk.chunk_id for chunk in anchors]
+        return [
+            RetrievedChunk(
+                document_id="doc-figure",
+                chunk_id="doc-figure:1",
+                text="キャプション: 120000 円以上は部門長承認。",
+                score=anchors[0].score,
+                file_name="approval.pdf",
+                metadata={
+                    "chunk_index": 1,
+                    "content_kind": "text",
+                    "element_ids": "fig-1-caption",
+                    "parent_element_ids": "fig-1",
+                    "dependency_edges": (
+                        '[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'
+                    ),
+                },
+            )
         ]
 
 
@@ -1829,6 +2409,29 @@ class CapturingLlm(OciEnterpriseAiClient):
         return "承認条件は 120000 円です。"
 
 
+class PlanningLlm(OciEnterpriseAiClient):
+    """Agentic クエリ計画(plan_query)の呼び出しと結果を記録する LLM。"""
+
+    def __init__(self, planned: list[str]) -> None:
+        super().__init__()
+        self._planned = planned
+        self.plan_calls: list[tuple[str, str, int]] = []
+
+    async def plan_query(
+        self,
+        query: str,
+        *,
+        mode: str,
+        max_subqueries: int = 3,
+    ) -> list[str]:
+        self.plan_calls.append((query, mode, max_subqueries))
+        return list(self._planned)
+
+    async def generate(self, prompt: str, context: str) -> str:
+        _ = prompt, context
+        return "請求書原本は Object Storage に保管します。"
+
+
 class CapturingPromptLlm(OciEnterpriseAiClient):
     """生成 prompt と context を記録する LLM。"""
 
@@ -1841,3 +2444,220 @@ class CapturingPromptLlm(OciEnterpriseAiClient):
         self.prompt = prompt
         self.context = context
         return "請求書原本は Object Storage に保管します。"
+
+
+async def test_pipeline_lean_grounding_pipeline_skips_neighbor_expansion(
+    caplog: LogCaptureFixture,
+) -> None:
+    """Grounding プリセット lean は custom の neighbor 拡張フラグを上書きして無効化する。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=NeighborOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_neighbor_window=1,
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+            rag_post_retrieval_pipeline="lean",
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert [citation.chunk_id for citation in response.citations] == ["doc-1:1"]
+    assert response.diagnostics.context_expanded_count == 0
+    assert response.diagnostics.post_retrieval_pipeline == "lean"
+
+
+async def test_pipeline_gap_stop_returns_without_retrieval() -> None:
+    """business_context_strict は業務スコープ未確定なら検索せず gap-stop 応答を返す。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=NeighborOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_retrieval_strategy="business_context_strict",
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert response.answer == GAP_STOP_ANSWER
+    assert response.citations == []
+    assert response.diagnostics.gap_stopped is True
+    assert response.diagnostics.retrieval_strategy_adapter == "business_context_strict"
+    assert llm.context == ""
+
+
+async def test_pipeline_business_context_strict_runs_with_pinned_scope() -> None:
+    """source_acl filter があればスコープ確定とみなし gap-stop しない。"""
+    llm = CapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=NeighborOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_retrieval_strategy="business_context_strict",
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(query="承認条件", top_k=1, rerank_top_n=1, filters={"source_acl": "support"})
+    )
+
+    assert response.diagnostics.gap_stopped is False
+    assert response.answer != GAP_STOP_ANSWER
+
+
+def test_business_context_scope_pinned_helper() -> None:
+    from app.rag.memory_engineering import build_business_context_pack
+
+    pack = build_business_context_pack(SearchRequest(query="x"))
+    assert _business_context_scope_pinned(pack) is False
+    pinned = build_business_context_pack(
+        SearchRequest(query="x", filters={"source_acl": "support"})
+    )
+    assert _business_context_scope_pinned(pinned) is True
+
+
+def test_apply_business_fit_weighting_prefers_active_version() -> None:
+    chunks = [
+        RetrievedChunk(
+            chunk_id="d:0",
+            document_id="d",
+            file_name="f",
+            text="draft",
+            score=0.9,
+            rerank_score=0.80,
+            metadata={"version_status": "draft"},
+        ),
+        RetrievedChunk(
+            chunk_id="d:1",
+            document_id="d",
+            file_name="f",
+            text="active",
+            score=0.9,
+            rerank_score=0.78,
+            metadata={"version_status": "active"},
+        ),
+    ]
+    reordered, changed = _apply_business_fit_weighting(chunks)
+    # active(0.78*1.15=0.897) が draft(0.80*0.85=0.68) を上回り順位反転する。
+    assert [chunk.chunk_id for chunk in reordered] == ["d:1", "d:0"]
+    assert changed == 2
+
+
+def test_relaxed_corrective_request_widens_and_drops_narrow_filters() -> None:
+    relaxed = _relaxed_corrective_request(
+        SearchRequest(
+            query="x",
+            top_k=10,
+            filters={"source_acl": "support", "content_kind": "table"},
+        )
+    )
+    assert relaxed.top_k == 20
+    assert "content_kind" not in relaxed.filters
+    assert relaxed.filters["source_acl"] == "support"
+
+
+class SystemPromptCapturingLlm(OciEnterpriseAiClient):
+    """generate に渡る system_prompt を記録するテスト用 LLM。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.system_prompt: str | None = "__unset__"
+
+    async def generate(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str | None = None,
+    ) -> str:
+        self.system_prompt = system_prompt
+        return "承認条件は 120000 円です。"
+
+
+async def test_pipeline_threads_generation_profile_system_prompt() -> None:
+    """非既定 Generation profile は system prompt を LLM へ渡す。"""
+    llm = SystemPromptCapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=NeighborOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_generation_profile="strict_extractive",
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.diagnostics.generation_profile == "strict_extractive"
+    assert llm.system_prompt is not None
+    assert llm.system_prompt != "__unset__"
+    assert "抽出" in llm.system_prompt
+
+
+async def test_pipeline_default_generation_profile_uses_client_default_prompt() -> None:
+    """既定 grounded_concise は system_prompt を渡さず client 既定を使う。"""
+    llm = SystemPromptCapturingLlm()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=NeighborOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.diagnostics.generation_profile == "grounded_concise"
+    # 既定 path は generate(query, context) を呼ぶため system_prompt は未指定(None)。
+    assert llm.system_prompt is None
+
+
+def test_crag_confidence_prefers_rerank_score() -> None:
+    """CRAG 信頼度は rerank 最高スコア(無ければ vector score)を [0,1] で返す。"""
+    chunks = [
+        RetrievedChunk(
+            document_id="d", chunk_id="d:0", text="a", score=0.9, rerank_score=0.42,
+            file_name="f.txt",
+        ),
+        RetrievedChunk(
+            document_id="d", chunk_id="d:1", text="b", score=0.5, rerank_score=0.18,
+            file_name="f.txt",
+        ),
+    ]
+    # rerank_score の最高(0.42)を採用。
+    assert _crag_confidence(chunks) == 0.42
+
+
+def test_crag_confidence_falls_back_to_vector_score() -> None:
+    chunks = [
+        RetrievedChunk(document_id="d", chunk_id="d:0", text="a", score=0.7, file_name="f.txt"),
+    ]
+    assert _crag_confidence(chunks) == 0.7
+
+
+def test_crag_confidence_empty_is_zero() -> None:
+    assert _crag_confidence([]) == 0.0
+
+
+def test_crag_confidence_clamped_to_unit_range() -> None:
+    chunks = [
+        RetrievedChunk(
+            document_id="d", chunk_id="d:0", text="a", score=0.0, rerank_score=1.8,
+            file_name="f.txt",
+        ),
+    ]
+    assert _crag_confidence(chunks) == 1.0

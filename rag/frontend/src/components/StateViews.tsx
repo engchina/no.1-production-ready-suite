@@ -1,4 +1,5 @@
 import { AlertCircle, Inbox, RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -44,13 +45,22 @@ export function ErrorState({
   );
 }
 
-/** 空状態。 */
-export function EmptyState({ title, hint }: { title: string; hint?: string }) {
+/** 空状態。任意で操作（作成導線など）を添える。 */
+export function EmptyState({
+  title,
+  hint,
+  action,
+}: {
+  title: string;
+  hint?: string;
+  action?: ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center gap-1 py-10 text-center">
       <Inbox size={22} className="text-muted" aria-hidden />
       <p className="mt-1 text-sm text-foreground">{title}</p>
-      {hint ? <p className="text-xs text-muted">{hint}</p> : null}
+      {hint ? <p className="max-w-md text-xs leading-relaxed text-muted">{hint}</p> : null}
+      {action ? <div className="mt-3">{action}</div> : null}
     </div>
   );
 }

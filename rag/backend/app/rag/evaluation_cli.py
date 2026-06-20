@@ -336,6 +336,8 @@ def _metrics_trend(metrics: EvaluationMetrics) -> dict[str, Any]:
         "citation_traceability_coverage": metrics.citation_traceability_coverage,
         "bbox_citation_coverage": metrics.bbox_citation_coverage,
         "element_lineage_coverage": metrics.element_lineage_coverage,
+        "content_kind_hit_rate": metrics.content_kind_hit_rate,
+        "section_coverage": metrics.section_coverage,
         "threshold_failure_count": len(metrics.threshold_failures),
         "threshold_failures": [
             failure.model_dump(mode="json") for failure in metrics.threshold_failures
@@ -363,6 +365,8 @@ def _gate_summary(gate: GateEvaluation, *, passed: bool) -> str:
         f"mrr={metrics.mrr}, answer_keyword_hit_rate={metrics.answer_keyword_hit_rate}, "
         f"groundedness_pass_rate={metrics.groundedness_pass_rate}, "
         f"citation_traceability_coverage={metrics.citation_traceability_coverage}, "
+        f"content_kind_hit_rate={metrics.content_kind_hit_rate}, "
+        f"section_coverage={metrics.section_coverage}, "
         f"threshold_failures={len(metrics.threshold_failures)}"
     )
 

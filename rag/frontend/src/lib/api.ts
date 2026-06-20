@@ -21,8 +21,21 @@ export const DASHBOARD_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
 
 /** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
 export type Degradable<T> = T & { warning_messages: string[] };
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
-export type FileStatus = "UPLOADED" | "INGESTING" | "INDEXED" | "ERROR";
+export type FileStatus =
+  | "UPLOADED"
+  | "INGESTING"
+  | "REVIEW"
+  | "INDEXING"
+  | "INDEXED"
+  | "ERROR";
 export type SearchMode = "hybrid" | "vector" | "keyword";
 export type SearchStrategy = "auto" | "hybrid" | "graph_local" | "graph_global" | "select_ai";
 export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
@@ -64,6 +77,8 @@ export type EvaluationFailureReason =
   | "answer_keyword_miss"
   | "low_groundedness"
   | "guardrail_warning"
+  | "content_kind_miss"
+  | "section_miss"
   | "case_error";
 export type EvaluationMetricName =
   | "precision_at_k"
@@ -74,6 +89,8 @@ export type EvaluationMetricName =
   | "citation_traceability_coverage"
   | "bbox_citation_coverage"
   | "element_lineage_coverage"
+  | "content_kind_hit_rate"
+  | "section_coverage"
   | "faithfulness"
   | "context_precision"
   | "context_recall"
@@ -89,9 +106,44 @@ export type ModelSettingsTestTargetType =
 export type UploadStorageBackend = "local" | "oci";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
 export type OciConfigTestStatus = "success" | "failed";
-export type ParserAdapterBackend = "local" | "auto" | "docling" | "marker" | "unstructured";
+export type ParserAdapterBackend =
+  | "local"
+  | "auto"
+  | "docling"
+  | "marker"
+  | "unstructured"
+  | "enterprise_ai_vlm"
+  | "oci_document_understanding";
+export type ParserServiceBackendName = "enterprise_ai_vlm" | "oci_document_understanding";
 export type ParserAdapterBackendName = "docling" | "marker" | "unstructured";
 export type ParserAdapterStatus = "active" | "available" | "disabled" | "ignored" | "missing";
+export type ParserAdapterScoreBackend = "local" | "docling" | "marker" | "unstructured";
+export type ParserAdapterScoreStatus =
+  | "recommended"
+  | "eligible"
+  | "available"
+  | "disabled"
+  | "ignored"
+  | "missing";
+export type ParserAdapterContractStatus =
+  | "passed"
+  | "failed"
+  | "fallback"
+  | "available"
+  | "ignored"
+  | "disabled"
+  | "missing"
+  | "unsupported"
+  | "fixture_missing";
+export type ParserAdapterSourceKind =
+  | "pdf"
+  | "image"
+  | "office"
+  | "html"
+  | "email"
+  | "audio"
+  | "text"
+  | "unknown";
 
 export interface ApiResponse<T> {
   data: T | null;
@@ -225,10 +277,31 @@ export interface SourceProfile {
   quality_warnings: string[];
 }
 
+export type IngestionJobPhase = "EXTRACT" | "INDEX";
+
+export interface DocumentElementTextEdit {
+  element_id: string;
+  text: string;
+}
+
+export interface DocumentTableCellTextEdit {
+  table_id: string;
+  row: number;
+  col: number;
+  text: string;
+}
+
+export interface DocumentApproveRequest {
+  raw_text?: string | null;
+  element_edits?: DocumentElementTextEdit[];
+  table_cell_edits?: DocumentTableCellTextEdit[];
+}
+
 export interface IngestionJob {
   id: string;
   document_id: string;
   status: IngestionJobStatus;
+  phase: IngestionJobPhase;
   parser_profile: string;
   quality_warnings: string[];
   skip_reason: string | null;
@@ -286,8 +359,10 @@ export interface ExtractionTableCell {
   text: string;
   row_span: number;
   col_span: number;
+  page_number?: number | null;
   bbox?: number[] | null;
   confidence?: number | null;
+  metadata?: Record<string, string | number | boolean | null>;
 }
 
 export interface ExtractionTable {
@@ -369,7 +444,25 @@ export interface DocumentChunkView {
   chunk_group_id: string | null;
   source_parser: string | null;
   element_ids: string[];
-  metadata: Record<string, string | number | boolean | null>;
+  metadata: Record<string, JsonValue>;
+}
+
+export type DocumentExtractionExportFormat = "json" | "markdown" | "html" | "chunks";
+
+export interface DocumentExtractionExport {
+  document_id: string;
+  file_name: string;
+  format: DocumentExtractionExportFormat;
+  content_type: string;
+  content: string;
+  payload: Record<string, unknown>;
+  chunks: DocumentChunkView[];
+  parser_backend: string | null;
+  parser_profile: string | null;
+  page_count: number;
+  element_count: number;
+  table_count: number;
+  asset_count: number;
 }
 
 export interface IngestionSegment {
@@ -415,8 +508,41 @@ export interface KnowledgeBaseSummary extends KnowledgeBaseRef {
   archived_at: string | null;
 }
 
+/** KB 単位の取込上書き(Parser/Chunking)。null はグローバル継承。 */
+export interface KnowledgeBaseIngestionConfig {
+  preprocess_profile: PreprocessProfileName | null;
+  parser_adapter_backend: ParserAdapterBackend | null;
+  parser_docling_enabled: boolean | null;
+  parser_marker_enabled: boolean | null;
+  parser_unstructured_enabled: boolean | null;
+  chunking_strategy: ChunkingStrategyName | null;
+  chunk_size: number | null;
+  chunk_overlap: number | null;
+  chunk_child_size: number | null;
+  chunk_sentence_window_size: number | null;
+  chunk_min_chars: number | null;
+}
+
+/** KB 単位のクエリ時上書き(Retrieval 以降)。null はグローバル継承。 */
+export interface KnowledgeBaseQueryConfig {
+  retrieval_strategy: RetrievalStrategyName | null;
+  post_retrieval_pipeline: PostRetrievalPipelineName | null;
+  generation_profile: GenerationProfileName | null;
+  guardrail_policy: GuardrailPolicyName | null;
+  vector_index_profile: VectorIndexProfileName | null;
+  evaluation_suite: EvaluationSuiteName | null;
+}
+
+/** KB 単位のアダプター上書き設定一式。 */
+export interface KnowledgeBaseAdapterConfig {
+  version: number;
+  ingestion: KnowledgeBaseIngestionConfig;
+  query: KnowledgeBaseQueryConfig;
+}
+
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   retrieval_config: Record<string, unknown>;
+  adapter_config: KnowledgeBaseAdapterConfig;
 }
 
 export interface KnowledgeBaseCreateRequest {
@@ -424,6 +550,7 @@ export interface KnowledgeBaseCreateRequest {
   description?: string | null;
   default_search_mode?: SearchMode;
   retrieval_config?: Record<string, unknown>;
+  adapter_config?: KnowledgeBaseAdapterConfig | null;
 }
 
 export interface KnowledgeBaseUpdateRequest {
@@ -431,6 +558,61 @@ export interface KnowledgeBaseUpdateRequest {
   description?: string | null;
   default_search_mode?: SearchMode | null;
   retrieval_config?: Record<string, unknown> | null;
+  adapter_config?: KnowledgeBaseAdapterConfig | null;
+}
+
+export type BusinessViewStatus = "ACTIVE" | "ARCHIVED";
+
+export interface BusinessViewRef {
+  id: string;
+  name: string;
+}
+
+/** 業務アシスタント(Business View)の設定一式。query は KB の query 上書きを再利用。 */
+export interface BusinessViewConfig {
+  version: number;
+  knowledge_base_ids: string[];
+  query: KnowledgeBaseQueryConfig;
+  system_prompt: string | null;
+  default_language: string | null;
+}
+
+export interface BusinessViewSummary extends BusinessViewRef {
+  description: string | null;
+  status: BusinessViewStatus;
+  knowledge_base_count: number;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface BusinessViewDetail extends BusinessViewSummary {
+  config: BusinessViewConfig;
+  knowledge_bases: KnowledgeBaseRef[];
+}
+
+export interface BusinessViewCreateRequest {
+  name: string;
+  description?: string | null;
+  config?: BusinessViewConfig;
+}
+
+export interface BusinessViewUpdateRequest {
+  name?: string | null;
+  description?: string | null;
+  config?: BusinessViewConfig;
+}
+
+/** 文書の取込設定スナップショット / owning KB とのドリフト状況。 */
+export interface DocumentIngestionConfigData {
+  document_id: string;
+  is_indexed: boolean;
+  owning_knowledge_base: KnowledgeBaseRef | null;
+  effective_chunking_strategy: string;
+  effective_parser_adapter_backend: string;
+  observed_chunking_strategy: string | null;
+  observed_parser_backend: string | null;
+  config_drift: boolean;
 }
 
 export interface KnowledgeBaseDocumentAssignmentRequest {
@@ -450,6 +632,7 @@ export interface SearchRequestBody {
   strategy?: SearchStrategy;
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
+  business_view_id?: string | null;
 }
 
 export interface RetrievedChunk {
@@ -460,7 +643,7 @@ export interface RetrievedChunk {
   rerank_score: number | null;
   file_name: string | null;
   category_name: string | null;
-  metadata: Record<string, string | number | boolean | null>;
+  metadata: Record<string, JsonValue>;
 }
 
 export interface SearchDiagnostics {
@@ -479,6 +662,8 @@ export interface SearchDiagnostics {
   context_diversified_count: number;
   context_group_expanded_count: number;
   context_expanded_count: number;
+  context_adaptive_expanded_count: number;
+  context_dependency_promoted_count: number;
   context_compressed_count: number;
   context_compression_saved_chars: number;
   citation_count: number;
@@ -489,6 +674,7 @@ export interface SearchDiagnostics {
   oracle_vector_target_accuracy: number;
   filter_keys: string[];
   knowledge_base_count: number;
+  business_view_applied?: string | null;
   config_fingerprint: string;
 }
 
@@ -540,6 +726,8 @@ export interface EvaluationCase {
   query: string;
   relevant_document_ids: string[];
   expected_answer_keywords: string[];
+  expected_content_kind?: string | null;
+  expected_section_paths?: string[];
 }
 
 export interface EvaluationThresholds {
@@ -551,6 +739,8 @@ export interface EvaluationThresholds {
   citation_traceability_coverage?: number | null;
   bbox_citation_coverage?: number | null;
   element_lineage_coverage?: number | null;
+  content_kind_hit_rate?: number | null;
+  section_coverage?: number | null;
   faithfulness?: number | null;
   context_precision?: number | null;
   context_recall?: number | null;
@@ -566,6 +756,7 @@ export interface EvaluationRunRequestBody {
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
   thresholds?: EvaluationThresholds | null;
+  suite?: EvaluationSuiteName | null;
   rag_overrides?: EvaluationRagOverrides | null;
 }
 
@@ -592,6 +783,8 @@ export interface EvaluationCaseResult {
   citation_traceability_coverage: number;
   bbox_citation_coverage: number;
   element_lineage_coverage: number;
+  content_kind_hit_rate: number;
+  section_coverage: number;
   guardrail_warnings: string[];
   failure_reasons: EvaluationFailureReason[];
   diagnostics: SearchDiagnostics;
@@ -609,6 +802,7 @@ export interface EvaluationThresholdFailure {
 export interface EvaluationMetrics {
   case_count: number;
   error_count: number;
+  evaluation_suite: EvaluationSuiteName;
   evaluated_k: number;
   precision_at_k: number;
   recall_at_k: number;
@@ -623,6 +817,8 @@ export interface EvaluationMetrics {
   citation_traceability_coverage: number;
   bbox_citation_coverage: number;
   element_lineage_coverage: number;
+  content_kind_hit_rate: number;
+  section_coverage: number;
   passed: boolean;
   threshold_failures: EvaluationThresholdFailure[];
   failure_reason_counts: Partial<Record<EvaluationFailureReason, number>>;
@@ -653,8 +849,13 @@ export interface EvaluationRagOverrides {
   context_window_chars?: number | null;
   context_neighbor_window?: number | null;
   context_diversity_lambda?: number | null;
+  context_adaptive_expansion_enabled?: boolean | null;
+  context_adaptive_neighbor_window?: number | null;
+  context_adaptive_min_overlap?: number | null;
   context_group_expansion_enabled?: boolean | null;
   context_group_max_chunks?: number | null;
+  context_dependency_promotion_enabled?: boolean | null;
+  context_dependency_max_chunks?: number | null;
   context_compression_enabled?: boolean | null;
   context_compression_max_sentences?: number | null;
   context_compression_max_chars_per_chunk?: number | null;
@@ -676,6 +877,7 @@ export interface EvaluationCompareRequestBody {
   experiments: EvaluationExperiment[];
   ranking_metric?: EvaluationMetricName;
   thresholds?: EvaluationThresholds | null;
+  suite?: EvaluationSuiteName | null;
 }
 
 export interface EvaluationExperimentResult {
@@ -698,6 +900,8 @@ export interface EnterpriseAiConfiguredModel {
   vision_enabled: boolean;
 }
 
+export type EnterpriseAiVlmInputMode = "auto" | "files_api" | "inline_image";
+
 export interface EnterpriseAiModelSettings {
   endpoint: string;
   project_ocid: string;
@@ -707,6 +911,7 @@ export interface EnterpriseAiModelSettings {
   models: EnterpriseAiConfiguredModel[];
   default_model_id: string;
   api_path: string;
+  vlm_input_mode: EnterpriseAiVlmInputMode;
   text_payload_template: string;
   vision_payload_template: string;
   text_response_path: string;
@@ -841,6 +1046,9 @@ export interface UploadStorageSettingsUpdate {
 export interface ParserAdapterStatusData {
   backend: ParserAdapterBackendName;
   package_name: string;
+  import_name: string;
+  distribution_name: string | null;
+  install_package: string;
   enabled: boolean;
   selected: boolean;
   installed: boolean;
@@ -849,11 +1057,481 @@ export interface ParserAdapterStatusData {
   warning_code: string | null;
 }
 
+export interface ParserAdapterScorecardEntryData {
+  backend: ParserAdapterScoreBackend;
+  rank: number;
+  score: number;
+  status: ParserAdapterScoreStatus;
+  recommended: boolean;
+  executable: boolean;
+  selected: boolean;
+  enabled: boolean;
+  installed: boolean;
+  metric_source: string;
+  metric_count: number;
+  signals: Record<string, number>;
+  reason_codes: string[];
+  warning_codes: string[];
+}
+
+export interface ParserAdapterScorecardData {
+  selected_backend: ParserAdapterBackend;
+  recommended_backend: ParserAdapterScoreBackend;
+  metrics_source: string;
+  metrics_applied_to: ParserAdapterScoreBackend | null;
+  entries: ParserAdapterScorecardEntryData[];
+}
+
+export interface ParserAdapterSourceRouteData {
+  source_kind: ParserAdapterSourceKind | string;
+  candidate_order: ParserAdapterScoreBackend[];
+  attempted_order: ParserAdapterScoreBackend[];
+  active_order: ParserAdapterScoreBackend[];
+  selected_backend: ParserAdapterScoreBackend;
+  reason_codes: string[];
+  warning_codes: string[];
+}
+
+export interface ParserAdapterBackendSourceMatrixData {
+  evidence_source: "runtime_routes";
+  required_source_kinds: string[];
+  covered_source_kinds: string[];
+  missing_source_kinds: string[];
+  backend_source_kinds: Partial<Record<ParserAdapterScoreBackend, string[]>>;
+  route_evidence: ParserAdapterSourceRouteData[];
+}
+
+export interface ParserAdapterContractCaseData {
+  backend: ParserAdapterBackendName;
+  source_kind: string;
+  fixture_name: string;
+  content_type: string;
+  status: ParserAdapterContractStatus;
+  blocking: boolean;
+  parser_backend: string | null;
+  parser_version: string | null;
+  adapter_import_name: string | null;
+  adapter_distribution_name: string | null;
+  adapter_package_version: string | null;
+  template: string | null;
+  element_count: number;
+  page_count: number;
+  table_count: number;
+  table_cell_count: number;
+  asset_count: number;
+  bbox_count: number;
+  warning_codes: string[];
+  reason_codes: string[];
+}
+
+export interface ParserAdapterContractSummaryData {
+  passed: boolean;
+  case_count: number;
+  blocking_failure_count: number;
+  source_kinds: string[];
+  backends: ParserAdapterBackendName[];
+  passed_source_kinds: string[];
+  missing_source_kinds: string[];
+  blocking_failure_source_kinds: string[];
+  blocking_failure_backends: ParserAdapterBackendName[];
+  backend_status_counts: Partial<Record<ParserAdapterBackendName, Partial<Record<string, number>>>>;
+  backend_source_status: Partial<Record<ParserAdapterBackendName, Record<string, string>>>;
+  backend_source_status_counts: Partial<
+    Record<ParserAdapterBackendName, Record<string, Partial<Record<string, number>>>>
+  >;
+  source_kind_status_counts: Record<string, Partial<Record<string, number>>>;
+  backend_passed_source_kinds: Partial<Record<ParserAdapterBackendName, string[]>>;
+  scenarios: string[];
+  passed_scenarios: string[];
+  missing_scenarios: string[];
+  blocking_failure_scenarios: string[];
+  backend_passed_scenarios: Partial<Record<ParserAdapterBackendName, string[]>>;
+  reason_code_counts: Record<string, number>;
+  warning_code_counts: Record<string, number>;
+  blocking_failure_reason_counts: Record<string, number>;
+  blocking_failures: Array<{
+    backend?: string;
+    source_kind?: string;
+    status?: string;
+    warning_codes?: string[];
+    reason_codes?: string[];
+  }>;
+}
+
+export interface ParserAdapterContractData {
+  passed: boolean;
+  fixture_root: string;
+  source_kinds: string[];
+  backends: ParserAdapterBackendName[];
+  case_count: number;
+  blocking_failure_count: number;
+  cases: ParserAdapterContractCaseData[];
+  summary: ParserAdapterContractSummaryData;
+  config_source: "runtime";
+}
+
+export interface ParserServiceBackendData {
+  backend: ParserServiceBackendName;
+  selected: boolean;
+  configured: boolean;
+  warning_code: string | null;
+}
+
 export interface ParserAdapterSettingsData {
   adapter_backend: ParserAdapterBackend;
   effective_order: ParserAdapterBackendName[];
   adapters: ParserAdapterStatusData[];
+  service_backends: ParserServiceBackendData[];
+  scorecard: ParserAdapterScorecardData;
+  source_routes: ParserAdapterSourceRouteData[];
+  backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;
   config_source: "runtime";
+}
+
+export interface ParserAdapterSettingsUpdate {
+  adapter_backend: ParserAdapterBackend;
+  docling_enabled: boolean;
+  marker_enabled: boolean;
+  unstructured_enabled: boolean;
+}
+
+// --- 設定: Chunking アダプター ---
+export type ChunkingStrategyName =
+  | "structure_aware"
+  | "recursive_character"
+  | "sentence_window"
+  | "hierarchical_parent_child"
+  | "markdown_heading"
+  | "page_level"
+  | "fixed_size";
+
+// --- 設定: 前処理(Preprocess)アダプター ---
+export type PreprocessProfileName =
+  | "passthrough"
+  | "text_normalize"
+  | "office_to_pdf"
+  | "pdf_to_page_images"
+  | "csv_to_json"
+  | "excel_to_json";
+
+export interface PreprocessProfileStatusData {
+  name: PreprocessProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  in_process: boolean;
+  requires_service: boolean;
+  available: boolean;
+}
+
+export interface PreprocessSettingsData {
+  profile: PreprocessProfileName;
+  service_enabled: boolean;
+  service_url: string;
+  canonical_artifact_prefix: string;
+  profiles: PreprocessProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface PreprocessSettingsUpdate {
+  profile: PreprocessProfileName;
+}
+
+// --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
+export type ServiceCategory = "preprocess" | "parser";
+export type ServiceProfile = "cpu" | "gpu";
+export type ServiceRuntimeStatus = "running" | "degraded" | "stopped" | "unconfigured";
+export type ServiceAction = "start" | "stop" | "restart";
+
+export interface ServiceStatusData {
+  service_id: string;
+  category: ServiceCategory;
+  profile: ServiceProfile;
+  label_key: string;
+  status: ServiceRuntimeStatus;
+  configured: boolean;
+}
+
+export type DeploymentMode = "dev" | "prod";
+
+export interface ServiceListData {
+  control_enabled: boolean;
+  deployment_mode: DeploymentMode;
+  services: ServiceStatusData[];
+}
+
+export interface ServiceControlResultData {
+  service_id: string;
+  action: ServiceAction;
+  status: ServiceRuntimeStatus;
+}
+
+export interface ChunkingStrategyStatusData {
+  name: ChunkingStrategyName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  uses_child_size: boolean;
+  uses_sentence_window: boolean;
+}
+
+export interface ChunkingSettingsData {
+  strategy: ChunkingStrategyName;
+  chunk_size: number;
+  overlap: number;
+  child_size: number;
+  sentence_window_size: number;
+  min_chars: number;
+  strategies: ChunkingStrategyStatusData[];
+  config_source: "runtime";
+}
+
+export interface ChunkingSettingsUpdate {
+  strategy: ChunkingStrategyName;
+  chunk_size: number;
+  overlap: number;
+  child_size: number;
+  sentence_window_size: number;
+  min_chars: number;
+}
+
+// --- 設定: Retrieval アダプター ---
+export type RetrievalStrategyName =
+  | "hybrid_rrf"
+  | "vector"
+  | "keyword"
+  | "graph_augmented"
+  | "select_ai_structured"
+  | "business_context_strict"
+  | "corrective_multi_query";
+
+export interface RetrievalStrategyStatusData {
+  name: RetrievalStrategyName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  gap_stop: boolean;
+  corrective_retrieval: boolean;
+  business_fit_weighting: boolean;
+}
+
+export interface RetrievalSettingsData {
+  strategy: RetrievalStrategyName;
+  query_expansion: boolean;
+  gap_stop: boolean;
+  corrective_retrieval: boolean;
+  business_fit_weighting: boolean;
+  strategies: RetrievalStrategyStatusData[];
+  config_source: "runtime";
+}
+
+export interface RetrievalSettingsUpdate {
+  strategy: RetrievalStrategyName;
+}
+
+// --- 設定: Grounding アダプター ---
+export type PostRetrievalPipelineName =
+  | "custom"
+  | "lean"
+  | "verified_context"
+  | "context_enrich"
+  | "compact"
+  | "full_governed";
+
+export type GroundingExpansionMode = "none" | "neighbor" | "group" | "adaptive";
+
+export interface GroundingPipelineStatusData {
+  name: PostRetrievalPipelineName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  dependency_promotion: boolean;
+  diversity: boolean;
+  expansion_mode: GroundingExpansionMode;
+  compression: boolean;
+}
+
+export interface GroundingSettingsData {
+  pipeline: PostRetrievalPipelineName;
+  dependency_promotion_enabled: boolean;
+  diversity_enabled: boolean;
+  expansion_mode: GroundingExpansionMode;
+  compression_enabled: boolean;
+  pipelines: GroundingPipelineStatusData[];
+  config_source: "runtime";
+}
+
+export interface GroundingSettingsUpdate {
+  pipeline: PostRetrievalPipelineName;
+}
+
+// --- 設定: Generation アダプター ---
+export type GenerationProfileName =
+  | "grounded_concise"
+  | "detailed_cited"
+  | "strict_extractive"
+  | "structured_json"
+  | "bilingual_ja_en";
+
+export interface GenerationProfileStatusData {
+  name: GenerationProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  structured_output: boolean;
+}
+
+export interface GenerationSettingsData {
+  profile: GenerationProfileName;
+  structured_output: boolean;
+  profiles: GenerationProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface GenerationSettingsUpdate {
+  profile: GenerationProfileName;
+}
+
+// --- 設定: Guardrail アダプター ---
+export type GuardrailPolicyName = "standard" | "strict" | "lenient" | "regulated";
+
+export interface GuardrailPolicyStatusData {
+  name: GuardrailPolicyName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  grounding_min_overlap: number;
+  grounding_min_ratio: number;
+  audit_emphasis: boolean;
+}
+
+export interface GuardrailSettingsData {
+  policy: GuardrailPolicyName;
+  block_prompt_injection: boolean;
+  mask_sensitive_identifiers: boolean;
+  max_query_chars: number;
+  grounding_min_overlap: number;
+  grounding_min_ratio: number;
+  audit_emphasis: boolean;
+  policies: GuardrailPolicyStatusData[];
+  config_source: "runtime";
+}
+
+export interface GuardrailSettingsUpdate {
+  policy: GuardrailPolicyName;
+}
+
+// --- 設定: Vector Index アダプター ---
+export type VectorIndexProfileName = "balanced" | "accurate" | "fast";
+
+export interface VectorIndexProfileStatusData {
+  name: VectorIndexProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  target_accuracy: number;
+  neighbors: number;
+  efconstruction: number;
+  distance: string;
+}
+
+export interface VectorIndexSettingsData {
+  profile: VectorIndexProfileName;
+  target_accuracy: number;
+  neighbors: number;
+  efconstruction: number;
+  distance: string;
+  requires_reprovision: boolean;
+  profiles: VectorIndexProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface VectorIndexSettingsUpdate {
+  profile: VectorIndexProfileName;
+}
+
+// --- 設定: Evaluation アダプター ---
+export type EvaluationSuiteName =
+  | "request_only"
+  | "retrieval_focused"
+  | "balanced"
+  | "strict_ci"
+  | "ragas_like";
+
+export interface EvaluationSuiteStatusData {
+  name: EvaluationSuiteName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  thresholds: Record<string, number>;
+  focus_metrics: string[];
+}
+
+export interface EvaluationSettingsData {
+  suite: EvaluationSuiteName;
+  thresholds: Record<string, number>;
+  focus_metrics: string[];
+  suites: EvaluationSuiteStatusData[];
+  config_source: "runtime";
+}
+
+export interface EvaluationSettingsUpdate {
+  suite: EvaluationSuiteName;
+}
+
+// --- 設定: GraphRAG アダプター ---
+export type GraphProfileName = "off" | "entities" | "full";
+
+export interface GraphProfileStatusData {
+  name: GraphProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  enabled: boolean;
+  build_claims: boolean;
+  build_community_summaries: boolean;
+}
+
+export interface GraphSettingsData {
+  profile: GraphProfileName;
+  enabled: boolean;
+  build_claims: boolean;
+  build_community_summaries: boolean;
+  profiles: GraphProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface GraphSettingsUpdate {
+  profile: GraphProfileName;
+}
+
+// --- 設定: Agentic アダプター ---
+export type AgenticProfileName = "off" | "query_rewrite" | "decompose" | "multi_hop";
+
+export interface AgenticProfileStatusData {
+  name: AgenticProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  enabled: boolean;
+  rewrite: boolean;
+  decompose: boolean;
+  multi_hop: boolean;
+}
+
+export interface AgenticSettingsData {
+  profile: AgenticProfileName;
+  enabled: boolean;
+  rewrite: boolean;
+  decompose: boolean;
+  multi_hop: boolean;
+  max_subqueries: number;
+  profiles: AgenticProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface AgenticSettingsUpdate {
+  profile: AgenticProfileName;
 }
 
 // --- 設定: OCI config ---
@@ -1109,6 +1787,16 @@ export const api = {
   getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
   listDocumentChunks: (id: string) =>
     request<DocumentChunkView[]>(`/api/documents/${encodeURIComponent(id)}/chunks`),
+  getDocumentIngestionConfig: (id: string) =>
+    request<DocumentIngestionConfigData>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-config`
+    ),
+  exportDocumentExtraction: (id: string, format: DocumentExtractionExportFormat = "markdown") => {
+    const search = new URLSearchParams({ format });
+    return request<DocumentExtractionExport>(
+      `/api/documents/${encodeURIComponent(id)}/extraction-export?${search.toString()}`
+    );
+  },
   listDocumentIngestionSegments: (id: string) =>
     request<IngestionSegment[]>(`/api/documents/${encodeURIComponent(id)}/ingestion-segments`),
   deleteDocument: (id: string) =>
@@ -1156,8 +1844,8 @@ export const api = {
     });
   },
   ingestDocument: (id: string, force = false) =>
-    request<DocumentDetail>(
-      `/api/documents/${encodeURIComponent(id)}/ingest${force ? "?force=true" : ""}`,
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs${force ? "?force=true" : ""}`,
       { method: "POST" }
     ),
   enqueueDocumentIngestionJob: (id: string, force = false) =>
@@ -1165,6 +1853,22 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs${force ? "?force=true" : ""}`,
       { method: "POST" }
     ),
+  retryFailedDocumentIngestionSegments: (id: string) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-segments/retry`,
+      { method: "POST" }
+    ),
+  /** REVIEW(確認待ち)文書を承認し、後段 index を投入する。任意でテキスト修正を伴う。 */
+  approveDocument: (id: string, payload?: DocumentApproveRequest) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/approve`,
+      payload ? jsonBody(payload) : { method: "POST" }
+    ),
+  /** REVIEW(確認待ち)文書を却下し、UPLOADED へ戻す。 */
+  rejectDocument: (id: string) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+    }),
   listIngestionJobs: (params: {
     status?: IngestionJobStatus;
     limit?: number;
@@ -1214,6 +1918,8 @@ export const api = {
       `/api/knowledge-bases${qs ? `?${qs}` : ""}`
     );
   },
+  getKnowledgeBase: (id: string) =>
+    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}`),
   createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
     request<KnowledgeBaseDetail>("/api/knowledge-bases", jsonBody(body)),
   updateKnowledgeBase: (id: string, body: KnowledgeBaseUpdateRequest) =>
@@ -1241,6 +1947,38 @@ export const api = {
       )}`,
       { method: "DELETE" }
     ),
+
+  // 業務アシスタント(Business View)
+  listBusinessViews: (params: {
+    status?: BusinessViewStatus;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.q) search.set("q", params.q);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return requestDegradable<Page<BusinessViewSummary>>(
+      `/api/business-views${qs ? `?${qs}` : ""}`
+    );
+  },
+  getBusinessView: (id: string) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}`),
+  createBusinessView: (body: BusinessViewCreateRequest) =>
+    request<BusinessViewDetail>("/api/business-views", jsonBody(body)),
+  updateBusinessView: (id: string, body: BusinessViewUpdateRequest) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  archiveBusinessView: (id: string) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+    }),
 
   // 検索
   search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
@@ -1305,6 +2043,109 @@ export const api = {
     }),
   getParserAdapterSettings: () =>
     request<ParserAdapterSettingsData>("/api/settings/parser-adapters"),
+  getParserAdapterContract: () =>
+    request<ParserAdapterContractData>("/api/settings/parser-adapters/contract"),
+  updateParserAdapterSettings: (body: ParserAdapterSettingsUpdate) =>
+    request<ParserAdapterSettingsData>("/api/settings/parser-adapters", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // サービス管理: 前処理 / Parser マイクロサービスの稼働可視化・起動/停止
+  getServices: () => request<ServiceListData>("/api/services"),
+  controlService: (serviceId: string, action: ServiceAction) =>
+    request<ServiceControlResultData>(
+      `/api/services/${encodeURIComponent(serviceId)}/${action}`,
+      { method: "POST" }
+    ),
+
+  // 設定: Chunking アダプター
+  getPreprocessSettings: () => request<PreprocessSettingsData>("/api/settings/preprocess"),
+  updatePreprocessSettings: (body: PreprocessSettingsUpdate) =>
+    request<PreprocessSettingsData>("/api/settings/preprocess", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  getChunkingSettings: () => request<ChunkingSettingsData>("/api/settings/chunking"),
+  updateChunkingSettings: (body: ChunkingSettingsUpdate) =>
+    request<ChunkingSettingsData>("/api/settings/chunking", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Retrieval アダプター
+  getRetrievalSettings: () => request<RetrievalSettingsData>("/api/settings/retrieval"),
+  updateRetrievalSettings: (body: RetrievalSettingsUpdate) =>
+    request<RetrievalSettingsData>("/api/settings/retrieval", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Grounding アダプター
+  getGroundingSettings: () => request<GroundingSettingsData>("/api/settings/grounding"),
+  updateGroundingSettings: (body: GroundingSettingsUpdate) =>
+    request<GroundingSettingsData>("/api/settings/grounding", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Generation アダプター
+  getGenerationSettings: () => request<GenerationSettingsData>("/api/settings/generation"),
+  updateGenerationSettings: (body: GenerationSettingsUpdate) =>
+    request<GenerationSettingsData>("/api/settings/generation", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Guardrail アダプター
+  getGuardrailSettings: () => request<GuardrailSettingsData>("/api/settings/guardrail"),
+  updateGuardrailSettings: (body: GuardrailSettingsUpdate) =>
+    request<GuardrailSettingsData>("/api/settings/guardrail", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Vector Index アダプター
+  getVectorIndexSettings: () => request<VectorIndexSettingsData>("/api/settings/vector-index"),
+  updateVectorIndexSettings: (body: VectorIndexSettingsUpdate) =>
+    request<VectorIndexSettingsData>("/api/settings/vector-index", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Evaluation アダプター
+  getEvaluationSettings: () => request<EvaluationSettingsData>("/api/settings/evaluation-suite"),
+  updateEvaluationSettings: (body: EvaluationSettingsUpdate) =>
+    request<EvaluationSettingsData>("/api/settings/evaluation-suite", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: GraphRAG アダプター
+  getGraphSettings: () => request<GraphSettingsData>("/api/settings/graph"),
+  updateGraphSettings: (body: GraphSettingsUpdate) =>
+    request<GraphSettingsData>("/api/settings/graph", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Agentic アダプター
+  getAgenticSettings: () => request<AgenticSettingsData>("/api/settings/agentic"),
+  updateAgenticSettings: (body: AgenticSettingsUpdate) =>
+    request<AgenticSettingsData>("/api/settings/agentic", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 
   // 設定: OCI config
   getOciSettings: () => request<OciSettingsData>("/api/settings/oci"),

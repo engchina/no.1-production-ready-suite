@@ -14,7 +14,109 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
-ParserAdapterBackend = Literal["local", "auto", "docling", "marker", "unstructured"]
+ParserAdapterBackend = Literal[
+    "local",
+    "auto",
+    "docling",
+    "marker",
+    "unstructured",
+    "mineru",
+    "dots_ocr",
+    "glm_ocr",
+    # service 系 backend（外部 Python package / parser microservice ではなく OCI クラウド
+    # サービスを backend から直接呼ぶ）。enterprise_ai_vlm は OCI Enterprise AI VLM を
+    # fallback ではなく明示選択し、oci_document_understanding は OCI Document Understanding
+    # の非同期 processor job で OCR/表抽出する。
+    "enterprise_ai_vlm",
+    "oci_document_understanding",
+]
+PreprocessProfile = Literal[
+    "passthrough",
+    "text_normalize",
+    "office_to_pdf",
+    "pdf_to_page_images",
+    "csv_to_json",
+    "excel_to_json",
+    "url_to_markdown",
+    "image_enhance",
+    "pii_redact",
+]
+ChunkingStrategy = Literal[
+    "structure_aware",
+    "recursive_character",
+    "sentence_window",
+    "hierarchical_parent_child",
+    "markdown_heading",
+    "page_level",
+    "fixed_size",
+]
+RetrievalStrategy = Literal[
+    "hybrid_rrf",
+    "vector",
+    "keyword",
+    "graph_augmented",
+    "select_ai_structured",
+    "business_context_strict",
+    "corrective_multi_query",
+    "reasoning_tree_search",
+    "colpali_visual_retrieval",
+]
+PostRetrievalPipeline = Literal[
+    "custom",
+    "lean",
+    "verified_context",
+    "context_enrich",
+    "compact",
+    "full_governed",
+]
+GenerationProfile = Literal[
+    "grounded_concise",
+    "detailed_cited",
+    "strict_extractive",
+    "structured_json",
+    "bilingual_ja_en",
+    "inline_cited",
+    "custom",
+]
+GuardrailPolicyName = Literal[
+    "standard",
+    "strict",
+    "lenient",
+    "regulated",
+]
+# Guardrail のバックエンド。local(既定)は in-process 決定論ヒューリスティック。
+# oci_guardrails は OCI Generative AI Guardrails(ApplyGuardrails、検出専用 API)を併用し、
+# 未設定/失敗時は local へ安全に縮退する。
+GuardrailBackend = Literal[
+    "local",
+    "oci_guardrails",
+]
+VectorIndexProfile = Literal[
+    "balanced",
+    "accurate",
+    "fast",
+]
+EvaluationSuite = Literal[
+    "request_only",
+    "retrieval_focused",
+    "balanced",
+    "strict_ci",
+    "ragas_like",
+]
+GraphProfile = Literal[
+    "off",
+    "entities",
+    "full",
+]
+AgenticProfile = Literal[
+    "off",
+    "smart_routing",
+    "query_rewrite",
+    "hyde",
+    "decompose",
+    "multi_hop",
+]
+EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
@@ -43,6 +145,7 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
     default_model_id: str = Field(default="", max_length=256)
     api_path: str = Field(default="/responses", max_length=512)
+    vlm_input_mode: EnterpriseAiVlmInputMode = "auto"
     text_payload_template: str = Field(default="", max_length=20000)
     vision_payload_template: str = Field(default="", max_length=20000)
     text_response_path: str = Field(default="", max_length=1024)
@@ -112,7 +215,7 @@ class Settings(BaseSettings):
 
     # --- アプリ ---
     app_name: str = "production-ready-rag"
-    environment: str = Field(default="development")
+    environment: str = Field(default="dev")
     log_level: str = Field(default="INFO")
     app_version: str = Field(default="0.1.0")
     auth_mode: AuthMode = Field(
@@ -150,6 +253,13 @@ class Settings(BaseSettings):
     oci_enterprise_ai_vlm_model: str = Field(default="")
     oci_enterprise_ai_llm_path: str = Field(default="/responses")
     oci_enterprise_ai_vlm_path: str = Field(default="/responses")
+    oci_enterprise_ai_vlm_input_mode: EnterpriseAiVlmInputMode = Field(
+        default="auto",
+        description=(
+            "Enterprise AI VLM への入力搬送方式。auto は画像を inline、非画像を Files API。"
+            "files_api は VLM 入力を明示的に /files 経由へ送る。inline_image は画像のみ inline。"
+        ),
+    )
     oci_enterprise_ai_llm_payload_template: str = Field(
         default="",
         description=(
@@ -302,13 +412,82 @@ class Settings(BaseSettings):
     )
     ingestion_queue_startup_drain_limit: int = Field(default=50, ge=1, le=500)
     ingestion_queue_stale_running_seconds: float = Field(default=3600.0, gt=0.0, le=86400.0)
+    ingestion_queue_recovery_interval_seconds: float = Field(
+        default=60.0,
+        gt=0.0,
+        le=3600.0,
+        description=(
+            "専用ワーカーが起動後も stale/固着文書の復旧を再実行する最短間隔（秒）。"
+            "クラッシュで INGESTING のまま取り残された文書を再起動なしで回復させる。"
+        ),
+    )
     ingestion_queue_worker_concurrency: int = Field(default=2, ge=1, le=16)
     ingestion_job_max_attempts: int = Field(default=3, ge=1, le=20)
+    ingestion_queue_dedicated_worker_enabled: bool = Field(
+        default=True,
+        description=(
+            "True にすると取込はキュー投入のみとし、専用ワーカー（in-process または別プロセス）"
+            "がジョブを消費する。HTTP リクエスト内では取込を実行しない。"
+        ),
+    )
+    ingestion_queue_poll_interval_seconds: float = Field(
+        default=2.0,
+        gt=0.0,
+        le=60.0,
+        description="専用ワーカーが QUEUED ジョブをポーリングする間隔（秒）。",
+    )
+    ingestion_queue_inprocess_worker_enabled: bool = Field(
+        default=True,
+        description=(
+            "専用ワーカーモード時に API プロセス内（lifespan）でもワーカーを起動するか。"
+            "別プロセスのワーカーへ完全に切り出す場合は False にする。"
+        ),
+    )
+    ingestion_queue_process_isolation_enabled: bool = Field(
+        default=True,
+        description=(
+            "in-process ワーカーが job 本体を subprocess で実行し、Docling/OCR/CUDA 初期化を "
+            "API プロセスから隔離する。専用 worker container では False にして直接実行できる。"
+        ),
+    )
 
     # --- RAG ---
     rag_chunk_size: int = Field(default=800, ge=200, le=4000)
     rag_chunk_overlap: int = Field(default=120, ge=0, le=1000)
-    rag_max_chunks_per_document: int = Field(default=512, ge=1, le=10000)
+    rag_chunking_strategy: ChunkingStrategy = Field(
+        default="structure_aware",
+        description=(
+            "chunks 段階の分割戦略(Chunking アダプター)。"
+            "structure_aware は element/section/table 認識、recursive_character は固定長、"
+            "sentence_window は文単位、hierarchical_parent_child は親子、"
+            "markdown_heading は章節単位、page_level はページ単位、"
+            "fixed_size は章節・文境界を無視した純粋な固定長分割。"
+        ),
+    )
+    rag_chunk_child_size: int = Field(
+        default=320,
+        ge=80,
+        le=4000,
+        description=(
+            "hierarchical_parent_child 戦略で親 chunk を再分割する子 chunk の目標文字数。"
+            "rag_chunk_size より小さくする。"
+        ),
+    )
+    rag_chunk_sentence_window_size: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="sentence_window 戦略で 1 chunk にまとめる文の数。",
+    )
+    rag_chunk_min_chars: int = Field(
+        default=0,
+        ge=0,
+        le=2000,
+        description=(
+            "この文字数未満の微小 chunk を隣接 chunk へ吸収する下限。0 で無効。"
+            "rag_chunk_size より小さくする。"
+        ),
+    )
     rag_context_window_chars: int = Field(default=12000, ge=1000, le=100000)
     rag_context_neighbor_window: int = Field(
         default=0,
@@ -334,10 +513,83 @@ class Settings(BaseSettings):
         le=20,
         description="同一 chunk group から anchor ごとに追加する sibling chunk 数の上限。",
     )
+    rag_context_adaptive_expansion_enabled: bool = Field(
+        default=False,
+        description=(
+            "query overlap と section/chunk group lineage で必要な隣接 context だけを追加する。"
+        ),
+    )
+    rag_context_adaptive_neighbor_window: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="adaptive context expansion が確認する anchor 前後 chunk 数。",
+    )
+    rag_context_adaptive_min_overlap: float = Field(
+        default=0.08,
+        ge=0.0,
+        le=1.0,
+        description="adaptive context expansion で query feature overlap による追加を許す下限。",
+    )
+    rag_context_dependency_promotion_enabled: bool = Field(
+        default=False,
+        description=(
+            "rerank 後に parent/child element lineage で関連 chunk を context 候補へ昇格する。"
+        ),
+    )
+    rag_context_dependency_max_chunks: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="dependency-linked context promotion で anchor ごとに追加する chunk 数の上限。",
+    )
+    rag_navigation_summary_enabled: bool = Field(
+        default=False,
+        description=(
+            "取込時に navigation tree の各章節 node を OCI Enterprise AI LLM で要約し、"
+            "progressive disclosure / Navigate retrieval に使う（既定 OFF）。"
+        ),
+    )
+    rag_navigation_summary_max_nodes: int = Field(
+        default=24,
+        ge=1,
+        le=200,
+        description="navigation node 要約を生成する node 数の上限（LLM 呼び出し回数の bound）。",
+    )
+    rag_asset_summary_enabled: bool = Field(
+        default=False,
+        description=(
+            "取込時に図・表・chart を OCI Enterprise AI VLM/LLM で要約し、検索可能な figure "
+            "element として source chunk に紐付ける（Knowhere 由来。既定 OFF）。"
+        ),
+    )
+    rag_asset_summary_max_assets: int = Field(
+        default=24,
+        ge=1,
+        le=200,
+        description="asset 要約を生成する asset 数の上限（VLM/LLM 呼び出し回数の bound）。",
+    )
+    rag_field_extraction_enabled: bool = Field(
+        default=False,
+        description=(
+            "取込時に field schema 定義に従い OCI Enterprise AI structured output で named "
+            "field/entity を抽出する（PoweRAG/LangExtract 由来。既定 OFF）。"
+        ),
+    )
     rag_context_compression_enabled: bool = Field(
         default=False,
         description=(
             "LLM context 投入前に query 関連 sentence/line だけを抽出して chunk text を圧縮する。"
+        ),
+    )
+    rag_grounding_crag_confidence_threshold: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "CRAG: grounding preset が corrective(verified_context/full_governed)のとき、rerank の"
+            "最高スコアがこの閾値未満なら query を書き換えて 1 回だけ corrective 再検索する。"
+            "閾値 0.0 は実質無効(corrective 経路でも再検索しない)。"
         ),
     )
     rag_context_compression_max_sentences: int = Field(
@@ -456,6 +708,173 @@ class Settings(BaseSettings):
     )
     rag_pdf_max_pages_per_segment: int = Field(default=3, ge=1, le=50)
     rag_pdf_max_segments: int = Field(default=300, ge=1, le=2000)
+    rag_retrieval_strategy: RetrievalStrategy = Field(
+        default="hybrid_rrf",
+        description=(
+            "検索段階の Retrieval アダプター。hybrid_rrf は hybrid + query expansion + RRF、"
+            "vector/keyword は単一モード、graph_augmented/select_ai_structured は構造寄り、"
+            "business_context_strict は業務適合加重 + gap-stop、"
+            "corrective_multi_query は多 query + 不足時の再検索。"
+            "per-request の strategy/mode を明示した場合はそちらを優先する。"
+        ),
+    )
+    rag_post_retrieval_pipeline: PostRetrievalPipeline = Field(
+        default="custom",
+        description=(
+            "検索後処理の Grounding アダプター。custom は既存 rag_context_* フラグを尊重し、"
+            "lean/verified_context/context_enrich/compact/full_governed は検証・整形段の"
+            "プリセットとして任意段(diversity/expansion/dependency/compression)を束ねる。"
+        ),
+    )
+    rag_generation_profile: GenerationProfile = Field(
+        default="grounded_concise",
+        description=(
+            "回答生成の Generation アダプター。grounded_concise(既定)は現行 system prompt、"
+            "detailed_cited は出典 ID 明示、strict_extractive は抽出のみ・推測禁止、"
+            "structured_json は JSON 構造化出力、bilingual_ja_en は日本語+英語要約。"
+        ),
+    )
+    rag_generation_system_prompt_override: str | None = Field(
+        default=None,
+        description=(
+            "回答生成 system prompt の上書き。業務アシスタント(Business View)の persona を"
+            "クエリ時に注入するための runtime 上書きで env からは設定しない(既定 None=上書きなし)。"
+            "設定時は Generation アダプターの profile prompt より優先する。"
+        ),
+    )
+    rag_guardrail_policy: GuardrailPolicyName = Field(
+        default="standard",
+        description=(
+            "安全の Guardrail アダプター。standard(既定)は現行フラグ、"
+            "strict/regulated は groundedness 厳格化、lenient は warning 抑制。"
+        ),
+    )
+    rag_guardrail_backend: GuardrailBackend = Field(
+        default="local",
+        description=(
+            "Guardrail のバックエンド。local(既定)は in-process 決定論ヒューリスティック"
+            "(現行挙動)。oci_guardrails は OCI Generative AI Guardrails(ApplyGuardrails、"
+            "content moderation / PII / prompt injection の検出専用 API)を併用し、未設定/失敗時"
+            "は local へ安全に縮退する。確定スタックは不変(別 LLM provider・外部 DB は不採用)。"
+        ),
+    )
+    oci_guardrails_compartment_id: str = Field(
+        default="",
+        description="OCI Guardrails の compartment OCID。空欄時は oci_compartment_id を使う。",
+    )
+    oci_guardrails_endpoint: str = Field(
+        default="",
+        description="OCI Generative AI Inference のサービスエンドポイント上書き(空欄は SDK 既定)。",
+    )
+    oci_guardrails_prompt_injection_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="prompt injection の risk score をブロック扱いにする閾値(0.0–1.0)。",
+    )
+    rag_evaluation_suite: EvaluationSuite = Field(
+        default="request_only",
+        description=(
+            "評価の Evaluation アダプター。request_only(既定)はプリセット閾値なしで現行どおり"
+            "request の thresholds を使う。retrieval_focused/balanced/strict_ci/ragas_like は"
+            "CI gate 用の名前付き閾値スイートを既定として補う(request の thresholds が最優先)。"
+        ),
+    )
+    rag_graph_profile: GraphProfile = Field(
+        default="off",
+        description=(
+            "GraphRAG アダプター(知識グラフ構築の深さ)。off(既定)は KG を構築しない、"
+            "entities は entities+relationships のみ、full は claims+community summary まで構築。"
+            "legacy の RAG_GRAPH_ENABLED=true は full 相当として扱う。"
+        ),
+    )
+    rag_agentic_profile: AgenticProfile = Field(
+        default="off",
+        description=(
+            "Agentic アダプター(LLM 補助のクエリ計画)。off(既定)は LLM 計画なし、"
+            "query_rewrite は検索向け書き換え、decompose は sub-question 分解、"
+            "multi_hop は分解 + 弱根拠時に 1 回追加分解。off 以外は追加 LLM 呼び出しが発生する。"
+        ),
+    )
+    rag_agentic_max_subqueries: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        description="Agentic アダプターが query variant へ注入する sub-question の上限。",
+    )
+    rag_vector_index_profile: VectorIndexProfile = Field(
+        default="balanced",
+        description=(
+            "索引/検索精度の Vector Index アダプター。balanced(既定)は"
+            "ORACLE_VECTOR_TARGET_ACCURACY をそのまま使い、accurate は高再現(98)、"
+            "fast は低レイテンシ(85)へ検索時 target accuracy を上書きする。"
+            "推奨 HNSW ビルドパラメータは設定画面に表示し、適用には索引再作成が必要。"
+        ),
+    )
+    # --- 前処理(Preprocess)ステージ(parse の前の原本変換)---
+    rag_preprocess_profile: PreprocessProfile = Field(
+        default="passthrough",
+        description=(
+            "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
+            "passthrough(既定)は変換せず現行挙動と一致。text_normalize は文字コード/"
+            "Unicode/空白を正規化(in-process)。office_to_pdf は Office→PDF、"
+            "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
+            "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、url_to_markdown は "
+            "URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)、image_enhance は "
+            "スキャン画像の OCR 向け補正(OpenCV)、pii_redact は取込時の PII マスク"
+            "(Presidio + 日本語 NER、外部 SaaS 非使用)"
+            "(いずれも各々独立した前処理マイクロサービス)。"
+        ),
+    )
+    rag_preprocess_enabled: bool = Field(
+        default=False,
+        description=(
+            "前処理マイクロサービスへの HTTP 委譲を有効化する。OFF(既定)は in-process で "
+            "扱える profile(passthrough / text_normalize)のみ実行し、サービス必須の変換は "
+            "passthrough へ安全に縮退する。"
+        ),
+    )
+    rag_preprocess_office_to_pdf_service_url: str = Field(
+        default="http://preprocess-office-to-pdf:8000",
+        description="Office→PDF 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_pdf_to_page_images_service_url: str = Field(
+        default="http://preprocess-pdf-to-page-images:8000",
+        description="PDF→ページ画像PDF 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_csv_to_json_service_url: str = Field(
+        default="http://preprocess-csv-to-json:8000",
+        description="CSV→構造化 JSON 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_excel_to_json_service_url: str = Field(
+        default="http://preprocess-excel-to-json:8000",
+        description="Excel(.xls/.xlsx)→構造化 JSON 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_url_to_markdown_service_url: str = Field(
+        default="http://preprocess-url-to-markdown:8000",
+        description="URL→クリーン Markdown 前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_image_enhance_service_url: str = Field(
+        default="http://preprocess-image-enhance:8000",
+        description="画像補正(OCR 前処理)マイクロサービスの base URL。",
+    )
+    rag_preprocess_pii_redact_service_url: str = Field(
+        default="http://preprocess-pii-redact:8000",
+        description="PII マスク(取込時)前処理マイクロサービスの base URL。",
+    )
+    rag_preprocess_service_timeout_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "前処理マイクロサービス呼び出しの HTTP timeout(秒)。"
+            "超過・接続失敗時は warning を付けて passthrough(原本そのまま parse)へ縮退する。"
+        ),
+    )
+    rag_canonical_artifact_prefix: str = Field(
+        default="artifacts/canonical",
+        max_length=256,
+        description="前処理で生成した正規化原本(canonical source)の Object Storage key prefix。",
+    )
     rag_parser_adapter_backend: ParserAdapterBackend = Field(
         default="local",
         description=(
@@ -479,6 +898,353 @@ class Settings(BaseSettings):
             "Unstructured adapter を feature flag で有効化する。未導入時は安全に fallback する。"
         ),
     )
+    rag_parser_mineru_enabled: bool = Field(
+        default=False,
+        description=(
+            "MinerU adapter(PoweRAG 由来)を feature flag で有効化する。未導入時は安全に "
+            "fallback する。実 OCR は OCI Enterprise AI VLM へ再マップ。"
+        ),
+    )
+    rag_parser_dots_ocr_enabled: bool = Field(
+        default=False,
+        description=(
+            "Dots.OCR adapter(PoweRAG 由来)を feature flag で有効化する。未導入時は安全に "
+            "fallback する。GPU parser マイクロサービスで実 OCR を行う。"
+        ),
+    )
+    rag_parser_glm_ocr_enabled: bool = Field(
+        default=False,
+        description=(
+            "GLM-OCR adapter(HuggingFace zai-org/GLM-OCR)を feature flag で有効化する。"
+            "未導入時は安全に fallback する。GPU parser マイクロサービスで実 OCR を行う。"
+        ),
+    )
+    rag_parser_docling_service_url: str = Field(
+        default="http://parser-docling:8000",
+        description="Docling parser マイクロサービスの base URL。",
+    )
+    rag_parser_marker_service_url: str = Field(
+        default="http://parser-marker:8000",
+        description="Marker parser マイクロサービスの base URL。",
+    )
+    rag_parser_unstructured_service_url: str = Field(
+        default="http://parser-unstructured:8000",
+        description="Unstructured parser マイクロサービスの base URL。",
+    )
+    rag_parser_mineru_service_url: str = Field(
+        default="http://parser-mineru:8000",
+        description="MinerU(GPU)parser マイクロサービスの base URL。",
+    )
+    rag_parser_dots_ocr_service_url: str = Field(
+        default="http://parser-dots-ocr:8000",
+        description="Dots.OCR(GPU)parser マイクロサービスの base URL。",
+    )
+    rag_parser_glm_ocr_service_url: str = Field(
+        default="http://parser-glm-ocr:8000",
+        description="GLM-OCR(GPU)parser マイクロサービスの base URL。",
+    )
+    rag_parser_asr_enabled: bool = Field(
+        default=True,
+        description=(
+            "音声/動画の文字起こし(ASR)を有効化する。audio source kind は OCI AI Speech →"
+            "ローカル faster-whisper(parser-asr)→ 未対応 の順で解決する。OFF にすると音声は"
+            "従来どおり未対応として扱う。"
+        ),
+    )
+    rag_parser_asr_service_url: str = Field(
+        default="http://parser-asr:8000",
+        description="ASR(GPU faster-whisper)parser マイクロサービスの base URL。",
+    )
+    rag_parser_service_timeout_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "parser マイクロサービス呼び出しの HTTP timeout(秒)。"
+            "超過・接続失敗時は warning を付けて local/Enterprise AI fallback へ縮退する。"
+        ),
+    )
+    # --- pipeline ステージのプラグイン(マイクロサービス)化 ---
+    # 各 pipeline ステージ(chunking 等)を独立サービスとして remote 委譲する。未達/timeout/無効時は
+    # backend in-process(同一 rag_pipeline_core ロジック)へ安全縮退する。
+    rag_pipeline_stage_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description=(
+            "pipeline ステージサービス呼び出しの HTTP timeout(秒)。"
+            "超過・接続失敗時は warning を付けて in-process へ安全縮退する。"
+        ),
+    )
+    rag_chunking_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "chunking ステージを chunking マイクロサービスへ HTTP 委譲する。OFF(既定)は "
+            "backend in-process で実行(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+        ),
+    )
+    rag_chunking_service_url: str = Field(
+        default="http://pipeline-chunking:8000",
+        description="chunking ステージマイクロサービスの base URL。",
+    )
+    rag_vector_index_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "vector_index プロファイル解決を vector_index マイクロサービスへ委譲する。OFF(既定)は "
+            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+        ),
+    )
+    rag_vector_index_service_url: str = Field(
+        default="http://pipeline-vector-index:8000",
+        description="vector_index ステージマイクロサービスの base URL。",
+    )
+    rag_graph_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "graphrag プロファイル解決を graphrag マイクロサービスへ委譲する。OFF(既定)は "
+            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+        ),
+    )
+    rag_graph_service_url: str = Field(
+        default="http://pipeline-graphrag:8000",
+        description="graphrag ステージマイクロサービスの base URL。",
+    )
+    rag_generation_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "generation の system prompt 解決を generation マイクロサービスへ委譲する。OFF(既定)は "
+            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。custom/persona "
+            "override は backend 側で上乗せする。"
+        ),
+    )
+    rag_generation_service_url: str = Field(
+        default="http://pipeline-generation:8000",
+        description="generation ステージマイクロサービスの base URL。",
+    )
+    rag_guardrail_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "guardrail の policy 解決(groundedness 閾値 + 監査強調)を guardrail マイクロサービスへ"
+            "委譲する。OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退。"
+            "OCI Generative AI Guardrails backend(rag_guardrail_backend)とは別レイヤーで共存。"
+        ),
+    )
+    rag_guardrail_service_url: str = Field(
+        default="http://pipeline-guardrail:8000",
+        description="guardrail ステージマイクロサービスの base URL。",
+    )
+    rag_agentic_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "agentic の profile 解決(クエリ計画の挙動フラグ)を agentic マイクロサービスへ委譲する。"
+            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "実 LLM クエリ計画は backend が OCI Enterprise AI で行う。"
+        ),
+    )
+    rag_agentic_service_url: str = Field(
+        default="http://pipeline-agentic:8000",
+        description="agentic ステージマイクロサービスの base URL。",
+    )
+    rag_grounding_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "grounding の preset 解決(検索後処理段フラグ)を grounding マイクロサービスへ委譲する。"
+            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "custom preset は backend の legacy rag_context_* 設定をそのまま使う。"
+        ),
+    )
+    rag_grounding_service_url: str = Field(
+        default="http://pipeline-grounding:8000",
+        description="grounding ステージマイクロサービスの base URL。",
+    )
+    rag_evaluation_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "evaluation の suite→閾値解決を evaluation マイクロサービスへ委譲する。OFF(既定)は "
+            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+        ),
+    )
+    rag_evaluation_service_url: str = Field(
+        default="http://pipeline-evaluation:8000",
+        description="evaluation ステージマイクロサービスの base URL。",
+    )
+    rag_retrieval_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "retrieval の strategy 解決(検索挙動フラグ)を retrieval マイクロサービスへ委譲する。"
+            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "実 retrieval(Oracle 26ai 経路)は backend が実行する。"
+        ),
+    )
+    rag_retrieval_service_url: str = Field(
+        default="http://pipeline-retrieval:8000",
+        description="retrieval ステージマイクロサービスの base URL。",
+    )
+    rag_graph_temporal_enabled: bool = Field(
+        default=False,
+        description=(
+            "Temporal GraphRAG: full プロファイル時に KG の entity/relationship へ timestamp を"
+            "付与し、検索時に時間文脈フィルタを可能にする。off/entities では無効。"
+        ),
+    )
+    rag_raptor_enabled: bool = Field(
+        default=False,
+        description=(
+            "RAPTOR 再帰要約索引: chunking 後に leaf chunk を再帰 cluster + OCI Enterprise AI で"
+            "要約し、多層级 summary node を leaf と一緒に索引する。OFF(既定)は leaf のみ。"
+            "追加 LLM 呼び出しを伴う opt-in。要約失敗時は leaf のみへ安全縮退する。"
+        ),
+    )
+    rag_raptor_cluster_size: int = Field(
+        default=5,
+        ge=2,
+        le=50,
+        description="RAPTOR の 1 cluster あたり chunk 数(要約単位)。",
+    )
+    rag_raptor_max_levels: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="RAPTOR 要約 tree の最大階層数。",
+    )
+    rag_parser_readiness_probe_enabled: bool = Field(
+        default=False,
+        description=(
+            "readiness 画面の adapter version/可用性を parser サービスの /health 問い合わせで "
+            "解決する。OFF(既定)は backend プロセス内の import 検出にフォールバック(開発/テスト "
+            "用)。compose / 本番では true にしてサービスの導入状況を表示する。"
+        ),
+    )
+    rag_parser_readiness_probe_timeout_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description="readiness の /health 問い合わせ timeout(秒)。",
+    )
+    # --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
+    rag_service_control_enabled: bool = Field(
+        default=False,
+        description=(
+            "サービス管理画面からの起動/停止(docker compose 制御)を有効化する。"
+            "OFF(既定)は稼働状態の可視化のみで、制御 API は 409(control_disabled)で拒否する。"
+            "ON にする場合は backend が docker CLI を実行できる必要がある(ホスト直起動、または "
+            "docker.sock + docker CLI のマウント)。"
+        ),
+    )
+    rag_service_control_command: str = Field(
+        default="docker compose",
+        description=(
+            "サービス起動/停止に使う compose コマンドのベース(空白区切り)。"
+            "service 名はカタログの allowlist 経由でのみ付与し、任意コマンドは受け付けない。"
+        ),
+    )
+    rag_service_control_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="サービス起動/停止 subprocess の timeout(秒)。超過は失敗として構造化返却する。",
+    )
+    rag_service_status_probe_timeout_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description=(
+            "サービス管理画面が各マイクロサービスの /health を問い合わせる timeout(秒)。"
+            "接続拒否/timeout は stopped、到達したが status!=ok は degraded として表示する。"
+        ),
+    )
+    # --- OCI Document Understanding（service 系 parser backend）---
+    # 別 OCI サービス(oci.ai_document)。非同期 processor job で日本語 OCR/表抽出する。
+    # 入出力は Object Storage 経由。未設定/失敗時は安全に既存フローへ縮退する。
+    oci_document_understanding_compartment_id: str = Field(
+        default="",
+        description=(
+            "OCI Document Understanding の compartment OCID。空のときは "
+            "oci_compartment_id を使う。"
+        ),
+    )
+    oci_document_understanding_namespace: str = Field(
+        default="",
+        description=(
+            "DU 入出力 Object Storage の namespace。空のときは object_storage_namespace を使う。"
+        ),
+    )
+    oci_document_understanding_input_bucket: str = Field(
+        default="",
+        description=(
+            "DU 入力ファイルを置く Object Storage bucket。空のときは object_storage_bucket を使う。"
+        ),
+    )
+    oci_document_understanding_output_bucket: str = Field(
+        default="",
+        description="DU 結果 JSON の出力先 bucket。空のときは入力 bucket を使う。",
+    )
+    oci_document_understanding_input_prefix: str = Field(
+        default="document-understanding/input",
+        max_length=256,
+        description="DU 入力ファイルの Object Storage key prefix。",
+    )
+    oci_document_understanding_output_prefix: str = Field(
+        default="document-understanding/output",
+        max_length=256,
+        description="DU 結果 JSON の Object Storage key prefix。",
+    )
+    oci_document_understanding_language: str = Field(
+        default="JPN",
+        max_length=8,
+        description="DU の言語ヒント(ISO 639-2、日本語は JPN)。",
+    )
+    oci_document_understanding_features: list[str] = Field(
+        default_factory=lambda: ["DOCUMENT_TEXT_EXTRACTION", "TABLE_EXTRACTION"],
+        description="DU で要求する analysis feature 種別。",
+    )
+    oci_document_understanding_poll_interval_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        le=60.0,
+        description="DU processor job の状態 poll 間隔(秒)。",
+    )
+    oci_document_understanding_timeout_seconds: float = Field(
+        default=600.0,
+        gt=0,
+        le=3600.0,
+        description="DU processor job 完了待ちの上限(秒)。超過時は安全に縮退する。",
+    )
+    # --- OCI AI Speech(音声文字起こし。空欄はローカル faster-whisper へ縮退)---
+    oci_speech_compartment_id: str = Field(
+        default="",
+        description="OCI AI Speech の compartment OCID。空欄時は oci_compartment_id を使う。",
+    )
+    oci_speech_namespace: str = Field(
+        default="",
+        description="Speech 入出力 Object Storage の namespace。空欄は object_storage_namespace。",
+    )
+    oci_speech_input_bucket: str = Field(
+        default="",
+        description="Speech 入力 bucket。空欄は object_storage_bucket。",
+    )
+    oci_speech_output_bucket: str = Field(
+        default="",
+        description="Speech 出力 bucket。空欄は入力 bucket と同じ。",
+    )
+    oci_speech_input_prefix: str = Field(
+        default="speech/input",
+        description="Speech 入力 object の key prefix。",
+    )
+    oci_speech_output_prefix: str = Field(
+        default="speech/output",
+        description="Speech 出力 JSON の key prefix。",
+    )
+    oci_speech_language: str = Field(
+        default="ja",
+        description="文字起こしの言語コード(既定 日本語)。",
+    )
+    oci_speech_poll_interval_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="Speech transcription job の状態 poll 間隔(秒)。",
+    )
+    oci_speech_timeout_seconds: float = Field(
+        default=900.0,
+        gt=0,
+        le=7200.0,
+        description="Speech job 完了待ちの上限(秒)。超過時はローカル faster-whisper へ縮退。",
+    )
     rag_segment_checkpoint_enabled: bool = Field(
         default=True,
         description="取込 segment checkpoint を Oracle に永続化し、失敗 segment の再試行に使う。",
@@ -491,6 +1257,14 @@ class Settings(BaseSettings):
         default="artifacts/extractions",
         max_length=256,
         description="構造化抽出 artifact の Object Storage key prefix。",
+    )
+    rag_review_gate_enabled: bool = Field(
+        default=False,
+        description=(
+            "True のときファイル処理を 2 段階(parse → 人がプレビュー確認 → index)にする。"
+            "前段 EXTRACT job は抽出後 REVIEW で停止し、承認 API 経由の INDEX job で索引する。"
+            "False(既定)は従来どおり 1 ジョブで INDEXED まで一気通貫する。"
+        ),
     )
 
     # --- レート制限（高コスト API の保護）---
@@ -530,9 +1304,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:
-        """chunk overlap が chunk size 以上になる誤設定を起動時に拒否する。"""
+        """chunk size と各 chunking 戦略パラメータの整合性を起動時に検証する。"""
         if self.rag_chunk_overlap >= self.rag_chunk_size:
             raise ValueError("RAG_CHUNK_OVERLAP は RAG_CHUNK_SIZE より小さくしてください。")
+        if self.rag_chunk_child_size >= self.rag_chunk_size:
+            raise ValueError("RAG_CHUNK_CHILD_SIZE は RAG_CHUNK_SIZE より小さくしてください。")
+        if self.rag_chunk_min_chars >= self.rag_chunk_size:
+            raise ValueError("RAG_CHUNK_MIN_CHARS は RAG_CHUNK_SIZE より小さくしてください。")
         return self
 
     @property
@@ -703,6 +1481,7 @@ def _apply_persisted_model_settings(
     settings.oci_enterprise_ai_vlm_model = _persisted_vision_model_id(models, default_model)
     settings.oci_enterprise_ai_llm_path = enterprise_ai.api_path
     settings.oci_enterprise_ai_vlm_path = enterprise_ai.api_path
+    settings.oci_enterprise_ai_vlm_input_mode = enterprise_ai.vlm_input_mode
     settings.oci_enterprise_ai_llm_payload_template = enterprise_ai.text_payload_template
     settings.oci_enterprise_ai_vlm_payload_template = enterprise_ai.vision_payload_template
     settings.oci_enterprise_ai_llm_response_path = enterprise_ai.text_response_path

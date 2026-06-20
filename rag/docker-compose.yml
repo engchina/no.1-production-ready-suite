@@ -1,17 +1,58 @@
+# parser は独立マイクロサービス化している(services/parsers/<name>)。
+# backend / ingestion-worker は重い parser 依存を持たず、取込時に各 parser サービスへ
+# HTTP 委譲する(未達時は local / Enterprise AI VLM へ安全に fallback)。
+# CPU parser(docling/marker/unstructured)は既定起動、GPU parser(mineru/dots_ocr)は
+# `--profile gpu` で opt-in する。
+
+x-parser-service-urls: &parser-service-urls
+  RAG_PARSER_DOCLING_SERVICE_URL: http://parser-docling:8000
+  RAG_PARSER_MARKER_SERVICE_URL: http://parser-marker:8000
+  RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000
+  RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
+  RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
+  RAG_PARSER_GLM_OCR_SERVICE_URL: http://parser-glm-ocr:8000
+  # 前処理(parse 前の原本変換)マイクロサービス。1 変換 = 1 独立サービス。
+  RAG_PREPROCESS_OFFICE_TO_PDF_SERVICE_URL: http://preprocess-office-to-pdf:8000
+  RAG_PREPROCESS_PDF_TO_PAGE_IMAGES_SERVICE_URL: http://preprocess-pdf-to-page-images:8000
+  RAG_PREPROCESS_CSV_TO_JSON_SERVICE_URL: http://preprocess-csv-to-json:8000
+  RAG_PREPROCESS_EXCEL_TO_JSON_SERVICE_URL: http://preprocess-excel-to-json:8000
+
 services:
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     env_file:
       - path: ./backend/.env
         required: false
     environment:
-      - LOCAL_STORAGE_DIR=/u01/production-ready-rag
-      - MODEL_SETTINGS_FILE=model-settings.json
-      - OCI_CONFIG_FILE=/home/appuser/.oci/config
-      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-2}
-      - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-60}
+      <<: *parser-service-urls
+      # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
+      ENVIRONMENT: prod
+      LOCAL_STORAGE_DIR: /u01/production-ready-rag
+      MODEL_SETTINGS_FILE: model-settings.json
+      OCI_CONFIG_FILE: /home/appuser/.oci/config
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-60}
+      # 取込は専用ワーカーへ切り出す。API プロセスはキュー投入のみ行い、
+      # event loop を取込処理で塞がない。
+      INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
+      INGESTION_QUEUE_INPROCESS_WORKER_ENABLED: "false"
+      # readiness 画面は parser サービスの /health で導入状況・version を表示する。
+      RAG_PARSER_READINESS_PROBE_ENABLED: "true"
+      # 前処理マイクロサービスへの委譲を有効化(profile は既定 passthrough のまま)。
+      RAG_PREPROCESS_ENABLED: "true"
+      # サービス管理画面: 既定は稼働状態の可視化のみ(/api/services は各 /health を集約)。
+      # 画面から起動/停止(docker compose 制御)も使う場合は、backend から docker CLI を
+      # 実行できるようにした上で RAG_SERVICE_CONTROL_ENABLED: "true" を設定する。
+      # コンテナ運用では docker socket + docker CLI のマウントが必要(下記コメント参照)。
+      # RAG_SERVICE_CONTROL_ENABLED: "true"
     ports:
       - "8000:8000"
+    # サービス管理画面から起動/停止を行う場合のみ、docker socket と compose ファイルを
+    # backend へマウントする(既定はコメントアウト=可視化のみで socket 非公開)。
+    #   - /var/run/docker.sock:/var/run/docker.sock
+    #   - ./docker-compose.yml:/app/docker-compose.yml:ro
     # OCI 設定 / Oracle wallet をマウント
     volumes:
       - ~/.oci:/home/appuser/.oci:ro
@@ -25,6 +66,209 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      <<: *parser-service-urls
+      ENVIRONMENT: prod
+      LOCAL_STORAGE_DIR: /u01/production-ready-rag
+      MODEL_SETTINGS_FILE: model-settings.json
+      OCI_CONFIG_FILE: /home/appuser/.oci/config
+      INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
+      INGESTION_QUEUE_WORKER_CONCURRENCY: ${INGESTION_QUEUE_WORKER_CONCURRENCY:-2}
+      INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED: "false"
+      # 前処理マイクロサービスへの委譲を有効化(profile は既定 passthrough のまま)。
+      RAG_PREPROCESS_ENABLED: "true"
+    # 取込キューを消費する専用ワーカープロセス。水平スケールは replicas を増やす
+    # （claim_ingestion_job の row lock で同一ジョブの二重実行は起きない）。
+    command:
+      - sh
+      - -c
+      - "exec uv run --no-sync python -m app.rag.ingestion_worker"
+    volumes:
+      - ~/.oci:/home/appuser/.oci:ro
+      - backend-local-storage:/u01/production-ready-rag
+
+  # ---- 前処理マイクロサービス(CPU・既定起動、1 変換 = 1 独立サービス)----
+  # parse の前に原本を変換する。未達時は backend が passthrough へ安全に縮退する。
+  preprocess-office-to-pdf:
+    build:
+      context: .
+      dockerfile: services/preprocess/office_to_pdf/Dockerfile
+    restart: unless-stopped
+
+  preprocess-pdf-to-page-images:
+    build:
+      context: .
+      dockerfile: services/preprocess/pdf_to_page_images/Dockerfile
+    restart: unless-stopped
+
+  preprocess-csv-to-json:
+    build:
+      context: .
+      dockerfile: services/preprocess/csv_to_json/Dockerfile
+    restart: unless-stopped
+
+  preprocess-excel-to-json:
+    build:
+      context: .
+      dockerfile: services/preprocess/excel_to_json/Dockerfile
+    restart: unless-stopped
+
+  preprocess-url-to-markdown:
+    build:
+      context: .
+      dockerfile: services/preprocess/url_to_markdown/Dockerfile
+    restart: unless-stopped
+
+  preprocess-image-enhance:
+    build:
+      context: .
+      dockerfile: services/preprocess/image_enhance/Dockerfile
+    restart: unless-stopped
+
+  preprocess-pii-redact:
+    build:
+      context: .
+      dockerfile: services/preprocess/pii_redact/Dockerfile
+    restart: unless-stopped
+
+  # ---- parser マイクロサービス(CPU・既定起動)----
+  parser-docling:
+    build:
+      context: .
+      dockerfile: services/parsers/docling/Dockerfile
+    restart: unless-stopped
+
+  parser-marker:
+    build:
+      context: .
+      dockerfile: services/parsers/marker/Dockerfile
+    restart: unless-stopped
+
+  parser-unstructured:
+    build:
+      context: .
+      dockerfile: services/parsers/unstructured/Dockerfile
+    restart: unless-stopped
+
+  # ---- parser マイクロサービス(GPU・`--profile gpu` で opt-in)----
+  parser-mineru:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/mineru/Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  parser-dots-ocr:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/dots_ocr/Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  parser-glm-ocr:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/glm_ocr/Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  parser-asr:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/asr/Dockerfile
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  # ---- pipeline ステージのプラグイン(マイクロサービス)----
+  pipeline-chunking:
+    build:
+      context: .
+      dockerfile: services/pipeline/chunking/Dockerfile
+    restart: unless-stopped
+
+  pipeline-vector-index:
+    build:
+      context: .
+      dockerfile: services/pipeline/vector_index/Dockerfile
+    restart: unless-stopped
+
+  pipeline-graphrag:
+    build:
+      context: .
+      dockerfile: services/pipeline/graphrag/Dockerfile
+    restart: unless-stopped
+
+  pipeline-generation:
+    build:
+      context: .
+      dockerfile: services/pipeline/generation/Dockerfile
+    restart: unless-stopped
+
+  pipeline-guardrail:
+    build:
+      context: .
+      dockerfile: services/pipeline/guardrail/Dockerfile
+    restart: unless-stopped
+
+  pipeline-agentic:
+    build:
+      context: .
+      dockerfile: services/pipeline/agentic/Dockerfile
+    restart: unless-stopped
+
+  pipeline-grounding:
+    build:
+      context: .
+      dockerfile: services/pipeline/grounding/Dockerfile
+    restart: unless-stopped
+
+  pipeline-evaluation:
+    build:
+      context: .
+      dockerfile: services/pipeline/evaluation/Dockerfile
+    restart: unless-stopped
+
+  pipeline-retrieval:
+    build:
+      context: .
+      dockerfile: services/pipeline/retrieval/Dockerfile
+    restart: unless-stopped
 
   frontend:
     build: ./frontend

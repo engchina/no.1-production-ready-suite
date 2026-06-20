@@ -18,7 +18,12 @@ from app.clients.oci_genai import OciGenAiClient
 from app.config import Settings
 from app.rag import ingestion as ingestion_module
 from app.rag.graph_index import GraphIndex
-from app.rag.ingestion import IngestionCancelledError, IngestionPipeline, IngestionUserError
+from app.rag.ingestion import (
+    EXTRACTION_ARTIFACT_SCHEMA_VERSION,
+    IngestionCancelledError,
+    IngestionPipeline,
+    IngestionUserError,
+)
 from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.rag.parsers import ParserRegistryResult
 from app.schemas.document import (
@@ -45,6 +50,7 @@ class FakeOracle:
     def __init__(self) -> None:
         self.saved_extraction: StructuredExtraction | None = None
         self.saved_chunk_count = 0
+        self.atomic_index_save_count = 0
         self.saved_graph_index: GraphIndex | None = None
         self.graph_document_id: str | None = None
         self.statuses: list[FileStatus] = []
@@ -84,6 +90,18 @@ class FakeOracle:
         vectors: list[list[float]],
     ) -> None:
         _ = document_id, vectors
+        self.saved_chunk_count = len(chunks)
+
+    async def save_index(
+        self,
+        document_id: str,
+        extraction: StructuredExtraction,
+        chunks: list[Any],
+        vectors: list[list[float]],
+    ) -> None:
+        _ = document_id, vectors
+        self.atomic_index_save_count += 1
+        self.saved_extraction = extraction
         self.saved_chunk_count = len(chunks)
 
     async def list_document_knowledge_bases(
@@ -779,6 +797,7 @@ async def test_ingestion_pipeline_keeps_successful_external_adapter_for_office(
     )
 
     assert detail.status == FileStatus.INDEXED
+    assert oracle.atomic_index_save_count == 1
     assert oracle.saved_extraction is not None
     assert oracle.saved_extraction.raw_text == "Docling adapter が抽出した Office 本文"
     assert oracle.saved_extraction.parser_artifacts["parser_backend"] == "docling"
@@ -816,6 +835,7 @@ async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index() 
         )
 
     assert oracle.statuses == [FileStatus.INGESTING]
+    assert oracle.atomic_index_save_count == 0
     assert oracle.saved_extraction is None
     assert oracle.saved_chunk_count == 0
 
@@ -827,7 +847,6 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
         rag_graph_enabled=True,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -868,7 +887,6 @@ async def test_ingestion_pipeline_splits_pdf_into_page_segments() -> None:
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -907,7 +925,6 @@ async def test_ingestion_pipeline_retries_truncated_pdf_segment_per_page() -> No
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -956,7 +973,6 @@ async def test_ingestion_pipeline_retries_only_failed_checkpoint_segment() -> No
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -999,7 +1015,6 @@ async def test_ingestion_pipeline_preserves_succeeded_segment_on_later_failure()
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1043,7 +1058,6 @@ async def test_ingestion_pipeline_records_schema_validation_detail_on_failed_seg
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1117,8 +1131,8 @@ async def test_ingestion_pipeline_merges_cached_succeeded_segments_on_failed_ret
             artifact_path=path_5,
         ),
     }
-    storage.seed_extraction(path_1, _segment_extraction("cached 1", page_number=1))
-    storage.seed_extraction(path_5, _segment_extraction("cached 5", page_number=1))
+    _seed_segment(storage, oracle, "doc-cached:p1-2", "cached 1")
+    _seed_segment(storage, oracle, "doc-cached:p5-5", "cached 5")
     vlm = SegmentCapturingVlm()
     settings = Settings.model_construct(
         rag_pdf_segmentation_enabled=True,
@@ -1126,7 +1140,6 @@ async def test_ingestion_pipeline_merges_cached_succeeded_segments_on_failed_ret
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1191,9 +1204,9 @@ async def test_ingestion_pipeline_reuses_all_succeeded_segment_artifacts() -> No
             ("doc-reuse:p5-5", 5, 5, paths["doc-reuse:p5-5"]),
         ]
     }
-    storage.seed_extraction(paths["doc-reuse:p1-2"], _segment_extraction("cached 1", page_number=1))
-    storage.seed_extraction(paths["doc-reuse:p3-4"], _segment_extraction("cached 3", page_number=1))
-    storage.seed_extraction(paths["doc-reuse:p5-5"], _segment_extraction("cached 5", page_number=1))
+    _seed_segment(storage, oracle, "doc-reuse:p1-2", "cached 1")
+    _seed_segment(storage, oracle, "doc-reuse:p3-4", "cached 3")
+    _seed_segment(storage, oracle, "doc-reuse:p5-5", "cached 5")
     vlm = SegmentCapturingVlm()
     settings = Settings.model_construct(
         rag_pdf_segmentation_enabled=True,
@@ -1201,7 +1214,6 @@ async def test_ingestion_pipeline_reuses_all_succeeded_segment_artifacts() -> No
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1268,14 +1280,8 @@ async def test_ingestion_pipeline_merges_segment_structure_with_unique_lineage()
             ("doc-structure:p3-4", 3, 4, paths["doc-structure:p3-4"]),
         ]
     }
-    storage.seed_extraction(
-        paths["doc-structure:p1-2"],
-        _segment_extraction("cached 1", page_number=1, include_structure=True),
-    )
-    storage.seed_extraction(
-        paths["doc-structure:p3-4"],
-        _segment_extraction("cached 3", page_number=1, include_structure=True),
-    )
+    _seed_segment(storage, oracle, "doc-structure:p1-2", "cached 1", include_structure=True)
+    _seed_segment(storage, oracle, "doc-structure:p3-4", "cached 3", include_structure=True)
     pipeline = IngestionPipeline(
         vlm=SegmentCapturingVlm(),
         genai=FakeEmbeddingClient(),
@@ -1287,7 +1293,6 @@ async def test_ingestion_pipeline_merges_segment_structure_with_unique_lineage()
             rag_pdf_max_segments=10,
             rag_chunk_size=800,
             rag_chunk_overlap=120,
-            rag_max_chunks_per_document=512,
             oci_genai_embedding_model="cohere.embed-v4.0",
             oci_enterprise_ai_models=[],
             oci_enterprise_ai_default_model="",
@@ -1361,7 +1366,7 @@ async def test_ingestion_pipeline_reextracts_missing_succeeded_segment_artifact(
             artifact_path=cached_path,
         ),
     }
-    storage.seed_extraction(cached_path, _segment_extraction("cached 3", page_number=1))
+    _seed_segment(storage, oracle, "doc-cache-miss:p3-4", "cached 3")
     vlm = SegmentCapturingVlm()
     settings = Settings.model_construct(
         rag_pdf_segmentation_enabled=True,
@@ -1369,7 +1374,6 @@ async def test_ingestion_pipeline_reextracts_missing_succeeded_segment_artifact(
         rag_pdf_max_segments=10,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
-        rag_max_chunks_per_document=512,
         oci_genai_embedding_model="cohere.embed-v4.0",
         oci_enterprise_ai_models=[],
         oci_enterprise_ai_default_model="",
@@ -1483,7 +1487,7 @@ async def test_ingestion_pipeline_retries_failed_openxml_office_segment_from_cac
             error_code="office_local_parse_failed",
         ),
     }
-    storage.seed_extraction(cached_path, _segment_extraction("cached sheet 1", page_number=1))
+    _seed_segment(storage, oracle, "doc-office:sheet1", "cached sheet 1")
     pipeline = IngestionPipeline(
         vlm=CapturingVlm(),
         genai=FakeEmbeddingClient(),
@@ -1572,8 +1576,16 @@ def _segment_extraction(
     *,
     page_number: int,
     include_structure: bool = False,
+    document_id: str | None = None,
+    segment_id: str | None = None,
+    page_start: int | None = None,
+    page_end: int | None = None,
 ) -> StructuredExtraction:
-    """segment artifact 用の最小 StructuredExtraction。"""
+    """segment artifact 用の最小 StructuredExtraction。
+
+    segment_id を渡すと、cache 再利用の identity 照合(``_cached_segment_artifact_matches``)が
+    通るよう ``extraction_artifact_*`` を parser_artifacts に埋める(producer と同じキー)。
+    """
     payload: dict[str, object] = {
         "raw_text": text,
         "document_type": "社内規程",
@@ -1617,10 +1629,48 @@ def _segment_extraction(
                         "alt_text": text,
                     }
                 ],
-                "parser_artifacts": {"source_parser": "enterprise_ai_segment"},
             }
         )
+    artifacts: dict[str, object] = {}
+    if include_structure:
+        artifacts["source_parser"] = "enterprise_ai_segment"
+    if segment_id is not None:
+        artifacts.update(
+            {
+                "extraction_artifact_schema_version": EXTRACTION_ARTIFACT_SCHEMA_VERSION,
+                "extraction_artifact_kind": "segment",
+                "extraction_artifact_document_id": document_id,
+                "extraction_artifact_segment_id": segment_id,
+                "extraction_artifact_page_start": page_start,
+                "extraction_artifact_page_end": page_end,
+            }
+        )
+    if artifacts:
+        payload["parser_artifacts"] = artifacts
     return StructuredExtraction.model_validate(payload)
+
+
+def _seed_segment(
+    storage: "FakeObjectStorage",
+    oracle: "FakeOracle",
+    segment_id: str,
+    text: str,
+    *,
+    include_structure: bool = False,
+) -> None:
+    """oracle.segments の identity を引いて、cache 再利用可能な segment artifact を seed する。"""
+    seg = oracle.segments[segment_id]
+    extraction = _segment_extraction(
+        text,
+        page_number=seg.page_start or 1,
+        include_structure=include_structure,
+        document_id=seg.document_id,
+        segment_id=seg.segment_id,
+        page_start=seg.page_start,
+        page_end=seg.page_end,
+    )
+    assert seg.artifact_path is not None
+    storage.seed_extraction(seg.artifact_path, extraction)
 
 
 def _pdf_source_profile(*, file_size_bytes: int) -> SourceProfile:

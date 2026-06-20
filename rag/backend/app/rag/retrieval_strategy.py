@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from app.config import Settings
+from app.rag.graph_adapter import resolve_graph_adapter
 from app.schemas.search import SearchMode, SearchRequest, SearchStrategy
 
 GLOBAL_QUERY_HINTS = (
@@ -122,7 +123,7 @@ def _resolve_graph_strategy(
     fallback_mode: SearchMode = SearchMode.HYBRID,
 ) -> ResolvedRetrievalStrategy:
     """GraphRAG-lite が未有効なら既存 retrieval へ戻す。"""
-    if not settings.rag_graph_enabled:
+    if not resolve_graph_adapter(settings).enabled:
         return ResolvedRetrievalStrategy(
             strategy=SearchStrategy.HYBRID,
             mode=fallback_mode,

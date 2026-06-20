@@ -15,6 +15,7 @@ from typing import Any
 
 from app.clients.oracle import (
     oracle_agent_memory_schema_sql,
+    oracle_business_view_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_feedback_schema_sql,
@@ -29,7 +30,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260616_006"
+MIGRATION_ARTIFACT_VERSION = "20260619_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -61,6 +62,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="knowledge_bases",
             table_name="rag_knowledge_bases",
             sql=oracle_knowledge_base_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="business_views",
+            table_name="rag_business_views",
+            sql=oracle_business_view_schema_sql(),
         ),
         OracleSchemaSection(
             name="ingestion_jobs",
@@ -158,6 +164,36 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260616_006_agent_memories",
             table_name="rag_agent_memories",
             sql=_agent_memories_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260617_001_ingestion_audit_file_processing_metrics",
+            table_name="rag_ingestion_audit",
+            sql=_ingestion_audit_file_processing_metrics_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260617_002_search_audit_adaptive_context",
+            table_name="rag_search_audit",
+            sql=_search_audit_adaptive_context_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260617_003_search_audit_dependency_context",
+            table_name="rag_search_audit",
+            sql=_search_audit_dependency_context_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260618_001_documents_review_status",
+            table_name="rag_documents",
+            sql=_documents_review_status_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260618_002_ingestion_jobs_phase",
+            table_name="rag_ingestion_jobs",
+            sql=_ingestion_jobs_phase_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260619_001_business_views",
+            table_name="rag_business_views",
+            sql=_business_views_migration_sql(),
         ),
     ]
 
@@ -447,6 +483,70 @@ END;
 """.strip()
 
 
+def _documents_review_status_migration_sql() -> str:
+    """rag_documents.status の CHECK constraint に REVIEW / INDEXING を追加する。"""
+    return """
+DECLARE
+    v_constraint_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND constraint_name = 'RAG_DOCUMENTS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_documents DROP CONSTRAINT '
+            || 'rag_documents_status_ck';
+    END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_documents ADD CONSTRAINT '
+        || 'rag_documents_status_ck CHECK '
+        || '(status IN (''UPLOADED'', ''INGESTING'', ''REVIEW'', '
+        || '''INDEXING'', ''INDEXED'', ''ERROR''))';
+END;
+/
+""".strip()
+
+
+def _ingestion_jobs_phase_migration_sql() -> str:
+    """rag_ingestion_jobs に phase 列(EXTRACT/INDEX)を追加する。"""
+    return """
+DECLARE
+    v_column_count NUMBER;
+    v_constraint_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND column_name = 'PHASE';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_jobs ADD '
+            || '(phase VARCHAR2(16) DEFAULT ''EXTRACT'' NOT NULL)';
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND constraint_name = 'RAG_INGESTION_JOBS_PHASE_CK';
+
+    IF v_constraint_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_jobs ADD CONSTRAINT '
+            || 'rag_ingestion_jobs_phase_ck CHECK '
+            || '(phase IN (''EXTRACT'', ''INDEX''))';
+    END IF;
+END;
+/
+""".strip()
+
+
 def _evaluation_runs_result_sha256_migration_sql() -> str:
     """rag_evaluation_runs に artifact hash 列を追加する。"""
     return """
@@ -477,6 +577,61 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_evaluation_runs_result_hash_idx '
             || 'ON rag_evaluation_runs (result_sha256)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _business_views_migration_sql() -> str:
+    """rag_business_views(業務アシスタント)table を追加する。"""
+    return """
+DECLARE
+    v_table_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_BUSINESS_VIEWS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_business_views ('
+            || 'business_view_id VARCHAR2(64) PRIMARY KEY,'
+            || 'tenant_id_hash CHAR(64),'
+            || 'name VARCHAR2(256) NOT NULL,'
+            || 'description VARCHAR2(2000),'
+            || 'status VARCHAR2(32) DEFAULT ''ACTIVE'' NOT NULL,'
+            || 'view_config JSON,'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'archived_at TIMESTAMP WITH TIME ZONE,'
+            || 'CONSTRAINT rag_business_views_status_ck CHECK '
+            || '(status IN (''ACTIVE'', ''ARCHIVED''))'
+            || ')';
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_BUSINESS_VIEWS_TENANT_NAME_UIDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE UNIQUE INDEX rag_business_views_tenant_name_uidx '
+            || 'ON rag_business_views (NVL(tenant_id_hash, ''__GLOBAL__''), LOWER(name))';
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_BUSINESS_VIEWS_TENANT_STATUS_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_business_views_tenant_status_idx '
+            || 'ON rag_business_views (tenant_id_hash, status, updated_at DESC)';
     END IF;
 END;
 /
@@ -606,6 +761,50 @@ BEGIN
     );
 END;
 /
+    """.strip()
+
+
+def _search_audit_adaptive_context_migration_sql() -> str:
+    """rag_search_audit に adaptive context expansion の低機密集計列を追加する。"""
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_SEARCH_AUDIT'
+      AND column_name = 'CONTEXT_ADAPTIVE_EXPANDED_COUNT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_search_audit ADD '
+            || '(context_adaptive_expanded_count NUMBER(10) DEFAULT 0 NOT NULL)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _search_audit_dependency_context_migration_sql() -> str:
+    """rag_search_audit に dependency-linked context promotion の集計列を追加する。"""
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_SEARCH_AUDIT'
+      AND column_name = 'CONTEXT_DEPENDENCY_PROMOTED_COUNT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_search_audit ADD '
+            || '(context_dependency_promoted_count NUMBER(10) DEFAULT 0 NOT NULL)';
+    END IF;
+END;
+/
 """.strip()
 
 
@@ -696,6 +895,57 @@ BEGIN
         'RAG_AGENT_MEMORIES_TRACE_IDX',
         'CREATE INDEX rag_agent_memories_trace_idx ON rag_agent_memories (trace_id)'
     );
+END;
+/
+""".strip()
+
+
+def _ingestion_audit_file_processing_metrics_migration_sql() -> str:
+    """rag_ingestion_audit に file-processing 観測用の低機密集計列を追加する。"""
+    return """
+DECLARE
+    v_index_count NUMBER;
+
+    PROCEDURE add_column_if_missing(p_column_name VARCHAR2, p_column_ddl VARCHAR2) IS
+        v_column_count NUMBER;
+    BEGIN
+        SELECT COUNT(*)
+        INTO v_column_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_INGESTION_AUDIT'
+          AND column_name = p_column_name;
+
+        IF v_column_count = 0 THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_ingestion_audit ADD (' || p_column_ddl || ')';
+        END IF;
+    END;
+BEGIN
+    add_column_if_missing('PARSER_BACKEND', 'parser_backend VARCHAR2(80)');
+    add_column_if_missing('PARSER_PROFILE', 'parser_profile VARCHAR2(80)');
+    add_column_if_missing(
+        'SEGMENT_COUNT',
+        'segment_count NUMBER(10) DEFAULT 0 NOT NULL'
+    );
+    add_column_if_missing(
+        'FALLBACK_COUNT',
+        'fallback_count NUMBER(10) DEFAULT 0 NOT NULL'
+    );
+    add_column_if_missing(
+        'FAILED_SEGMENT_COUNT',
+        'failed_segment_count NUMBER(10) DEFAULT 0 NOT NULL'
+    );
+
+    SELECT COUNT(*)
+    INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_INGESTION_AUDIT_PARSER_CREATED_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_ingestion_audit_parser_created_idx '
+            || 'ON rag_ingestion_audit (parser_backend, parser_profile, created_at DESC)';
+    END IF;
 END;
 /
 """.strip()

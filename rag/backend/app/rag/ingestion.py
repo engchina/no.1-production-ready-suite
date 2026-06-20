@@ -1,6 +1,7 @@
 """取込: VLM 抽出 -> チャンク分割 -> 埋め込み -> Oracle 26ai へ索引。"""
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -9,10 +10,15 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
 from time import perf_counter
+from uuid import uuid4
 
 from pydantic import ValidationError
+from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
+from rag_pipeline_core.raptor import build_raptor_summaries
+from rag_pipeline_core.stage import ChunkingStageRequest
 
 from app.clients.object_storage import ObjectStorageClient
+from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
 from app.clients.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
     EnterpriseAiTimeoutError,
@@ -20,13 +26,32 @@ from app.clients.oci_enterprise_ai import (
     OciEnterpriseAiClient,
 )
 from app.clients.oci_genai import OciGenAiClient
+from app.clients.oci_speech import OciSpeechClient
 from app.clients.oracle import OracleClient
+from app.clients.parser_service import ParserServiceClient
+from app.clients.pipeline_stage import PipelineStageClient
+from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import Settings, enterprise_ai_vision_model_id, get_settings
+from app.rag.asset_summary import summarize_assets
 from app.rag.audit import record_rag_ingestion_audit
-from app.rag.chunking import Chunk, chunk_extraction
+from app.rag.chunking import Chunk, chunk_extraction_with_strategy
+from app.rag.chunking_strategy import resolve_chunking_params
+from app.rag.extraction_field_adapter import (
+    FieldDefinition,
+    extract_fields_from_extraction,
+    field_definitions_prompt,
+    load_field_schema,
+    parse_extraction_fields,
+)
+from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.graph_index import GraphIndex, build_graph_index
 from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.rag.ingestion_strategy import extraction_strategy_for_source
+from app.rag.navigation import (
+    build_navigation_tree,
+    navigation_summary_elements,
+    summarize_navigation_nodes,
+)
 from app.rag.observability import (
     TraceOutcome,
     elapsed_ms,
@@ -37,6 +62,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.parsers import (
+    SERVICE_ADAPTER_BACKENDS,
     OfficeSegmentExtraction,
     OfficeSegmentFailure,
     ParserRegistryResult,
@@ -45,13 +71,17 @@ from app.rag.parsers import (
     template_for_source_profile,
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
+from app.rag.preprocess_strategy import resolve_preprocess_profile
 from app.schemas.document import DocumentDetail, FileStatus, IngestionSegment, SourceProfile
 from app.schemas.extraction import (
     DocumentElement,
+    ExtractionArtifactValue,
     ExtractionAsset,
+    ExtractionField,
     ExtractionMetadataValue,
     ExtractionPage,
     ExtractionTable,
+    IngestionQualityReport,
     StructuredExtraction,
 )
 
@@ -137,6 +167,8 @@ class IngestionPipeline:
         genai: OciGenAiClient | None = None,
         oracle: OracleClient | None = None,
         object_storage: ObjectStorageClient | None = None,
+        document_understanding: OciDocumentUnderstandingClient | None = None,
+        speech: OciSpeechClient | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._settings = settings or get_settings()
@@ -144,6 +176,18 @@ class IngestionPipeline:
         self._genai = genai or OciGenAiClient(settings=self._settings)
         self._oracle = oracle or OracleClient(settings=self._settings)
         self._object_storage = object_storage or ObjectStorageClient(settings=self._settings)
+        # 外部 adapter は同一プロセスで import せず parser マイクロサービスへ HTTP 委譲する。
+        self._parser_service = ParserServiceClient(settings=self._settings)
+        # pipeline ステージ(chunking 等)のプラグイン委譲。未達は in-process へ縮退する。
+        self._pipeline_stage = PipelineStageClient(self._settings)
+        # 前処理(parse 前の原本変換)。軽量正規化は in-process、重い変換はサービスへ委譲。
+        self._preprocess = PreprocessServiceClient(self._settings)
+        # service 系 backend(OCI Document Understanding)を backend から直接呼ぶ。
+        self._document_understanding = document_understanding or OciDocumentUnderstandingClient(
+            settings=self._settings
+        )
+        # 音声/動画の文字起こし(OCI AI Speech 優先、未設定/失敗は parser-asr へ縮退)。
+        self._speech = speech or OciSpeechClient(settings=self._settings)
 
     async def ingest(
         self,
@@ -166,13 +210,23 @@ class IngestionPipeline:
         checkpoint_segments: list[IngestionSegment] = []
         try:
             await _raise_if_cancelled(cancel_checker)
-            parser_result = _observe_sync_ingestion_stage(
+            # 前処理(Preprocess): parse の前に原本を一度だけ canonical な中間物へ変換し、
+            # 派生系譜(SourceDerivation)を残す。passthrough(既定)は原本そのまま。
+            parse_bytes, parse_content_type, source_derivation = await self._preprocess_source(
+                trace_id=trace_id,
+                document_id=document_id,
+                source_bytes=image_bytes,
+                content_type=content_type,
+                source_profile=source_profile,
+            )
+            await _raise_if_cancelled(cancel_checker)
+            parser_result = await _observe_cpu_ingestion_stage(
                 trace_id,
                 "source_partition",
                 lambda: parse_with_registry(
-                    image_bytes,
+                    parse_bytes,
                     source_profile=source_profile,
-                    content_type=content_type,
+                    content_type=parse_content_type,
                     adapter_backend=getattr(
                         self._settings,
                         "rag_parser_adapter_backend",
@@ -193,29 +247,65 @@ class IngestionPipeline:
                         "rag_parser_unstructured_enabled",
                         False,
                     ),
+                    external_adapter_runner=self._parser_service.runner,
                 ),
                 attributes={
-                    "content_type": _observability_content_type(content_type),
+                    "content_type": _observability_content_type(parse_content_type),
                     "source_modality": (
                         source_profile.modality.value if source_profile is not None else "unknown"
                     ),
                     "parser_profile": strategy.parser_profile,
+                    "preprocess_profile": source_derivation.preprocess_profile,
+                    "preprocess_converted": source_derivation.converted,
                 },
                 result_attributes=_parser_result_attributes,
             )
-            if parser_result.unsupported_reason:
+            audio_extraction: StructuredExtraction | None = None
+            if parser_result.unsupported_reason == "audio_transcription_not_configured":
+                # 音声/動画は OCI AI Speech → ローカル faster-whisper の順で文字起こしする。
+                audio_extraction = await self._transcribe_audio(
+                    trace_id=trace_id,
+                    document_id=document_id,
+                    source_bytes=parse_bytes,
+                    content_type=parse_content_type,
+                    source_profile=source_profile,
+                    cancel_checker=cancel_checker,
+                )
+                if audio_extraction is None:
+                    raise IngestionUserError(_unsupported_parser_message(parser_result))
+            elif parser_result.unsupported_reason:
                 raise IngestionUserError(_unsupported_parser_message(parser_result))
             checkpoint_segments = await self._prepare_segment_checkpoints(
                 document_id=document_id,
-                source_bytes=image_bytes,
-                content_type=content_type,
+                source_bytes=parse_bytes,
+                content_type=parse_content_type,
                 source_profile=source_profile,
                 parser_backend=_checkpoint_parser_backend(parser_result, source_profile),
                 parser_profile=strategy.parser_profile,
             )
             await _raise_if_cancelled(cancel_checker)
+            # 音声文字起こしが成功していれば以降の parser/VLM 経路は短絡する。
+            extraction: StructuredExtraction | None = audio_extraction
+            service_backend = _service_parser_backend(parser_result.parser_backend)
             try:
-                if parser_result.extraction is not None and _is_external_adapter_backend(
+                if service_backend is not None:
+                    # 明示選択された service backend(OCI Enterprise AI VLM /
+                    # Document Understanding)はローカル/外部 adapter を飛ばして直接呼ぶ。
+                    # DU が利用不可/失敗のときは None を返し、下の標準フローへ安全に縮退する。
+                    extraction = await self._extract_with_service_backend(
+                        service_backend,
+                        trace_id=trace_id,
+                        document_id=document_id,
+                        source_bytes=parse_bytes,
+                        prompt=strategy.prompt,
+                        content_type=parse_content_type,
+                        parser_profile=strategy.parser_profile,
+                        checkpoint_segments=checkpoint_segments,
+                        cancel_checker=cancel_checker,
+                    )
+                if extraction is not None:
+                    pass
+                elif parser_result.extraction is not None and _is_external_adapter_backend(
                     parser_result.parser_backend
                 ):
                     extraction = parser_result.extraction
@@ -223,7 +313,7 @@ class IngestionPipeline:
                     office_extraction = await self._extract_local_office_segments(
                         document_id=document_id,
                         trace_id=trace_id,
-                        source_bytes=image_bytes,
+                        source_bytes=parse_bytes,
                         source_profile=source_profile,
                         checkpoint_segments=checkpoint_segments,
                         cancel_checker=cancel_checker,
@@ -242,9 +332,9 @@ class IngestionPipeline:
                             extracted = await self._extract_with_vlm(
                                 trace_id=trace_id,
                                 document_id=document_id,
-                                source_bytes=image_bytes,
+                                source_bytes=parse_bytes,
                                 prompt=strategy.prompt,
-                                content_type=content_type,
+                                content_type=parse_content_type,
                                 parser_profile=strategy.parser_profile,
                                 checkpoint_segments=checkpoint_segments,
                                 cancel_checker=cancel_checker,
@@ -254,6 +344,8 @@ class IngestionPipeline:
                 raise IngestionTimeoutError(str(exc)) from exc
             except EnterpriseAiIncompleteResponseError as exc:
                 raise IngestionUserError(str(exc)) from exc
+            # 上の分岐はいずれかで必ず extraction を確定させる。
+            assert extraction is not None
             await _raise_if_cancelled(cancel_checker)
             extraction = _extraction_with_parser_context(
                 extraction,
@@ -261,6 +353,8 @@ class IngestionPipeline:
                 fallback_template=template_for_source_profile(source_profile),
                 source_parser=strategy.parser_profile,
             )
+            # 派生系譜(溯源)を抽出 metadata へ刻む。artifact cache / document payload 経由で永続。
+            extraction = _extraction_with_source_derivation(extraction, source_derivation)
             quality_report = build_ingestion_quality_report(
                 extraction,
                 source_profile=source_profile,
@@ -285,6 +379,9 @@ class IngestionPipeline:
                 fallback_used=parser_result.fallback_used,
             )
             extraction = extraction.model_copy(update={"quality_report": quality_report})
+            extraction = await self._attach_asset_summaries(trace_id, extraction)
+            extraction = await self._attach_extraction_fields(trace_id, extraction)
+            extraction = await self._attach_navigation_tree(trace_id, extraction)
             checkpoint_segments = await self._mark_segments_succeeded(
                 checkpoint_segments,
                 artifact_path=extraction_artifact_path,
@@ -292,83 +389,25 @@ class IngestionPipeline:
             text = _text_for_chunking(extraction)
             if not text:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
-            await _raise_if_cancelled(cancel_checker)
-            chunks = _observe_sync_ingestion_stage(
-                trace_id,
-                "chunking",
-                lambda: chunk_extraction(
-                    extraction,
-                    chunk_size=self._settings.rag_chunk_size,
-                    overlap=self._settings.rag_chunk_overlap,
-                ),
-                attributes={
-                    "chunk_profile": "structure_v1",
-                    "chunk_size": self._settings.rag_chunk_size,
-                    "chunk_overlap": self._settings.rag_chunk_overlap,
-                    "input_chars": len(text),
-                    "parser_profile": strategy.parser_profile,
-                    "parser_backend": quality_report.parser_backend,
-                    "fallback_used": quality_report.fallback_used,
-                    "quality_risk_level": quality_report.risk_level,
-                    **_extraction_structure_attributes(extraction),
-                },
-                result_attributes=lambda result: {"chunk_count": len(result)},
-            )
-            if not chunks:
-                raise IngestionUserError("索引用チャンクを作成できませんでした。")
-            if len(chunks) > self._settings.rag_max_chunks_per_document:
-                raise IngestionUserError(
-                    "索引用チャンク数が上限を超えています。"
-                    f"max={self._settings.rag_max_chunks_per_document}, actual={len(chunks)}"
+            if self._settings.rag_review_gate_enabled:
+                # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 index で再利用する。
+                await self._oracle.save_extraction(document_id, extraction)
+                detail = await self._oracle.update_document_status(
+                    document_id, FileStatus.REVIEW
                 )
-            await _raise_if_cancelled(cancel_checker)
-            vectors = await _observe_ingestion_stage(
-                trace_id,
-                "embedding",
-                self._genai.embed([chunk.text for chunk in chunks]),
-                attributes={
-                    "model": self._settings.oci_genai_embedding_model,
-                    "input_count": len(chunks),
-                },
-                result_attributes=lambda result: {"vector_count": len(result)},
-            )
-            await _raise_if_cancelled(cancel_checker)
-            await _observe_ingestion_stage(
-                trace_id,
-                "indexing",
-                self._save_index(
-                    trace_id,
-                    document_id,
-                    extraction,
-                    chunks,
-                    vectors,
-                    cancel_checker=cancel_checker,
-                ),
-                attributes={
-                    "chunk_count": len(chunks),
-                    "vector_count": len(vectors),
-                },
-            )
-            await _raise_if_cancelled(cancel_checker)
-            detail = await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
-            record_ingestion("success", len(chunks))
-            record_rag_ingestion_audit(
+                record_ingestion("review", 0)
+                return detail
+            return await self._run_index_phase(
                 trace_id=trace_id,
                 document_id=document_id,
-                outcome="success",
+                extraction=extraction,
+                quality_report=quality_report,
+                parser_profile=strategy.parser_profile,
+                checkpoint_segments=checkpoint_segments,
                 source_bytes=image_bytes,
-                document_type=_observability_document_type(extraction.document_type),
-                extraction_confidence=extraction.confidence,
-                parser_backend=quality_report.parser_backend,
-                parser_profile=quality_report.parser_profile,
-                segment_count=len(checkpoint_segments),
-                fallback_count=1 if quality_report.fallback_used else 0,
-                failed_segment_count=quality_report.failed_segment_count,
-                chunk_count=len(chunks),
-                vector_count=len(vectors),
-                elapsed_ms=elapsed_ms(started_at),
+                started_at=started_at,
+                cancel_checker=cancel_checker,
             )
-            return detail
         except IngestionCancelledError as exc:
             await self._mark_segments_cancelled(checkpoint_segments)
             record_ingestion("cancelled", 0)
@@ -402,6 +441,301 @@ class IngestionPipeline:
                 error=exc,
             )
             raise
+
+    async def index_reviewed(
+        self,
+        document_id: str,
+        *,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+    ) -> DocumentDetail:
+        """REVIEW で承認済みの文書を後段(chunk→embed→index)だけ実行する。
+
+        前段(parse/抽出)は再実行せず、保存済み抽出本文を再利用する。
+        2 段階処理(parse → 人がプレビュー確認 → index)の INDEX フェーズ。
+        """
+        started_at = now()
+        trace_id = new_trace_id()
+        detail = await self._oracle.get_document(document_id)
+        if detail is None:
+            raise IngestionUserError("ドキュメントが見つかりません。")
+        if not detail.extraction:
+            raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+        extraction = _validate_structured_extraction_payload(detail.extraction)
+        quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        await self._oracle.update_document_status(document_id, FileStatus.INDEXING)
+        checkpoint_segments = await self._safe_list_ingestion_segments(document_id)
+        try:
+            return await self._run_index_phase(
+                trace_id=trace_id,
+                document_id=document_id,
+                extraction=extraction,
+                quality_report=quality_report,
+                parser_profile=quality_report.parser_profile,
+                checkpoint_segments=checkpoint_segments,
+                source_bytes=b"",
+                started_at=started_at,
+                cancel_checker=cancel_checker,
+            )
+        except IngestionCancelledError as exc:
+            record_ingestion("cancelled", 0)
+            record_rag_ingestion_audit(
+                trace_id=trace_id,
+                document_id=document_id,
+                outcome="error",
+                source_bytes=b"",
+                segment_count=len(checkpoint_segments),
+                failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
+                elapsed_ms=elapsed_ms(started_at),
+                error=exc,
+            )
+            raise
+        except Exception as exc:
+            record_ingestion("error", 0)
+            await self._oracle.update_document_status(
+                document_id,
+                FileStatus.ERROR,
+                _safe_persistent_error_message(exc),
+            )
+            record_rag_ingestion_audit(
+                trace_id=trace_id,
+                document_id=document_id,
+                outcome="error",
+                source_bytes=b"",
+                segment_count=len(checkpoint_segments),
+                failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
+                elapsed_ms=elapsed_ms(started_at),
+                error=exc,
+            )
+            raise
+
+    async def _run_index_phase(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        extraction: StructuredExtraction,
+        quality_report: IngestionQualityReport,
+        parser_profile: str,
+        checkpoint_segments: list[IngestionSegment],
+        source_bytes: bytes,
+        started_at: float,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+    ) -> DocumentDetail:
+        """抽出結果から chunk→embed→index を実行し INDEXED まで進める後段。
+
+        例外はそのまま呼び出し側(ingest / index_reviewed)の except へ伝播させる。
+        """
+        text = _text_for_chunking(extraction)
+        if not text:
+            raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
+        await _raise_if_cancelled(cancel_checker)
+        chunking_params = resolve_chunking_params(self._settings)
+
+        def _run_chunking() -> list[Chunk]:
+            # remote(chunking マイクロサービス)優先。未達/無効は同一ロジックで in-process 実行。
+            request = ChunkingStageRequest(
+                extraction=extraction,
+                strategy=chunking_params.strategy,
+                chunk_size=chunking_params.chunk_size,
+                overlap=chunking_params.overlap,
+                child_size=chunking_params.child_size,
+                sentence_window_size=chunking_params.sentence_window_size,
+                min_chars=chunking_params.min_chars,
+            )
+            remote = self._pipeline_stage.run_chunking(request)
+            if remote is not None:
+                return remote
+            return chunk_extraction_with_strategy(
+                extraction,
+                strategy=chunking_params.strategy,
+                chunk_size=chunking_params.chunk_size,
+                overlap=chunking_params.overlap,
+                child_size=chunking_params.child_size,
+                sentence_window_size=chunking_params.sentence_window_size,
+                min_chars=chunking_params.min_chars,
+            )
+
+        chunks = await _observe_cpu_ingestion_stage(
+            trace_id,
+            "chunking",
+            _run_chunking,
+            attributes={
+                "chunk_profile": "structure_v1",
+                "chunk_strategy": chunking_params.strategy,
+                "chunk_size": chunking_params.chunk_size,
+                "chunk_overlap": chunking_params.overlap,
+                "chunk_child_size": chunking_params.child_size,
+                "chunk_sentence_window_size": chunking_params.sentence_window_size,
+                "chunk_min_chars": chunking_params.min_chars,
+                "input_chars": len(text),
+                "parser_profile": parser_profile,
+                "parser_backend": quality_report.parser_backend,
+                "fallback_used": quality_report.fallback_used,
+                "quality_risk_level": quality_report.risk_level,
+                **_extraction_structure_attributes(extraction),
+            },
+            result_attributes=lambda result: {"chunk_count": len(result)},
+        )
+        if not chunks:
+            raise IngestionUserError("索引用チャンクを作成できませんでした。")
+        # RAPTOR 再帰要約索引(opt-in)。leaf に summary node を足して索引する。要約失敗は leaf のみ。
+        chunks = await self._augment_with_raptor(trace_id, chunks, cancel_checker)
+        # 派生系譜(溯源)を chunk metadata へ貫通させ、citation → 派生原本 → 原本を追跡可能にする。
+        chunks = _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
+        await _raise_if_cancelled(cancel_checker)
+        vectors = await _observe_ingestion_stage(
+            trace_id,
+            "embedding",
+            self._genai.embed([chunk.text for chunk in chunks]),
+            attributes={
+                "model": self._settings.oci_genai_embedding_model,
+                "input_count": len(chunks),
+            },
+            result_attributes=lambda result: {"vector_count": len(result)},
+        )
+        await _raise_if_cancelled(cancel_checker)
+        await _observe_ingestion_stage(
+            trace_id,
+            "indexing",
+            self._save_index(
+                trace_id,
+                document_id,
+                extraction,
+                chunks,
+                vectors,
+                cancel_checker=cancel_checker,
+            ),
+            attributes={
+                "chunk_count": len(chunks),
+                "vector_count": len(vectors),
+            },
+        )
+        await _raise_if_cancelled(cancel_checker)
+        detail = await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
+        record_ingestion("success", len(chunks))
+        record_rag_ingestion_audit(
+            trace_id=trace_id,
+            document_id=document_id,
+            outcome="success",
+            source_bytes=source_bytes,
+            document_type=_observability_document_type(extraction.document_type),
+            extraction_confidence=extraction.confidence,
+            parser_backend=quality_report.parser_backend,
+            parser_profile=quality_report.parser_profile,
+            segment_count=len(checkpoint_segments),
+            fallback_count=1 if quality_report.fallback_used else 0,
+            failed_segment_count=quality_report.failed_segment_count,
+            chunk_count=len(chunks),
+            vector_count=len(vectors),
+            elapsed_ms=elapsed_ms(started_at),
+        )
+        return detail
+
+    async def _preprocess_source(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        source_bytes: bytes,
+        content_type: str,
+        source_profile: SourceProfile | None,
+    ) -> tuple[bytes, str, SourceDerivation]:
+        """parse の前に原本を canonical な中間物へ変換し、(canonical bytes, content_type,
+        派生系譜)を返す。
+
+        passthrough(既定)は変換せず原本をそのまま返す(現行挙動と一致)。それ以外は
+        in-process(text_normalize)または前処理マイクロサービスへ委譲し、変換物を
+        Object Storage へ保存して派生系譜(SourceDerivation)に object path / sha を残す。
+        失敗・未対応は passthrough へ安全に縮退する。
+        """
+        profile = resolve_preprocess_profile(self._settings)
+        source_sha = hashlib.sha256(source_bytes).hexdigest()
+        if profile == "passthrough":
+            return source_bytes, content_type, _passthrough_derivation(
+                profile=profile, source_sha=source_sha, content_type=content_type
+            )
+        outcome: ConvertOutcome = await _observe_cpu_ingestion_stage(
+            trace_id,
+            "preprocess",
+            lambda: self._preprocess.convert(
+                source_bytes,
+                content_type=content_type,
+                source_profile=source_profile,
+                profile=profile,
+            ),
+            attributes={
+                "preprocess_profile": profile,
+                "content_type": _observability_content_type(content_type),
+                "source_bytes": len(source_bytes),
+            },
+            result_attributes=lambda result: {
+                "preprocess_converted": result.converted,
+                "preprocess_converter": result.converter_name,
+            },
+        )
+        if not outcome.converted or outcome.derived_bytes is None:
+            return source_bytes, content_type, _passthrough_derivation(
+                profile=profile,
+                source_sha=source_sha,
+                content_type=content_type,
+                converter_name=outcome.converter_name,
+                warnings=list(outcome.warnings),
+            )
+        derived_bytes = outcome.derived_bytes
+        derived_content_type = outcome.derived_content_type or content_type
+        derived_sha = hashlib.sha256(derived_bytes).hexdigest()
+        derived_path = await self._cache_canonical_artifact(
+            document_id=document_id,
+            trace_id=trace_id,
+            derived_bytes=derived_bytes,
+            content_type=derived_content_type,
+        )
+        derivation = SourceDerivation(
+            derivation_id=uuid4().hex,
+            preprocess_profile=profile,
+            converted=True,
+            converter_name=outcome.converter_name,
+            converter_version=outcome.converter_version,
+            source_content_type=content_type,
+            source_sha256=source_sha,
+            derived_object_path=derived_path,
+            derived_content_type=derived_content_type,
+            derived_sha256=derived_sha,
+            page_map={str(key): int(value) for key, value in outcome.page_map.items()},
+            warnings=list(outcome.warnings),
+        )
+        return derived_bytes, derived_content_type, derivation
+
+    async def _cache_canonical_artifact(
+        self,
+        *,
+        document_id: str,
+        trace_id: str,
+        derived_bytes: bytes,
+        content_type: str,
+    ) -> str | None:
+        """前処理で生成した正規化原本(canonical source)を Object Storage へ保存する。"""
+        if not getattr(self._settings, "rag_extraction_artifact_cache_enabled", True):
+            return None
+        key_prefix = _safe_artifact_prefix(
+            getattr(self._settings, "rag_canonical_artifact_prefix", "artifacts/canonical")
+        )
+        document_key = _safe_artifact_key_part(document_id)
+        trace_key = _safe_artifact_key_part(trace_id)
+        extension = _canonical_artifact_extension(content_type)
+        key = f"{key_prefix}/{document_key}/{trace_key}/canonical{extension}"
+        try:
+            return await self._object_storage.put(
+                key,
+                derived_bytes,
+                content_type=content_type or "application/octet-stream",
+            )
+        except Exception as exc:  # noqa: BLE001 - 保存失敗は派生系譜を path 無しで残し取込を続ける
+            logger.warning(
+                "canonical_artifact_cache_failed",
+                extra={"document_id": document_id, "error_type": type(exc).__name__},
+            )
+            return None
 
     async def _prepare_segment_checkpoints(
         self,
@@ -439,7 +773,8 @@ class IngestionPipeline:
             ]
         if existing and all(segment.status == "SUCCEEDED" for segment in existing):
             return existing
-        segments = _checkpoint_segments_for_source(
+        segments = await asyncio.to_thread(
+            _checkpoint_segments_for_source,
             document_id=document_id,
             source_bytes=source_bytes,
             content_type=content_type,
@@ -452,6 +787,121 @@ class IngestionPipeline:
         )
         await self._safe_replace_ingestion_segments(document_id, segments)
         return segments
+
+    async def _attach_extraction_fields(
+        self,
+        trace_id: str,
+        extraction: StructuredExtraction,
+    ) -> StructuredExtraction:
+        """`rag_field_extraction_enabled` が真なら field schema に従い named field を抽出する。
+
+        定義済み field を OCI Enterprise AI の structured output で抽出し、`ExtractionField`
+        へ Pydantic 検証して保存する（best-effort、既定 OFF）。
+        """
+        if not getattr(self._settings, "rag_field_extraction_enabled", False):
+            return extraction
+        schema = load_field_schema()
+        if not schema.fields:
+            return extraction
+
+        async def _extract(text: str, field_defs: list[FieldDefinition]) -> list[ExtractionField]:
+            prompt = (
+                "次の文書から、指定された field を抽出してください。"
+                "各 field は {\"name\", \"value\", \"value_type\", \"confidence\"} の "
+                "JSON 配列だけで出力し、見つからない field は省略してください。"
+                f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
+            )
+            raw = await self._vlm.generate(prompt, text)
+            return parse_extraction_fields(raw, field_defs)
+
+        try:
+            return await extract_fields_from_extraction(extraction, schema.fields, _extract)
+        except Exception:  # noqa: BLE001 - field 抽出失敗は取込を妨げない（best-effort）
+            logger.warning("field_extraction_failed", extra={"trace_id": trace_id})
+            return extraction
+
+    async def _attach_asset_summaries(
+        self,
+        trace_id: str,
+        extraction: StructuredExtraction,
+    ) -> StructuredExtraction:
+        """`rag_asset_summary_enabled` が真なら図・表・chart を要約して紐付ける。
+
+        object_path がある asset は Object Storage から画像を取得し OCI Enterprise AI VLM で、
+        画像が取得できない asset は alt_text を OCI Enterprise AI LLM で要約する（best-effort）。
+        既定 OFF。
+        """
+        if not getattr(self._settings, "rag_asset_summary_enabled", False):
+            return extraction
+        if not extraction.assets:
+            return extraction
+
+        async def _summarize(asset: ExtractionAsset) -> str | None:
+            prompt = (
+                "この図表の内容を日本語で1〜2文に要約してください。"
+                "読み取れない場合は空で返してください。"
+            )
+            if asset.object_path:
+                try:
+                    image_bytes = await self._object_storage.get(asset.object_path)
+                except Exception:
+                    image_bytes = None
+                if image_bytes:
+                    return await self._vlm.generate_from_image(image_bytes, prompt)
+            caption = (asset.alt_text or "").strip()
+            if not caption:
+                return None
+            return await self._vlm.generate(prompt, caption)
+
+        try:
+            return await summarize_assets(
+                extraction,
+                _summarize,
+                max_assets=getattr(self._settings, "rag_asset_summary_max_assets", 24),
+            )
+        except Exception:  # noqa: BLE001 - 要約失敗は取込を妨げない（best-effort）
+            logger.warning("asset_summary_failed", extra={"trace_id": trace_id})
+            return extraction
+
+    async def _attach_navigation_tree(
+        self,
+        trace_id: str,
+        extraction: StructuredExtraction,
+    ) -> StructuredExtraction:
+        """章節 navigation tree を決定論的に構築し、任意で node 要約を付与する。
+
+        tree 構築は LLM 不要で常に実行する。node 要約は
+        `rag_navigation_summary_enabled` が真のときだけ OCI Enterprise AI LLM で行う。
+        """
+        nodes = build_navigation_tree(extraction)
+        if not nodes:
+            return extraction
+        if getattr(self._settings, "rag_navigation_summary_enabled", False):
+
+            async def _summarize(text: str) -> str:
+                return await self._vlm.generate(
+                    "次の章節の内容を日本語で1〜2文に要約してください。"
+                    "原文にない情報は補わないでください。",
+                    text,
+                )
+
+            try:
+                nodes = await summarize_navigation_nodes(
+                    nodes,
+                    extraction,
+                    _summarize,
+                    max_nodes=getattr(self._settings, "rag_navigation_summary_max_nodes", 24),
+                )
+            except Exception:  # noqa: BLE001 - 要約失敗は tree 構築を妨げない（best-effort）
+                logger.warning("navigation_summary_failed", extra={"trace_id": trace_id})
+        # summary がある node は検索可能な section_summary element にして、
+        # Knowhere の Navigate / progressive disclosure を hybrid retrieval へつなぐ。
+        next_order = max((element.order for element in extraction.elements), default=0) + 1
+        summary_elements = navigation_summary_elements(nodes, start_order=next_order)
+        updates: dict[str, object] = {"navigation": nodes}
+        if summary_elements:
+            updates["elements"] = [*extraction.elements, *summary_elements]
+        return extraction.model_copy(update=updates)
 
     async def _cache_extraction_artifact(
         self,
@@ -601,6 +1051,13 @@ class IngestionPipeline:
                 )
                 missing_ranges.add(checkpoint_range)
                 continue
+            if not _cached_segment_artifact_matches(extraction, checkpoint):
+                logger.info(
+                    "segment_extraction_artifact_identity_mismatch",
+                    extra={"segment_id": checkpoint.segment_id},
+                )
+                missing_ranges.add(checkpoint_range)
+                continue
             cached.append(
                 _SegmentExtraction(
                     segment=PdfPageSegment(
@@ -639,6 +1096,13 @@ class IngestionPipeline:
                 extra={"error_type": type(exc).__name__},
             )
             return None
+        document_id = checkpoint_segments[0].document_id
+        if not _cached_full_artifact_matches(extraction, document_id):
+            logger.info(
+                "full_extraction_artifact_identity_mismatch",
+                extra={"document_id": document_id},
+            )
+            return None
         parser_artifacts = {
             **extraction.parser_artifacts,
             "extraction_artifact_reused": True,
@@ -659,7 +1123,8 @@ class IngestionPipeline:
         """OpenXML Office を slide/sheet checkpoint 単位で抽出・cache する。"""
         if not _has_office_checkpoint_segments(checkpoint_segments):
             return None
-        parse_result = parse_openxml_office_segment_extractions(
+        parse_result = await asyncio.to_thread(
+            parse_openxml_office_segment_extractions,
             source_bytes,
             source_profile=source_profile,
         )
@@ -925,6 +1390,146 @@ class IngestionPipeline:
                 extra={"segment_id": segment_id, "error_type": type(exc).__name__},
             )
 
+    async def _extract_with_service_backend(
+        self,
+        service_backend: str,
+        *,
+        trace_id: str,
+        document_id: str,
+        source_bytes: bytes,
+        prompt: str,
+        content_type: str,
+        parser_profile: str,
+        checkpoint_segments: Sequence[IngestionSegment],
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> StructuredExtraction | None:
+        """明示選択された service backend で抽出する。
+
+        まず再開用の cached 抽出を再利用し、無ければ各 OCI クラウドサービスを直接呼ぶ。
+        `oci_document_understanding` が利用不可/失敗のときは None を返し、呼び出し側で
+        既存のローカル/VLM フローへ安全に縮退させる。`enterprise_ai_vlm` は明示選択なので
+        常に VLM 抽出まで実行する。
+        """
+        cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
+        if cached_extraction is not None:
+            return cached_extraction
+        if service_backend == "oci_document_understanding":
+            extracted = await self._extract_with_document_understanding(
+                trace_id=trace_id,
+                document_id=document_id,
+                source_bytes=source_bytes,
+                content_type=content_type,
+                parser_profile=parser_profile,
+                checkpoint_segments=checkpoint_segments,
+                cancel_checker=cancel_checker,
+            )
+            if extracted is None:
+                return None
+            return _validate_structured_extraction_payload(extracted)
+        # enterprise_ai_vlm: fallback ではなく明示選択 → 直接 VLM 抽出。
+        extracted = await self._extract_with_vlm(
+            trace_id=trace_id,
+            document_id=document_id,
+            source_bytes=source_bytes,
+            prompt=prompt,
+            content_type=content_type,
+            parser_profile=parser_profile,
+            checkpoint_segments=checkpoint_segments,
+            cancel_checker=cancel_checker,
+        )
+        return _validate_structured_extraction_payload(extracted)
+
+    async def _augment_with_raptor(
+        self,
+        trace_id: str,
+        chunks: list[Chunk],
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> list[Chunk]:
+        """RAPTOR 再帰要約索引(opt-in)。leaf に summary node を加えて返す。
+
+        要約は OCI Enterprise AI で行い、失敗/未設定の cluster は skip(最低でも leaf を残す)。
+        OFF(既定)のときは leaf chunk をそのまま返す。
+        """
+        if not getattr(self._settings, "rag_raptor_enabled", False):
+            return chunks
+        await _raise_if_cancelled(cancel_checker)
+
+        async def _summarize(text: str) -> str | None:
+            try:
+                return await self._vlm.generate(
+                    "次のテキスト群の要点を簡潔な日本語で要約してください。",
+                    text,
+                    system_prompt="あなたは文書を階層的に要約するアシスタントです。",
+                )
+            except Exception:  # noqa: BLE001 - 要約失敗は当該 cluster を skip(leaf は残る)
+                return None
+
+        augmented = await build_raptor_summaries(
+            chunks,
+            summarizer=_summarize,
+            cluster_size=int(getattr(self._settings, "rag_raptor_cluster_size", 5)),
+            max_levels=int(getattr(self._settings, "rag_raptor_max_levels", 2)),
+        )
+        return augmented
+
+    async def _transcribe_audio(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        source_bytes: bytes,
+        content_type: str,
+        source_profile: SourceProfile | None,
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> StructuredExtraction | None:
+        """音声/動画を文字起こしする。OCI AI Speech 優先、未設定/失敗は parser-asr へ縮退。
+
+        いずれも利用不可なら None を返し、呼び出し側で「未対応」として扱う。
+        """
+        _ = trace_id
+        if not getattr(self._settings, "rag_parser_asr_enabled", True):
+            return None
+        await _raise_if_cancelled(cancel_checker)
+        # 1) OCI AI Speech(設定済みのとき優先)。
+        payload = await self._speech.transcribe(
+            source_bytes, content_type=content_type, document_id=document_id
+        )
+        if payload is not None:
+            try:
+                return _validate_structured_extraction_payload(payload)
+            except Exception:  # noqa: BLE001 - schema 不一致はローカル経路へ縮退する
+                logger.warning("OCI Speech 結果の検証に失敗。ローカル ASR へ縮退します。")
+        # 2) ローカル faster-whisper(parser-asr マイクロサービス)。
+        await _raise_if_cancelled(cancel_checker)
+        result = await asyncio.to_thread(
+            self._parser_service.runner, "asr", source_bytes, source_profile, content_type
+        )
+        if result.extraction is not None:
+            return result.extraction
+        return None
+
+    async def _extract_with_document_understanding(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        source_bytes: bytes,
+        content_type: str,
+        parser_profile: str,
+        checkpoint_segments: Sequence[IngestionSegment],
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> dict[str, object] | None:
+        """OCI Document Understanding(非同期 job)で抽出する。失敗/未設定は None。"""
+        _ = (trace_id, parser_profile, checkpoint_segments)
+        await _raise_if_cancelled(cancel_checker)
+        payload = await self._document_understanding.analyze(
+            source_bytes,
+            content_type=content_type,
+            document_id=document_id,
+        )
+        await _raise_if_cancelled(cancel_checker)
+        return payload
+
     async def _extract_with_vlm(
         self,
         *,
@@ -938,7 +1543,8 @@ class IngestionPipeline:
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> dict[str, object]:
         """必要なら PDF を segment に分けて VLM 抽出する。"""
-        segments = _pdf_segments_for_ingestion(
+        segments = await asyncio.to_thread(
+            _pdf_segments_for_ingestion,
             source_bytes,
             content_type=content_type,
             max_pages_per_segment=self._settings.rag_pdf_max_pages_per_segment,
@@ -1078,7 +1684,8 @@ class IngestionPipeline:
                     error_message="Enterprise AI の出力が上限に達しました。",
                 )
                 raise
-            page_segments = split_pdf_page_segments(
+            page_segments = await asyncio.to_thread(
+                split_pdf_page_segments,
                 segment.content,
                 max_pages_per_segment=1,
                 page_number_offset=segment.page_start - 1,
@@ -1152,11 +1759,9 @@ class IngestionPipeline:
     ) -> None:
         """抽出本文とチャンクを一貫した indexing stage として保存する。"""
         await _raise_if_cancelled(cancel_checker)
-        await self._oracle.save_extraction(document_id, extraction)
+        await self._oracle.save_index(document_id, extraction, chunks, vectors)
         await _raise_if_cancelled(cancel_checker)
-        await self._oracle.save_chunks(document_id, chunks, vectors)
-        await _raise_if_cancelled(cancel_checker)
-        if not getattr(self._settings, "rag_graph_enabled", False):
+        if not resolve_graph_adapter(self._settings).enabled:
             return
         try:
             await _observe_ingestion_stage(
@@ -1182,12 +1787,16 @@ class IngestionPipeline:
         chunks: list[Chunk],
     ) -> GraphIndex:
         """構造化抽出から GraphRAG-lite index を作り Oracle へ保存する。"""
+        graph_params = resolve_graph_adapter(self._settings)
         knowledge_bases = await self._oracle.list_document_knowledge_bases(document_id)
-        graph_index = build_graph_index(
+        graph_index = await asyncio.to_thread(
+            build_graph_index,
             document_id=document_id,
             knowledge_base_ids=[knowledge_base.id for knowledge_base in knowledge_bases],
             extraction=extraction,
             chunks=chunks,
+            build_claims=graph_params.build_claims,
+            build_community_summaries=graph_params.build_community_summaries,
         )
         await self._oracle.replace_document_graph_index(document_id, graph_index)
         return graph_index
@@ -1319,6 +1928,11 @@ def _is_external_adapter_backend(parser_backend: str) -> bool:
     return parser_backend in {"docling", "marker", "unstructured"}
 
 
+def _service_parser_backend(parser_backend: str) -> str | None:
+    """parser_result が service backend(OCI クラウド直接呼び出し)の sentinel か判定する。"""
+    return parser_backend if parser_backend in SERVICE_ADAPTER_BACKENDS else None
+
+
 def _extraction_with_parser_context(
     extraction: StructuredExtraction,
     *,
@@ -1365,6 +1979,75 @@ def _extraction_with_parser_context(
             "parser_artifacts": parser_artifacts,
         }
     )
+
+
+def _passthrough_derivation(
+    *,
+    profile: str,
+    source_sha: str,
+    content_type: str,
+    converter_name: str = "passthrough",
+    warnings: list[str] | None = None,
+) -> SourceDerivation:
+    """変換しない(passthrough / no-op / 縮退)場合の派生系譜。derived は原本と同一を指す。"""
+    return SourceDerivation(
+        derivation_id=uuid4().hex,
+        preprocess_profile=profile,
+        converted=False,
+        converter_name=converter_name,
+        converter_version="v1",
+        source_content_type=content_type,
+        source_sha256=source_sha,
+        derived_content_type=content_type,
+        derived_sha256=source_sha,
+        warnings=warnings or [],
+    )
+
+
+def _extraction_with_source_derivation(
+    extraction: StructuredExtraction,
+    derivation: SourceDerivation,
+) -> StructuredExtraction:
+    """派生系譜(溯源)を抽出 metadata(parser_artifacts)へ刻む。"""
+    parser_artifacts = {
+        **extraction.parser_artifacts,
+        "source_derivation": derivation.model_dump(mode="json"),
+    }
+    return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
+
+
+def _source_derivation_id(extraction: StructuredExtraction) -> str | None:
+    """抽出 metadata から派生系譜 ID を取り出す(無ければ None)。"""
+    derivation = extraction.parser_artifacts.get("source_derivation")
+    if isinstance(derivation, Mapping):
+        value = derivation.get("derivation_id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _chunks_with_source_derivation(chunks: list[Chunk], derivation_id: str | None) -> list[Chunk]:
+    """各 chunk metadata へ派生系譜 ID を付与する(chunk → 派生原本 → 原本の追跡)。"""
+    if not derivation_id:
+        return chunks
+    for chunk in chunks:
+        chunk.metadata["source_derivation_id"] = derivation_id
+    return chunks
+
+
+def _canonical_artifact_extension(content_type: str) -> str:
+    """canonical artifact の保存拡張子を content_type から決める(表示・取り回し用)。"""
+    normalized = (content_type or "").split(";", 1)[0].strip().casefold()
+    mapping = {
+        "application/pdf": ".pdf",
+        "text/plain": ".txt",
+        "text/markdown": ".md",
+        "text/html": ".html",
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "application/zip": ".zip",
+    }
+    return mapping.get(normalized, ".bin")
 
 
 def _source_parser_name(
@@ -1681,7 +2364,7 @@ def _extraction_with_artifact_cache_metadata(
     segment: IngestionSegment | None = None,
 ) -> StructuredExtraction:
     """Object Storage cache payload を後方互換な parser_artifacts で自描述にする。"""
-    parser_artifacts: dict[str, ExtractionMetadataValue] = {
+    parser_artifacts: dict[str, ExtractionArtifactValue] = {
         **extraction.parser_artifacts,
         "extraction_artifact_schema_version": EXTRACTION_ARTIFACT_SCHEMA_VERSION,
         "extraction_artifact_kind": artifact_kind,
@@ -1695,6 +2378,58 @@ def _extraction_with_artifact_cache_metadata(
         if segment.page_end is not None:
             parser_artifacts["extraction_artifact_page_end"] = segment.page_end
     return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
+
+
+def _cached_segment_artifact_matches(
+    extraction: StructuredExtraction,
+    segment: IngestionSegment,
+) -> bool:
+    """Object Storage の segment artifact が現在の checkpoint と一致するか確認する。"""
+    artifacts = extraction.parser_artifacts
+    return (
+        _artifact_int(artifacts.get("extraction_artifact_schema_version"))
+        == EXTRACTION_ARTIFACT_SCHEMA_VERSION
+        and _artifact_string(artifacts.get("extraction_artifact_kind")) == "segment"
+        and _artifact_string(artifacts.get("extraction_artifact_document_id"))
+        == segment.document_id
+        and _artifact_string(artifacts.get("extraction_artifact_segment_id"))
+        == segment.segment_id
+        and _artifact_int(artifacts.get("extraction_artifact_page_start")) == segment.page_start
+        and _artifact_int(artifacts.get("extraction_artifact_page_end")) == segment.page_end
+    )
+
+
+def _cached_full_artifact_matches(
+    extraction: StructuredExtraction,
+    document_id: str,
+) -> bool:
+    """Object Storage の full extraction artifact が現在文書のものか確認する。"""
+    artifacts = extraction.parser_artifacts
+    return (
+        _artifact_int(artifacts.get("extraction_artifact_schema_version"))
+        == EXTRACTION_ARTIFACT_SCHEMA_VERSION
+        and _artifact_string(artifacts.get("extraction_artifact_kind")) == "full"
+        and _artifact_string(artifacts.get("extraction_artifact_document_id")) == document_id
+    )
+
+
+def _artifact_string(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _artifact_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _checkpoint_for_source(
@@ -2170,7 +2905,7 @@ async def _observe_ingestion_stage[T](
     return result
 
 
-def _observe_sync_ingestion_stage[T](
+async def _observe_cpu_ingestion_stage[T](
     trace_id: str,
     stage: str,
     operation: Callable[[], T],
@@ -2178,20 +2913,14 @@ def _observe_sync_ingestion_stage[T](
     attributes: Mapping[str, object] | None = None,
     result_attributes: Callable[[T], Mapping[str, object]] | None = None,
 ) -> T:
-    """同期の取込 stage を metrics / trace span に記録する。"""
-    started_at = perf_counter()
-    base_attributes = dict(attributes or {})
-    try:
-        result = operation()
-    except Exception as exc:
-        elapsed = perf_counter() - started_at
-        _record_ingestion_stage(trace_id, stage, "error", elapsed, base_attributes, exc)
-        raise
-    elapsed = perf_counter() - started_at
-    if result_attributes is not None:
-        base_attributes.update(result_attributes(result))
-    _record_ingestion_stage(trace_id, stage, "success", elapsed, base_attributes)
-    return result
+    """CPU バウンドな同期 stage を thread へ退避し、event loop を塞がずに記録する。"""
+    return await _observe_ingestion_stage(
+        trace_id,
+        stage,
+        asyncio.to_thread(operation),
+        attributes=attributes,
+        result_attributes=result_attributes,
+    )
 
 
 def _record_ingestion_stage(

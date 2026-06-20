@@ -82,6 +82,24 @@ LLM_SYSTEM_PROMPT = (
     "根拠が不足する場合は、不足していると明示してください。"
     "口座番号や個人番号などの機微情報は必要最小限に留めてください。"
 )
+_QUERY_REWRITE_PROMPT = (
+    "あなたは検索クエリ最適化アシスタントです。"
+    "次の質問を、社内文書検索に適した簡潔な検索クエリへ 1 つだけ書き換えてください。"
+    '出力は JSON 文字列配列のみ(例: ["書き換えたクエリ"])とし、説明文は付けないでください。'
+)
+_QUERY_DECOMPOSE_PROMPT = (
+    "あなたは質問分解アシスタントです。"
+    "次の質問に答えるために検索すべき独立した sub-question を作成してください。"
+    '出力は JSON 文字列配列のみ(例: ["sub-question 1", "sub-question 2"])とし、'
+    "説明文は付けないでください。元質問が単純なら 1 要素でも構いません。"
+)
+# HyDE: 仮説的な回答文書を 1 つ生成し、その埋め込みで検索する(query-document 意味ギャップを橋渡し)。
+_QUERY_HYDE_PROMPT = (
+    "あなたは社内文書の専門家です。次の質問に対する、社内文書に書かれていそうな"
+    "簡潔で具体的な仮説的回答(2-3 文)を日本語で 1 つ書いてください。事実か不明でも"
+    "もっともらしい記述で構いません(検索用の仮説文書として使います)。"
+    '出力は JSON 文字列配列のみ(例: ["仮説的な回答文"])とし、説明文は付けないでください。'
+)
 STRUCTURED_EXTRACTION_INSTRUCTIONS = (
     "文書を日本語優先で OCR し、raw_text に読み順の本文全体を入れてください。"
     "ページ境界が分かる場合は raw_text に「--- page N ---」形式の行を入れてください。"
@@ -257,19 +275,66 @@ class OciEnterpriseAiClient:
             parser_profile=parser_profile,
         )
 
-    async def generate(self, prompt: str, context: str) -> str:
-        """LLM で回答を生成する。"""
-        return await self._generate_with_enterprise_ai(prompt, context)
+    async def generate(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str | None = None,
+    ) -> str:
+        """LLM で回答を生成する。system_prompt は Generation アダプター profile が解決する。"""
+        return await self._generate_with_enterprise_ai(
+            prompt,
+            context,
+            system_prompt=system_prompt,
+        )
 
-    async def generate_stream(self, prompt: str, context: str) -> AsyncIterator[str]:
+    async def generate_stream(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str | None = None,
+    ) -> AsyncIterator[str]:
         """LLM で回答を token/chunk stream として生成する。"""
-        payload = _streaming_llm_payload(_build_llm_payload(self._settings, prompt, context))
+        payload = _streaming_llm_payload(
+            _build_llm_payload(self._settings, prompt, context, system_prompt=system_prompt)
+        )
         lines = self._post_enterprise_ai_stream(
             self._settings.oci_enterprise_ai_llm_path,
             payload,
         )
         async for chunk in _iter_generated_text_stream(lines):
             yield chunk
+
+    async def plan_query(
+        self,
+        query: str,
+        *,
+        mode: str,
+        max_subqueries: int = 3,
+    ) -> list[str]:
+        """Agentic アダプター用にクエリ計画(書き換え/分解)を LLM で行う。
+
+        mode="query_rewrite" は検索向けに 1 つへ書き換え、それ以外は sub-question を返す。
+        JSON 文字列配列で受領し、解析失敗・空時は空 list を返して呼び出し側で元 query を使う。
+        """
+        # smart_routing(v1)は query_rewrite と同じ LLM 書き換え経路を使う。
+        # hyde は仮説的回答文書を 1 つ生成し、その埋め込みで検索する(別プロンプト・1 件)。
+        rewrite_modes = {"query_rewrite", "smart_routing"}
+        single_modes = rewrite_modes | {"hyde"}
+        if mode == "hyde":
+            system_prompt = _QUERY_HYDE_PROMPT
+        elif mode in rewrite_modes:
+            system_prompt = _QUERY_REWRITE_PROMPT
+        else:
+            system_prompt = _QUERY_DECOMPOSE_PROMPT
+        try:
+            raw = await self.generate(query, "", system_prompt=system_prompt)
+        except Exception:
+            return []
+        limit = 1 if mode in single_modes else max(1, max_subqueries)
+        return _parse_planned_queries(raw, limit=limit)
 
     async def generate_from_image(
         self,
@@ -279,20 +344,29 @@ class OciEnterpriseAiClient:
         mime_type: str = DEFAULT_MIME_TYPE,
     ) -> str:
         """Vision smoke test 用に OpenAI Responses 形式で画像から text を生成する。"""
-        payload = _build_vision_text_payload(
-            self._settings,
-            image_bytes,
-            prompt,
-            mime_type=mime_type,
-        )
-        response = await self._post_enterprise_ai(
-            self._settings.oci_enterprise_ai_vlm_path,
-            payload,
-        )
-        return _parse_generated_text(
-            response,
-            response_path=self._settings.oci_enterprise_ai_vlm_response_path,
-        )
+        uploaded_file_id = ""
+        if _should_upload_vlm_input(self._settings, mime_type=mime_type):
+            uploaded_file_id = await self._upload_vlm_input_file(image_bytes, mime_type=mime_type)
+        try:
+            payload = await asyncio.to_thread(
+                _build_vision_text_payload,
+                self._settings,
+                image_bytes,
+                prompt,
+                mime_type=mime_type,
+                file_id=uploaded_file_id,
+            )
+            response = await self._post_enterprise_ai(
+                self._settings.oci_enterprise_ai_vlm_path,
+                payload,
+            )
+            return _parse_generated_text(
+                response,
+                response_path=self._settings.oci_enterprise_ai_vlm_response_path,
+            )
+        finally:
+            if uploaded_file_id:
+                await self._delete_uploaded_file(uploaded_file_id)
 
     def preview_llm_request(self, prompt: str, context: str) -> EnterpriseAiRequestPreview:
         """LLM endpoint request の非機密プレビューを返す。"""
@@ -315,7 +389,7 @@ class OciEnterpriseAiClient:
     ) -> EnterpriseAiRequestPreview:
         """VLM endpoint request の非機密プレビューを返す。"""
         file_id = (
-            "" if self._settings.oci_enterprise_ai_vlm_payload_template.strip() else "file_preview"
+            "file_preview" if _should_upload_vlm_input(self._settings, mime_type=mime_type) else ""
         )
         payload = _build_vlm_payload(
             self._settings,
@@ -344,13 +418,20 @@ class OciEnterpriseAiClient:
         """OCI Enterprise AI VLM endpoint を呼び出し、構造化抽出を検証する。"""
         uploaded_file_id = ""
         normalized_mime_type = _normalized_mime_type(mime_type)
-        if (
-            not self._settings.oci_enterprise_ai_vlm_payload_template.strip()
-            and normalized_mime_type not in IMAGE_MIME_TYPES
+        if _vlm_input_mode(self._settings) == "inline_image" and (
+            normalized_mime_type not in IMAGE_MIME_TYPES
         ):
+            raise EnterpriseAiUnsupportedInputError(
+                "Enterprise AI VLM 入力方式が inline_image のため、"
+                "この MIME type は送信できません。"
+                "PDF や Office fallback を読む場合は、モデル設定の VLM 入力方式を Files API"
+                " または Auto に変更してください。"
+            )
+        if _should_upload_vlm_input(self._settings, mime_type=mime_type):
             uploaded_file_id = await self._upload_vlm_input_file(image_bytes, mime_type=mime_type)
         try:
-            payload = _build_vlm_payload(
+            payload = await asyncio.to_thread(
+                _build_vlm_payload,
                 self._settings,
                 image_bytes,
                 prompt,
@@ -416,9 +497,15 @@ class OciEnterpriseAiClient:
         except Exception:
             return
 
-    async def _generate_with_enterprise_ai(self, prompt: str, context: str) -> str:
+    async def _generate_with_enterprise_ai(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str | None = None,
+    ) -> str:
         """OCI Enterprise AI LLM endpoint を呼び出し、RAG 回答を生成する。"""
-        payload = _build_llm_payload(self._settings, prompt, context)
+        payload = _build_llm_payload(self._settings, prompt, context, system_prompt=system_prompt)
         response = await self._post_enterprise_ai(
             self._settings.oci_enterprise_ai_llm_path,
             payload,
@@ -920,35 +1007,54 @@ def _build_vision_text_payload(
     prompt: str,
     *,
     mime_type: str,
+    file_id: str = "",
 ) -> dict[str, Any]:
     """Vision 接続確認用の最小 OpenAI Responses payload を作る。"""
     model_id = enterprise_ai_vision_model_id(settings)
     _require_value(model_id, "OCI Enterprise AI Vision model")
     normalized_mime_type = _normalized_mime_type(mime_type)
     data_base64 = base64.b64encode(image_bytes).decode("ascii")
+    if file_id:
+        file_content = _responses_uploaded_file_content(normalized_mime_type, file_id)
+        content = [
+            {"type": "input_text", "text": prompt},
+            file_content,
+        ]
+    else:
+        content = [
+            {"type": "input_text", "text": prompt},
+            {
+                "type": "input_image",
+                "image_url": f"data:{normalized_mime_type};base64,{data_base64}",
+            },
+        ]
     return {
         "model": model_id,
         "input": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:{normalized_mime_type};base64,{data_base64}",
-                    },
-                ],
+                "content": content,
             }
         ],
     }
 
 
-def _build_llm_payload(settings: Settings, prompt: str, context: str) -> dict[str, Any]:
-    """LLM endpoint へ送る payload を標準形または template から作る。"""
+def _build_llm_payload(
+    settings: Settings,
+    prompt: str,
+    context: str,
+    system_prompt: str | None = None,
+) -> dict[str, Any]:
+    """LLM endpoint へ送る payload を標準形または template から作る。
+
+    `system_prompt` は Generation アダプターの profile が解決した system prompt 変種。
+    None のときは既定の `LLM_SYSTEM_PROMPT` を使い、現行挙動と一致させる。
+    """
+    effective_system_prompt = system_prompt or LLM_SYSTEM_PROMPT
     model_id = enterprise_ai_default_model_id(settings)
     user_message = _rag_user_message(prompt, context)
     messages = [
-        {"role": "system", "content": LLM_SYSTEM_PROMPT},
+        {"role": "system", "content": effective_system_prompt},
         {"role": "user", "content": user_message},
     ]
     parameters = {
@@ -964,10 +1070,10 @@ def _build_llm_payload(settings: Settings, prompt: str, context: str) -> dict[st
         "language": "ja",
         "prompt": prompt,
         "context": context,
-        "system_prompt": LLM_SYSTEM_PROMPT,
+        "system_prompt": effective_system_prompt,
         "user_message": user_message,
         "input": [{"role": "user", "content": user_message}],
-        "instructions": LLM_SYSTEM_PROMPT,
+        "instructions": effective_system_prompt,
         "messages": messages,
         "parameters": parameters,
         "temperature": parameters["temperature"],
@@ -988,7 +1094,7 @@ def _build_llm_payload(settings: Settings, prompt: str, context: str) -> dict[st
     _require_value(model_id, "OCI Enterprise AI default model")
     return {
         "model": model_id,
-        "instructions": LLM_SYSTEM_PROMPT,
+        "instructions": effective_system_prompt,
         "input": [{"role": "user", "content": user_message}],
         "temperature": parameters["temperature"],
         "max_output_tokens": parameters["max_output_tokens"],
@@ -1050,6 +1156,26 @@ def _normalized_mime_type(value: str) -> str:
     """MIME type を Enterprise AI payload 用に正規化する。"""
     cleaned = value.split(";", maxsplit=1)[0].strip().lower()
     return cleaned or DEFAULT_MIME_TYPE
+
+
+def _vlm_input_mode(settings: Settings) -> str:
+    """設定値を VLM 入力搬送方式として正規化する。"""
+    mode = str(getattr(settings, "oci_enterprise_ai_vlm_input_mode", "auto")).strip().casefold()
+    if mode in {"auto", "files_api", "inline_image"}:
+        return mode
+    return "auto"
+
+
+def _should_upload_vlm_input(settings: Settings, *, mime_type: str) -> bool:
+    """VLM 入力を Files API へアップロードするかを設定から決める。"""
+    mode = _vlm_input_mode(settings)
+    if mode == "files_api":
+        return True
+    if mode == "inline_image":
+        return False
+    if settings.oci_enterprise_ai_vlm_payload_template.strip():
+        return False
+    return _normalized_mime_type(mime_type) not in IMAGE_MIME_TYPES
 
 
 def _decode_text_bytes(data: bytes) -> str:
@@ -1313,6 +1439,36 @@ def _validation_error_message(error: ValidationError) -> str:
         "設定 > モデル の VLM response path / payload template と、VLM 出力 JSON の"
         " raw_text・confidence・elements 形式を確認して再実行してください。"
     )
+
+
+def _parse_planned_queries(raw: str, *, limit: int) -> list[str]:
+    """LLM のクエリ計画応答から JSON 文字列配列を堅牢に抽出する。"""
+    if not raw or not raw.strip():
+        return []
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return []
+    try:
+        parsed = json.loads(raw[start : end + 1])
+    except ValueError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    planned: list[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        if not isinstance(item, str):
+            continue
+        cleaned = re.sub(r"\s+", " ", item).strip()
+        key = cleaned.casefold()
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        planned.append(cleaned[:500])
+        if len(planned) >= limit:
+            break
+    return planned
 
 
 def _parse_generated_text(

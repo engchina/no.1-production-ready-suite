@@ -8,6 +8,7 @@ import pytest
 from app.api.routes import documents as documents_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
 from app.main import app
+from app.rag.kb_adapter_config import parse_adapter_config
 from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus
 from app.schemas.knowledge_base import (
     KnowledgeBaseDetail,
@@ -51,6 +52,7 @@ class FakeKnowledgeBaseOracle:
             status=KnowledgeBaseStatus.ACTIVE,
             default_search_mode=default_search_mode,
             retrieval_config=retrieval_config or {},
+            adapter_config=parse_adapter_config(retrieval_config),
             document_count=0,
             indexed_document_count=0,
             error_document_count=0,
@@ -122,6 +124,11 @@ class FakeKnowledgeBaseOracle:
                     retrieval_config
                     if "retrieval_config" in fields and retrieval_config is not None
                     else detail.retrieval_config
+                ),
+                "adapter_config": (
+                    parse_adapter_config(retrieval_config)
+                    if "retrieval_config" in fields
+                    else detail.adapter_config
                 ),
                 "updated_at": datetime(2026, 1, 2, tzinfo=UTC),
             }
@@ -355,3 +362,75 @@ def test_archived_knowledge_base_rejects_assignment(
 
     assert resp.status_code == 409
     assert resp.json()["error_messages"] == ["アーカイブ済みナレッジベースは変更できません。"]
+
+
+def test_create_knowledge_base_with_adapter_config(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """adapter_config を指定して作成すると detail に型付きで戻る。"""
+    resp = client.post(
+        "/api/knowledge-bases",
+        json={
+            "name": "Markdown FAQ",
+            "adapter_config": {
+                "ingestion": {"chunking_strategy": "markdown_heading", "chunk_size": 1200},
+                "query": {"generation_profile": "detailed_cited"},
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["adapter_config"]["ingestion"]["chunking_strategy"] == "markdown_heading"
+    assert data["adapter_config"]["ingestion"]["chunk_size"] == 1200
+    assert data["adapter_config"]["query"]["generation_profile"] == "detailed_cited"
+    # 未指定フィールドはグローバル継承を表す None で戻る。
+    assert data["adapter_config"]["ingestion"]["parser_adapter_backend"] is None
+    assert data["adapter_config"]["query"]["retrieval_strategy"] is None
+
+
+def test_patch_knowledge_base_replaces_adapter_config(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """adapter_config を PATCH すると置換され、detail へ反映される。"""
+    created = client.post("/api/knowledge-bases", json={"name": "Scanned PDF"}).json()["data"]
+    assert created["adapter_config"]["ingestion"]["chunking_strategy"] is None
+
+    patch_resp = client.patch(
+        f"/api/knowledge-bases/{created['id']}",
+        json={
+            "adapter_config": {
+                "ingestion": {
+                    "parser_adapter_backend": "docling",
+                    "parser_docling_enabled": True,
+                    "chunking_strategy": "page_level",
+                }
+            }
+        },
+    )
+
+    assert patch_resp.status_code == 200
+    data = patch_resp.json()["data"]
+    assert data["adapter_config"]["ingestion"]["parser_adapter_backend"] == "docling"
+    assert data["adapter_config"]["ingestion"]["parser_docling_enabled"] is True
+    assert data["adapter_config"]["ingestion"]["chunking_strategy"] == "page_level"
+
+    # 取得し直しても保持される。
+    get_resp = client.get(f"/api/knowledge-bases/{created['id']}")
+    reloaded = get_resp.json()["data"]["adapter_config"]
+    assert reloaded["ingestion"]["chunking_strategy"] == "page_level"
+
+
+def test_create_knowledge_base_rejects_invalid_adapter_config(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """allowlist 外の戦略値は 422 で拒否する。"""
+    resp = client.post(
+        "/api/knowledge-bases",
+        json={
+            "name": "壊れた設定",
+            "adapter_config": {"ingestion": {"chunking_strategy": "does_not_exist"}},
+        },
+    )
+
+    assert resp.status_code == 422

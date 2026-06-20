@@ -2,12 +2,15 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  ClipboardCheck,
   FileSearch,
   FlaskConical,
   GitCompare,
+  Settings2,
   XCircle,
 } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/StateViews";
@@ -23,11 +26,26 @@ import {
   type EvaluationMetricName,
   type EvaluationMetrics,
   type EvaluationRunRequestBody,
+  type EvaluationSuiteName,
+  type EvaluationSuiteStatusData,
 } from "@/lib/api";
-import { t } from "@/lib/i18n";
-import { useCompareEvaluation, useRunEvaluation } from "@/lib/queries";
+import { t, type I18nKey } from "@/lib/i18n";
+import { useCompareEvaluation, useEvaluationSettings, useRunEvaluation } from "@/lib/queries";
+import { APP_ROUTES } from "@/lib/routes";
 import { qualityCodeLabel } from "@/lib/source-profile-labels";
 import { cn } from "@/lib/utils";
+
+/** suite セレクタの「設定の既定に従う」を表す擬似値(suite を送らない)。 */
+const DEFAULT_SUITE_VALUE = "__default__" as const;
+type SuiteSelection = EvaluationSuiteName | typeof DEFAULT_SUITE_VALUE;
+
+const SUITE_ORDER: EvaluationSuiteName[] = [
+  "request_only",
+  "retrieval_focused",
+  "balanced",
+  "strict_ci",
+  "ragas_like",
+];
 
 const SAMPLE_REQUEST = JSON.stringify(
   {
@@ -37,20 +55,14 @@ const SAMPLE_REQUEST = JSON.stringify(
         query: "経費申請の承認フローを教えてください。",
         relevant_document_ids: ["doc-expense-policy"],
         expected_answer_keywords: ["部門長", "承認"],
+        expected_content_kind: "text",
+        expected_section_paths: ["経費申請 > 承認フロー"],
       },
     ],
     top_k: 10,
     rerank_top_n: 5,
     mode: "hybrid",
     filters: { status: "INDEXED" },
-    thresholds: {
-      precision_at_k: 0.4,
-      recall_at_k: 0.8,
-      mrr: 0.7,
-      answer_keyword_hit_rate: 0.8,
-      groundedness_pass_rate: 0.9,
-      citation_traceability_coverage: 0.9,
-    },
   },
   null,
   2
@@ -86,6 +98,8 @@ const RANKING_METRICS: EvaluationMetricName[] = [
   "citation_traceability_coverage",
   "bbox_citation_coverage",
   "element_lineage_coverage",
+  "content_kind_hit_rate",
+  "section_coverage",
   "faithfulness",
   "context_precision",
   "context_recall",
@@ -101,10 +115,12 @@ const RANKING_METRIC_OPTIONS = RANKING_METRICS.map((metric) => ({
 export function EvaluationClient() {
   const runMutation = useRunEvaluation();
   const compareMutation = useCompareEvaluation();
+  const settingsQuery = useEvaluationSettings();
   const [requestJson, setRequestJson] = useState(SAMPLE_REQUEST);
   const [experimentsJson, setExperimentsJson] = useState(SAMPLE_EXPERIMENTS);
   const [rankingMetric, setRankingMetric] = useState<EvaluationMetricName>("mrr");
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
+  const [suite, setSuite] = useState<SuiteSelection>(DEFAULT_SUITE_VALUE);
   const [runError, setRunError] = useState("");
   const [compareError, setCompareError] = useState("");
 
@@ -113,14 +129,21 @@ export function EvaluationClient() {
   const canRun = parsedRequest.ok;
   const canCompare = parsedRequest.ok && parsedExperiments.ok;
 
+  const globalSuite = settingsQuery.data?.suite ?? null;
+  const suiteStatuses = settingsQuery.data?.suites ?? [];
+  const effectiveSuiteName: EvaluationSuiteName | null =
+    suite === DEFAULT_SUITE_VALUE ? globalSuite : suite;
+  const requestHasThresholds = parsedRequest.ok && hasThresholds(parsedRequest.value.thresholds);
+
   const runEvaluation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!parsedRequest.ok) return;
     setRunError("");
     runMutation.reset();
     try {
+      const body = applyRequestKnowledgeBaseScope(parsedRequest.value, knowledgeBaseIds);
       await runMutation.mutateAsync(
-        applyRequestKnowledgeBaseScope(parsedRequest.value, knowledgeBaseIds)
+        suite === DEFAULT_SUITE_VALUE ? body : { ...body, suite }
       );
     } catch (error) {
       setRunError(error instanceof ApiError ? error.message : t("evaluation.error.run"));
@@ -138,6 +161,7 @@ export function EvaluationClient() {
         thresholds: parsedRequest.value.thresholds ?? null,
         experiments: applyExperimentKnowledgeBaseScope(parsedExperiments.value, knowledgeBaseIds),
         ranking_metric: rankingMetric,
+        ...(suite === DEFAULT_SUITE_VALUE ? {} : { suite }),
       });
     } catch (error) {
       setCompareError(error instanceof ApiError ? error.message : t("evaluation.error.compare"));
@@ -162,7 +186,16 @@ export function EvaluationClient() {
           </CardContent>
         </Card>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <SuiteSelector
+          suite={suite}
+          onChange={setSuite}
+          globalSuite={globalSuite}
+          effectiveSuiteName={effectiveSuiteName}
+          suiteStatuses={suiteStatuses}
+          requestHasThresholds={requestHasThresholds}
+        />
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
           <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -269,6 +302,85 @@ export function EvaluationClient() {
   );
 }
 
+function SuiteSelector({
+  suite,
+  onChange,
+  globalSuite,
+  effectiveSuiteName,
+  suiteStatuses,
+  requestHasThresholds,
+}: {
+  suite: SuiteSelection;
+  onChange: (value: SuiteSelection) => void;
+  globalSuite: EvaluationSuiteName | null;
+  effectiveSuiteName: EvaluationSuiteName | null;
+  suiteStatuses: EvaluationSuiteStatusData[];
+  requestHasThresholds: boolean;
+}) {
+  const defaultLabel = globalSuite
+    ? t("evaluation.suite.followDefaultWith", { suite: suiteLabel(globalSuite) })
+    : t("evaluation.suite.followDefault");
+  const options: SelectFieldOption<SuiteSelection>[] = [
+    { value: DEFAULT_SUITE_VALUE, label: defaultLabel },
+    ...SUITE_ORDER.map((name) => ({ value: name, label: suiteLabel(name) })),
+  ];
+  const effectiveStatus = effectiveSuiteName
+    ? (suiteStatuses.find((item) => item.name === effectiveSuiteName) ?? null)
+    : null;
+  const thresholdEntries = Object.entries(effectiveStatus?.thresholds ?? {});
+
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ClipboardCheck size={16} className="text-primary" aria-hidden />
+          {t("evaluation.suite.title")}
+        </CardTitle>
+        <CardDescription>{t("evaluation.suite.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <SelectField
+          id="evaluation-suite"
+          label={t("evaluation.suite.label")}
+          value={suite}
+          options={options}
+          onValueChange={onChange}
+        />
+        <div className="rounded-md border border-border bg-muted/20 p-3">
+          <p className="text-xs font-medium text-muted">
+            {t("evaluation.suite.thresholdsPreview")}
+          </p>
+          {thresholdEntries.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {thresholdEntries.map(([metric, value]) => (
+                <span
+                  key={metric}
+                  className="inline-flex min-h-6 items-center rounded-md bg-card px-2 text-xs font-medium text-foreground ring-1 ring-border"
+                >
+                  {metricLabel(metric as EvaluationMetricName)}
+                  <span className="tnum ml-1 font-semibold text-primary">{value}</span>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-foreground">{t("evaluation.suite.noThresholds")}</p>
+          )}
+        </div>
+        {requestHasThresholds ? (
+          <Banner severity="info">{t("evaluation.suite.manualOverrideNote")}</Banner>
+        ) : null}
+        <Link
+          to={APP_ROUTES.settingsEvaluation}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+        >
+          <Settings2 size={14} aria-hidden />
+          {t("evaluation.suite.settingsLink")}
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
 function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
   return (
     <section className="min-w-0 space-y-4" aria-labelledby="evaluation-result-title">
@@ -276,7 +388,15 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
         <h2 id="evaluation-result-title" className="text-base font-semibold text-foreground">
           {t("evaluation.result.title")}
         </h2>
-        <StatusBadge passed={metrics.passed} />
+        <div className="flex flex-wrap items-center gap-2">
+          {metrics.evaluation_suite ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted">
+              <ClipboardCheck size={13} aria-hidden />
+              {t("evaluation.suite.applied")}: {suiteLabel(metrics.evaluation_suite)}
+            </span>
+          ) : null}
+          <StatusBadge passed={metrics.passed} />
+        </div>
       </div>
       <MetricGrid metrics={metrics} />
       <IngestionQualityPanel metrics={metrics} />
@@ -468,6 +588,14 @@ function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
       label: t("evaluation.metric.elementLineage"),
       value: formatPercent(metrics.element_lineage_coverage),
     },
+    {
+      label: t("evaluation.metric.contentKindHit"),
+      value: formatPercent(metrics.content_kind_hit_rate),
+    },
+    {
+      label: t("evaluation.metric.sectionCoverage"),
+      value: formatPercent(metrics.section_coverage),
+    },
     { label: t("evaluation.metric.faithfulness"), value: formatPercent(metrics.faithfulness) },
     {
       label: t("evaluation.metric.contextPrecision"),
@@ -569,7 +697,10 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
         ) : null}
       </div>
       <div className="overflow-hidden rounded-lg border border-border bg-card">
-        <div className="overflow-x-auto">
+        {/* contain:paint で横スクロール領域を確実に封じ込める。main の [contain:layout] 配下では
+            縦スクロールが発生しない scroll container が min-width をもつ表を祖先へ伝播させ、
+            ページが横スクロール(崩れ)するため(決定論的に再現・検証済み)。 */}
+        <div className="overflow-auto [contain:paint]">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="bg-background text-xs text-muted">
               <tr>
@@ -772,6 +903,10 @@ function metricLabel(metric: EvaluationMetricName) {
       return t("evaluation.metric.bboxCitation");
     case "element_lineage_coverage":
       return t("evaluation.metric.elementLineage");
+    case "content_kind_hit_rate":
+      return t("evaluation.metric.contentKindHit");
+    case "section_coverage":
+      return t("evaluation.metric.sectionCoverage");
     case "faithfulness":
       return t("evaluation.metric.faithfulness");
     case "context_precision":
@@ -783,6 +918,15 @@ function metricLabel(metric: EvaluationMetricName) {
     case "noise_sensitivity":
       return t("evaluation.metric.noiseSensitivity");
   }
+}
+
+function suiteLabel(name: EvaluationSuiteName) {
+  return t(`settings.evaluation.suite.${name}` as I18nKey);
+}
+
+function hasThresholds(thresholds: EvaluationRunRequestBody["thresholds"]): boolean {
+  if (!thresholds) return false;
+  return Object.values(thresholds).some((value) => value !== null && value !== undefined);
 }
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };

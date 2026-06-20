@@ -7,6 +7,8 @@ export type { FileStatus };
 const STATUS_STYLES: Record<FileStatus, string> = {
   UPLOADED: "bg-slate-100 text-slate-700",
   INGESTING: "bg-amber-100 text-amber-700",
+  REVIEW: "bg-sky-100 text-sky-700",
+  INDEXING: "bg-amber-100 text-amber-700",
   INDEXED: "bg-emerald-100 text-emerald-700",
   ERROR: "bg-red-100 text-red-700",
 };

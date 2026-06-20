@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -119,9 +119,6 @@ function searchStreamBody(): string {
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth
-    )
-  ).toBe(true);
+  // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
+  await expectNoPageOverflow(page);
 }

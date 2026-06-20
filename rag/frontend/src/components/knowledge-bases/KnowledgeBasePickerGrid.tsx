@@ -123,7 +123,7 @@ export function KnowledgeBasePickerGrid({
           className={cn(
             "grid gap-2 sm:grid-cols-2 xl:grid-cols-3",
             showToolbar &&
-              "max-h-72 overflow-y-auto rounded-md border border-border bg-card/40 p-2 [scrollbar-gutter:stable]"
+              "bounded-scroll-area rounded-md border border-border bg-card/40 p-2"
           )}
         >
           {filtered.map((knowledgeBase) => (

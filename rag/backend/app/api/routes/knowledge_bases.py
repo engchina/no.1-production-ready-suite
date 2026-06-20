@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.db_degradation import load_or_degrade
+from app.rag.kb_adapter_config import dump_adapter_config
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import DocumentSummary, FileStatus
 from app.schemas.knowledge_base import (
@@ -63,11 +64,16 @@ async def create_knowledge_base(
     request: KnowledgeBaseCreateRequest,
 ) -> ApiResponse[KnowledgeBaseDetail]:
     """ナレッジベースを作成する。"""
+    retrieval_config = (
+        dump_adapter_config(request.adapter_config)
+        if request.adapter_config is not None
+        else request.retrieval_config
+    )
     detail = await OracleClient().create_knowledge_base(
         name=request.name,
         description=request.description,
         default_search_mode=request.default_search_mode,
-        retrieval_config=request.retrieval_config,
+        retrieval_config=retrieval_config,
     )
     return ApiResponse(data=detail)
 
@@ -89,14 +95,25 @@ async def update_knowledge_base(
     request: KnowledgeBaseUpdateRequest,
 ) -> ApiResponse[KnowledgeBaseDetail]:
     """ナレッジベースを更新する。"""
+    update_fields = set(request.model_fields_set)
+    retrieval_config = request.retrieval_config
+    # adapter_config は既存 retrieval_config カラムへ正規化して保存する。
+    if "adapter_config" in update_fields:
+        retrieval_config = (
+            dump_adapter_config(request.adapter_config)
+            if request.adapter_config is not None
+            else {}
+        )
+        update_fields.discard("adapter_config")
+        update_fields.add("retrieval_config")
     try:
         detail = await OracleClient().update_knowledge_base(
             knowledge_base_id,
             name=request.name,
             description=request.description,
             default_search_mode=request.default_search_mode,
-            retrieval_config=request.retrieval_config,
-            update_fields=set(request.model_fields_set),
+            retrieval_config=retrieval_config,
+            update_fields=update_fields,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc

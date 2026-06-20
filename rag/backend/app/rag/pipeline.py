@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -11,8 +12,12 @@ from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import Settings, enterprise_ai_default_model_id, get_settings
+from app.rag.agentic_adapter import resolve_agentic_adapter
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.generation_adapter import resolve_generation_adapter
+from app.rag.graph_adapter import resolve_graph_adapter
+from app.rag.grounding_adapter import GroundingAdapterParams, resolve_grounding_adapter
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.memory_engineering import (
     BusinessContextPack,
@@ -33,7 +38,9 @@ from app.rag.observability import (
 )
 from app.rag.query_transform import expand_retrieval_queries
 from app.rag.request_context import current_audit_request_context
+from app.rag.retrieval_adapter import RetrievalAdapterParams, resolve_retrieval_adapter
 from app.rag.retrieval_strategy import ResolvedRetrievalStrategy, resolve_retrieval_strategy
+from app.schemas.common import JsonValue
 from app.schemas.search import (
     RetrievedChunk,
     SearchMode,
@@ -47,6 +54,11 @@ NO_RESULTS_ANSWER = (
 )
 NO_RESULTS_WARNING = "検索条件に一致する根拠が見つかりませんでした。"
 UNVERIFIED_RESULTS_WARNING = "取得候補は検証で除外されたため、回答に使える根拠がありませんでした。"
+GAP_STOP_ANSWER = (
+    "この検索に必要な業務スコープ(テナント / データセット / ACL / バージョン)が"
+    "確定していないため、根拠検索を実行しませんでした。スコープを指定して再検索してください。"
+)
+GAP_STOP_WARNING = "業務スコープが未確定のため検索を停止しました(gap-stop)。"
 WHITESPACE_RE = re.compile(r"\s+")
 CONTEXT_SEGMENT_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
 QUERY_FEATURE_RE = re.compile(r"[a-z0-9_]{2,}|[ぁ-んァ-ン一-龯々ー]{2,}", re.IGNORECASE)
@@ -156,10 +168,13 @@ class RagPipeline:
         error_stage = "embedding"
         retrieved: list[RetrievedChunk] = []
         ranked: list[RetrievedChunk] = []
+        reranked_count = 0
         deduplicated_count = 0
         context_diversified_count = 0
         context_group_expanded_count = 0
         context_expanded_count = 0
+        context_adaptive_expanded_count = 0
+        context_dependency_promoted_count = 0
         context_compressed_count = 0
         context_compression_saved_chars = 0
         agent_memory_retrieved_count = 0
@@ -173,22 +188,96 @@ class RagPipeline:
         runtime_retrieval_strategy = "hybrid"
         runtime_fallback_reason: str | None = None
         runtime_graph_hit_count = 0
+        business_fit_reordered_count = 0
+        corrective_retried = False
+        crag_confidence_score: float | None = None
+        crag_fallback_triggered = False
+        hyde_generated = False
+        agentic_subquery_count = 0
+        agentic_hops = 0
+        graph_profile = resolve_graph_adapter(self._settings).profile
+        retrieval_params: RetrievalAdapterParams = resolve_retrieval_adapter(self._settings)
+        grounding_params: GroundingAdapterParams = resolve_grounding_adapter(self._settings)
+        agentic_params = resolve_agentic_adapter(self._settings)
+        effective_request = _apply_retrieval_adapter_request(request, retrieval_params)
         resolved_strategy = resolve_retrieval_strategy(
-            request,
+            effective_request,
             settings=self._settings,
             query=query_guardrail.sanitized_text,
         )
         runtime_retrieval_strategy = resolved_strategy.strategy.value
         runtime_fallback_reason = resolved_strategy.fallback_reason
         runtime_graph_hit_count = resolved_strategy.graph_hit_count
+        if retrieval_params.gap_stop and not _business_context_scope_pinned(business_context):
+            elapsed = elapsed_ms(started_at)
+            diagnostics = build_search_diagnostics(
+                effective_request,
+                settings=self._settings,
+                retrieval_strategy=runtime_retrieval_strategy,
+                retrieval_strategy_adapter=retrieval_params.strategy,
+                post_retrieval_pipeline=grounding_params.pipeline,
+                generation_profile=self._settings.rag_generation_profile,
+                guardrail_policy=self._settings.rag_guardrail_policy,
+                vector_index_profile=self._settings.rag_vector_index_profile,
+                graph_profile=graph_profile,
+                agentic_profile=agentic_params.profile,
+                agentic_subquery_count=agentic_subquery_count,
+                agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
+                route_reason=resolved_strategy.route_reason,
+                fallback_reason="gap_stop_scope_unresolved",
+                business_context=business_context.diagnostics(),
+                gap_stopped=True,
+            )
+            record_rag_request(resolved_strategy.mode.value, "no_results", elapsed / 1000, 0)
+            record_rag_search_audit(
+                trace_id=trace_id,
+                outcome="no_results",
+                mode=resolved_strategy.mode,
+                sanitized_query=query_guardrail.sanitized_text,
+                filters=request.filters,
+                findings=query_guardrail.findings,
+                retrieved_count=0,
+                citations=[],
+                elapsed_ms=elapsed,
+                diagnostics=diagnostics,
+            )
+            return SearchResponse(
+                answer=GAP_STOP_ANSWER,
+                citations=[],
+                trace_id=trace_id,
+                guardrail_warnings=[*query_guardrail.warnings, GAP_STOP_WARNING],
+                elapsed_ms=elapsed,
+                diagnostics=diagnostics,
+            )
         try:
             query_variants = expand_retrieval_queries(
                 query_guardrail.sanitized_text,
-                enabled=self._settings.rag_query_expansion_enabled,
+                enabled=retrieval_params.query_expansion,
                 max_variants=self._settings.rag_query_expansion_max_variants,
             )
             if not query_variants:
                 query_variants = [query_guardrail.sanitized_text]
+            if agentic_params.enabled:
+                error_stage = "agentic_planning"
+                planned = await self._llm.plan_query(
+                    query_guardrail.sanitized_text,
+                    mode=agentic_params.profile,
+                    max_subqueries=agentic_params.max_subqueries,
+                )
+                if planned:
+                    agentic_subquery_count = len(planned)
+                    agentic_hops = 1
+                    if agentic_params.hyde:
+                        # HyDE: 仮説文書を主検索クエリにし、元クエリも残す。
+                        hyde_generated = True
+                    if agentic_params.rewrite:
+                        query_variants = _dedupe_strings([planned[0], *query_variants])
+                    else:
+                        query_variants = _dedupe_strings([*query_variants, *planned])
             query_variant_count = len(query_variants)
             retrieval_plan = build_retrieval_plan(
                 trace_id=trace_id,
@@ -220,7 +309,7 @@ class RagPipeline:
                 self._retrieve_with_strategy(
                     query_variants=query_variants,
                     vectors=vectors,
-                    request=request,
+                    request=effective_request,
                     resolved_strategy=resolved_strategy,
                 ),
                 attributes={
@@ -266,6 +355,7 @@ class RagPipeline:
                 progress_callback=progress_callback,
                 stage_timings=stream_stage_timings,
             )
+            reranked_count = len(ranked)
             if not ranked:
                 elapsed = elapsed_ms(started_at)
                 diagnostics = build_search_diagnostics(
@@ -273,6 +363,19 @@ class RagPipeline:
                     settings=self._settings,
                     retrieval_strategy=runtime_retrieval_strategy,
                     route_reason=resolved_strategy.route_reason,
+                    retrieval_strategy_adapter=retrieval_params.strategy,
+                    post_retrieval_pipeline=grounding_params.pipeline,
+                generation_profile=self._settings.rag_generation_profile,
+                guardrail_policy=self._settings.rag_guardrail_policy,
+                vector_index_profile=self._settings.rag_vector_index_profile,
+                graph_profile=graph_profile,
+                agentic_profile=agentic_params.profile,
+                agentic_subquery_count=agentic_subquery_count,
+                agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
@@ -310,16 +413,87 @@ class RagPipeline:
                     diagnostics=diagnostics,
                 )
 
+            # CRAG: grounding preset が corrective(verified_context/full_governed)で、rerank の
+            # 最高スコアが閾値未満なら query を書き換えて 1 回だけ corrective 再検索する。
+            crag_confidence_score = _crag_confidence(ranked)
+            crag_threshold = float(
+                getattr(self._settings, "rag_grounding_crag_confidence_threshold", 0.0)
+            )
+            if (
+                grounding_params.corrective_enabled
+                and not corrective_retried
+                and crag_threshold > 0.0
+                and crag_confidence_score < crag_threshold
+            ):
+                corrective_retried = True
+                crag_fallback_triggered = True
+                error_stage = "crag_corrective"
+                rewritten = await self._llm.plan_query(
+                    query_guardrail.sanitized_text,
+                    mode="query_rewrite",
+                    max_subqueries=agentic_params.max_subqueries,
+                )
+                crag_variants = (
+                    _dedupe_strings([*rewritten, *query_variants]) if rewritten else query_variants
+                )
+                crag_vectors = await self._genai.embed(
+                    crag_variants, input_type="SEARCH_QUERY"
+                )
+                crag_result = await self._retrieve_with_strategy(
+                    query_variants=crag_variants,
+                    vectors=crag_vectors,
+                    request=effective_request,
+                    resolved_strategy=resolved_strategy,
+                )
+                crag_ranked = await self._rerank(
+                    query_guardrail.sanitized_text,
+                    crag_result.chunks,
+                    request.rerank_top_n,
+                )
+                crag_new_confidence = _crag_confidence(crag_ranked)
+                if crag_ranked and crag_new_confidence > crag_confidence_score:
+                    # 書き換え後の方が信頼度が高ければ採用する。
+                    ranked = crag_ranked
+                    retrieved = crag_result.chunks
+                    crag_confidence_score = crag_new_confidence
+
+            if retrieval_params.business_fit_weighting:
+                error_stage = "business_fit_weighting"
+                ranked, business_fit_reordered_count = _apply_business_fit_weighting(ranked)
+            if grounding_params.dependency_promotion_enabled:
+                error_stage = "context_dependency_promotion"
+                ranked, context_dependency_promoted_count = await _observe_stage(
+                    trace_id,
+                    request.mode.value,
+                    "context_dependency_promotion",
+                    self._promote_dependency_linked_context(ranked, retrieved),
+                    attributes={
+                        "anchor_count": len(ranked),
+                        "candidate_count": len(retrieved),
+                        "max_chunks_per_anchor": (
+                            self._settings.rag_context_dependency_max_chunks
+                        ),
+                    },
+                    result_attributes=lambda item: {
+                        "promoted_count": item[1],
+                        "output_count": len(item[0]),
+                    },
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
+                )
             packed_chunks, deduplicated_count = _dedupe_ranked_chunks(ranked)
-            if self._settings.rag_context_diversity_lambda < 1.0:
+            if grounding_params.diversity_enabled:
                 error_stage = "context_diversity"
                 packed_chunks, context_diversified_count = await _observe_stage(
                     trace_id,
                     request.mode.value,
                     "context_diversity",
-                    self._diversify_context_anchors(packed_chunks),
+                    self._diversify_context_anchors(
+                        packed_chunks,
+                        grounding_params.diversity_lambda,
+                    ),
                     attributes={
-                        "lambda": self._settings.rag_context_diversity_lambda,
+                        "lambda": grounding_params.diversity_lambda,
                         "input_count": len(packed_chunks),
                     },
                     result_attributes=lambda item: {
@@ -329,7 +503,32 @@ class RagPipeline:
                     progress_callback=progress_callback,
                     stage_timings=stream_stage_timings,
                 )
-            if self._settings.rag_context_group_expansion_enabled:
+            if grounding_params.expansion_mode == "adaptive":
+                error_stage = "context_adaptive_expansion"
+                packed_chunks, context_adaptive_expanded_count = await _observe_stage(
+                    trace_id,
+                    request.mode.value,
+                    "context_adaptive_expansion",
+                    self._expand_context_adaptively(
+                        packed_chunks,
+                        query_guardrail.sanitized_text,
+                    ),
+                    attributes={
+                        "input_count": len(packed_chunks),
+                        "neighbor_window": (
+                            self._settings.rag_context_adaptive_neighbor_window
+                        ),
+                        "max_chunks_per_group": (self._settings.rag_context_group_max_chunks),
+                        "min_overlap": self._settings.rag_context_adaptive_min_overlap,
+                    },
+                    result_attributes=lambda item: {
+                        "expanded_count": item[1],
+                        "output_count": len(item[0]),
+                    },
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
+                )
+            elif grounding_params.expansion_mode == "group":
                 error_stage = "context_group_expansion"
                 packed_chunks, context_group_expanded_count = await _observe_stage(
                     trace_id,
@@ -347,7 +546,7 @@ class RagPipeline:
                     progress_callback=progress_callback,
                     stage_timings=stream_stage_timings,
                 )
-            if self._settings.rag_context_neighbor_window > 0:
+            if grounding_params.neighbor_expansion_enabled:
                 error_stage = "context_expansion"
                 packed_chunks, context_expanded_count = await _observe_stage(
                     trace_id,
@@ -365,7 +564,7 @@ class RagPipeline:
                     progress_callback=progress_callback,
                     stage_timings=stream_stage_timings,
                 )
-            if self._settings.rag_context_compression_enabled:
+            if grounding_params.compression_enabled:
                 error_stage = "context_compression"
                 (
                     packed_chunks,
@@ -397,6 +596,72 @@ class RagPipeline:
             if retrieval_plan is None:
                 raise RuntimeError("retrieval plan が初期化されていません。")
             context_pack = resolve_context_pack(packed_chunks, plan=retrieval_plan)
+            if (
+                retrieval_params.corrective_retrieval
+                and context_pack.evidence_count == 0
+                and not corrective_retried
+            ):
+                corrective_retried = True
+                error_stage = "corrective_retrieval"
+                relaxed_request = _relaxed_corrective_request(request)
+                corrective_result = await self._retrieve_with_strategy(
+                    query_variants=query_variants,
+                    vectors=vectors,
+                    request=relaxed_request,
+                    resolved_strategy=resolved_strategy,
+                )
+                corrective_ranked = await self._rerank(
+                    query_guardrail.sanitized_text,
+                    corrective_result.chunks,
+                    request.rerank_top_n,
+                )
+                if corrective_ranked:
+                    corrective_packed, _ = _dedupe_ranked_chunks(corrective_ranked)
+                    corrective_pack = resolve_context_pack(
+                        corrective_packed,
+                        plan=retrieval_plan,
+                    )
+                    if corrective_pack.evidence_count > 0:
+                        retrieved = corrective_result.chunks
+                        packed_chunks = corrective_packed
+                        context_pack = corrective_pack
+            if (
+                agentic_params.multi_hop
+                and context_pack.evidence_count == 0
+                and not corrective_retried
+            ):
+                corrective_retried = True
+                error_stage = "agentic_multi_hop"
+                hop_queries = await self._llm.plan_query(
+                    query_guardrail.sanitized_text,
+                    mode="decompose",
+                    max_subqueries=agentic_params.max_subqueries,
+                )
+                if hop_queries:
+                    agentic_hops += 1
+                    hop_variants = _dedupe_strings([*query_variants, *hop_queries])
+                    hop_vectors = await self._genai.embed(
+                        hop_variants,
+                        input_type="SEARCH_QUERY",
+                    )
+                    hop_result = await self._retrieve_with_strategy(
+                        query_variants=hop_variants,
+                        vectors=hop_vectors,
+                        request=effective_request,
+                        resolved_strategy=resolved_strategy,
+                    )
+                    hop_ranked = await self._rerank(
+                        query_guardrail.sanitized_text,
+                        hop_result.chunks,
+                        request.rerank_top_n,
+                    )
+                    if hop_ranked:
+                        hop_packed, _ = _dedupe_ranked_chunks(hop_ranked)
+                        hop_pack = resolve_context_pack(hop_packed, plan=retrieval_plan)
+                        if hop_pack.evidence_count > 0:
+                            retrieved = hop_result.chunks
+                            packed_chunks = hop_packed
+                            context_pack = hop_pack
             if not context_pack.chunks:
                 elapsed = elapsed_ms(started_at)
                 diagnostics = build_search_diagnostics(
@@ -404,6 +669,19 @@ class RagPipeline:
                     settings=self._settings,
                     retrieval_strategy=runtime_retrieval_strategy,
                     route_reason=resolved_strategy.route_reason,
+                    retrieval_strategy_adapter=retrieval_params.strategy,
+                    post_retrieval_pipeline=grounding_params.pipeline,
+                generation_profile=self._settings.rag_generation_profile,
+                guardrail_policy=self._settings.rag_guardrail_policy,
+                vector_index_profile=self._settings.rag_vector_index_profile,
+                graph_profile=graph_profile,
+                agentic_profile=agentic_params.profile,
+                agentic_subquery_count=agentic_subquery_count,
+                agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
@@ -412,13 +690,16 @@ class RagPipeline:
                     retrieved_context_pack=context_pack.diagnostics(),
                     stream_stage_timings=stream_stage_timings,
                     retrieved_count=len(retrieved),
-                    reranked_count=len(ranked),
+                    reranked_count=reranked_count,
                     deduplicated_count=deduplicated_count,
                     context_diversified_count=context_diversified_count,
                     context_group_expanded_count=context_group_expanded_count,
                     context_expanded_count=context_expanded_count,
+                    context_adaptive_expanded_count=context_adaptive_expanded_count,
+                    context_dependency_promoted_count=context_dependency_promoted_count,
                     context_compressed_count=context_compressed_count,
                     context_compression_saved_chars=context_compression_saved_chars,
+                    business_fit_reordered_count=business_fit_reordered_count,
                     agent_memory_retrieved_count=agent_memory_retrieved_count,
                     resolver_rejected_count=context_pack.rejected_count,
                     insufficient_context_count=context_pack.insufficient_count,
@@ -466,6 +747,19 @@ class RagPipeline:
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
+                retrieval_strategy_adapter=retrieval_params.strategy,
+                post_retrieval_pipeline=grounding_params.pipeline,
+                generation_profile=self._settings.rag_generation_profile,
+                guardrail_policy=self._settings.rag_guardrail_policy,
+                vector_index_profile=self._settings.rag_vector_index_profile,
+                graph_profile=graph_profile,
+                agentic_profile=agentic_params.profile,
+                agentic_subquery_count=agentic_subquery_count,
+                agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                 memory_plan_id=retrieval_plan.plan_id,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
@@ -475,13 +769,16 @@ class RagPipeline:
                 context_builder=context_builder_diagnostics,
                 stream_stage_timings=stream_stage_timings,
                 retrieved_count=len(retrieved),
-                reranked_count=len(ranked),
+                reranked_count=reranked_count,
                 deduplicated_count=deduplicated_count,
                 context_diversified_count=context_diversified_count,
                 context_group_expanded_count=context_group_expanded_count,
                 context_expanded_count=context_expanded_count,
+                context_adaptive_expanded_count=context_adaptive_expanded_count,
+                context_dependency_promoted_count=context_dependency_promoted_count,
                 context_compressed_count=context_compressed_count,
                 context_compression_saved_chars=context_compression_saved_chars,
+                business_fit_reordered_count=business_fit_reordered_count,
                 agent_memory_retrieved_count=agent_memory_retrieved_count,
                 evidence_count=built_context.evidence_count,
                 support_count=built_context.support_count,
@@ -577,6 +874,19 @@ class RagPipeline:
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
+                retrieval_strategy_adapter=retrieval_params.strategy,
+                post_retrieval_pipeline=grounding_params.pipeline,
+                generation_profile=self._settings.rag_generation_profile,
+                guardrail_policy=self._settings.rag_guardrail_policy,
+                vector_index_profile=self._settings.rag_vector_index_profile,
+                graph_profile=graph_profile,
+                agentic_profile=agentic_params.profile,
+                agentic_subquery_count=agentic_subquery_count,
+                agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
+                hyde_generated=hyde_generated,
                 memory_plan_id=retrieval_plan.plan_id if retrieval_plan is not None else None,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
@@ -590,13 +900,16 @@ class RagPipeline:
                 context_builder=context_builder_diagnostics,
                 stream_stage_timings=stream_stage_timings,
                 retrieved_count=len(retrieved),
-                reranked_count=len(ranked),
+                reranked_count=reranked_count,
                 deduplicated_count=deduplicated_count,
                 context_diversified_count=context_diversified_count,
                 context_group_expanded_count=context_group_expanded_count,
                 context_expanded_count=context_expanded_count,
+                context_adaptive_expanded_count=context_adaptive_expanded_count,
+                context_dependency_promoted_count=context_dependency_promoted_count,
                 context_compressed_count=context_compressed_count,
                 context_compression_saved_chars=context_compression_saved_chars,
+                business_fit_reordered_count=business_fit_reordered_count,
                 agent_memory_retrieved_count=agent_memory_retrieved_count,
                 agent_memory_writeback_count=agent_memory_writeback_count,
                 agent_memory_writeback_status=agent_memory_writeback_status,
@@ -673,10 +986,19 @@ class RagPipeline:
         token_callback: SearchTokenCallback | None,
     ) -> str:
         """回答生成を通常呼び出しまたは Enterprise AI stream で実行する。"""
+        generation_params = resolve_generation_adapter(self._settings)
+        system_prompt = generation_params.system_prompt
         if token_callback is None:
-            return await self._llm.generate(query, context)
+            if system_prompt is None:
+                return await self._llm.generate(query, context)
+            return await self._llm.generate(query, context, system_prompt=system_prompt)
+        stream = (
+            self._llm.generate_stream(query, context)
+            if system_prompt is None
+            else self._llm.generate_stream(query, context, system_prompt=system_prompt)
+        )
         chunks: list[str] = []
-        async for chunk in self._llm.generate_stream(query, context):
+        async for chunk in stream:
             if not chunk:
                 continue
             chunks.append(chunk)
@@ -732,6 +1054,26 @@ class RagPipeline:
             return 0, "failed"
         return (1, "saved") if saved_id else (0, "skipped")
 
+    async def _promote_dependency_linked_context(
+        self,
+        anchors: list[RetrievedChunk],
+        candidates: list[RetrievedChunk],
+    ) -> tuple[list[RetrievedChunk], int]:
+        """retrieved pool から parent/child lineage で結びつく chunk を昇格する。"""
+        dependency_candidates = list(candidates)
+        if not _oracle_method_is_inherited(self._oracle, "context_dependency_chunks"):
+            dependency_candidates.extend(
+                await self._oracle.context_dependency_chunks(
+                    anchors,
+                    max_chunks_per_anchor=self._settings.rag_context_dependency_max_chunks,
+                )
+            )
+        return _promote_dependency_linked_context(
+            anchors,
+            dependency_candidates,
+            max_chunks_per_anchor=self._settings.rag_context_dependency_max_chunks,
+        )
+
     async def _expand_context_neighbors(
         self,
         chunks: list[RetrievedChunk],
@@ -757,14 +1099,46 @@ class RagPipeline:
         )
         return _interleave_context_group_siblings(chunks, siblings)
 
+    async def _expand_context_adaptively(
+        self,
+        chunks: list[RetrievedChunk],
+        query: str,
+    ) -> tuple[list[RetrievedChunk], int]:
+        """query relevance と構造連続性で必要な context chunk だけを追加する。"""
+        if not chunks:
+            return chunks, 0
+        candidates: list[RetrievedChunk] = []
+        if not _oracle_method_is_inherited(self._oracle, "context_group_siblings"):
+            candidates.extend(
+                await self._oracle.context_group_siblings(
+                    chunks,
+                    max_chunks_per_group=self._settings.rag_context_group_max_chunks,
+                )
+            )
+        window = self._settings.rag_context_adaptive_neighbor_window
+        if window > 0 and not _oracle_method_is_inherited(self._oracle, "context_neighbors"):
+            candidates.extend(await self._oracle.context_neighbors(chunks, window=window))
+        return _interleave_adaptive_context(
+            chunks,
+            candidates,
+            query=query,
+            min_overlap=self._settings.rag_context_adaptive_min_overlap,
+        )
+
     async def _diversify_context_anchors(
         self,
         chunks: list[RetrievedChunk],
+        diversity_lambda: float | None = None,
     ) -> tuple[list[RetrievedChunk], int]:
         """MMR 風に rerank anchor を並べ替え、context window の冗長化を抑える。"""
+        effective_lambda = (
+            diversity_lambda
+            if diversity_lambda is not None
+            else self._settings.rag_context_diversity_lambda
+        )
         return _diversify_context_anchors(
             chunks,
-            diversity_lambda=self._settings.rag_context_diversity_lambda,
+            diversity_lambda=effective_lambda,
         )
 
     async def _compress_context_chunks(
@@ -1142,49 +1516,176 @@ def _memory_references_document(chunk: RetrievedChunk, document_id: str) -> bool
 
 
 def _metadata_id_set(
-    metadata: Mapping[str, str | int | float | bool | None],
+    metadata: Mapping[str, JsonValue],
     key: str,
 ) -> set[str]:
-    value = metadata.get(key)
+    return _metadata_id_tokens(metadata.get(key))
+
+
+def _metadata_id_tokens(value: object) -> set[str]:
     if isinstance(value, str):
-        cleaned = value.replace("[", "").replace("]", "").replace("'", "").replace('"', "")
+        stripped = value.strip()
+        if stripped.startswith("["):
+            try:
+                decoded = json.loads(stripped)
+            except json.JSONDecodeError:
+                decoded = None
+            if decoded is not None:
+                return _metadata_id_tokens(decoded)
+        cleaned = stripped.replace("[", "").replace("]", "").replace("'", "").replace('"', "")
         return {item.strip() for item in cleaned.split(",") if item.strip()}
-    if isinstance(value, int):
+    if isinstance(value, bool) or value is None:
+        return set()
+    if isinstance(value, int | float):
         return {str(value)}
+    if isinstance(value, list):
+        tokens: set[str] = set()
+        for item in value:
+            tokens.update(_metadata_id_tokens(item))
+        return tokens
     return set()
 
 
 def _document_ids_from_citation_ids(
-    metadata: Mapping[str, str | int | float | bool | None],
+    metadata: Mapping[str, JsonValue],
 ) -> set[str]:
     citation_ids = _metadata_id_set(metadata, "citation_ids")
     return {item.split("#", 1)[0] for item in citation_ids if "#" in item}
 
 
 def _metadata_value_equals(
-    metadata: Mapping[str, str | int | float | bool | None],
+    metadata: Mapping[str, JsonValue],
     key: str,
     expected: str,
 ) -> bool:
-    value = metadata.get(key)
-    return isinstance(value, str) and value.casefold() == expected.casefold()
+    value = _metadata_text(metadata.get(key))
+    return bool(value and value.casefold() == expected.casefold())
 
 
 def _metadata_value_contains(
-    metadata: Mapping[str, str | int | float | bool | None],
+    metadata: Mapping[str, JsonValue],
     key: str,
     expected: str,
 ) -> bool:
-    value = metadata.get(key)
-    return isinstance(value, str) and expected.casefold() in value.casefold()
+    value = _metadata_text(metadata.get(key))
+    return bool(value and expected.casefold() in value.casefold())
 
 
 def _metadata_string(
-    metadata: Mapping[str, str | int | float | bool | None],
+    metadata: Mapping[str, JsonValue],
     key: str,
 ) -> str | None:
-    value = metadata.get(key)
-    return value if isinstance(value, str) and value.strip() else None
+    return _metadata_text(metadata.get(key))
+
+
+def _metadata_text(value: object) -> str | None:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, list):
+        parts = [part for item in value if (part := _metadata_text(item))]
+        joined = " > ".join(parts)
+        return joined or None
+    return None
+
+
+def _apply_retrieval_adapter_request(
+    request: SearchRequest,
+    params: RetrievalAdapterParams,
+) -> SearchRequest:
+    """Retrieval アダプターの mode/strategy bias を request 既定値にだけ適用する。
+
+    per-request で明示された mode(HYBRID 以外)/ strategy(AUTO 以外)は上書きしない。
+    """
+    updates: dict[str, object] = {}
+    if params.mode_override is not None and request.mode == SearchMode.HYBRID:
+        updates["mode"] = params.mode_override
+    if params.strategy_bias is not None and request.strategy == SearchStrategy.AUTO:
+        updates["strategy"] = params.strategy_bias
+    return request.model_copy(update=updates) if updates else request
+
+
+def _business_context_scope_pinned(business_context: BusinessContextPack) -> bool:
+    """gap-stop 判定: 業務スコープ(テナント/データセット/ACL/版)が 1 つでも固定済みか。"""
+    return any(
+        (
+            business_context.tenant_scoped,
+            business_context.user_scoped,
+            business_context.role_scoped,
+            business_context.document_acl_scoped,
+            business_context.category_acl_scoped,
+            business_context.knowledge_base_scoped,
+            business_context.source_acl_filter_present,
+            business_context.version_filter_present,
+        )
+    )
+
+
+def _crag_confidence(ranked: list[RetrievedChunk]) -> float:
+    """CRAG の信頼度シグナル: rerank 最高スコア(無ければ vector score)を [0,1] で返す。"""
+    if not ranked:
+        return 0.0
+    best = max(
+        (chunk.rerank_score if chunk.rerank_score is not None else chunk.score)
+        for chunk in ranked
+    )
+    return max(0.0, min(1.0, float(best)))
+
+
+def _relaxed_corrective_request(request: SearchRequest) -> SearchRequest:
+    """corrective retrieval 用に top_k を広げ、絞り込み filter を緩めた request を作る。"""
+    relaxed_filters = {
+        key: value
+        for key, value in request.filters.items()
+        if key not in {"content_kind", "section_title", "section_path"}
+    }
+    return request.model_copy(
+        update={
+            "top_k": min(100, max(request.top_k + 1, request.top_k * 2)),
+            "filters": relaxed_filters,
+            "mode": SearchMode.HYBRID,
+            "strategy": SearchStrategy.HYBRID,
+        }
+    )
+
+
+def _business_fit(chunk: RetrievedChunk) -> float:
+    """chunk metadata から業務適合度を決定論的に算出する(version/ACL/鮮度)。"""
+    fit = 1.0
+    version_status = (_metadata_string(chunk.metadata, "version_status") or "").casefold()
+    if version_status in {"active", "current", "approved", "effective", "published"}:
+        fit *= 1.15
+    elif version_status in {"draft", "provisional", "pending", "review"}:
+        fit *= 0.85
+    if _metadata_string(chunk.metadata, "source_acl"):
+        fit *= 1.05
+    if _metadata_string(chunk.metadata, "document_version"):
+        fit *= 1.02
+    return max(0.5, min(1.3, fit))
+
+
+def _apply_business_fit_weighting(
+    chunks: list[RetrievedChunk],
+) -> tuple[list[RetrievedChunk], int]:
+    """rerank 後に final = semantic × business_fit で並べ替える(PDF AIDB Proof)。"""
+    if len(chunks) <= 1:
+        return chunks, 0
+    indexed = list(enumerate(chunks))
+
+    def sort_key(item: tuple[int, RetrievedChunk]) -> tuple[float, int]:
+        index, chunk = item
+        semantic = chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+        return (-(semantic * _business_fit(chunk)), index)
+
+    reordered = sorted(indexed, key=sort_key)
+    changed = sum(
+        1 for new_index, (old_index, _) in enumerate(reordered) if new_index != old_index
+    )
+    return [chunk for _, chunk in reordered], changed
 
 
 def _oracle_method_is_inherited(oracle: OracleClient, method_name: str) -> bool:
@@ -1449,6 +1950,317 @@ def _interleave_context_group_siblings(
             packed.append(sibling)
             seen.add(sibling.chunk_id)
     return packed, len(packed) - len(anchors)
+
+
+def _promote_dependency_linked_context(
+    anchors: list[RetrievedChunk],
+    candidates: list[RetrievedChunk],
+    *,
+    max_chunks_per_anchor: int,
+) -> tuple[list[RetrievedChunk], int]:
+    """rerank で落ちた parent/child chunk を retrieved pool から context へ戻す。"""
+    if not anchors or not candidates or max_chunks_per_anchor <= 0:
+        return anchors, 0
+    anchor_ids = {chunk.chunk_id for chunk in anchors}
+    promoted_by_anchor: dict[str, list[RetrievedChunk]] = {}
+    for anchor in anchors:
+        if _is_agent_memory_chunk(anchor):
+            continue
+        promoted: list[RetrievedChunk] = []
+        for candidate in candidates:
+            if (
+                candidate.chunk_id in anchor_ids
+                or candidate.document_id != anchor.document_id
+                or _is_agent_memory_chunk(candidate)
+            ):
+                continue
+            reason, shared_ids = _dependency_promotion_reason(anchor, candidate)
+            if reason is None:
+                continue
+            promoted.append(
+                _with_context_dependency_metadata(
+                    candidate,
+                    anchor=anchor,
+                    reason=reason,
+                    shared_ids=shared_ids,
+                )
+            )
+        promoted_by_anchor[anchor.chunk_id] = sorted(
+            promoted,
+            key=_context_dependency_sort_key,
+        )[:max_chunks_per_anchor]
+
+    packed: list[RetrievedChunk] = []
+    seen: set[str] = set()
+    for anchor in anchors:
+        if anchor.chunk_id not in seen:
+            packed.append(anchor)
+            seen.add(anchor.chunk_id)
+        for candidate in promoted_by_anchor.get(anchor.chunk_id, []):
+            if candidate.chunk_id in seen:
+                continue
+            packed.append(candidate)
+            seen.add(candidate.chunk_id)
+    return packed, len(packed) - len(anchors)
+
+
+def _dependency_promotion_reason(
+    anchor: RetrievedChunk,
+    candidate: RetrievedChunk,
+) -> tuple[str | None, set[str]]:
+    """anchor と candidate の dependency 関係を返す。"""
+    anchor_elements = _metadata_id_set(anchor.metadata, "element_ids")
+    candidate_elements = _metadata_id_set(candidate.metadata, "element_ids")
+    anchor_parents = _metadata_id_set(anchor.metadata, "parent_element_ids")
+    candidate_parents = _metadata_id_set(candidate.metadata, "parent_element_ids")
+    if shared := anchor_elements & candidate_parents:
+        return "child_of_anchor", shared
+    if shared := candidate_elements & anchor_parents:
+        return "parent_of_anchor", shared
+
+    candidate_edges = _dependency_edge_pairs(candidate.metadata)
+    if shared := _dependency_edge_shared_ids(candidate_edges, anchor_elements):
+        return "candidate_dependency_edge", shared
+    anchor_edges = _dependency_edge_pairs(anchor.metadata)
+    if shared := _dependency_edge_shared_ids(anchor_edges, candidate_elements):
+        return "anchor_dependency_edge", shared
+    return None, set()
+
+
+def _dependency_edge_pairs(
+    metadata: Mapping[str, JsonValue],
+) -> set[tuple[str, str]]:
+    """metadata.dependency_edges を (parent_id, child_id) の集合へ変換する。"""
+    value = metadata.get("dependency_edges")
+    if isinstance(value, str):
+        if not value.strip():
+            return set()
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return set()
+    else:
+        payload = value
+    if not isinstance(payload, list):
+        return set()
+    edges: set[tuple[str, str]] = set()
+    for item in payload:
+        if not isinstance(item, Mapping):
+            continue
+        parent_id = _mapping_text(item, "parent_id") or _mapping_text(item, "parent")
+        child_id = _mapping_text(item, "child_id") or _mapping_text(item, "child")
+        if parent_id and child_id:
+            edges.add((parent_id, child_id))
+    return edges
+
+
+def _dependency_edge_shared_ids(
+    edges: set[tuple[str, str]],
+    element_ids: set[str],
+) -> set[str]:
+    """dependency edge と element_ids の交差を返す。"""
+    if not edges or not element_ids:
+        return set()
+    edge_ids = {item for edge in edges for item in edge}
+    return edge_ids & element_ids
+
+
+def _mapping_text(mapping: Mapping[object, object], key: str) -> str | None:
+    value = mapping.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _with_context_dependency_metadata(
+    chunk: RetrievedChunk,
+    *,
+    anchor: RetrievedChunk,
+    reason: str,
+    shared_ids: set[str],
+) -> RetrievedChunk:
+    """dependency promotion の判断理由を citation metadata に残す。"""
+    metadata = {
+        **chunk.metadata,
+        "context_dependency_promoted": True,
+        "context_dependency_reason": reason,
+        "context_anchor_chunk_id": anchor.chunk_id,
+    }
+    if shared_ids:
+        metadata["context_dependency_shared_element_ids"] = ",".join(sorted(shared_ids)[:8])
+    return chunk.model_copy(update={"metadata": metadata})
+
+
+def _context_dependency_sort_key(chunk: RetrievedChunk) -> tuple[int, int, str]:
+    """parent/child 関係の強さと chunk_index で安定化する。"""
+    reason = _metadata_string(chunk.metadata, "context_dependency_reason") or ""
+    priority = {
+        "child_of_anchor": 0,
+        "parent_of_anchor": 1,
+        "candidate_dependency_edge": 2,
+        "anchor_dependency_edge": 3,
+    }.get(reason, 9)
+    return (priority, _metadata_int(chunk.metadata.get("chunk_index")), chunk.chunk_id)
+
+
+def _interleave_adaptive_context(
+    anchors: list[RetrievedChunk],
+    candidates: list[RetrievedChunk],
+    *,
+    query: str,
+    min_overlap: float,
+) -> tuple[list[RetrievedChunk], int]:
+    """SCAR 風に query/構造連続性で選んだ context だけを anchor 後へ差し込む。"""
+    if not anchors or not candidates:
+        return anchors, 0
+    anchors_by_id = {chunk.chunk_id: chunk for chunk in anchors}
+    anchor_ids = set(anchors_by_id)
+    query_features = _query_match_features(query)
+    candidates_by_anchor: dict[str, list[RetrievedChunk]] = {}
+    seen_candidates: set[tuple[str, str]] = set()
+    for candidate in candidates:
+        anchor_id = candidate.metadata.get("context_anchor_chunk_id")
+        if not isinstance(anchor_id, str) or candidate.chunk_id in anchor_ids:
+            continue
+        anchor = anchors_by_id.get(anchor_id)
+        if anchor is None:
+            continue
+        key = (anchor_id, candidate.chunk_id)
+        if key in seen_candidates:
+            continue
+        seen_candidates.add(key)
+        reason, overlap = _adaptive_context_reason(
+            anchor,
+            candidate,
+            query_features=query_features,
+            min_overlap=min_overlap,
+        )
+        if reason is None:
+            continue
+        candidates_by_anchor.setdefault(anchor_id, []).append(
+            _with_context_adaptive_metadata(candidate, reason=reason, overlap=overlap)
+        )
+
+    packed: list[RetrievedChunk] = []
+    seen: set[str] = set()
+    for anchor in anchors:
+        if anchor.chunk_id not in seen:
+            packed.append(anchor)
+            seen.add(anchor.chunk_id)
+        for candidate in sorted(
+            candidates_by_anchor.get(anchor.chunk_id, []),
+            key=_context_adaptive_sort_key,
+        ):
+            if candidate.chunk_id in seen:
+                continue
+            packed.append(candidate)
+            seen.add(candidate.chunk_id)
+    return packed, len(packed) - len(anchors)
+
+
+def _adaptive_context_reason(
+    anchor: RetrievedChunk,
+    candidate: RetrievedChunk,
+    *,
+    query_features: set[str],
+    min_overlap: float,
+) -> tuple[str | None, float]:
+    """候補 context を追加する理由と query overlap を返す。"""
+    overlap = _query_feature_overlap(candidate.text, query_features)
+    if _same_structural_group(anchor, candidate):
+        return "same_structural_group", overlap
+    if _has_dependency_lineage(anchor, candidate):
+        return "dependency_lineage", overlap
+    if query_features and overlap >= min_overlap:
+        return "query_overlap", overlap
+    if _same_section(anchor, candidate) and overlap > 0:
+        return "same_section_overlap", overlap
+    return None, overlap
+
+
+def _query_feature_overlap(text: str, query_features: set[str]) -> float:
+    """query feature のうち候補 chunk に含まれる割合を返す。"""
+    if not query_features:
+        return 0.0
+    spaced = WHITESPACE_RE.sub(" ", text.casefold())
+    compact = WHITESPACE_RE.sub("", spaced)
+    matched = sum(1 for feature in query_features if feature in spaced or feature in compact)
+    return matched / len(query_features)
+
+
+def _same_structural_group(anchor: RetrievedChunk, candidate: RetrievedChunk) -> bool:
+    """表・図・式などの同一 chunk group は query overlap がなくても連続性を重視する。"""
+    group_id = _metadata_string(anchor.metadata, "chunk_group_id")
+    if group_id is None or group_id != _metadata_string(candidate.metadata, "chunk_group_id"):
+        return False
+    structural_kinds = {"table", "figure", "equation", "code", "list", "slide", "sheet"}
+    anchor_kind = _metadata_string(anchor.metadata, "content_kind")
+    candidate_kind = _metadata_string(candidate.metadata, "content_kind")
+    group_kind = _metadata_string(anchor.metadata, "chunk_group_kind") or _metadata_string(
+        candidate.metadata,
+        "chunk_group_kind",
+    )
+    return any(kind in structural_kinds for kind in (anchor_kind, candidate_kind, group_kind))
+
+
+def _has_dependency_lineage(anchor: RetrievedChunk, candidate: RetrievedChunk) -> bool:
+    """figure-caption 等の parent/child lineage がある候補を拾う。"""
+    if _metadata_string(candidate.metadata, "dependency_edges"):
+        return True
+    anchor_elements = _metadata_id_set(anchor.metadata, "element_ids")
+    candidate_parents = _metadata_id_set(candidate.metadata, "parent_element_ids")
+    if anchor_elements and candidate_parents and anchor_elements & candidate_parents:
+        return True
+    candidate_elements = _metadata_id_set(candidate.metadata, "element_ids")
+    anchor_parents = _metadata_id_set(anchor.metadata, "parent_element_ids")
+    return bool(candidate_elements and anchor_parents and candidate_elements & anchor_parents)
+
+
+def _same_section(anchor: RetrievedChunk, candidate: RetrievedChunk) -> bool:
+    """section_path / section_title が一致するかを見る。"""
+    for key in ("section_path", "section_title"):
+        anchor_value = _metadata_string(anchor.metadata, key)
+        candidate_value = _metadata_string(candidate.metadata, key)
+        if (
+            anchor_value
+            and candidate_value
+            and anchor_value.casefold() == candidate_value.casefold()
+        ):
+            return True
+    return False
+
+
+def _with_context_adaptive_metadata(
+    chunk: RetrievedChunk,
+    *,
+    reason: str,
+    overlap: float,
+) -> RetrievedChunk:
+    """adaptive expansion の判断理由を citation metadata に残す。"""
+    return chunk.model_copy(
+        update={
+            "metadata": {
+                **chunk.metadata,
+                "context_adaptive_expanded": True,
+                "context_adaptive_reason": reason,
+                "context_adaptive_query_overlap": round(overlap, 4),
+            }
+        }
+    )
+
+
+def _context_adaptive_sort_key(chunk: RetrievedChunk) -> tuple[int, int, int, int, str]:
+    """group sibling を優先し、近さと chunk_index で安定化する。"""
+    reason = _metadata_string(chunk.metadata, "context_adaptive_reason") or ""
+    priority = {
+        "same_structural_group": 0,
+        "dependency_lineage": 1,
+        "query_overlap": 2,
+        "same_section_overlap": 3,
+    }.get(reason, 9)
+    group_distance = _metadata_int(chunk.metadata.get("context_group_distance"))
+    neighbor_distance = _metadata_int(chunk.metadata.get("context_neighbor_distance"))
+    distance = group_distance if group_distance else neighbor_distance
+    chunk_index = _metadata_int(chunk.metadata.get("chunk_index"))
+    return (priority, abs(distance), distance, chunk_index, chunk.chunk_id)
 
 
 def _context_group_sort_key(chunk: RetrievedChunk) -> tuple[int, int, int, str]:

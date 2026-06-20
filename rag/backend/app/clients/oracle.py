@@ -14,13 +14,18 @@ from array import array
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
 from app.config import Settings, get_settings
+from app.rag.business_view_config import (
+    BusinessViewConfig,
+    dump_business_view_config,
+    parse_business_view_config,
+)
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
     GraphClaim,
@@ -30,8 +35,16 @@ from app.rag.graph_index import (
     GraphIndex,
     GraphRelationship,
 )
+from app.rag.kb_adapter_config import parse_adapter_config
 from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
+from app.rag.vector_index_adapter import resolve_vector_index_adapter
+from app.schemas.business_view import (
+    BusinessViewDetail,
+    BusinessViewStatus,
+    BusinessViewSummary,
+)
+from app.schemas.common import JsonValue
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -39,6 +52,7 @@ from app.schemas.document import (
     DocumentSummary,
     FileStatus,
     IngestionJob,
+    IngestionJobPhase,
     IngestionJobStatus,
     IngestionSegment,
 )
@@ -53,7 +67,7 @@ from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
 SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
-type MetadataValue = str | int | float | bool | None
+type MetadataValue = JsonValue
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 T = TypeVar("T")
 DocumentT = TypeVar("DocumentT", bound=DocumentSummary)
@@ -153,7 +167,7 @@ class StoredChunk:
     chunk_index: int
     text: str
     embedding: list[float]
-    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
+    metadata: dict[str, MetadataValue] = field(default_factory=dict)
 
 
 @dataclass
@@ -174,6 +188,21 @@ class StoredKnowledgeBase:
     indexed_document_count: int = 0
     error_document_count: int = 0
     searchable_chunk_count: int = 0
+
+
+@dataclass
+class StoredBusinessView:
+    """業務アシスタント(Business View)行。"""
+
+    id: str
+    name: str
+    status: BusinessViewStatus
+    created_at: datetime
+    updated_at: datetime
+    tenant_id_hash: str | None = None
+    description: str | None = None
+    view_config: dict[str, object] = field(default_factory=dict)
+    archived_at: datetime | None = None
 
 
 @dataclass
@@ -216,6 +245,12 @@ _DB_TEST_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="oracle
 
 class SelectAiUnavailableError(RuntimeError):
     """Select AI を実行できる Oracle 設定がない。"""
+
+    safe_for_user = True
+
+
+class DocumentDeleteBlockedByRunningIngestionError(RuntimeError):
+    """実行中 ingestion job があるため document 削除を止めた。"""
 
     safe_for_user = True
 
@@ -359,6 +394,20 @@ class OracleClient:
         return await self._context_group_siblings_with_oracle(
             anchors,
             max_chunks_per_group=max_chunks_per_group,
+        )
+
+    async def context_dependency_chunks(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_anchor: int,
+    ) -> list[RetrievedChunk]:
+        """rerank anchor と dependency metadata を共有する候補 chunk を取得する。"""
+        if max_chunks_per_anchor <= 0 or not anchors:
+            return []
+        return await self._context_dependency_chunks_with_oracle(
+            anchors,
+            max_chunks_per_anchor=max_chunks_per_anchor,
         )
 
     async def select_ai(
@@ -535,6 +584,91 @@ class OracleClient:
         """文書の所属ナレッジベース一覧を返す。"""
         return await self._list_document_knowledge_bases_with_oracle(document_id)
 
+    async def get_owning_knowledge_base(
+        self, document_id: str
+    ) -> KnowledgeBaseDetail | None:
+        """取込設定の基準となる owning KB(最古割当)を返す。所属無しなら None。
+
+        文書-KB は多対多だが、取込時の Parser/Chunking 上書きを決定論的にするため、
+        最も早く割り当てられた KB を owning KB とする(同時刻は knowledge_base_id 昇順)。
+        """
+        owning_id = await self._get_owning_knowledge_base_id_with_oracle(document_id)
+        if owning_id is None:
+            return None
+        return await self.get_knowledge_base(owning_id)
+
+    async def create_business_view(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        config: BusinessViewConfig | None = None,
+    ) -> BusinessViewDetail:
+        """業務アシスタントを作成する。"""
+        return await self._create_business_view_with_oracle(
+            name=name,
+            description=description,
+            config=config or BusinessViewConfig(),
+        )
+
+    async def list_business_views(
+        self,
+        *,
+        status: BusinessViewStatus | None = None,
+        query: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[BusinessViewSummary]:
+        """業務アシスタント一覧を返す。"""
+        return await self._list_business_views_with_oracle(
+            status=status,
+            query=query,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_business_views(
+        self,
+        *,
+        status: BusinessViewStatus | None = None,
+        query: str | None = None,
+    ) -> int:
+        """条件に一致する業務アシスタント数を返す。"""
+        return await self._count_business_views_with_oracle(status=status, query=query)
+
+    async def get_business_view(
+        self,
+        business_view_id: str,
+    ) -> BusinessViewDetail | None:
+        """業務アシスタント詳細を返す。参照 KB の名前も解決して埋める。"""
+        view = await self._get_business_view_with_oracle(business_view_id)
+        if view is None:
+            return None
+        refs = await self._resolve_knowledge_base_refs(view.config.normalized_knowledge_base_ids())
+        return view.model_copy(update={"knowledge_bases": refs})
+
+    async def update_business_view(
+        self,
+        business_view_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        config: BusinessViewConfig | None = None,
+        update_fields: set[str] | None = None,
+    ) -> BusinessViewDetail:
+        """業務アシスタントを更新する。"""
+        return await self._update_business_view_with_oracle(
+            business_view_id=business_view_id,
+            name=name,
+            description=description,
+            config=config,
+            update_fields=update_fields,
+        )
+
+    async def archive_business_view(self, business_view_id: str) -> BusinessViewDetail:
+        """業務アシスタントをアーカイブする。参照 KB・文書は変更しない。"""
+        return await self._archive_business_view_with_oracle(business_view_id)
+
     async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
         """取込 job を永続化する。"""
         return await self._create_ingestion_job_with_oracle(job)
@@ -549,12 +683,18 @@ class OracleClient:
         status: IngestionJobStatus | None = None,
         limit: int | None = None,
         offset: int = 0,
+        oldest_first: bool = False,
     ) -> list[IngestionJob]:
-        """直近の取込 job 一覧を返す。"""
+        """取込 job 一覧を返す。
+
+        既定は新しい順(UI 用)。``oldest_first=True`` でキュー消費向けに
+        古い順(FIFO)で返し、ワーカーが滞留 job を starvation させないようにする。
+        """
         return await self._list_ingestion_jobs_with_oracle(
             status=status,
             limit=limit,
             offset=offset,
+            oldest_first=oldest_first,
         )
 
     async def list_document_ingestion_jobs(
@@ -711,7 +851,7 @@ class OracleClient:
         return await self._get_document_with_oracle(document_id)
 
     async def delete_document(self, document_id: str) -> bool:
-        """ドキュメントと関連 chunk/index 行を削除する。"""
+        """ドキュメントと関連 chunk/index/ingestion 行を削除する。"""
         return await self._delete_document_with_oracle(document_id)
 
     async def update_document_status(
@@ -745,6 +885,25 @@ class OracleClient:
         for index, embedding in enumerate(embeddings):
             self._validate_embedding_width(embedding, f"chunk embedding[{index}]")
         return await self._save_chunks_with_oracle(document_id, chunks, embeddings)
+
+    async def save_index(
+        self,
+        document_id: str,
+        extraction: StructuredExtraction,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+    ) -> list[RetrievedChunk]:
+        """構造化抽出と chunk/vector を 1 transaction で保存する。"""
+        if len(chunks) != len(embeddings):
+            raise ValueError("chunks と embeddings の件数が一致しません。")
+        for index, embedding in enumerate(embeddings):
+            self._validate_embedding_width(embedding, f"chunk embedding[{index}]")
+        return await self._save_index_with_oracle(
+            document_id,
+            extraction,
+            chunks,
+            embeddings,
+        )
 
     async def replace_document_graph_index(
         self,
@@ -783,6 +942,8 @@ class OracleClient:
                     context_diversified_count,
                     context_group_expanded_count,
                     context_expanded_count,
+                    context_adaptive_expanded_count,
+                    context_dependency_promoted_count,
                     context_compressed_count,
                     context_compression_saved_chars,
                     agent_memory_retrieved_count,
@@ -826,6 +987,8 @@ class OracleClient:
                     :context_diversified_count,
                     :context_group_expanded_count,
                     :context_expanded_count,
+                    :context_adaptive_expanded_count,
+                    :context_dependency_promoted_count,
                     :context_compressed_count,
                     :context_compression_saved_chars,
                     :agent_memory_retrieved_count,
@@ -870,6 +1033,11 @@ class OracleClient:
                     source_bytes,
                     document_type,
                     extraction_confidence,
+                    parser_backend,
+                    parser_profile,
+                    segment_count,
+                    fallback_count,
+                    failed_segment_count,
                     chunk_count,
                     vector_count,
                     elapsed_ms,
@@ -887,6 +1055,11 @@ class OracleClient:
                     :source_bytes,
                     :document_type,
                     :extraction_confidence,
+                    :parser_backend,
+                    :parser_profile,
+                    :segment_count,
+                    :fallback_count,
+                    :failed_segment_count,
                     :chunk_count,
                     :vector_count,
                     :elapsed_ms,
@@ -1118,7 +1291,7 @@ class OracleClient:
         )
         fetch_clause = _oracle_vector_fetch_clause(
             top_k=top_k,
-            target_accuracy=self._settings.oracle_vector_target_accuracy,
+            target_accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
         )
         rows = await self._fetch_all(
             _render_sql(
@@ -1167,7 +1340,7 @@ class OracleClient:
         )
         fetch_clause = _oracle_vector_fetch_clause(
             top_k=top_k,
-            target_accuracy=self._settings.oracle_vector_target_accuracy,
+            target_accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
         )
         rows = await self._fetch_all(
             _render_sql(
@@ -1503,6 +1676,66 @@ class OracleClient:
                     )
                 )
         return siblings
+
+    async def _context_dependency_chunks_with_oracle(
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_anchor: int,
+    ) -> list[RetrievedChunk]:
+        """Oracle から dependency promotion 用の同一 document 候補を取得する。"""
+        dependency_chunks: list[RetrievedChunk] = []
+        candidate_limit = max(max_chunks_per_anchor * 8, max_chunks_per_anchor)
+        for anchor in anchors:
+            anchor_index = _chunk_index_from_retrieved(anchor) or 0
+            where_sql, binds = _oracle_retrieval_where({"document_id": anchor.document_id})
+            dependency_match_sql, dependency_binds = _context_dependency_match_sql(anchor)
+            binds.update(
+                {
+                    "anchor_index": anchor_index,
+                    "anchor_chunk_id": anchor.chunk_id,
+                    "candidate_limit": candidate_limit,
+                    **dependency_binds,
+                }
+            )
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT *
+                FROM (
+                    SELECT
+                        c.document_id,
+                        c.chunk_id,
+                        c.chunk_text,
+                        c.metadata_json,
+                        c.chunk_index,
+                        d.file_name,
+                        d.category_name,
+                        0 AS score
+                    FROM rag_chunks c
+                    JOIN rag_documents d ON d.document_id = c.document_id
+                    WHERE {where_sql}
+                      AND c.chunk_id <> :anchor_chunk_id
+                      AND (
+                        {dependency_match_sql}
+                      )
+                    ORDER BY
+                        ABS(c.chunk_index - :anchor_index) ASC,
+                        c.chunk_index ASC,
+                        c.chunk_id ASC
+                )
+                WHERE ROWNUM <= :candidate_limit
+                """,
+                    where_sql=where_sql,
+                    dependency_match_sql=dependency_match_sql,
+                ),
+                binds,
+            )
+            dependency_chunks.extend(
+                _retrieved_chunk_from_row(row).model_copy(update={"score": anchor.score})
+                for row in rows
+            )
+        return dependency_chunks
 
     async def _create_document_with_oracle(
         self,
@@ -1928,6 +2161,280 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def _create_business_view_with_oracle(
+        self,
+        *,
+        name: str,
+        description: str | None,
+        config: BusinessViewConfig,
+    ) -> BusinessViewDetail:
+        """Oracle business view table へ行を作成する。"""
+        now = datetime.now(UTC)
+        view = StoredBusinessView(
+            id=uuid4().hex,
+            tenant_id_hash=_current_tenant_id_hash(),
+            name=name,
+            description=description,
+            status=BusinessViewStatus.ACTIVE,
+            view_config=dump_business_view_config(config),
+            created_at=now,
+            updated_at=now,
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_business_views (
+                    business_view_id,
+                    tenant_id_hash,
+                    name,
+                    description,
+                    status,
+                    view_config,
+                    created_at,
+                    updated_at,
+                    archived_at
+                ) VALUES (
+                    :business_view_id,
+                    :tenant_id_hash,
+                    :name,
+                    :description,
+                    :status,
+                    :view_config,
+                    :created_at,
+                    :updated_at,
+                    :archived_at
+                )
+                """,
+                _business_view_binds(view),
+            )
+            return _to_business_view_detail(view)
+
+        return await self._run_transaction(operation)
+
+    async def _list_business_views_with_oracle(
+        self,
+        *,
+        status: BusinessViewStatus | None,
+        query: str | None,
+        limit: int | None,
+        offset: int,
+    ) -> list[BusinessViewSummary]:
+        """Oracle business view table から一覧取得する。"""
+        where_sql, binds = _oracle_business_view_where(status=status, query=query)
+        binds["offset"] = offset
+        if limit is not None:
+            binds["limit"] = limit
+            paging_sql = "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
+        else:
+            paging_sql = "OFFSET :offset ROWS"
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                bv.business_view_id,
+                bv.tenant_id_hash,
+                bv.name,
+                bv.description,
+                bv.status,
+                bv.view_config,
+                bv.created_at,
+                bv.updated_at,
+                bv.archived_at
+            FROM rag_business_views bv
+            WHERE {where_sql}
+            ORDER BY bv.updated_at DESC, bv.name ASC
+            {paging_sql}
+            """,
+                where_sql=where_sql,
+                paging_sql=paging_sql,
+            ),
+            binds,
+        )
+        return [_to_business_view_summary(_stored_business_view_from_row(row)) for row in rows]
+
+    async def _count_business_views_with_oracle(
+        self,
+        *,
+        status: BusinessViewStatus | None,
+        query: str | None,
+    ) -> int:
+        """Oracle business view table の件数を取得する。"""
+        where_sql, binds = _oracle_business_view_where(status=status, query=query)
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT COUNT(*) AS count_value
+            FROM rag_business_views bv
+            WHERE {where_sql}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return _row_count_value(row)
+
+    async def _get_business_view_with_oracle(
+        self,
+        business_view_id: str,
+    ) -> BusinessViewDetail | None:
+        """Oracle business view table から詳細取得する(KB 名は未解決)。"""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                bv.business_view_id,
+                bv.tenant_id_hash,
+                bv.name,
+                bv.description,
+                bv.status,
+                bv.view_config,
+                bv.created_at,
+                bv.updated_at,
+                bv.archived_at
+            FROM rag_business_views bv
+            WHERE bv.business_view_id = :business_view_id
+              AND {tenant_sql}
+            """,
+                tenant_sql=_oracle_tenant_predicate(alias="bv"),
+            ),
+            _with_tenant_bind({"business_view_id": business_view_id}),
+        )
+        if not rows:
+            return None
+        return _to_business_view_detail(_stored_business_view_from_row(rows[0]))
+
+    async def _update_business_view_with_oracle(
+        self,
+        *,
+        business_view_id: str,
+        name: str | None,
+        description: str | None,
+        config: BusinessViewConfig | None,
+        update_fields: set[str] | None,
+    ) -> BusinessViewDetail:
+        """Oracle business view table を更新する。"""
+        fields = update_fields or {
+            field_name
+            for field_name, value in {
+                "name": name,
+                "description": description,
+                "config": config,
+            }.items()
+            if value is not None
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
+            existing = _select_business_view(connection, business_view_id)
+            if existing is None:
+                raise KeyError(f"business_view_id={business_view_id} は存在しません。")
+            updated = existing
+            now = datetime.now(UTC)
+            if fields:
+                if "name" in fields and name is not None:
+                    updated = updated_copy_business_view(updated, name=name)
+                if "description" in fields:
+                    updated = updated_copy_business_view(updated, description=description)
+                if "config" in fields and config is not None:
+                    updated = updated_copy_business_view(
+                        updated,
+                        view_config=dump_business_view_config(config),
+                    )
+                updated = updated_copy_business_view(updated, updated_at=now)
+                _execute(
+                    connection,
+                    _render_sql(
+                        """
+                    UPDATE rag_business_views
+                    SET
+                        name = :name,
+                        description = :description,
+                        view_config = :view_config,
+                        updated_at = :updated_at
+                    WHERE business_view_id = :business_view_id
+                      AND {tenant_sql}
+                    """,
+                        tenant_sql=_oracle_tenant_predicate(),
+                    ),
+                    _business_view_binds(updated),
+                )
+            return _to_business_view_detail(updated)
+
+        return await self._run_transaction(operation)
+
+    async def _archive_business_view_with_oracle(
+        self,
+        business_view_id: str,
+    ) -> BusinessViewDetail:
+        """Oracle business view table の status を ARCHIVED にする。"""
+
+        def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
+            existing = _select_business_view(connection, business_view_id)
+            if existing is None:
+                raise KeyError(f"business_view_id={business_view_id} は存在しません。")
+            now = datetime.now(UTC)
+            archived = updated_copy_business_view(
+                existing,
+                status=BusinessViewStatus.ARCHIVED,
+                updated_at=now,
+                archived_at=now,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_business_views
+                SET
+                    status = :status,
+                    updated_at = :updated_at,
+                    archived_at = :archived_at
+                WHERE business_view_id = :business_view_id
+                  AND {tenant_sql}
+                """,
+                    tenant_sql=_oracle_tenant_predicate(),
+                ),
+                _business_view_binds(archived),
+            )
+            return _to_business_view_detail(archived)
+
+        return await self._run_transaction(operation)
+
+    async def _resolve_knowledge_base_refs(
+        self,
+        knowledge_base_ids: Sequence[str],
+    ) -> list[KnowledgeBaseRef]:
+        """参照 KB ID 群から存在する KB の {id, name} を tenant scope で解決する。"""
+        ids = _unique_optional_sequence(knowledge_base_ids)
+        if not ids:
+            return []
+        in_sql, in_binds = _oracle_in_predicate("kb.knowledge_base_id", "ref_kb_id", ids)
+        binds = _with_tenant_bind({})
+        binds.update(in_binds)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT kb.knowledge_base_id, kb.name
+            FROM rag_knowledge_bases kb
+            WHERE {in_sql}
+              AND {tenant_sql}
+            """,
+                in_sql=in_sql,
+                tenant_sql=_oracle_tenant_predicate(alias="kb"),
+            ),
+            binds,
+        )
+        by_id = {
+            str(row["knowledge_base_id"]): str(row["name"])
+            for row in rows
+        }
+        # 入力順を保ち、存在しない KB は落とす。
+        return [
+            KnowledgeBaseRef(id=knowledge_base_id, name=by_id[knowledge_base_id])
+            for knowledge_base_id in ids
+            if knowledge_base_id in by_id
+        ]
+
     async def _assign_documents_to_knowledge_base_with_oracle(
         self,
         knowledge_base_id: str,
@@ -2107,6 +2614,35 @@ class OracleClient:
             for row in rows
         ]
 
+    async def _get_owning_knowledge_base_id_with_oracle(
+        self,
+        document_id: str,
+    ) -> str | None:
+        """最古割当の所属 KB の id を返す。所属が無ければ None。"""
+        rows = await self._fetch_all(
+            """
+            SELECT
+                dkb.knowledge_base_id
+            FROM rag_document_knowledge_bases dkb
+            JOIN rag_knowledge_bases kb
+                ON kb.knowledge_base_id = dkb.knowledge_base_id
+            JOIN rag_documents d
+                ON d.document_id = dkb.document_id
+            WHERE dkb.document_id = :document_id
+              AND {document_access_sql}
+              AND {knowledge_base_access_sql}
+            ORDER BY dkb.assigned_at ASC, dkb.knowledge_base_id ASC
+            FETCH FIRST 1 ROWS ONLY
+            """.format(
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        if not rows:
+            return None
+        return str(rows[0]["knowledge_base_id"])
+
     async def _document_knowledge_base_refs_by_document_id_with_oracle(
         self,
         document_ids: Sequence[str],
@@ -2180,6 +2716,7 @@ class OracleClient:
                     document_id,
                     tenant_id_hash,
                     status,
+                    phase,
                     parser_profile,
                     quality_warnings,
                     skip_reason,
@@ -2194,6 +2731,7 @@ class OracleClient:
                     :document_id,
                     :tenant_id_hash,
                     :status,
+                    :phase,
                     :parser_profile,
                     :quality_warnings,
                     :skip_reason,
@@ -2220,6 +2758,7 @@ class OracleClient:
                 j.job_id,
                 j.document_id,
                 j.status,
+                j.phase,
                 j.parser_profile,
                 j.quality_warnings,
                 j.skip_reason,
@@ -2247,8 +2786,9 @@ class OracleClient:
         status: IngestionJobStatus | None,
         limit: int | None,
         offset: int,
+        oldest_first: bool = False,
     ) -> list[IngestionJob]:
-        """Oracle ingestion job table から直近 job を取得する。"""
+        """Oracle ingestion job table から job を取得する。"""
         binds: dict[str, object] = {"offset": offset}
         status_clause = ""
         if status is not None:
@@ -2258,6 +2798,11 @@ class OracleClient:
         if limit is not None:
             binds["limit"] = limit
             limit_clause += " FETCH NEXT :limit ROWS ONLY"
+        order_clause = (
+            "ORDER BY j.queued_at ASC, j.job_id ASC"
+            if oldest_first
+            else "ORDER BY j.queued_at DESC, j.job_id DESC"
+        )
         rows = await self._fetch_ingestion_job_rows(
             _render_sql(
                 """
@@ -2265,6 +2810,7 @@ class OracleClient:
                 j.job_id,
                 j.document_id,
                 j.status,
+                j.phase,
                 j.parser_profile,
                 j.quality_warnings,
                 j.skip_reason,
@@ -2279,11 +2825,12 @@ class OracleClient:
               ON d.document_id = j.document_id
             WHERE {document_access_sql}
               {status_clause}
-            ORDER BY j.queued_at DESC, j.job_id DESC
+            {order_clause}
             {limit_clause}
             """,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 status_clause=status_clause,
+                order_clause=order_clause,
                 limit_clause=limit_clause,
             ),
             _with_tenant_bind(binds),
@@ -2309,6 +2856,7 @@ class OracleClient:
                 j.job_id,
                 j.document_id,
                 j.status,
+                j.phase,
                 j.parser_profile,
                 j.quality_warnings,
                 j.skip_reason,
@@ -2580,9 +3128,22 @@ class OracleClient:
         stale_before: datetime,
         limit: int,
     ) -> list[IngestionJob]:
-        """stale RUNNING job を QUEUED/FAILED へ戻す。"""
+        """stale RUNNING job を QUEUED/FAILED へ戻し、固着した文書状態も復旧する。
+
+        サブプロセスがクラッシュした場合、job は RUNNING、文書は INGESTING/INDEXING
+        のまま残る。job だけ QUEUED へ戻しても文書が INGESTING のままだと、再投入された
+        job が取込中ガード(409)で必ず失敗し、永久に固着する。これを防ぐため:
+
+        - job を再キューする際は、文書も再実行可能な状態(EXTRACT→UPLOADED /
+          INDEX→REVIEW)へ戻す。
+        - 試行上限超過で job を失敗させる際は、文書も ERROR へ戻す。
+        - QUEUED/RUNNING の job が一つも無いのに INGESTING/INDEXING で取り残された
+          文書(過去のデッドロックで FAILED になった job しか持たない等)は ERROR へ
+          戻し、利用者が再試行できるようにする。
+        """
         now = datetime.now(UTC)
         stale_error_message = "取込ジョブが規定回数を超えて停止しました。"
+        orphan_error_message = "取込処理が中断されたため停止しました。再実行してください。"
 
         def operation(connection: OracleConnectionProtocol) -> list[IngestionJob]:
             rows = _fetch_ingestion_job_rows(
@@ -2593,6 +3154,7 @@ class OracleClient:
                     j.job_id,
                     j.document_id,
                     j.status,
+                    j.phase,
                     j.parser_profile,
                     j.quality_warnings,
                     j.skip_reason,
@@ -2645,6 +3207,13 @@ class OracleClient:
                             }
                         ),
                     )
+                    # 試行上限超過: 文書を ERROR へ戻し固着を解消する。
+                    self._reset_document_status_inline(
+                        connection,
+                        document_id=job.document_id,
+                        status=FileStatus.ERROR,
+                        error_message=stale_error_message,
+                    )
                     continue
                 _execute(
                     connection,
@@ -2667,9 +3236,120 @@ class OracleClient:
                     ),
                     _with_tenant_bind({"job_id": job.id}),
                 )
+                # 再キュー: 文書も再実行可能な状態へ戻し、取込中ガードでの再失敗を防ぐ。
+                self._reset_document_status_inline(
+                    connection,
+                    document_id=job.document_id,
+                    status=(
+                        FileStatus.REVIEW
+                        if job.phase == IngestionJobPhase.INDEX
+                        else FileStatus.UPLOADED
+                    ),
+                    error_message=None,
+                )
+
+            # QUEUED/RUNNING の job が無いのに INGESTING/INDEXING で取り残された文書を
+            # ERROR へ戻す(過去のデッドロックで固着した文書の自己復旧)。
+            orphan_rows = _fetch_all(
+                connection,
+                _render_sql(
+                    """
+                SELECT d.document_id
+                FROM rag_documents d
+                WHERE d.status IN ('INGESTING', 'INDEXING')
+                  AND {document_access_sql}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM rag_ingestion_jobs j
+                      WHERE j.document_id = d.document_id
+                        AND j.status IN ('QUEUED', 'RUNNING')
+                  )
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({}),
+            )
+            for orphan_row in orphan_rows:
+                orphan_document_id = orphan_row.get("document_id")
+                if not isinstance(orphan_document_id, str):
+                    continue
+                self._reset_document_status_inline(
+                    connection,
+                    document_id=orphan_document_id,
+                    status=FileStatus.ERROR,
+                    error_message=orphan_error_message,
+                )
             return stale_jobs
 
         return await self._run_transaction(operation)
+
+    @staticmethod
+    def _reset_document_status_inline(
+        connection: OracleConnectionProtocol,
+        *,
+        document_id: str,
+        status: FileStatus,
+        error_message: str | None,
+    ) -> None:
+        """recovery トランザクション内で固着文書の状態を復旧する。
+
+        INGESTING/INDEXING に取り残された文書だけを対象にし、ERROR へ戻す場合は
+        中途半端なチャンク/抽出を破棄する。再実行可能状態(UPLOADED/REVIEW)へ戻す
+        場合は再利用のため抽出を保持する。
+        """
+        if status == FileStatus.ERROR:
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunks
+                WHERE document_id = :document_id
+                """,
+                {"document_id": document_id},
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET status = :status,
+                    error_message = :error_message,
+                    extraction = NULL
+                WHERE document_id = :document_id
+                  AND status IN ('INGESTING', 'INDEXING')
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "status": status.value,
+                        "error_message": error_message,
+                    }
+                ),
+            )
+            return
+        _execute(
+            connection,
+            _render_sql(
+                """
+            UPDATE rag_documents
+            SET status = :status,
+                error_message = :error_message
+            WHERE document_id = :document_id
+              AND status IN ('INGESTING', 'INDEXING')
+              AND {access_predicate}
+            """,
+                access_predicate=_oracle_access_predicate_sql(),
+            ),
+            _with_tenant_bind(
+                {
+                    "document_id": document_id,
+                    "status": status.value,
+                    "error_message": error_message,
+                }
+            ),
+        )
 
     async def _claim_ingestion_job_with_oracle(
         self,
@@ -2688,6 +3368,7 @@ class OracleClient:
                     j.job_id,
                     j.document_id,
                     j.status,
+                    j.phase,
                     j.parser_profile,
                     j.quality_warnings,
                     j.skip_reason,
@@ -2839,6 +3520,7 @@ class OracleClient:
                     j.job_id,
                     j.document_id,
                     j.status,
+                    j.phase,
                     j.parser_profile,
                     j.quality_warnings,
                     j.skip_reason,
@@ -3245,7 +3927,7 @@ class OracleClient:
         return await self._run_transaction(operation)
 
     async def _delete_document_with_oracle(self, document_id: str) -> bool:
-        """Oracle document table と chunk/vector table から指定 document を削除する。"""
+        """Oracle document table と関連 chunk/vector/ingestion 行を同一 transaction で削除する。"""
 
         def operation(connection: OracleConnectionProtocol) -> bool:
             existing = _select_document(connection, document_id)
@@ -3270,6 +3952,61 @@ class OracleClient:
                 ),
                 _with_tenant_bind({"document_id": document_id}),
             )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_ingestion_segments
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_ingestion_segments.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_ingestion_jobs
+                WHERE document_id = :document_id
+                  AND status <> 'RUNNING'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_ingestion_jobs.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            running_jobs = _fetch_all(
+                connection,
+                _render_sql(
+                    """
+                SELECT j.job_id
+                FROM rag_ingestion_jobs j
+                JOIN rag_documents d
+                  ON d.document_id = j.document_id
+                WHERE j.document_id = :document_id
+                  AND j.status = 'RUNNING'
+                  AND {document_access_sql}
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            if running_jobs:
+                raise DocumentDeleteBlockedByRunningIngestionError(
+                    "取込ジョブが実行中のため削除できません。先にキャンセルしてください。"
+                )
             _execute(
                 connection,
                 """
@@ -3334,6 +4071,56 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    @staticmethod
+    def _chunk_insert_rows(
+        document_id: str,
+        document: StoredDocument,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+    ) -> list[dict[str, object]]:
+        """rag_chunks へ挿入する bind row を構築する。"""
+        return [
+            {
+                "chunk_id": f"{document_id}:{chunk.index}",
+                "document_id": document_id,
+                "tenant_id_hash": document.tenant_id_hash,
+                "chunk_index": chunk.index,
+                "chunk_text": chunk.text,
+                "metadata_json": _json_dumps(
+                    {
+                        "document_id": document_id,
+                        "chunk_id": f"{document_id}:{chunk.index}",
+                        "chunk_index": chunk.index,
+                        "start_offset": chunk.start_offset,
+                        "end_offset": chunk.end_offset,
+                        **chunk.metadata,
+                    }
+                ),
+                "embedding": _to_vector_bind(embedding),
+            }
+            for chunk, embedding in zip(chunks, embeddings, strict=True)
+        ]
+
+    @staticmethod
+    def _retrieved_chunks_from_insert_rows(
+        document_id: str,
+        document: StoredDocument,
+        rows: Sequence[Mapping[str, object]],
+    ) -> list[RetrievedChunk]:
+        """保存直後の chunk row を API 返却用 schema へ変換する。"""
+        return [
+            RetrievedChunk(
+                document_id=document_id,
+                chunk_id=str(row["chunk_id"]),
+                text=str(row["chunk_text"]),
+                score=1.0,
+                file_name=document.file_name,
+                category_name=document.category_name,
+                metadata=_json_loads(row["metadata_json"]),
+            )
+            for row in rows
+        ]
+
     async def _save_chunks_with_oracle(
         self,
         document_id: str,
@@ -3354,27 +4141,7 @@ class OracleClient:
                 """,
                 {"document_id": document_id},
             )
-            rows = [
-                {
-                    "chunk_id": f"{document_id}:{chunk.index}",
-                    "document_id": document_id,
-                    "tenant_id_hash": document.tenant_id_hash,
-                    "chunk_index": chunk.index,
-                    "chunk_text": chunk.text,
-                    "metadata_json": _json_dumps(
-                        {
-                            "document_id": document_id,
-                            "chunk_id": f"{document_id}:{chunk.index}",
-                            "chunk_index": chunk.index,
-                            "start_offset": chunk.start_offset,
-                            "end_offset": chunk.end_offset,
-                            **chunk.metadata,
-                        }
-                    ),
-                    "embedding": _to_vector_bind(embedding),
-                }
-                for chunk, embedding in zip(chunks, embeddings, strict=True)
-            ]
+            rows = self._chunk_insert_rows(document_id, document, chunks, embeddings)
             if rows:
                 _executemany(
                     connection,
@@ -3399,18 +4166,75 @@ class OracleClient:
                     """,
                     rows,
                 )
-            return [
-                RetrievedChunk(
-                    document_id=document_id,
-                    chunk_id=str(row["chunk_id"]),
-                    text=str(row["chunk_text"]),
-                    score=1.0,
-                    file_name=document.file_name,
-                    category_name=document.category_name,
-                    metadata=_json_loads(row["metadata_json"]),
+            return self._retrieved_chunks_from_insert_rows(document_id, document, rows)
+
+        return await self._run_transaction(operation)
+
+    async def _save_index_with_oracle(
+        self,
+        document_id: str,
+        extraction: StructuredExtraction,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+    ) -> list[RetrievedChunk]:
+        """抽出 payload と chunk/vector を同一 Oracle transaction で置換する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET extraction = :extraction
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "extraction": _json_dumps(extraction.to_document_payload()),
+                    }
+                ),
+            )
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunks
+                WHERE document_id = :document_id
+                """,
+                {"document_id": document_id},
+            )
+            rows = self._chunk_insert_rows(document_id, document, chunks, embeddings)
+            if rows:
+                _executemany(
+                    connection,
+                    """
+                    INSERT INTO rag_chunks (
+                        chunk_id,
+                        document_id,
+                        tenant_id_hash,
+                        chunk_index,
+                        chunk_text,
+                        metadata_json,
+                        embedding
+                    ) VALUES (
+                        :chunk_id,
+                        :document_id,
+                        :tenant_id_hash,
+                        :chunk_index,
+                        :chunk_text,
+                        :metadata_json,
+                        :embedding
+                    )
+                    """,
+                    rows,
                 )
-                for row in rows
-            ]
+            return self._retrieved_chunks_from_insert_rows(document_id, document, rows)
 
         return await self._run_transaction(operation)
 
@@ -3888,6 +4712,14 @@ def _search_audit_binds(event: Mapping[str, object]) -> dict[str, object]:
         "context_diversified_count": _audit_int(event, "context_diversified_count"),
         "context_group_expanded_count": _audit_int(event, "context_group_expanded_count"),
         "context_expanded_count": _audit_int(event, "context_expanded_count"),
+        "context_adaptive_expanded_count": _audit_int(
+            event,
+            "context_adaptive_expanded_count",
+        ),
+        "context_dependency_promoted_count": _audit_int(
+            event,
+            "context_dependency_promoted_count",
+        ),
         "context_compressed_count": _audit_int(event, "context_compressed_count"),
         "context_compression_saved_chars": _audit_int(
             event,
@@ -3938,6 +4770,11 @@ def _ingestion_audit_binds(event: Mapping[str, object]) -> dict[str, object]:
         "source_bytes": _audit_int(event, "source_bytes"),
         "document_type": _audit_optional_str(event, "document_type"),
         "extraction_confidence": _audit_optional_float(event, "extraction_confidence"),
+        "parser_backend": _audit_optional_str(event, "parser_backend"),
+        "parser_profile": _audit_optional_str(event, "parser_profile"),
+        "segment_count": _audit_int(event, "segment_count"),
+        "fallback_count": _audit_int(event, "fallback_count"),
+        "failed_segment_count": _audit_int(event, "failed_segment_count"),
         "chunk_count": _audit_int(event, "chunk_count"),
         "vector_count": _audit_int(event, "vector_count"),
         "elapsed_ms": _audit_float(event, "elapsed_ms"),
@@ -4298,6 +5135,35 @@ def _select_knowledge_base(
     return None if not rows else _stored_knowledge_base_from_row(rows[0])
 
 
+def _select_business_view(
+    connection: OracleConnectionProtocol,
+    business_view_id: str,
+) -> StoredBusinessView | None:
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            business_view_id,
+            tenant_id_hash,
+            name,
+            description,
+            status,
+            view_config,
+            created_at,
+            updated_at,
+            archived_at
+        FROM rag_business_views
+        WHERE business_view_id = :business_view_id
+          AND {tenant_sql}
+        """,
+            tenant_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"business_view_id": business_view_id}),
+    )
+    return None if not rows else _stored_business_view_from_row(rows[0])
+
+
 def _select_knowledge_base_by_name(
     connection: OracleConnectionProtocol,
     name: str,
@@ -4599,6 +5465,25 @@ def _oracle_knowledge_base_where(
     return " AND ".join(clauses), binds
 
 
+def _oracle_business_view_where(
+    *,
+    status: BusinessViewStatus | None = None,
+    query: str | None = None,
+) -> tuple[str, dict[str, object]]:
+    clauses = [_oracle_tenant_predicate(alias="bv")]
+    binds = _with_tenant_bind({})
+    if status is not None:
+        clauses.append("bv.status = :business_view_status")
+        binds["business_view_status"] = status.value
+    if query and query.strip():
+        clauses.append(
+            "(LOWER(bv.name) LIKE :business_view_query ESCAPE '\\' "
+            "OR LOWER(bv.description) LIKE :business_view_query ESCAPE '\\')"
+        )
+        binds["business_view_query"] = _like_pattern(query)
+    return " AND ".join(clauses), binds
+
+
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
@@ -4676,9 +5561,59 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 "= :filter_document_version"
             )
             binds["filter_document_version"] = cleaned.casefold()
+        elif key == "page_number_min":
+            clauses.append(
+                "JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER) "
+                ">= :filter_page_number_min"
+            )
+            binds["filter_page_number_min"] = int(cleaned)
+        elif key == "page_number_max":
+            clauses.append(
+                "JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER) "
+                "<= :filter_page_number_max"
+            )
+            binds["filter_page_number_max"] = int(cleaned)
+        elif key == "uploaded_from":
+            clauses.append("d.uploaded_at >= :filter_uploaded_from")
+            binds["filter_uploaded_from"] = _parse_filter_datetime(cleaned, end_of_day=False)
+        elif key == "uploaded_to":
+            clauses.append("d.uploaded_at <= :filter_uploaded_to")
+            binds["filter_uploaded_to"] = _parse_filter_datetime(cleaned, end_of_day=True)
+        elif key == "indexed_from":
+            clauses.append("d.indexed_at >= :filter_indexed_from")
+            binds["filter_indexed_from"] = _parse_filter_datetime(cleaned, end_of_day=False)
+        elif key == "indexed_to":
+            clauses.append("d.indexed_at <= :filter_indexed_to")
+            binds["filter_indexed_to"] = _parse_filter_datetime(cleaned, end_of_day=True)
+        elif key == "content_kinds":
+            kinds = [part.strip().casefold() for part in cleaned.split(",") if part.strip()]
+            if kinds:
+                predicate, kind_binds = _oracle_in_predicate(
+                    "LOWER(JSON_VALUE(c.metadata_json, '$.content_kind'))",
+                    "filter_content_kind_in",
+                    kinds,
+                )
+                clauses.append(predicate)
+                binds.update(kind_binds)
         else:
             raise ValueError(f"未対応の検索フィルターです: {key}")
     return " AND ".join(clauses), binds
+
+
+def _parse_filter_datetime(value: str, *, end_of_day: bool) -> datetime:
+    """検証済みの ISO 8601 日付/日時を tz-aware datetime へ変換する。
+
+    date-only（YYYY-MM-DD）の `_to` 境界は当日全体を含めるため、その日の終端へ寄せる。
+    naive な入力は UTC として解釈する。
+    """
+    raw = value.strip()
+    candidate = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
+    parsed = datetime.fromisoformat(candidate)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    if end_of_day and len(raw) == 10:
+        parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
+    return parsed
 
 
 def _oracle_agent_memory_where() -> tuple[str, dict[str, object]]:
@@ -4973,6 +5908,20 @@ def _knowledge_base_binds(knowledge_base: StoredKnowledgeBase) -> dict[str, obje
     }
 
 
+def _business_view_binds(view: StoredBusinessView) -> dict[str, object]:
+    return {
+        "business_view_id": view.id,
+        "tenant_id_hash": view.tenant_id_hash,
+        "name": view.name,
+        "description": view.description,
+        "status": view.status.value,
+        "view_config": _json_dumps(view.view_config),
+        "created_at": view.created_at,
+        "updated_at": view.updated_at,
+        "archived_at": view.archived_at,
+    }
+
+
 def _document_knowledge_base_binds(
     *,
     knowledge_base_id: str,
@@ -4994,6 +5943,7 @@ def _ingestion_job_binds(job: IngestionJob) -> dict[str, object]:
         "document_id": job.document_id,
         "tenant_id_hash": _current_tenant_id_hash(),
         "status": job.status.value,
+        "phase": job.phase.value,
         "parser_profile": job.parser_profile,
         "quality_warnings": _json_dumps(job.quality_warnings),
         "skip_reason": job.skip_reason,
@@ -5061,11 +6011,26 @@ def _stored_knowledge_base_from_row(row: Mapping[str, object]) -> StoredKnowledg
     )
 
 
+def _stored_business_view_from_row(row: Mapping[str, object]) -> StoredBusinessView:
+    return StoredBusinessView(
+        id=str(row["business_view_id"]),
+        tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
+        name=str(row["name"]),
+        description=_optional_str(row.get("description")),
+        status=_business_view_status(row.get("status")),
+        view_config=_json_loads(row.get("view_config")),
+        created_at=_datetime_value(row.get("created_at")),
+        updated_at=_datetime_value(row.get("updated_at")),
+        archived_at=_optional_datetime(row.get("archived_at")),
+    )
+
+
 def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:
     return IngestionJob(
         id=str(row["job_id"]),
         document_id=str(row["document_id"]),
         status=_ingestion_job_status(row.get("status")),
+        phase=_ingestion_job_phase(row.get("phase")),
         parser_profile=str(row.get("parser_profile") or "enterprise_ai_generic"),
         quality_warnings=_json_string_list(row.get("quality_warnings")),
         skip_reason=_optional_str(row.get("skip_reason")),
@@ -5218,6 +6183,7 @@ def _coerce_metadata_value(item: object) -> MetadataValue:
     """JSON 由来の値を MetadataValue へ正規化する。
 
     Oracle の JSON 列は数値を Decimal で返すため、int/float に戻す。
+    list/dict は citation lineage として構造を保ったまま返す。
     """
     if item is None or isinstance(item, bool):
         return item
@@ -5225,8 +6191,10 @@ def _coerce_metadata_value(item: object) -> MetadataValue:
         return int(item) if item == item.to_integral_value() else float(item)
     if isinstance(item, str | int | float):
         return item
-    if isinstance(item, list | dict):
-        return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(item, Mapping):
+        return {str(key): _coerce_metadata_value(value) for key, value in item.items()}
+    if isinstance(item, Sequence) and not isinstance(item, str | bytes | bytearray):
+        return [_coerce_metadata_value(value) for value in item]
     return str(item)
 
 
@@ -5277,13 +6245,14 @@ def _element_ids_from_metadata(value: object) -> list[str]:
 
 
 def _bbox_from_metadata(value: object) -> list[float] | None:
-    """chunk metadata の bbox JSON 文字列を list[float] に戻す。"""
-    if not isinstance(value, str):
-        return None
-    try:
-        decoded = json.loads(value)
-    except json.JSONDecodeError:
-        return None
+    """chunk metadata の bbox JSON 文字列 / 配列を list[float] に戻す。"""
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    else:
+        decoded = value
     if not isinstance(decoded, list) or len(decoded) not in {4, 8}:
         return None
     bbox: list[float] = []
@@ -5368,10 +6337,22 @@ def _ingestion_job_status(value: object) -> IngestionJobStatus:
     return IngestionJobStatus(str(value or IngestionJobStatus.QUEUED.value))
 
 
+def _ingestion_job_phase(value: object) -> IngestionJobPhase:
+    if isinstance(value, IngestionJobPhase):
+        return value
+    return IngestionJobPhase(str(value or IngestionJobPhase.EXTRACT.value))
+
+
 def _knowledge_base_status(value: object) -> KnowledgeBaseStatus:
     if isinstance(value, KnowledgeBaseStatus):
         return value
     return KnowledgeBaseStatus(str(value or KnowledgeBaseStatus.ACTIVE.value))
+
+
+def _business_view_status(value: object) -> BusinessViewStatus:
+    if isinstance(value, BusinessViewStatus):
+        return value
+    return BusinessViewStatus(str(value or BusinessViewStatus.ACTIVE.value))
 
 
 def _search_mode(value: object) -> SearchMode:
@@ -5700,6 +6681,40 @@ CREATE INDEX {membership_table}_tenant_kb_idx
 """.strip()
 
 
+def oracle_business_view_schema_sql(
+    table_name: str = "rag_business_views",
+) -> str:
+    """Oracle business view(業務アシスタント)table の DDL 例を返す。
+
+    参照 KB は ``view_config`` JSON 内に ID 群として保持する(多対多。link table 不要で
+    DDL を最小化する)。query 上書きと persona も同 JSON へ束ねる。
+    """
+    return f"""
+CREATE TABLE {table_name} (
+    business_view_id   VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash     CHAR(64),
+    name               VARCHAR2(256) NOT NULL,
+    description        VARCHAR2(2000),
+    status             VARCHAR2(32) DEFAULT 'ACTIVE' NOT NULL,
+    view_config        JSON,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    archived_at        TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT {table_name}_status_ck
+        CHECK (status IN ('ACTIVE', 'ARCHIVED'))
+);
+
+CREATE UNIQUE INDEX {table_name}_tenant_name_uidx
+    ON {table_name} (
+        NVL(tenant_id_hash, '__GLOBAL__'),
+        LOWER(name)
+    );
+
+CREATE INDEX {table_name}_tenant_status_idx
+    ON {table_name} (tenant_id_hash, status, updated_at DESC);
+""".strip()
+
+
 def oracle_ingestion_job_schema_sql(
     table_name: str = "rag_ingestion_jobs",
     document_table: str = "rag_documents",
@@ -5711,6 +6726,7 @@ CREATE TABLE {table_name} (
     document_id      VARCHAR2(64) NOT NULL,
     tenant_id_hash   CHAR(64),
     status           VARCHAR2(32) NOT NULL,
+    phase            VARCHAR2(16) DEFAULT 'EXTRACT' NOT NULL,
     parser_profile   VARCHAR2(80) NOT NULL,
     quality_warnings JSON,
     skip_reason      VARCHAR2(256),
@@ -5722,6 +6738,8 @@ CREATE TABLE {table_name} (
     finished_at      TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED')),
+    CONSTRAINT {table_name}_phase_ck
+        CHECK (phase IN ('EXTRACT', 'INDEX')),
     CONSTRAINT {table_name}_attempts_ck
         CHECK (attempt_count >= 0 AND max_attempts >= 1),
     CONSTRAINT {table_name}_document_fk
@@ -5832,7 +6850,7 @@ CREATE TABLE {table_name} (
     uploaded_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     indexed_at               TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
-        CHECK (status IN ('UPLOADED', 'INGESTING', 'INDEXED', 'ERROR')),
+        CHECK (status IN ('UPLOADED', 'INGESTING', 'REVIEW', 'INDEXING', 'INDEXED', 'ERROR')),
     CONSTRAINT {table_name}_duplicate_fk
         FOREIGN KEY (duplicate_of_document_id) REFERENCES {table_name} (document_id)
 );
@@ -5875,6 +6893,8 @@ CREATE TABLE {table_name} (
     context_diversified_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_group_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_adaptive_expanded_count NUMBER(10) DEFAULT 0 NOT NULL,
+    context_dependency_promoted_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_compressed_count NUMBER(10) DEFAULT 0 NOT NULL,
     context_compression_saved_chars NUMBER(10) DEFAULT 0 NOT NULL,
     agent_memory_retrieved_count NUMBER(10) DEFAULT 0 NOT NULL,
@@ -5937,6 +6957,11 @@ CREATE TABLE {table_name} (
     source_bytes           NUMBER(19) NOT NULL,
     document_type          VARCHAR2(128),
     extraction_confidence  NUMBER(6, 5),
+    parser_backend         VARCHAR2(80),
+    parser_profile         VARCHAR2(80),
+    segment_count          NUMBER(10) DEFAULT 0 NOT NULL,
+    fallback_count         NUMBER(10) DEFAULT 0 NOT NULL,
+    failed_segment_count   NUMBER(10) DEFAULT 0 NOT NULL,
     chunk_count            NUMBER(10) DEFAULT 0 NOT NULL,
     vector_count           NUMBER(10) DEFAULT 0 NOT NULL,
     elapsed_ms             NUMBER(12, 3) NOT NULL,
@@ -5955,6 +6980,9 @@ CREATE INDEX {table_name}_tenant_created_idx
 
 CREATE INDEX {table_name}_document_created_idx
     ON {table_name} (document_id, created_at DESC);
+
+CREATE INDEX {table_name}_parser_created_idx
+    ON {table_name} (parser_backend, parser_profile, created_at DESC);
 
 CREATE INDEX {table_name}_source_sha256_idx
     ON {table_name} (source_sha256);
@@ -6442,6 +7470,80 @@ def _chunk_group_id_from_metadata(metadata: Mapping[str, MetadataValue]) -> str 
     return cleaned or None
 
 
+def _context_dependency_match_sql(anchor: RetrievedChunk) -> tuple[str, dict[str, object]]:
+    """anchor lineage に一致する dependency candidate を Oracle metadata から絞り込む。"""
+    tokens = _context_dependency_anchor_tokens(anchor.metadata)
+    if not tokens:
+        return (
+            "JSON_EXISTS(c.metadata_json, '$.element_ids')\n"
+            "                        OR JSON_EXISTS(c.metadata_json, '$.parent_element_ids')\n"
+            "                        OR JSON_EXISTS(c.metadata_json, '$.dependency_edges')",
+            {},
+        )
+    clauses: list[str] = []
+    binds: dict[str, object] = {}
+    for index, token in enumerate(tokens[:16]):
+        bind_name = f"dependency_token_{index}"
+        clauses.append(
+            "LOWER(JSON_SERIALIZE(c.metadata_json RETURNING VARCHAR2(32767))) "
+            f"LIKE :{bind_name} ESCAPE '\\'"
+        )
+        binds[bind_name] = _like_pattern(token)
+    return "\n                        OR ".join(clauses), binds
+
+
+def _context_dependency_anchor_tokens(
+    metadata: Mapping[str, MetadataValue],
+) -> list[str]:
+    """dependency lookup で使う element id / parent id / edge endpoint を抽出する。"""
+    tokens: list[str] = []
+    tokens.extend(_element_ids_from_metadata(metadata.get("element_ids")))
+    tokens.extend(_element_ids_from_metadata(metadata.get("parent_element_ids")))
+    tokens.extend(_dependency_edge_endpoint_ids(metadata.get("dependency_edges")))
+    return _unique_dependency_tokens(tokens)
+
+
+def _dependency_edge_endpoint_ids(value: object) -> list[str]:
+    """dependency_edges metadata から parent/child endpoint id を取り出す。"""
+    payload = value
+    if isinstance(value, str):
+        if not value.strip():
+            return []
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(payload, Sequence) or isinstance(payload, str | bytes | bytearray):
+        return []
+    endpoint_ids: list[str] = []
+    for item in payload:
+        if not isinstance(item, Mapping):
+            continue
+        for key in ("parent_id", "parent", "child_id", "child"):
+            value = item.get(key)
+            if isinstance(value, str | int):
+                cleaned = str(value).strip()
+                if cleaned:
+                    endpoint_ids.append(cleaned)
+    return endpoint_ids
+
+
+def _unique_dependency_tokens(values: Sequence[str]) -> list[str]:
+    """SQL metadata match に使える短い lineage token を安定順で返す。"""
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = value.strip()
+        if len(cleaned) < 2:
+            continue
+        normalized = cleaned.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        tokens.append(cleaned)
+    return tokens
+
+
 def _context_neighbor_offsets(window: int) -> list[int]:
     """近い順に前後 offset を返す。"""
     return sorted(
@@ -6577,6 +7679,7 @@ def _to_knowledge_base_detail(knowledge_base: StoredKnowledgeBase) -> KnowledgeB
     return KnowledgeBaseDetail(
         **_to_knowledge_base_summary(knowledge_base).model_dump(),
         retrieval_config=knowledge_base.retrieval_config,
+        adapter_config=parse_adapter_config(knowledge_base.retrieval_config),
     )
 
 
@@ -6585,6 +7688,36 @@ def updated_copy_knowledge_base(
     **changes: object,
 ) -> StoredKnowledgeBase:
     return replace(knowledge_base, **cast(Any, changes))
+
+
+def _to_business_view_summary(view: StoredBusinessView) -> BusinessViewSummary:
+    config = parse_business_view_config(view.view_config)
+    return BusinessViewSummary(
+        id=view.id,
+        name=view.name,
+        description=view.description,
+        status=view.status,
+        knowledge_base_count=len(config.normalized_knowledge_base_ids()),
+        created_at=view.created_at,
+        updated_at=view.updated_at,
+        archived_at=view.archived_at,
+    )
+
+
+def _to_business_view_detail(view: StoredBusinessView) -> BusinessViewDetail:
+    config = parse_business_view_config(view.view_config)
+    return BusinessViewDetail(
+        **_to_business_view_summary(view).model_dump(),
+        config=config,
+        knowledge_bases=[],
+    )
+
+
+def updated_copy_business_view(
+    view: StoredBusinessView,
+    **changes: object,
+) -> StoredBusinessView:
+    return replace(view, **cast(Any, changes))
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:

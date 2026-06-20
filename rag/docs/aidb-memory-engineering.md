@@ -83,3 +83,33 @@ Agent Memory は外部ストアを使わず、Oracle 26ai 内の `rag_agent_memo
 LLM context は `Evidence`、`Support`、`Structure`、`History` の label を付けた構造で渡す。回答の根拠として扱えるのは `Evidence` のみで、`Support` と `History` は説明・比較・継続性の補助に使う。
 
 `SearchDiagnostics` と `rag_search_audit` には、`memory_plan_id`、business context、retrieval plan、context pack、evidence/support/structure/history 件数、Agent Memory retrieval / writeback 件数、resolver rejected 件数、不足 context 件数を残す。
+
+## Retrieval アダプター / Grounding アダプター
+
+検索段階と検索後処理を、Parser / Chunking アダプターと同型の **手動選択できるアダプター**に束ねる。
+
+- **Retrieval アダプター(`rag_retrieval_strategy`)** — `app/rag/retrieval_adapter.py`。
+  hybrid_rrf(既定)/ vector / keyword / graph_augmented / select_ai_structured /
+  business_context_strict / corrective_multi_query。既存の hybrid / AI Vector Search /
+  Oracle Text / GraphRAG-lite / Select AI 経路へ解決し、per-request の `strategy` / `mode` を
+  明示した場合はそちらを優先する。`GET/PATCH /api/settings/retrieval` と専用設定画面で切替。
+- **Grounding アダプター(`rag_post_retrieval_pipeline`)** — `app/rag/grounding_adapter.py`。
+  custom(既定・既存 `rag_context_*` フラグを尊重)/ lean / verified_context /
+  context_enrich / compact / full_governed。dedupe / Resolver-Verifier / Context Builder は
+  常時実行し、任意段(dependency promotion / MMR diversity / context expansion /
+  compression)を preset で束ねる。`GET/PATCH /api/settings/grounding` と専用設定画面で切替。
+
+### 追加した決定論的手法(他 RAG を上回るための差分)
+
+- **gap-stop(PDF Memory Router Route D)**: `business_context_strict` で業務スコープ
+  (tenant / dataset / ACL / version)が未確定なら検索を実行せず、`gap_stopped` 診断付きで
+  insufficient_context を返す。Agent の自由検索へ逃がさない。
+- **corrective / iterative retrieval(PDF Step5「過不足あれば追加検索」)**:
+  `corrective_multi_query` で検証済み根拠が 0 件のとき、top_k 拡大・絞り込み filter 緩和で
+  1 回だけ再検索→再 rerank→再 verify する(上限 1 反復、追加 LLM 呼び出しなし)。
+- **business-fit 加重(PDF AIDB Proof)**: rerank 後に `final = semantic × business_fit`
+  (version active / source_acl / 鮮度 を metadata から決定論的に算出)で並べ替える。
+
+既定 preset(hybrid_rrf / custom)は現行挙動と一致させ、明示選択時のみ挙動を束ねる。
+`SearchDiagnostics` には `retrieval_strategy_adapter` / `post_retrieval_pipeline` /
+`gap_stopped` / `corrective_retried` / `business_fit_reordered_count` を残す。

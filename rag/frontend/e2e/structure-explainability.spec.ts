@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -74,9 +74,11 @@ test("文書詳細で構造化抽出要素と raw text を確認できる", asyn
   await expect(extractionPanel).toBeVisible();
   await expect(extractionPanel.getByText("構造化要素")).toBeVisible();
   await expect(extractionPanel.getByText("見出し")).toBeVisible();
-  await expect(extractionPanel.getByText("p.2", { exact: true })).toBeVisible();
+  await expect(extractionPanel.getByRole("button", { name: /表 table p\.2/ })).toBeVisible();
   await expect(extractionPanel.getByText("経費申請 > 料金表")).toBeVisible();
   await expect(extractionPanel.getByText("| 交通費 | 1000 |")).toBeVisible();
+  await expect(extractionPanel.getByText("表セル")).toBeVisible();
+  await expect(extractionPanel.getByRole("button", { name: /料金表 B2 1000/ })).toBeVisible();
   await expect(extractionPanel.getByText("本文テキスト")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
@@ -130,6 +132,9 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await page.getByRole("button", { name: "検索" }).click();
 
   await expect(page.getByRole("heading", { name: /引用/ })).toBeVisible();
+  const executionMetrics = page.getByLabel("検索実行");
+  await expect(executionMetrics.locator("div").filter({ hasText: "適応展開" })).toContainText("2");
+  await expect(executionMetrics.locator("div").filter({ hasText: "依存昇格" })).toContainText("1");
   const citation = page.locator("li").filter({ hasText: "料金表の交通費は 1000 円です。" });
   await expect(page.getByText("p.2-3")).toBeVisible();
   await expect(citation.locator("dl").getByText("表", { exact: true })).toBeVisible();
@@ -138,7 +143,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   const previewLink = citation.getByRole("link", { name: "policy.txt の引用位置を開く" });
   await expect(previewLink).toHaveAttribute(
     "href",
-    /\/documents\/doc-1\?chunk_id=doc-1%3A1&element_id=tbl-1/
+    /\/documents\/doc-1\?chunk_id=doc-1%3A1&page=2&element_id=tbl-1&cell_ref=B2&formula_cell_ref=B2/
   );
   await citation.getByRole("button", { name: "この引用は役に立った" }).click();
   await expect.poll(() => feedbackPayload).toEqual({
@@ -150,15 +155,21 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   });
   await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
   await previewLink.click();
-  await expect(page).toHaveURL(/\/documents\/doc-1\?chunk_id=doc-1%3A1&element_id=tbl-1/);
+  await expect(page).toHaveURL(
+    /\/documents\/doc-1\?chunk_id=doc-1%3A1&page=2&element_id=tbl-1&cell_ref=B2&formula_cell_ref=B2/
+  );
   const chunkPanel = page
     .getByRole("heading", { name: "Chunk / Citation" })
     .locator("xpath=ancestor::section[1]");
   const linkedChunkButton = chunkPanel.getByRole("button", { name: /料金表の交通費/ });
   await expect(linkedChunkButton).toHaveAttribute("aria-pressed", "true");
-  await expect(linkedChunkButton).toBeFocused();
-  await expect(page.getByText(/位置: p\.2 \/ bbox x=0\.0% y=0\.0% w=100\.0% h=40\.0%/)).toBeVisible();
-  await expect(page.getByTestId("bbox-preview-overlay")).toBeVisible();
+  const linkedCellButton = page.getByRole("button", { name: /料金表 B2 1000/ });
+  await expect(linkedCellButton).toHaveAttribute("aria-pressed", "true");
+  await expect(linkedCellButton).toBeFocused();
+  await expect(page.getByText(/位置: p\.2 \/ bbox x=0\.0% y=0\.0% w=50\.0% h=20\.0%/)).toBeVisible();
+  const bboxOverlay = page.getByTestId("bbox-preview-overlay");
+  await expect(bboxOverlay).toBeVisible();
+  await expect(bboxOverlay).toHaveAttribute("data-bbox-unit", "absolute");
   await expectNoHorizontalOverflow(page);
 });
 
@@ -257,9 +268,54 @@ async function mockDocumentDetail(page: Page) {
             ],
             pages: [
               { page_number: 1, width: 612, height: 792, element_ids: ["el-0000"] },
-              { page_number: 2, width: 612, height: 792, element_ids: ["tbl-1"] },
+              { page_number: 2, element_ids: ["tbl-1"] },
             ],
-            tables: [],
+            tables: [
+              {
+                table_id: "table-1",
+                element_id: "tbl-1",
+                page_number: 2,
+                caption: "料金表",
+                cells: [
+                  {
+                    row: 0,
+                    col: 0,
+                    text: "項目",
+                    row_span: 1,
+                    col_span: 1,
+                  },
+                  {
+                    row: 0,
+                    col: 1,
+                    text: "金額",
+                    row_span: 1,
+                    col_span: 1,
+                  },
+                  {
+                    row: 1,
+                    col: 0,
+                    text: "交通費",
+                    row_span: 1,
+                    col_span: 1,
+                  },
+                  {
+                    row: 1,
+                    col: 1,
+                    text: "1000",
+                    row_span: 1,
+                    col_span: 1,
+                    bbox: [0, 0, 306, 0, 306, 158.4, 0, 158.4],
+                    metadata: {
+                      formula_cell_ref: "B2",
+                      bbox_coordinate_mode: "xyxy",
+                      bbox_unit: "absolute",
+                      page_width: 612,
+                      page_height: 792,
+                    },
+                  },
+                ],
+              },
+            ],
             assets: [],
             parser_artifacts: { parser_backend: "local_partition" },
           },
@@ -321,13 +377,21 @@ async function mockDocumentDetail(page: Page) {
             text: "料金表の交通費は 1000 円です。",
             page_start: 2,
             page_end: 2,
-            bbox: [0, 0, 100, 40],
+            bbox: null,
             section_path: "経費申請 > 料金表",
             content_kind: "table",
             chunk_group_id: "grp-2",
             source_parser: "local_text_structure",
             element_ids: ["tbl-1"],
-            metadata: { chunk_profile: "structure_v1", element_ids: "tbl-1" },
+            metadata: {
+              chunk_profile: "structure_v1",
+              element_ids: "tbl-1",
+              bbox_json: "[0,0,612,316.8]",
+              bbox_coordinate_mode: "xyxy",
+              bbox_unit: "absolute",
+              page_width: 612,
+              page_height: 792,
+            },
           },
         ],
         error_messages: [],
@@ -422,6 +486,8 @@ function searchStreamBody(): string {
       section_path: "経費申請 > 料金表",
       chunk_profile: "structure_v1",
       element_ids: "tbl-1",
+      formula_cell_refs:
+        '{"table_id":"tbl-1","cells":[{"metadata":{"formula_cell_ref":"B2"}}]}',
     },
   };
   return [
@@ -429,7 +495,16 @@ function searchStreamBody(): string {
       trace_id: "trace-1",
       elapsed_ms: 12,
       guardrail_warnings: [],
-      diagnostics: {},
+      diagnostics: {
+        retrieved_count: 6,
+        reranked_count: 3,
+        citation_count: 1,
+        context_adaptive_expanded_count: 2,
+        context_dependency_promoted_count: 1,
+        context_group_expanded_count: 0,
+        context_expanded_count: 0,
+        context_compressed_count: 0,
+      },
     })}\n\n`,
     `event: delta\ndata: ${JSON.stringify({ text: "料金表を確認しました。" })}\n\n`,
     `event: citations\ndata: ${JSON.stringify([citation])}\n\n`,
@@ -438,9 +513,6 @@ function searchStreamBody(): string {
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth
-    )
-  ).toBe(true);
+  // documentElement と main の双方を検査する共通ヘルパーへ委譲(_helpers.ts)。
+  await expectNoPageOverflow(page);
 }

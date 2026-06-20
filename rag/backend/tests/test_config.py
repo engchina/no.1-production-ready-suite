@@ -1,5 +1,6 @@
 """設定値の安全な制約テスト。"""
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,111 @@ from app.config import (
     Settings,
     resolve_model_settings_file,
 )
+
+
+def test_chunking_strategy_defaults_to_structure_aware() -> None:
+    """Chunking アダプターの既定戦略は structure_aware。"""
+    settings = Settings()
+    assert settings.rag_chunking_strategy == "structure_aware"
+    assert settings.rag_chunk_child_size == 320
+    assert settings.rag_chunk_sentence_window_size == 3
+    assert settings.rag_chunk_min_chars == 0
+
+
+def test_chunk_child_size_and_min_chars_must_be_smaller_than_chunk_size() -> None:
+    """child_size / min_chars が chunk_size 以上の誤設定は起動時に拒否する。"""
+    with pytest.raises(ValidationError):
+        Settings(rag_chunk_size=800, rag_chunk_child_size=800)
+    with pytest.raises(ValidationError):
+        Settings(rag_chunk_size=300, rag_chunk_min_chars=300)
+
+
+def test_unknown_chunking_strategy_is_rejected() -> None:
+    """未知の chunking 戦略名は Literal で拒否する。"""
+    with pytest.raises(ValidationError):
+        Settings(rag_chunking_strategy="semantic_double_pass")
+
+
+def test_retrieval_and_grounding_defaults_match_current_behavior() -> None:
+    """Retrieval/Grounding アダプターの既定は現行挙動と一致させる。"""
+    settings = Settings()
+    assert settings.rag_retrieval_strategy == "hybrid_rrf"
+    assert settings.rag_post_retrieval_pipeline == "custom"
+
+
+def test_unknown_retrieval_strategy_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rag_retrieval_strategy="hyde_fusion")
+
+
+def test_unknown_post_retrieval_pipeline_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rag_post_retrieval_pipeline="agentic_loop")
+
+
+def test_generation_and_guardrail_defaults_match_current_behavior() -> None:
+    """Generation/Guardrail アダプターの既定は現行挙動と一致させる。"""
+    settings = Settings()
+    assert settings.rag_generation_profile == "grounded_concise"
+    assert settings.rag_guardrail_policy == "standard"
+
+
+def test_unknown_generation_profile_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rag_generation_profile="chain_of_thought")
+
+
+def test_unknown_guardrail_policy_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rag_guardrail_policy="paranoid")
+
+
+def test_vector_index_profile_defaults_to_balanced() -> None:
+    """Vector Index アダプターの既定 balanced は現行挙動と一致させる。"""
+    assert Settings().rag_vector_index_profile == "balanced"
+
+
+def test_unknown_vector_index_profile_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rag_vector_index_profile="ivf_flat")
+
+
+def test_evaluation_suite_defaults_to_request_only() -> None:
+    """Evaluation アダプターの既定 request_only は現行挙動と一致させる。"""
+    assert Settings().rag_evaluation_suite == "request_only"
+
+
+def test_unknown_evaluation_suite_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rag_evaluation_suite="autorag_tuner")
+
+
+def test_graph_profile_defaults_to_off() -> None:
+    """GraphRAG アダプターの既定 off は KG 非構築(現行挙動)と一致させる。"""
+    assert Settings().rag_graph_profile == "off"
+
+
+def test_unknown_graph_profile_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rag_graph_profile="neo4j")
+
+
+def test_agentic_profile_defaults_to_off() -> None:
+    """Agentic アダプターの既定 off は LLM 計画なし(現行挙動)と一致させる。"""
+    assert Settings().rag_agentic_profile == "off"
+
+
+def test_unknown_agentic_profile_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(rag_agentic_profile="react_agent")
+
+
+def test_agentic_max_subqueries_defaults_and_bounds() -> None:
+    assert Settings().rag_agentic_max_subqueries == 3
+    with pytest.raises(ValidationError):
+        Settings(rag_agentic_max_subqueries=0)
+    with pytest.raises(ValidationError):
+        Settings(rag_agentic_max_subqueries=9)
 
 
 def test_embedding_dimension_is_fixed_to_oracle_vector_width() -> None:
@@ -94,9 +200,33 @@ def test_pdf_segmentation_defaults_are_bounded() -> None:
         Settings(rag_pdf_max_segments=0)
 
 
-def test_parser_adapter_flags_default_to_local_optional() -> None:
+def test_ingestion_queue_defaults_keep_api_process_non_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ローカル既定でも HTTP リクエスト内で取込を実行しない。"""
+    for key in (
+        "INGESTION_QUEUE_DEDICATED_WORKER_ENABLED",
+        "INGESTION_QUEUE_INPROCESS_WORKER_ENABLED",
+        "INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    settings = Settings(_env_file=None)
+
+    assert settings.ingestion_queue_dedicated_worker_enabled is True
+    assert settings.ingestion_queue_inprocess_worker_enabled is True
+    assert settings.ingestion_queue_process_isolation_enabled is True
+
+
+def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.MonkeyPatch) -> None:
     """外部 parser adapter は既定で任意依存のまま無効にする。"""
-    settings = Settings()
+    for key in (
+        "RAG_PARSER_ADAPTER_BACKEND",
+        "RAG_PARSER_DOCLING_ENABLED",
+        "RAG_PARSER_MARKER_ENABLED",
+        "RAG_PARSER_UNSTRUCTURED_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    settings = Settings(_env_file=None)
 
     assert settings.rag_parser_adapter_backend == "local"
     assert settings.rag_parser_docling_enabled is False
@@ -108,6 +238,30 @@ def test_parser_adapter_flags_default_to_local_optional() -> None:
 
     with pytest.raises(ValidationError):
         Settings(rag_parser_adapter_backend="llama_parse")
+
+
+def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> None:
+    """外部 parser はサービス化。backend は per-adapter extra のみ宣言し combined extra は持たない。
+
+    marker(pillow<11)と unstructured(pillow>=11.1)は共存不可のため、combined extra は
+    そもそも lock 不能。両 extra を uv conflicts に宣言し universal lock を成立させる。
+    """
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    optional = pyproject["project"]["optional-dependencies"]
+
+    assert optional["docling"] == ["docling==2.103.0"]
+    assert optional["marker"] == ["marker-pdf[full]==1.10.2"]
+    assert optional["unstructured"] == ["unstructured[all-docs]==0.23.1"]
+    # 共存不可な combined extra は提供しない(サービス分離の理由)。
+    assert "parser-adapters" not in optional
+    # marker と unstructured は uv conflicts で排他宣言する。
+    conflicts = pyproject["tool"]["uv"]["conflicts"]
+    conflict_sets = [{entry["extra"] for entry in group} for group in conflicts]
+    assert {"marker", "unstructured"} in conflict_sets
+    # backend は共有 contract package を path 依存で取り込む。
+    assert "rag-parser-core" in pyproject["project"]["dependencies"]
 
 
 def test_tsv_upload_content_type_is_allowed_by_default() -> None:
@@ -178,14 +332,6 @@ def test_chunk_overlap_must_be_smaller_than_chunk_size() -> None:
     """chunk overlap が chunk size 以上の誤設定は起動時に拒否する。"""
     with pytest.raises(ValidationError, match="RAG_CHUNK_OVERLAP"):
         Settings(rag_chunk_size=400, rag_chunk_overlap=400)
-
-
-def test_max_chunks_per_document_is_bounded() -> None:
-    """1 文書あたり chunk 数の上限は正の値に制限する。"""
-    assert Settings().rag_max_chunks_per_document == 512
-
-    with pytest.raises(ValidationError):
-        Settings(rag_max_chunks_per_document=0)
 
 
 def test_upload_storage_backend_is_local_or_oci() -> None:
@@ -323,6 +469,46 @@ def test_context_group_expansion_defaults_to_disabled_and_is_bounded() -> None:
         Settings(rag_context_group_max_chunks=0)
     with pytest.raises(ValidationError):
         Settings(rag_context_group_max_chunks=21)
+
+
+def test_context_adaptive_expansion_defaults_to_disabled_and_is_bounded() -> None:
+    """adaptive context expansion は既定無効で、window/overlap を制限する。"""
+    settings = Settings()
+
+    assert settings.rag_context_adaptive_expansion_enabled is False
+    assert settings.rag_context_adaptive_neighbor_window == 1
+    assert settings.rag_context_adaptive_min_overlap == 0.08
+    assert Settings(
+        rag_context_adaptive_expansion_enabled=True,
+        rag_context_adaptive_neighbor_window=2,
+        rag_context_adaptive_min_overlap=0.2,
+    ).rag_context_adaptive_min_overlap == 0.2
+
+    with pytest.raises(ValidationError):
+        Settings(rag_context_adaptive_neighbor_window=-1)
+    with pytest.raises(ValidationError):
+        Settings(rag_context_adaptive_neighbor_window=6)
+    with pytest.raises(ValidationError):
+        Settings(rag_context_adaptive_min_overlap=-0.01)
+    with pytest.raises(ValidationError):
+        Settings(rag_context_adaptive_min_overlap=1.01)
+
+
+def test_context_dependency_promotion_defaults_to_disabled_and_is_bounded() -> None:
+    """dependency context promotion は既定無効で、追加 chunk 数を制限する。"""
+    settings = Settings()
+
+    assert settings.rag_context_dependency_promotion_enabled is False
+    assert settings.rag_context_dependency_max_chunks == 4
+    assert Settings(
+        rag_context_dependency_promotion_enabled=True,
+        rag_context_dependency_max_chunks=2,
+    ).rag_context_dependency_max_chunks == 2
+
+    with pytest.raises(ValidationError):
+        Settings(rag_context_dependency_max_chunks=0)
+    with pytest.raises(ValidationError):
+        Settings(rag_context_dependency_max_chunks=21)
 
 
 def test_context_compression_defaults_to_disabled_and_is_bounded() -> None:

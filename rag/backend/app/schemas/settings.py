@@ -5,9 +5,24 @@ import re
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.config import ParserAdapterBackend, UploadStorageBackend
+from app.config import (
+    AgenticProfile,
+    ChunkingStrategy,
+    EnterpriseAiVlmInputMode,
+    EvaluationSuite,
+    GenerationProfile,
+    GraphProfile,
+    GuardrailBackend,
+    GuardrailPolicyName,
+    ParserAdapterBackend,
+    PostRetrievalPipeline,
+    PreprocessProfile,
+    RetrievalStrategy,
+    UploadStorageBackend,
+    VectorIndexProfile,
+)
 
 ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
 ModelSettingsTestStatus = Literal["success", "failed"]
@@ -15,8 +30,32 @@ ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "e
 DatabaseConnectionTestStatus = Literal["success", "failed"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
-ParserAdapterBackendName = Literal["docling", "marker", "unstructured"]
+ParserAdapterBackendName = Literal[
+    "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
+]
+ParserAdapterScoreBackendName = Literal[
+    "local", "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
+]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
+ParserAdapterContractStatus = Literal[
+    "passed",
+    "failed",
+    "fallback",
+    "available",
+    "ignored",
+    "disabled",
+    "missing",
+    "unsupported",
+    "fixture_missing",
+]
+ParserAdapterScoreStatus = Literal[
+    "recommended",
+    "eligible",
+    "available",
+    "disabled",
+    "ignored",
+    "missing",
+]
 
 
 class EnterpriseAiModelEntrySettings(BaseModel):
@@ -44,6 +83,7 @@ class EnterpriseAiModelSettings(BaseModel):
     models: list[EnterpriseAiModelEntrySettings] = Field(default_factory=list, max_length=20)
     default_model_id: str = Field(default="", max_length=256)
     api_path: str = Field(default="/responses", max_length=512)
+    vlm_input_mode: EnterpriseAiVlmInputMode = "auto"
     text_payload_template: str = Field(default="", max_length=20000)
     vision_payload_template: str = Field(default="", max_length=20000)
     text_response_path: str = Field(default="", max_length=1024)
@@ -303,11 +343,159 @@ class ParserAdapterStatusData(BaseModel):
 
     backend: ParserAdapterBackendName
     package_name: str
+    import_name: str
+    distribution_name: str | None = None
+    install_package: str
     enabled: bool
     selected: bool
     installed: bool
     status: ParserAdapterStatus
     version: str | None = None
+    warning_code: str | None = None
+
+
+class ParserAdapterScorecardEntryData(BaseModel):
+    """parser backend 推奨 scorecard の 1 行。"""
+
+    backend: ParserAdapterScoreBackendName
+    rank: int
+    score: float
+    status: ParserAdapterScoreStatus
+    recommended: bool
+    executable: bool
+    selected: bool
+    enabled: bool
+    installed: bool
+    metric_source: str
+    metric_count: int
+    signals: dict[str, float] = Field(default_factory=dict)
+    reason_codes: list[str] = Field(default_factory=list)
+    warning_codes: list[str] = Field(default_factory=list)
+
+
+class ParserAdapterScorecardData(BaseModel):
+    """parser backend の評価駆動推奨。"""
+
+    selected_backend: ParserAdapterBackend
+    recommended_backend: ParserAdapterScoreBackendName
+    metrics_source: str
+    metrics_applied_to: ParserAdapterScoreBackendName | None = None
+    entries: list[ParserAdapterScorecardEntryData]
+
+
+class ParserAdapterSourceRouteData(BaseModel):
+    """source kind ごとの adapter routing evidence。"""
+
+    source_kind: str
+    candidate_order: list[ParserAdapterScoreBackendName] = Field(default_factory=list)
+    attempted_order: list[ParserAdapterScoreBackendName] = Field(default_factory=list)
+    active_order: list[ParserAdapterScoreBackendName] = Field(default_factory=list)
+    selected_backend: ParserAdapterScoreBackendName
+    reason_codes: list[str] = Field(default_factory=list)
+    warning_codes: list[str] = Field(default_factory=list)
+
+
+class ParserAdapterBackendSourceMatrixData(BaseModel):
+    """runtime 設定から見た backend-source routing matrix。"""
+
+    evidence_source: Literal["runtime_routes"]
+    required_source_kinds: list[str] = Field(default_factory=list)
+    covered_source_kinds: list[str] = Field(default_factory=list)
+    missing_source_kinds: list[str] = Field(default_factory=list)
+    backend_source_kinds: dict[ParserAdapterScoreBackendName, list[str]] = Field(
+        default_factory=dict
+    )
+    route_evidence: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
+
+
+class ParserAdapterContractCaseData(BaseModel):
+    """adapter/source の実 remap compatibility 結果。"""
+
+    backend: ParserAdapterBackendName
+    source_kind: str
+    fixture_name: str
+    content_type: str
+    status: ParserAdapterContractStatus
+    blocking: bool
+    parser_backend: str | None = None
+    parser_version: str | None = None
+    adapter_import_name: str | None = None
+    adapter_distribution_name: str | None = None
+    adapter_package_version: str | None = None
+    template: str | None = None
+    element_count: int = 0
+    page_count: int = 0
+    table_count: int = 0
+    table_cell_count: int = 0
+    asset_count: int = 0
+    bbox_count: int = 0
+    warning_codes: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class ParserAdapterContractSummaryData(BaseModel):
+    """compatibility matrix の低機密 summary。"""
+
+    passed: bool
+    case_count: int
+    blocking_failure_count: int
+    source_kinds: list[str] = Field(default_factory=list)
+    backends: list[ParserAdapterBackendName] = Field(default_factory=list)
+    passed_source_kinds: list[str] = Field(default_factory=list)
+    missing_source_kinds: list[str] = Field(default_factory=list)
+    blocking_failure_source_kinds: list[str] = Field(default_factory=list)
+    blocking_failure_backends: list[ParserAdapterBackendName] = Field(default_factory=list)
+    backend_status_counts: dict[ParserAdapterBackendName, dict[str, int]] = Field(
+        default_factory=dict
+    )
+    backend_source_status: dict[ParserAdapterBackendName, dict[str, str]] = Field(
+        default_factory=dict
+    )
+    backend_source_status_counts: dict[
+        ParserAdapterBackendName,
+        dict[str, dict[str, int]],
+    ] = Field(default_factory=dict)
+    source_kind_status_counts: dict[str, dict[str, int]] = Field(default_factory=dict)
+    backend_passed_source_kinds: dict[ParserAdapterBackendName, list[str]] = Field(
+        default_factory=dict
+    )
+    scenarios: list[str] = Field(default_factory=list)
+    passed_scenarios: list[str] = Field(default_factory=list)
+    missing_scenarios: list[str] = Field(default_factory=list)
+    blocking_failure_scenarios: list[str] = Field(default_factory=list)
+    backend_passed_scenarios: dict[ParserAdapterBackendName, list[str]] = Field(
+        default_factory=dict
+    )
+    reason_code_counts: dict[str, int] = Field(default_factory=dict)
+    warning_code_counts: dict[str, int] = Field(default_factory=dict)
+    blocking_failure_reason_counts: dict[str, int] = Field(default_factory=dict)
+    blocking_failures: list[dict[str, object]] = Field(default_factory=list)
+
+
+class ParserAdapterContractData(BaseModel):
+    """parser adapter compatibility matrix の API payload。"""
+
+    passed: bool
+    fixture_root: str
+    source_kinds: list[str] = Field(default_factory=list)
+    backends: list[ParserAdapterBackendName] = Field(default_factory=list)
+    case_count: int
+    blocking_failure_count: int
+    cases: list[ParserAdapterContractCaseData] = Field(default_factory=list)
+    summary: ParserAdapterContractSummaryData
+    config_source: Literal["runtime"]
+
+
+class ParserServiceBackendData(BaseModel):
+    """service 系 parser backend(OCI クラウドサービス直呼び)の選択状態と可用性。
+
+    package readiness の対象外。backend から OCI Enterprise AI VLM / Document
+    Understanding を直接呼ぶため、設定の完全性で「利用可能か」を示す。
+    """
+
+    backend: Literal["enterprise_ai_vlm", "oci_document_understanding"]
+    selected: bool
+    configured: bool
     warning_code: str | None = None
 
 
@@ -317,7 +505,425 @@ class ParserAdapterSettingsData(BaseModel):
     adapter_backend: ParserAdapterBackend
     effective_order: list[ParserAdapterBackendName]
     adapters: list[ParserAdapterStatusData]
+    service_backends: list[ParserServiceBackendData] = Field(default_factory=list)
+    scorecard: ParserAdapterScorecardData
+    source_routes: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
+    backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData
     config_source: Literal["runtime"]
+
+
+class ParserAdapterSettingsUpdate(BaseModel):
+    """任意 parser adapter feature flags の更新 payload。"""
+
+    adapter_backend: ParserAdapterBackend
+    docling_enabled: bool = False
+    marker_enabled: bool = False
+    unstructured_enabled: bool = False
+
+
+ChunkingStrategyName = ChunkingStrategy
+
+
+class PreprocessProfileStatusData(BaseModel):
+    """前処理(Preprocess)段階の 1 変換プリセットの選択状態と実行基盤。"""
+
+    name: PreprocessProfile
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    in_process: bool = False
+    requires_service: bool = False
+    available: bool = True
+
+
+class PreprocessSettingsData(BaseModel):
+    """前処理アダプター設定の非機密 runtime snapshot。"""
+
+    profile: PreprocessProfile
+    service_enabled: bool
+    service_url: str
+    canonical_artifact_prefix: str
+    profiles: list[PreprocessProfileStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class PreprocessSettingsUpdate(BaseModel):
+    """前処理アダプター設定の更新 payload。"""
+
+    profile: PreprocessProfile
+
+
+class ChunkingStrategyStatusData(BaseModel):
+    """chunks 段階の 1 分割戦略の選択状態と適用場面。"""
+
+    name: ChunkingStrategyName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    uses_child_size: bool = False
+    uses_sentence_window: bool = False
+
+
+class ChunkingSettingsData(BaseModel):
+    """Chunking アダプター設定の非機密 runtime snapshot。"""
+
+    strategy: ChunkingStrategyName
+    chunk_size: int
+    overlap: int
+    child_size: int
+    sentence_window_size: int
+    min_chars: int
+    strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class ChunkingSettingsUpdate(BaseModel):
+    """Chunking アダプター設定の更新 payload。"""
+
+    strategy: ChunkingStrategyName
+    chunk_size: int = Field(default=800, ge=200, le=4000)
+    overlap: int = Field(default=120, ge=0, le=1000)
+    child_size: int = Field(default=320, ge=80, le=4000)
+    sentence_window_size: int = Field(default=3, ge=1, le=20)
+    min_chars: int = Field(default=0, ge=0, le=2000)
+
+    @model_validator(mode="after")
+    def validate_chunk_bounds(self) -> "ChunkingSettingsUpdate":
+        """chunk size と各パラメータの整合性を保存前に検証する。"""
+        if self.overlap >= self.chunk_size:
+            raise ValueError("overlap は chunk_size より小さくしてください。")
+        if self.child_size >= self.chunk_size:
+            raise ValueError("child_size は chunk_size より小さくしてください。")
+        if self.min_chars >= self.chunk_size:
+            raise ValueError("min_chars は chunk_size より小さくしてください。")
+        return self
+
+
+RetrievalStrategyName = RetrievalStrategy
+PostRetrievalPipelineName = PostRetrievalPipeline
+ExpansionModeName = Literal["none", "neighbor", "group", "adaptive"]
+
+
+class RetrievalStrategyStatusData(BaseModel):
+    """検索段階の 1 戦略の選択状態と適用場面。"""
+
+    name: RetrievalStrategyName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    gap_stop: bool = False
+    corrective_retrieval: bool = False
+    business_fit_weighting: bool = False
+
+
+class RetrievalSettingsData(BaseModel):
+    """Retrieval アダプター設定の非機密 runtime snapshot。"""
+
+    strategy: RetrievalStrategyName
+    query_expansion: bool
+    gap_stop: bool
+    corrective_retrieval: bool
+    business_fit_weighting: bool
+    strategies: list[RetrievalStrategyStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class RetrievalSettingsUpdate(BaseModel):
+    """Retrieval アダプター設定の更新 payload。"""
+
+    strategy: RetrievalStrategyName
+
+
+class GroundingPipelineStatusData(BaseModel):
+    """検索後処理の 1 プリセットの選択状態と束ねる段。"""
+
+    name: PostRetrievalPipelineName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    dependency_promotion: bool = False
+    diversity: bool = False
+    expansion_mode: ExpansionModeName = "none"
+    compression: bool = False
+
+
+class GroundingSettingsData(BaseModel):
+    """Grounding アダプター設定の非機密 runtime snapshot。"""
+
+    pipeline: PostRetrievalPipelineName
+    dependency_promotion_enabled: bool
+    diversity_enabled: bool
+    expansion_mode: ExpansionModeName
+    compression_enabled: bool
+    pipelines: list[GroundingPipelineStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class GroundingSettingsUpdate(BaseModel):
+    """Grounding アダプター設定の更新 payload。"""
+
+    pipeline: PostRetrievalPipelineName
+
+
+GenerationProfileName = GenerationProfile
+GuardrailPolicyNameSchema = GuardrailPolicyName
+GuardrailBackendName = GuardrailBackend
+
+
+class GenerationProfileStatusData(BaseModel):
+    """回答生成の 1 プロファイルの選択状態と適用場面。"""
+
+    name: GenerationProfileName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    structured_output: bool = False
+
+
+class GenerationSettingsData(BaseModel):
+    """Generation アダプター設定の非機密 runtime snapshot。"""
+
+    profile: GenerationProfileName
+    structured_output: bool
+    profiles: list[GenerationProfileStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class GenerationSettingsUpdate(BaseModel):
+    """Generation アダプター設定の更新 payload。"""
+
+    profile: GenerationProfileName
+
+
+class PromptVersionData(BaseModel):
+    """回答生成 system prompt の 1 版(PoweRAG の prompt versioning 由来)。"""
+
+    version_id: str
+    name: str
+    system_prompt: str
+    note: str = ""
+    created_at: datetime
+    created_by: str = ""
+    active: bool = False
+
+
+class PromptVersionsData(BaseModel):
+    """prompt 版一覧と有効版。"""
+
+    active_version_id: str | None = None
+    versions: list[PromptVersionData] = Field(default_factory=list)
+
+
+class PromptVersionCreate(BaseModel):
+    """新しい prompt 版の作成 payload。"""
+
+    name: str = Field(min_length=1, max_length=120)
+    system_prompt: str = Field(min_length=1, max_length=20000)
+    note: str = Field(default="", max_length=2000)
+    activate: bool = True
+
+    @field_validator("name", "system_prompt")
+    @classmethod
+    def _strip_non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("name と system_prompt は空にできません。")
+        return cleaned
+
+
+class FieldDefinitionData(BaseModel):
+    """抽出対象 field の宣言(PoweRAG/LangExtract 由来)。"""
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    value_type: Literal["string", "number", "date", "bool"] = "string"
+
+    @field_validator("name")
+    @classmethod
+    def _strip_non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("field name は空にできません。")
+        return cleaned
+
+
+class ExtractionFieldsSettingsData(BaseModel):
+    """field 抽出 schema 定義の snapshot。"""
+
+    fields: list[FieldDefinitionData] = Field(default_factory=list)
+    config_source: Literal["runtime"] = "runtime"
+
+
+class ExtractionFieldsSettingsUpdate(BaseModel):
+    """field 抽出 schema 定義の更新 payload。"""
+
+    fields: list[FieldDefinitionData] = Field(default_factory=list, max_length=50)
+
+
+class GuardrailPolicyStatusData(BaseModel):
+    """安全の 1 ポリシーの選択状態と groundedness 厳格度。"""
+
+    name: GuardrailPolicyNameSchema
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    grounding_min_overlap: int
+    grounding_min_ratio: float
+    audit_emphasis: bool = False
+
+
+class GuardrailSettingsData(BaseModel):
+    """Guardrail アダプター設定の非機密 runtime snapshot。"""
+
+    policy: GuardrailPolicyNameSchema
+    block_prompt_injection: bool
+    mask_sensitive_identifiers: bool
+    max_query_chars: int
+    grounding_min_overlap: int
+    grounding_min_ratio: float
+    audit_emphasis: bool
+    policies: list[GuardrailPolicyStatusData] = Field(default_factory=list)
+    backend: GuardrailBackendName = "local"
+    oci_configured: bool = False
+    oci_warning_code: str | None = None
+    config_source: Literal["runtime"]
+
+
+class GuardrailSettingsUpdate(BaseModel):
+    """Guardrail アダプター設定の更新 payload。"""
+
+    policy: GuardrailPolicyNameSchema
+    backend: GuardrailBackendName | None = None
+
+
+VectorIndexProfileName = VectorIndexProfile
+
+
+class VectorIndexProfileStatusData(BaseModel):
+    """索引/検索精度の 1 プロファイルの選択状態と推奨値。"""
+
+    name: VectorIndexProfileName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    target_accuracy: int
+    neighbors: int
+    efconstruction: int
+    distance: str
+
+
+class VectorIndexSettingsData(BaseModel):
+    """Vector Index アダプター設定の非機密 runtime snapshot。"""
+
+    profile: VectorIndexProfileName
+    target_accuracy: int
+    neighbors: int
+    efconstruction: int
+    distance: str
+    requires_reprovision: bool
+    profiles: list[VectorIndexProfileStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class VectorIndexSettingsUpdate(BaseModel):
+    """Vector Index アダプター設定の更新 payload。"""
+
+    profile: VectorIndexProfileName
+
+
+EvaluationSuiteName = EvaluationSuite
+
+
+class EvaluationSuiteStatusData(BaseModel):
+    """評価の 1 スイートの選択状態と閾値。"""
+
+    name: EvaluationSuiteName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    thresholds: dict[str, float] = Field(default_factory=dict)
+    focus_metrics: list[str] = Field(default_factory=list)
+
+
+class EvaluationSettingsData(BaseModel):
+    """Evaluation アダプター設定の非機密 runtime snapshot。"""
+
+    suite: EvaluationSuiteName
+    thresholds: dict[str, float] = Field(default_factory=dict)
+    focus_metrics: list[str] = Field(default_factory=list)
+    suites: list[EvaluationSuiteStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class EvaluationSettingsUpdate(BaseModel):
+    """Evaluation アダプター設定の更新 payload。"""
+
+    suite: EvaluationSuiteName
+
+
+GraphProfileName = GraphProfile
+AgenticProfileName = AgenticProfile
+
+
+class GraphProfileStatusData(BaseModel):
+    """知識グラフ構築の 1 プロファイルの選択状態と構築深度。"""
+
+    name: GraphProfileName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    enabled: bool
+    build_claims: bool
+    build_community_summaries: bool
+
+
+class GraphSettingsData(BaseModel):
+    """GraphRAG アダプター設定の非機密 runtime snapshot。"""
+
+    profile: GraphProfileName
+    enabled: bool
+    build_claims: bool
+    build_community_summaries: bool
+    profiles: list[GraphProfileStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class GraphSettingsUpdate(BaseModel):
+    """GraphRAG アダプター設定の更新 payload。"""
+
+    profile: GraphProfileName
+
+
+class AgenticProfileStatusData(BaseModel):
+    """クエリ計画の 1 プロファイルの選択状態と挙動。"""
+
+    name: AgenticProfileName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    enabled: bool
+    rewrite: bool
+    decompose: bool
+    multi_hop: bool
+
+
+class AgenticSettingsData(BaseModel):
+    """Agentic アダプター設定の非機密 runtime snapshot。"""
+
+    profile: AgenticProfileName
+    enabled: bool
+    rewrite: bool
+    decompose: bool
+    multi_hop: bool
+    max_subqueries: int
+    profiles: list[AgenticProfileStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class AgenticSettingsUpdate(BaseModel):
+    """Agentic アダプター設定の更新 payload。"""
+
+    profile: AgenticProfileName
 
 
 class OciConfigReadRequest(BaseModel):

@@ -1,5 +1,7 @@
 """チャンク分割のテスト。"""
 
+import json
+
 import pytest
 
 from app.rag.chunking import chunk_extraction, chunk_text
@@ -46,6 +48,9 @@ def test_chunk_text_adds_section_and_content_metadata() -> None:
     assert approval.metadata["text_chars"] == len(approval.text)
     assert isinstance(approval.metadata["text_sha256"], str)
     assert len(str(approval.metadata["text_sha256"])) == 64
+    assert approval.metadata["chunk_size_target"] == 80
+    assert approval.metadata["chunk_size_limit"] == 80
+    assert approval.metadata["chunk_size_compliance"] == "within_limit"
 
     payment = next(chunk for chunk in chunks if "月末" in chunk.text)
     assert payment.metadata["section_title"] == "支払条件"
@@ -208,14 +213,15 @@ def test_chunk_extraction_groups_figure_with_caption() -> None:
             DocumentElement(
                 kind="figure",
                 text="RAG パイプライン構成図: 取込、検索、生成の流れ。",
+                element_id="fig-1",
                 page_number=4,
-                metadata={"element_id": "fig-1"},
             ),
             DocumentElement(
                 kind="figure_caption",
                 text="図1: Oracle 26ai と OCI Enterprise AI の連携。",
+                element_id="fig-1-caption",
+                parent_id="fig-1",
                 page_number=4,
-                metadata={"element_id": "fig-1-caption"},
             ),
             DocumentElement(kind="text", text="本文の補足説明です。", page_number=4),
         ]
@@ -229,6 +235,11 @@ def test_chunk_extraction_groups_figure_with_caption() -> None:
     assert figure_chunk.metadata["content_kind"] == "figure"
     assert figure_chunk.metadata["element_kinds"] == "figure,figure_caption"
     assert figure_chunk.metadata["element_ids"] == "fig-1,fig-1-caption"
+    assert figure_chunk.metadata["parent_element_ids"] == "fig-1"
+    assert figure_chunk.metadata["dependency_edge_count"] == 1
+    assert figure_chunk.metadata["dependency_edges"] == (
+        '[{"child_id":"fig-1-caption","parent_id":"fig-1"}]'
+    )
     assert figure_chunk.metadata["section_title"] == "アーキテクチャ"
     assert figure_chunk.metadata["page_start"] == 4
     assert figure_chunk.metadata["page_end"] == 4
@@ -277,8 +288,37 @@ def test_chunk_extraction_adds_parent_group_metadata_to_split_table() -> None:
     assert all(chunk.metadata["table_id"] == "xlsx-sheet-1" for chunk in table_chunks)
     assert all(chunk.metadata["table_row_count"] == 4 for chunk in table_chunks)
     assert all(chunk.metadata["table_column_count"] == 2 for chunk in table_chunks)
+    assert all(
+        chunk.metadata["table_row_tree_version"] == "row_tree_v1" for chunk in table_chunks
+    )
+    assert all(
+        chunk.metadata["table_row_tree_format"] == "key_value_rows" for chunk in table_chunks
+    )
+    assert all(chunk.metadata["table_row_tree_column_count"] == 2 for chunk in table_chunks)
+    assert all(chunk.metadata["table_row_tree_row_count"] == 1 for chunk in table_chunks)
+    assert [chunk.metadata["table_cell_refs"] for chunk in table_chunks] == [
+        "A2\nB2",
+        "A3\nB3",
+        "A4\nB4",
+    ]
+    assert all(chunk.metadata["table_cell_ref_format"] == "a1" for chunk in table_chunks)
+    assert all(chunk.metadata["table_cell_ref_count"] == 2 for chunk in table_chunks)
+    assert all(
+        json.loads(str(chunk.metadata["table_row_tree_column_keys"])) == ["項目", "金額"]
+        for chunk in table_chunks
+    )
+    assert all(
+        isinstance(chunk.metadata["table_row_tree_kv_sha256"], str)
+        and len(str(chunk.metadata["table_row_tree_kv_sha256"])) == 64
+        for chunk in table_chunks
+    )
     assert all(chunk.metadata["chunk_template"] == "table_preserve_rows" for chunk in table_chunks)
     assert all(chunk.metadata["source_chunk_template"] == "office_sheet" for chunk in table_chunks)
+    assert all(chunk.metadata["chunk_size_target"] == 16 for chunk in table_chunks)
+    assert all(
+        chunk.metadata["chunk_size_compliance"] in {"within_limit", "overflow_justified"}
+        for chunk in table_chunks
+    )
 
 
 def test_chunk_extraction_repeats_table_header_for_row_group_chunks() -> None:
@@ -322,3 +362,101 @@ def test_chunk_extraction_repeats_table_header_for_row_group_chunks() -> None:
         assert chunk.metadata["chunk_group_id"] == table_chunks[0].metadata["chunk_group_id"]
     assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [1, 2, 3]
     assert [chunk.metadata["table_data_row_end"] for chunk in table_chunks] == [1, 2, 3]
+    assert [chunk.metadata["table_row_tree_row_start"] for chunk in table_chunks] == [1, 2, 3]
+    assert [chunk.metadata["table_row_tree_row_end"] for chunk in table_chunks] == [1, 2, 3]
+    assert all(
+        json.loads(str(chunk.metadata["table_row_tree_column_keys"])) == ["項目", "金額"]
+        for chunk in table_chunks
+    )
+
+
+def test_chunk_extraction_repeats_table_caption_with_split_header() -> None:
+    """caption 付き長表も table_preserve_rows のまま分割し、表題を各 part に残す。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="table",
+                text=(
+                    "表1: 経費明細\n"
+                    "|項目|金額|\n"
+                    "|---|---|\n"
+                    "|交通費|1000円|\n"
+                    "|宿泊費|2000円|\n"
+                    "|会議費|3000円|"
+                ),
+                page_number=1,
+                metadata={
+                    "element_id": "tbl-captioned",
+                    "table_id": "tbl-captioned",
+                    "table_caption": "表1: 経費明細",
+                    "row_count": 5,
+                    "column_count": 2,
+                },
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=36, overlap=0)
+    table_chunks = [chunk for chunk in chunks if chunk.metadata["content_kind"] == "table"]
+
+    assert len(table_chunks) >= 2
+    for chunk in table_chunks:
+        assert chunk.text.startswith("表1: 経費明細\n|項目|金額|\n|---|---|")
+        assert chunk.metadata["table_caption"] == "表1: 経費明細"
+        assert chunk.metadata["table_id"] == "tbl-captioned"
+        assert chunk.metadata["chunk_group_kind"] == "table"
+    assert table_chunks[0].metadata["table_header_repeated"] is False
+    assert all(chunk.metadata["table_header_repeated"] is True for chunk in table_chunks[1:])
+    assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [1, 2, 3]
+    assert [chunk.metadata["table_data_row_end"] for chunk in table_chunks] == [1, 2, 3]
+
+
+def test_chunk_extraction_links_cross_page_table_continuity() -> None:
+    """同一 table_id が複数ページに続く場合は continuity group と全体行番号を付ける。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="table",
+                text="|項目|金額|\n|---|---|\n|交通費|1000円|\n|宿泊費|2000円|",
+                page_number=1,
+                metadata={
+                    "element_id": "tbl-p1",
+                    "table_id": "tbl-expenses",
+                    "row_count": 5,
+                    "column_count": 2,
+                },
+            ),
+            DocumentElement(
+                kind="table",
+                text="|項目|金額|\n|---|---|\n|会議費|3000円|\n|備品費|4000円|",
+                page_number=2,
+                metadata={
+                    "element_id": "tbl-p2",
+                    "table_id": "tbl-expenses",
+                    "row_count": 5,
+                    "column_count": 2,
+                },
+            ),
+        ]
+    )
+
+    table_chunks = [
+        chunk
+        for chunk in chunk_extraction(extraction, chunk_size=200, overlap=0)
+        if chunk.metadata["content_kind"] == "table"
+    ]
+
+    assert len(table_chunks) == 2
+    assert {chunk.metadata["chunk_group_id"] for chunk in table_chunks} == {
+        table_chunks[0].metadata["table_continuity_group_id"]
+    }
+    assert all(chunk.metadata["chunk_group_kind"] == "table_continuity" for chunk in table_chunks)
+    assert all(chunk.metadata["table_cross_page"] is True for chunk in table_chunks)
+    assert all(chunk.metadata["table_page_start"] == 1 for chunk in table_chunks)
+    assert all(chunk.metadata["table_page_end"] == 2 for chunk in table_chunks)
+    assert [chunk.metadata["chunk_part_index"] for chunk in table_chunks] == [1, 2]
+    assert [chunk.metadata["table_continuation_index"] for chunk in table_chunks] == [1, 2]
+    assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [1, 3]
+    assert [chunk.metadata["table_data_row_end"] for chunk in table_chunks] == [2, 4]
+    assert table_chunks[0].metadata["table_header_repeated"] is False
+    assert table_chunks[1].metadata["table_header_repeated"] is True

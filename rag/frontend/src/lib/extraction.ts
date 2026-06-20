@@ -6,6 +6,21 @@ import type {
   ExtractionTableCell,
 } from "./api";
 
+export interface SourceDerivationView {
+  derivationId: string;
+  preprocessProfile: string;
+  converted: boolean;
+  converterName: string;
+  converterVersion: string;
+  sourceContentType: string | null;
+  sourceSha256: string | null;
+  derivedObjectPath: string | null;
+  derivedContentType: string | null;
+  derivedSha256: string | null;
+  pageMap: Record<string, number>;
+  warnings: string[];
+}
+
 export interface ParsedStructuredExtraction {
   rawText: string;
   documentType: string;
@@ -16,6 +31,7 @@ export interface ParsedStructuredExtraction {
   tables: ExtractionTable[];
   assets: ExtractionAsset[];
   parserArtifacts: Record<string, JsonScalar>;
+  sourceDerivation: SourceDerivationView | null;
 }
 
 export interface ExtractionElementStats {
@@ -51,6 +67,35 @@ export function parseStructuredExtraction(input: unknown): ParsedStructuredExtra
     tables,
     assets,
     parserArtifacts: metadataValue(source.parser_artifacts),
+    sourceDerivation: parseSourceDerivation(source.parser_artifacts),
+  };
+}
+
+/** 派生系譜(溯源)を parser_artifacts.source_derivation から取り出す。 */
+function parseSourceDerivation(parserArtifacts: unknown): SourceDerivationView | null {
+  const artifacts = recordValue(parserArtifacts);
+  const source = recordValue(artifacts.source_derivation);
+  const derivationId = stringValue(source.derivation_id);
+  if (!derivationId) return null;
+  const pageMapSource = recordValue(source.page_map);
+  const pageMap: Record<string, number> = {};
+  for (const [key, item] of Object.entries(pageMapSource)) {
+    const parsed = integerValue(item);
+    if (parsed != null) pageMap[key] = parsed;
+  }
+  return {
+    derivationId,
+    preprocessProfile: stringValue(source.preprocess_profile) || "passthrough",
+    converted: source.converted === true,
+    converterName: stringValue(source.converter_name) || "passthrough",
+    converterVersion: stringValue(source.converter_version) || "v1",
+    sourceContentType: stringValue(source.source_content_type) || null,
+    sourceSha256: stringValue(source.source_sha256) || null,
+    derivedObjectPath: stringValue(source.derived_object_path) || null,
+    derivedContentType: stringValue(source.derived_content_type) || null,
+    derivedSha256: stringValue(source.derived_sha256) || null,
+    pageMap,
+    warnings: arrayValue(source.warnings).map(String).filter(Boolean),
   };
 }
 
@@ -156,8 +201,10 @@ function parseTableCells(value: unknown): ExtractionTableCell[] {
         text: stringValue(source.text),
         row_span: integerValue(source.row_span, 1) ?? 1,
         col_span: integerValue(source.col_span, 1) ?? 1,
+        page_number: integerValue(source.page_number, 1),
         bbox: numberArrayValue(source.bbox),
         confidence: numberValue(source.confidence, 0, 1),
+        metadata: metadataValue(source.metadata),
       };
     })
     .filter((item): item is ExtractionTableCell => item != null);

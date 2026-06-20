@@ -1,5 +1,5 @@
-import { expect, type Page, test } from "@playwright/test";
-import { mockDatabaseReady } from "./_helpers";
+import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -44,6 +44,16 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
   await expect(page.getByRole("heading", { name: "抽出本文" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Chunk / Citation" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "取込セグメント" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "抽出エクスポート" })).toBeVisible();
+  await expect(page.getByText("<!-- page: 1 -->")).toBeVisible();
+  await page.getByRole("button", { name: "HTML" }).click();
+  await expect(page.getByText("<article")).toBeVisible();
+  await expect(page.getByText("<h1>経費申請</h1>")).toBeVisible();
+  await expect(page.getByText('<table data-element-id="tbl-1"')).toBeVisible();
+  await page.getByRole("button", { name: "JSON" }).click();
+  await expect(page.getByText('"document_type": "規程"')).toBeVisible();
+  await page.getByRole("button", { name: "Chunks" }).click();
+  await expect(page.getByText('"chunk_id": "doc-1:0"')).toBeVisible();
 
   const chunkPanel = page
     .getByRole("heading", { name: "Chunk / Citation" })
@@ -98,6 +108,30 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
   await expect(previewOverlay).toHaveAttribute(
     "style",
     /left: 25%; top: 25%; width: 25%; height: 25%;/
+  );
+  await expectNoHorizontalOverflow(page);
+});
+
+test("狭い画面幅(375px)でも文書 workspace がページを横スクロール(崩れ)させない", async ({ page }) => {
+  await mockDocumentWorkspace(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/documents/doc-1");
+
+  await expect(page.getByRole("heading", { name: "原本プレビュー" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Chunk / Citation" })).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+test("PDF 原本プレビューは左サイドバーを初期表示しない", async ({ page }) => {
+  await mockDocumentWorkspace(page, { pdfPreview: true });
+
+  await page.goto("/documents/doc-1");
+
+  const pdfFrame = page.locator('iframe[title="policy.pdf"]');
+  await expect(pdfFrame).toHaveAttribute(
+    "src",
+    /\/api\/documents\/doc-1\/content#page=1&pagemode=none&navpanes=0$/
   );
   await expectNoHorizontalOverflow(page);
 });
@@ -167,6 +201,29 @@ test("明示された xywh bbox mode で citation overlay を位置決めする"
   await expectNoHorizontalOverflow(page);
 });
 
+test("metadata の bbox unit を優先して citation overlay を位置決めする", async ({ page }) => {
+  await mockDocumentWorkspace(page, { chunkBboxUnit: "absolute" });
+
+  await page.goto("/documents/doc-1");
+
+  const chunkPanel = page
+    .getByRole("heading", { name: "Chunk / Citation" })
+    .locator("xpath=ancestor::section[1]");
+  await chunkPanel.getByRole("button", { name: /交通費は1000円/ }).click();
+
+  await expect(
+    page.getByText(/位置: p\.1 \/ bbox x=4\.1% y=1\.3% w=4\.1% h=3\.8%/)
+  ).toBeVisible();
+  const overlay = page.getByTestId("bbox-overlay");
+  await expect(overlay).toHaveAttribute("data-bbox-mode", "xyxy");
+  await expect(overlay).toHaveAttribute("data-bbox-unit", "absolute");
+  await expect(overlay).toHaveAttribute(
+    "style",
+    /left: 4\.08497.*%; top: 1\.26263.*%; width: 4\.08497.*%; height: 3\.78788.*%;/
+  );
+  await expectNoHorizontalOverflow(page);
+});
+
 test("element_id 深リンクは構造化 block をフォーカスして preview bbox に定位する", async ({ page }) => {
   await mockDocumentWorkspace(page);
 
@@ -187,6 +244,77 @@ test("element_id 深リンクは構造化 block をフォーカスして preview
   await expectNoHorizontalOverflow(page);
 });
 
+test("formula cell 深リンクは表セルをフォーカスして cell bbox に定位する", async ({ page }) => {
+  await mockDocumentWorkspace(page);
+
+  await page.goto("/documents/doc-1?chunk_id=doc-1:1&table_id=tbl-1&formula_cell_ref=B2&page=1");
+
+  const extractionPanel = page
+    .getByRole("heading", { name: "抽出本文" })
+    .locator("xpath=ancestor::section[1]");
+  const targetCell = extractionPanel
+    .getByTestId("extraction-table-cell")
+    .filter({ hasText: "B2" });
+  await expect(targetCell).toHaveAttribute("aria-pressed", "true");
+  await expect(targetCell).toBeFocused();
+  await expect(targetCell).toContainText("1000円");
+  await expect(
+    page.getByText(/位置: p\.1 \/ bbox x=50\.0% y=10\.0% w=25\.0% h=20\.0%/)
+  ).toBeVisible();
+  const overlay = page.getByTestId("bbox-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toHaveAttribute("data-bbox-mode", "xyxy");
+  await expect(overlay).toHaveAttribute("data-bbox-unit", "percent");
+  await expect(overlay).toHaveAttribute(
+    "style",
+    /left: 50%; top: 10%; width: 25%; height: 20%;/
+  );
+  await expectNoHorizontalOverflow(page);
+});
+
+test("citation 深リンクの bbox fallback で chunk 欠損時も preview に定位する", async ({ page }) => {
+  await mockDocumentWorkspace(page, { chunksEmpty: true });
+
+  await page.goto(
+    "/documents/doc-1?chunk_id=missing:chunk&page=1&bbox=10,15,40,30&bbox_mode=xywh&bbox_unit=percent&page_width=612&page_height=792"
+  );
+
+  await expect(
+    page.getByText(/位置: p\.1 \/ bbox x=10\.0% y=15\.0% w=40\.0% h=30\.0%/)
+  ).toBeVisible();
+  await expect(page.getByText("chunk はまだ作成されていません。")).toBeVisible();
+  const overlay = page.getByTestId("bbox-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toHaveAttribute("data-bbox-mode", "xywh");
+  await expect(overlay).toHaveAttribute("data-bbox-unit", "percent");
+  await expect(overlay).toHaveAttribute(
+    "style",
+    /left: 10%; top: 15%; width: 40%; height: 30%;/
+  );
+  await expectNoHorizontalOverflow(page);
+});
+
+test("citation 深リンクは page rotation を反映して bbox overlay を定位する", async ({ page }) => {
+  await mockDocumentWorkspace(page, { chunksEmpty: true });
+
+  await page.goto(
+    "/documents/doc-1?chunk_id=missing:chunk&page=1&bbox=10,15,40,30&bbox_mode=xywh&bbox_unit=percent&page_width=612&page_height=792&page_rotation=90"
+  );
+
+  await expect(
+    page.getByText(/位置: p\.1 \/ bbox x=15\.0% y=50\.0% w=30\.0% h=40\.0%/)
+  ).toBeVisible();
+  const overlay = page.getByTestId("bbox-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toHaveAttribute("data-bbox-mode", "xywh");
+  await expect(overlay).toHaveAttribute("data-bbox-unit", "percent");
+  await expect(overlay).toHaveAttribute(
+    "style",
+    /left: 15%; top: 50%; width: 30%; height: 40%;/
+  );
+  await expectNoHorizontalOverflow(page);
+});
+
 test("取込セグメント失敗時は原因と復旧導線を表示する", async ({ page }) => {
   const state = await mockDocumentWorkspace(page, { segmentError: true });
 
@@ -202,9 +330,24 @@ test("取込セグメント失敗時は原因と復旧導線を表示する", as
   await page.getByRole("button", { name: "失敗 segment を再試行" }).click();
   await expect.poll(() => state.retryRequest).toEqual({
     method: "POST",
-    path: "/api/documents/doc-1/ingestion-jobs",
-    force: null,
+    path: "/api/documents/doc-1/ingestion-segments/retry",
   });
+  await expectNoHorizontalOverflow(page);
+});
+
+test("取込セグメントが多い場合は高さ固定で内部スクロールする", async ({ page }) => {
+  await mockDocumentWorkspace(page, { segmentCount: 30 });
+
+  await page.goto("/documents/doc-1");
+
+  const panel = page
+    .getByRole("heading", { name: "取込セグメント" })
+    .locator("xpath=ancestor::section[1]");
+  const list = panel.locator("ol");
+
+  await expect(page.getByText("30 件")).toBeVisible();
+  await expect(list.getByText("p.1-3")).toBeVisible();
+  await expect(await isScrollable(list)).toBe(true);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -212,13 +355,17 @@ async function mockDocumentWorkspace(
   page: Page,
   options: {
     chunkBboxMode?: "xywh";
+    chunkBboxUnit?: "absolute";
+    chunksEmpty?: boolean;
     chunksError?: boolean;
     imagePreview?: boolean;
+    pdfPreview?: boolean;
     segmentError?: boolean;
+    segmentCount?: number;
   } = {}
 ) {
   const state: {
-    retryRequest: { method: string; path: string; force: string | null } | null;
+    retryRequest: { method: string; path: string } | null;
   } = {
     retryRequest: null,
   };
@@ -227,6 +374,7 @@ async function mockDocumentWorkspace(
       json: {
         data: documentDetail({
           imagePreview: options.imagePreview,
+          pdfPreview: options.pdfPreview,
           status: options.segmentError ? "ERROR" : "INDEXED",
         }),
         error_messages: [],
@@ -234,13 +382,21 @@ async function mockDocumentWorkspace(
       },
     });
   });
-  await page.route("**/api/documents/doc-1/ingestion-jobs**", async (route) => {
+  await page.route("**/api/documents/doc-1/ingestion-segments/retry", async (route) => {
     const url = new URL(route.request().url());
     state.retryRequest = {
       method: route.request().method(),
       path: url.pathname,
-      force: url.searchParams.get("force"),
     };
+    await route.fulfill({
+      json: {
+        data: retrySegmentsJob(),
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/ingestion-jobs**", async (route) => {
     await route.fulfill({
       json: {
         data: retrySegmentsJob(),
@@ -276,6 +432,21 @@ async function mockDocumentWorkspace(
       });
       return;
     }
+    if (options.pdfPreview) {
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+        body: [
+          "%PDF-1.1",
+          "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj",
+          "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj",
+          "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj",
+          "trailer << /Root 1 0 R >>",
+          "%%EOF",
+        ].join("\n"),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       headers: { "content-type": "text/plain; charset=utf-8" },
@@ -289,6 +460,16 @@ async function mockDocumentWorkspace(
         json: {
           data: null,
           error_messages: ["chunk error"],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+    if (options.chunksEmpty) {
+      await route.fulfill({
+        json: {
+          data: [],
+          error_messages: [],
           warning_messages: [],
         },
       });
@@ -319,18 +500,38 @@ async function mockDocumentWorkspace(
             text: "交通費は1000円です。",
             page_start: 1,
             page_end: 1,
-            bbox: options.chunkBboxMode === "xywh" ? [25, 10, 50, 40] : [0, 0, 100, 40],
+            bbox:
+              options.chunkBboxMode === "xywh" || options.chunkBboxUnit
+                ? [25, 10, 50, 40]
+                : [0, 0, 100, 40],
             section_path: "経費申請 > 料金表",
             content_kind: "table",
             chunk_group_id: "grp-2",
             source_parser: "local_text_structure",
             element_ids: ["tbl-1"],
             metadata:
-              options.chunkBboxMode === "xywh"
-                ? { bbox_coordinate_mode: "xywh", chunk_profile: "structure_v1" }
+              options.chunkBboxMode === "xywh" || options.chunkBboxUnit
+                ? {
+                    ...(options.chunkBboxMode === "xywh"
+                      ? { bbox_coordinate_mode: "xywh" }
+                      : {}),
+                    ...(options.chunkBboxUnit ? { bbox_unit: options.chunkBboxUnit } : {}),
+                    chunk_profile: "structure_v1",
+                  }
                 : { chunk_profile: "structure_v1" },
           },
         ],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/extraction-export**", async (route) => {
+    const url = new URL(route.request().url());
+    const format = url.searchParams.get("format") ?? "markdown";
+    await route.fulfill({
+      json: {
+        data: extractionExport(format),
         error_messages: [],
         warning_messages: [],
       },
@@ -355,27 +556,101 @@ async function mockDocumentWorkspace(
       json: {
         data: options.segmentError
           ? [failedSegment]
-          : [
-              {
-                segment_id: "doc-1:source",
-                document_id: "doc-1",
-                status: "SUCCEEDED",
-                parser_backend: "local_partition",
-                parser_profile: "local_text_structure",
-                page_start: 1,
-                page_end: 1,
-                attempt_count: 1,
-                artifact_path: "local://doc-1",
-                error_code: null,
-                error_message: null,
-              },
-            ],
+          : ingestionSegments(options.segmentCount ?? 1),
         error_messages: [],
         warning_messages: [],
       },
     });
   });
   return state;
+}
+
+function ingestionSegments(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const start = index * 3 + 1;
+    const status = index < 4 ? "SUCCEEDED" : index === 4 ? "RUNNING" : "QUEUED";
+    return {
+      segment_id: `doc-1:p${start}-${start + 2}`,
+      document_id: "doc-1",
+      status,
+      parser_backend: index === 0 ? "local_partition" : "enterprise_ai",
+      parser_profile: index === 0 ? "local_text_structure" : "enterprise_ai_pdf_layout",
+      page_start: start,
+      page_end: start + 2,
+      attempt_count: status === "QUEUED" ? 0 : 1,
+      artifact_path: status === "SUCCEEDED" ? `local://doc-1/${start}` : null,
+      error_code: null,
+      error_message: null,
+    };
+  });
+}
+
+function extractionExport(format: string) {
+  const chunks = [
+    {
+      document_id: "doc-1",
+      chunk_id: "doc-1:0",
+      chunk_index: 0,
+      text: "経費申請の概要です。",
+      page_start: 1,
+      page_end: 1,
+      bbox: null,
+      section_path: "経費申請",
+      content_kind: "text",
+      chunk_group_id: "grp-1",
+      source_parser: "local_text_structure",
+      element_ids: ["el-0000"],
+      metadata: { chunk_profile: "structure_v1" },
+    },
+  ];
+  const payload = {
+    raw_text: "経費申請\n交通費は1000円です。",
+    document_type: "規程",
+    elements: documentDetail().extraction.elements,
+  };
+  const htmlContent = [
+    "<article>",
+    "  <h1>経費申請</h1>",
+    "  <p>交通費は1000円です。</p>",
+    '  <table data-element-id="tbl-1" class="table-block" data-table-id="tbl-1">',
+    "    <tbody>",
+    '      <tr data-row="0"><th data-table-id="tbl-1" data-row="0" data-col="0">項目</th><th data-table-id="tbl-1" data-row="0" data-col="1">値</th></tr>',
+    '      <tr data-row="1"><td data-table-id="tbl-1" data-row="1" data-col="0">交通費</td><td data-table-id="tbl-1" data-row="1" data-col="1">1000円</td></tr>',
+    "    </tbody>",
+    "  </table>",
+    "</article>",
+  ].join("\n");
+  const content =
+    format === "markdown"
+      ? "<!-- page: 1 -->\n# 経費申請\n\n交通費は1000円です。"
+      : format === "html"
+        ? htmlContent
+        : JSON.stringify(format === "chunks" ? { chunks } : payload, null, 2);
+  return {
+    document_id: "doc-1",
+    file_name: "policy.txt",
+    format,
+    content_type:
+      format === "markdown"
+        ? "text/markdown; charset=utf-8"
+        : format === "html"
+          ? "text/html; charset=utf-8"
+          : "application/json",
+    content,
+    payload:
+      format === "markdown" || format === "html"
+        ? {}
+        : format === "chunks"
+          ? { chunks }
+          : payload,
+    chunks: format === "chunks" ? chunks : [],
+    parser_backend: "local_partition",
+    parser_profile: "local_text_structure",
+    page_count: 1,
+    element_count: 2,
+    table_count: 0,
+    asset_count: 0,
+  };
 }
 
 function retrySegmentsJob() {
@@ -395,19 +670,42 @@ function retrySegmentsJob() {
   };
 }
 
-function documentDetail(options: { imagePreview?: boolean; status?: string } = {}) {
+function documentDetail(
+  options: { imagePreview?: boolean; pdfPreview?: boolean; status?: string } = {}
+) {
+  const fileName = options.pdfPreview
+    ? "policy.pdf"
+    : options.imagePreview
+      ? "receipt.png"
+      : "policy.txt";
+  const contentType = options.pdfPreview
+    ? "application/pdf"
+    : options.imagePreview
+      ? "image/png"
+      : "text/plain";
+  const extension = options.pdfPreview ? ".pdf" : options.imagePreview ? ".png" : ".txt";
+  const previewKind = options.pdfPreview ? "pdf" : options.imagePreview ? "image" : "text";
+  const modality = options.pdfPreview ? "pdf" : options.imagePreview ? "image" : "text";
+  const parserProfile = options.pdfPreview
+    ? "enterprise_ai_pdf_layout"
+    : options.imagePreview
+      ? "enterprise_ai_image_ocr"
+      : "local_text_structure";
+  const parserBackend =
+    options.imagePreview || options.pdfPreview ? "enterprise_ai" : "local_partition";
+
   return {
     id: "doc-1",
-    file_name: options.imagePreview ? "receipt.png" : "policy.txt",
+    file_name: fileName,
     status: options.status ?? "INDEXED",
     category_name: null,
-    content_type: options.imagePreview ? "image/png" : "text/plain",
+    content_type: contentType,
     file_size_bytes: 64,
     content_sha256: "a".repeat(64),
     duplicate_of_document_id: null,
     uploaded_at: "2026-06-15T00:00:00Z",
     indexed_at: "2026-06-15T00:00:03Z",
-    object_storage_path: options.imagePreview ? "local://receipt.png" : "local://policy.txt",
+    object_storage_path: `local://${fileName}`,
     extraction: {
       raw_text: "経費申請\n交通費は1000円です。",
       document_type: "規程",
@@ -442,26 +740,85 @@ function documentDetail(options: { imagePreview?: boolean; status?: string } = {
           metadata: {},
         },
       ],
-      tables: [],
+      tables: [
+        {
+          table_id: "tbl-1",
+          element_id: "tbl-1",
+          page_number: 1,
+          caption: "料金表",
+          metadata: { bbox_unit: "percent" },
+          cells: [
+            {
+              row: 0,
+              col: 0,
+              text: "項目",
+              row_span: 1,
+              col_span: 1,
+              page_number: 1,
+              bbox: [0, 0, 50, 10],
+              confidence: 0.95,
+              metadata: { cell_ref: "A1", bbox_unit: "percent" },
+            },
+            {
+              row: 0,
+              col: 1,
+              text: "値",
+              row_span: 1,
+              col_span: 1,
+              page_number: 1,
+              bbox: [50, 0, 75, 10],
+              confidence: 0.95,
+              metadata: { cell_ref: "B1", bbox_unit: "percent" },
+            },
+            {
+              row: 1,
+              col: 0,
+              text: "交通費",
+              row_span: 1,
+              col_span: 1,
+              page_number: 1,
+              bbox: [0, 10, 50, 30],
+              confidence: 0.92,
+              metadata: { cell_ref: "A2", bbox_unit: "percent" },
+            },
+            {
+              row: 1,
+              col: 1,
+              text: "1000円",
+              row_span: 1,
+              col_span: 1,
+              page_number: 1,
+              bbox: [50, 10, 75, 30],
+              confidence: 0.92,
+              metadata: {
+                cell_ref: "B2",
+                formula_cell_ref: "B2",
+                formula: "=SUM(B2)",
+                bbox_unit: "percent",
+              },
+            },
+          ],
+        },
+      ],
       assets: [],
       parser_artifacts: { parser_backend: "local_partition" },
     },
     error_message: null,
     knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
     source_profile: {
-      original_file_name: options.imagePreview ? "receipt.png" : "policy.txt",
-      sanitized_file_name: options.imagePreview ? "receipt.png" : "policy.txt",
-      extension: options.imagePreview ? ".png" : ".txt",
-      content_type: options.imagePreview ? "image/png" : "text/plain",
-      inferred_content_type: options.imagePreview ? "image/png" : "text/plain",
+      original_file_name: fileName,
+      sanitized_file_name: fileName,
+      extension,
+      content_type: contentType,
+      inferred_content_type: contentType,
       file_size_bytes: 64,
       content_sha256: "a".repeat(64),
-      modality: options.imagePreview ? "image" : "text",
-      parser_profile: options.imagePreview ? "enterprise_ai_image_ocr" : "local_text_structure",
-      parser_backend: options.imagePreview ? "enterprise_ai" : "local_partition",
+      modality,
+      parser_profile: parserProfile,
+      parser_backend: parserBackend,
       parser_version: "v1",
-      preview_kind: options.imagePreview ? "image" : "text",
-      text_charset: options.imagePreview ? null : "utf-8",
+      preview_kind: previewKind,
+      text_charset: options.imagePreview || options.pdfPreview ? null : "utf-8",
       duplicate_of_document_id: null,
       unsupported_reason: null,
       quality_status: "ready",
@@ -470,10 +827,12 @@ function documentDetail(options: { imagePreview?: boolean; status?: string } = {
   };
 }
 
+// 既存呼び出しを保ちつつ、documentElement だけでなく main の内部はみ出しも検査する
+// 共通ヘルパー(_helpers.ts)へ委譲する。
 async function expectNoHorizontalOverflow(page: Page) {
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth
-    )
-  ).toBe(true);
+  await expectNoPageOverflow(page);
+}
+
+async function isScrollable(locator: Locator): Promise<boolean> {
+  return locator.evaluate((el) => el.scrollHeight > el.clientHeight + 1);
 }

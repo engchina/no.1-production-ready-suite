@@ -144,6 +144,38 @@ test("ADB 管理パネルが情報を表示し起動操作できる", async ({ p
   ).toBeVisible();
 });
 
+test("起動後に lifecycle がポーリングで自動更新される(STARTING→AVAILABLE)", async ({
+  page,
+}) => {
+  let started = false;
+  let pollsSinceStart = 0;
+  await mockDatabaseAndAdb(page, {
+    info: () => {
+      if (!started) return adbInfo({ lifecycle_state: "STOPPED" });
+      pollsSinceStart += 1;
+      // 起動後の最初のポーリングは起動中、その後 AVAILABLE へ遷移。
+      return adbInfo({ lifecycle_state: pollsSinceStart >= 2 ? "AVAILABLE" : "STARTING" });
+    },
+    onStart: () => {
+      started = true;
+      return adbInfo({
+        status: "accepted",
+        message: "データベース 'RAG ADB' の起動を開始しました。",
+        lifecycle_state: "STARTING",
+      });
+    },
+  });
+
+  await page.goto("/settings/database");
+
+  await expect(page.getByText("状態: 停止済み")).toBeVisible();
+  await page.getByRole("button", { name: "起動", exact: true }).click();
+  await expect(page.getByText("状態: 起動中")).toBeVisible();
+
+  // クリックや「情報を再取得」なしで、ポーリングにより起動済みへ更新される。
+  await expect(page.getByText("状態: 起動済み")).toBeVisible({ timeout: 15000 });
+});
+
 test("起動済み ADB を停止操作できる", async ({ page }) => {
   await mockDatabaseAndAdb(page, {
     info: () => adbInfo({ lifecycle_state: "AVAILABLE" }),

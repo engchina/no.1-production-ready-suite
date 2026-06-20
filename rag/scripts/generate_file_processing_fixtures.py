@@ -138,6 +138,7 @@ def main() -> int:
     <section>
       <h2>引用確認</h2>
       <p>回答の根拠はページ番号、bbox、element_idで追跡します。</p>
+      <figure>構造化 block citation 対応<figcaption>図1: block と citation の対応</figcaption></figure>
     </section>
   </main>
 </body>
@@ -205,20 +206,63 @@ def _write_docx(name: str, paragraphs: list[str]) -> None:
 
 
 def _write_pptx(name: str, slides: list[str]) -> None:
+    slide_overrides = "".join(
+        f'<Override PartName="/ppt/slides/slide{index}.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
+        for index in range(1, len(slides) + 1)
+    )
+    slide_ids = "".join(
+        f'<p:sldId id="{255 + index}" r:id="rId{index}"/>'
+        for index in range(1, len(slides) + 1)
+    )
+    slide_relationships = "".join(
+        f'<Relationship Id="rId{index}" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" '
+        f'Target="slides/slide{index}.xml"/>'
+        for index in range(1, len(slides) + 1)
+    )
     files = {
         "[Content_Types].xml": (
             '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
             f'<Default Extension="rels" ContentType="{PACKAGE_RELATIONSHIPS_CONTENT_TYPE}"/>'
             '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/ppt/presentation.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
+            f"{slide_overrides}"
             "</Types>"
         ),
-        "ppt/presentation.xml": '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>',
+        "_rels/.rels": (
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" '
+            f'Type="{OFFICE_DOCUMENT_RELATIONSHIP}" '
+            'Target="ppt/presentation.xml"/>'
+            "</Relationships>"
+        ),
+        "ppt/_rels/presentation.xml.rels": (
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f"{slide_relationships}</Relationships>"
+        ),
+        "ppt/presentation.xml": (
+            '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+            'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f"<p:sldIdLst>{slide_ids}</p:sldIdLst>"
+            '<p:sldSz cx="9144000" cy="5143500" type="screen16x9"/>'
+            '<p:notesSz cx="6858000" cy="9144000"/>'
+            "</p:presentation>"
+        ),
     }
     for index, text in enumerate(slides, start=1):
         files[f"ppt/slides/slide{index}.xml"] = (
             '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
             'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
-            f"<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{escape(text)}</a:t>"
+            "<p:cSld><p:spTree>"
+            '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+            "<p:grpSpPr/>"
+            '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/>'
+            '<p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+            "<p:spPr/>"
+            f"<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{escape(text)}</a:t>"
             "</a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"
         )
     _write_zip(name, files)
@@ -234,7 +278,50 @@ def _write_xlsx(name: str, *, long_table: bool) -> None:
                 '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                 f'<Default Extension="rels" ContentType="{PACKAGE_RELATIONSHIPS_CONTENT_TYPE}"/>'
                 '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" '
+                'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" '
+                'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                '<Override PartName="/xl/sharedStrings.xml" '
+                'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
+                '<Override PartName="/xl/styles.xml" '
+                'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
                 "</Types>"
+            ),
+            "_rels/.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" '
+                f'Type="{OFFICE_DOCUMENT_RELATIONSHIP}" '
+                'Target="xl/workbook.xml"/>'
+                "</Relationships>"
+            ),
+            "xl/_rels/workbook.xml.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+                'Target="worksheets/sheet1.xml"/>'
+                '<Relationship Id="rId2" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" '
+                'Target="sharedStrings.xml"/>'
+                '<Relationship Id="rId3" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+                'Target="styles.xml"/>'
+                "</Relationships>"
+            ),
+            "xl/workbook.xml": (
+                '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<sheets><sheet name="経費" sheetId="1" r:id="rId1"/></sheets>'
+                "</workbook>"
+            ),
+            "xl/styles.xml": (
+                '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
+                '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
+                '<borders count="1"><border/></borders>'
+                '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+                '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+                "</styleSheet>"
             ),
             "xl/sharedStrings.xml": _shared_strings_xml(shared),
             "xl/worksheets/sheet1.xml": _sheet_xml(rows, shared),

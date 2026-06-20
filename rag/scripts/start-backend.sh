@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # バックエンド(FastAPI / Uvicorn)を開発モードで起動する。
-# - 初回は uv sync で依存を解決する。
+# - 依存は uv sync で解決する(外部 parser は services/parsers/<name> の独立サービスで動くため、
+#   backend には docling/marker/unstructured 等の重い parser 依存を入れない)。
 # - .env が無い場合でも、デフォルトの local アダプタ・local 認証で起動できる。
 set -euo pipefail
 

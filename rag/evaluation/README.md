@@ -69,12 +69,23 @@ local CI では backend から contract gate を実行できます。出力 JSON
 cd backend
 uv run python -m app.rag.file_processing_golden_cli \
   ../docs/evaluation/file-processing-golden-set.json \
-  --output ../evaluation/file-processing-report.json
+  --output ../evaluation/file-processing-report.json \
+  --trend-output ../evaluation/file-processing-trend.json
 ```
 
-出力の `staging_requirements` は、OCI Enterprise AI / Object Storage / Oracle 26ai / UI preview が必要な pending check を case 単位で列挙します。nightly workflow はこの gate を先に実行し、`file-processing-report.json` を artifact に保存します。staging で pending を残したくない場合は CLI の `--fail-on-pending`、または workflow dispatch の `fail_on_file_processing_pending=true` を使います。
+出力の `staging_requirements` は、OCI Enterprise AI / Object Storage / Oracle 26ai / UI preview が必要な pending check を case 単位で列挙します。`--trend-output` は `file-processing-trend.json` として、parser fallback rate、表 QA、page hit、bbox / preview addressability、source/backend coverage、real-world staging dataset policy summary、threshold status、result hash だけを含む非機密 trend snapshot を保存します。case detail、fixture path、OCR 原文、chunk 本文、検索 query / answer は含めません。nightly workflow はこの gate を先に実行し、`file-processing-report.json` と `file-processing-trend.json` を artifact に保存します。前回の非機密 trend を baseline として保持している場合は、trend regression gate で table QA / page hit / bbox / fallback rate / real-world policy / ingestion p95 などの退化を CI で止められます。
 
-実 staging 環境で pending check を閉じる場合は、Object Storage に fixture を保存し、一時 KB / document を作成して ingestion / search / chunk metadata / segment checkpoint / extraction artifact cache を検証する staging gate を実行します。結果 JSON は parser、segment、bbox、citation、canonical duplicate、artifact reuse の非機密 evidence と、retrieval recall / groundedness / ingestion p95 / bbox / citation traceability / element lineage / page hit / extraction page coverage / low confidence rate / failed segment rate の aggregate metrics、`threshold_results` だけを持ち、OCR 原文・chunk 本文・tenant/user secret は保存しません。staging で測定された threshold が未達の場合も report は `passed=false` になります。
+```bash
+cd backend
+uv run python -m app.rag.file_processing_trend_cli \
+  ../evaluation/file-processing-trend.json \
+  --baseline ../evaluation/baselines/file-processing-trend.json \
+  --output ../evaluation/file-processing-trend-regression.json
+```
+
+staging で pending を残したくない場合は CLI の `--fail-on-pending`、または workflow dispatch の `fail_on_file_processing_pending=true` を使います。
+
+実 staging 環境で pending check を閉じる場合は、Object Storage に fixture を保存し、一時 KB / document を作成して ingestion / search / chunk metadata / segment checkpoint / extraction artifact cache を検証する staging gate を実行します。結果 JSON は parser、segment、bbox、citation、canonical duplicate、artifact reuse の非機密 evidence と、retrieval recall / groundedness / ingestion p95 / bbox / citation traceability / element lineage / page hit / extraction page coverage / low confidence rate / failed segment rate の aggregate metrics、`threshold_results` だけを持ち、OCR 原文・chunk 本文・tenant/user secret は保存しません。staging report には `adapter_golden_gate` と `object_storage_artifact_chain` も含まれ、Docling / Marker / Unstructured の enabled/installed 表示ではなく同一 golden set の table QA / page hit / fallback / bbox / source coverage / contract 結果と、Object Storage put/get roundtrip、ingestion 後の full/segment artifact readback、artifact identity metadata 検証、segment artifact reuse を promotion blocker として扱います。artifact 本体は `raw_text` を含み得ますが、staging report / trend には readable/identity/count/byte 数だけを残し、OCR 原文は audit payload へ出しません。`--parser-adapter-contract-strict` は manifest の `fixture_root` と正向きの schema-remap `cases[].fixture` を contract runner に渡し、selected adapter ごとに少なくとも 1 件の passed remap case を要求します。インストール済み adapter が実 package + 実 fixture で `StructuredExtraction` へ remap できた証跡として `case_id` hash / `scenario` / parser backend / adapter import・distribution・version / schema count / reason code を残し、distribution/version metadata や schema-remap 証跡がない場合は `adapter_distribution_name_missing`、`adapter_package_version_missing`、`adapter_schema_remap_evidence_missing` で promotion blocker にします。corrupted / unsupported fixture は adapter smoke ではなく staging の safe-error / warning taxonomy gate で検証します。`staging_dataset_policy` が設定されているのに promotion 必須でない場合は `staging_dataset_policy_not_required`、必須 policy の実データ数 / source kind / scenario / 非機密レビュー / fixture 隔離が未達の場合は `staging_dataset_policy_failed` として止めます。blocker は件数と不足 source kind / scenario だけを出し、real-world case id や fixture path は出しません。staging で測定された threshold が未達の場合も report は `passed=false` になります。
 
 外部依存へ接続する前に、まず preflight で OCI / Oracle / Enterprise AI / Object Storage の必須設定だけを確認できます。preflight 出力も secret 値を含みません。
 
@@ -91,9 +102,40 @@ cd backend
 uv run python -m app.rag.file_processing_staging_cli \
   ../docs/evaluation/file-processing-golden-set.json \
   --output ../evaluation/file-processing-staging-report.json \
+  --trend-output ../evaluation/file-processing-staging-trend.json \
   --cleanup
 ```
 
-nightly workflow でも `run_file_processing_staging=true` を指定すると同じ staging gate を実行し、`file-processing-staging-report.json` を artifact に保存します。OCI Enterprise AI / Oracle / Object Storage の接続情報は runner 環境の `.env` または GitHub Actions の secret/variable から注入してください。
+nightly workflow でも `run_file_processing_staging=true` を指定すると同じ staging gate を実行し、`file-processing-staging-report.json` と `file-processing-staging-trend.json` を artifact に保存します。staging trend は retrieval recall、表 QA、page hit、bbox / preview addressability、adapter contract、adapter golden gate、Object Storage artifact chain、segment artifact reuse、runtime check status、real-world dataset policy coverage を時系列比較するための非機密 summary で、case detail や gate evidence は含めません。staging 昇格では `--require-promotion-ready` を付けると、baseline が promotion ready だったのに current が blocker 付きへ戻る退化も失敗扱いにできます。promotion gate は閾値を緩める変更だけでなく、`required_for_promotion=false`、`pending_checks_block_promotion=false`、必須 runtime check の削除も blocker にします。
 
-これらは local CI で parser routing、chunk lineage、manifest/asset 契約を安定検証するための小さな合成サンプルです。OCI Enterprise AI の OCR/reading order 品質、実スキャン PDF、実 Office レイアウト、実メール添付を gate する場合は、staging 用の非機密実データセットを追加し、同 manifest の scenario と required check に対応付けて nightly で評価してください。
+```bash
+cd backend
+uv run python -m app.rag.file_processing_trend_cli \
+  ../evaluation/file-processing-staging-trend.json \
+  --baseline ../evaluation/baselines/file-processing-staging-trend.json \
+  --output ../evaluation/file-processing-staging-trend-regression.json \
+  --require-promotion-ready
+```
+
+GitHub Actions では `file_processing_trend_baseline_path` と `file_processing_staging_trend_baseline_path` を指定すると、同じ比較結果を `file-processing-trend-regression.json` / `file-processing-staging-trend-regression.json` として artifact に保存し、退化時に workflow を失敗させます。OCI Enterprise AI / Oracle / Object Storage の接続情報は runner 環境の `.env` または GitHub Actions の secret/variable から注入してください。
+
+これらは local CI で parser routing、chunk lineage、manifest/asset 契約を安定検証するための小さな合成サンプルです。OCI Enterprise AI の OCR/reading order 品質、実スキャン PDF、実 Office レイアウト、実メール添付を gate する場合は、staging 用の非機密実データセットを追加し、同 manifest の scenario と required check に対応付けて nightly で評価してください。staging 用 manifest には `staging_dataset_policy` を入れると、real-world case 数、source kind / scenario coverage、非機密レビュー、fixture 隔離を manifest validation と promotion blocker の両方で強制できます。real-world case は synthetic fixture の流用ではなく、`fixture_kind: "real_world"`、`data_sensitivity: "non_sensitive"`、`reviewed_for_public_ci: true` を持ち、既定では `staging/` 配下の fixture を参照する必要があります。
+
+```json
+{
+  "staging_dataset_policy": {
+    "required_for_promotion": true,
+    "min_real_world_cases": 6,
+    "required_source_kinds": ["pdf", "office", "html", "email", "image"],
+    "required_scenarios": [
+      "scanned_pdf_ocr",
+      "two_column_pdf_reading_order",
+      "japanese_docx_layout",
+      "japanese_pptx_slides",
+      "japanese_xlsx_sheets",
+      "email_thread_headers"
+    ],
+    "required_fixture_prefix": "staging/"
+  }
+}
+```

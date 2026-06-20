@@ -7,6 +7,7 @@
  */
 
 :root {
+  /* フォント実体は src/fonts.css で自前ホスト(@fontsource / オフライン) */
   --font-sans: "Noto Sans JP", "Roboto", system-ui, -apple-system, "Segoe UI",
     "Helvetica Neue", Arial, sans-serif;
 
@@ -103,6 +104,32 @@ body {
 .tnum {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
+}
+
+/* 一覧が増えてもページ全体を押し下げない、業務画面向けの内部スクロール領域。 */
+.bounded-scroll-area,
+.bounded-scroll-area-lg {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.bounded-scroll-area {
+  max-height: min(22rem, 56vh);
+}
+
+.bounded-scroll-area-lg {
+  max-height: min(34rem, 68vh);
+}
+
+@media (max-width: 640px) {
+  .bounded-scroll-area {
+    max-height: min(20rem, 52vh);
+  }
+
+  .bounded-scroll-area-lg {
+    max-height: min(28rem, 60vh);
+  }
 }
 
 /* メッセージ機構のアニメーション（docs/frontend-messaging-spec.md §6）。

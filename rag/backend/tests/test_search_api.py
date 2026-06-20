@@ -334,6 +334,9 @@ def _force_search_timeout(monkeypatch: MonkeyPatch) -> None:
 class SlowPipeline:
     """timeout を再現するテスト用 pipeline。"""
 
+    def __init__(self, *, settings: object | None = None, **_kwargs: object) -> None:
+        self._settings = settings
+
     async def run(
         self,
         _request: SearchRequest,
@@ -349,6 +352,9 @@ class SlowPipeline:
 
 class RealtimeStreamingPipeline:
     """token_callback へ回答 delta を先に流すテスト用 pipeline。"""
+
+    def __init__(self, *, settings: object | None = None, **_kwargs: object) -> None:
+        self._settings = settings
 
     async def run(
         self,
@@ -373,6 +379,9 @@ class RealtimeStreamingPipeline:
 
 class AuditingPipeline:
     """監査ログだけを記録して空検索結果を返すテスト用 pipeline。"""
+
+    def __init__(self, *, settings: object | None = None, **_kwargs: object) -> None:
+        self._settings = settings
 
     async def run(
         self,

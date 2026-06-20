@@ -163,6 +163,50 @@ async def test_oci_vlm_posts_image_data_url_without_files_api() -> None:
     assert base64.b64decode(image_url.split(",", maxsplit=1)[1]) == b"png-bytes"
 
 
+async def test_oci_vlm_files_api_mode_uploads_images() -> None:
+    """VLM 入力方式を Files API にすると画像も /files 経由で送る。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_vlm_input_mode = "files_api"
+    transport = FakeEnterpriseAiTransport(
+        {
+            "data": {
+                "raw_text": "PNG OCR",
+                "document_type": "画像",
+                "confidence": 0.9,
+                "warnings": [],
+            }
+        }
+    )
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    await client.extract_with_vlm(b"png-bytes", "OCR", mime_type="image/png")
+
+    assert transport.uploads[0]["url"] == "https://enterprise-ai.example/files"
+    assert transport.uploads[0]["file_name"] == "enterprise-ai-input.png"
+    assert transport.uploads[0]["content"] == b"png-bytes"
+    assert transport.uploads[0]["mime_type"] == "image/png"
+    assert transport.uploads[0]["purpose"] == "vision"
+    content = transport.calls[0]["payload"]["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "OCR"}
+    assert content[1] == {"type": "input_image", "file_id": "file-test"}
+    assert transport.deletes[0]["url"] == "https://enterprise-ai.example/files/file-test"
+
+
+async def test_oci_vlm_inline_image_mode_rejects_pdf() -> None:
+    """inline_image は PDF fallback を暗黙変換せず、設定変更を促す。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_vlm_input_mode = "inline_image"
+    transport = FakeEnterpriseAiTransport({})
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
+
+    with pytest.raises(EnterpriseAiUnsupportedInputError, match="Files API"):
+        await client.extract_with_vlm(b"pdf-bytes", "OCR", mime_type="application/pdf")
+
+    assert transport.uploads == []
+    assert transport.calls == []
+    assert transport.deletes == []
+
+
 async def test_oci_vlm_omits_json_schema_for_gemini_provider() -> None:
     """Gemini provider には Responses JSON Schema ではなく prompt 契約で JSON 出力させる。"""
     settings = _oci_settings()

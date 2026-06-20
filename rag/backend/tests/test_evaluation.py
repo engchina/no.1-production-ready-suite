@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -57,6 +58,9 @@ class StubPipeline:
                         "page_end": 2,
                         "element_ids": "el-approval",
                         "bbox": "[0.1, 0.2, 0.4, 0.3]",
+                        "content_kind": "text",
+                        "section_title": "承認",
+                        "section_path": "経費申請 > 承認",
                     },
                 )
             ],
@@ -112,6 +116,8 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert metrics.citation_traceability_coverage == 1.0
     assert metrics.bbox_citation_coverage == 1.0
     assert metrics.element_lineage_coverage == 1.0
+    assert metrics.content_kind_hit_rate == 1.0
+    assert metrics.section_coverage == 1.0
     assert metrics.passed is True
     assert metrics.threshold_failures == []
     assert metrics.failure_reason_counts == {}
@@ -139,6 +145,8 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert result.citation_traceability_coverage == 1.0
     assert result.bbox_citation_coverage == 1.0
     assert result.element_lineage_coverage == 1.0
+    assert result.content_kind_hit_rate == 1.0
+    assert result.section_coverage == 1.0
     assert result.guardrail_warnings == []
     assert result.failure_reasons == []
     assert result.diagnostics.top_k == 5
@@ -147,6 +155,52 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert result.diagnostics.citation_count == 1
     assert pipeline.requests[0].mode == SearchMode.KEYWORD
     assert pipeline.requests[0].filters == {"status": "INDEXED"}
+
+
+async def test_evaluation_runner_scores_content_kind_and_section_expectations() -> None:
+    """document-level hit でも content kind / section が違えば評価で検知する。"""
+    pipeline = StubPipeline()
+    runner = EvaluationRunner(pipeline=pipeline)
+    metrics = await runner.run(
+        cases=[
+            EvaluationCase(
+                id="case-section-hit",
+                query="承認条件",
+                relevant_document_ids=["doc-1"],
+                expected_answer_keywords=["120000"],
+                expected_content_kind="text",
+                expected_section_paths=["経費申請 > 承認"],
+            ),
+            EvaluationCase(
+                id="case-section-miss",
+                query="料金表",
+                relevant_document_ids=["doc-1"],
+                expected_answer_keywords=["120000"],
+                expected_content_kind="table",
+                expected_section_paths=["経費申請 > 料金表"],
+            ),
+        ],
+        top_k=5,
+        rerank_top_n=3,
+        thresholds=EvaluationThresholds(
+            content_kind_hit_rate=0.8,
+            section_coverage=0.8,
+        ),
+    )
+
+    assert metrics.content_kind_hit_rate == 0.5
+    assert metrics.section_coverage == 0.5
+    assert metrics.passed is False
+    assert metrics.failure_reason_counts["content_kind_miss"] == 1
+    assert metrics.failure_reason_counts["section_miss"] == 1
+    threshold_failures = {failure.metric for failure in metrics.threshold_failures}
+    assert threshold_failures == {"content_kind_hit_rate", "section_coverage"}
+    assert metrics.case_results[0].content_kind_hit_rate == 1.0
+    assert metrics.case_results[0].section_coverage == 1.0
+    assert metrics.case_results[1].content_kind_hit_rate == 0.0
+    assert metrics.case_results[1].section_coverage == 0.0
+    assert "content_kind_miss" in metrics.case_results[1].failure_reasons
+    assert "section_miss" in metrics.case_results[1].failure_reasons
 
 
 async def test_evaluation_runner_passes_knowledge_base_scope_to_search_request() -> None:
@@ -754,8 +808,13 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
             rag_context_window_chars=12000,
             rag_context_neighbor_window=0,
             rag_context_diversity_lambda=1.0,
+            rag_context_adaptive_expansion_enabled=False,
+            rag_context_adaptive_neighbor_window=1,
+            rag_context_adaptive_min_overlap=0.08,
             rag_context_group_expansion_enabled=False,
             rag_context_group_max_chunks=4,
+            rag_context_dependency_promotion_enabled=False,
+            rag_context_dependency_max_chunks=4,
             rag_context_compression_enabled=False,
             rag_context_compression_max_sentences=3,
             rag_context_compression_max_chars_per_chunk=1200,
@@ -787,8 +846,13 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
                     context_window_chars=4096,
                     context_neighbor_window=1,
                     context_diversity_lambda=0.35,
+                    context_adaptive_expansion_enabled=True,
+                    context_adaptive_neighbor_window=2,
+                    context_adaptive_min_overlap=0.2,
                     context_group_expansion_enabled=True,
                     context_group_max_chunks=2,
+                    context_dependency_promotion_enabled=True,
+                    context_dependency_max_chunks=3,
                     context_compression_enabled=True,
                     context_compression_max_sentences=2,
                     context_compression_max_chars_per_chunk=800,
@@ -803,8 +867,13 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
     assert observed_settings[0].rag_context_diversity_lambda == 1.0
     assert observed_settings[1].rag_context_diversity_lambda == 0.35
     assert observed_settings[1].rag_context_neighbor_window == 1
+    assert observed_settings[1].rag_context_adaptive_expansion_enabled is True
+    assert observed_settings[1].rag_context_adaptive_neighbor_window == 2
+    assert observed_settings[1].rag_context_adaptive_min_overlap == 0.2
     assert observed_settings[1].rag_context_group_expansion_enabled is True
     assert observed_settings[1].rag_context_group_max_chunks == 2
+    assert observed_settings[1].rag_context_dependency_promotion_enabled is True
+    assert observed_settings[1].rag_context_dependency_max_chunks == 3
     assert observed_settings[1].rag_context_compression_enabled is True
     assert observed_settings[1].rag_context_compression_max_sentences == 2
     assert observed_settings[1].rag_context_compression_max_chars_per_chunk == 800
@@ -993,7 +1062,10 @@ def test_evaluation_compare_api_rejects_invalid_rag_overrides() -> None:
                     "rerank_top_n": 3,
                     "rag_overrides": {
                         "context_diversity_lambda": 1.2,
+                        "context_adaptive_neighbor_window": 6,
+                        "context_adaptive_min_overlap": -0.01,
                         "context_group_max_chunks": 21,
+                        "context_dependency_max_chunks": 21,
                         "context_neighbor_window": 6,
                         "context_compression_max_sentences": 11,
                         "context_compression_max_chars_per_chunk": 199,
@@ -1054,6 +1126,10 @@ def test_evaluation_api_persists_redacted_artifact(monkeypatch: MonkeyPatch) -> 
         async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
             artifacts.append(artifact)
             return "eval-1"
+
+        async def get_knowledge_base(self, knowledge_base_id: str) -> None:
+            # この fake は KB 別の評価スイート上書きを使わない。
+            return None
 
     monkeypatch.setattr("app.api.routes.evaluation.EvaluationRunner", FakeEvaluationRunner)
     monkeypatch.setattr("app.api.routes.evaluation.OracleClient", FakeOracleClient)
@@ -1126,3 +1202,164 @@ def test_evaluation_api_runs_against_local_pipeline() -> None:
     assert data["case_results"][0]["answer_keyword_hit"] is True
     assert data["case_results"][0]["groundedness_passed"] is True
     assert data["case_results"][0]["failure_reasons"] == []
+
+
+def _minimal_eval_metrics() -> EvaluationMetrics:
+    return EvaluationMetrics(
+        case_count=1,
+        evaluated_k=1,
+        precision_at_k=1.0,
+        recall_at_k=1.0,
+        mrr=1.0,
+        answer_keyword_hit_rate=1.0,
+        groundedness_pass_rate=1.0,
+    )
+
+
+def _eval_run_body() -> dict[str, Any]:
+    return {
+        "cases": [
+            {
+                "id": "c1",
+                "query": "承認条件は?",
+                "relevant_document_ids": ["doc-1"],
+                "expected_answer_keywords": ["承認"],
+            }
+        ]
+    }
+
+
+def test_run_evaluation_applies_suite_thresholds_when_request_omits(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """request に thresholds 未指定なら設定 suite の閾値を適用し suite を stamp する。"""
+    captured: dict[str, Any] = {}
+
+    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
+        captured["thresholds"] = kwargs.get("thresholds")
+        return _minimal_eval_metrics()
+
+    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
+    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "balanced")
+
+    resp = client.post("/api/evaluation/run", json=_eval_run_body())
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["evaluation_suite"] == "balanced"
+    thresholds = captured["thresholds"]
+    assert thresholds is not None
+    assert thresholds.groundedness_pass_rate == 0.9
+
+
+def test_run_evaluation_request_thresholds_take_precedence_over_suite(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """request の thresholds は suite より優先される。"""
+    captured: dict[str, Any] = {}
+
+    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
+        captured["thresholds"] = kwargs.get("thresholds")
+        return _minimal_eval_metrics()
+
+    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
+    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "balanced")
+
+    body = {**_eval_run_body(), "thresholds": {"mrr": 0.42}, "suite": "strict_ci"}
+    resp = client.post("/api/evaluation/run", json=body)
+
+    assert resp.status_code == 200
+    # suite は stamp されるが、閾値は request 明示が優先。
+    assert resp.json()["data"]["evaluation_suite"] == "strict_ci"
+    thresholds = captured["thresholds"]
+    assert thresholds is not None
+    assert thresholds.mrr == 0.42
+    assert thresholds.groundedness_pass_rate is None
+
+
+def test_run_evaluation_request_only_keeps_no_preset_thresholds(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """既定 request_only は閾値なしで現行どおり(thresholds=None)。"""
+    captured: dict[str, Any] = {}
+
+    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
+        captured["thresholds"] = kwargs.get("thresholds")
+        return _minimal_eval_metrics()
+
+    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
+    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "request_only")
+
+    resp = client.post("/api/evaluation/run", json=_eval_run_body())
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["evaluation_suite"] == "request_only"
+    assert captured["thresholds"] is None
+
+
+def test_run_evaluation_uses_kb_evaluation_suite_when_request_omits(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """単一 KB 指定時、request 未指定なら KB の evaluation_suite が解決順 2 番目で効く。"""
+    from app.api.routes import evaluation as evaluation_route
+    from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
+    from app.schemas.knowledge_base import KnowledgeBaseDetail, KnowledgeBaseStatus
+
+    captured: dict[str, Any] = {}
+
+    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
+        captured["thresholds"] = kwargs.get("thresholds")
+        return _minimal_eval_metrics()
+
+    class FakeOracleClient:
+        async def get_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail:
+            return KnowledgeBaseDetail(
+                id=knowledge_base_id,
+                name="KB",
+                status=KnowledgeBaseStatus.ACTIVE,
+                adapter_config=KnowledgeBaseAdapterConfig.model_validate(
+                    {"query": {"evaluation_suite": "strict_ci"}}
+                ),
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+
+        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
+            return "eval-1"
+
+    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
+    monkeypatch.setattr(evaluation_route, "OracleClient", FakeOracleClient)
+    monkeypatch.setattr(get_settings(), "rag_evaluation_suite", "balanced")
+
+    body = {**_eval_run_body(), "knowledge_base_ids": ["kb-1"]}
+    resp = client.post("/api/evaluation/run", json=body)
+
+    assert resp.status_code == 200
+    # グローバル balanced ではなく KB の strict_ci が選ばれる。
+    assert resp.json()["data"]["evaluation_suite"] == "strict_ci"
+    assert captured["thresholds"] is not None
+
+
+def test_run_evaluation_request_suite_beats_kb_suite(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """request の suite 明示は KB の evaluation_suite より優先される。"""
+    from app.api.routes import evaluation as evaluation_route
+
+    async def fake_run(self: EvaluationRunner, **kwargs: Any) -> EvaluationMetrics:
+        return _minimal_eval_metrics()
+
+    class FakeOracleClient:
+        async def get_knowledge_base(self, knowledge_base_id: str) -> None:
+            raise AssertionError("request suite 指定時は KB を参照しない")
+
+        async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
+            return "eval-1"
+
+    monkeypatch.setattr(EvaluationRunner, "run", fake_run)
+    monkeypatch.setattr(evaluation_route, "OracleClient", FakeOracleClient)
+
+    body = {**_eval_run_body(), "knowledge_base_ids": ["kb-1"], "suite": "retrieval_focused"}
+    resp = client.post("/api/evaluation/run", json=body)
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["evaluation_suite"] == "retrieval_focused"

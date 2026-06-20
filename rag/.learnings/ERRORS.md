@@ -1,3 +1,37 @@
+## [ERR-20260618-001] multipage_ingestion_stuck_in_ingesting_deadlock
+
+**Logged**: 2026-06-18T00:00:00+09:00
+**Priority**: high
+**Status**: resolved
+**Area**: ingestion
+
+### Summary
+多ページ PDF の取込が `INGESTING` のまま固着し、再試行のたびに 409 `このドキュメントは現在取込中です。` で失敗して永久に回復不能になる。UI には generic な `ingestion_error` だけが表示される。
+
+### Error
+```text
+job EXTRACT FAILED (attempts=2) error_message='このドキュメントは現在取込中です。'
+document status=INGESTING error_message=None  # 固着
+```
+
+### Context
+- 多ページ PDF は ~N segment(既定 3 頁/segment)へ分割され subprocess で逐次 VLM 抽出される。subprocess がクラッシュ/強制終了されると clean な except が走らず、文書は `INGESTING`・job は `RUNNING` のまま残る。
+- stale recovery は滞留 RUNNING job を QUEUED へ戻すが**文書状態を戻さない**。再投入 job が `_ingest_existing_document`(documents.py:962)の取込中ガードに弾かれ job だけ FAILED、文書は `INGESTING` のまま → デッドロック。
+- 実 DB のジョブ履歴に本来の失敗原因(`max_output_tokens 上限で途中終了`、旧コードの `索引用チャンク数が上限`)が残っていたが、固着でマスクされていた。
+
+### Suggested Fix
+`recover_stale_ingestion_jobs` で job 復旧時に文書状態も復旧する(再キュー→EXTRACT は UPLOADED / INDEX は REVIEW、試行上限超過→ERROR)。さらに QUEUED/RUNNING job が無いのに `INGESTING`/`INDEXING` で取り残された文書を ERROR へ戻す orphan sweep を追加。worker は起動時に加えて `ingestion_queue_recovery_interval_seconds`(既定 60s)ごとにアイドル中も再実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/clients/oracle.py, backend/app/rag/ingestion_worker.py, backend/app/config.py
+
+### Resolution
+- **Resolved**: 2026-06-18
+- **Notes**: oracle 復旧 + worker 定期回復 + 新 config を実装。test_oracle_adapter(orphan/stale)・test_ingestion_worker(定期回復)緑。固着済み文書は backend 再起動の startup recovery、または最大 60s のアイドル回復で ERROR へ遷移し再試行可能になる。
+
+---
+
 ## [ERR-20260614-001] uv_cache_readonly
 
 **Logged**: 2026-06-14T02:31:00+09:00
@@ -25,11 +59,106 @@ Use a writable cache directory for verification commands, for example `uv --cach
 ### Metadata
 - Reproducible: yes
 - Related Files: backend/pyproject.toml
-- Recurrence-Count: 2
-- Last-Seen: 2026-06-16T20:36:23+09:00
+- Recurrence-Count: 3
+- Last-Seen: 2026-06-18T04:26:58+09:00
 
 ### Recurrence Notes
 - 2026-06-16T20:36:23+09:00: `uv run ruff check ...` and `uv run pytest ...` failed in the managed sandbox for the same `/root/.cache/uv` write issue. Reran successfully with `UV_CACHE_DIR=/tmp/uv-cache`.
+- 2026-06-18T04:26:58+09:00: `uv lock --offline` failed for the same `/root/.cache/uv` write issue. Use a writable cache path such as `UV_CACHE_DIR=/tmp/uv-cache`.
+
+---
+
+## [ERR-20260618-001] pytest_node_id_mismatch
+
+**Logged**: 2026-06-18T15:55:15+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Targeted pytest failed because a guessed node id did not exist in `test_file_processing_staging.py`.
+
+### Error
+```text
+ERROR: not found: /u01/workspace/no.1-production-ready-rag/backend/tests/test_file_processing_staging.py::test_preflight_payload_strict_redacts_contract_blocking_failures
+(no match in any of [<Module test_file_processing_staging.py>])
+```
+
+### Context
+- Command attempted: `uv run pytest tests/test_file_processing_staging.py::test_file_processing_staging_trend_keeps_adapter_package_version_evidence tests/test_file_processing_staging.py::test_preflight_payload_strict_runs_manifest_adapter_contract tests/test_file_processing_staging.py::test_preflight_payload_strict_redacts_contract_blocking_failures -q`
+- The intended coverage was strict parser adapter contract staging payload redaction.
+
+### Suggested Fix
+Use `rg` to confirm pytest node ids before running a narrow targeted subset.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_file_processing_staging.py
+
+### Resolution
+- **Resolved**: 2026-06-18T15:55:15+09:00
+- **Notes**: Located the actual strict parser adapter staging tests with `rg` before rerunning the corrected subset.
+
+---
+
+## [ERR-20260618-001] agent_browser_socket_dir_readonly
+
+**Logged**: 2026-06-18T08:34:43+09:00
+**Priority**: low
+**Status**: pending
+**Area**: config
+
+### Summary
+`agent-browser --auto-connect get url` failed in the managed sandbox because it could not create its socket directory on a read-only filesystem.
+
+### Error
+```text
+✗ Failed to create socket directory: Read-only file system (os error 30)
+```
+
+### Context
+- Command attempted: `agent-browser --auto-connect get url`
+- The failure occurred before browser connection, likely while creating agent-browser runtime/session files outside the writable workspace roots.
+
+### Suggested Fix
+Rerun browser automation commands with approved sandbox escalation when the helper needs to create socket/session files outside writable project paths.
+
+### Metadata
+- Reproducible: yes
+- Related Files: /root/.agents/skills/agent-browser/SKILL.md
+
+---
+
+## [ERR-20260618-001] vite_listen_eperm
+
+**Logged**: 2026-06-18T04:31:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+Playwright could not start the Vite web server inside the managed sandbox because listening on localhost returned `EPERM`.
+
+### Error
+```text
+Error: listen EPERM: operation not permitted 127.0.0.1:3007
+Error: Process from config.webServer was not able to start. Exit code: 1
+```
+
+### Context
+- Command attempted: `npm run test:e2e -- e2e/parser-adapter-settings.spec.ts`
+- Manual Vite startup with `npm run dev -- --host 127.0.0.1 --port 3007` reproduced the `listen EPERM`.
+
+### Suggested Fix
+Run Playwright UI verification with approved sandbox escalation when Vite cannot bind a localhost test port.
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/playwright.config.ts
+
+### Resolution
+- **Resolved**: 2026-06-18T04:31:00+09:00
+- **Notes**: Reran the same Playwright spec with sandbox escalation; 8 tests passed.
 
 ---
 
@@ -217,6 +346,7 @@ timeout 180s env UV_CACHE_DIR=/tmp/uv-cache uv run pytest -q
 - A second run with explicit `timeout 180s` reproduced the stall/long-running behavior.
 - Targeted verification passed: `tests/test_pipeline.py tests/test_search_api.py -q`.
 - `uv run ruff check .` and `uv run mypy .` passed with `UV_CACHE_DIR=/tmp/uv-cache`.
+- 2026-06-18T04:43:00+09:00: A focused `test_oci_enterprise_ai.py` subset printed a passing dot, then did not exit before a 30-60s `timeout`; the pure `test_oci_http_status_error_includes_response_body` target passed.
 
 ### Suggested Fix
 Use a targeted test subset for code-change verification when full pytest stalls, then investigate full-suite timing with verbose/failfast selection in a dedicated debugging pass.
@@ -225,6 +355,8 @@ Use a targeted test subset for code-change verification when full pytest stalls,
 - Reproducible: yes
 - Related Files: backend/tests
 - See Also: ERR-20260614-003, ERR-20260614-018
+- Recurrence-Count: 2
+- Last-Seen: 2026-06-18T04:43:00+09:00
 
 ---
 

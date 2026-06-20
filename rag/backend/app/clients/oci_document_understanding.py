@@ -1,0 +1,446 @@
+"""OCI Document Understanding(service 系 parser backend)クライアント。
+
+OCI Enterprise AI / Generative AI とは別の OCI AI サービス(`oci.ai_document`)を
+backend から直接呼ぶ。非同期 processor job で日本語 OCR / 表抽出を行い、結果 JSON を
+`StructuredExtraction` 互換 payload へ決定論で remap する。入出力は Object Storage
+経由。未設定・SDK 失敗・job 失敗・timeout のときは ``None`` を返し、呼び出し側
+(ingestion)で既存のローカル / Enterprise AI VLM フローへ安全に縮退する。
+
+実 OCI 呼び出しは遅延 import + thread 実行で隔離し、テストでは ``document_client`` /
+``object_storage_client`` を注入して fake SDK で決定論検証する。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import importlib
+import json
+import logging
+import mimetypes
+import time
+from collections.abc import Mapping, Sequence
+from typing import Any, Protocol
+
+from app.clients.oci_auth import load_oci_config_without_prompt
+from app.config import Settings
+
+logger = logging.getLogger(__name__)
+
+# processor job のライフサイクル状態(getattr で大文字小文字を吸収する)。
+_SUCCEEDED_STATES = {"SUCCEEDED"}
+_TERMINAL_FAILURE_STATES = {"FAILED", "CANCELED", "CANCELLED"}
+
+# 設定 feature 名 → SDK feature クラス名の対応。未知の値は無視する。
+_FEATURE_CLASS_BY_NAME: dict[str, str] = {
+    "DOCUMENT_TEXT_EXTRACTION": "DocumentTextExtractionFeature",
+    "TEXT_EXTRACTION": "DocumentTextExtractionFeature",
+    "TABLE_EXTRACTION": "DocumentTableExtractionFeature",
+    "DOCUMENT_TABLE_EXTRACTION": "DocumentTableExtractionFeature",
+    "KEY_VALUE_EXTRACTION": "DocumentKeyValueExtractionFeature",
+    "DOCUMENT_KEY_VALUE_EXTRACTION": "DocumentKeyValueExtractionFeature",
+}
+
+
+class DocumentUnderstandingSdkProtocol(Protocol):
+    """`oci.ai_document.AIServiceDocumentClient` の利用部分。"""
+
+    def create_processor_job(self, create_processor_job_details: object) -> object:
+        """processor job を作成し、data.id / lifecycle_state を持つ response を返す。"""
+
+    def get_processor_job(self, processor_job_id: str) -> object:
+        """processor job の現在状態を返す。"""
+
+
+class ObjectStorageSdkProtocol(Protocol):
+    """DU 入出力に使う Object Storage SDK の利用部分。"""
+
+    def put_object(
+        self,
+        namespace_name: str,
+        bucket_name: str,
+        object_name: str,
+        put_object_body: bytes,
+        **kwargs: Any,
+    ) -> object:
+        """入力ファイルを Object Storage へアップロードする。"""
+
+    def list_objects(
+        self,
+        namespace_name: str,
+        bucket_name: str,
+        **kwargs: Any,
+    ) -> object:
+        """prefix 配下の object を列挙する。"""
+
+    def get_object(
+        self,
+        namespace_name: str,
+        bucket_name: str,
+        object_name: str,
+        **kwargs: Any,
+    ) -> object:
+        """結果 JSON を取得する。"""
+
+
+class OciDocumentUnderstandingClient:
+    """OCI Document Understanding を非同期 processor job で呼ぶクライアント。"""
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        document_client: DocumentUnderstandingSdkProtocol | None = None,
+        object_storage_client: ObjectStorageSdkProtocol | None = None,
+    ) -> None:
+        self._settings = settings
+        self._document_client = document_client
+        self._object_storage_client = object_storage_client
+
+    # --- 設定解決 ---
+    def _compartment_id(self) -> str:
+        return (
+            self._settings.oci_document_understanding_compartment_id.strip()
+            or self._settings.oci_compartment_id.strip()
+        )
+
+    def _namespace(self) -> str:
+        return (
+            self._settings.oci_document_understanding_namespace.strip()
+            or self._settings.object_storage_namespace.strip()
+        )
+
+    def _input_bucket(self) -> str:
+        return (
+            self._settings.oci_document_understanding_input_bucket.strip()
+            or self._settings.object_storage_bucket.strip()
+        )
+
+    def _output_bucket(self) -> str:
+        return (
+            self._settings.oci_document_understanding_output_bucket.strip()
+            or self._input_bucket()
+        )
+
+    def is_configured(self) -> bool:
+        """job を投入できる最小設定(compartment / namespace / 入力 bucket)が揃うか。"""
+        return bool(self._compartment_id() and self._namespace() and self._input_bucket())
+
+    # --- 公開 API ---
+    async def analyze(
+        self,
+        source_bytes: bytes,
+        *,
+        content_type: str,
+        document_id: str,
+    ) -> dict[str, object] | None:
+        """DU で 1 文書を解析し、StructuredExtraction 互換 payload を返す。
+
+        未設定・SDK/通信失敗・job 失敗・timeout のときは ``None`` を返す。
+        """
+        if not self.is_configured():
+            logger.info("OCI Document Understanding 未設定のため縮退します。")
+            return None
+        object_name = self._input_object_name(document_id, content_type)
+        try:
+            job_id = await asyncio.to_thread(
+                self._submit_job, source_bytes, object_name, content_type
+            )
+        except Exception as exc:  # noqa: BLE001 - 失敗時は安全に縮退する
+            logger.warning("DU job 投入に失敗しました。", extra={"error": str(exc)})
+            return None
+        try:
+            await self._await_job(job_id)
+            result = await asyncio.to_thread(self._read_first_result, job_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "DU job の完了待ち/結果取得に失敗しました。",
+                extra={"error": str(exc), "job_id": job_id},
+            )
+            return None
+        if result is None:
+            return None
+        return document_understanding_result_to_payload(result)
+
+    # --- job ライフサイクル ---
+    def _submit_job(self, source_bytes: bytes, object_name: str, content_type: str) -> str:
+        """入力を put し、processor job を作成して job id を返す(同期)。"""
+        models = importlib.import_module("oci.ai_document.models")
+        namespace = self._namespace()
+        input_bucket = self._input_bucket()
+        self._storage().put_object(
+            namespace,
+            input_bucket,
+            object_name,
+            source_bytes,
+            content_type=content_type or "application/octet-stream",
+        )
+        details = models.CreateProcessorJobDetails(
+            compartment_id=self._compartment_id(),
+            input_location=models.ObjectStorageLocations(
+                object_locations=[
+                    models.ObjectLocation(
+                        namespace_name=namespace,
+                        bucket_name=input_bucket,
+                        object_name=object_name,
+                    )
+                ]
+            ),
+            output_location=models.OutputLocation(
+                namespace_name=namespace,
+                bucket_name=self._output_bucket(),
+                prefix=self._settings.oci_document_understanding_output_prefix.strip(),
+            ),
+            processor_config=models.GeneralProcessorConfig(
+                features=self._build_features(models),
+                language=self._settings.oci_document_understanding_language.strip() or "JPN",
+            ),
+        )
+        response = self._documents().create_processor_job(create_processor_job_details=details)
+        job = getattr(response, "data", response)
+        job_id = getattr(job, "id", None)
+        if not job_id:
+            raise RuntimeError("DU create_processor_job が job id を返しませんでした。")
+        return str(job_id)
+
+    async def _await_job(self, job_id: str) -> None:
+        """SUCCEEDED まで poll する。FAILED/timeout は例外で縮退させる。"""
+        interval = float(self._settings.oci_document_understanding_poll_interval_seconds)
+        deadline = time.monotonic() + float(
+            self._settings.oci_document_understanding_timeout_seconds
+        )
+        while True:
+            job = await asyncio.to_thread(self._get_job, job_id)
+            state = str(getattr(job, "lifecycle_state", "") or "").upper()
+            if state in _SUCCEEDED_STATES:
+                return
+            if state in _TERMINAL_FAILURE_STATES:
+                detail = str(getattr(job, "lifecycle_details", "") or "")
+                raise RuntimeError(f"DU job が失敗しました(state={state} {detail}).")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("DU job が制限時間内に完了しませんでした。")
+            await asyncio.sleep(interval)
+
+    def _get_job(self, job_id: str) -> object:
+        response = self._documents().get_processor_job(job_id)
+        return getattr(response, "data", response)
+
+    def _read_first_result(self, job_id: str) -> dict[str, object] | None:
+        """output prefix/job_id 配下の最初の結果 JSON を読み込む(同期)。"""
+        namespace = self._namespace()
+        output_bucket = self._output_bucket()
+        prefix = "/".join(
+            part
+            for part in (
+                self._settings.oci_document_understanding_output_prefix.strip().strip("/"),
+                job_id,
+            )
+            if part
+        )
+        listed = self._storage().list_objects(namespace, output_bucket, prefix=prefix)
+        objects = getattr(getattr(listed, "data", listed), "objects", []) or []
+        for entry in objects:
+            name = str(getattr(entry, "name", "") or "")
+            if not name.endswith(".json"):
+                continue
+            response = self._storage().get_object(namespace, output_bucket, name)
+            raw = _response_bytes(response)
+            if raw is None:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        logger.warning("DU 結果 JSON が見つかりませんでした。", extra={"job_id": job_id})
+        return None
+
+    def _build_features(self, models: Any) -> list[object]:
+        features: list[object] = []
+        for name in self._settings.oci_document_understanding_features:
+            class_name = _FEATURE_CLASS_BY_NAME.get(str(name).strip().upper())
+            feature_cls = getattr(models, class_name, None) if class_name else None
+            if feature_cls is not None:
+                features.append(feature_cls())
+        if not features:
+            features.append(models.DocumentTextExtractionFeature())
+        return features
+
+    def _input_object_name(self, document_id: str, content_type: str) -> str:
+        prefix = self._settings.oci_document_understanding_input_prefix.strip().strip("/")
+        mime = content_type.split(";")[0].strip() if content_type else ""
+        ext = mimetypes.guess_extension(mime) if mime else None
+        safe_id = "".join(ch for ch in document_id if ch.isalnum() or ch in "-_") or "document"
+        name = f"{safe_id}{ext or ''}"
+        return f"{prefix}/{name}" if prefix else name
+
+    # --- 遅延 SDK 構築 ---
+    def _documents(self) -> DocumentUnderstandingSdkProtocol:
+        if self._document_client is not None:
+            return self._document_client
+        oci_config = importlib.import_module("oci.config")
+        ai_document = importlib.import_module("oci.ai_document")
+        config = load_oci_config_without_prompt(
+            oci_config,
+            self._settings.oci_config_file,
+            self._settings.oci_config_profile,
+            region=self._settings.oci_region.strip() or None,
+        )
+        self._document_client = ai_document.AIServiceDocumentClient(config)
+        return self._document_client
+
+    def _storage(self) -> ObjectStorageSdkProtocol:
+        if self._object_storage_client is not None:
+            return self._object_storage_client
+        oci_config = importlib.import_module("oci.config")
+        object_storage = importlib.import_module("oci.object_storage")
+        region = (
+            self._settings.object_storage_region.strip()
+            or self._settings.oci_region.strip()
+            or None
+        )
+        config = load_oci_config_without_prompt(
+            oci_config,
+            self._settings.oci_config_file,
+            self._settings.oci_config_profile,
+            region=region,
+        )
+        self._object_storage_client = object_storage.ObjectStorageClient(config)
+        return self._object_storage_client
+
+
+def _response_bytes(response: object) -> bytes | None:
+    """get_object response から本文 bytes を取り出す(SDK / fake 双方を許容)。"""
+    data = getattr(response, "data", response)
+    raw = getattr(data, "content", None)
+    if raw is None:
+        raw = getattr(data, "raw", None)
+    if raw is None:
+        raw = data
+    if isinstance(raw, str):
+        return raw.encode("utf-8")
+    if isinstance(raw, bytes | bytearray):
+        return bytes(raw)
+    return None
+
+
+def document_understanding_result_to_payload(
+    result: Mapping[str, object],
+) -> dict[str, object]:
+    """DU の解析結果 JSON を StructuredExtraction 互換 payload へ決定論で remap する。
+
+    DU 出力 JSON は camelCase。pages[].lines[].text を読み順テキストへ、tables[] を
+    ExtractionTable へ写す。raw_text だけでも StructuredExtraction 側で要素/ページを
+    補完できるが、表構造は DU の強みなので明示的に持たせる。
+    """
+    pages_raw = _as_sequence(result.get("pages"))
+    page_texts: list[str] = []
+    pages_payload: list[dict[str, object]] = []
+    tables_payload: list[dict[str, object]] = []
+    confidences: list[float] = []
+    table_counter = 0
+
+    for index, page in enumerate(pages_raw):
+        if not isinstance(page, Mapping):
+            continue
+        page_number = _as_int(page.get("pageNumber"), default=index + 1)
+        lines = _as_sequence(page.get("lines"))
+        line_texts = [
+            str(line.get("text", "")).strip()
+            for line in lines
+            if isinstance(line, Mapping) and str(line.get("text", "")).strip()
+        ]
+        if line_texts:
+            page_texts.append("\n".join(line_texts))
+        for word in _as_sequence(page.get("words")):
+            if isinstance(word, Mapping):
+                conf = word.get("confidence")
+                if isinstance(conf, int | float):
+                    confidences.append(float(conf))
+
+        dimensions = page.get("dimensions")
+        page_entry: dict[str, object] = {"page_number": page_number}
+        if isinstance(dimensions, Mapping):
+            width = dimensions.get("width")
+            height = dimensions.get("height")
+            if isinstance(width, int | float) and width > 0:
+                page_entry["width"] = float(width)
+            if isinstance(height, int | float) and height > 0:
+                page_entry["height"] = float(height)
+        pages_payload.append(page_entry)
+
+        for table in _as_sequence(page.get("tables")):
+            if not isinstance(table, Mapping):
+                continue
+            table_counter += 1
+            cells = _remap_table_cells(table)
+            tables_payload.append(
+                {
+                    "table_id": f"du-table-{table_counter}",
+                    "page_number": page_number,
+                    "cells": cells,
+                }
+            )
+
+    raw_text = "\n\n".join(text for text in page_texts if text).strip()
+    confidence = round(sum(confidences) / len(confidences), 4) if confidences else 0.0
+    payload: dict[str, object] = {
+        "raw_text": raw_text,
+        "document_type": _detected_document_type(result),
+        "confidence": confidence,
+        "warnings": [],
+        "pages": pages_payload,
+        "tables": tables_payload,
+        "parser_artifacts": {
+            "parser_backend": "oci_document_understanding",
+            "source_parser": "oci_document_understanding",
+        },
+    }
+    return payload
+
+
+def _remap_table_cells(table: Mapping[str, object]) -> list[dict[str, object]]:
+    """DU table の header/body/footer 行を ExtractionTableCell payload へ写す。"""
+    cells: list[dict[str, object]] = []
+    for row_key in ("headerRows", "bodyRows", "footerRows"):
+        for row in _as_sequence(table.get(row_key)):
+            if not isinstance(row, Mapping):
+                continue
+            for cell in _as_sequence(row.get("cells")):
+                if not isinstance(cell, Mapping):
+                    continue
+                text = str(cell.get("text", "")).strip()
+                row_index = _as_int(cell.get("rowIndex"), default=0)
+                col_index = _as_int(cell.get("columnIndex"), default=0)
+                cell_payload: dict[str, object] = {
+                    "row": max(row_index, 0),
+                    "col": max(col_index, 0),
+                    "text": text,
+                    "row_span": max(_as_int(cell.get("rowSpan"), default=1), 1),
+                    "col_span": max(_as_int(cell.get("columnSpan"), default=1), 1),
+                }
+                cells.append(cell_payload)
+    return cells
+
+
+def _detected_document_type(result: Mapping[str, object]) -> str:
+    for entry in _as_sequence(result.get("detectedDocumentTypes")):
+        if isinstance(entry, Mapping):
+            doc_type = str(entry.get("documentType", "")).strip()
+            if doc_type:
+                return doc_type
+    return "ドキュメント"
+
+
+def _as_sequence(value: object) -> Sequence[object]:
+    return value if isinstance(value, list | tuple) else ()
+
+
+def _as_int(value: object, *, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return default

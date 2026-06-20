@@ -10,7 +10,7 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, type Ref } from "react";
 
 import { Banner } from "@/components/ui/banner";
-import type { DocumentElement } from "@/lib/api";
+import type { DocumentElement, ExtractionTable, ExtractionTableCell } from "@/lib/api";
 import {
   parseStructuredExtraction,
   summarizeDocumentElements,
@@ -18,6 +18,7 @@ import {
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { tableCellKey, tableCellRef } from "@/lib/table-cell-focus";
 
 const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
   title: "flow.extraction.kind.title",
@@ -38,25 +39,33 @@ const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
 export function DocumentExtraction({
   extraction,
   selectedElementId = null,
+  selectedTableCellKey = null,
   focusRequestKey = null,
   focusSelectedElement = false,
+  focusSelectedTableCell = false,
   onElementSelect,
+  onTableCellSelect,
 }: {
   extraction: Record<string, unknown>;
   selectedElementId?: string | null;
+  selectedTableCellKey?: string | null;
   focusRequestKey?: string | null;
   focusSelectedElement?: boolean;
+  focusSelectedTableCell?: boolean;
   onElementSelect?: (elementId: string) => void;
+  onTableCellSelect?: (table: ExtractionTable, cell: ExtractionTableCell) => void;
 }) {
   const parsed = parseStructuredExtraction(extraction);
   const stats = summarizeDocumentElements(parsed.elements);
   const selectedElementRef = useRef<HTMLButtonElement | null>(null);
+  const selectedTableCellRef = useRef<HTMLButtonElement | null>(null);
   const hasSummary =
     parsed.rawText ||
     parsed.documentType ||
     parsed.confidence != null ||
     parsed.warnings.length > 0 ||
-    parsed.elements.length > 0;
+    parsed.elements.length > 0 ||
+    parsed.tables.length > 0;
 
   useEffect(() => {
     if (!focusRequestKey || !selectedElementId || !selectedElementRef.current) return;
@@ -64,6 +73,13 @@ export function DocumentExtraction({
       focus: focusSelectedElement,
     });
   }, [focusRequestKey, focusSelectedElement, selectedElementId]);
+
+  useEffect(() => {
+    if (!focusRequestKey || !selectedTableCellKey || !selectedTableCellRef.current) return;
+    scrollFocusedControlIntoView(selectedTableCellRef.current, {
+      focus: focusSelectedTableCell,
+    });
+  }, [focusRequestKey, focusSelectedTableCell, selectedTableCellKey]);
 
   if (!hasSummary) {
     return <p className="text-sm text-muted">{t("flow.extraction.empty")}</p>;
@@ -139,6 +155,15 @@ export function DocumentExtraction({
             </ol>
           </section>
         </>
+      ) : null}
+
+      {parsed.tables.some((table) => table.cells.length > 0) ? (
+        <TableCellsPanel
+          tables={parsed.tables}
+          selectedTableCellKey={selectedTableCellKey}
+          selectedTableCellRef={selectedTableCellRef}
+          onTableCellSelect={onTableCellSelect}
+        />
       ) : null}
 
       <RawTextBlock rawText={parsed.rawText} compact={parsed.elements.length > 0} />
@@ -239,6 +264,112 @@ function ElementItem({
       </button>
     </li>
   );
+}
+
+function TableCellsPanel({
+  tables,
+  selectedTableCellKey,
+  selectedTableCellRef,
+  onTableCellSelect,
+}: {
+  tables: ExtractionTable[];
+  selectedTableCellKey: string | null;
+  selectedTableCellRef: Ref<HTMLButtonElement>;
+  onTableCellSelect?: (table: ExtractionTable, cell: ExtractionTableCell) => void;
+}) {
+  return (
+    <section>
+      <h4 className="mb-2 text-sm font-semibold text-foreground">
+        {t("flow.extraction.tableCells")}
+      </h4>
+      <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
+        {tables
+          .filter((table) => table.cells.length > 0)
+          .map((table) => (
+            <div
+              key={table.table_id}
+              className="rounded-md border border-border bg-card p-3"
+              data-testid="extraction-table-cells"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="break-all text-xs font-medium text-foreground">
+                  {table.caption || table.table_id}
+                </span>
+                {typeof table.page_number === "number" ? (
+                  <span className="tnum rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+                    {t("flow.extraction.page", { page: table.page_number })}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-2 overflow-auto">
+                <div className="grid min-w-full gap-1" style={tableGridStyle(table)}>
+                  {table.cells.map((cell) => {
+                    const key = tableCellKey(table.table_id, cell);
+                    const selected = key === selectedTableCellKey;
+                    const ref = tableCellRef(cell);
+                    return (
+                      <button
+                        key={key}
+                        ref={selected ? selectedTableCellRef : undefined}
+                        type="button"
+                        className={`min-h-11 rounded border px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+                          selected
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-background text-foreground hover:bg-card"
+                        }`}
+                        aria-pressed={selected}
+                        aria-label={tableCellAriaLabel(table, cell)}
+                        data-testid="extraction-table-cell"
+                        onClick={() => onTableCellSelect?.(table, cell)}
+                      >
+                        <span className="flex flex-wrap items-center gap-1">
+                          <span className="tnum rounded bg-card px-1.5 py-0.5 text-[11px] text-muted">
+                            {ref || t("flow.extraction.tableCellPosition", {
+                              row: cell.row + 1,
+                              col: cell.col + 1,
+                            })}
+                          </span>
+                          {cell.bbox ? (
+                            <span className="rounded bg-success-bg px-1.5 py-0.5 text-[11px] text-success">
+                              bbox
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="mt-1 block whitespace-pre-wrap break-words leading-relaxed">
+                          {cell.text || "—"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ))}
+      </div>
+    </section>
+  );
+}
+
+function tableGridStyle(table: ExtractionTable) {
+  const columnCount = Math.max(
+    1,
+    ...table.cells.map((cell) => cell.col + Math.max(1, cell.col_span))
+  );
+  return {
+    gridTemplateColumns: `repeat(${columnCount}, minmax(7rem, 1fr))`,
+  };
+}
+
+function tableCellAriaLabel(table: ExtractionTable, cell: ExtractionTableCell): string {
+  const ref = tableCellRef(cell);
+  return t("flow.extraction.tableCellAria", {
+    table: table.caption || table.table_id,
+    cell: ref || t("flow.extraction.tableCellPosition", {
+      row: cell.row + 1,
+      col: cell.col + 1,
+    }),
+    text: cell.text || "—",
+  });
 }
 
 function RawTextBlock({ rawText, compact }: { rawText: string; compact: boolean }) {
