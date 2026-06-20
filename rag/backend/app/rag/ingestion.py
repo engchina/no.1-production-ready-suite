@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
+from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
 
 from app.clients.object_storage import ObjectStorageClient
@@ -576,6 +577,8 @@ class IngestionPipeline:
         )
         if not chunks:
             raise IngestionUserError("索引用チャンクを作成できませんでした。")
+        # RAPTOR 再帰要約索引(opt-in)。leaf に summary node を足して索引する。要約失敗は leaf のみ。
+        chunks = await self._augment_with_raptor(trace_id, chunks, cancel_checker)
         # 派生系譜(溯源)を chunk metadata へ貫通させ、citation → 派生原本 → 原本を追跡可能にする。
         chunks = _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
         await _raise_if_cancelled(cancel_checker)
@@ -1434,6 +1437,39 @@ class IngestionPipeline:
             cancel_checker=cancel_checker,
         )
         return _validate_structured_extraction_payload(extracted)
+
+    async def _augment_with_raptor(
+        self,
+        trace_id: str,
+        chunks: list[Chunk],
+        cancel_checker: Callable[[], Awaitable[bool]] | None,
+    ) -> list[Chunk]:
+        """RAPTOR 再帰要約索引(opt-in)。leaf に summary node を加えて返す。
+
+        要約は OCI Enterprise AI で行い、失敗/未設定の cluster は skip(最低でも leaf を残す)。
+        OFF(既定)のときは leaf chunk をそのまま返す。
+        """
+        if not getattr(self._settings, "rag_raptor_enabled", False):
+            return chunks
+        await _raise_if_cancelled(cancel_checker)
+
+        async def _summarize(text: str) -> str | None:
+            try:
+                return await self._vlm.generate(
+                    "次のテキスト群の要点を簡潔な日本語で要約してください。",
+                    text,
+                    system_prompt="あなたは文書を階層的に要約するアシスタントです。",
+                )
+            except Exception:  # noqa: BLE001 - 要約失敗は当該 cluster を skip(leaf は残る)
+                return None
+
+        augmented = await build_raptor_summaries(
+            chunks,
+            summarizer=_summarize,
+            cluster_size=int(getattr(self._settings, "rag_raptor_cluster_size", 5)),
+            max_levels=int(getattr(self._settings, "rag_raptor_max_levels", 2)),
+        )
+        return augmented
 
     async def _transcribe_audio(
         self,

@@ -999,6 +999,26 @@ class Settings(BaseSettings):
             "付与し、検索時に時間文脈フィルタを可能にする。off/entities では無効。"
         ),
     )
+    rag_raptor_enabled: bool = Field(
+        default=False,
+        description=(
+            "RAPTOR 再帰要約索引: chunking 後に leaf chunk を再帰 cluster + OCI Enterprise AI 要約し、"
+            "多層级 summary node を leaf と一緒に索引する。OFF(既定)は leaf のみ(現行挙動)。"
+            "追加 LLM 呼び出しを伴う opt-in。要約失敗時は leaf のみへ安全縮退する。"
+        ),
+    )
+    rag_raptor_cluster_size: int = Field(
+        default=5,
+        ge=2,
+        le=50,
+        description="RAPTOR の 1 cluster あたり chunk 数(要約単位)。",
+    )
+    rag_raptor_max_levels: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="RAPTOR 要約 tree の最大階層数。",
+    )
     rag_parser_readiness_probe_enabled: bool = Field(
         default=False,
         description=(
