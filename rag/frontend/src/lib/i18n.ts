@@ -441,7 +441,7 @@ export const ja = {
   "settings.services.column.actions": "操作",
   "settings.services.gpuNote": "GPU プロファイル(docker compose --profile gpu で opt-in)。",
   "settings.services.ociNote":
-    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。",
+    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Vision は「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",
   "settings.services.status.running": "稼働中",
   "settings.services.status.degraded": "縮退",
   "settings.services.status.stopped": "停止",

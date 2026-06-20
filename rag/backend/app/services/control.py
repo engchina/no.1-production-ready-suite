@@ -26,6 +26,7 @@ from typing import Literal
 
 from app.config import Settings
 from app.services.catalog import ServiceCatalogEntry, is_dev_mode
+from app.services.service_env import oci_service_env
 
 logger = logging.getLogger(__name__)
 
@@ -335,11 +336,19 @@ class UvProcessDriver:
                 ),
                 False,
             )
+        # microservice は os.environ(from_env)から設定を読むが、backend の有効設定は
+        # Settings(.env + UI 上書き)で os.environ に載らない。profile=oci のサービスには
+        # backend の OCI 設定を env で渡し、UI/.env で設定した値を子プロセスへ届ける
+        # (API キー等は OCI サービスにのみ渡す)。
+        child_env = os.environ.copy()
+        if entry.profile == "oci":
+            child_env.update(oci_service_env(settings))
         try:
             # start_new_session=True で独立プロセスグループにし、backend と寿命を切り離す。
             process = subprocess.Popen(  # noqa: S603 - argv は固定 + allowlist 済みエントリのみ
                 argv,
                 cwd=str(REPO_ROOT),
+                env=child_env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
