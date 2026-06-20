@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, Database, X } from "lucide-react";
+import { Check, ChevronDown, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -191,7 +191,6 @@ export function KnowledgeBasePickerGrid({
           }
         }}
       >
-        <Database size={14} className="ml-1 shrink-0 text-primary" aria-hidden />
         {chips.map((kb) => (
           <span
             key={kb.id}
