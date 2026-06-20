@@ -2,16 +2,17 @@
 
 import asyncio
 import logging
-import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from time import perf_counter
-from typing import Any
-from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
+
+# 共有 backend インフラ（CORS / request-id / エラー envelope）。
+from pr_backend_core.api.errors import api_error_response, http_exception_messages
+from pr_backend_core.observability.request_context import generate_request_id
+from pr_backend_core.security.cors import configure_cors
 from prometheus_client import make_asgi_app
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
@@ -31,11 +32,9 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.common import ApiResponse
 
 logger = logging.getLogger(__name__)
 UNHANDLED_ERROR_MESSAGE = "サーバー内部でエラーが発生しました。時間をおいて再度お試しください。"
-REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 @asynccontextmanager
@@ -102,51 +101,12 @@ def _route_path(request: Request) -> str:
     return path if isinstance(path, str) else request.url.path
 
 
-def _request_id(request: Request) -> str:
-    """リクエスト ID を取得または発行する。"""
-    incoming = request.headers.get("x-request-id", "").strip()
-    if REQUEST_ID_PATTERN.fullmatch(incoming):
-        return incoming
-    return uuid4().hex
-
-
-def _api_error_response(
-    status_code: int,
-    messages: list[str],
-    headers: Mapping[str, str] | None = None,
-    request_id: str | None = None,
-) -> JSONResponse:
-    """ApiResponse 形式のエラーレスポンスを返す。"""
-    body = ApiResponse[object](data=None, error_messages=messages)
-    response_headers = dict(headers or {})
-    if request_id:
-        response_headers["X-Request-ID"] = request_id
-    return JSONResponse(
-        status_code=status_code,
-        content=body.model_dump(mode="json"),
-        headers=response_headers,
-    )
-
-
-def _http_exception_messages(detail: Any, status_code: int) -> list[str]:
-    """HTTPException.detail を API エラー配列へ正規化する。"""
-    if isinstance(detail, str):
-        if status_code == 404 and detail == "Not Found":
-            return ["リソースが見つかりません。"]
-        if status_code == 405 and detail == "Method Not Allowed":
-            return ["許可されていない HTTP メソッドです。"]
-        return [detail]
-    if isinstance(detail, list):
-        return [str(item) for item in detail]
-    if isinstance(detail, dict):
-        return [str(detail)]
-    return ["リクエストの処理に失敗しました。"]
-
-
 def _response_request_id(request: Request) -> str:
     """例外ハンドラからも同じ request id を返せるよう取得する。"""
     state_request_id = getattr(request.state, "request_id", None)
-    return state_request_id if isinstance(state_request_id, str) else _request_id(request)
+    if isinstance(state_request_id, str):
+        return state_request_id
+    return generate_request_id(request.headers.get("x-request-id"))
 
 
 def create_app() -> FastAPI:
@@ -158,21 +118,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    configure_cors(app, origins=settings.cors_origins)
 
     @app.middleware("http")
     async def metrics_middleware(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        """HTTP レベルのメトリクスを記録する。"""
+        """HTTP レベルのメトリクスを記録する（認証/監査コンテキスト付与込み）。"""
         started_at = perf_counter()
-        request_id = _request_id(request)
+        # request id の検証/採番は共有インフラへ委譲（認証/監査は RAG 固有のまま）。
+        request_id = generate_request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
         context = audit_request_context_from_headers(
             request.headers,
@@ -207,10 +162,10 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-        """HTTPException を ApiResponse 形式へ統一する。"""
-        return _api_error_response(
+        """HTTPException を ApiResponse 形式へ統一する（共有 envelope）。"""
+        return api_error_response(
             exc.status_code,
-            _http_exception_messages(exc.detail, exc.status_code),
+            http_exception_messages(exc.detail, exc.status_code),
             headers=exc.headers,
             request_id=_response_request_id(request),
         )
@@ -224,7 +179,7 @@ def create_app() -> FastAPI:
             f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
             for error in exc.errors()
         ]
-        return _api_error_response(
+        return api_error_response(
             422,
             messages or ["リクエストの形式が不正です。"],
             request_id=_response_request_id(request),
@@ -243,7 +198,7 @@ def create_app() -> FastAPI:
                 "exception_type": type(exc).__name__,
             },
         )
-        return _api_error_response(
+        return api_error_response(
             500,
             [UNHANDLED_ERROR_MESSAGE],
             request_id=request_id,
