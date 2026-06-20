@@ -6,7 +6,7 @@
 > 採用する場合も本プロジェクトの確定スタック(OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai / Vite + React Router)に
 > 合わせて再実装する。外部ベクトル DB・別 LLM プロバイダをそのまま導入しないこと(逸脱時は AGENTS.md §8 に従い要確認)。
 
-最終更新: 2026-06-18
+最終更新: 2026-06-20(改訂: zero-hallucination RAG 参照実装 FareedKhan-dev/rag-zero-hallucinations を §2.1、vectorless / ファイル単位ナビゲーション型 jsonlicn/knowledge-navigator を §2.2 に追加)
 
 ---
 
@@ -43,8 +43,49 @@
 | **UR2** (Tsinghua-dhy) | RAG + 強化学習 研究 | ACL 2026 ORAL。検索と推論を RL で動的協調。プロダクトではないが研究価値高。 |
 | **agentic-rag-for-dummies** | Agentic RAG 教材 / 雛形 | LangGraph・memory・human-in-the-loop・query clarification・self-correction・RAGAS・Langfuse を網羅。アーキ参考価値高。 |
 | **ai-agents-for-beginners** (Microsoft) | Agent 教材 | Agent 入門。Agentic RAG の章を含む。チーム学習向け。 |
+| **rag-zero-hallucinations** (FareedKhan-dev) | Zero-Hallucination RAG エンドツーエンド参照(チュートリアル + コード) | **near-zero hallucination を最優先にした end-to-end RAG**。hybrid 検索(dense + BM25 を RRF 融合)→ rerank(150→20)→ query routing / multi-hop 分解 → **文単位で引用必須の生成 or 棄権トークン** → **atomic claim 分解 + faithfulness judge** → **校正済み棄権** → **CRAG 自己修正ループ(証拠が弱ければ再検索)**。4 層のハルシネーション防止(正しい証拠を引く / 文脈のみで生成 / claim を検証 / 不確かなら棄権)が本プロジェクトの「2段ゲート + guardrail + 引用 lineage + 評価」志向と最も整合。**重点トラッキング**。確定スタックへの詳細再マップは §2.1。 |
+| **knowledge-navigator** (jsonlicn) | Vectorless / ファイル単位ナビゲーション型 RAG(チュートリアル + コード) | **チャンク分割を捨て、LLM に整備済み文書の「目録」を読ませ、自分で原文ファイルを開かせる**。文書を Markdown へ治理 → ファイル単位で 1 知識単元に整理 → 各ファイル要約を**階層マージ形式の Markdown インデックス**(`index_all.md`)に集約 → 質問時にインデックスを context へロード → LLM が ReAct で読むべきファイルパスを選択 → 原文全文を読んで**ファイルパス引用付き**で回答。外部ベクトル DB 不要(全量 / 分块モード)。PageIndex と同系統の vectorless・file-level・reasoning-based retrieval。**重点トラッキング**。再マップは §2.2。 |
 
 > **本プロジェクトへの再マップ**: GraphRAG 系(Microsoft GraphRAG / LightRAG の community summary・lightweight KG)は **GraphRAG アダプター(`rag_graph_profile`)** が Oracle 内の GraphRAG-lite 構築深度として、Agentic 系(agentic-rag-for-dummies / LangGraph 的な query rewriting・sub-question decomposition・iterative RAG)は **Agentic アダプター(`rag_agentic_profile`)** が OCI Enterprise AI による検索前クエリ計画として取り込む(詳細は §4.2)。外部グラフ DB(Neo4j 等)/ 別 LLM provider はそのまま導入せず、確定スタック(Oracle 26ai + OCI Enterprise AI)へ再マップする。
+
+### 2.1 Zero-Hallucination RAG パイプライン(引用・検証・棄権・CRAG): FareedKhan-dev/rag-zero-hallucinations
+
+> **near-zero hallucination を最優先に置いた end-to-end RAG チュートリアル**(語料は HotpotQA、回答不能セットに SQuAD v2 + 手書き false premise、verifier 評価に HaluBench)。
+> 「完璧な生成」を狙わず、**唯一の安全な失敗モード=理由付きの棄権(refusal)** へ不確かな質問を寄せる設計思想が、本プロジェクトの 2段ゲート / guardrail / 引用 lineage 志向と深く一致する。
+> ただし原実装は **LanceDB(外部ベクトル DB)・Qwen3 + vLLM(別 LLM provider)・bm25s(別 sparse 実装)・datasketch(MinHash)・LangGraph** を使うため、**そのまま導入せず**確定スタック(Oracle 26ai AI Vector Search / OCI Enterprise AI / OCI Generative AI Cohere)へ必ず再マップする(AGENTS.md §3・§8。逸脱導入は不可、必要時は理由を添えて要確認)。
+
+**4 層ハルシネーション防止アーキテクチャ(① 正しい証拠を引く → ② 文脈のみで生成 → ③ claim を検証 → ④ 不確かなら棄権)→ 本プロジェクトのアダプターへの再マップ:**
+
+| 原実装の段階 / 手法(参考) | 原実装の技術 | 本プロジェクトの確定スタックへの再マップ |
+|---|---|---|
+| **取込: 正規化 + 近似重複除去 + 構造認識 chunk** | NFKC 正規化 / MinHash LSH dedup(閾値 0.9・64 perm, datasketch) / 文単位 256-token・overlap 32 の chunk + **1 文 context prefix**(各 chunk を単独で曖昧でなくする) | NFKC は既存前処理へ。**MinHash LSH は外部依存なしの決定論 dedup** として前処理に取り込む(`rag_chunking_strategy` 近傍)。context prefix は既存 chunk lineage / `chunk_strategy` metadata に「contextual prefix」派生を加える(prefix 生成は OCI Enterprise AI、決定論 fallback 付き) |
+| **索引: hybrid(dense + sparse)** | LanceDB(IVF_PQ on-disk)+ **bm25s** posting、10M+ vectors へスケール | **Oracle 26ai AI Vector Search(`VECTOR(1536, FLOAT32)`)+ Oracle Text** の既存 hybrid。`rag_retrieval_strategy=hybrid_rrf`。索引精度は `rag_vector_index_profile`。**LanceDB / bm25s は導入しない** |
+| **検索: RRF 融合 + rerank 150→20** | reciprocal rank fusion(k=60, スコア正規化なし)+ cross-encoder rerank(Qwen3-Reranker-4B) | 既存 `hybrid_rrf` の RRF 融合 + **OCI Generative AI Cohere Rerank v4 fast**(候補 N→top-k)。rerank を別 provider にせず Cohere へ |
+| **路由 + 分解** | LLM で no_retrieval / single_hop / multi_hop を分類、multi-hop を 2–3 sub-question へ分解、**false-premise(誤前提)検出** | `rag_agentic_profile`(`query_rewrite` / `decompose` / `multi_hop`)を **OCI Enterprise AI `plan_query`** で実装。false-premise 検出は Clarify / guardrail 的な警告として追加(追加 LLM 呼び出しは明示 opt-in) |
+| **引用付き生成 or 棄権** | 文ごとに inline citation 必須・passage ID 検証(無効引用は除去)、回答不能は **ABSTAIN_TOKEN(`INSUFFICIENT_EVIDENCE`)** | `rag_generation_profile=strict_extractive` / `detailed_cited`(OCI Enterprise AI の system prompt 変種、追加 LLM 呼び出しなし)。citation は既存 traceable citation lineage、棄権は guardrail の groundedness 閾値割れ時の安全応答 |
+| **claim 検証(faithfulness judge)** | 回答を **atomic claim へ分解**、各 claim を引用文脈に対し faithfulness judge(Qwen3-32B)が [0,1] でスコア、**最弱 claim 基準**(全 claim が τ=0.3 超で合格)、CoVe(Chain-of-Verification)で境界回答を修復 | `rag_post_retrieval_pipeline=verified_context` + `rag_guardrail_policy`(`strict` / `regulated`)の **groundedness 検証**として OCI Enterprise AI の構造化出力 + 閾値で束ねる。外部評価 SaaS / 追加 LLM-as-judge provider は増やさない |
+| **校正済み棄権(calibrated abstention)** | 各シグナルを統合し risk-coverage 曲線で閾値調整、support 不足なら棄権 | guardrail の groundedness / 検索 evidence grade / claim faithfulness を統合した**決定論的棄権判定**。閾値はドメイン別に設定で調整 |
+| **CRAG 自己修正 agent** | LangGraph 状態機械、evidence grade(0–1)で routing(≥0.7 生成 / <0.4 棄権 / 0.4–0.7 はクエリ精緻化 + 再検索)、hop budget 上限 3 | `rag_retrieval_strategy=corrective_multi_query` + `rag_agentic_profile=multi_hop`(上限 hop あり)。LangGraph は導入せず本プロジェクトの検索→評価→(再検索)経路へ。CRAG / Self-RAG 的 corrective retrieval は §4.2 retrieval / grounding アダプターに整理済み |
+| **評価: ハルシネーション採点 + 1000 万 vector ベンチ** | 200 問 golden set で hallucination 採点、HaluBench で verifier 評価(AUROC 0.702)、faithfulness 0.908 / context recall@20 0.97 / coverage 46% vs abstain 54%、10M index(p95 18.48ms / 38.8GB)→ 100M 外挿(p95 77.58ms / 388GB) | `rag_evaluation_suite`(`balanced` / `strict_ci` / `ragas_like`)に **hallucination rate / claim faithfulness / context recall@k / coverage(回答率)vs abstain(棄権率)** を決定論指標として追加。golden set は本プロジェクト評価ゴールデンの作り方の手本。大規模ベンチは Oracle 26ai の索引 scaling 検証観点として参照 |
+
+> **本プロジェクトへの示唆**: ① **棄権を一級市民にする**(回答率を下げてでも誤答を出さない安全側設計)、② **文単位の引用必須 + 引用検証**(無効引用の除去)、③ **claim 分解 + faithfulness 閾値で最弱 claim を gate**、④ **CRAG の evidence grade による「生成 / 再検索 / 棄権」三分岐**は、いずれも確定スタック内で決定論寄りに実装でき、既存の retrieval / grounding / generation / guardrail / agentic / evaluation アダプターを束ねる **「ハルシネーション抑止 preset」** として整理する価値が高い。**外部ベクトル DB(LanceDB)・別 LLM provider(Qwen3 / vLLM)・bm25s は導入しない。**
+
+### 2.2 Vectorless / ファイル単位ナビゲーション型 RAG: jsonlicn/knowledge-navigator
+
+> **「チャンクを捨て、LLM に文書を人間のように翻させる」**ことを主張する vectorless RAG チュートリアル(Python 3.10+ / ReAct エージェント / `gpt-4o` 既定・**外部ベクトル DB なし**、`summarizer.py` で索引生成 → `chat.py` でナビゲーション + 回答)。
+> 文書をファイル単位の知識単元に治理し、各ファイル要約を**階層マージ形式の Markdown インデックス**(`index_all.md`、共通パス前缀を見出し化して逐行フルパスより token を 15–20% 節約)へ集約 → 質問時にインデックスを context へロード → LLM が読むべき**ファイルパス**を ReAct で選択 → 原文全文を読んで**ファイルパス引用付き**で回答する。256K context で約 70% を索引に充てれば 600–700 ファイル相当を全量ロードでき、超過時は **分块索引(~500 件/バッチ)** / **分層ドリルダウン** で拡張する。
+> 本プロジェクトは既に **vectorless / reasoning retrieval の PageIndex**(§2)と **navigation tree + node 要約 + progressive disclosure**(Knowhere 取込、§5)を追跡しており、本案はその「ファイル単位・索引主導・引用可検証」志向を**ひとつの完結したエージェント検索ループ**として具体化したもの。**外部ベクトル DB を増やさない方針(AGENTS.md §3)とむしろ整合**するが、LLM=`gpt-4o`(と要約用 7B)は **OCI Enterprise AI** へ、文書治理は本プロジェクトの 2 段処理(parse→人手プレビュー確認→index)へ再マップする。
+
+| 原実装の設計(参考) | 本プロジェクトの確定スタック / 既存機能への再マップ |
+|---|---|
+| **文書治理 → Markdown、ファイル=1 知識単元** | 既存の 2 段ファイル処理(parse→人手プレビュー確認→index)と `StructuredExtraction`。原本は不可篡改の溯源副本として保持(既存方針と一致) |
+| **階層マージ形式の Markdown 索引(共通パス前缀を見出し化)+ 各ファイル要約** | 既存の **navigation tree + node 要約 + progressive disclosure**(`app/rag/navigation.py`、`GET /api/documents/{id}/navigation`)を「ファイル単位の索引ビュー」へ拡張。要約生成は 7B ではなく **OCI Enterprise AI**。索引はキャッシュし、変更ファイルだけ増分更新 |
+| **LLM が索引を読み、読むべきファイルパスを ReAct で選択** | `rag_agentic_profile`(`query_rewrite` / `decompose` / `multi_hop`)の検索前計画として **OCI Enterprise AI `plan_query`** で実装。「索引閲覧 → ファイル選択 → 原文取得」を検索→評価→(再取得)経路へ載せる(追加 LLM 呼び出しは明示 opt-in) |
+| **原文全文を読んで生成(チャンクを混ぜない)** | `rag_chunking_strategy=page_level`(PageIndex 粗粒度)を**ファイル / 文書単位の粗粒度検索モード**へ拡張する設計参考。検索段は `rag_retrieval_strategy` でファイル単位選択 + 原文 context 注入 |
+| **ファイルパス引用(直接開いて検証可能)** | 既存の traceable citation lineage を**ファイルパス / 文書単位の引用**として強化。`rag_generation_profile=detailed_cited` / `strict_extractive` |
+| **vector-assist(任意): ベクトル + パス + 要約のみ保存、切片原文は保存しない** | **Oracle 26ai AI Vector Search を「回答源」ではなく「ナビゲーション信号」として使う**設計。ベクトルは file-path への定位ヒントに留め、回答は常に原文ファイルから。外部ベクトル DB は導入しない |
+
+> **本プロジェクトへの示唆**: ① **索引を「人間可読・LLM 可読の Markdown 目録」として一級資産にする**(共通パス前缀の見出し化で token 節約、キャッシュ + 増分更新)、② **ベクトル検索を回答源ではなくナビゲーション信号へ降格**して引用可検証性を担保、③ **粗粒度(ファイル / 文書単位)検索モード**を chunk 主導経路と並立させる、は確定スタック内で実装でき、既存の navigation / agentic / retrieval / generation アダプターと PageIndex 追跡を補強する。適用境界(未治理の雑多ファイル堆、超大規模 Web 検索、リアルタイム流データ、純グラフ推理)は原文と同じく明示する。**外部ベクトル DB・別 LLM provider は導入しない。**
 
 ## 3. 自社 RAG 構築で避けて通れないフレームワーク / コンポーネント
 
@@ -73,6 +114,7 @@
 | **Ragas** | RAG 評価 | OSS の LLM アプリ評価フレームワーク。指標・合成テストデータ・品質監視。RAG 評価の定番。 |
 | **AutoRAG** (Marker-Inc-Korea) | RAG パイプライン自動最適化 | モジュール組合せを自動評価し、より良い RAG パイプラインを探索。本プロジェクトでは外部 stack は導入せず、parser adapter readiness と file-processing golden/staging 指標を使う `parser_adapter_scorecard` として再実装する。 |
 | **FlashRAG** (RUC-NLPIR) | RAG 研究再現ツールキット | RAG アルゴリズム再現・研究向け。多データセット・多アルゴリズム・多 reasoning 手法。 |
+| **HaluBench / faithfulness judge**(rag-zero-hallucinations 由来) | ハルシネーション検証データ + claim 検証 | 回答不能セット(SQuAD v2 + 手書き false premise)と HaluBench で **verifier(faithfulness judge)自体を AUROC 評価**し運用閾値を選ぶ発想。本プロジェクトの `rag_evaluation_suite` へ **hallucination rate / claim faithfulness / context recall@k / coverage vs abstain** を決定論指標として追加する手本(詳細は §2.1)。外部評価 SaaS / 追加 LLM-as-judge provider は導入しない。 |
 
 ### 4.1 2026 追跡: 構造認識・マルチページ文書 chunking / 評価
 
@@ -162,6 +204,7 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 | **agentic-rag-for-dummies** | 高 | Agentic RAG の学習/雛形。プロダクトではないがアーキ参考価値高。 |
 | **microsoft/ai-agents-for-beginners** | 高 | Agent 教材。チーム研修向け。RAG プロダクトではない。 |
 | **PageIndex** | 非常に高 | 新型 vectorless / 推論式インデックス。重点トラッキング対象。 |
+| **jsonlicn/knowledge-navigator** | 高 | **vectorless / ファイル単位ナビゲーション型 RAG の参照(チュートリアル + コード)**。チャンクを捨て LLM に Markdown 目録(`index_all.md`)を読ませ原文ファイルを開かせる。PageIndex と同系統で、本プロジェクトの navigation tree + agentic 検索計画 + 引用 lineage を補強。確定スタックへの再マップは §2.2(`gpt-4o` は OCI Enterprise AI へ、ベクトルは導入時もナビゲーション信号に限定)。 |
 | **Dify Knowledge Pipeline** | 非常に高 | Dify が「アプリ基盤」から「企業級 RAG データガバナンス/運用パイプライン」へ進化中であることを示す。 |
 | **UR2** | 中〜高 | RAG + RL 研究方向。論文/実験価値高、プロダクト成熟度はまだ早期。 |
 | **Understand-Anything** | 高 | コード/ナレッジのグラフ化。codebase RAG・architecture Q&A・agent memory 向け。 |
@@ -171,6 +214,7 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 | **engchina/no.1-semantic-doc-search** | シナリオ型 | Oracle Cloud / ADB / Compute / Terraform 構成の semantic document search サンプル。大阪リージョン向け deploy 手順や OSS ライセンス棚卸しも含み、本プロジェクトの OCI 配備・文書検索 UI/API の比較参考になる。 |
 | **engchina/No.1-PdfParser-Free** | シナリオ型(**取込済**) | PDF をページ画像に変換して VLM/OCR で Markdown 化する解析サンプル。「先变换、再 parse」の手法を**前処理(Preprocess)ステージ**として再実装済み(`rag_preprocess_profile=pdf_to_page_images`、`services/preprocess` で PyMuPDF ラスタライズ→画像 PDF→既存 VLM 経路、`SourceDerivation` で派生系譜=溯源を保持)。OpenAI 互換 chat 経路は導入せず OCI Enterprise AI VLM へ再マップ。 |
 | **hkuds/rag-anything** | 非常に高 | マルチモーダル RAG の重点プロジェクト。長期トラッキング推奨。 |
+| **FareedKhan-dev/rag-zero-hallucinations** | 非常に高 | **near-zero hallucination RAG の end-to-end 参照(チュートリアル + コード)**。引用付き生成・claim faithfulness 検証・校正済み棄権・CRAG 自己修正を一通り通す。プロダクトではないが、本プロジェクトの「ハルシネーション抑止 preset」設計の中核参考。確定スタックへの再マップは §2.1(LanceDB / Qwen3+vLLM / bm25s は導入せず Oracle 26ai / OCI Enterprise AI / OCI Cohere へ)。 |
 | **oceanbase/powerrag** | シナリオ型(**取込済**) | RAGFlow ベースの OceanBase 強化版。優点を確定スタックへ再マップ済み: scalar/日付/カテゴリ pre-filter(Oracle 26ai `JSON_VALUE`/`TIMESTAMP`/`IN`)、schema 駆動 field/entity 抽出(`extraction_field_adapter`、LangExtract→OCI Enterprise AI structured output)、prompt 版管理(`prompt_versions`、custom generation profile)、MinerU/Dots.OCR を parser adapter 候補として登録(`rag_parser_mineru_enabled`/`rag_parser_dots_ocr_enabled`、未導入時は安全に fallback)。 |
 | **ontos-ai/knowhere** | 高(**取込済**) | 文書解析 API / RAG-ready chunks。優点を再実装済み: 章節 navigation tree + node 要約 + progressive disclosure(`app/rag/navigation.py`、`GET /api/documents/{id}/navigation`)、図表の VLM 要約を検索可能 chunk へ紐付け(`asset_summary`、`rag_asset_summary_enabled`)。source traceability は既存 citation lineage を継続活用。外部 API 直接依存ではなく adapter として再マップ。 |
 
@@ -181,8 +225,9 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 - **PDF OCR / Parser 実装参考**: Docling / MinerU / Marker / Unstructured / Knowhere / engchina/No.1-PdfParser-Free
 - **GraphRAG / ナレッジグラフ増強**: Microsoft GraphRAG / LightRAG / RAG-Anything / KAG / Graphiti / Cognee / Neo4j GraphRAG / Understand-Anything
 - **Agentic RAG**: LangGraph / LlamaIndex / agentic-rag-for-dummies / LangChain / Graphiti / Cognee
+- **ハルシネーション抑止 / 引用・faithfulness 検証 / 棄権**: FareedKhan-dev/rag-zero-hallucinations / Ragas
 - **評価・チューニング**: Ragas / AutoRAG / FlashRAG
-- **次世代 RAG 方向の研究**: PageIndex / UR2 / RAG-Anything / Graphiti / LightRAG / Understand-Anything
+- **次世代 RAG 方向の研究**: PageIndex / knowledge-navigator(vectorless・ファイル単位ナビゲーション) / UR2 / RAG-Anything / Graphiti / LightRAG / Understand-Anything
 - **Oracle / OCI 参照実装**: engchina/no.1-rag / engchina/no.1-semantic-doc-search / engchina/No.1-PdfParser-Free
 
 ## 7. リスク・法務メモ
@@ -236,6 +281,8 @@ RAGFlow / Docling / Marker / Unstructured / Dify / RAG-Anything / MultiDocFusion
 - Ragas — https://www.ragas.io/
 - AutoRAG — https://github.com/Marker-Inc-Korea/AutoRAG
 - FlashRAG — https://github.com/RUC-NLPIR/FlashRAG
+- FareedKhan-dev/rag-zero-hallucinations — https://github.com/FareedKhan-dev/rag-zero-hallucinations
+- jsonlicn/knowledge-navigator — https://github.com/jsonlicn/knowledge-navigator
 - nashsu/llm_wiki — https://github.com/nashsu/llm_wiki
 - nvk/llm-wiki — https://github.com/nvk/llm-wiki
 - engchina/no.1-rag — https://github.com/engchina/no.1-rag
