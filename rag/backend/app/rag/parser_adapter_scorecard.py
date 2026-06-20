@@ -25,7 +25,12 @@ from app.rag.parser_adapter_routing import (
     normalize_source_kind,
 )
 
-ParserAdapterScoreBackend = Literal["local", "docling", "marker", "unstructured"]
+# source routing には GPU adapter(mineru/dots_ocr/glm_ocr)も流れるため、型ドメインは全 backend を
+# 含める(schema の ParserAdapterScoreBackendName と一致)。採点対象集合は ADAPTER_SCORE_BACKENDS で
+# 別途 CPU/local に限定する。
+ParserAdapterScoreBackend = Literal[
+    "local", "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
+]
 ParserAdapterScoreStatus = Literal[
     "recommended",
     "eligible",
