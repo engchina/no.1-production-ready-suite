@@ -31,6 +31,9 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
     "dots_ocr": "rag_parser_dots_ocr_service_url",
     "glm_ocr": "rag_parser_glm_ocr_service_url",
     "asr": "rag_parser_asr_service_url",
+    # OCI クラウド service 系 backend(薄いプロキシ microservice)。
+    "oci_genai_vision": "rag_parser_oci_genai_vision_service_url",
+    "oci_document_understanding": "rag_parser_oci_document_understanding_service_url",
 }
 
 
@@ -76,6 +79,45 @@ class ParserServiceClient:
                 source_profile.model_dump_json() if source_profile is not None else "null"
             ),
         }
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.post(f"{url}/parse", files=files, data=data)
+                response.raise_for_status()
+                payload = response.json()
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+            logger.warning(
+                "parser service call failed",
+                extra={"parser_backend": backend, "service_url": url, "error": str(exc)},
+            )
+            return _fallback(backend, f"{backend}_adapter_service_unreachable")
+        try:
+            return ParseResponse.model_validate(payload).to_result()
+        except ValueError as exc:
+            logger.warning(
+                "parser service returned invalid payload",
+                extra={"parser_backend": backend, "service_url": url, "error": str(exc)},
+            )
+            return _fallback(backend, f"{backend}_adapter_service_invalid_response")
+
+    def run_service_backend(
+        self,
+        backend: str,
+        source_bytes: bytes,
+        *,
+        content_type: str,
+        document_id: str,
+    ) -> ParserRegistryResult:
+        """OCI クラウド service 系 backend を microservice へ HTTP 委譲する。
+
+        ``runner`` と異なり source_profile 不要で document_id を渡す(OCI 入力 object 名の
+        一意化用)。未到達/失敗/未設定時は extraction=None の fallback を返し、呼び出し側で
+        既存 in-process フローへ安全に縮退させる。
+        """
+        url = self.service_url(backend)
+        if url is None:
+            return _fallback(backend, f"{backend}_adapter_service_unconfigured")
+        files = {"file": ("upload", source_bytes, content_type or "application/octet-stream")}
+        data = {"content_type": content_type, "document_id": document_id}
         try:
             with httpx.Client(timeout=self._timeout) as client:
                 response = client.post(f"{url}/parse", files=files, data=data)
