@@ -1645,6 +1645,56 @@ function timeoutMessage(timeoutMs: number): string {
   return t("common.api.timeout", { seconds: Math.ceil(timeoutMs / 1000) });
 }
 
+// --- NL2SQL クエリ(生成 → 人手確認 → 実行 の 2 段ゲート)---
+export interface Nl2SqlRouterSummary {
+  profile_selected: string | null;
+  generation_backend: string;
+  complexity_score: number;
+  matched_signals: string[];
+  reason: string;
+}
+export interface Nl2SqlGuardrailVerdict {
+  allowed: boolean;
+  policy: string;
+  statement_type: string;
+  violations: string[];
+  semantic_verify_required: boolean;
+  max_rows: number | null;
+  run_role: string | null;
+}
+export interface Nl2SqlGenerateRequestBody {
+  question: string;
+  profile_name?: string | null;
+  team_name?: string | null;
+  allowed_objects?: string[];
+}
+export interface Nl2SqlGenerateResponse {
+  question: string;
+  profile_name: string;
+  generation_backend: string;
+  router: Nl2SqlRouterSummary;
+  generated_sql: string;
+  narration: string | null;
+  guardrail: Nl2SqlGuardrailVerdict;
+}
+export interface Nl2SqlExecuteRequestBody {
+  sql: string;
+  allowed_objects?: string[];
+}
+export interface Nl2SqlSqlResult {
+  columns: string[];
+  rows: JsonValue[][];
+  row_count: number;
+  truncated: boolean;
+}
+export interface Nl2SqlExecuteResponse {
+  sql: string;
+  executed: boolean;
+  blocked_reason: string | null;
+  guardrail: Nl2SqlGuardrailVerdict;
+  result: Nl2SqlSqlResult | null;
+}
+
 async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
   try {
     return (await res.json()) as ApiResponse<T>;
@@ -1986,6 +2036,12 @@ export const api = {
     request<SelectAiResponse>("/api/search/select-ai", jsonBody(body)),
   submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
     request<CitationFeedbackResponse>("/api/search/citation-feedback", jsonBody(body)),
+
+  // NL2SQL(2 段ゲート)
+  generateNl2Sql: (body: Nl2SqlGenerateRequestBody) =>
+    request<Nl2SqlGenerateResponse>("/api/nl2sql/generate", jsonBody(body)),
+  executeNl2Sql: (body: Nl2SqlExecuteRequestBody) =>
+    request<Nl2SqlExecuteResponse>("/api/nl2sql/execute", jsonBody(body)),
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>

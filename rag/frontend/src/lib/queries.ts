@@ -961,6 +961,20 @@ export function useUpdateGuardrailSettings() {
   });
 }
 
+/** NL2SQL: 自然言語から SQL を生成(未実行)。 */
+export function useGenerateNl2Sql() {
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof api.generateNl2Sql>[0]) => api.generateNl2Sql(payload),
+  });
+}
+
+/** NL2SQL: 承認済み SQL を read-only 実行。 */
+export function useExecuteNl2Sql() {
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof api.executeNl2Sql>[0]) => api.executeNl2Sql(payload),
+  });
+}
+
 /** Retrieval アダプター(検索戦略)の runtime 設定。 */
 export function useRetrievalSettings() {
   return useQuery<RetrievalSettingsData>({

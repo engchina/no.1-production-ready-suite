@@ -8,6 +8,7 @@ export const APP_ROUTES = {
   businessViews: "/business-views",
   documents: "/documents",
   search: "/search",
+  nl2sqlConsole: "/nl2sql",
   evaluation: "/evaluation",
   settingsOci: "/settings/oci",
   settingsUploadStorage: "/settings/upload-storage",

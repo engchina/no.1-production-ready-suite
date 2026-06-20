@@ -19,6 +19,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  SquareTerminal,
   UserCog,
   Workflow,
   Upload,
@@ -65,6 +66,12 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.section.rag",
     items: [
       { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch },
+      {
+        href: APP_ROUTES.nl2sqlConsole,
+        labelKey: "nav.nl2sqlConsole",
+        sidebarLabelKey: "nav.nl2sqlConsole.sidebar",
+        icon: SquareTerminal,
+      },
       {
         href: APP_ROUTES.businessViews,
         labelKey: "nav.businessViews",
