@@ -23,6 +23,7 @@ dependencies = [
     "pypdf>=6.4,<7",
     "rag-parser-core",
     "rag-pipeline-core",
+    "production-ready-backend-core",
 ]
 
 # 重い parser 依存(docling/marker/unstructured/mineru/dots_ocr)は backend に載せない。
@@ -45,6 +46,8 @@ conflicts = [[{ extra = "marker" }, { extra = "unstructured" }]]
 [tool.uv.sources]
 rag-parser-core = { path = "../packages/rag_parser_core", editable = true }
 rag-pipeline-core = { path = "../packages/rag_pipeline_core", editable = true }
+# 共有 backend インフラ（platform repo の sibling パス）。変更時は uv lock 再生成が必要。
+production-ready-backend-core = { path = "../../no.1-production-ready-platform/packages/backend_core", editable = true }
 
 [dependency-groups]
 dev = [

@@ -10,6 +10,9 @@ export default defineConfig({
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
+    // 共有 UI パッケージ（file: リンク）は自分の node_modules の React を解決しうるため、
+    // React/ReactDOM を必ずこのアプリの 1 コピーへ集約する（"Invalid hook call" 回避）。
+    dedupe: ["react", "react-dom"],
   },
   server: {
     host: "0.0.0.0",
