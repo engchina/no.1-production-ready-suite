@@ -34,6 +34,20 @@ from app.config import (
     get_settings,
     resolve_model_settings_file,
 )
+from app.nl2sql.cache import (
+    cache_adapter_runtime_settings,
+    normalize_cache_policy,
+)
+from app.nl2sql.guardrail import (
+    guardrail_adapter_runtime_settings as nl2sql_guardrail_runtime_settings,
+)
+from app.nl2sql.guardrail import (
+    normalize_guardrail_policy as normalize_nl2sql_guardrail_policy,
+)
+from app.nl2sql.router import (
+    normalize_router_profile,
+    router_adapter_runtime_settings,
+)
 from app.rag.agentic_adapter import (
     agentic_adapter_runtime_settings,
     normalize_agentic_profile,
@@ -95,6 +109,9 @@ from app.schemas.settings import (
     AgenticProfileStatusData,
     AgenticSettingsData,
     AgenticSettingsUpdate,
+    CachePolicyStatusData,
+    CacheSettingsData,
+    CacheSettingsUpdate,
     ChunkingSettingsData,
     ChunkingSettingsUpdate,
     ChunkingStrategyStatusData,
@@ -128,6 +145,9 @@ from app.schemas.settings import (
     ModelSettingsTestRequest,
     ModelSettingsTestResult,
     ModelSettingsTestTargetType,
+    Nl2SqlGuardrailPolicyStatusData,
+    Nl2SqlGuardrailSettingsData,
+    Nl2SqlGuardrailSettingsUpdate,
     OciConfigField,
     OciConfigReadData,
     OciConfigReadRequest,
@@ -159,6 +179,9 @@ from app.schemas.settings import (
     RetrievalSettingsData,
     RetrievalSettingsUpdate,
     RetrievalStrategyStatusData,
+    RouterProfileStatusData,
+    RouterSettingsData,
+    RouterSettingsUpdate,
     UploadStorageSettingsData,
     UploadStorageSettingsUpdate,
     VectorIndexProfileStatusData,
@@ -693,6 +716,80 @@ async def update_vector_index_settings(
     _persist_vector_index_settings(candidate)
     settings.rag_vector_index_profile = candidate.rag_vector_index_profile
     return ApiResponse(data=_vector_index_settings_data(settings))
+
+
+@router.get("/nl2sql/router", response_model=ApiResponse[RouterSettingsData])
+async def get_nl2sql_router_settings() -> ApiResponse[RouterSettingsData]:
+    """NL2SQL Router アダプター(ルーティング)の選択と解決内容を返す。"""
+    return ApiResponse(data=_nl2sql_router_settings_data(get_settings()))
+
+
+@router.patch("/nl2sql/router", response_model=ApiResponse[RouterSettingsData])
+async def update_nl2sql_router_settings(
+    payload: RouterSettingsUpdate,
+) -> ApiResponse[RouterSettingsData]:
+    """NL2SQL Router アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    update: dict[str, object] = {"nl2sql_router_profile": normalize_router_profile(payload.profile)}
+    if payload.complexity_threshold is not None:
+        update["nl2sql_router_complexity_threshold"] = payload.complexity_threshold
+    candidate = settings.model_copy(update=update)
+    _persist_nl2sql_router_settings(candidate)
+    settings.nl2sql_router_profile = candidate.nl2sql_router_profile
+    settings.nl2sql_router_complexity_threshold = candidate.nl2sql_router_complexity_threshold
+    return ApiResponse(data=_nl2sql_router_settings_data(settings))
+
+
+@router.get("/nl2sql/guardrail", response_model=ApiResponse[Nl2SqlGuardrailSettingsData])
+async def get_nl2sql_guardrail_settings() -> ApiResponse[Nl2SqlGuardrailSettingsData]:
+    """NL2SQL Guardrail アダプター(SQL 安全)の選択と解決内容を返す。"""
+    return ApiResponse(data=_nl2sql_guardrail_settings_data(get_settings()))
+
+
+@router.patch("/nl2sql/guardrail", response_model=ApiResponse[Nl2SqlGuardrailSettingsData])
+async def update_nl2sql_guardrail_settings(
+    payload: Nl2SqlGuardrailSettingsUpdate,
+) -> ApiResponse[Nl2SqlGuardrailSettingsData]:
+    """NL2SQL Guardrail アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    update: dict[str, object] = {
+        "nl2sql_guardrail_policy": normalize_nl2sql_guardrail_policy(payload.policy)
+    }
+    if payload.max_rows is not None:
+        update["nl2sql_guardrail_max_rows"] = payload.max_rows
+    if payload.run_role is not None:
+        update["nl2sql_guardrail_run_role"] = payload.run_role
+    candidate = settings.model_copy(update=update)
+    _persist_nl2sql_guardrail_settings(candidate)
+    settings.nl2sql_guardrail_policy = candidate.nl2sql_guardrail_policy
+    settings.nl2sql_guardrail_max_rows = candidate.nl2sql_guardrail_max_rows
+    settings.nl2sql_guardrail_run_role = candidate.nl2sql_guardrail_run_role
+    return ApiResponse(data=_nl2sql_guardrail_settings_data(settings))
+
+
+@router.get("/nl2sql/cache", response_model=ApiResponse[CacheSettingsData])
+async def get_nl2sql_cache_settings() -> ApiResponse[CacheSettingsData]:
+    """NL2SQL Cache アダプター(意味キャッシュ)の選択と解決内容を返す。"""
+    return ApiResponse(data=_nl2sql_cache_settings_data(get_settings()))
+
+
+@router.patch("/nl2sql/cache", response_model=ApiResponse[CacheSettingsData])
+async def update_nl2sql_cache_settings(
+    payload: CacheSettingsUpdate,
+) -> ApiResponse[CacheSettingsData]:
+    """NL2SQL Cache アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    update: dict[str, object] = {"nl2sql_cache_policy": normalize_cache_policy(payload.policy)}
+    if payload.similarity_threshold is not None:
+        update["nl2sql_cache_similarity_threshold"] = payload.similarity_threshold
+    if payload.ttl_seconds is not None:
+        update["nl2sql_cache_ttl_seconds"] = payload.ttl_seconds
+    candidate = settings.model_copy(update=update)
+    _persist_nl2sql_cache_settings(candidate)
+    settings.nl2sql_cache_policy = candidate.nl2sql_cache_policy
+    settings.nl2sql_cache_similarity_threshold = candidate.nl2sql_cache_similarity_threshold
+    settings.nl2sql_cache_ttl_seconds = candidate.nl2sql_cache_ttl_seconds
+    return ApiResponse(data=_nl2sql_cache_settings_data(settings))
 
 
 @router.get("/evaluation-suite", response_model=ApiResponse[EvaluationSettingsData])
@@ -2242,6 +2339,119 @@ def _persist_vector_index_settings(settings: Settings) -> None:
         {"RAG_VECTOR_INDEX_PROFILE": settings.rag_vector_index_profile},
         section_comment="# Vector Index アダプター",
         error_detail="Vector Index アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _nl2sql_router_settings_data(settings: Settings) -> RouterSettingsData:
+    """Settings から NL2SQL Router アダプター設定の表示用データを作る。"""
+    runtime = router_adapter_runtime_settings(settings)
+    return RouterSettingsData(
+        profile=runtime.profile,
+        default_generation_backend=runtime.default_generation_backend,
+        complexity_threshold=runtime.complexity_threshold,
+        profiles=[
+            RouterProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_nl2sql_router_settings(settings: Settings) -> None:
+    """NL2SQL Router アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "NL2SQL_ROUTER_PROFILE": settings.nl2sql_router_profile,
+            "NL2SQL_ROUTER_COMPLEXITY_THRESHOLD": str(settings.nl2sql_router_complexity_threshold),
+        },
+        section_comment="# NL2SQL Router アダプター",
+        error_detail="NL2SQL Router アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _nl2sql_guardrail_settings_data(settings: Settings) -> Nl2SqlGuardrailSettingsData:
+    """Settings から NL2SQL Guardrail アダプター設定の表示用データを作る。"""
+    runtime = nl2sql_guardrail_runtime_settings(settings)
+    return Nl2SqlGuardrailSettingsData(
+        policy=runtime.policy,
+        enforce_read_only=runtime.enforce_read_only,
+        max_rows=runtime.max_rows,
+        require_object_allowlist=runtime.require_object_allowlist,
+        semantic_verify=runtime.semantic_verify,
+        run_role=runtime.run_role,
+        policies=[
+            Nl2SqlGuardrailPolicyStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                enforce_read_only=status.enforce_read_only,
+                require_object_allowlist=status.require_object_allowlist,
+                semantic_verify=status.semantic_verify,
+            )
+            for status in runtime.policies
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_nl2sql_guardrail_settings(settings: Settings) -> None:
+    """NL2SQL Guardrail アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "NL2SQL_GUARDRAIL_POLICY": settings.nl2sql_guardrail_policy,
+            "NL2SQL_GUARDRAIL_MAX_ROWS": str(settings.nl2sql_guardrail_max_rows),
+            "NL2SQL_GUARDRAIL_RUN_ROLE": settings.nl2sql_guardrail_run_role,
+        },
+        section_comment="# NL2SQL Guardrail アダプター",
+        error_detail="NL2SQL Guardrail アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _nl2sql_cache_settings_data(settings: Settings) -> CacheSettingsData:
+    """Settings から NL2SQL Cache アダプター設定の表示用データを作る。"""
+    runtime = cache_adapter_runtime_settings(settings)
+    return CacheSettingsData(
+        policy=runtime.policy,
+        cache_nl_to_sql=runtime.cache_nl_to_sql,
+        cache_nl_to_result=runtime.cache_nl_to_result,
+        cache_sql_to_result=runtime.cache_sql_to_result,
+        similarity_threshold=runtime.similarity_threshold,
+        ttl_seconds=runtime.ttl_seconds,
+        policies=[
+            CachePolicyStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                cache_nl_to_sql=status.cache_nl_to_sql,
+                cache_nl_to_result=status.cache_nl_to_result,
+                cache_sql_to_result=status.cache_sql_to_result,
+            )
+            for status in runtime.policies
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_nl2sql_cache_settings(settings: Settings) -> None:
+    """NL2SQL Cache アダプター設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "NL2SQL_CACHE_POLICY": settings.nl2sql_cache_policy,
+            "NL2SQL_CACHE_SIMILARITY_THRESHOLD": str(settings.nl2sql_cache_similarity_threshold),
+            "NL2SQL_CACHE_TTL_SECONDS": str(settings.nl2sql_cache_ttl_seconds),
+        },
+        section_comment="# NL2SQL Cache アダプター",
+        error_detail="NL2SQL Cache アダプター設定を backend/.env へ保存できませんでした。",
     )
 
 

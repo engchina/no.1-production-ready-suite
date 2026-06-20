@@ -117,6 +117,17 @@ AgenticProfile = Literal[
     "multi_hop",
 ]
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
+# --- NL2SQL パイプラインアダプター(Select AI 中核)---
+# ルーティング(profile 自動選択 / 複雑度で単段↔多段)。off=現行(ルーティングなし)。
+Nl2SqlRouterProfile = Literal["off", "classifier", "complexity_aware"]
+# SQL 安全ポリシー。read_only(既定)は SELECT のみ、strict は object allowlist+row limit+
+# semantic_verify、sandboxed は専用低権限ロール実行。
+Nl2SqlGuardrailPolicy = Literal["read_only", "strict", "sandboxed"]
+# 意味キャッシュ。off(既定)/ nl_sql / nl_result / sql_result。
+Nl2SqlCachePolicy = Literal["off", "nl_sql", "nl_result", "sql_result"]
+# 生成バックエンド(Generation)。select_ai_agent(既定・RUN_TEAM)/ select_ai(GENERATE)/
+# app_enterprise_ai(アプリ側オーケストレーション)。
+Nl2SqlGenerationBackend = Literal["select_ai_agent", "select_ai", "app_enterprise_ai"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
@@ -810,6 +821,104 @@ class Settings(BaseSettings):
             "fast は低レイテンシ(85)へ検索時 target accuracy を上書きする。"
             "推奨 HNSW ビルドパラメータは設定画面に表示し、適用には索引再作成が必要。"
         ),
+    )
+    # --- NL2SQL パイプラインアダプター(Select AI 中核)---
+    nl2sql_generation_backend: Nl2SqlGenerationBackend = Field(
+        default="select_ai_agent",
+        description=(
+            "SQL 生成バックエンド。select_ai_agent(既定)は DBMS_CLOUD_AI_AGENT.RUN_TEAM、"
+            "select_ai は SET_PROFILE→DBMS_CLOUD_AI.GENERATE、app_enterprise_ai はアプリ側"
+            "オーケストレーション。確定スタックは不変(別 LLM provider は不採用)。"
+        ),
+    )
+    nl2sql_router_profile: Nl2SqlRouterProfile = Field(
+        default="off",
+        description=(
+            "ルーティングの Router アダプター。off(既定)は固定 profile/backend、"
+            "classifier は質問埋め込み+決定論分類器で profile を自動選択、complexity_aware は"
+            "複雑度で select_ai(単段)↔select_ai_agent(多段)を振り分ける(コスト最適化)。"
+        ),
+    )
+    nl2sql_router_complexity_threshold: int = Field(
+        default=2,
+        ge=1,
+        le=6,
+        description="complexity_aware で多段(select_ai_agent)へ切替える複雑度シグナル数の閾値。",
+    )
+    nl2sql_guardrail_policy: Nl2SqlGuardrailPolicy = Field(
+        default="read_only",
+        description=(
+            "SQL ガードレールの Guardrail アダプター。read_only(既定)は SELECT のみ許可し"
+            "DDL/DML/複文をブロック、strict は object allowlist+row limit+EXPLAIN+semantic_verify、"
+            "sandboxed は専用低権限ロールで実行。実行前の人手承認ゲートは必須。"
+        ),
+    )
+    nl2sql_guardrail_max_rows: int = Field(
+        default=1000,
+        ge=1,
+        le=1_000_000,
+        description="strict/sandboxed で許可する最大取得行数(row limit)。",
+    )
+    nl2sql_guardrail_run_role: str = Field(
+        default="",
+        description="sandboxed で実行に用いる専用低権限 DB ロール名(空欄は接続ユーザのまま)。",
+    )
+    nl2sql_cache_policy: Nl2SqlCachePolicy = Field(
+        default="off",
+        description=(
+            "意味キャッシュの Cache アダプター。off(既定)/ nl_sql(NL→SQL)/ nl_result(NL→結果)"
+            "/ sql_result(SQL→結果)。NL 類似は Oracle 26ai ベクトル検索(Cohere 埋め込み)で判定。"
+        ),
+    )
+    nl2sql_cache_similarity_threshold: float = Field(
+        default=0.95,
+        ge=0.0,
+        le=1.0,
+        description="NL 類似キャッシュをヒット扱いにする cosine 類似度の下限(0.0–1.0)。",
+    )
+    nl2sql_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=0,
+        le=86_400,
+        description="キャッシュエントリの TTL 秒(0 は無期限)。鮮度要件で調整する。",
+    )
+    # --- Select AI プロビジョニング(credential/profile/tool/agent/task/team)---
+    select_ai_model: str = Field(
+        default="",
+        description="Select AI profile の model 名(空欄は未設定。region 非対応時は fallback)。",
+    )
+    select_ai_oci_endpoint_id: str = Field(
+        default="",
+        description=(
+            "Select AI profile の oci_endpoint_id。OCI Enterprise AI / 専用エンドポイントを指す"
+            "(モデルの頭脳を Enterprise AI に寄せる)。空欄は profile attributes へ含めない。"
+        ),
+    )
+    select_ai_region: str = Field(
+        default="",
+        description="Select AI profile の region(空欄は OCI 設定の region を使う)。",
+    )
+    select_ai_embedding_model: str = Field(
+        default="cohere.embed-v4.0",
+        description="Select AI RAG / 類似例検索に使う埋め込みモデル(OCI GenAI Cohere)。",
+    )
+    select_ai_credential_name: str = Field(
+        default="",
+        description="Select AI profile が使う既存 credential 名(空欄は決定論命名を生成)。",
+    )
+    select_ai_response_language: str = Field(
+        default="日本語",
+        description="Select AI Agent task の応答言語(既定 日本語)。",
+    )
+    select_ai_max_tokens: int = Field(
+        default=0,
+        ge=0,
+        le=128_000,
+        description="Select AI profile の max_tokens(0 は profile attributes へ含めない)。",
+    )
+    select_ai_api_format: str = Field(
+        default="",
+        description="Select AI profile の oci_apiformat(空欄は含めない。例: COHERE / GENERIC)。",
     )
     # --- 前処理(Preprocess)ステージ(parse の前の原本変換)---
     rag_preprocess_profile: PreprocessProfile = Field(
