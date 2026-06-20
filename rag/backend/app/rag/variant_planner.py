@@ -18,6 +18,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.config import Settings
+from app.rag.kb_adapter_config import (
+    KnowledgeBaseAdapterConfig,
+    apply_adapter_config_or_global,
+)
 from app.rag.variant_keys import compute_layer_ids
 
 
@@ -83,6 +87,27 @@ def plan_materializations(
         graph_layers=_freeze(graph_layers),
         nav_layers=_freeze(nav_layers),
     )
+
+
+def plan_document_materializations(
+    source_sha256: str,
+    global_settings: Settings,
+    kb_configs: Mapping[str, KnowledgeBaseAdapterConfig],
+) -> MaterializationPlan:
+    """文書の所属 KB 群とその KB アダプター設定から materialization 計画を作る。
+
+    取込入口が呼ぶ想定の橋渡し。各 KB の取込上書きを ``apply_adapter_config_or_global``
+    でグローバルへ重ねて effective 取込設定を求め(=取込パイプラインが使うのと同じ
+    解決)、:func:`plan_materializations` に渡す。同じ effective 設定に解決される KB は
+    同じ層を共有する(複製ゼロ)。設定が矛盾する KB はグローバルへ安全縮退する。
+    """
+    consumers: dict[str, Settings] = {}
+    for kb_id, config in kb_configs.items():
+        effective, _applied = apply_adapter_config_or_global(
+            global_settings, config, scope="ingestion"
+        )
+        consumers[kb_id] = effective
+    return plan_materializations(source_sha256, consumers)
 
 
 def diff_plan(existing_ids: frozenset[str], plan: MaterializationPlan) -> MaterializationDiff:
