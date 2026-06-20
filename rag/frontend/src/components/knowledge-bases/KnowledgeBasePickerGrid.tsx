@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, Database, Search, X } from "lucide-react";
+import { Check, ChevronDown, Database, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -177,7 +177,7 @@ export function KnowledgeBasePickerGrid({
     open && filtered[activeIndex] ? `${listId}-opt-${filtered[activeIndex].id}` : undefined;
 
   return (
-    <div ref={rootRef} className="space-y-1.5">
+    <div ref={rootRef} className="max-w-2xl space-y-1.5">
       {/* トリガー: 選択済みチップ + 検索入力 */}
       <div
         className={cn(
@@ -206,7 +206,7 @@ export function KnowledgeBasePickerGrid({
               }}
               disabled={disabled}
               aria-label={t("knowledgeBasePicker.removeChip", { name: kb.name })}
-              className="shrink-0 rounded-sm text-muted transition-colors hover:text-foreground disabled:cursor-not-allowed"
+              className="relative shrink-0 rounded-sm p-0.5 text-muted transition-colors before:absolute before:-inset-2 before:content-[''] hover:text-foreground disabled:cursor-not-allowed"
             >
               <X size={12} aria-hidden />
             </button>
@@ -243,7 +243,7 @@ export function KnowledgeBasePickerGrid({
           }}
           disabled={disabled}
           aria-label={t("knowledgeBasePicker.toggleListAria")}
-          className="shrink-0 rounded-sm p-0.5 text-muted transition-colors hover:text-foreground disabled:cursor-not-allowed"
+          className="relative shrink-0 rounded-sm p-1 text-muted transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground disabled:cursor-not-allowed"
         >
           <ChevronDown
             size={16}
@@ -258,8 +258,7 @@ export function KnowledgeBasePickerGrid({
         <div className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
           {showEmptyToggle ? (
             <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-              <span className="flex items-center gap-1.5 text-xs text-muted">
-                <Search size={12} aria-hidden />
+              <span className="text-xs text-muted">
                 {t("knowledgeBasePicker.count", {
                   shown: filtered.length,
                   total: items.length,
@@ -304,7 +303,7 @@ export function KnowledgeBasePickerGrid({
                     }}
                     onMouseEnter={() => setActiveIndex(index)}
                     className={cn(
-                      "flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm",
+                      "flex min-h-[44px] cursor-pointer items-center gap-2.5 px-3 py-2 text-sm",
                       isActive && "bg-info-bg/60",
                       isSelected && "bg-info-bg/40"
                     )}
