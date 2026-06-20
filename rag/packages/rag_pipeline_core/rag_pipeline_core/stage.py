@@ -96,3 +96,17 @@ class GraphStageResponse(BaseModel):
     build_claims: bool
     build_community_summary: bool
     temporal: bool
+
+
+class GenerationStageRequest(BaseModel):
+    """``POST /run``(generation)の入力。profile のみ(custom/override は backend)。"""
+
+    profile: str = "grounded_concise"
+
+
+class GenerationStageResponse(BaseModel):
+    """``POST /run``(generation)の出力(静的 system prompt + 構造化出力フラグ)。"""
+
+    profile: str
+    system_prompt: str | None = None
+    structured_output: bool = False

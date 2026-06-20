@@ -73,6 +73,7 @@ GenerationProfile = Literal[
     "strict_extractive",
     "structured_json",
     "bilingual_ja_en",
+    "inline_cited",
     "custom",
 ]
 GuardrailPolicyName = Literal[
@@ -992,6 +993,18 @@ class Settings(BaseSettings):
         default="http://pipeline-graphrag:8000",
         description="graphrag ステージマイクロサービスの base URL。",
     )
+    rag_generation_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "generation の system prompt 解決を generation マイクロサービスへ委譲する。OFF(既定)は "
+            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。custom/persona "
+            "override は backend 側で上乗せする。"
+        ),
+    )
+    rag_generation_service_url: str = Field(
+        default="http://pipeline-generation:8000",
+        description="generation ステージマイクロサービスの base URL。",
+    )
     rag_graph_temporal_enabled: bool = Field(
         default=False,
         description=(
@@ -1002,8 +1015,8 @@ class Settings(BaseSettings):
     rag_raptor_enabled: bool = Field(
         default=False,
         description=(
-            "RAPTOR 再帰要約索引: chunking 後に leaf chunk を再帰 cluster + OCI Enterprise AI 要約し、"
-            "多層级 summary node を leaf と一緒に索引する。OFF(既定)は leaf のみ(現行挙動)。"
+            "RAPTOR 再帰要約索引: chunking 後に leaf chunk を再帰 cluster + OCI Enterprise AI で"
+            "要約し、多層级 summary node を leaf と一緒に索引する。OFF(既定)は leaf のみ。"
             "追加 LLM 呼び出しを伴う opt-in。要約失敗時は leaf のみへ安全縮退する。"
         ),
     )

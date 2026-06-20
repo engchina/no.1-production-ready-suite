@@ -234,6 +234,12 @@ services:
       dockerfile: services/pipeline/graphrag/Dockerfile
     restart: unless-stopped
 
+  pipeline-generation:
+    build:
+      context: .
+      dockerfile: services/pipeline/generation/Dockerfile
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     environment:

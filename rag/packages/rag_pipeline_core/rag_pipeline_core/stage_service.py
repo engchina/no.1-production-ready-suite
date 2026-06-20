@@ -11,10 +11,13 @@ from collections.abc import Callable
 from fastapi import FastAPI
 
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
+from rag_pipeline_core.generation import resolve_generation
 from rag_pipeline_core.graph import resolve_graph_profile
 from rag_pipeline_core.stage import (
     ChunkingStageRequest,
     ChunkingStageResponse,
+    GenerationStageRequest,
+    GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
     StageHealth,
@@ -82,6 +85,28 @@ def create_graph_app(
             build_claims=resolved.build_claims,
             build_community_summary=resolved.build_community_summary,
             temporal=resolved.temporal,
+        )
+
+    return app
+
+
+def create_generation_app(
+    *, health_probe: HealthProbe | None = None, title: str = "pipeline-generation"
+) -> FastAPI:
+    """generation ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
+    app = FastAPI(title=title)
+    probe = health_probe or (
+        lambda: StageHealth(status="ok", stage="generation", package_name="rag_pipeline_core")
+    )
+    _health_routes(app, probe)
+
+    @app.post("/run", response_model=GenerationStageResponse)
+    def run(request: GenerationStageRequest) -> GenerationStageResponse:
+        resolved = resolve_generation(request.profile)
+        return GenerationStageResponse(
+            profile=resolved.profile,
+            system_prompt=resolved.system_prompt,
+            structured_output=resolved.structured_output,
         )
 
     return app

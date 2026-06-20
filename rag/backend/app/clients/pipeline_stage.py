@@ -16,6 +16,8 @@ import httpx
 from rag_pipeline_core.stage import (
     ChunkingStageRequest,
     ChunkingStageResponse,
+    GenerationStageRequest,
+    GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
     VectorIndexStageRequest,
@@ -32,11 +34,13 @@ _STAGE_URL_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_url",
     "vector_index": "rag_vector_index_service_url",
     "graphrag": "rag_graph_service_url",
+    "generation": "rag_generation_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_enabled",
     "vector_index": "rag_vector_index_service_enabled",
     "graphrag": "rag_graph_service_enabled",
+    "generation": "rag_generation_service_enabled",
 }
 
 
@@ -121,6 +125,18 @@ class PipelineStageClient:
             return None
         try:
             return GraphStageResponse.model_validate(payload)
+        except ValueError:
+            return None
+
+    def run_generation(
+        self, request: GenerationStageRequest
+    ) -> GenerationStageResponse | None:
+        """generation ステージ(静的 prompt 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        payload = self._post_run("generation", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            return GenerationStageResponse.model_validate(payload)
         except ValueError:
             return None
 

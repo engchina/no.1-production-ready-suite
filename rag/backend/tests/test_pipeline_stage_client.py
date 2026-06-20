@@ -187,3 +187,36 @@ def test_vector_index_adapter_falls_back_when_disabled() -> None:
     # 既定(service 無効)は in-process 解決(現行挙動)。
     params = resolve_vector_index_adapter(Settings(rag_vector_index_profile="accurate"))
     assert params.profile == "accurate" and params.target_accuracy == 98
+
+
+def test_run_generation_remote(monkeypatch: MonkeyPatch) -> None:
+    _fake_post(
+        monkeypatch,
+        {"profile": "inline_cited", "system_prompt": "逐句付与", "structured_output": False},
+    )
+    from rag_pipeline_core.stage import GenerationStageRequest
+
+    client = PipelineStageClient(
+        Settings(rag_generation_service_enabled=True, rag_generation_service_url="http://svc")
+    )
+    res = client.run_generation(GenerationStageRequest(profile="inline_cited"))
+    assert res is not None and res.system_prompt == "逐句付与"
+
+
+def test_generation_adapter_override_beats_service(monkeypatch: MonkeyPatch) -> None:
+    from app.rag.generation_adapter import resolve_generation_adapter
+
+    _fake_post(
+        monkeypatch,
+        {"profile": "inline_cited", "system_prompt": "service prompt", "structured_output": False},
+    )
+    settings = Settings(
+        rag_generation_profile="inline_cited",
+        rag_generation_service_enabled=True,
+        rag_generation_service_url="http://svc",
+        rag_generation_system_prompt_override="persona override",
+    )
+    params = resolve_generation_adapter(settings)
+    # persona override は service 解決より優先。
+    assert params.system_prompt == "persona override"
+    assert params.profile == "inline_cited"
