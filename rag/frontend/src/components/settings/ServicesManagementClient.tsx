@@ -71,6 +71,24 @@ export function ServicesManagementClient() {
   const preprocess = data.services.filter((s) => s.category === "preprocess");
   const parserCpu = data.services.filter((s) => s.category === "parser" && s.profile === "cpu");
   const parserGpu = data.services.filter((s) => s.category === "parser" && s.profile === "gpu");
+  // RAG パイプライン各ステージのプラグイン(前処理/Parser 以外)をパイプライン順に並べる。
+  const pipelineStageOrder = [
+    "chunking",
+    "vector_index",
+    "retrieval",
+    "grounding",
+    "generation",
+    "guardrail",
+    "evaluation",
+    "graphrag",
+    "agentic",
+  ];
+  const pipelineStages = data.services
+    .filter((s) => pipelineStageOrder.includes(s.category))
+    .sort(
+      (a, b) =>
+        pipelineStageOrder.indexOf(a.category) - pipelineStageOrder.indexOf(b.category)
+    );
 
   async function act(service: ServiceStatusData, action: "start" | "stop") {
     if (action === "stop") {
@@ -191,6 +209,14 @@ export function ServicesManagementClient() {
         title={t("settings.services.group.parserGpu")}
         note={t("settings.services.gpuNote")}
         services={parserGpu}
+        controlEnabled={controlEnabled}
+        pending={pending}
+        onAct={act}
+      />
+      <ServiceGroup
+        title={t("settings.services.group.pipeline")}
+        note={t("settings.services.pipelineNote")}
+        services={pipelineStages}
         controlEnabled={controlEnabled}
         pending={pending}
         onAct={act}
