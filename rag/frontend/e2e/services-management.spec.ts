@@ -140,13 +140,25 @@ for (const viewport of [
     await page.goto("/settings/services");
 
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
-    await expect(page.getByText("前処理サービス", { exact: true })).toBeVisible();
-    await expect(page.getByText("Parser サービス(CPU)", { exact: true })).toBeVisible();
-    await expect(page.getByText("Parser サービス(GPU)", { exact: true })).toBeVisible();
-    // RAG パイプライン ステージ群(chunking/retrieval 等のプラグイン)。
-    await expect(page.getByText("RAG パイプライン ステージ", { exact: true })).toBeVisible();
-    await expect(page.getByText("Chunking(分割)", { exact: true })).toBeVisible();
-    await expect(page.getByText("Retrieval(検索)", { exact: true })).toBeVisible();
+    // セクション見出しは RAG パイプライン順(前処理→解析→分割→…)で表示。
+    // ラベルはサイドナビと統一しているため heading role で限定する。
+    await expect(
+      page.getByRole("heading", { name: "前処理 (Preprocess)", exact: true })
+    ).toBeVisible();
+    // 解析は CPU/GPU 両方あるため Parser と同様に分割。
+    await expect(
+      page.getByRole("heading", { name: "解析 (Parser)(CPU)", exact: true })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "解析 (Parser)(GPU)", exact: true })
+    ).toBeVisible();
+    // 単一プロファイルのステージは接尾辞なし。
+    await expect(
+      page.getByRole("heading", { name: "分割 (Chunking)", exact: true })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "検索 (Retrieval)", exact: true })
+    ).toBeVisible();
     // 稼働状態バッジ。
     await expect(page.getByText("稼働中").first()).toBeVisible();
     await expect(page.getByText("停止").first()).toBeVisible();

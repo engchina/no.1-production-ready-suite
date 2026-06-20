@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -68,27 +68,28 @@ export function ServicesManagementClient() {
 
   const controlEnabled = data.control_enabled;
   const deploymentMode = data.deployment_mode;
-  const preprocess = data.services.filter((s) => s.category === "preprocess");
-  const parserCpu = data.services.filter((s) => s.category === "parser" && s.profile === "cpu");
-  const parserGpu = data.services.filter((s) => s.category === "parser" && s.profile === "gpu");
-  // RAG パイプライン各ステージのプラグイン(前処理/Parser 以外)をパイプライン順に並べる。
-  const pipelineStageOrder = [
-    "chunking",
-    "vector_index",
-    "retrieval",
-    "grounding",
-    "generation",
-    "guardrail",
-    "evaluation",
-    "graphrag",
-    "agentic",
+  // サービス管理ページのセクションは RAG パイプライン順(サイドナビと一致)で表示する。
+  // 各ステージは CPU/GPU の両方がある場合のみ Parser と同様に CPU/GPU へ分割する。
+  const PIPELINE_STAGE_ORDER: { category: string; labelKey: I18nKey }[] = [
+    { category: "preprocess", labelKey: "settings.services.stage.preprocess" },
+    { category: "parser", labelKey: "settings.services.stage.parser" },
+    { category: "chunking", labelKey: "settings.services.stage.chunking" },
+    { category: "vector_index", labelKey: "settings.services.stage.vectorIndex" },
+    { category: "retrieval", labelKey: "settings.services.stage.retrieval" },
+    { category: "grounding", labelKey: "settings.services.stage.grounding" },
+    { category: "generation", labelKey: "settings.services.stage.generation" },
+    { category: "guardrail", labelKey: "settings.services.stage.guardrail" },
+    { category: "evaluation", labelKey: "settings.services.stage.evaluation" },
+    { category: "graphrag", labelKey: "settings.services.stage.graphrag" },
+    { category: "agentic", labelKey: "settings.services.stage.agentic" },
   ];
-  const pipelineStages = data.services
-    .filter((s) => pipelineStageOrder.includes(s.category))
-    .sort(
-      (a, b) =>
-        pipelineStageOrder.indexOf(a.category) - pipelineStageOrder.indexOf(b.category)
-    );
+  const stageGroups = PIPELINE_STAGE_ORDER.map(({ category, labelKey }) => {
+    const label = t(labelKey);
+    const cpu = data.services.filter((s) => s.category === category && s.profile === "cpu");
+    const gpu = data.services.filter((s) => s.category === category && s.profile === "gpu");
+    const hasBoth = cpu.length > 0 && gpu.length > 0;
+    return { category, label, cpu, gpu, hasBoth };
+  });
 
   async function act(service: ServiceStatusData, action: "start" | "stop") {
     if (action === "stop") {
@@ -191,36 +192,47 @@ export function ServicesManagementClient() {
         </CardContent>
       </Card>
 
-      <ServiceGroup
-        title={t("settings.services.group.preprocess")}
-        services={preprocess}
-        controlEnabled={controlEnabled}
-        pending={pending}
-        onAct={act}
-      />
-      <ServiceGroup
-        title={t("settings.services.group.parserCpu")}
-        services={parserCpu}
-        controlEnabled={controlEnabled}
-        pending={pending}
-        onAct={act}
-      />
-      <ServiceGroup
-        title={t("settings.services.group.parserGpu")}
-        note={t("settings.services.gpuNote")}
-        services={parserGpu}
-        controlEnabled={controlEnabled}
-        pending={pending}
-        onAct={act}
-      />
-      <ServiceGroup
-        title={t("settings.services.group.pipeline")}
-        note={t("settings.services.pipelineNote")}
-        services={pipelineStages}
-        controlEnabled={controlEnabled}
-        pending={pending}
-        onAct={act}
-      />
+      {stageGroups.map((stage) =>
+        stage.hasBoth ? (
+          // CPU/GPU 両方ある場合は Parser と同様に分割する。
+          <Fragment key={stage.category}>
+            <ServiceGroup
+              title={t("settings.services.cpuSuffix", { stage: stage.label })}
+              services={stage.cpu}
+              controlEnabled={controlEnabled}
+              pending={pending}
+              onAct={act}
+            />
+            <ServiceGroup
+              title={t("settings.services.gpuSuffix", { stage: stage.label })}
+              note={t("settings.services.gpuNote")}
+              services={stage.gpu}
+              controlEnabled={controlEnabled}
+              pending={pending}
+              onAct={act}
+            />
+          </Fragment>
+        ) : stage.gpu.length > 0 ? (
+          <ServiceGroup
+            key={stage.category}
+            title={t("settings.services.gpuSuffix", { stage: stage.label })}
+            note={t("settings.services.gpuNote")}
+            services={stage.gpu}
+            controlEnabled={controlEnabled}
+            pending={pending}
+            onAct={act}
+          />
+        ) : (
+          <ServiceGroup
+            key={stage.category}
+            title={stage.label}
+            services={stage.cpu}
+            controlEnabled={controlEnabled}
+            pending={pending}
+            onAct={act}
+          />
+        )
+      )}
     </div>
   );
 }
