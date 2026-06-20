@@ -106,18 +106,19 @@ class ParserServiceClient:
         *,
         content_type: str,
         document_id: str,
+        prompt: str = "",
     ) -> ParserRegistryResult:
         """OCI クラウド service 系 backend を microservice へ HTTP 委譲する。
 
-        ``runner`` と異なり source_profile 不要で document_id を渡す(OCI 入力 object 名の
-        一意化用)。未到達/失敗/未設定時は extraction=None の fallback を返し、呼び出し側で
-        既存 in-process フローへ安全に縮退させる。
+        ``runner`` と異なり source_profile 不要で document_id(OCI 入力 object 名の一意化用)
+        と prompt(VLM 抽出指示)を渡す。未到達/失敗/未設定時は extraction=None の fallback を
+        返し、呼び出し側で既存 in-process フローへ安全に縮退させる。
         """
         url = self.service_url(backend)
         if url is None:
             return _fallback(backend, f"{backend}_adapter_service_unconfigured")
         files = {"file": ("upload", source_bytes, content_type or "application/octet-stream")}
-        data = {"content_type": content_type, "document_id": document_id}
+        data = {"content_type": content_type, "document_id": document_id, "prompt": prompt}
         try:
             with httpx.Client(timeout=self._timeout) as client:
                 response = client.post(f"{url}/parse", files=files, data=data)

@@ -29,8 +29,9 @@ async def _parse(
     content_type: str,
     source_profile: SourceProfile | None,
     document_id: str,
+    prompt: str,
 ) -> ParseResponse:
-    _ = source_profile  # 入力 object 名は document_id を使う
+    _ = (source_profile, prompt)  # 入力 object 名は document_id を使う。DU は prompt 不要。
     payload = await _service().analyze(
         source_bytes, content_type=content_type, document_id=document_id
     )

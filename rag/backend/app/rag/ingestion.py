@@ -1444,7 +1444,20 @@ class IngestionPipeline:
             if extracted is None:
                 return None
             return _validate_structured_extraction_payload(extracted)
-        # oci_genai_vision(旧 enterprise_ai_vlm): fallback ではなく明示選択 → 直接 VLM 抽出。
+        # oci_genai_vision(旧 enterprise_ai_vlm): まず parser microservice へ HTTP 委譲
+        # (単一 VLM 呼び出し)。未到達/未設定/失敗(大規模 PDF の token 超過等を含む)時は、
+        # PDF 分割込みの in-process VLM へ安全縮退する(分割/checkpoint は backend に残す)。
+        await _raise_if_cancelled(cancel_checker)
+        service_result = await asyncio.to_thread(
+            self._parser_service.run_service_backend,
+            "oci_genai_vision",
+            source_bytes,
+            content_type=content_type,
+            document_id=document_id,
+            prompt=prompt,
+        )
+        if service_result.extraction is not None:
+            return service_result.extraction
         extracted = await self._extract_with_vlm(
             trace_id=trace_id,
             document_id=document_id,
