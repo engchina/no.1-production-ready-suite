@@ -169,15 +169,12 @@ def _ingestion_quality(
         quality_report = (
             normalized.quality_report
             if normalized is not None and normalized.quality_report is not None
-            else build_ingestion_quality_report(normalized)
-            if normalized is not None
-            else None
+            else build_ingestion_quality_report(normalized) if normalized is not None else None
         )
         if (
             normalized is not None
             and quality_report is not None
-            and "segment_extraction_artifact_cache_miss"
-            in quality_report.quality_warnings
+            and "segment_extraction_artifact_cache_miss" in quality_report.quality_warnings
         ):
             segment_artifact_cache_miss_document_count += 1
         elements = normalized.elements if normalized is not None else []

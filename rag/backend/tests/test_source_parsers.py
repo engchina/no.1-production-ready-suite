@@ -318,9 +318,7 @@ Page 2
         element for element in result.extraction.elements if element.content_kind == "table"
     ]
     assert len(table_elements) == 2
-    assert {element.metadata["table_id"] for element in table_elements} == {
-        "inferred-table-0001"
-    }
+    assert {element.metadata["table_id"] for element in table_elements} == {"inferred-table-0001"}
     assert [element.page_number for element in table_elements] == [1, 2]
     assert all(element.metadata["table_cross_page"] is True for element in table_elements)
     assert len(result.extraction.tables) == 2
@@ -331,9 +329,7 @@ Page 2
         for chunk in chunk_extraction(result.extraction, chunk_size=80, overlap=0)
         if chunk.metadata["content_kind"] == "table"
     ]
-    assert {chunk.metadata["table_id"] for chunk in table_chunks} == {
-        "inferred-table-0001"
-    }
+    assert {chunk.metadata["table_id"] for chunk in table_chunks} == {"inferred-table-0001"}
     assert all(chunk.metadata["table_cross_page"] is True for chunk in table_chunks)
 
 
@@ -964,9 +960,7 @@ def test_parser_registry_preserves_xlsx_formula_lineage() -> None:
     assert formula_cell.metadata["formula"] == "SUM(A2:A2)"
     assert formula_cell.metadata["formula_value"] == "1200"
     formula = next(
-        element
-        for element in result.extraction.elements
-        if element.content_kind == "equation"
+        element for element in result.extraction.elements if element.content_kind == "equation"
     )
     assert formula.kind == "equation"
     assert formula.text == "B2 = SUM(A2:A2) (値: 1200)"
@@ -974,18 +968,12 @@ def test_parser_registry_preserves_xlsx_formula_lineage() -> None:
     assert formula.metadata["equation_format"] == "excel_formula"
     assert formula.metadata["formula_cell_ref"] == "B2"
     chunks = chunk_extraction(result.extraction, chunk_size=120, overlap=0)
-    table_chunk = next(
-        chunk for chunk in chunks if chunk.metadata["content_kind"] == "table"
-    )
+    table_chunk = next(chunk for chunk in chunks if chunk.metadata["content_kind"] == "table")
     assert table_chunk.metadata["formula_count"] == 1
     assert table_chunk.metadata["formula_cell_count"] == 1
     assert table_chunk.metadata["formula_cell_refs"] == "B2"
     assert "B2=SUM(A2:A2)" in str(table_chunk.metadata["formula_cells"])
-    formula_chunk = next(
-        chunk
-        for chunk in chunks
-        if chunk.metadata["content_kind"] == "equation"
-    )
+    formula_chunk = next(chunk for chunk in chunks if chunk.metadata["content_kind"] == "equation")
     assert formula_chunk.metadata["equation_format"] == "excel_formula"
     assert formula_chunk.metadata["formula_count"] == 1
     assert formula_chunk.metadata["formula_cell_count"] == 1
@@ -1739,8 +1727,7 @@ def test_docling_adapter_recursively_flattens_nested_page_blocks(
     ]
     assert {element.page_number for element in result.extraction.elements} == {2}
     assert all(
-        element.section_path == ["管理ガイド", "検索"]
-        for element in result.extraction.elements
+        element.section_path == ["管理ガイド", "検索"] for element in result.extraction.elements
     )
     table = result.extraction.tables[0]
     assert table.page_number == 2
@@ -2231,7 +2218,8 @@ def test_parser_registry_uses_unstructured_adapter_elements(
         (1, 1, "1"),
     ]
     table_chunk = next(
-        chunk for chunk in chunk_extraction(result.extraction, chunk_size=80, overlap=0)
+        chunk
+        for chunk in chunk_extraction(result.extraction, chunk_size=80, overlap=0)
         if chunk.metadata["content_kind"] == "table"
     )
     assert table_chunk.metadata["table_id"] == "table-1"
@@ -3089,8 +3077,7 @@ def test_parser_registry_uses_adapter_metadata_text_as_html_table(
     assert element.metadata["table_source"] == "adapter_cells"
     table = result.extraction.tables[0]
     cell_shapes = [
-        (cell.row, cell.col, cell.text, cell.row_span, cell.col_span)
-        for cell in table.cells
+        (cell.row, cell.col, cell.text, cell.row_span, cell.col_span) for cell in table.cells
     ]
     assert cell_shapes == [
         (0, 0, "地域", 1, 1),
@@ -3343,11 +3330,7 @@ def _pptx_table_bytes(rows: list[list[str]]) -> bytes:
     table_rows = []
     for row in rows:
         cells = "".join(
-            (
-                "<a:tc><a:txBody><a:p><a:r>"
-                f"<a:t>{value}</a:t>"
-                "</a:r></a:p></a:txBody></a:tc>"
-            )
+            ("<a:tc><a:txBody><a:p><a:r>" f"<a:t>{value}</a:t>" "</a:r></a:p></a:txBody></a:tc>")
             for value in row
         )
         table_rows.append(f"<a:tr>{cells}</a:tr>")
@@ -3379,9 +3362,7 @@ def _xlsx_table_bytes(rows: list[list[str]]) -> bytes:
         {
             "xl/sharedStrings.xml": shared,
             "xl/worksheets/sheet1.xml": (
-                "<worksheet><sheetData>"
-                + "".join(worksheet_rows)
-                + "</sheetData></worksheet>"
+                "<worksheet><sheetData>" + "".join(worksheet_rows) + "</sheetData></worksheet>"
             ),
         }
     )

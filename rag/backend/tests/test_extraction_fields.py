@@ -103,9 +103,7 @@ def test_field_schema_store_save_load_round_trip() -> None:
 
 def test_field_schema_rejects_duplicate_names() -> None:
     with pytest.raises(ValueError, match="重複"):
-        fields_mod.save_field_schema(
-            [FieldDefinition(name="a"), FieldDefinition(name="A")]
-        )
+        fields_mod.save_field_schema([FieldDefinition(name="a"), FieldDefinition(name="A")])
 
 
 def test_field_round_trips_through_document_payload_only_when_present() -> None:

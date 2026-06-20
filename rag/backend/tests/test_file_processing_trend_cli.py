@@ -82,9 +82,10 @@ def test_file_processing_trend_cli_fails_on_core_metric_regression(
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["passed"] is False
-    assert {
-        regression["metric"] for regression in payload["regressions"]
-    } == {"table_qa_accuracy", "parser_fallback_rate"}
+    assert {regression["metric"] for regression in payload["regressions"]} == {
+        "table_qa_accuracy",
+        "parser_fallback_rate",
+    }
     table_regression = next(
         regression
         for regression in payload["regressions"]
@@ -205,8 +206,7 @@ def test_file_processing_trend_cli_fails_when_comparable_metric_is_removed(
         "table_qa_accuracy",
     ]
     regressions = {
-        regression["metric"]: regression["reason"]
-        for regression in payload["regressions"]
+        regression["metric"]: regression["reason"] for regression in payload["regressions"]
     }
     assert regressions["adapter_contract_coverage"] == "metric_missing_from_current"
     assert regressions["table_qa_accuracy"] == "metric_missing_from_current"
@@ -571,9 +571,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_bad_set_repl
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "parser_adapter_contract_missing_source_kinds_added",
         "parser_adapter_contract_missing_scenarios_added",
         "parser_adapter_contract_blocking_source_kinds_added",
@@ -641,9 +639,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_evidence_set
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "parser_adapter_contract_scenarios_removed",
         "parser_adapter_contract_source_kinds_removed",
         "parser_adapter_contract_backends_removed",
@@ -710,9 +706,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_contract_case_ref_rep
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "parser_adapter_contract_passed_case_refs_removed",
         "parser_adapter_contract_backend_passed_case_refs_removed",
         "parser_adapter_contract_blocking_failure_case_refs_added",
@@ -809,18 +803,14 @@ def test_file_processing_trend_cli_fails_on_backend_source_bad_status_count_regr
         "backend_passed_scenarios": {
             "docling": ["scanned_pdf_ocr", "two_column_pdf_reading_order"]
         },
-        "backend_source_status_counts": {
-            "docling": {"pdf": {"passed": 2, "fallback": 0}}
-        },
+        "backend_source_status_counts": {"docling": {"pdf": {"passed": 2, "fallback": 0}}},
         "missing_source_kinds": [],
         "blocking_failure_source_kinds": [],
         "blocking_failure_backends": [],
     }
     current_contract = {
         **baseline_contract,
-        "backend_source_status_counts": {
-            "docling": {"pdf": {"passed": 2, "fallback": 1}}
-        },
+        "backend_source_status_counts": {"docling": {"pdf": {"passed": 2, "fallback": 1}}},
     }
     baseline = _trend(
         metrics={"adapter_contract_coverage": 1.0},
@@ -847,17 +837,14 @@ def test_file_processing_trend_cli_fails_on_backend_source_bad_status_count_regr
     assert payload["regressions"] == [
         {
             "metric": (
-                "parser_adapter_contract_backend_source_status_count:"
-                "docling:pdf:fallback"
+                "parser_adapter_contract_backend_source_status_count:" "docling:pdf:fallback"
             ),
             "direction": "max",
             "baseline": 0.0,
             "current": 1.0,
             "allowed_delta": 0.0,
             "delta": 1.0,
-            "reason": (
-                "parser_adapter_contract_backend_source_bad_status_count_increased"
-            ),
+            "reason": ("parser_adapter_contract_backend_source_bad_status_count_increased"),
         }
     ]
     assert "raw_text" not in output_path.read_text(encoding="utf-8")
@@ -912,18 +899,13 @@ def test_file_processing_trend_cli_fails_on_backend_source_passed_count_decrease
     assert exit_code == 1
     assert payload["regressions"] == [
         {
-            "metric": (
-                "parser_adapter_contract_backend_source_status_count:"
-                "docling:pdf:passed"
-            ),
+            "metric": ("parser_adapter_contract_backend_source_status_count:" "docling:pdf:passed"),
             "direction": "min",
             "baseline": 3.0,
             "current": 2.0,
             "allowed_delta": 0.0,
             "delta": -1.0,
-            "reason": (
-                "parser_adapter_contract_backend_source_passed_status_count_decreased"
-            ),
+            "reason": ("parser_adapter_contract_backend_source_passed_status_count_decreased"),
         }
     ]
     assert "raw_text" not in output_path.read_text(encoding="utf-8")
@@ -979,8 +961,7 @@ def test_file_processing_trend_cli_fails_on_adapter_warning_code_increase(
     assert payload["regressions"] == [
         {
             "metric": (
-                "parser_adapter_contract_warning_code_count:"
-                "docling_adapter_layout_warning"
+                "parser_adapter_contract_warning_code_count:" "docling_adapter_layout_warning"
             ),
             "direction": "max",
             "baseline": 0.0,
@@ -1059,9 +1040,7 @@ def test_file_processing_trend_cli_fails_on_blocking_reason_count_increase(
             "current": 1.0,
             "allowed_delta": 0.0,
             "delta": 1.0,
-            "reason": (
-                "parser_adapter_contract_blocking_failure_reason_count_increased"
-            ),
+            "reason": ("parser_adapter_contract_blocking_failure_reason_count_increased"),
         }
     ]
     assert "raw_text" not in output_path.read_text(encoding="utf-8")
@@ -1152,10 +1131,7 @@ def test_file_processing_trend_cli_fails_on_adapter_golden_gate_regression(
     assert "adapter_golden_gate_missing_source_kind_count_increased" in reasons
     assert "adapter_golden_gate_missing_manifest_source_kind_count_increased" in reasons
     assert "adapter_golden_gate_contract_missing_source_kind_count_increased" in reasons
-    assert (
-        "adapter_golden_gate_source_route_contract_gap_source_kind_count_increased"
-        in reasons
-    )
+    assert "adapter_golden_gate_source_route_contract_gap_source_kind_count_increased" in reasons
     assert "adapter_golden_gate_missing_metric_count_increased" in reasons
     assert "adapter_golden_gate_failed_metric_count_increased" in reasons
     assert "adapter_golden_gate_contract_blocking_failure_count_increased" in reasons
@@ -1268,9 +1244,7 @@ def test_file_processing_trend_cli_fails_on_adapter_golden_gate_case_ref_replace
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "adapter_golden_gate_contract_passed_case_refs_removed",
         "adapter_golden_gate_contract_backend_passed_case_refs_removed",
         "adapter_golden_gate_contract_blocking_failure_case_refs_added",
@@ -1447,9 +1421,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_scorecard_code_replac
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "parser_adapter_scorecard_reason_codes_added",
         "parser_adapter_scorecard_warning_codes_added",
     }
@@ -1572,9 +1544,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_source_route_code_rep
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "parser_adapter_source_route_reason_codes_added",
         "parser_adapter_source_route_warning_codes_added",
     }
@@ -1627,9 +1597,7 @@ def test_file_processing_trend_cli_fails_on_parser_adapter_source_route_evidence
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "parser_adapter_source_route_candidates_removed",
         "parser_adapter_source_route_attempted_backends_removed",
         "parser_adapter_source_route_active_backends_removed",
@@ -1786,9 +1754,9 @@ def test_file_processing_trend_cli_fails_on_backend_source_kind_missing_set_repl
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {"backend_source_kind_matrix_missing_source_kinds_added"}
+    assert {regression["reason"] for regression in payload["regressions"]} == {
+        "backend_source_kind_matrix_missing_source_kinds_added"
+    }
     output_text = output_path.read_text(encoding="utf-8")
     assert "office" not in output_text
     assert "image" not in output_text
@@ -1875,9 +1843,7 @@ def test_file_processing_trend_cli_fails_on_object_storage_artifact_chain_regres
     assert "object_storage_segment_artifact_identity_verified_count_decreased" in reasons
     assert "object_storage_artifact_integrity_error_count_increased" in reasons
     assert "object_storage_retry_case_count_decreased" in reasons
-    assert (
-        "object_storage_retained_successful_segment_artifact_count_decreased" in reasons
-    )
+    assert "object_storage_retained_successful_segment_artifact_count_decreased" in reasons
     assert "object_storage_segment_cache_miss_count_increased" in reasons
     assert "object_storage_rewritten_successful_segment_artifact_count_increased" in reasons
     assert "raw_text" not in output_path.read_text(encoding="utf-8")
@@ -2056,9 +2022,7 @@ def test_file_processing_trend_cli_fails_on_artifact_case_ref_replacement(
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "object_storage_full_artifact_case_refs_removed",
         "object_storage_full_artifact_identity_case_refs_removed",
         "object_storage_retry_case_refs_removed",
@@ -2125,9 +2089,7 @@ def test_file_processing_trend_cli_fails_on_table_cell_lineage_case_ref_replacem
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "table_cell_lineage_expected_case_refs_removed",
         "table_cell_lineage_resolved_case_refs_removed",
         "table_cell_lineage_covered_case_refs_removed",
@@ -2193,9 +2155,7 @@ def test_file_processing_trend_cli_fails_on_preview_addressability_case_ref_repl
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "preview_addressability_gate_case_refs_removed",
         "preview_addressability_addressable_case_refs_removed",
         "preview_addressability_chunk_bbox_case_refs_removed",
@@ -2330,9 +2290,7 @@ def test_file_processing_trend_cli_fails_on_preview_addressability_evidence_regr
     assert "preview_addressability_chunk_bbox_count_decreased" in reasons
     assert "preview_addressability_chunk_addressable_count_decreased" in reasons
     assert "preview_addressability_extraction_bbox_target_count_decreased" in reasons
-    assert (
-        "preview_addressability_extraction_addressable_target_count_decreased" in reasons
-    )
+    assert "preview_addressability_extraction_addressable_target_count_decreased" in reasons
     assert "preview_addressability_target_count_decreased" in reasons
     assert "preview_addressability_addressable_target_count_decreased" in reasons
     assert "preview_addressability_unaddressable_target_count_increased" in reasons
@@ -2490,9 +2448,7 @@ def test_file_processing_trend_cli_fails_on_chunk_template_bad_set_replacement(
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "chunk_template_missing_source_kinds_added",
         "chunk_template_missing_scenarios_added",
         "chunk_template_reason_codes_added",
@@ -2564,9 +2520,7 @@ def test_file_processing_trend_cli_fails_on_chunk_template_covered_set_replaceme
 
     assert exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert {
-        regression["reason"] for regression in payload["regressions"]
-    } == {
+    assert {regression["reason"] for regression in payload["regressions"]} == {
         "chunk_template_covered_source_kinds_removed",
         "chunk_template_covered_scenarios_removed",
     }

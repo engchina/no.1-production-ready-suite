@@ -160,9 +160,7 @@ def build_parser_adapter_scorecard(
     """runtime readiness と任意の downstream 指標から scorecard を作る。"""
     normalized_metrics = _normalized_metric_signals(metrics or {})
     metrics_applied_to = (
-        (metrics_backend or _infer_metrics_backend(runtime))
-        if normalized_metrics
-        else None
+        (metrics_backend or _infer_metrics_backend(runtime)) if normalized_metrics else None
     )
     adapter_by_backend: dict[ParserAdapterName, ParserAdapterRuntimeStatus] = {
         adapter.backend: adapter for adapter in runtime.adapters
@@ -455,8 +453,7 @@ def _recommended_backend(
     executable_entries = [
         entry
         for entry in entries
-        if entry.executable
-        and INCOMPLETE_ADAPTER_EVIDENCE_WARNING not in set(entry.warning_codes)
+        if entry.executable and INCOMPLETE_ADAPTER_EVIDENCE_WARNING not in set(entry.warning_codes)
     ]
     if not executable_entries:
         return "local"
@@ -507,8 +504,7 @@ def _normalize_metric(value: float, direction: MetricDirection) -> float:
     if value >= LATENCY_ZERO_CREDIT_MS:
         return 0.0
     return 1.0 - (
-        (value - LATENCY_FULL_CREDIT_MS)
-        / (LATENCY_ZERO_CREDIT_MS - LATENCY_FULL_CREDIT_MS)
+        (value - LATENCY_FULL_CREDIT_MS) / (LATENCY_ZERO_CREDIT_MS - LATENCY_FULL_CREDIT_MS)
     )
 
 

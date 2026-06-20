@@ -143,9 +143,7 @@ def test_dispatch_uses_worker_wakeup(monkeypatch: pytest.MonkeyPatch) -> None:
     """HTTP 入口では取込を実行せず、ワーカーへ起床通知のみ行う。"""
     from app.api.routes import documents
 
-    dedicated = get_settings().model_copy(
-        update={"ingestion_queue_dedicated_worker_enabled": True}
-    )
+    dedicated = get_settings().model_copy(update={"ingestion_queue_dedicated_worker_enabled": True})
     monkeypatch.setattr(documents, "get_settings", lambda: dedicated)
     ingestion_worker._WAKEUP.clear()
 
@@ -160,9 +158,7 @@ def test_dispatch_still_only_wakes_worker_when_dedicated_mode_is_disabled(
     """legacy 設定でも FastAPI BackgroundTasks へ戻さない。"""
     from app.api.routes import documents
 
-    inline = get_settings().model_copy(
-        update={"ingestion_queue_dedicated_worker_enabled": False}
-    )
+    inline = get_settings().model_copy(update={"ingestion_queue_dedicated_worker_enabled": False})
     monkeypatch.setattr(documents, "get_settings", lambda: inline)
     ingestion_worker._WAKEUP.clear()
 
@@ -299,9 +295,7 @@ async def test_worker_recovers_stale_jobs_periodically_when_idle() -> None:
         recovered_calls += 1
         return []
 
-    settings = get_settings().model_copy(
-        update={"ingestion_queue_recovery_interval_seconds": 0.0}
-    )
+    settings = get_settings().model_copy(update={"ingestion_queue_recovery_interval_seconds": 0.0})
     worker = IngestionQueueWorker(
         settings=settings,
         job_runner=runner,

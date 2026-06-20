@@ -160,9 +160,10 @@ def test_ingestion_quality_report_completeness_requires_contract_metadata() -> N
     )
     assert quality_report_metadata_violation(sensitive) == "quality_report_sensitive_key"
     assert quality_report_metadata_violation(underreported) == "quality_element_count_mismatch"
-    assert ingestion_quality_report_completeness(
-        [payload, missing_version, sensitive, underreported]
-    ) == 0.25
+    assert (
+        ingestion_quality_report_completeness([payload, missing_version, sensitive, underreported])
+        == 0.25
+    )
 
 
 def test_table_qa_accuracy_matches_normalized_expected_answer() -> None:
@@ -793,9 +794,11 @@ def test_table_cell_lineage_requires_formula_refs_to_resolve_to_cells() -> None:
                     update={
                         "metadata": {},
                         "cells": [
-                            cell.model_copy(update={"metadata": {"formula_cell_ref": "B2"}})
-                            if cell.row == 1 and cell.col == 1
-                            else cell
+                            (
+                                cell.model_copy(update={"metadata": {"formula_cell_ref": "B2"}})
+                                if cell.row == 1 and cell.col == 1
+                                else cell
+                            )
                             for cell in extraction.tables[0].cells
                         ],
                     }
@@ -1630,9 +1633,7 @@ def test_preview_addressability_validates_extraction_bbox_targets() -> None:
                     metadata={"bbox_unit": "absolute", "page_rotation": 0},
                 )
             ],
-            "pages": [
-                ExtractionPage(page_number=1, width=200, height=100, rotation=90)
-            ],
+            "pages": [ExtractionPage(page_number=1, width=200, height=100, rotation=90)],
         }
     )
     invalid_rotation = extraction.model_copy(
@@ -1718,9 +1719,7 @@ def test_file_processing_golden_manifest_requires_markdown_code_formula_case() -
     manifest_path = REPO_ROOT / "docs/evaluation/file-processing-golden-set.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["cases"] = [
-        case
-        for case in manifest["cases"]
-        if case.get("scenario") != "markdown_code_formula_blocks"
+        case for case in manifest["cases"] if case.get("scenario") != "markdown_code_formula_blocks"
     ]
 
     errors = validate_file_processing_manifest(manifest)
@@ -1733,9 +1732,7 @@ def test_file_processing_manifest_requires_scenario_specific_checks() -> None:
     manifest_path = REPO_ROOT / "docs/evaluation/file-processing-golden-set.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     markdown_case = next(
-        case
-        for case in manifest["cases"]
-        if case["scenario"] == "markdown_code_formula_blocks"
+        case for case in manifest["cases"] if case["scenario"] == "markdown_code_formula_blocks"
     )
     markdown_case["required_checks"] = ["heading_structure", "element_lineage"]
 
@@ -1755,9 +1752,7 @@ def test_file_processing_manifest_requires_table_structure_for_table_scenarios()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     table_case = next(case for case in manifest["cases"] if case["id"] == "long-table-row-groups")
     table_case["required_checks"] = [
-        check
-        for check in table_case["required_checks"]
-        if check != "table_structure_fidelity"
+        check for check in table_case["required_checks"] if check != "table_structure_fidelity"
     ]
 
     errors = validate_file_processing_manifest(manifest)
@@ -1784,16 +1779,12 @@ def test_file_processing_manifest_rejects_negative_adapter_schema_remap_case() -
     """unsupported/corrupted case を adapter schema-remap 証跡に混ぜない。"""
     manifest_path = REPO_ROOT / "docs/evaluation/file-processing-golden-set.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    tiff_case = next(
-        case for case in manifest["cases"] if case["id"] == "tiff-image-unsupported"
-    )
+    tiff_case = next(case for case in manifest["cases"] if case["id"] == "tiff-image-unsupported")
     tiff_case["adapter_schema_remap"] = True
 
     errors = validate_file_processing_manifest(manifest)
 
-    assert (
-        "case[tiff-image-unsupported]:adapter_schema_remap_not_positive_fixture"
-    ) in errors
+    assert ("case[tiff-image-unsupported]:adapter_schema_remap_not_positive_fixture") in errors
 
 
 def test_file_processing_contract_runner_executes_local_parser_checks() -> None:
@@ -2006,9 +1997,7 @@ def test_file_processing_golden_cli_writes_non_sensitive_report(tmp_path: Path) 
     assert payload["metric_summary"]["reading_order_consistency"]["value"] == 1.0
     assert payload["metric_summary"]["structural_section_coverage"]["status"] == "measured"
     assert payload["metric_summary"]["structural_section_coverage"]["value"] == 1.0
-    assert payload["metric_summary"]["dependency_context_recall"]["status"] == (
-        "requires_staging"
-    )
+    assert payload["metric_summary"]["dependency_context_recall"]["status"] == ("requires_staging")
     assert payload["metric_summary"]["dependency_context_recall"]["value"] is None
     assert payload["metric_summary"]["table_structure_fidelity"]["status"] == "measured"
     assert payload["metric_summary"]["table_structure_fidelity"]["value"] == 1.0
@@ -2016,9 +2005,7 @@ def test_file_processing_golden_cli_writes_non_sensitive_report(tmp_path: Path) 
     assert payload["metric_summary"]["table_cell_lineage_coverage"]["value"] == 1.0
     assert payload["metric_summary"]["table_row_tree_fidelity"]["status"] == "measured"
     assert payload["metric_summary"]["table_row_tree_fidelity"]["value"] == 1.0
-    assert payload["metric_summary"]["visual_chunk_metadata_completeness"]["status"] == (
-        "measured"
-    )
+    assert payload["metric_summary"]["visual_chunk_metadata_completeness"]["status"] == ("measured")
     assert payload["metric_summary"]["visual_chunk_metadata_completeness"]["value"] == 1.0
     assert payload["metric_summary"]["chunk_size_compliance"]["status"] == "measured"
     assert payload["metric_summary"]["chunk_size_compliance"]["value"] == 1.0
@@ -2043,9 +2030,7 @@ def test_file_processing_golden_cli_writes_non_sensitive_report(tmp_path: Path) 
     assert backend_source_summary["missing_source_kinds"] == []
     assert backend_source_summary["backend_source_kinds"]
     assert "raw_text" not in str(backend_source_summary)
-    assert payload["metric_summary"]["adapter_contract_coverage"]["status"] == (
-        "requires_staging"
-    )
+    assert payload["metric_summary"]["adapter_contract_coverage"]["status"] == ("requires_staging")
     assert payload["metric_summary"]["groundedness"]["status"] == "requires_staging"
     assert payload["metric_summary"]["ingestion_p95_ms"]["status"] == "requires_staging"
     threshold_by_metric = {result["metric"]: result for result in payload["threshold_results"]}
@@ -2073,8 +2058,7 @@ def test_file_processing_golden_cli_writes_non_sensitive_report(tmp_path: Path) 
     assert threshold_by_metric["page_hit_accuracy"]["status"] == "pending"
     blocker_by_code = {blocker["code"]: blocker for blocker in payload["promotion_blockers"]}
     assert (
-        blocker_by_code["pending_staging_checks"]["count"]
-        == payload["pending_staging_check_count"]
+        blocker_by_code["pending_staging_checks"]["count"] == payload["pending_staging_check_count"]
     )
     assert any(blocker["code"] == "threshold_pending" for blocker in payload["promotion_blockers"])
     assert len(payload["staging_requirements"]) == payload["pending_staging_check_count"]
@@ -2131,15 +2115,11 @@ def test_file_processing_golden_cli_writes_non_sensitive_trend_snapshot(
     assert trend["promotion_blocker_code_counts"]["pending_staging_checks"] == 1
     assert trend["threshold_status_counts"]["passed"] > 0
     assert trend["threshold_status_counts"]["pending"] > 0
-    assert any(
-        item["metric"] == "page_hit_accuracy" for item in trend["threshold_pending"]
-    )
+    assert any(item["metric"] == "page_hit_accuracy" for item in trend["threshold_pending"])
     assert trend["metrics"]["parser_fallback_rate"]["value"] == 1 / 17
     assert trend["metrics"]["table_qa_accuracy"]["value"] == 1.0
     assert trend["metrics"]["page_hit_accuracy"]["status"] == "requires_staging"
-    assert trend["metrics"]["bbox_coordinate_validity_coverage"]["status"] == (
-        "requires_staging"
-    )
+    assert trend["metrics"]["bbox_coordinate_validity_coverage"]["status"] == ("requires_staging")
     assert trend["metrics"]["backend_source_kind_coverage"]["missing_source_kinds"] == []
     assert trend["staging_dataset_policy"]["configured"] is False
     assert trend["staging_dataset_policy"]["promotion_ready"] is True
@@ -2254,8 +2234,7 @@ def test_file_processing_golden_cli_fails_when_parser_routing_regresses(
     assert payload["metric_summary"]["parser_routing_accuracy"]["value"] < 1.0
     assert threshold_by_metric["parser_routing_accuracy"]["status"] == "failed"
     assert any(
-        blocker["code"] == "threshold_failed"
-        and blocker["metric"] == "parser_routing_accuracy"
+        blocker["code"] == "threshold_failed" and blocker["metric"] == "parser_routing_accuracy"
         for blocker in payload["promotion_blockers"]
     )
 

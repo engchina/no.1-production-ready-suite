@@ -152,9 +152,7 @@ class _FakeStorageClient:
         self.put_calls.append((namespace_name, bucket_name, object_name))
         return _FakeResponse(None)
 
-    def list_objects(
-        self, namespace_name: str, bucket_name: str, **kwargs: Any
-    ) -> _FakeResponse:
+    def list_objects(self, namespace_name: str, bucket_name: str, **kwargs: Any) -> _FakeResponse:
         prefix = str(kwargs.get("prefix", ""))
         names = [name for name in self._output_objects if name.startswith(prefix)]
         return _FakeResponse(type("L", (), {"objects": [_FakeObjectEntry(n) for n in names]})())

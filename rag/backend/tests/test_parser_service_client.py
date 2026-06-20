@@ -12,7 +12,6 @@ from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import ParserRegistryResult
 from rag_parser_core.result import ParseResponse
 
-from app.clients import parser_service as parser_service_module
 from app.clients.parser_service import ParserServiceClient
 from app.config import Settings
 from app.schemas.document import SourceModality, SourceProfile
@@ -41,7 +40,7 @@ def _install_transport(
         kwargs.pop("timeout", None)
         return original(transport=handler)
 
-    monkeypatch.setattr(parser_service_module.httpx, "Client", factory)
+    monkeypatch.setattr(httpx, "Client", factory)
 
 
 def test_runner_returns_extraction_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,7 +72,9 @@ def test_runner_returns_extraction_on_success(monkeypatch: pytest.MonkeyPatch) -
         return httpx.Response(200, json=response.model_dump(mode="json"))
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
-    client = ParserServiceClient(Settings(rag_parser_docling_service_url="http://parser-docling:8000"))
+    client = ParserServiceClient(
+        Settings(rag_parser_docling_service_url="http://parser-docling:8000")
+    )
     result = client.runner("docling", b"abc", _profile(), "application/pdf")
 
     assert isinstance(result, ParserRegistryResult)
@@ -87,7 +88,9 @@ def test_runner_falls_back_when_service_unreachable(monkeypatch: pytest.MonkeyPa
         raise httpx.ConnectError("connection refused", request=request)
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
-    client = ParserServiceClient(Settings(rag_parser_marker_service_url="http://parser-marker:8000"))
+    client = ParserServiceClient(
+        Settings(rag_parser_marker_service_url="http://parser-marker:8000")
+    )
     result = client.runner("marker", b"abc", _profile(), "application/pdf")
 
     assert result.extraction is None

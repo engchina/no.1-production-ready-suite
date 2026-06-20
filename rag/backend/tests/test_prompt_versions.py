@@ -36,9 +36,7 @@ def test_create_first_version_is_auto_activated() -> None:
 
 def test_create_without_activate_keeps_previous_active() -> None:
     first = prompt_versions.create_prompt_version(name="v1", system_prompt="prompt one")
-    prompt_versions.create_prompt_version(
-        name="v2", system_prompt="prompt two", activate=False
-    )
+    prompt_versions.create_prompt_version(name="v2", system_prompt="prompt two", activate=False)
     active = prompt_versions.get_active_prompt_version()
     assert active is not None
     assert active.version_id == first.version_id
@@ -82,18 +80,14 @@ def test_no_active_when_store_empty() -> None:
 
 def test_custom_generation_profile_resolves_active_prompt() -> None:
     prompt_versions.create_prompt_version(name="v1", system_prompt="カスタム指示です。")
-    params = resolve_generation_adapter(
-        Settings.model_construct(rag_generation_profile="custom")
-    )
+    params = resolve_generation_adapter(Settings.model_construct(rag_generation_profile="custom"))
     assert params.profile == "custom"
     assert params.system_prompt == "カスタム指示です。"
 
 
 def test_custom_profile_falls_back_to_default_prompt_when_no_active_version() -> None:
     # 有効版が無ければ system_prompt は None(client 既定 prompt を使う)。
-    params = resolve_generation_adapter(
-        Settings.model_construct(rag_generation_profile="custom")
-    )
+    params = resolve_generation_adapter(Settings.model_construct(rag_generation_profile="custom"))
     assert params.profile == "custom"
     assert params.system_prompt is None
 

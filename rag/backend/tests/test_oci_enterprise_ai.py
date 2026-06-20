@@ -453,12 +453,7 @@ async def test_oci_vlm_coerces_string_section_path_in_elements() -> None:
 async def test_oci_vlm_reports_schema_validation_details() -> None:
     """VLM の schema 不整合は ValidationError 型名だけでなく失敗項目を返す。"""
     transport = FakeEnterpriseAiTransport(
-        {
-            "output": (
-                '{"raw_text":"本文","document_type":"資料",'
-                '"confidence":1.4,"warnings":[]}'
-            )
-        }
+        {"output": ('{"raw_text":"本文","document_type":"資料",' '"confidence":1.4,"warnings":[]}')}
     )
     client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
 

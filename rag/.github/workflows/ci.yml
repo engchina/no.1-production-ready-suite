@@ -24,6 +24,8 @@ jobs:
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
+          # gitleaks-action@v2 は PR スキャンに GITHUB_TOKEN を要求する(未指定だと失敗する)。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # pre-commit hook と同一の設定/ルールで走査する
           GITLEAKS_CONFIG: .gitleaks.toml
           # OSS リポジトリ向けライセンスは不要(private の場合のみ要設定)
@@ -66,10 +68,12 @@ jobs:
         run: uv run pytest --cov=app
 
       - name: Security scan
-        run: uv run bandit -r app
+        run: uv run bandit -c pyproject.toml -r app
 
       - name: Dependency audit
-        run: uv run pip-audit
+        # GHSA-537c-gmf6-5ccf(cryptography): fix は 48.0.1 だが oci SDK が cryptography を
+        # 上位制約するため bump 不可。OCI は確定スタックのため当面 ignore する。
+        run: uv run pip-audit --ignore-vuln GHSA-537c-gmf6-5ccf
 
   frontend:
     name: Frontend

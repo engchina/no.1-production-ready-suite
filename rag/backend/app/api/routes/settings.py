@@ -665,9 +665,7 @@ async def update_guardrail_settings(
 ) -> ApiResponse[GuardrailSettingsData]:
     """Guardrail アダプター設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
-    update: dict[str, object] = {
-        "rag_guardrail_policy": normalize_guardrail_policy(payload.policy)
-    }
+    update: dict[str, object] = {"rag_guardrail_policy": normalize_guardrail_policy(payload.policy)}
     if payload.backend is not None:
         update["rag_guardrail_backend"] = payload.backend
     candidate = settings.model_copy(update=update)
@@ -1940,9 +1938,11 @@ def _parser_adapter_contract_data(settings: Settings) -> ParserAdapterContractDa
     raw_summary = payload.get("summary")
     summary = raw_summary if isinstance(raw_summary, dict) else {}
     raw_cases = payload.get("cases")
-    artifact_cases = [
-        case for case in raw_cases if isinstance(case, dict)
-    ] if isinstance(raw_cases, list | tuple) else []
+    artifact_cases = (
+        [case for case in raw_cases if isinstance(case, dict)]
+        if isinstance(raw_cases, list | tuple)
+        else []
+    )
     return ParserAdapterContractData(
         passed=matrix.passed,
         fixture_root=str(payload["fixture_root"]),
@@ -1958,16 +1958,10 @@ def _parser_adapter_contract_data(settings: Settings) -> ParserAdapterContractDa
                 content_type=str(case["content_type"]),
                 status=case["status"],
                 blocking=bool(case["blocking"]),
-                parser_backend=(
-                    str(case["parser_backend"]) if "parser_backend" in case else None
-                ),
-                parser_version=(
-                    str(case["parser_version"]) if "parser_version" in case else None
-                ),
+                parser_backend=(str(case["parser_backend"]) if "parser_backend" in case else None),
+                parser_version=(str(case["parser_version"]) if "parser_version" in case else None),
                 adapter_import_name=(
-                    str(case["adapter_import_name"])
-                    if "adapter_import_name" in case
-                    else None
+                    str(case["adapter_import_name"]) if "adapter_import_name" in case else None
                 ),
                 adapter_distribution_name=(
                     str(case["adapter_distribution_name"])
@@ -2182,8 +2176,7 @@ def _evaluation_settings_data(settings: Settings) -> EvaluationSettingsData:
         if thresholds is None:
             return {}
         return {
-            key: float(value)
-            for key, value in thresholds.model_dump(exclude_none=True).items()
+            key: float(value) for key, value in thresholds.model_dump(exclude_none=True).items()
         }
 
     return EvaluationSettingsData(
@@ -2537,12 +2530,8 @@ def _persist_parser_adapter_settings(settings: Settings) -> None:
         BACKEND_ENV_FILE,
         {
             "RAG_PARSER_ADAPTER_BACKEND": settings.rag_parser_adapter_backend,
-            "RAG_PARSER_DOCLING_ENABLED": _format_env_bool(
-                settings.rag_parser_docling_enabled
-            ),
-            "RAG_PARSER_MARKER_ENABLED": _format_env_bool(
-                settings.rag_parser_marker_enabled
-            ),
+            "RAG_PARSER_DOCLING_ENABLED": _format_env_bool(settings.rag_parser_docling_enabled),
+            "RAG_PARSER_MARKER_ENABLED": _format_env_bool(settings.rag_parser_marker_enabled),
             "RAG_PARSER_UNSTRUCTURED_ENABLED": _format_env_bool(
                 settings.rag_parser_unstructured_enabled
             ),

@@ -561,9 +561,7 @@ async def test_pipeline_fetches_dependency_context_not_in_retrieved_pool() -> No
         ),
     )
 
-    response = await pipeline.run(
-        SearchRequest(query="承認フロー 120000", top_k=1, rerank_top_n=1)
-    )
+    response = await pipeline.run(SearchRequest(query="承認フロー 120000", top_k=1, rerank_top_n=1))
 
     assert oracle.dependency_lookup_anchors == ["doc-figure:0"]
     assert [citation.chunk_id for citation in response.citations] == [
@@ -593,9 +591,7 @@ async def test_pipeline_promotes_structured_dependency_edge_metadata() -> None:
         ),
     )
 
-    response = await pipeline.run(
-        SearchRequest(query="承認フロー 120000", top_k=3, rerank_top_n=1)
-    )
+    response = await pipeline.run(SearchRequest(query="承認フロー 120000", top_k=3, rerank_top_n=1))
 
     assert [citation.chunk_id for citation in response.citations] == [
         "doc-figure:0",
@@ -1223,7 +1219,7 @@ class ExplodingLlm(OciEnterpriseAiClient):
         super().__init__()
         self.called = False
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         self.called = True
         raise AssertionError("no-results では LLM を呼び出さない")
 
@@ -1371,7 +1367,7 @@ class FailingRerankGenAiClient(OciGenAiClient):
 class SensitiveAnswerLlm(OciEnterpriseAiClient):
     """機微情報を含む回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         return "振込先の口座番号は 1234567 です。クラウド利用料です。"
 
 
@@ -1987,9 +1983,7 @@ class DependencyPromotionOracleClient(OracleClient):
                     "content_kind": "text",
                     "element_ids": "fig-1-caption",
                     "parent_element_ids": "fig-1",
-                    "dependency_edges": (
-                        '[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'
-                    ),
+                    "dependency_edges": ('[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'),
                 },
             ),
             RetrievedChunk(
@@ -2042,9 +2036,7 @@ class StructuredDependencyPromotionOracleClient(OracleClient):
                     "chunk_index": 1,
                     "content_kind": "text",
                     "element_ids": ["fig-1-caption"],
-                    "dependency_edges": [
-                        {"parent_id": "fig-1", "child_id": "fig-1-caption"}
-                    ],
+                    "dependency_edges": [{"parent_id": "fig-1", "child_id": "fig-1-caption"}],
                 },
             ),
             RetrievedChunk(
@@ -2113,9 +2105,7 @@ class DependencyLookupOracleClient(OracleClient):
                     "content_kind": "text",
                     "element_ids": "fig-1-caption",
                     "parent_element_ids": "fig-1",
-                    "dependency_edges": (
-                        '[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'
-                    ),
+                    "dependency_edges": ('[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'),
                 },
             )
         ]
@@ -2374,24 +2364,26 @@ class RejectedCandidateOracleClient(OracleClient):
 class UngroundedLlm(OciEnterpriseAiClient):
     """citation と無関係な回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         return "明日の天気は晴れです。"
 
 
 class GroundedLlm(OciEnterpriseAiClient):
     """citation に基づく回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         return "承認条件は 120000 円です。"
 
 
 class StreamingLlm(OciEnterpriseAiClient):
     """Enterprise AI streaming 回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         raise AssertionError("stream 有効時は generate_stream を使う")
 
-    async def generate_stream(self, prompt: str, context: str) -> AsyncIterator[str]:
+    async def generate_stream(
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> AsyncIterator[str]:
         _ = prompt, context
         for chunk in ("承認条件は ", "120000 円です。"):
             yield chunk
@@ -2404,7 +2396,7 @@ class CapturingLlm(OciEnterpriseAiClient):
         super().__init__()
         self.context = ""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         self.context = context
         return "承認条件は 120000 円です。"
 
@@ -2427,7 +2419,7 @@ class PlanningLlm(OciEnterpriseAiClient):
         self.plan_calls.append((query, mode, max_subqueries))
         return list(self._planned)
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         _ = prompt, context
         return "請求書原本は Object Storage に保管します。"
 
@@ -2440,7 +2432,7 @@ class CapturingPromptLlm(OciEnterpriseAiClient):
         self.prompt = ""
         self.context = ""
 
-    async def generate(self, prompt: str, context: str) -> str:
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
         self.prompt = prompt
         self.context = context
         return "請求書原本は Object Storage に保管します。"
@@ -2630,11 +2622,19 @@ def test_crag_confidence_prefers_rerank_score() -> None:
     """CRAG 信頼度は rerank 最高スコア(無ければ vector score)を [0,1] で返す。"""
     chunks = [
         RetrievedChunk(
-            document_id="d", chunk_id="d:0", text="a", score=0.9, rerank_score=0.42,
+            document_id="d",
+            chunk_id="d:0",
+            text="a",
+            score=0.9,
+            rerank_score=0.42,
             file_name="f.txt",
         ),
         RetrievedChunk(
-            document_id="d", chunk_id="d:1", text="b", score=0.5, rerank_score=0.18,
+            document_id="d",
+            chunk_id="d:1",
+            text="b",
+            score=0.5,
+            rerank_score=0.18,
             file_name="f.txt",
         ),
     ]
@@ -2656,7 +2656,11 @@ def test_crag_confidence_empty_is_zero() -> None:
 def test_crag_confidence_clamped_to_unit_range() -> None:
     chunks = [
         RetrievedChunk(
-            document_id="d", chunk_id="d:0", text="a", score=0.0, rerank_score=1.8,
+            document_id="d",
+            chunk_id="d:0",
+            text="a",
+            score=0.0,
+            rerank_score=1.8,
             file_name="f.txt",
         ),
     ]

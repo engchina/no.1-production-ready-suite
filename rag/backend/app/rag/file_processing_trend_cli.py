@@ -95,19 +95,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--latency-increase-ratio",
         type=float,
         default=DEFAULT_LATENCY_INCREASE_RATIO,
-        help=(
-            "ingestion_p95_ms の許容増加率。"
-            f"既定値: {DEFAULT_LATENCY_INCREASE_RATIO}"
-        ),
+        help=("ingestion_p95_ms の許容増加率。" f"既定値: {DEFAULT_LATENCY_INCREASE_RATIO}"),
     )
     parser.add_argument(
         "--latency-increase-ms",
         type=float,
         default=DEFAULT_LATENCY_INCREASE_MS,
-        help=(
-            "ingestion_p95_ms の許容増加絶対値。"
-            f"既定値: {DEFAULT_LATENCY_INCREASE_MS}"
-        ),
+        help=("ingestion_p95_ms の許容増加絶対値。" f"既定値: {DEFAULT_LATENCY_INCREASE_MS}"),
     )
     parser.add_argument(
         "--require-promotion-ready",
@@ -498,14 +492,10 @@ def _parser_adapter_source_route_regressions(
     baseline: Mapping[str, Any],
 ) -> list[TrendRegression]:
     """source kind 別 parser routing 証跡の退化を検出する。"""
-    baseline_routes = _parser_adapter_routes_by_source(
-        baseline.get("parser_adapter_source_routes")
-    )
+    baseline_routes = _parser_adapter_routes_by_source(baseline.get("parser_adapter_source_routes"))
     if not baseline_routes:
         return []
-    current_routes = _parser_adapter_routes_by_source(
-        current.get("parser_adapter_source_routes")
-    )
+    current_routes = _parser_adapter_routes_by_source(current.get("parser_adapter_source_routes"))
     regressions: list[TrendRegression] = []
     removed_source_kinds = set(baseline_routes) - set(current_routes)
     if removed_source_kinds:
@@ -652,9 +642,7 @@ def _route_contract_gap_warning_count(route: Mapping[str, object]) -> float | No
         return 0.0
     return float(
         sum(
-            1
-            for warning in warnings
-            if warning.endswith("_adapter_contract_unverified_for_source")
+            1 for warning in warnings if warning.endswith("_adapter_contract_unverified_for_source")
         )
     )
 
@@ -738,10 +726,11 @@ def _parser_adapter_scorecard_entry_regressions(
     regressions: list[TrendRegression] = []
     baseline_status = _optional_str(baseline_entry.get("status"))
     current_status = _optional_str(current_entry.get("status"))
-    if (
-        baseline_status in {"recommended", "eligible", "available"}
-        and current_status not in {"recommended", "eligible", "available"}
-    ):
+    if baseline_status in {"recommended", "eligible", "available"} and current_status not in {
+        "recommended",
+        "eligible",
+        "available",
+    }:
         regressions.append(
             TrendRegression(
                 metric=f"parser_adapter_scorecard_status:{backend}",
@@ -920,10 +909,10 @@ def _chunk_template_entry_regressions(
     regressions: list[TrendRegression] = []
     baseline_status = _optional_str(baseline_entry.get("status"))
     current_status = _optional_str(current_entry.get("status"))
-    if (
-        baseline_status in {"recommended", "healthy"}
-        and current_status not in {"recommended", "healthy"}
-    ):
+    if baseline_status in {"recommended", "healthy"} and current_status not in {
+        "recommended",
+        "healthy",
+    }:
         regressions.append(
             TrendRegression(
                 metric=f"chunk_template_status:{template}",
@@ -1192,9 +1181,7 @@ def _object_storage_artifact_chain_regressions(
         _count_regression(
             metric="object_storage_rewritten_successful_segment_artifact_count",
             current=_number(current_chain.get("rewritten_successful_segment_artifact_count")),
-            baseline=_number(
-                baseline_chain.get("rewritten_successful_segment_artifact_count")
-            ),
+            baseline=_number(baseline_chain.get("rewritten_successful_segment_artifact_count")),
             reason="object_storage_rewritten_successful_segment_artifact_count_increased",
         )
     )
@@ -1905,15 +1892,9 @@ def _adapter_golden_gate_regressions(
     regressions.extend(
         _count_regression(
             metric="adapter_golden_gate_source_route_contract_gap_source_kind_count",
-            current=_sequence_count(
-                current_gate.get("source_route_contract_gap_source_kinds")
-            ),
-            baseline=_sequence_count(
-                baseline_gate.get("source_route_contract_gap_source_kinds")
-            ),
-            reason=(
-                "adapter_golden_gate_source_route_contract_gap_source_kind_count_increased"
-            ),
+            current=_sequence_count(current_gate.get("source_route_contract_gap_source_kinds")),
+            baseline=_sequence_count(baseline_gate.get("source_route_contract_gap_source_kinds")),
+            reason=("adapter_golden_gate_source_route_contract_gap_source_kind_count_increased"),
         )
     )
     regressions.extend(
@@ -2195,14 +2176,10 @@ def _parser_adapter_contract_regressions(
                 )
             )
     baseline_backend_source_pair_count = (
-        float(len(baseline_backend_source_pairs))
-        if baseline_backend_source_pairs
-        else None
+        float(len(baseline_backend_source_pairs)) if baseline_backend_source_pairs else None
     )
     current_backend_source_pair_count = (
-        float(len(current_backend_source_pairs))
-        if current_backend_source_pairs
-        else None
+        float(len(current_backend_source_pairs)) if current_backend_source_pairs else None
     )
     regressions.extend(
         _count_decrease_regression(
@@ -2235,14 +2212,10 @@ def _parser_adapter_contract_regressions(
                 )
             )
     baseline_backend_scenario_pair_count = (
-        float(len(baseline_backend_scenario_pairs))
-        if baseline_backend_scenario_pairs
-        else None
+        float(len(baseline_backend_scenario_pairs)) if baseline_backend_scenario_pairs else None
     )
     current_backend_scenario_pair_count = (
-        float(len(current_backend_scenario_pairs))
-        if current_backend_scenario_pairs
-        else None
+        float(len(current_backend_scenario_pairs)) if current_backend_scenario_pairs else None
     )
     regressions.extend(
         _count_decrease_regression(
@@ -2282,12 +2255,8 @@ def _parser_adapter_contract_regressions(
         _code_count_regressions(
             metric_prefix="parser_adapter_contract_blocking_failure_reason_count",
             reason="parser_adapter_contract_blocking_failure_reason_count_increased",
-            current_counts=_mapping(
-                current_contract.get("blocking_failure_reason_counts")
-            ),
-            baseline_counts=_mapping(
-                baseline_contract.get("blocking_failure_reason_counts")
-            ),
+            current_counts=_mapping(current_contract.get("blocking_failure_reason_counts")),
+            baseline_counts=_mapping(baseline_contract.get("blocking_failure_reason_counts")),
         )
     )
     regressions.extend(
@@ -2481,12 +2450,8 @@ def _staging_dataset_policy_regressions(
     regressions.extend(
         _count_decrease_regression(
             metric="executed_compliant_real_world_case_count",
-            current=_number(
-                current_policy.get("executed_compliant_real_world_case_count")
-            ),
-            baseline=_number(
-                baseline_policy.get("executed_compliant_real_world_case_count")
-            ),
+            current=_number(current_policy.get("executed_compliant_real_world_case_count")),
+            baseline=_number(baseline_policy.get("executed_compliant_real_world_case_count")),
             reason="executed_compliant_real_world_case_count_decreased",
         )
     )
@@ -2700,9 +2665,7 @@ def _backend_source_passed_status_regressions(
                 current=current_value,
                 allowed_delta=0.0,
                 delta=current_value - baseline_value,
-                reason=(
-                    "parser_adapter_contract_backend_source_passed_status_count_decreased"
-                ),
+                reason=("parser_adapter_contract_backend_source_passed_status_count_decreased"),
             )
         )
     return regressions
@@ -2790,11 +2753,7 @@ def _sequence_count(value: object) -> float | None:
 def _string_set(value: object) -> set[str]:
     if not isinstance(value, list | tuple | set):
         return set()
-    return {
-        item.strip()
-        for item in value
-        if isinstance(item, str) and item.strip()
-    }
+    return {item.strip() for item in value if isinstance(item, str) and item.strip()}
 
 
 def _string_set_removed_regression(
@@ -2946,10 +2905,7 @@ def _backend_string_pairs(value: object) -> set[str]:
         if not isinstance(backend, str) or not backend.strip():
             continue
         source_kinds = _string_set(raw_source_kinds)
-        pairs.update(
-            f"{backend.strip()}:{source_kind}"
-            for source_kind in source_kinds
-        )
+        pairs.update(f"{backend.strip()}:{source_kind}" for source_kind in source_kinds)
     return pairs
 
 

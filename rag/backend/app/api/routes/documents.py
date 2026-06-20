@@ -494,9 +494,7 @@ async def cancel_ingestion_job(
     if job.status == IngestionJobStatus.RUNNING:
         # INDEX フェーズの取消は抽出をやり直さないよう REVIEW へ戻す。
         restore_status = (
-            FileStatus.REVIEW
-            if job.phase == IngestionJobPhase.INDEX
-            else FileStatus.UPLOADED
+            FileStatus.REVIEW if job.phase == IngestionJobPhase.INDEX else FileStatus.UPLOADED
         )
         await oracle.update_document_status(job.document_id, restore_status)
     return ApiResponse(data=cancelled)
@@ -633,10 +631,15 @@ async def export_document_extraction(
             format=format,
             content_type=_document_extraction_export_content_type(format),
             content=content,
-            payload=payload
-            if format
-            not in {DocumentExtractionExportFormat.MARKDOWN, DocumentExtractionExportFormat.HTML}
-            else {},
+            payload=(
+                payload
+                if format
+                not in {
+                    DocumentExtractionExportFormat.MARKDOWN,
+                    DocumentExtractionExportFormat.HTML,
+                }
+                else {}
+            ),
             chunks=chunks,
             parser_backend=_extraction_parser_backend(extraction),
             parser_profile=_extraction_parser_profile(extraction),
@@ -910,13 +913,9 @@ def _apply_table_cell_edits(
     cell_edits: list[DocumentTableCellTextEdit],
 ) -> StructuredExtraction:
     """表セルのテキストのみを差し替える(row/col/span・bbox・構造は保持)。"""
-    text_by_cell_key = {
-        (edit.table_id, edit.row, edit.col): edit.text for edit in cell_edits
-    }
+    text_by_cell_key = {(edit.table_id, edit.row, edit.col): edit.text for edit in cell_edits}
     valid_cell_keys = {
-        (table.table_id, cell.row, cell.col)
-        for table in extraction.tables
-        for cell in table.cells
+        (table.table_id, cell.row, cell.col) for table in extraction.tables for cell in table.cells
     }
     unknown_cells = sorted(
         f"{table_id}:{row},{col}"
@@ -1327,11 +1326,7 @@ def _page_numbers_from_mappings(items: list[object]) -> set[int]:
         if not isinstance(item, Mapping):
             continue
         page_number = item.get("page_number")
-        if (
-            isinstance(page_number, int)
-            and not isinstance(page_number, bool)
-            and page_number >= 1
-        ):
+        if isinstance(page_number, int) and not isinstance(page_number, bool) and page_number >= 1:
             pages.add(page_number)
     return pages
 
@@ -1366,9 +1361,7 @@ def _structured_extraction_from_detail(detail: DocumentDetail) -> StructuredExtr
         return StructuredExtraction.model_validate(detail.extraction)
     except Exception:
         raw_text = (
-            detail.extraction.get("raw_text")
-            if isinstance(detail.extraction, Mapping)
-            else ""
+            detail.extraction.get("raw_text") if isinstance(detail.extraction, Mapping) else ""
         )
         document_type = (
             detail.extraction.get("document_type")
@@ -1506,8 +1499,7 @@ def _extraction_html(extraction: StructuredExtraction) -> str:
         if element.page_number is not None and element.page_number != current_page:
             current_page = element.page_number
             lines.append(
-                f'  <p class="page-marker" data-page="{current_page}">'
-                f"page {current_page}</p>"
+                f'  <p class="page-marker" data-page="{current_page}">' f"page {current_page}</p>"
             )
         rendered = _element_html(element, tables_by_element_id=tables_by_element_id)
         if rendered:
@@ -1516,8 +1508,7 @@ def _extraction_html(extraction: StructuredExtraction) -> str:
         if asset.page_number is not None and asset.page_number != current_page:
             current_page = asset.page_number
             lines.append(
-                f'  <p class="page-marker" data-page="{current_page}">'
-                f"page {current_page}</p>"
+                f'  <p class="page-marker" data-page="{current_page}">' f"page {current_page}</p>"
             )
         lines.append(_asset_html(asset))
     lines.append("</article>")

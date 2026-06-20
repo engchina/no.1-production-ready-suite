@@ -27,9 +27,7 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
     "glm_ocr": "rag_parser_glm_ocr_service_url",
 }
 
-ParserAdapterName = Literal[
-    "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
-]
+ParserAdapterName = Literal["docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 
 
@@ -259,6 +257,8 @@ def _probe_service_health(
     installed = str(payload.get("status", "")).lower() == "ok"
     version = payload.get("package_version")
     distribution_name = payload.get("package_name")
-    return installed, version if isinstance(version, str) else None, (
-        distribution_name if isinstance(distribution_name, str) else None
+    return (
+        installed,
+        version if isinstance(version, str) else None,
+        (distribution_name if isinstance(distribution_name, str) else None),
     )

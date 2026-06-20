@@ -54,9 +54,7 @@ async def run_evaluation(
 ) -> ApiResponse[EvaluationMetrics]:
     """golden set を使って RAG 評価を実行する。"""
     enforce_rate_limit("evaluation", http_request)
-    suite_name = await _resolve_evaluation_suite_name(
-        request.suite, request.knowledge_base_ids
-    )
+    suite_name = await _resolve_evaluation_suite_name(request.suite, request.knowledge_base_ids)
     effective_thresholds = (
         request.thresholds
         if request.thresholds is not None

@@ -365,17 +365,17 @@ class RagPipeline:
                     route_reason=resolved_strategy.route_reason,
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     post_retrieval_pipeline=grounding_params.pipeline,
-                generation_profile=self._settings.rag_generation_profile,
-                guardrail_policy=self._settings.rag_guardrail_policy,
-                vector_index_profile=self._settings.rag_vector_index_profile,
-                graph_profile=graph_profile,
-                agentic_profile=agentic_params.profile,
-                agentic_subquery_count=agentic_subquery_count,
-                agentic_hops=agentic_hops,
-                corrective_retried=corrective_retried,
-                crag_confidence_score=crag_confidence_score,
-                crag_fallback_triggered=crag_fallback_triggered,
-                hyde_generated=hyde_generated,
+                    generation_profile=self._settings.rag_generation_profile,
+                    guardrail_policy=self._settings.rag_guardrail_policy,
+                    vector_index_profile=self._settings.rag_vector_index_profile,
+                    graph_profile=graph_profile,
+                    agentic_profile=agentic_params.profile,
+                    agentic_subquery_count=agentic_subquery_count,
+                    agentic_hops=agentic_hops,
+                    corrective_retried=corrective_retried,
+                    crag_confidence_score=crag_confidence_score,
+                    crag_fallback_triggered=crag_fallback_triggered,
+                    hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
@@ -436,9 +436,7 @@ class RagPipeline:
                 crag_variants = (
                     _dedupe_strings([*rewritten, *query_variants]) if rewritten else query_variants
                 )
-                crag_vectors = await self._genai.embed(
-                    crag_variants, input_type="SEARCH_QUERY"
-                )
+                crag_vectors = await self._genai.embed(crag_variants, input_type="SEARCH_QUERY")
                 crag_result = await self._retrieve_with_strategy(
                     query_variants=crag_variants,
                     vectors=crag_vectors,
@@ -470,9 +468,7 @@ class RagPipeline:
                     attributes={
                         "anchor_count": len(ranked),
                         "candidate_count": len(retrieved),
-                        "max_chunks_per_anchor": (
-                            self._settings.rag_context_dependency_max_chunks
-                        ),
+                        "max_chunks_per_anchor": (self._settings.rag_context_dependency_max_chunks),
                     },
                     result_attributes=lambda item: {
                         "promoted_count": item[1],
@@ -515,9 +511,7 @@ class RagPipeline:
                     ),
                     attributes={
                         "input_count": len(packed_chunks),
-                        "neighbor_window": (
-                            self._settings.rag_context_adaptive_neighbor_window
-                        ),
+                        "neighbor_window": (self._settings.rag_context_adaptive_neighbor_window),
                         "max_chunks_per_group": (self._settings.rag_context_group_max_chunks),
                         "min_overlap": self._settings.rag_context_adaptive_min_overlap,
                     },
@@ -671,17 +665,17 @@ class RagPipeline:
                     route_reason=resolved_strategy.route_reason,
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     post_retrieval_pipeline=grounding_params.pipeline,
-                generation_profile=self._settings.rag_generation_profile,
-                guardrail_policy=self._settings.rag_guardrail_policy,
-                vector_index_profile=self._settings.rag_vector_index_profile,
-                graph_profile=graph_profile,
-                agentic_profile=agentic_params.profile,
-                agentic_subquery_count=agentic_subquery_count,
-                agentic_hops=agentic_hops,
-                corrective_retried=corrective_retried,
-                crag_confidence_score=crag_confidence_score,
-                crag_fallback_triggered=crag_fallback_triggered,
-                hyde_generated=hyde_generated,
+                    generation_profile=self._settings.rag_generation_profile,
+                    guardrail_policy=self._settings.rag_guardrail_policy,
+                    vector_index_profile=self._settings.rag_vector_index_profile,
+                    graph_profile=graph_profile,
+                    agentic_profile=agentic_params.profile,
+                    agentic_subquery_count=agentic_subquery_count,
+                    agentic_hops=agentic_hops,
+                    corrective_retried=corrective_retried,
+                    crag_confidence_score=crag_confidence_score,
+                    crag_fallback_triggered=crag_fallback_triggered,
+                    hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
@@ -1630,8 +1624,7 @@ def _crag_confidence(ranked: list[RetrievedChunk]) -> float:
     if not ranked:
         return 0.0
     best = max(
-        (chunk.rerank_score if chunk.rerank_score is not None else chunk.score)
-        for chunk in ranked
+        (chunk.rerank_score if chunk.rerank_score is not None else chunk.score) for chunk in ranked
     )
     return max(0.0, min(1.0, float(best)))
 
@@ -1682,9 +1675,7 @@ def _apply_business_fit_weighting(
         return (-(semantic * _business_fit(chunk)), index)
 
     reordered = sorted(indexed, key=sort_key)
-    changed = sum(
-        1 for new_index, (old_index, _) in enumerate(reordered) if new_index != old_index
-    )
+    changed = sum(1 for new_index, (old_index, _) in enumerate(reordered) if new_index != old_index)
     return [chunk for _, chunk in reordered], changed
 
 

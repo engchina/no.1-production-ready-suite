@@ -112,9 +112,7 @@ def test_build_navigation_tree_is_empty_without_sections() -> None:
 async def test_summarize_navigation_nodes_fills_summaries_with_injected_summarizer() -> None:
     extraction = _extraction(
         [
-            _element(
-                text="あ" * 300, element_id="e1", section_path=["第1章"], order=0, page=1
-            ),
+            _element(text="あ" * 300, element_id="e1", section_path=["第1章"], order=0, page=1),
             _element(text="短文", element_id="e2", section_path=["第2章"], order=1, page=2),
         ]
     )
@@ -126,9 +124,7 @@ async def test_summarize_navigation_nodes_fills_summaries_with_injected_summariz
         calls.append(text)
         return f"要約({len(text)}文字)"
 
-    summarized = await summarize_navigation_nodes(
-        nodes, extraction, _summarize, min_chars=200
-    )
+    summarized = await summarize_navigation_nodes(nodes, extraction, _summarize, min_chars=200)
     by_path = {tuple(node.section_path): node for node in summarized}
     # 長い章は要約され、短い章（min_chars 未満）は要約されない。
     assert by_path[("第1章",)].summary == "要約(300文字)"

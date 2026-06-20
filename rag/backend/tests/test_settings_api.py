@@ -78,9 +78,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["unstructured"]["status"] == "disabled"
     assert body["scorecard"]["selected_backend"] == "auto"
     assert body["scorecard"]["recommended_backend"] == "docling"
-    score_by_backend = {
-        entry["backend"]: entry for entry in body["scorecard"]["entries"]
-    }
+    score_by_backend = {entry["backend"]: entry for entry in body["scorecard"]["entries"]}
     assert score_by_backend["docling"]["recommended"] is True
     assert score_by_backend["marker"]["warning_codes"] == ["adapter_package_missing"]
     route_by_kind = {route["source_kind"]: route for route in body["source_routes"]}

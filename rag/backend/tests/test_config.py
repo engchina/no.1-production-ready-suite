@@ -478,11 +478,14 @@ def test_context_adaptive_expansion_defaults_to_disabled_and_is_bounded() -> Non
     assert settings.rag_context_adaptive_expansion_enabled is False
     assert settings.rag_context_adaptive_neighbor_window == 1
     assert settings.rag_context_adaptive_min_overlap == 0.08
-    assert Settings(
-        rag_context_adaptive_expansion_enabled=True,
-        rag_context_adaptive_neighbor_window=2,
-        rag_context_adaptive_min_overlap=0.2,
-    ).rag_context_adaptive_min_overlap == 0.2
+    assert (
+        Settings(
+            rag_context_adaptive_expansion_enabled=True,
+            rag_context_adaptive_neighbor_window=2,
+            rag_context_adaptive_min_overlap=0.2,
+        ).rag_context_adaptive_min_overlap
+        == 0.2
+    )
 
     with pytest.raises(ValidationError):
         Settings(rag_context_adaptive_neighbor_window=-1)
@@ -500,10 +503,13 @@ def test_context_dependency_promotion_defaults_to_disabled_and_is_bounded() -> N
 
     assert settings.rag_context_dependency_promotion_enabled is False
     assert settings.rag_context_dependency_max_chunks == 4
-    assert Settings(
-        rag_context_dependency_promotion_enabled=True,
-        rag_context_dependency_max_chunks=2,
-    ).rag_context_dependency_max_chunks == 2
+    assert (
+        Settings(
+            rag_context_dependency_promotion_enabled=True,
+            rag_context_dependency_max_chunks=2,
+        ).rag_context_dependency_max_chunks
+        == 2
+    )
 
     with pytest.raises(ValidationError):
         Settings(rag_context_dependency_max_chunks=0)

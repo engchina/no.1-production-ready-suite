@@ -193,10 +193,7 @@ def preprocess_runtime_settings(settings: Settings) -> PreprocessRuntimeSettings
     )
     service_urls = ", ".join(
         url
-        for url in (
-            preprocess_service_url(settings, name)
-            for name in PREPROCESS_SERVICE_URL_ATTRS
-        )
+        for url in (preprocess_service_url(settings, name) for name in PREPROCESS_SERVICE_URL_ATTRS)
         if url
     )
     return PreprocessRuntimeSettings(

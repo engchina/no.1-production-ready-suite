@@ -33,9 +33,7 @@ async def list_business_views(
     settings = get_settings()
 
     async def _load() -> Page[BusinessViewSummary]:
-        items = await oracle.list_business_views(
-            status=status, query=q, limit=limit, offset=offset
-        )
+        items = await oracle.list_business_views(status=status, query=q, limit=limit, offset=offset)
         total = await oracle.count_business_views(status=status, query=q)
         return Page(
             items=items,

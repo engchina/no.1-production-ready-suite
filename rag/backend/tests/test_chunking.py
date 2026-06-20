@@ -74,8 +74,7 @@ def test_structured_extraction_infers_elements_from_raw_text() -> None:
 
 def test_structured_extraction_infers_code_and_equation_blocks() -> None:
     """Markdown/LaTeX block を code/equation element として保持する。"""
-    extraction = StructuredExtraction(
-        raw_text="""# 実装メモ
+    extraction = StructuredExtraction(raw_text="""# 実装メモ
 ```python
 def answer() -> int:
     return 42
@@ -84,8 +83,7 @@ def answer() -> int:
 $$
 E = mc^2
 $$
-"""
-    )
+""")
 
     assert [element.kind for element in extraction.elements] == ["title", "code", "equation"]
     code_element = extraction.elements[1]
@@ -288,9 +286,7 @@ def test_chunk_extraction_adds_parent_group_metadata_to_split_table() -> None:
     assert all(chunk.metadata["table_id"] == "xlsx-sheet-1" for chunk in table_chunks)
     assert all(chunk.metadata["table_row_count"] == 4 for chunk in table_chunks)
     assert all(chunk.metadata["table_column_count"] == 2 for chunk in table_chunks)
-    assert all(
-        chunk.metadata["table_row_tree_version"] == "row_tree_v1" for chunk in table_chunks
-    )
+    assert all(chunk.metadata["table_row_tree_version"] == "row_tree_v1" for chunk in table_chunks)
     assert all(
         chunk.metadata["table_row_tree_format"] == "key_value_rows" for chunk in table_chunks
     )

@@ -256,9 +256,7 @@ def build_chunk_template_scorecard(
                     metrics=metrics,
                     metrics_source=metrics_source,
                     evidence=(
-                        template_evidence.get(template)
-                        if template_evidence is not None
-                        else None
+                        template_evidence.get(template) if template_evidence is not None else None
                     ),
                 )
                 for template in templates
@@ -501,8 +499,7 @@ def _normalize_metric(value: float, direction: MetricDirection) -> float:
     if value >= LATENCY_ZERO_CREDIT_MS:
         return 0.0
     return 1.0 - (
-        (value - LATENCY_FULL_CREDIT_MS)
-        / (LATENCY_ZERO_CREDIT_MS - LATENCY_FULL_CREDIT_MS)
+        (value - LATENCY_FULL_CREDIT_MS) / (LATENCY_ZERO_CREDIT_MS - LATENCY_FULL_CREDIT_MS)
     )
 
 

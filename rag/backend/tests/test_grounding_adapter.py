@@ -85,9 +85,7 @@ def test_full_governed_enables_all_stages() -> None:
 
 
 def test_runtime_settings_orders_and_marks_selected() -> None:
-    runtime = grounding_adapter_runtime_settings(
-        Settings(rag_post_retrieval_pipeline="compact")
-    )
+    runtime = grounding_adapter_runtime_settings(Settings(rag_post_retrieval_pipeline="compact"))
     assert tuple(status.name for status in runtime.pipelines) == GROUNDING_PIPELINE_ORDER
     selected = [status.name for status in runtime.pipelines if status.selected]
     assert selected == ["compact"]

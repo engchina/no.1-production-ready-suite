@@ -128,9 +128,7 @@ REQUIRED_FILE_PROCESSING_SOURCE_KINDS = frozenset(
         "text",
     }
 )
-REQUIRED_ADAPTER_SCHEMA_REMAP_SOURCE_KINDS = frozenset(
-    {"pdf", "image", "office", "html", "email"}
-)
+REQUIRED_ADAPTER_SCHEMA_REMAP_SOURCE_KINDS = frozenset({"pdf", "image", "office", "html", "email"})
 REQUIRED_FILE_PROCESSING_SCENARIO_CHECKS: Mapping[str, frozenset[str]] = {
     "scanned_pdf_ocr": frozenset(
         {"ocr_text", "page_coverage", "citation_traceability", "quality_report_metadata"}
@@ -270,9 +268,7 @@ REQUIRED_FILE_PROCESSING_SCENARIO_CHECKS: Mapping[str, frozenset[str]] = {
     "tiff_image_unsupported": frozenset(
         {"unsupported_reason", "safe_error", "parser_warning_taxonomy"}
     ),
-    "audio_unsupported": frozenset(
-        {"unsupported_reason", "safe_error", "parser_warning_taxonomy"}
-    ),
+    "audio_unsupported": frozenset({"unsupported_reason", "safe_error", "parser_warning_taxonomy"}),
     "duplicate_file_canonical_kb": frozenset(
         {
             "canonical_alias",
@@ -598,8 +594,7 @@ def _validate_adapter_schema_remap_contract(
     missing_source_kinds = REQUIRED_ADAPTER_SCHEMA_REMAP_SOURCE_KINDS - declared_source_kinds
     if missing_source_kinds:
         errors.append(
-            "adapter_schema_remap:missing_source_kinds:"
-            + ",".join(sorted(missing_source_kinds))
+            "adapter_schema_remap:missing_source_kinds:" + ",".join(sorted(missing_source_kinds))
         )
     return tuple(errors)
 
@@ -612,9 +607,7 @@ def _case_requires_adapter_schema_remap_smoke(case: Mapping[str, object]) -> boo
         return False
     if _string_value(case.get("expected_parser_profile")).startswith("unsupported_"):
         return False
-    return not _string_value(case.get("expected_chunk_template")).startswith(
-        "unsupported_"
-    )
+    return not _string_value(case.get("expected_chunk_template")).startswith("unsupported_")
 
 
 def evaluate_file_processing_metric_thresholds(
@@ -690,8 +683,7 @@ def _validate_staging_dataset_policy(
     unknown_source_kinds = required_source_kinds - REQUIRED_FILE_PROCESSING_SOURCE_KINDS
     if unknown_source_kinds:
         errors.append(
-            "staging_dataset_policy:unknown_source_kinds:"
-            + ",".join(sorted(unknown_source_kinds))
+            "staging_dataset_policy:unknown_source_kinds:" + ",".join(sorted(unknown_source_kinds))
         )
 
     required_scenarios = _string_set(policy.get("required_scenarios"))
@@ -702,8 +694,7 @@ def _validate_staging_dataset_policy(
         )
 
     required_fixture_prefix = (
-        _string_value(policy.get("required_fixture_prefix"))
-        or _DEFAULT_REAL_WORLD_FIXTURE_PREFIX
+        _string_value(policy.get("required_fixture_prefix")) or _DEFAULT_REAL_WORLD_FIXTURE_PREFIX
     )
     real_world_cases: list[Mapping[str, object]] = []
     real_world_source_kinds: set[str] = set()
@@ -727,8 +718,7 @@ def _validate_staging_dataset_policy(
         fixture = _string_value(case.get("fixture"))
         if required_fixture_prefix and not fixture.startswith(required_fixture_prefix):
             errors.append(
-                f"case[{case_id}]:real_world_fixture_prefix_mismatch:"
-                f"{required_fixture_prefix}"
+                f"case[{case_id}]:real_world_fixture_prefix_mismatch:" f"{required_fixture_prefix}"
             )
 
     if len(real_world_cases) < min_real_world_cases:
@@ -740,14 +730,12 @@ def _validate_staging_dataset_policy(
     missing_source_kinds = required_source_kinds - real_world_source_kinds
     if missing_source_kinds:
         errors.append(
-            "staging_dataset_policy:missing_source_kinds:"
-            + ",".join(sorted(missing_source_kinds))
+            "staging_dataset_policy:missing_source_kinds:" + ",".join(sorted(missing_source_kinds))
         )
     missing_scenarios = required_scenarios - real_world_scenarios
     if missing_scenarios:
         errors.append(
-            "staging_dataset_policy:missing_scenarios:"
-            + ",".join(sorted(missing_scenarios))
+            "staging_dataset_policy:missing_scenarios:" + ",".join(sorted(missing_scenarios))
         )
     return tuple(errors)
 
@@ -811,8 +799,7 @@ def staging_dataset_policy_summary(manifest: Mapping[str, object]) -> dict[str, 
     required_scenarios = _string_set(policy.get("required_scenarios"))
     valid_required_scenarios = required_scenarios & REQUIRED_FILE_PROCESSING_SCENARIOS
     required_fixture_prefix = (
-        _string_value(policy.get("required_fixture_prefix"))
-        or _DEFAULT_REAL_WORLD_FIXTURE_PREFIX
+        _string_value(policy.get("required_fixture_prefix")) or _DEFAULT_REAL_WORLD_FIXTURE_PREFIX
     )
 
     real_world_case_count = 0
@@ -1159,10 +1146,7 @@ def _run_file_processing_case_contract(
         pending.append("table_qa_accuracy:requires_staging_search_qa")
     if _dependency_lineage_requires_staging(case) and "dependency_lineage" in passed:
         pending.append("dependency_lineage:requires_staging_search_citation")
-    if (
-        _structural_section_requires_staging(case)
-        and "structural_section_coverage" in passed
-    ):
+    if _structural_section_requires_staging(case) and "structural_section_coverage" in passed:
         pending.append("structural_section_coverage:requires_staging_section_search")
     return FileProcessingContractCaseResult(
         case_id=case_id,
@@ -1495,11 +1479,7 @@ def _check_parser_warning_taxonomy(
     segment_failures: Sequence[object],
 ) -> tuple[str, str]:
     """parser fallback / unsupported の警告が安定 code だけで表現されているか。"""
-    warning_codes = [
-        _string_value(warning)
-        for warning in warnings
-        if _string_value(warning)
-    ]
+    warning_codes = [_string_value(warning) for warning in warnings if _string_value(warning)]
     warning_codes.extend(
         code
         for failure in segment_failures
@@ -1749,10 +1729,7 @@ def _check_table_preserve_rows(chunks: Sequence[Chunk]) -> tuple[str, str]:
             chunk.index,
         ),
     )
-    if any(
-        _optional_int(chunk.metadata.get("chunk_part_index")) is None
-        for chunk in ordered
-    ):
+    if any(_optional_int(chunk.metadata.get("chunk_part_index")) is None for chunk in ordered):
         return "failure", "table_part_index_missing"
     first_header = _table_header_signature(ordered[0].text)
     if not first_header:
@@ -1807,11 +1784,7 @@ def _cross_page_table_pages(extraction: StructuredExtraction) -> dict[str, set[i
         if not table_id or element.page_number is None:
             continue
         pages_by_table.setdefault(table_id, set()).add(element.page_number)
-    return {
-        table_id: pages
-        for table_id, pages in pages_by_table.items()
-        if len(pages) > 1
-    }
+    return {table_id: pages for table_id, pages in pages_by_table.items() if len(pages) > 1}
 
 
 def _cross_page_table_chunk_violation(
@@ -1843,14 +1816,10 @@ def _cross_page_table_chunk_violation(
     if any(chunk.metadata.get("table_cross_page") is not True for chunk in ordered):
         return "cross_page_table_flag_missing"
     if any(
-        _optional_int(chunk.metadata.get("table_page_start")) != min(pages)
-        for chunk in ordered
+        _optional_int(chunk.metadata.get("table_page_start")) != min(pages) for chunk in ordered
     ):
         return "cross_page_table_page_start_mismatch"
-    if any(
-        _optional_int(chunk.metadata.get("table_page_end")) != max(pages)
-        for chunk in ordered
-    ):
+    if any(_optional_int(chunk.metadata.get("table_page_end")) != max(pages) for chunk in ordered):
         return "cross_page_table_page_end_mismatch"
     expected_indexes = list(range(1, len(ordered) + 1))
     actual_indexes = [
@@ -1883,11 +1852,7 @@ def _cross_page_table_chunk_violation(
         if row_start <= previous_end:
             return "cross_page_table_row_overlap"
         previous_end = row_end
-    chunk_pages = {
-        page
-        for chunk in ordered
-        for page in _chunk_pages_from_metadata(chunk.metadata)
-    }
+    chunk_pages = {page for chunk in ordered for page in _chunk_pages_from_metadata(chunk.metadata)}
     if not pages <= chunk_pages:
         return "cross_page_table_chunk_pages_missing"
     return None
@@ -2342,8 +2307,7 @@ def _table_row_tree_chunk_violation(
         return "table_row_tree_header_hash_mismatch"
     row_hashes = _json_string_list(metadata.get("table_row_tree_row_hashes"))
     expected_hashes = [
-        _stable_json_sha256({"columns": column_keys, "row": row_block})
-        for row_block in row_blocks
+        _stable_json_sha256({"columns": column_keys, "row": row_block}) for row_block in row_blocks
     ]
     if row_hashes != expected_hashes:
         return "table_row_tree_row_hash_mismatch"
@@ -2375,8 +2339,7 @@ def _table_rows_without_separator(text: str) -> list[list[str]]:
         if not _looks_like_table_row(stripped) or _looks_like_markdown_separator(stripped):
             continue
         cells = [
-            _clean_table_cell(cell.replace("\\|", "|"))
-            for cell in _split_table_cells(stripped)
+            _clean_table_cell(cell.replace("\\|", "|")) for cell in _split_table_cells(stripped)
         ]
         if cells:
             rows.append(cells)
@@ -2603,9 +2566,7 @@ def _chunk_group_contextual_coherence_violation(chunks: Sequence[Chunk]) -> str 
 def _single_chunk_group_contextual_coherence_violation(
     group_chunks: Sequence[Chunk],
 ) -> str | None:
-    part_counts = {
-        _positive_int(chunk.metadata.get("chunk_part_count")) for chunk in group_chunks
-    }
+    part_counts = {_positive_int(chunk.metadata.get("chunk_part_count")) for chunk in group_chunks}
     if len(part_counts) != 1:
         return "context_group_part_count_mismatch"
     part_count = next(iter(part_counts))
@@ -2614,9 +2575,7 @@ def _single_chunk_group_contextual_coherence_violation(
     )
     if part_indexes != list(range(1, part_count + 1)):
         return "context_group_part_indexes_not_contiguous"
-    group_kinds = {
-        _string_value(chunk.metadata.get("chunk_group_kind")) for chunk in group_chunks
-    }
+    group_kinds = {_string_value(chunk.metadata.get("chunk_group_kind")) for chunk in group_chunks}
     if len(group_kinds) != 1:
         return "context_group_kind_mismatch"
     if part_count <= 1:
@@ -2882,8 +2841,7 @@ def _quality_report_figure_count(extraction: StructuredExtraction) -> int:
         sum(
             1
             for element in extraction.elements
-            if element.kind in {"figure", "figure_caption"}
-            or element.content_kind == "figure"
+            if element.kind in {"figure", "figure_caption"} or element.content_kind == "figure"
         ),
         sum(1 for asset in extraction.assets if asset.kind.casefold() in _FIGURE_ASSET_KINDS),
     )
@@ -2911,12 +2869,8 @@ def _quality_report_low_confidence_count(extraction: StructuredExtraction) -> in
 
 
 def _structured_extraction_pages(extraction: StructuredExtraction) -> set[int]:
-    return {
-        page.page_number for page in extraction.pages if page.page_number is not None
-    } | {
-        element.page_number
-        for element in extraction.elements
-        if element.page_number is not None
+    return {page.page_number for page in extraction.pages if page.page_number is not None} | {
+        element.page_number for element in extraction.elements if element.page_number is not None
     }
 
 
@@ -3056,8 +3010,7 @@ def _reading_order_chunk_violation(chunks: Sequence[Chunk]) -> str | None:
         row_starts = [
             row_start
             for chunk in group_chunks
-            if (row_start := _optional_int(chunk.metadata.get("table_data_row_start")))
-            is not None
+            if (row_start := _optional_int(chunk.metadata.get("table_data_row_start"))) is not None
         ]
         if len(row_starts) >= 2 and row_starts != sorted(row_starts):
             return "table_row_group_order_not_monotonic"
@@ -3245,11 +3198,7 @@ def _section_set(value: object) -> set[str]:
         return {_normalize_section_label(value)} if _normalize_section_label(value) else set()
     if not _is_sequence(value):
         return set()
-    return {
-        section
-        for item in value
-        if (section := _normalize_section_label(item))
-    }
+    return {section for item in value if (section := _normalize_section_label(item))}
 
 
 def _normalize_section_label(value: object) -> str:
@@ -3380,9 +3329,11 @@ def _dependency_lineage_requires_staging(case: Mapping[str, object]) -> bool:
 
 
 def _structural_section_requires_staging(case: Mapping[str, object]) -> bool:
-    return "structural_section_coverage" in _string_set(case.get("required_checks")) and bool(
-        _section_set(case.get("expected_sections"))
-    ) and bool(_string_value(case.get("staging_query")))
+    return (
+        "structural_section_coverage" in _string_set(case.get("required_checks"))
+        and bool(_section_set(case.get("expected_sections")))
+        and bool(_string_value(case.get("staging_query")))
+    )
 
 
 def parser_fallback_rate(extractions: Sequence[Mapping[str, object]]) -> float:
@@ -3825,9 +3776,7 @@ def _id_tuple(value: object) -> tuple[str, ...]:
         return tuple(item.strip() for item in cleaned.split(",") if item.strip())
     if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
         return tuple(
-            str(item).strip()
-            for item in value
-            if isinstance(item, str | int) and str(item).strip()
+            str(item).strip() for item in value if isinstance(item, str | int) and str(item).strip()
         )
     return ()
 

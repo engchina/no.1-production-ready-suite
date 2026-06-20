@@ -1,5 +1,6 @@
 """RAG guardrail policy のテスト。"""
 
+from app.clients.oci_guardrails import GuardrailInspection
 from app.config import Settings
 from app.rag.guardrails import GuardrailPolicy, evaluate_groundedness
 
@@ -133,18 +134,16 @@ def test_evaluate_groundedness_fails_unrelated_answer_with_context() -> None:
 class _FakeOciClient:
     """OciGuardrailsClient 代替。inspect_text の戻り値を固定する。"""
 
-    def __init__(self, inspection: object | None) -> None:
+    def __init__(self, inspection: GuardrailInspection | None) -> None:
         self._inspection = inspection
         self.calls: list[str] = []
 
-    def inspect_text(self, text: str, **_kwargs: object) -> object | None:
+    def inspect_text(self, text: str, **_kwargs: object) -> GuardrailInspection | None:
         self.calls.append(text)
         return self._inspection
 
 
-def _inspection(**kwargs: object) -> object:
-    from app.clients.oci_guardrails import GuardrailInspection
-
+def _inspection(**kwargs: object) -> GuardrailInspection:
     return GuardrailInspection(**kwargs)  # type: ignore[arg-type]
 
 

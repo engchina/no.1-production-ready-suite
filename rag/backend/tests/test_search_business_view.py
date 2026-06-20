@@ -110,9 +110,7 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
     # 参照 KB が検索対象へ展開されている。
     assert RecordingPipeline.captured_request is not None
     assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-1", "kb-2"]
-    assert (
-        RecordingPipeline.captured_request.filters["knowledge_base_id"] == "kb-1,kb-2"
-    )
+    assert RecordingPipeline.captured_request.filters["knowledge_base_id"] == "kb-1,kb-2"
 
 
 def test_business_view_persona_overrides_system_prompt(monkeypatch: MonkeyPatch) -> None:

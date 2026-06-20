@@ -69,9 +69,7 @@ class PipelineStageClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._timeout = float(
-            getattr(settings, "rag_pipeline_stage_timeout_seconds", 120.0)
-        )
+        self._timeout = float(getattr(settings, "rag_pipeline_stage_timeout_seconds", 120.0))
 
     def _service_url(self, stage: str) -> str | None:
         field = _STAGE_URL_FIELDS.get(stage)
@@ -93,9 +91,7 @@ class PipelineStageClient:
         url = self._service_url(stage)
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
-                    f"{url}/run", content=request_json, headers=_JSON_HEADERS
-                )
+                response = client.post(f"{url}/run", content=request_json, headers=_JSON_HEADERS)
                 response.raise_for_status()
                 payload: dict[str, object] = response.json()
                 return payload
@@ -126,9 +122,7 @@ class PipelineStageClient:
             for item in parsed.chunks
         ]
 
-    def run_vector_index(
-        self, request: VectorIndexStageRequest
-    ) -> VectorIndexStageResponse | None:
+    def run_vector_index(self, request: VectorIndexStageRequest) -> VectorIndexStageResponse | None:
         """vector_index ステージを remote 実行する。委譲不可/失敗時は None。"""
         payload = self._post_run("vector_index", request.model_dump_json())
         if payload is None:
@@ -148,9 +142,7 @@ class PipelineStageClient:
         except ValueError:
             return None
 
-    def run_generation(
-        self, request: GenerationStageRequest
-    ) -> GenerationStageResponse | None:
+    def run_generation(self, request: GenerationStageRequest) -> GenerationStageResponse | None:
         """generation ステージ(静的 prompt 解決)を remote 実行する。委譲不可/失敗時は None。"""
         payload = self._post_run("generation", request.model_dump_json())
         if payload is None:

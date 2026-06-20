@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-from typing import Any
+import subprocess
+from typing import Any, Literal
 
 import pytest
 from pytest import MonkeyPatch
@@ -149,14 +150,31 @@ def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
     assert mineru is not None
     args = _compose_args(settings, mineru, "start")
     assert args == [
-        "docker", "compose", "--profile", "gpu", "up", "-d", "--no-build", "parser-mineru",
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "up",
+        "-d",
+        "--no-build",
+        "parser-mineru",
     ]
     # GPU は profile gate に隠れるため stop / restart でも --profile gpu を付ける。
     assert _compose_args(settings, mineru, "stop") == [
-        "docker", "compose", "--profile", "gpu", "stop", "parser-mineru",
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "stop",
+        "parser-mineru",
     ]
     assert _compose_args(settings, mineru, "restart") == [
-        "docker", "compose", "--profile", "gpu", "restart", "parser-mineru",
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "restart",
+        "parser-mineru",
     ]
 
 
@@ -268,7 +286,7 @@ def test_control_client_raises_on_nonzero_exit(monkeypatch: MonkeyPatch) -> None
     async def fake_exec(*_args: Any, **_kwargs: Any) -> _FakeProcess:
         return _FakeProcess(returncode=1, stderr=b"boom")
 
-    monkeypatch.setattr(control_module.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     client_obj = ServiceControlClient(docker_driver=DockerComposeDriver())
     with pytest.raises(ServiceControlError) as exc:
         asyncio.run(client_obj.control(settings, entry, "start"))
@@ -285,7 +303,7 @@ def test_control_client_success(monkeypatch: MonkeyPatch) -> None:
     async def fake_exec(*_args: Any, **_kwargs: Any) -> _FakeProcess:
         return _FakeProcess(returncode=0)
 
-    monkeypatch.setattr(control_module.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     result = asyncio.run(ServiceControlClient().control(settings, entry, "stop"))
     assert isinstance(result, ControlResult)
     assert result.ok is True
@@ -351,7 +369,7 @@ def test_control_success_returns_updated_status(monkeypatch: MonkeyPatch) -> Non
         _self: Any,
         _settings: Any,
         entry: ServiceCatalogEntry,
-        action: str,
+        action: Literal["start", "stop", "restart"],
     ) -> ControlResult:
         return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
 
@@ -377,7 +395,7 @@ def test_control_failure_returns_502(monkeypatch: MonkeyPatch) -> None:
         _self: Any,
         _settings: Any,
         entry: ServiceCatalogEntry,
-        action: str,
+        action: Literal["start", "stop", "restart"],
     ) -> ControlResult:
         raise ServiceControlError(
             ControlResult(
@@ -513,7 +531,7 @@ class _RecordingDriver:
         self.calls: list[str] = []
 
     async def run(
-        self, settings: Any, entry: ServiceCatalogEntry, action: str
+        self, settings: Any, entry: ServiceCatalogEntry, action: Literal["start", "stop", "restart"]
     ) -> ControlResult:
         self.calls.append(action)
         return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
@@ -566,7 +584,7 @@ def test_uv_driver_start_writes_pidfile_and_argv(monkeypatch: MonkeyPatch, tmp_p
         return _FakePopen(pid=4321)
 
     monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
-    monkeypatch.setattr(control_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
     # 起動後検証: 待機を 0 にし、spawn したプロセスは生存しているものとみなす。
     monkeypatch.setattr(control_module, "_START_VERIFY_DELAY_SECONDS", 0)
     monkeypatch.setattr(control_module, "_pid_alive", lambda _pid: True)
@@ -601,7 +619,7 @@ def test_uv_driver_start_idempotent_when_alive(monkeypatch: MonkeyPatch, tmp_pat
     def boom(*_a: Any, **_k: Any) -> None:  # pragma: no cover - 呼ばれてはいけない
         raise AssertionError("既に起動済みなら Popen は呼ばない")
 
-    monkeypatch.setattr(control_module.subprocess, "Popen", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
     result = asyncio.run(UvProcessDriver().run(settings, entry, "start"))
     assert result.ok is True
 
@@ -617,9 +635,9 @@ def test_uv_driver_stop_signals_and_clears_pidfile(monkeypatch: MonkeyPatch, tmp
     # 生存判定: 初回 True(→SIGTERM)、以降 False(ループ即終了・SIGKILL なし)。
     alive = iter([True, False, False])
     monkeypatch.setattr(control_module, "_pid_alive", lambda _pid: next(alive))
-    monkeypatch.setattr(control_module.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(os, "getpgid", lambda pid: pid)
     signals: list[int] = []
-    monkeypatch.setattr(control_module.os, "killpg", lambda _pgid, sig: signals.append(sig))
+    monkeypatch.setattr(os, "killpg", lambda _pgid, sig: signals.append(sig))
 
     result = asyncio.run(UvProcessDriver().run(settings, entry, "stop"))
     assert result.ok is True
@@ -663,7 +681,7 @@ def test_uv_driver_start_detects_immediate_exit(monkeypatch: MonkeyPatch, tmp_pa
     assert entry is not None
     monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
     monkeypatch.setattr(control_module, "_START_VERIFY_DELAY_SECONDS", 0)
-    monkeypatch.setattr(control_module.subprocess, "Popen", lambda *_a, **_k: _FakePopen(pid=4321))
+    monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: _FakePopen(pid=4321))
     # 起動済み判定は False(新規 spawn させる)、検証時の生存判定も False(即死)。
     monkeypatch.setattr(control_module, "_pid_is_service", lambda _pid, _entry: False)
     monkeypatch.setattr(control_module, "_pid_alive", lambda _pid: False)
@@ -689,7 +707,9 @@ def test_control_client_serializes_same_service() -> None:
     max_active = 0
 
     class _SlowDriver:
-        async def run(self, _s: Any, e: ServiceCatalogEntry, action: str) -> ControlResult:
+        async def run(
+            self, _s: Any, e: ServiceCatalogEntry, action: Literal["start", "stop", "restart"]
+        ) -> ControlResult:
             nonlocal active, max_active
             active += 1
             max_active = max(max_active, active)

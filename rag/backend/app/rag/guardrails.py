@@ -18,6 +18,7 @@ class _OciGuardrailsLike(Protocol):
 
     def inspect_text(self, text: str) -> GuardrailInspection | None: ...
 
+
 PROMPT_INJECTION_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
@@ -211,12 +212,15 @@ class GuardrailPolicy:
         if self._params.mask_sensitive_identifiers:
             sanitized, sensitive_findings = _mask_sensitive_identifiers(sanitized)
             findings.extend(sensitive_findings)
-        if context is not None and not evaluate_groundedness(
-            sanitized,
-            context,
-            min_overlap=self._params.grounding_min_overlap,
-            min_ratio=self._params.grounding_min_ratio,
-        ).grounded:
+        if (
+            context is not None
+            and not evaluate_groundedness(
+                sanitized,
+                context,
+                min_overlap=self._params.grounding_min_overlap,
+                min_ratio=self._params.grounding_min_ratio,
+            ).grounded
+        ):
             findings.append(
                 GuardrailFinding(
                     code="low_groundedness",
