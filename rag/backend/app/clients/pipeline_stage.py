@@ -20,6 +20,8 @@ from rag_pipeline_core.stage import (
     GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
+    GuardrailStageRequest,
+    GuardrailStageResponse,
     VectorIndexStageRequest,
     VectorIndexStageResponse,
 )
@@ -35,12 +37,14 @@ _STAGE_URL_FIELDS: dict[str, str] = {
     "vector_index": "rag_vector_index_service_url",
     "graphrag": "rag_graph_service_url",
     "generation": "rag_generation_service_url",
+    "guardrail": "rag_guardrail_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_enabled",
     "vector_index": "rag_vector_index_service_enabled",
     "graphrag": "rag_graph_service_enabled",
     "generation": "rag_generation_service_enabled",
+    "guardrail": "rag_guardrail_service_enabled",
 }
 
 
@@ -137,6 +141,16 @@ class PipelineStageClient:
             return None
         try:
             return GenerationStageResponse.model_validate(payload)
+        except ValueError:
+            return None
+
+    def run_guardrail(self, request: GuardrailStageRequest) -> GuardrailStageResponse | None:
+        """guardrail ステージ(静的 policy 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        payload = self._post_run("guardrail", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            return GuardrailStageResponse.model_validate(payload)
         except ValueError:
             return None
 

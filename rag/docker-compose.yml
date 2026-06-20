@@ -240,6 +240,12 @@ services:
       dockerfile: services/pipeline/generation/Dockerfile
     restart: unless-stopped
 
+  pipeline-guardrail:
+    build:
+      context: .
+      dockerfile: services/pipeline/guardrail/Dockerfile
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     environment:

@@ -110,3 +110,18 @@ class GenerationStageResponse(BaseModel):
     profile: str
     system_prompt: str | None = None
     structured_output: bool = False
+
+
+class GuardrailStageRequest(BaseModel):
+    """``POST /run``(guardrail)の入力。policy のみ。"""
+
+    policy: str = "standard"
+
+
+class GuardrailStageResponse(BaseModel):
+    """``POST /run``(guardrail)の出力(groundedness 厳格度 + 監査強調)。"""
+
+    policy: str
+    grounding_min_overlap: int
+    grounding_min_ratio: float
+    audit_emphasis: bool

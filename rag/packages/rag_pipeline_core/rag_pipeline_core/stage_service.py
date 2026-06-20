@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
 from rag_pipeline_core.generation import resolve_generation
 from rag_pipeline_core.graph import resolve_graph_profile
+from rag_pipeline_core.guardrail import resolve_guardrail
 from rag_pipeline_core.stage import (
     ChunkingStageRequest,
     ChunkingStageResponse,
@@ -20,6 +21,8 @@ from rag_pipeline_core.stage import (
     GenerationStageResponse,
     GraphStageRequest,
     GraphStageResponse,
+    GuardrailStageRequest,
+    GuardrailStageResponse,
     StageHealth,
     VectorIndexStageRequest,
     VectorIndexStageResponse,
@@ -107,6 +110,29 @@ def create_generation_app(
             profile=resolved.profile,
             system_prompt=resolved.system_prompt,
             structured_output=resolved.structured_output,
+        )
+
+    return app
+
+
+def create_guardrail_app(
+    *, health_probe: HealthProbe | None = None, title: str = "pipeline-guardrail"
+) -> FastAPI:
+    """guardrail ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
+    app = FastAPI(title=title)
+    probe = health_probe or (
+        lambda: StageHealth(status="ok", stage="guardrail", package_name="rag_pipeline_core")
+    )
+    _health_routes(app, probe)
+
+    @app.post("/run", response_model=GuardrailStageResponse)
+    def run(request: GuardrailStageRequest) -> GuardrailStageResponse:
+        resolved = resolve_guardrail(request.policy)
+        return GuardrailStageResponse(
+            policy=resolved.policy,
+            grounding_min_overlap=resolved.grounding_min_overlap,
+            grounding_min_ratio=resolved.grounding_min_ratio,
+            audit_emphasis=resolved.audit_emphasis,
         )
 
     return app

@@ -1005,6 +1005,18 @@ class Settings(BaseSettings):
         default="http://pipeline-generation:8000",
         description="generation ステージマイクロサービスの base URL。",
     )
+    rag_guardrail_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "guardrail の policy 解決(groundedness 閾値 + 監査強調)を guardrail マイクロサービスへ"
+            "委譲する。OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退。"
+            "OCI Generative AI Guardrails backend(rag_guardrail_backend)とは別レイヤーで共存。"
+        ),
+    )
+    rag_guardrail_service_url: str = Field(
+        default="http://pipeline-guardrail:8000",
+        description="guardrail ステージマイクロサービスの base URL。",
+    )
     rag_graph_temporal_enabled: bool = Field(
         default=False,
         description=(

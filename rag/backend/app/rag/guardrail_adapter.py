@@ -1,74 +1,33 @@
 """Guardrail アダプター(安全ポリシーの手動選択プリセット)。
 
-`retrieval_adapter.py` と同型で、選択された安全ポリシーと利用可能なプリセット一覧を非機密の
-runtime snapshot として返す。NeMo Guardrails / Llama Guard 的な概念を、外部 SaaS や
-追加 LLM 呼び出しなしの決定論ヒューリスティック(prompt injection / PII マスク /
-groundedness 閾値)へ再マップする。`standard` は既存 `guardrail_*` 設定をそのまま尊重する。
+policy→groundedness 厳格度 + audit_emphasis の静的解決は共有パッケージ
+``rag_pipeline_core.guardrail`` を単一ソースとして使い、backend と guardrail マイクロサービスが
+同一結果を返す。`rag_guardrail_service_enabled` が真のとき静的解決を pipeline-guardrail サービスへ
+委譲し、未達/失敗時は in-process(同一ロジック)へ安全縮退する。block_prompt_injection / PII
+マスク / max_query_chars は backend 設定由来のため解決後に上乗せする。OCI Generative AI
+Guardrails backend(app.clients.oci_guardrails)は別レイヤーで共存。外部安全 SaaS は導入しない。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.config import GuardrailPolicyName, Settings
+from rag_pipeline_core.guardrail import (
+    DEFAULT_GROUNDING_MIN_OVERLAP,
+    DEFAULT_GROUNDING_MIN_RATIO,
+    GUARDRAIL_POLICIES,
+    GUARDRAIL_SPECS,
+    resolve_guardrail,
+)
+from rag_pipeline_core.guardrail import (
+    normalize_guardrail_policy as _core_normalize,
+)
 
-# evaluate_groundedness の既定閾値。standard はこの値を再現する。
-DEFAULT_GROUNDING_MIN_OVERLAP = 3
-DEFAULT_GROUNDING_MIN_RATIO = 0.12
+from app.config import GuardrailPolicyName, Settings
 
 GuardrailPolicy = GuardrailPolicyName
 DEFAULT_GUARDRAIL_POLICY: GuardrailPolicy = "standard"
-GUARDRAIL_POLICY_ORDER: tuple[GuardrailPolicy, ...] = (
-    "standard",
-    "strict",
-    "lenient",
-    "regulated",
-)
-
-
-@dataclass(frozen=True)
-class GuardrailPolicySpec:
-    """1 安全ポリシーの由来と groundedness 厳格度。"""
-
-    name: GuardrailPolicy
-    origin: str
-    recommended_for: tuple[str, ...]
-    grounding_min_overlap: int | None  # None は standard(settings 既定値)を使う
-    grounding_min_ratio: float | None
-    audit_emphasis: bool = False
-
-
-GUARDRAIL_ADAPTER_SPECS: dict[GuardrailPolicy, GuardrailPolicySpec] = {
-    "standard": GuardrailPolicySpec(
-        name="standard",
-        origin="reference_policy",
-        recommended_for=("general", "balanced"),
-        grounding_min_overlap=None,
-        grounding_min_ratio=None,
-    ),
-    "strict": GuardrailPolicySpec(
-        name="strict",
-        origin="nemo_guardrails_strict",
-        recommended_for=("low_hallucination", "sensitive"),
-        grounding_min_overlap=5,
-        grounding_min_ratio=0.30,
-    ),
-    "lenient": GuardrailPolicySpec(
-        name="lenient",
-        origin="recall_first",
-        recommended_for=("exploratory", "internal"),
-        grounding_min_overlap=2,
-        grounding_min_ratio=0.05,
-    ),
-    "regulated": GuardrailPolicySpec(
-        name="regulated",
-        origin="compliance_audit",
-        recommended_for=("compliance", "regulated"),
-        grounding_min_overlap=5,
-        grounding_min_ratio=0.30,
-        audit_emphasis=True,
-    ),
-}
+GUARDRAIL_POLICY_ORDER: tuple[GuardrailPolicy, ...] = GUARDRAIL_POLICIES  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -113,18 +72,18 @@ class GuardrailAdapterRuntimeSettings:
 
 def normalize_guardrail_policy(value: object) -> GuardrailPolicy:
     """未知のポリシー名は既定 standard へ寄せる。"""
-    normalized = str(value).casefold()
-    if normalized in GUARDRAIL_ADAPTER_SPECS:
-        return normalized
-    return DEFAULT_GUARDRAIL_POLICY
+    return _core_normalize(value)  # type: ignore[return-value]
 
 
 def resolve_guardrail_adapter(settings: Settings) -> GuardrailAdapterParams:
-    """Settings から Guardrail アダプターの effective パラメータを作る。"""
+    """Settings から Guardrail アダプターの effective パラメータを作る。
+
+    静的 groundedness/audit は core / サービスで解決し、backend 設定由来の安全レバーを上乗せする。
+    """
     policy = normalize_guardrail_policy(
         getattr(settings, "rag_guardrail_policy", DEFAULT_GUARDRAIL_POLICY)
     )
-    spec = GUARDRAIL_ADAPTER_SPECS[policy]
+    overlap, ratio, audit = _resolve_static(settings, policy)
     return GuardrailAdapterParams(
         policy=policy,
         block_prompt_injection=bool(getattr(settings, "guardrail_block_prompt_injection", True)),
@@ -132,18 +91,29 @@ def resolve_guardrail_adapter(settings: Settings) -> GuardrailAdapterParams:
             getattr(settings, "guardrail_mask_sensitive_identifiers", True)
         ),
         max_query_chars=int(getattr(settings, "guardrail_max_query_chars", 2000)),
-        grounding_min_overlap=(
-            spec.grounding_min_overlap
-            if spec.grounding_min_overlap is not None
-            else DEFAULT_GROUNDING_MIN_OVERLAP
-        ),
-        grounding_min_ratio=(
-            spec.grounding_min_ratio
-            if spec.grounding_min_ratio is not None
-            else DEFAULT_GROUNDING_MIN_RATIO
-        ),
-        audit_emphasis=spec.audit_emphasis,
+        grounding_min_overlap=overlap,
+        grounding_min_ratio=ratio,
+        audit_emphasis=audit,
     )
+
+
+def _resolve_static(settings: Settings, policy: str) -> tuple[int, float, bool]:
+    """静的 (grounding_min_overlap, grounding_min_ratio, audit_emphasis) を解決する。"""
+    from rag_pipeline_core.stage import GuardrailStageRequest
+
+    from app.clients.pipeline_stage import PipelineStageClient
+
+    client = PipelineStageClient(settings)
+    if client.is_enabled("guardrail"):
+        response = client.run_guardrail(GuardrailStageRequest(policy=policy))
+        if response is not None:
+            return (
+                response.grounding_min_overlap,
+                response.grounding_min_ratio,
+                response.audit_emphasis,
+            )
+    resolved = resolve_guardrail(policy)
+    return resolved.grounding_min_overlap, resolved.grounding_min_ratio, resolved.audit_emphasis
 
 
 def guardrail_adapter_runtime_settings(settings: Settings) -> GuardrailAdapterRuntimeSettings:
@@ -151,7 +121,7 @@ def guardrail_adapter_runtime_settings(settings: Settings) -> GuardrailAdapterRu
     params = resolve_guardrail_adapter(settings)
     statuses = tuple(
         GuardrailPolicyStatus(
-            name=spec.name,
+            name=spec.name,  # type: ignore[arg-type]
             origin=spec.origin,
             recommended_for=spec.recommended_for,
             selected=spec.name == params.policy,
@@ -167,7 +137,7 @@ def guardrail_adapter_runtime_settings(settings: Settings) -> GuardrailAdapterRu
             ),
             audit_emphasis=spec.audit_emphasis,
         )
-        for spec in (GUARDRAIL_ADAPTER_SPECS[name] for name in GUARDRAIL_POLICY_ORDER)
+        for spec in (GUARDRAIL_SPECS[name] for name in GUARDRAIL_POLICIES)
     )
     return GuardrailAdapterRuntimeSettings(
         policy=params.policy,
