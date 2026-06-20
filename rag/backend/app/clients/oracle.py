@@ -4452,6 +4452,10 @@ class OracleClient:
         """pool から connection を取得する。"""
         return self._pool().acquire()
 
+    def connection_pool(self) -> OraclePoolProtocol:
+        """共有 connection pool を返す(Select AI クライアント等が再利用する)。"""
+        return self._pool()
+
     def _pool(self) -> OraclePoolProtocol:
         """python-oracledb connection pool を遅延初期化する。"""
         if self._pool_instance is not None:

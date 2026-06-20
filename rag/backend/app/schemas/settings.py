@@ -16,6 +16,10 @@ from app.config import (
     GraphProfile,
     GuardrailBackend,
     GuardrailPolicyName,
+    Nl2SqlCachePolicy,
+    Nl2SqlGenerationBackend,
+    Nl2SqlGuardrailPolicy,
+    Nl2SqlRouterProfile,
     ParserAdapterBackend,
     PostRetrievalPipeline,
     PreprocessProfile,
@@ -829,6 +833,111 @@ class VectorIndexSettingsUpdate(BaseModel):
     """Vector Index アダプター設定の更新 payload。"""
 
     profile: VectorIndexProfileName
+
+
+# --- NL2SQL Router アダプター ---
+Nl2SqlRouterProfileName = Nl2SqlRouterProfile
+Nl2SqlGenerationBackendName = Nl2SqlGenerationBackend
+
+
+class RouterProfileStatusData(BaseModel):
+    """1 ルーティングプロファイルの選択状態。"""
+
+    name: Nl2SqlRouterProfileName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+
+
+class RouterSettingsData(BaseModel):
+    """NL2SQL Router アダプター設定の非機密 runtime snapshot。"""
+
+    profile: Nl2SqlRouterProfileName
+    default_generation_backend: Nl2SqlGenerationBackendName
+    complexity_threshold: int
+    profiles: list[RouterProfileStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class RouterSettingsUpdate(BaseModel):
+    """NL2SQL Router アダプター設定の更新 payload。"""
+
+    profile: Nl2SqlRouterProfileName
+    complexity_threshold: int | None = Field(default=None, ge=1, le=6)
+
+
+# --- NL2SQL Guardrail アダプター ---
+Nl2SqlGuardrailPolicyName = Nl2SqlGuardrailPolicy
+
+
+class Nl2SqlGuardrailPolicyStatusData(BaseModel):
+    """1 SQL 安全ポリシーの選択状態と効果。"""
+
+    name: Nl2SqlGuardrailPolicyName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    enforce_read_only: bool
+    require_object_allowlist: bool
+    semantic_verify: bool
+
+
+class Nl2SqlGuardrailSettingsData(BaseModel):
+    """NL2SQL Guardrail アダプター設定の非機密 runtime snapshot。"""
+
+    policy: Nl2SqlGuardrailPolicyName
+    enforce_read_only: bool
+    max_rows: int
+    require_object_allowlist: bool
+    semantic_verify: bool
+    run_role: str
+    policies: list[Nl2SqlGuardrailPolicyStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class Nl2SqlGuardrailSettingsUpdate(BaseModel):
+    """NL2SQL Guardrail アダプター設定の更新 payload。"""
+
+    policy: Nl2SqlGuardrailPolicyName
+    max_rows: int | None = Field(default=None, ge=1, le=1_000_000)
+    run_role: str | None = None
+
+
+# --- NL2SQL Cache アダプター ---
+Nl2SqlCachePolicyName = Nl2SqlCachePolicy
+
+
+class CachePolicyStatusData(BaseModel):
+    """1 キャッシュポリシーの選択状態と効果。"""
+
+    name: Nl2SqlCachePolicyName
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool
+    cache_nl_to_sql: bool
+    cache_nl_to_result: bool
+    cache_sql_to_result: bool
+
+
+class CacheSettingsData(BaseModel):
+    """NL2SQL Cache アダプター設定の非機密 runtime snapshot。"""
+
+    policy: Nl2SqlCachePolicyName
+    cache_nl_to_sql: bool
+    cache_nl_to_result: bool
+    cache_sql_to_result: bool
+    similarity_threshold: float
+    ttl_seconds: int
+    policies: list[CachePolicyStatusData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class CacheSettingsUpdate(BaseModel):
+    """NL2SQL Cache アダプター設定の更新 payload。"""
+
+    policy: Nl2SqlCachePolicyName
+    similarity_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    ttl_seconds: int | None = Field(default=None, ge=0, le=86_400)
 
 
 EvaluationSuiteName = EvaluationSuite
