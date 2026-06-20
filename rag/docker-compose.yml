@@ -246,6 +246,12 @@ services:
       dockerfile: services/pipeline/guardrail/Dockerfile
     restart: unless-stopped
 
+  pipeline-agentic:
+    build:
+      context: .
+      dockerfile: services/pipeline/agentic/Dockerfile
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     environment:

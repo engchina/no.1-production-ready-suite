@@ -1,77 +1,30 @@
 """Agentic アダプター(LLM 補助のクエリ計画プロファイル)。
 
-`vector_index_adapter.py` と同型で、選択されたクエリ計画モードと利用可能なプリセット一覧を
-非機密の runtime snapshot として返す。off 以外は OCI Enterprise AI への追加呼び出しを伴うため、
-明示 opt-in とする。既定 off は LLM 計画なし(現行挙動)。外部 LLM provider は導入しない。
+profile→クエリ計画の挙動フラグの静的解決は共有パッケージ ``rag_pipeline_core.agentic`` を単一
+ソースとして使い、backend と agentic マイクロサービスが同一結果を返す。
+`rag_agentic_service_enabled` が真のとき静的解決を pipeline-agentic サービスへ委譲し、未達/失敗
+時は in-process(同一ロジック)へ安全縮退する。max_subqueries は backend 設定由来のため解決後に
+上乗せ。off 以外は OCI Enterprise AI への追加呼び出しを伴う opt-in。外部 LLM provider は導入しない。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rag_pipeline_core.agentic import (
+    AGENTIC_PROFILES,
+    AGENTIC_SPECS,
+    resolve_agentic,
+)
+from rag_pipeline_core.agentic import (
+    normalize_agentic_profile as _core_normalize,
+)
+
 from app.config import AgenticProfile, Settings
 
 AgenticProfileName = AgenticProfile
 DEFAULT_AGENTIC_PROFILE: AgenticProfileName = "off"
-AGENTIC_PROFILE_ORDER: tuple[AgenticProfileName, ...] = (
-    "off",
-    "query_rewrite",
-    "decompose",
-    "multi_hop",
-)
-
-
-@dataclass(frozen=True)
-class AgenticProfileSpec:
-    """1 クエリ計画プロファイルの由来と挙動。"""
-
-    name: AgenticProfileName
-    origin: str
-    recommended_for: tuple[str, ...]
-    enabled: bool
-    rewrite: bool
-    decompose: bool
-    multi_hop: bool
-
-
-AGENTIC_ADAPTER_SPECS: dict[AgenticProfileName, AgenticProfileSpec] = {
-    "off": AgenticProfileSpec(
-        name="off",
-        origin="disabled",
-        recommended_for=("default", "low_cost"),
-        enabled=False,
-        rewrite=False,
-        decompose=False,
-        multi_hop=False,
-    ),
-    "query_rewrite": AgenticProfileSpec(
-        name="query_rewrite",
-        origin="query_rewriting",
-        recommended_for=("noisy_query", "conversational"),
-        enabled=True,
-        rewrite=True,
-        decompose=False,
-        multi_hop=False,
-    ),
-    "decompose": AgenticProfileSpec(
-        name="decompose",
-        origin="sub_question_decomposition",
-        recommended_for=("multi_part", "comparison"),
-        enabled=True,
-        rewrite=False,
-        decompose=True,
-        multi_hop=False,
-    ),
-    "multi_hop": AgenticProfileSpec(
-        name="multi_hop",
-        origin="iterative_rag",
-        recommended_for=("multi_hop", "complex"),
-        enabled=True,
-        rewrite=False,
-        decompose=True,
-        multi_hop=True,
-    ),
-}
+AGENTIC_PROFILE_ORDER: tuple[AgenticProfileName, ...] = AGENTIC_PROFILES  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -84,6 +37,7 @@ class AgenticAdapterParams:
     decompose: bool
     multi_hop: bool
     max_subqueries: int
+    smart_routing: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,26 +69,49 @@ class AgenticAdapterRuntimeSettings:
 
 def normalize_agentic_profile(value: object) -> AgenticProfileName:
     """未知のプロファイル名は既定 off へ寄せる。"""
-    normalized = str(value).casefold()
-    if normalized in AGENTIC_ADAPTER_SPECS:
-        return normalized
-    return DEFAULT_AGENTIC_PROFILE
+    return _core_normalize(value)  # type: ignore[return-value]
 
 
 def resolve_agentic_adapter(settings: Settings) -> AgenticAdapterParams:
-    """Settings から Agentic アダプターの解決済みパラメータを作る。"""
+    """Settings から Agentic アダプターの解決済みパラメータを作る。
+
+    静的な挙動フラグは core / サービスで解決し、max_subqueries を backend 設定から上乗せする。
+    """
     profile = normalize_agentic_profile(
         getattr(settings, "rag_agentic_profile", DEFAULT_AGENTIC_PROFILE)
     )
-    spec = AGENTIC_ADAPTER_SPECS[profile]
+    resolved = _resolve_static(settings, profile)
     return AgenticAdapterParams(
         profile=profile,
-        enabled=spec.enabled,
-        rewrite=spec.rewrite,
-        decompose=spec.decompose,
-        multi_hop=spec.multi_hop,
+        enabled=resolved.enabled,
+        rewrite=resolved.rewrite,
+        decompose=resolved.decompose,
+        multi_hop=resolved.multi_hop,
+        smart_routing=resolved.smart_routing,
         max_subqueries=int(getattr(settings, "rag_agentic_max_subqueries", 3)),
     )
+
+
+def _resolve_static(settings: Settings, profile: str):  # type: ignore[no-untyped-def]
+    """静的な挙動フラグを service 優先 + in-process 縮退で解決する。"""
+    from rag_pipeline_core.agentic import AgenticResolved
+    from rag_pipeline_core.stage import AgenticStageRequest
+
+    from app.clients.pipeline_stage import PipelineStageClient
+
+    client = PipelineStageClient(settings)
+    if client.is_enabled("agentic"):
+        response = client.run_agentic(AgenticStageRequest(profile=profile))
+        if response is not None:
+            return AgenticResolved(
+                profile=response.profile,
+                enabled=response.enabled,
+                rewrite=response.rewrite,
+                decompose=response.decompose,
+                multi_hop=response.multi_hop,
+                smart_routing=response.smart_routing,
+            )
+    return resolve_agentic(profile)
 
 
 def agentic_adapter_runtime_settings(settings: Settings) -> AgenticAdapterRuntimeSettings:
@@ -142,7 +119,7 @@ def agentic_adapter_runtime_settings(settings: Settings) -> AgenticAdapterRuntim
     params = resolve_agentic_adapter(settings)
     statuses = tuple(
         AgenticProfileStatus(
-            name=spec.name,
+            name=spec.name,  # type: ignore[arg-type]
             origin=spec.origin,
             recommended_for=spec.recommended_for,
             selected=spec.name == params.profile,
@@ -151,7 +128,7 @@ def agentic_adapter_runtime_settings(settings: Settings) -> AgenticAdapterRuntim
             decompose=spec.decompose,
             multi_hop=spec.multi_hop,
         )
-        for spec in (AGENTIC_ADAPTER_SPECS[name] for name in AGENTIC_PROFILE_ORDER)
+        for spec in (AGENTIC_SPECS[name] for name in AGENTIC_PROFILES)
     )
     return AgenticAdapterRuntimeSettings(
         profile=params.profile,

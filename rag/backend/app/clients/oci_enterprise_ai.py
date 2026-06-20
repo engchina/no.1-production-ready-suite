@@ -312,14 +312,16 @@ class OciEnterpriseAiClient:
         mode="query_rewrite" は検索向けに 1 つへ書き換え、それ以外は sub-question を返す。
         JSON 文字列配列で受領し、解析失敗・空時は空 list を返して呼び出し側で元 query を使う。
         """
+        # smart_routing(v1)は query_rewrite と同じ LLM 書き換え経路を使う。
+        rewrite_modes = {"query_rewrite", "smart_routing"}
         system_prompt = (
-            _QUERY_REWRITE_PROMPT if mode == "query_rewrite" else _QUERY_DECOMPOSE_PROMPT
+            _QUERY_REWRITE_PROMPT if mode in rewrite_modes else _QUERY_DECOMPOSE_PROMPT
         )
         try:
             raw = await self.generate(query, "", system_prompt=system_prompt)
         except Exception:
             return []
-        limit = 1 if mode == "query_rewrite" else max(1, max_subqueries)
+        limit = 1 if mode in rewrite_modes else max(1, max_subqueries)
         return _parse_planned_queries(raw, limit=limit)
 
     async def generate_from_image(

@@ -251,6 +251,16 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         dev_port=8034,
         dev_runner="uv",
     ),
+    ServiceCatalogEntry(
+        service_id="pipeline-agentic",
+        category="agentic",
+        profile="cpu",
+        url_field="rag_agentic_service_url",
+        label_key="settings.services.item.pipelineAgentic",
+        working_dir="services/pipeline/agentic",
+        dev_port=8035,
+        dev_runner="uv",
+    ),
 )
 
 _CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {

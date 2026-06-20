@@ -125,3 +125,20 @@ class GuardrailStageResponse(BaseModel):
     grounding_min_overlap: int
     grounding_min_ratio: float
     audit_emphasis: bool
+
+
+class AgenticStageRequest(BaseModel):
+    """``POST /run``(agentic)の入力。profile のみ(max_subqueries は backend)。"""
+
+    profile: str = "off"
+
+
+class AgenticStageResponse(BaseModel):
+    """``POST /run``(agentic)の出力(クエリ計画の挙動フラグ)。"""
+
+    profile: str
+    enabled: bool
+    rewrite: bool
+    decompose: bool
+    multi_hop: bool
+    smart_routing: bool

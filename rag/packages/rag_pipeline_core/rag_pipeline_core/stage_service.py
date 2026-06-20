@@ -10,11 +10,14 @@ from collections.abc import Callable
 
 from fastapi import FastAPI
 
+from rag_pipeline_core.agentic import resolve_agentic
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
 from rag_pipeline_core.generation import resolve_generation
 from rag_pipeline_core.graph import resolve_graph_profile
 from rag_pipeline_core.guardrail import resolve_guardrail
 from rag_pipeline_core.stage import (
+    AgenticStageRequest,
+    AgenticStageResponse,
     ChunkingStageRequest,
     ChunkingStageResponse,
     GenerationStageRequest,
@@ -133,6 +136,31 @@ def create_guardrail_app(
             grounding_min_overlap=resolved.grounding_min_overlap,
             grounding_min_ratio=resolved.grounding_min_ratio,
             audit_emphasis=resolved.audit_emphasis,
+        )
+
+    return app
+
+
+def create_agentic_app(
+    *, health_probe: HealthProbe | None = None, title: str = "pipeline-agentic"
+) -> FastAPI:
+    """agentic ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
+    app = FastAPI(title=title)
+    probe = health_probe or (
+        lambda: StageHealth(status="ok", stage="agentic", package_name="rag_pipeline_core")
+    )
+    _health_routes(app, probe)
+
+    @app.post("/run", response_model=AgenticStageResponse)
+    def run(request: AgenticStageRequest) -> AgenticStageResponse:
+        resolved = resolve_agentic(request.profile)
+        return AgenticStageResponse(
+            profile=resolved.profile,
+            enabled=resolved.enabled,
+            rewrite=resolved.rewrite,
+            decompose=resolved.decompose,
+            multi_hop=resolved.multi_hop,
+            smart_routing=resolved.smart_routing,
         )
 
     return app

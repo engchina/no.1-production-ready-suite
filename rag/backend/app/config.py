@@ -108,6 +108,7 @@ GraphProfile = Literal[
 ]
 AgenticProfile = Literal[
     "off",
+    "smart_routing",
     "query_rewrite",
     "decompose",
     "multi_hop",
@@ -1016,6 +1017,18 @@ class Settings(BaseSettings):
     rag_guardrail_service_url: str = Field(
         default="http://pipeline-guardrail:8000",
         description="guardrail ステージマイクロサービスの base URL。",
+    )
+    rag_agentic_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "agentic の profile 解決(クエリ計画の挙動フラグ)を agentic マイクロサービスへ委譲する。"
+            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "実 LLM クエリ計画は backend が OCI Enterprise AI で行う。"
+        ),
+    )
+    rag_agentic_service_url: str = Field(
+        default="http://pipeline-agentic:8000",
+        description="agentic ステージマイクロサービスの base URL。",
     )
     rag_graph_temporal_enabled: bool = Field(
         default=False,

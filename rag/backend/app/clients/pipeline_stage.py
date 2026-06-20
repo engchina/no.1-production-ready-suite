@@ -14,6 +14,8 @@ import logging
 
 import httpx
 from rag_pipeline_core.stage import (
+    AgenticStageRequest,
+    AgenticStageResponse,
     ChunkingStageRequest,
     ChunkingStageResponse,
     GenerationStageRequest,
@@ -38,6 +40,7 @@ _STAGE_URL_FIELDS: dict[str, str] = {
     "graphrag": "rag_graph_service_url",
     "generation": "rag_generation_service_url",
     "guardrail": "rag_guardrail_service_url",
+    "agentic": "rag_agentic_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_enabled",
@@ -45,6 +48,7 @@ _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "graphrag": "rag_graph_service_enabled",
     "generation": "rag_generation_service_enabled",
     "guardrail": "rag_guardrail_service_enabled",
+    "agentic": "rag_agentic_service_enabled",
 }
 
 
@@ -151,6 +155,16 @@ class PipelineStageClient:
             return None
         try:
             return GuardrailStageResponse.model_validate(payload)
+        except ValueError:
+            return None
+
+    def run_agentic(self, request: AgenticStageRequest) -> AgenticStageResponse | None:
+        """agentic ステージ(静的 profile 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        payload = self._post_run("agentic", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            return AgenticStageResponse.model_validate(payload)
         except ValueError:
             return None
 
