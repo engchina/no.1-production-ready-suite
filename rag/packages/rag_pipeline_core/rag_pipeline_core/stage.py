@@ -173,3 +173,22 @@ class EvaluationStageResponse(BaseModel):
     suite: str
     thresholds: dict[str, float] | None = None
     focus_metrics: list[str] = Field(default_factory=list)
+
+
+class RetrievalStageRequest(BaseModel):
+    """``POST /run``(retrieval)の入力。strategy + settings 既定 query_expansion。"""
+
+    strategy: str = "hybrid_rrf"
+    settings_query_expansion: bool = True
+
+
+class RetrievalStageResponse(BaseModel):
+    """``POST /run``(retrieval)の出力(検索挙動。mode/strategy は文字列)。"""
+
+    strategy: str
+    mode_override: str | None = None
+    strategy_bias: str | None = None
+    query_expansion: bool
+    gap_stop: bool
+    corrective_retrieval: bool
+    business_fit_weighting: bool

@@ -1,92 +1,31 @@
 """Retrieval アダプター(検索段階の手動選択プリセット)。
 
-`parser_adapter_readiness.py` と同型で、選択された検索戦略と利用可能なプリセット一覧を
-非機密の runtime snapshot として返す。実際の retrieval 実装は既存の hybrid / vector /
-keyword / GraphRAG-lite / Select AI 経路へ解決する。外部検索エンジンは導入しない。
+strategy→検索挙動の静的解決は共有パッケージ ``rag_pipeline_core.retrieval`` を単一ソースとして
+使い、backend と retrieval マイクロサービスが同一結果を返す。`rag_retrieval_service_enabled` が
+真のとき静的解決を pipeline-retrieval サービスへ委譲し、未達/失敗時は in-process(同一ロジック)へ
+安全縮退する。mode/strategy は wire 中立の文字列で受け渡し backend で SearchMode/SearchStrategy へ
+写す。実 retrieval は Oracle 26ai 経路を backend が実行する。外部検索エンジンは導入しない。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rag_pipeline_core.retrieval import (
+    RETRIEVAL_SPECS,
+    RETRIEVAL_STRATEGIES,
+    resolve_retrieval,
+)
+from rag_pipeline_core.retrieval import (
+    normalize_retrieval_strategy as _core_normalize,
+)
+
 from app.config import RetrievalStrategy, Settings
 from app.schemas.search import SearchMode, SearchStrategy
 
 RetrievalStrategyName = RetrievalStrategy
 DEFAULT_RETRIEVAL_STRATEGY: RetrievalStrategyName = "hybrid_rrf"
-RETRIEVAL_STRATEGY_ORDER: tuple[RetrievalStrategyName, ...] = (
-    "hybrid_rrf",
-    "vector",
-    "keyword",
-    "graph_augmented",
-    "select_ai_structured",
-    "business_context_strict",
-    "corrective_multi_query",
-)
-
-
-@dataclass(frozen=True)
-class RetrievalAdapterSpec:
-    """1 検索戦略の由来と適用場面(機械可読の非機密 metadata)。"""
-
-    name: RetrievalStrategyName
-    origin: str
-    recommended_for: tuple[str, ...]
-    mode_override: SearchMode | None = None
-    strategy_bias: SearchStrategy | None = None
-    query_expansion: bool | None = None  # None は settings 既定に従う
-    gap_stop: bool = False
-    corrective_retrieval: bool = False
-    business_fit_weighting: bool = False
-
-
-RETRIEVAL_ADAPTER_SPECS: dict[RetrievalStrategyName, RetrievalAdapterSpec] = {
-    "hybrid_rrf": RetrievalAdapterSpec(
-        name="hybrid_rrf",
-        origin="oracle_hybrid_rrf",
-        recommended_for=("general", "faq", "policy"),
-    ),
-    "vector": RetrievalAdapterSpec(
-        name="vector",
-        origin="oracle_ai_vector_search",
-        recommended_for=("semantic", "paraphrase"),
-        mode_override=SearchMode.VECTOR,
-        query_expansion=False,
-    ),
-    "keyword": RetrievalAdapterSpec(
-        name="keyword",
-        origin="oracle_text",
-        recommended_for=("named_entity", "regulation"),
-        mode_override=SearchMode.KEYWORD,
-        query_expansion=False,
-    ),
-    "graph_augmented": RetrievalAdapterSpec(
-        name="graph_augmented",
-        origin="graphrag_lite",
-        recommended_for=("relationship", "cross_document"),
-        strategy_bias=SearchStrategy.GRAPH_GLOBAL,
-    ),
-    "select_ai_structured": RetrievalAdapterSpec(
-        name="select_ai_structured",
-        origin="oracle_select_ai",
-        recommended_for=("aggregate", "structured"),
-        strategy_bias=SearchStrategy.SELECT_AI,
-    ),
-    "business_context_strict": RetrievalAdapterSpec(
-        name="business_context_strict",
-        origin="aidb_business_context",
-        recommended_for=("compliance", "enterprise"),
-        gap_stop=True,
-        business_fit_weighting=True,
-    ),
-    "corrective_multi_query": RetrievalAdapterSpec(
-        name="corrective_multi_query",
-        origin="crag_self_rag",
-        recommended_for=("recall_critical", "ambiguous"),
-        query_expansion=True,
-        corrective_retrieval=True,
-    ),
-}
+RETRIEVAL_STRATEGY_ORDER: tuple[RetrievalStrategyName, ...] = RETRIEVAL_STRATEGIES  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -129,31 +68,62 @@ class RetrievalAdapterRuntimeSettings:
 
 def normalize_retrieval_strategy(value: object) -> RetrievalStrategyName:
     """未知の戦略名は既定 hybrid_rrf へ寄せる。"""
-    normalized = str(value).casefold()
-    if normalized in RETRIEVAL_ADAPTER_SPECS:
-        return normalized
-    return DEFAULT_RETRIEVAL_STRATEGY
+    return _core_normalize(value)  # type: ignore[return-value]
+
+
+def _as_mode(value: str | None) -> SearchMode | None:
+    return SearchMode(value) if value is not None else None
+
+
+def _as_strategy(value: str | None) -> SearchStrategy | None:
+    return SearchStrategy(value) if value is not None else None
 
 
 def resolve_retrieval_adapter(settings: Settings) -> RetrievalAdapterParams:
-    """Settings から Retrieval アダプターの解決済みパラメータを作る。"""
+    """Settings から Retrieval アダプターの解決済みパラメータを作る。
+
+    `rag_retrieval_service_enabled` のときは pipeline-retrieval サービスへ委譲し、未達/失敗時は
+    in-process(同一 rag_pipeline_core ロジック)へ安全縮退する。
+    """
     strategy = normalize_retrieval_strategy(
         getattr(settings, "rag_retrieval_strategy", DEFAULT_RETRIEVAL_STRATEGY)
     )
-    spec = RETRIEVAL_ADAPTER_SPECS[strategy]
     settings_expansion = bool(getattr(settings, "rag_query_expansion_enabled", True))
-    query_expansion = (
-        spec.query_expansion if spec.query_expansion is not None else settings_expansion
-    )
+    resolved = _resolve_static(settings, strategy, settings_expansion)
     return RetrievalAdapterParams(
         strategy=strategy,
-        mode_override=spec.mode_override,
-        strategy_bias=spec.strategy_bias,
-        query_expansion=query_expansion,
-        gap_stop=spec.gap_stop,
-        corrective_retrieval=spec.corrective_retrieval,
-        business_fit_weighting=spec.business_fit_weighting,
+        mode_override=_as_mode(resolved.mode_override),
+        strategy_bias=_as_strategy(resolved.strategy_bias),
+        query_expansion=resolved.query_expansion,
+        gap_stop=resolved.gap_stop,
+        corrective_retrieval=resolved.corrective_retrieval,
+        business_fit_weighting=resolved.business_fit_weighting,
     )
+
+
+def _resolve_static(settings: Settings, strategy: str, settings_expansion: bool):  # type: ignore[no-untyped-def]
+    """検索挙動の静的解決を service 優先 + in-process 縮退で行う。"""
+    from rag_pipeline_core.retrieval import RetrievalResolved
+    from rag_pipeline_core.stage import RetrievalStageRequest
+
+    from app.clients.pipeline_stage import PipelineStageClient
+
+    client = PipelineStageClient(settings)
+    if client.is_enabled("retrieval"):
+        response = client.run_retrieval(
+            RetrievalStageRequest(strategy=strategy, settings_query_expansion=settings_expansion)
+        )
+        if response is not None:
+            return RetrievalResolved(
+                strategy=response.strategy,
+                mode_override=response.mode_override,
+                strategy_bias=response.strategy_bias,
+                query_expansion=response.query_expansion,
+                gap_stop=response.gap_stop,
+                corrective_retrieval=response.corrective_retrieval,
+                business_fit_weighting=response.business_fit_weighting,
+            )
+    return resolve_retrieval(strategy, settings_expansion)
 
 
 def retrieval_adapter_runtime_settings(settings: Settings) -> RetrievalAdapterRuntimeSettings:
@@ -161,7 +131,7 @@ def retrieval_adapter_runtime_settings(settings: Settings) -> RetrievalAdapterRu
     params = resolve_retrieval_adapter(settings)
     statuses = tuple(
         RetrievalStrategyStatus(
-            name=spec.name,
+            name=spec.name,  # type: ignore[arg-type]
             origin=spec.origin,
             recommended_for=spec.recommended_for,
             selected=spec.name == params.strategy,
@@ -169,7 +139,7 @@ def retrieval_adapter_runtime_settings(settings: Settings) -> RetrievalAdapterRu
             corrective_retrieval=spec.corrective_retrieval,
             business_fit_weighting=spec.business_fit_weighting,
         )
-        for spec in (RETRIEVAL_ADAPTER_SPECS[name] for name in RETRIEVAL_STRATEGY_ORDER)
+        for spec in (RETRIEVAL_SPECS[name] for name in RETRIEVAL_STRATEGIES)
     )
     return RetrievalAdapterRuntimeSettings(
         strategy=params.strategy,

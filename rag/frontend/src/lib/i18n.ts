@@ -456,6 +456,7 @@ export const ja = {
   "settings.services.item.pipelineAgentic": "Agentic(クエリ計画)",
   "settings.services.item.pipelineGrounding": "Grounding(検索後処理)",
   "settings.services.item.pipelineEvaluation": "Evaluation(評価)",
+  "settings.services.item.pipelineRetrieval": "Retrieval(検索)",
   "settings.services.empty": "表示できるサービスがありません。",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":

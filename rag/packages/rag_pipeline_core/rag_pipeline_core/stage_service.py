@@ -17,6 +17,7 @@ from rag_pipeline_core.generation import resolve_generation
 from rag_pipeline_core.graph import resolve_graph_profile
 from rag_pipeline_core.grounding import resolve_grounding
 from rag_pipeline_core.guardrail import resolve_guardrail
+from rag_pipeline_core.retrieval import resolve_retrieval
 from rag_pipeline_core.stage import (
     AgenticStageRequest,
     AgenticStageResponse,
@@ -32,6 +33,8 @@ from rag_pipeline_core.stage import (
     GroundingStageResponse,
     GuardrailStageRequest,
     GuardrailStageResponse,
+    RetrievalStageRequest,
+    RetrievalStageResponse,
     StageHealth,
     VectorIndexStageRequest,
     VectorIndexStageResponse,
@@ -214,6 +217,32 @@ def create_evaluation_app(
             suite=resolved.suite,
             thresholds=resolved.thresholds,
             focus_metrics=list(resolved.focus_metrics),
+        )
+
+    return app
+
+
+def create_retrieval_app(
+    *, health_probe: HealthProbe | None = None, title: str = "pipeline-retrieval"
+) -> FastAPI:
+    """retrieval ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
+    app = FastAPI(title=title)
+    probe = health_probe or (
+        lambda: StageHealth(status="ok", stage="retrieval", package_name="rag_pipeline_core")
+    )
+    _health_routes(app, probe)
+
+    @app.post("/run", response_model=RetrievalStageResponse)
+    def run(request: RetrievalStageRequest) -> RetrievalStageResponse:
+        resolved = resolve_retrieval(request.strategy, request.settings_query_expansion)
+        return RetrievalStageResponse(
+            strategy=resolved.strategy,
+            mode_override=resolved.mode_override,
+            strategy_bias=resolved.strategy_bias,
+            query_expansion=resolved.query_expansion,
+            gap_stop=resolved.gap_stop,
+            corrective_retrieval=resolved.corrective_retrieval,
+            business_fit_weighting=resolved.business_fit_weighting,
         )
 
     return app

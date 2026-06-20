@@ -1053,6 +1053,18 @@ class Settings(BaseSettings):
         default="http://pipeline-evaluation:8000",
         description="evaluation ステージマイクロサービスの base URL。",
     )
+    rag_retrieval_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "retrieval の strategy 解決(検索挙動フラグ)を retrieval マイクロサービスへ委譲する。"
+            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "実 retrieval(Oracle 26ai 経路)は backend が実行する。"
+        ),
+    )
+    rag_retrieval_service_url: str = Field(
+        default="http://pipeline-retrieval:8000",
+        description="retrieval ステージマイクロサービスの base URL。",
+    )
     rag_graph_temporal_enabled: bool = Field(
         default=False,
         description=(

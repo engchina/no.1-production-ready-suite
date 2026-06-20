@@ -264,6 +264,12 @@ services:
       dockerfile: services/pipeline/evaluation/Dockerfile
     restart: unless-stopped
 
+  pipeline-retrieval:
+    build:
+      context: .
+      dockerfile: services/pipeline/retrieval/Dockerfile
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     environment:

@@ -28,6 +28,8 @@ from rag_pipeline_core.stage import (
     GroundingStageResponse,
     GuardrailStageRequest,
     GuardrailStageResponse,
+    RetrievalStageRequest,
+    RetrievalStageResponse,
     VectorIndexStageRequest,
     VectorIndexStageResponse,
 )
@@ -47,6 +49,7 @@ _STAGE_URL_FIELDS: dict[str, str] = {
     "agentic": "rag_agentic_service_url",
     "grounding": "rag_grounding_service_url",
     "evaluation": "rag_evaluation_service_url",
+    "retrieval": "rag_retrieval_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_enabled",
@@ -57,6 +60,7 @@ _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "agentic": "rag_agentic_service_enabled",
     "grounding": "rag_grounding_service_enabled",
     "evaluation": "rag_evaluation_service_enabled",
+    "retrieval": "rag_retrieval_service_enabled",
 }
 
 
@@ -193,6 +197,16 @@ class PipelineStageClient:
             return None
         try:
             return EvaluationStageResponse.model_validate(payload)
+        except ValueError:
+            return None
+
+    def run_retrieval(self, request: RetrievalStageRequest) -> RetrievalStageResponse | None:
+        """retrieval ステージ(strategy 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        payload = self._post_run("retrieval", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            return RetrievalStageResponse.model_validate(payload)
         except ValueError:
             return None
 
