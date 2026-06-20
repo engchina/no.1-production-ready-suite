@@ -128,6 +128,20 @@ Nl2SqlCachePolicy = Literal["off", "nl_sql", "nl_result", "sql_result"]
 # 生成バックエンド(Generation)。select_ai_agent(既定・RUN_TEAM)/ select_ai(GENERATE)/
 # app_enterprise_ai(アプリ側オーケストレーション)。
 Nl2SqlGenerationBackend = Literal["select_ai_agent", "select_ai", "app_enterprise_ai"]
+# --- NL2SQL パイプライン preset アダプター(決定論・現行=各既定)---
+Nl2SqlSchemaSource = Literal["full", "curated", "sampled"]
+Nl2SqlSchemaLinking = Literal["enforce_all", "curated", "auto_prune"]
+Nl2SqlKnowledgeProfile = Literal["off", "glossary", "few_shot", "rag_trained"]
+Nl2SqlClarifyPolicy = Literal["off", "detect", "interactive"]
+Nl2SqlGenerationProfile = Literal[
+    "grounded_sql", "sql_with_explanation", "narrated", "structured_json", "bilingual_ja_en"
+]
+Nl2SqlCorrectionProfile = Literal["off", "retry_on_error", "verified"]
+Nl2SqlAgenticProfile = Literal["off", "decompose", "multi_hop"]
+Nl2SqlResultProfile = Literal["table", "narrate", "chart", "bilingual_ja_en"]
+Nl2SqlEvaluationSuite = Literal[
+    "request_only", "execution_focused", "balanced", "strict_ci", "bird_like"
+]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
@@ -881,6 +895,49 @@ class Settings(BaseSettings):
         ge=0,
         le=86_400,
         description="キャッシュエントリの TTL 秒(0 は無期限)。鮮度要件で調整する。",
+    )
+    # --- NL2SQL パイプライン preset アダプター(各既定は現行=最小挙動)---
+    nl2sql_schema_source: Nl2SqlSchemaSource = Field(
+        default="full",
+        description="スキーマ取込。full(既定)/ curated(明示選択)/ sampled(M-Schema 風サンプル値)。",
+    )
+    nl2sql_schema_linking: Nl2SqlSchemaLinking = Field(
+        default="enforce_all",
+        description="スキーマリンク。enforce_all(既定)/ curated / auto_prune(ベクトル多段)。",
+    )
+    nl2sql_knowledge_profile: Nl2SqlKnowledgeProfile = Field(
+        default="off",
+        description="知識/例示。off(既定)/ glossary / few_shot / rag_trained。",
+    )
+    nl2sql_clarify_policy: Nl2SqlClarifyPolicy = Field(
+        default="off",
+        description="曖昧性解決。off(既定)/ detect / interactive(確認質問)。",
+    )
+    nl2sql_generation_profile: Nl2SqlGenerationProfile = Field(
+        default="grounded_sql",
+        description=(
+            "回答スタイル。grounded_sql(既定・純 SQL)/ sql_with_explanation / narrated / "
+            "structured_json / bilingual_ja_en。"
+        ),
+    )
+    nl2sql_correction_profile: Nl2SqlCorrectionProfile = Field(
+        default="off",
+        description="自己修正。off(既定)/ retry_on_error / verified(逆翻訳突合)。",
+    )
+    nl2sql_agentic_profile: Nl2SqlAgenticProfile = Field(
+        default="off",
+        description="エージェント計画。off(既定)/ decompose / multi_hop。",
+    )
+    nl2sql_result_profile: Nl2SqlResultProfile = Field(
+        default="table",
+        description="結果整形。table(既定)/ narrate / chart / bilingual_ja_en。",
+    )
+    nl2sql_evaluation_suite: Nl2SqlEvaluationSuite = Field(
+        default="request_only",
+        description=(
+            "評価スイート(CI 閾値)。request_only(既定)/ execution_focused / balanced / "
+            "strict_ci / bird_like。決定論指標のみ。"
+        ),
     )
     # --- Select AI プロビジョニング(credential/profile/tool/agent/task/team)---
     select_ai_model: str = Field(

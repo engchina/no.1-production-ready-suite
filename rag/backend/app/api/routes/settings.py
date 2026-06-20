@@ -44,6 +44,7 @@ from app.nl2sql.guardrail import (
 from app.nl2sql.guardrail import (
     normalize_guardrail_policy as normalize_nl2sql_guardrail_policy,
 )
+from app.nl2sql.presets import get_adapter, normalize_selection, pipeline_runtime
 from app.nl2sql.router import (
     normalize_router_profile,
     router_adapter_runtime_settings,
@@ -148,6 +149,7 @@ from app.schemas.settings import (
     Nl2SqlGuardrailPolicyStatusData,
     Nl2SqlGuardrailSettingsData,
     Nl2SqlGuardrailSettingsUpdate,
+    Nl2SqlPipelineSettingsData,
     OciConfigField,
     OciConfigReadData,
     OciConfigReadRequest,
@@ -170,6 +172,9 @@ from app.schemas.settings import (
     ParserAdapterSourceRouteData,
     ParserAdapterStatusData,
     ParserServiceBackendData,
+    PipelineAdapterData,
+    PipelineAdapterOptionData,
+    PipelinePresetUpdate,
     PreprocessProfileStatusData,
     PreprocessSettingsData,
     PreprocessSettingsUpdate,
@@ -790,6 +795,36 @@ async def update_nl2sql_cache_settings(
     settings.nl2sql_cache_similarity_threshold = candidate.nl2sql_cache_similarity_threshold
     settings.nl2sql_cache_ttl_seconds = candidate.nl2sql_cache_ttl_seconds
     return ApiResponse(data=_nl2sql_cache_settings_data(settings))
+
+
+@router.get("/nl2sql/pipeline", response_model=ApiResponse[Nl2SqlPipelineSettingsData])
+async def get_nl2sql_pipeline_settings() -> ApiResponse[Nl2SqlPipelineSettingsData]:
+    """NL2SQL パイプライン preset 群(schema_source 〜 evaluation)の選択と選択肢を返す。"""
+    return ApiResponse(data=_nl2sql_pipeline_settings_data(get_settings()))
+
+
+@router.patch(
+    "/nl2sql/pipeline/{adapter_key}",
+    response_model=ApiResponse[Nl2SqlPipelineSettingsData],
+)
+async def update_nl2sql_pipeline_setting(
+    adapter_key: str,
+    payload: PipelinePresetUpdate,
+) -> ApiResponse[Nl2SqlPipelineSettingsData]:
+    """1 アダプターの preset 選択を backend/.env と現在プロセスへ反映する。"""
+    adapter = get_adapter(adapter_key)
+    if adapter is None:
+        raise HTTPException(status_code=404, detail=f"未知のアダプター: {adapter_key}")
+    if payload.selection not in adapter.option_names:
+        raise HTTPException(
+            status_code=422, detail=f"{adapter_key} に無い選択肢: {payload.selection}"
+        )
+    settings = get_settings()
+    normalized = normalize_selection(adapter_key, payload.selection)
+    candidate = settings.model_copy(update={adapter.settings_field: normalized})
+    _persist_nl2sql_pipeline_setting(adapter.env_key, normalized)
+    setattr(settings, adapter.settings_field, getattr(candidate, adapter.settings_field))
+    return ApiResponse(data=_nl2sql_pipeline_settings_data(settings))
 
 
 @router.get("/evaluation-suite", response_model=ApiResponse[EvaluationSettingsData])
@@ -2452,6 +2487,42 @@ def _persist_nl2sql_cache_settings(settings: Settings) -> None:
         },
         section_comment="# NL2SQL Cache アダプター",
         error_detail="NL2SQL Cache アダプター設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _nl2sql_pipeline_settings_data(settings: Settings) -> Nl2SqlPipelineSettingsData:
+    """Settings から NL2SQL パイプライン preset 群の表示用データを作る。"""
+    return Nl2SqlPipelineSettingsData(
+        adapters=[
+            PipelineAdapterData(
+                key=runtime.key,
+                settings_field=runtime.settings_field,
+                label=runtime.label,
+                selected=runtime.selected,
+                options=[
+                    PipelineAdapterOptionData(
+                        name=option.name,
+                        origin=option.origin,
+                        recommended_for=list(option.recommended_for),
+                        summary=option.summary,
+                        selected=option.selected,
+                    )
+                    for option in runtime.options
+                ],
+            )
+            for runtime in pipeline_runtime(settings)
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_nl2sql_pipeline_setting(env_key: str, value: str) -> None:
+    """1 アダプターの preset 選択を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {env_key: value},
+        section_comment="# NL2SQL パイプライン preset アダプター",
+        error_detail="NL2SQL パイプライン preset 設定を backend/.env へ保存できませんでした。",
     )
 
 

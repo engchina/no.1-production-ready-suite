@@ -940,6 +940,40 @@ class CacheSettingsUpdate(BaseModel):
     ttl_seconds: int | None = Field(default=None, ge=0, le=86_400)
 
 
+# --- NL2SQL パイプライン preset アダプター(schema_source 〜 evaluation)---
+class PipelineAdapterOptionData(BaseModel):
+    """1 preset 選択肢の選択状態。"""
+
+    name: str
+    origin: str
+    recommended_for: list[str] = Field(default_factory=list)
+    summary: str
+    selected: bool
+
+
+class PipelineAdapterData(BaseModel):
+    """1 パイプラインアダプターの選択と選択肢群。"""
+
+    key: str
+    settings_field: str
+    label: str
+    selected: str
+    options: list[PipelineAdapterOptionData] = Field(default_factory=list)
+
+
+class Nl2SqlPipelineSettingsData(BaseModel):
+    """NL2SQL パイプライン preset 群の runtime snapshot。"""
+
+    adapters: list[PipelineAdapterData] = Field(default_factory=list)
+    config_source: Literal["runtime"]
+
+
+class PipelinePresetUpdate(BaseModel):
+    """1 アダプターの選択更新 payload。"""
+
+    selection: str = Field(..., min_length=1, max_length=64)
+
+
 EvaluationSuiteName = EvaluationSuite
 
 
