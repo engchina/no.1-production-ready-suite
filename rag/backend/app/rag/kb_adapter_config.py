@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.config import (
     ChunkingStrategy,
     GenerationProfile,
+    GraphProfile,
     GuardrailPolicyName,
     ParserAdapterBackend,
     PostRetrievalPipeline,
@@ -64,6 +65,12 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "chunk_child_size": "rag_chunk_child_size",
     "chunk_sentence_window_size": "rag_chunk_sentence_window_size",
     "chunk_min_chars": "rag_chunk_min_chars",
+    # 取込側の高度軸(現状グローバルのみだった adapter を KB 上書き対象へ拡張)。
+    # いずれも取込パイプラインが self._settings から読むため、KB 上書きが取込に効く。
+    "graph_profile": "rag_graph_profile",
+    "field_extraction_enabled": "rag_field_extraction_enabled",
+    "asset_summary_enabled": "rag_asset_summary_enabled",
+    "navigation_summary_enabled": "rag_navigation_summary_enabled",
 }
 _QUERY_FIELD_MAP: dict[str, str] = {
     "retrieval_strategy": "rag_retrieval_strategy",
@@ -104,6 +111,11 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     chunk_child_size: int | None = Field(default=None, ge=80, le=4000)
     chunk_sentence_window_size: int | None = Field(default=None, ge=1, le=20)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
+    # 取込側の高度軸(KB 上書き対象へ拡張)。None はグローバル継承。
+    graph_profile: GraphProfile | None = None
+    field_extraction_enabled: bool | None = None
+    asset_summary_enabled: bool | None = None
+    navigation_summary_enabled: bool | None = None
 
 
 class KnowledgeBaseQueryConfig(BaseModel):
@@ -217,6 +229,44 @@ def resolve_effective_settings(
     if scope == "ingestion":
         _validate_chunk_consistency(merged)
     return merged
+
+
+def _resolved_field_value(
+    section: KnowledgeBaseIngestionConfig | KnowledgeBaseQueryConfig,
+    kb_field: str,
+    global_settings: Settings,
+    settings_field: str,
+) -> object:
+    """override があればその値、無ければグローバル設定の対応値を返す。"""
+    override = getattr(section, kb_field, None)
+    if override is not None:
+        return override
+    return getattr(global_settings, settings_field)
+
+
+def resolve_effective_adapter_config(
+    global_settings: Settings,
+    config: KnowledgeBaseAdapterConfig,
+) -> KnowledgeBaseAdapterConfig:
+    """KB 上書きをグローバル既定で埋めた「解決済み」設定を返す(UI の継承値表示用)。
+
+    各フィールドは override があればその値、無ければグローバル設定の対応値で埋める。
+    ``materialize`` には使わず **表示専用**。継承行に「実際に効く値」を出すために使う。
+    """
+    ingestion = {
+        kb_field: _resolved_field_value(
+            config.ingestion, kb_field, global_settings, settings_field
+        )
+        for kb_field, settings_field in _INGESTION_FIELD_MAP.items()
+    }
+    query = {
+        kb_field: _resolved_field_value(config.query, kb_field, global_settings, settings_field)
+        for kb_field, settings_field in _QUERY_FIELD_MAP.items()
+    }
+    return KnowledgeBaseAdapterConfig(
+        ingestion=KnowledgeBaseIngestionConfig(**ingestion),
+        query=KnowledgeBaseQueryConfig(**query),
+    )
 
 
 def apply_adapter_config_or_global(

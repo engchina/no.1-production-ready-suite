@@ -49,6 +49,13 @@ class KnowledgeBaseDetail(KnowledgeBaseSummary):
             "クエリ時に効く)。None フィールドはグローバル設定を継承する。"
         ),
     )
+    effective_adapter_config: KnowledgeBaseAdapterConfig | None = Field(
+        default=None,
+        description=(
+            "KB 上書きをグローバル既定で埋めた解決済み設定(表示専用)。継承フィールドに"
+            "「実際に効く値」を出すために使う。materialize には使わない。"
+        ),
+    )
 
 
 class KnowledgeBaseCreateRequest(BaseModel):

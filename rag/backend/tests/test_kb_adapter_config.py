@@ -9,6 +9,7 @@ from app.rag.kb_adapter_config import (
     apply_adapter_config_or_global,
     dump_adapter_config,
     parse_adapter_config,
+    resolve_effective_adapter_config,
     resolve_effective_settings,
 )
 
@@ -152,6 +153,68 @@ def test_dump_parse_round_trip() -> None:
     )
     restored = parse_adapter_config(dump_adapter_config(config))
     assert restored.model_dump() == config.model_dump()
+
+
+def test_ingestion_scope_overlays_advanced_axes() -> None:
+    """取込側の高度軸(graph / field / asset / nav)も KB 上書きで effective に反映される。"""
+    settings = get_settings()
+    config = _config(
+        ingestion={
+            "graph_profile": "entities",
+            "field_extraction_enabled": True,
+            "asset_summary_enabled": True,
+            "navigation_summary_enabled": True,
+        },
+    )
+
+    overrides = config.settings_overrides("ingestion")
+    assert overrides == {
+        "rag_graph_profile": "entities",
+        "rag_field_extraction_enabled": True,
+        "rag_asset_summary_enabled": True,
+        "rag_navigation_summary_enabled": True,
+    }
+
+    effective = resolve_effective_settings(settings, config, scope="ingestion")
+    assert effective.rag_graph_profile == "entities"
+    assert effective.rag_field_extraction_enabled is True
+    assert effective.rag_asset_summary_enabled is True
+    assert effective.rag_navigation_summary_enabled is True
+    # query 系は不変。
+    assert effective.rag_generation_profile == settings.rag_generation_profile
+
+
+def test_resolve_effective_adapter_config_fills_inherited_with_global() -> None:
+    """継承(None)フィールドはグローバル既定で埋められ、上書きはそのまま残る。"""
+    settings = get_settings()
+    config = _config(
+        ingestion={"chunking_strategy": "page_level"},
+        query={"vector_index_profile": "accurate"},
+    )
+
+    effective = resolve_effective_adapter_config(settings, config)
+
+    # 上書きフィールドは override 値。
+    assert effective.ingestion.chunking_strategy == "page_level"
+    assert effective.query.vector_index_profile == "accurate"
+    # 継承フィールドはグローバル既定で解決され、None にはならない。
+    assert effective.ingestion.preprocess_profile == settings.rag_preprocess_profile
+    assert effective.ingestion.parser_adapter_backend == settings.rag_parser_adapter_backend
+    assert effective.query.generation_profile == settings.rag_generation_profile
+    assert effective.query.retrieval_strategy == settings.rag_retrieval_strategy
+
+
+def test_resolve_effective_adapter_config_all_global_when_empty() -> None:
+    """空設定では全フィールドがグローバル既定で解決される(None が無い)。"""
+    settings = get_settings()
+    effective = resolve_effective_adapter_config(settings, KnowledgeBaseAdapterConfig())
+
+    assert effective.ingestion.chunking_strategy == settings.rag_chunking_strategy
+    assert effective.ingestion.chunk_size == settings.rag_chunk_size
+    assert effective.query.guardrail_policy == settings.rag_guardrail_policy
+    assert effective.query.evaluation_suite == settings.rag_evaluation_suite
+    # 解決済みは表示専用なので継承判定の元データ(config)は変更しない。
+    assert KnowledgeBaseAdapterConfig().is_empty()
 
 
 def test_invalid_literal_value_is_rejected_at_validation() -> None:
