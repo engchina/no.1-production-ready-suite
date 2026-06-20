@@ -8,6 +8,17 @@ from typing import Literal, Self, TypeGuard
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 type ExtractionMetadataValue = str | int | float | bool | None
+# parser_artifacts は source_derivation(派生系譜)など **nested な JSON** も保持するため、
+# scalar に限らず list / dict を許容する再帰型にする(model_validate での round-trip を保証)。
+type ExtractionArtifactValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | list["ExtractionArtifactValue"]
+    | dict[str, "ExtractionArtifactValue"]
+)
 
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
 NUMBERED_HEADING = re.compile(
@@ -328,7 +339,7 @@ class StructuredExtraction(BaseModel):
     assets: list[ExtractionAsset] = Field(default_factory=list)
     navigation: list[DocumentNavigationNode] = Field(default_factory=list)
     fields: list[ExtractionField] = Field(default_factory=list)
-    parser_artifacts: dict[str, ExtractionMetadataValue] = Field(default_factory=dict)
+    parser_artifacts: dict[str, ExtractionArtifactValue] = Field(default_factory=dict)
     quality_report: IngestionQualityReport | None = None
 
     @model_validator(mode="after")

@@ -105,3 +105,30 @@ def test_convert_endpoint_roundtrip_with_stub_converter() -> None:
     parsed = ConvertResponse.model_validate(response.json())
     assert parsed.converted is True
     assert parsed.derived_bytes() == b"%PDF stub DOCX"
+
+
+def test_parser_artifacts_accepts_nested_source_derivation_roundtrip() -> None:
+    """parser_artifacts は nested な source_derivation を保持し model_validate で round-trip する。
+
+    二段階レビューの index フェーズ再検証(StructuredExtraction.model_validate)が dict 値で
+    失敗しない退化防止。
+    """
+    from rag_parser_core.extraction import StructuredExtraction
+
+    extraction = StructuredExtraction(
+        raw_text="本文",
+        parser_artifacts={
+            "source_derivation": {
+                "derivation_id": "d1",
+                "converted": False,
+                "page_map": {"1": 1},
+                "warnings": [],
+            },
+            "asr_backend": "oci_speech",
+        },
+    )
+    restored = StructuredExtraction.model_validate_json(extraction.model_dump_json())
+    derivation = restored.parser_artifacts["source_derivation"]
+    assert isinstance(derivation, dict)
+    assert derivation["derivation_id"] == "d1"
+    assert restored.parser_artifacts["asr_backend"] == "oci_speech"

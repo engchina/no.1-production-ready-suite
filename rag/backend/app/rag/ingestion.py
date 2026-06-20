@@ -75,6 +75,7 @@ from app.rag.preprocess_strategy import resolve_preprocess_profile
 from app.schemas.document import DocumentDetail, FileStatus, IngestionSegment, SourceProfile
 from app.schemas.extraction import (
     DocumentElement,
+    ExtractionArtifactValue,
     ExtractionAsset,
     ExtractionField,
     ExtractionMetadataValue,
@@ -2363,7 +2364,7 @@ def _extraction_with_artifact_cache_metadata(
     segment: IngestionSegment | None = None,
 ) -> StructuredExtraction:
     """Object Storage cache payload を後方互換な parser_artifacts で自描述にする。"""
-    parser_artifacts: dict[str, ExtractionMetadataValue] = {
+    parser_artifacts: dict[str, ExtractionArtifactValue] = {
         **extraction.parser_artifacts,
         "extraction_artifact_schema_version": EXTRACTION_ARTIFACT_SCHEMA_VERSION,
         "extraction_artifact_kind": artifact_kind,
