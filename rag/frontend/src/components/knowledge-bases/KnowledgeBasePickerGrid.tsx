@@ -177,7 +177,7 @@ export function KnowledgeBasePickerGrid({
     open && filtered[activeIndex] ? `${listId}-opt-${filtered[activeIndex].id}` : undefined;
 
   return (
-    <div ref={rootRef} className="max-w-2xl space-y-1.5">
+    <div ref={rootRef} className="space-y-1.5">
       {/* トリガー: 選択済みチップ + 検索入力 */}
       <div
         className={cn(
@@ -319,7 +319,7 @@ export function KnowledgeBasePickerGrid({
                     >
                       {isSelected ? <Check size={12} strokeWidth={3} /> : null}
                     </span>
-                    <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                    <span className="min-w-0 max-w-[24rem] truncate font-medium text-foreground">
                       {kb.name}
                       {kb.id === topId ? (
                         <span className="ml-1.5 rounded-sm bg-info-bg px-1 py-0.5 align-middle text-[10px] font-medium text-primary">
@@ -332,6 +332,7 @@ export function KnowledgeBasePickerGrid({
                         count: kb.document_count,
                       })}
                     </span>
+                    <span className="flex-1" aria-hidden />
                   </li>
                 );
               })}
