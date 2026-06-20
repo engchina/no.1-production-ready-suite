@@ -28,7 +28,7 @@ interface ServiceRow {
     | "evaluation"
     | "graphrag"
     | "agentic";
-  profile: "cpu" | "gpu";
+  profile: "cpu" | "gpu" | "oci";
   label_key: string;
   status: ServiceStatus;
   configured: boolean;
@@ -59,6 +59,22 @@ function defaultServices(): ServiceRow[] {
       label_key: "settings.services.item.parserMineru",
       status: "stopped",
       configured: true,
+    },
+    {
+      service_id: "parser-oci-genai-vision",
+      category: "parser",
+      profile: "oci",
+      label_key: "settings.services.item.parserOciGenaiVision",
+      status: "stopped",
+      configured: false,
+    },
+    {
+      service_id: "parser-oci-document-understanding",
+      category: "parser",
+      profile: "oci",
+      label_key: "settings.services.item.parserOciDocumentUnderstanding",
+      status: "unconfigured",
+      configured: false,
     },
     {
       service_id: "pipeline-chunking",
@@ -152,6 +168,14 @@ for (const viewport of [
     await expect(
       page.getByRole("heading", { name: "解析 (Parser)(GPU)", exact: true })
     ).toBeVisible();
+    // OCI クラウド parser は第 3 グループ「解析 (Parser)(OCI)」として表示。
+    await expect(
+      page.getByRole("heading", { name: "解析 (Parser)(OCI)", exact: true })
+    ).toBeVisible();
+    await expect(
+      page.getByText("OCI Generative AI (Vision)", { exact: true })
+    ).toBeVisible();
+    await expect(page.getByText("OCI 認証はメイン設定を継承", { exact: false })).toBeVisible();
     // 単一プロファイルのステージは接尾辞なし。
     await expect(
       page.getByRole("heading", { name: "分割 (Chunking)", exact: true })

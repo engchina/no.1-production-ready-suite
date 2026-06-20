@@ -48,7 +48,9 @@ for (const viewport of [
     await expect(
       page.getByRole("radio", { name: /OCI Document Understanding/ })
     ).toBeVisible();
-    await expect(page.getByRole("radio", { name: /Enterprise AI VLM/ })).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /OCI Generative AI \(Vision\)/ })
+    ).toBeVisible();
     await expect(page.getByText("未設定", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("OCI サービス", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Source routing matrix")).toBeVisible();
@@ -241,7 +243,7 @@ test("Parser adapter 設定は backend と feature flag を保存できる", asy
       savedPayload = route.request().postDataJSON();
       await route.fulfill({
         json: parserAdapterEnvelope({
-          adapter_backend: "auto",
+          adapter_backend: "mineru",
           effective_order: ["docling", "unstructured"],
           config_source: "runtime",
           adapters: [
@@ -305,11 +307,13 @@ test("Parser adapter 設定は backend と feature flag を保存できる", asy
 
   await page.goto("/settings/parser-adapters");
 
-  const autoBackend = page.getByRole("radio", { name: /Auto/ });
-  await autoBackend.focus();
-  await expect(autoBackend).toBeFocused();
+  // local/auto は廃止。microservice backend(MinerU)を選択する。MinerU は feature flag
+  // を自動 ON しないため、下の docling/unstructured トグル assert と干渉しない。
+  const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
+  await mineruBackend.focus();
+  await expect(mineruBackend).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(autoBackend).toHaveAttribute("aria-checked", "true");
+  await expect(mineruBackend).toHaveAttribute("aria-checked", "true");
 
   await page.getByRole("switch", { name: "Docling adapter feature flag" }).click();
   await page.getByRole("switch", { name: "Unstructured adapter feature flag" }).click();
@@ -320,7 +324,7 @@ test("Parser adapter 設定は backend と feature flag を保存できる", asy
   await expect(page.getByText("Parser adapter 設定を保存しました。")).toBeVisible();
   await expect(page.getByText("Docling -> Unstructured")).toBeVisible();
   expect(savedPayload).toEqual({
-    adapter_backend: "auto",
+    adapter_backend: "mineru",
     docling_enabled: true,
     marker_enabled: false,
     unstructured_enabled: true,
@@ -388,7 +392,7 @@ function parserAdapterEnvelope(data: object) {
       source_routes: sourceRoutes,
       service_backends: [
         {
-          backend: "enterprise_ai_vlm",
+          backend: "oci_genai_vision",
           selected: false,
           configured: true,
           warning_code: null,

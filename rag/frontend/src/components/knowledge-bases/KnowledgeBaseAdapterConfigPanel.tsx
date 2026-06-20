@@ -34,12 +34,17 @@ const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = [
   { value: "csv_to_json", label: "csv_to_json(CSV→JSON)" },
   { value: "excel_to_json", label: "excel_to_json(Excel→JSON)" },
 ];
+// parser バックエンドはサービスとして起動できる parser microservice のみを並べる
+// (local/auto は廃止)。グローバル設定の選択肢と整合させる。
 const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = [
-  { value: "local", label: "local(内蔵パーサ)" },
-  { value: "auto", label: "auto(source 別自動ルーティング)" },
   { value: "docling", label: "Docling" },
   { value: "marker", label: "Marker" },
   { value: "unstructured", label: "Unstructured" },
+  { value: "mineru", label: "MinerU" },
+  { value: "dots_ocr", label: "Dots.OCR" },
+  { value: "glm_ocr", label: "GLM-OCR" },
+  { value: "oci_genai_vision", label: "OCI Generative AI (Vision)" },
+  { value: "oci_document_understanding", label: "OCI Document Understanding" },
 ];
 const CHUNKING_OPTIONS: SelectFieldOption<ChunkingStrategyName>[] = [
   { value: "structure_aware", label: "structure_aware(構造認識)" },

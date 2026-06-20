@@ -493,11 +493,11 @@ class ParserAdapterContractData(BaseModel):
 class ParserServiceBackendData(BaseModel):
     """service 系 parser backend(OCI クラウドサービス直呼び)の選択状態と可用性。
 
-    package readiness の対象外。backend から OCI Enterprise AI VLM / Document
+    package readiness の対象外。backend から OCI Generative AI(Vision) / Document
     Understanding を直接呼ぶため、設定の完全性で「利用可能か」を示す。
     """
 
-    backend: Literal["enterprise_ai_vlm", "oci_document_understanding"]
+    backend: Literal["oci_genai_vision", "oci_document_understanding"]
     selected: bool
     configured: bool
     warning_code: str | None = None

@@ -152,12 +152,21 @@ export const ja = {
   "settings.parserAdapters.backend.docling.description": "Docling を優先",
   "settings.parserAdapters.backend.marker.description": "Marker を優先",
   "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
-  "settings.parserAdapters.backend.enterprise_ai_vlm": "Enterprise AI VLM",
+  "settings.parserAdapters.backend.mineru.description": "MinerU を優先(GPU)",
+  "settings.parserAdapters.backend.dots_ocr.description": "Dots.OCR を優先(GPU)",
+  "settings.parserAdapters.backend.glm_ocr.description": "GLM-OCR を優先(GPU)",
+  "settings.parserAdapters.backend.oci_genai_vision": "OCI Generative AI (Vision)",
+  "settings.parserAdapters.backend.oci_genai_vision.description":
+    "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
+  // 後方互換エイリアス(旧称)。表示は oci_genai_vision に統一。
+  "settings.parserAdapters.backend.enterprise_ai_vlm": "OCI Generative AI (Vision)",
   "settings.parserAdapters.backend.enterprise_ai_vlm.description":
-    "OCI Enterprise AI VLM を明示選択(fallback ではなく直接 OCR/抽出)",
+    "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
   "settings.parserAdapters.backend.oci_document_understanding": "OCI Document Understanding",
   "settings.parserAdapters.backend.oci_document_understanding.description":
     "OCI Document Understanding の非同期 job で日本語 OCR/表抽出",
+  "settings.parserAdapters.legacyBackendNotice":
+    "外部エンジン未選択(内蔵フォールバックで解析)。下から parser を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.tag": "OCI サービス",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
   "settings.parserAdapters.serviceBackend.note":
@@ -415,6 +424,7 @@ export const ja = {
   "settings.services.lastUpdated": "最終更新: {time}",
   "settings.services.cpuSuffix": "{stage}(CPU)",
   "settings.services.gpuSuffix": "{stage}(GPU)",
+  "settings.services.ociSuffix": "{stage}(OCI)",
   "settings.services.stage.preprocess": "前処理 (Preprocess)",
   "settings.services.stage.parser": "解析 (Parser)",
   "settings.services.stage.chunking": "分割 (Chunking)",
@@ -430,6 +440,8 @@ export const ja = {
   "settings.services.column.status": "状態",
   "settings.services.column.actions": "操作",
   "settings.services.gpuNote": "GPU プロファイル(docker compose --profile gpu で opt-in)。",
+  "settings.services.ociNote":
+    "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。",
   "settings.services.status.running": "稼働中",
   "settings.services.status.degraded": "縮退",
   "settings.services.status.stopped": "停止",
@@ -460,6 +472,8 @@ export const ja = {
   "settings.services.item.parserDotsOcr": "Dots.OCR",
   "settings.services.item.parserGlmOcr": "GLM-OCR",
   "settings.services.item.parserAsr": "ASR(音声文字起こし)",
+  "settings.services.item.parserOciGenaiVision": "OCI Generative AI (Vision)",
+  "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
   "settings.services.item.pipelineChunking": "Chunking(分割)",
   "settings.services.item.pipelineVectorIndex": "Vector Index(索引)",
   "settings.services.item.pipelineGraphrag": "GraphRAG(知識グラフ)",

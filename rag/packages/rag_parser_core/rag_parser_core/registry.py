@@ -62,7 +62,10 @@ AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 # クラウドサービス(Enterprise AI VLM / Document Understanding)を直接呼ぶ。core は
 # 決定論・非 network を保つため、ここでは実行せず sentinel(extraction=None)を返し、
 # 実際の呼び出しは backend(ingestion)側へ委譲する。
-SERVICE_ADAPTER_BACKENDS = frozenset({"enterprise_ai_vlm", "oci_document_understanding"})
+# oci_genai_vision = OCI Generative AI(Vision)。enterprise_ai_vlm は後方互換エイリアス。
+SERVICE_ADAPTER_BACKENDS = frozenset(
+    {"oci_genai_vision", "enterprise_ai_vlm", "oci_document_understanding"}
+)
 
 # 外部 adapter 実行の注入点。backend は HTTP runner を、service/test は in-process を渡す。
 ExternalAdapterRunner = Callable[

@@ -11,6 +11,9 @@ x-parser-service-urls: &parser-service-urls
   RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
   RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
   RAG_PARSER_GLM_OCR_SERVICE_URL: http://parser-glm-ocr:8000
+  # OCI クラウド parser(薄いプロキシ・`--profile oci` で opt-in)。
+  RAG_PARSER_OCI_GENAI_VISION_SERVICE_URL: http://parser-oci-genai-vision:8000
+  RAG_PARSER_OCI_DOCUMENT_UNDERSTANDING_SERVICE_URL: http://parser-oci-document-understanding:8000
   # 前処理(parse 前の原本変換)マイクロサービス。1 変換 = 1 独立サービス。
   RAG_PREPROCESS_OFFICE_TO_PDF_SERVICE_URL: http://preprocess-office-to-pdf:8000
   RAG_PREPROCESS_PDF_TO_PAGE_IMAGES_SERVICE_URL: http://preprocess-pdf-to-page-images:8000
@@ -214,6 +217,37 @@ services:
             - driver: nvidia
               count: 1
               capabilities: ["gpu"]
+
+  # ---- parser マイクロサービス(OCI クラウド・`--profile oci` で opt-in)----
+  # OCI を呼ぶ薄いプロキシ(GPU 不要)。OCI 認証はメイン backend と同じ backend/.env と
+  # ~/.oci マウントを継承する(個別設定なし)。
+  parser-oci-genai-vision:
+    profiles: ["oci"]
+    build:
+      context: .
+      dockerfile: services/parsers/oci_genai_vision/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      OCI_CONFIG_FILE: /home/appuser/.oci/config
+    volumes:
+      - ~/.oci:/home/appuser/.oci:ro
+
+  parser-oci-document-understanding:
+    profiles: ["oci"]
+    build:
+      context: .
+      dockerfile: services/parsers/oci_document_understanding/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      OCI_CONFIG_FILE: /home/appuser/.oci/config
+    volumes:
+      - ~/.oci:/home/appuser/.oci:ro
 
   # ---- pipeline ステージのプラグイン(マイクロサービス)----
   pipeline-chunking:

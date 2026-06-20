@@ -30,7 +30,9 @@ ServiceCategory = Literal[
     "graphrag",
     "agentic",
 ]
-ServiceProfile = Literal["cpu", "gpu"]
+# cpu/gpu はローカル ML 依存の重さで分ける。oci は OCI クラウドサービスを呼ぶ薄い
+# プロキシ microservice(GPU 不要・OCI 認証はメイン設定を継承)。
+ServiceProfile = Literal["cpu", "gpu", "oci"]
 # dev(ホスト)での起動方式。軽量な前処理は uv プロセス、重い ML 依存の parser は
 # (dev でも)docker compose で起動する。prod は常に docker。
 DevRunner = Literal["uv", "docker"]
@@ -199,6 +201,28 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/parsers/asr",
         dev_port=8026,
         dev_runner="docker",
+    ),
+    # ---- parser マイクロサービス(OCI クラウド・OCI 認証はメイン設定を継承)----
+    # OCI を呼ぶだけの軽量プロキシなので dev は uv プロセス(host の ~/.oci・env を継承)。
+    ServiceCatalogEntry(
+        service_id="parser-oci-genai-vision",
+        category="parser",
+        profile="oci",
+        url_field="rag_parser_oci_genai_vision_service_url",
+        label_key="settings.services.item.parserOciGenaiVision",
+        working_dir="services/parsers/oci_genai_vision",
+        dev_port=8027,
+        dev_runner="uv",
+    ),
+    ServiceCatalogEntry(
+        service_id="parser-oci-document-understanding",
+        category="parser",
+        profile="oci",
+        url_field="rag_parser_oci_document_understanding_service_url",
+        label_key="settings.services.item.parserOciDocumentUnderstanding",
+        working_dir="services/parsers/oci_document_understanding",
+        dev_port=8028,
+        dev_runner="uv",
     ),
     # ---- pipeline ステージのプラグイン(マイクロサービス)----
     ServiceCatalogEntry(

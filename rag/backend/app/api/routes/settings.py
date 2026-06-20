@@ -1992,8 +1992,9 @@ def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBacke
     du_configured = OciDocumentUnderstandingClient(settings=settings).is_configured()
     return [
         ParserServiceBackendData(
-            backend="enterprise_ai_vlm",
-            selected=selected == "enterprise_ai_vlm",
+            backend="oci_genai_vision",
+            # 旧称 enterprise_ai_vlm も選択値として受理(後方互換エイリアス)。
+            selected=selected in ("oci_genai_vision", "enterprise_ai_vlm"),
             configured=vlm_configured,
             warning_code=None if vlm_configured else "enterprise_ai_endpoint_unconfigured",
         ),

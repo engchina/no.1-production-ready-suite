@@ -119,10 +119,12 @@ def test_parser_adapter_settings_reports_service_backends(
 
     assert resp.status_code == 200
     body = resp.json()["data"]
+    # 旧称 enterprise_ai_vlm を保存値にしても、canonical な oci_genai_vision service
+    # backend が選択状態として返る(後方互換エイリアス)。
     assert body["adapter_backend"] == "enterprise_ai_vlm"
     service = {item["backend"]: item for item in body["service_backends"]}
-    assert service["enterprise_ai_vlm"]["selected"] is True
-    assert service["enterprise_ai_vlm"]["configured"] is True
+    assert service["oci_genai_vision"]["selected"] is True
+    assert service["oci_genai_vision"]["configured"] is True
     assert service["oci_document_understanding"]["selected"] is False
     assert service["oci_document_understanding"]["configured"] is False
     assert (

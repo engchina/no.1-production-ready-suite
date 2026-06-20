@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type DeploymentMode,
+  type ServiceProfile,
   type ServiceRuntimeStatus,
   type ServiceStatusData,
 } from "@/lib/api";
@@ -69,7 +70,7 @@ export function ServicesManagementClient() {
   const controlEnabled = data.control_enabled;
   const deploymentMode = data.deployment_mode;
   // サービス管理ページのセクションは RAG パイプライン順(サイドナビと一致)で表示する。
-  // 各ステージは CPU/GPU の両方がある場合のみ Parser と同様に CPU/GPU へ分割する。
+  // 各ステージは CPU/GPU/OCI のうち存在するプロファイルごとにグループを分けて表示する。
   const PIPELINE_STAGE_ORDER: { category: string; labelKey: I18nKey }[] = [
     { category: "preprocess", labelKey: "settings.services.stage.preprocess" },
     { category: "parser", labelKey: "settings.services.stage.parser" },
@@ -83,12 +84,23 @@ export function ServicesManagementClient() {
     { category: "graphrag", labelKey: "settings.services.stage.graphrag" },
     { category: "agentic", labelKey: "settings.services.stage.agentic" },
   ];
+  // プロファイル表示順と suffix/note。GPU/OCI は単独でも opt-in/要件を note で明示する。
+  const PROFILE_ORDER: {
+    profile: ServiceProfile;
+    suffixKey: I18nKey;
+    noteKey: I18nKey | null;
+  }[] = [
+    { profile: "cpu", suffixKey: "settings.services.cpuSuffix", noteKey: null },
+    { profile: "gpu", suffixKey: "settings.services.gpuSuffix", noteKey: "settings.services.gpuNote" },
+    { profile: "oci", suffixKey: "settings.services.ociSuffix", noteKey: "settings.services.ociNote" },
+  ];
   const stageGroups = PIPELINE_STAGE_ORDER.map(({ category, labelKey }) => {
     const label = t(labelKey);
-    const cpu = data.services.filter((s) => s.category === category && s.profile === "cpu");
-    const gpu = data.services.filter((s) => s.category === category && s.profile === "gpu");
-    const hasBoth = cpu.length > 0 && gpu.length > 0;
-    return { category, label, cpu, gpu, hasBoth };
+    const groups = PROFILE_ORDER.map((p) => ({
+      ...p,
+      services: data.services.filter((s) => s.category === category && s.profile === p.profile),
+    })).filter((g) => g.services.length > 0);
+    return { category, label, groups };
   });
 
   async function act(service: ServiceStatusData, action: "start" | "stop") {
@@ -192,47 +204,30 @@ export function ServicesManagementClient() {
         </CardContent>
       </Card>
 
-      {stageGroups.map((stage) =>
-        stage.hasBoth ? (
-          // CPU/GPU 両方ある場合は Parser と同様に分割する。
+      {stageGroups.map((stage) => {
+        // 単一プロファイルかつ CPU のときだけ suffix 無しのステージ名にする。
+        // 複数プロファイル、または GPU/OCI は suffix(+note)を付けて区別・要件を明示する。
+        const multi = stage.groups.length > 1;
+        return (
           <Fragment key={stage.category}>
-            <ServiceGroup
-              title={t("settings.services.cpuSuffix", { stage: stage.label })}
-              services={stage.cpu}
-              controlEnabled={controlEnabled}
-              pending={pending}
-              onAct={act}
-            />
-            <ServiceGroup
-              title={t("settings.services.gpuSuffix", { stage: stage.label })}
-              note={t("settings.services.gpuNote")}
-              services={stage.gpu}
-              controlEnabled={controlEnabled}
-              pending={pending}
-              onAct={act}
-            />
+            {stage.groups.map((g) => (
+              <ServiceGroup
+                key={`${stage.category}-${g.profile}`}
+                title={
+                  multi || g.profile !== "cpu"
+                    ? t(g.suffixKey, { stage: stage.label })
+                    : stage.label
+                }
+                note={g.noteKey ? t(g.noteKey) : undefined}
+                services={g.services}
+                controlEnabled={controlEnabled}
+                pending={pending}
+                onAct={act}
+              />
+            ))}
           </Fragment>
-        ) : stage.gpu.length > 0 ? (
-          <ServiceGroup
-            key={stage.category}
-            title={t("settings.services.gpuSuffix", { stage: stage.label })}
-            note={t("settings.services.gpuNote")}
-            services={stage.gpu}
-            controlEnabled={controlEnabled}
-            pending={pending}
-            onAct={act}
-          />
-        ) : (
-          <ServiceGroup
-            key={stage.category}
-            title={stage.label}
-            services={stage.cpu}
-            controlEnabled={controlEnabled}
-            pending={pending}
-            onAct={act}
-          />
-        )
-      )}
+        );
+      })}
     </div>
   );
 }
