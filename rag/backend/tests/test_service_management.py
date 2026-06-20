@@ -49,7 +49,8 @@ def test_catalog_ids_unique_and_url_fields_resolve() -> None:
 
 def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
     categories = {entry.category for entry in SERVICE_CATALOG}
-    assert categories == {"preprocess", "parser"}
+    # preprocess / parser に加え、pipeline ステージのプラグイン(chunking 等)を含む。
+    assert {"preprocess", "parser", "chunking"} <= categories
     gpu_ids = {entry.service_id for entry in SERVICE_CATALOG if entry.profile == "gpu"}
     assert gpu_ids == {"parser-mineru", "parser-dots-ocr", "parser-glm-ocr", "parser-asr"}
 

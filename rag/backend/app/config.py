@@ -948,6 +948,28 @@ class Settings(BaseSettings):
             "超過・接続失敗時は warning を付けて local/Enterprise AI fallback へ縮退する。"
         ),
     )
+    # --- pipeline ステージのプラグイン(マイクロサービス)化 ---
+    # 各 pipeline ステージ(chunking 等)を独立サービスとして remote 委譲する。未達/timeout/無効時は
+    # backend in-process(同一 rag_pipeline_core ロジック)へ安全縮退する。
+    rag_pipeline_stage_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description=(
+            "pipeline ステージサービス呼び出しの HTTP timeout(秒)。"
+            "超過・接続失敗時は warning を付けて in-process へ安全縮退する。"
+        ),
+    )
+    rag_chunking_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "chunking ステージを chunking マイクロサービスへ HTTP 委譲する。OFF(既定)は "
+            "backend in-process で実行(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+        ),
+    )
+    rag_chunking_service_url: str = Field(
+        default="http://pipeline-chunking:8000",
+        description="chunking ステージマイクロサービスの base URL。",
+    )
     rag_parser_readiness_probe_enabled: bool = Field(
         default=False,
         description=(

@@ -22,6 +22,7 @@ dependencies = [
     "charset-normalizer>=3.4,<4",
     "pypdf>=6.4,<7",
     "rag-parser-core",
+    "rag-pipeline-core",
 ]
 
 # 重い parser 依存(docling/marker/unstructured/mineru/dots_ocr)は backend に載せない。
@@ -43,6 +44,7 @@ conflicts = [[{ extra = "marker" }, { extra = "unstructured" }]]
 
 [tool.uv.sources]
 rag-parser-core = { path = "../packages/rag_parser_core", editable = true }
+rag-pipeline-core = { path = "../packages/rag_pipeline_core", editable = true }
 
 [dependency-groups]
 dev = [

@@ -16,7 +16,20 @@ from urllib.parse import urlparse
 
 from app.config import Settings
 
-ServiceCategory = Literal["preprocess", "parser"]
+ServiceCategory = Literal[
+    "preprocess",
+    "parser",
+    # pipeline 各ステージのプラグイン(マイクロサービス)化。順次追加する。
+    "chunking",
+    "vector_index",
+    "retrieval",
+    "grounding",
+    "generation",
+    "guardrail",
+    "evaluation",
+    "graphrag",
+    "agentic",
+]
 ServiceProfile = Literal["cpu", "gpu"]
 # dev(ホスト)での起動方式。軽量な前処理は uv プロセス、重い ML 依存の parser は
 # (dev でも)docker compose で起動する。prod は常に docker。
@@ -186,6 +199,17 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/parsers/asr",
         dev_port=8026,
         dev_runner="docker",
+    ),
+    # ---- pipeline ステージのプラグイン(マイクロサービス)----
+    ServiceCatalogEntry(
+        service_id="pipeline-chunking",
+        category="chunking",
+        profile="cpu",
+        url_field="rag_chunking_service_url",
+        label_key="settings.services.item.pipelineChunking",
+        working_dir="services/pipeline/chunking",
+        dev_port=8030,
+        dev_runner="uv",
     ),
 )
 

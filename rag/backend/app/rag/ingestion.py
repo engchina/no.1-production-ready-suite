@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
+from rag_pipeline_core.stage import ChunkingStageRequest
 
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
@@ -27,6 +28,7 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oci_speech import OciSpeechClient
 from app.clients.oracle import OracleClient
 from app.clients.parser_service import ParserServiceClient
+from app.clients.pipeline_stage import PipelineStageClient
 from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import Settings, enterprise_ai_vision_model_id, get_settings
 from app.rag.asset_summary import summarize_assets
@@ -174,6 +176,8 @@ class IngestionPipeline:
         self._object_storage = object_storage or ObjectStorageClient(settings=self._settings)
         # 外部 adapter は同一プロセスで import せず parser マイクロサービスへ HTTP 委譲する。
         self._parser_service = ParserServiceClient(settings=self._settings)
+        # pipeline ステージ(chunking 等)のプラグイン委譲。未達は in-process へ縮退する。
+        self._pipeline_stage = PipelineStageClient(self._settings)
         # 前処理(parse 前の原本変換)。軽量正規化は in-process、重い変換はサービスへ委譲。
         self._preprocess = PreprocessServiceClient(self._settings)
         # service 系 backend(OCI Document Understanding)を backend から直接呼ぶ。
@@ -524,10 +528,22 @@ class IngestionPipeline:
             raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
         await _raise_if_cancelled(cancel_checker)
         chunking_params = resolve_chunking_params(self._settings)
-        chunks = await _observe_cpu_ingestion_stage(
-            trace_id,
-            "chunking",
-            lambda: chunk_extraction_with_strategy(
+
+        def _run_chunking() -> list[Chunk]:
+            # remote(chunking マイクロサービス)優先。未達/無効は同一ロジックで in-process 実行。
+            request = ChunkingStageRequest(
+                extraction=extraction,
+                strategy=chunking_params.strategy,
+                chunk_size=chunking_params.chunk_size,
+                overlap=chunking_params.overlap,
+                child_size=chunking_params.child_size,
+                sentence_window_size=chunking_params.sentence_window_size,
+                min_chars=chunking_params.min_chars,
+            )
+            remote = self._pipeline_stage.run_chunking(request)
+            if remote is not None:
+                return remote
+            return chunk_extraction_with_strategy(
                 extraction,
                 strategy=chunking_params.strategy,
                 chunk_size=chunking_params.chunk_size,
@@ -535,7 +551,12 @@ class IngestionPipeline:
                 child_size=chunking_params.child_size,
                 sentence_window_size=chunking_params.sentence_window_size,
                 min_chars=chunking_params.min_chars,
-            ),
+            )
+
+        chunks = await _observe_cpu_ingestion_stage(
+            trace_id,
+            "chunking",
+            _run_chunking,
             attributes={
                 "chunk_profile": "structure_v1",
                 "chunk_strategy": chunking_params.strategy,

@@ -215,6 +215,13 @@ services:
               count: 1
               capabilities: ["gpu"]
 
+  # ---- pipeline ステージのプラグイン(マイクロサービス)----
+  pipeline-chunking:
+    build:
+      context: .
+      dockerfile: services/pipeline/chunking/Dockerfile
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     environment:
