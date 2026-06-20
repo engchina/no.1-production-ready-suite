@@ -117,8 +117,7 @@ class OciDocumentUnderstandingClient:
 
     def _output_bucket(self) -> str:
         return (
-            self._settings.oci_document_understanding_output_bucket.strip()
-            or self._input_bucket()
+            self._settings.oci_document_understanding_output_bucket.strip() or self._input_bucket()
         )
 
     def is_configured(self) -> bool:

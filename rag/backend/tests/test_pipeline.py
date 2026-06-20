@@ -561,9 +561,7 @@ async def test_pipeline_fetches_dependency_context_not_in_retrieved_pool() -> No
         ),
     )
 
-    response = await pipeline.run(
-        SearchRequest(query="承認フロー 120000", top_k=1, rerank_top_n=1)
-    )
+    response = await pipeline.run(SearchRequest(query="承認フロー 120000", top_k=1, rerank_top_n=1))
 
     assert oracle.dependency_lookup_anchors == ["doc-figure:0"]
     assert [citation.chunk_id for citation in response.citations] == [
@@ -593,9 +591,7 @@ async def test_pipeline_promotes_structured_dependency_edge_metadata() -> None:
         ),
     )
 
-    response = await pipeline.run(
-        SearchRequest(query="承認フロー 120000", top_k=3, rerank_top_n=1)
-    )
+    response = await pipeline.run(SearchRequest(query="承認フロー 120000", top_k=3, rerank_top_n=1))
 
     assert [citation.chunk_id for citation in response.citations] == [
         "doc-figure:0",
@@ -1987,9 +1983,7 @@ class DependencyPromotionOracleClient(OracleClient):
                     "content_kind": "text",
                     "element_ids": "fig-1-caption",
                     "parent_element_ids": "fig-1",
-                    "dependency_edges": (
-                        '[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'
-                    ),
+                    "dependency_edges": ('[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'),
                 },
             ),
             RetrievedChunk(
@@ -2042,9 +2036,7 @@ class StructuredDependencyPromotionOracleClient(OracleClient):
                     "chunk_index": 1,
                     "content_kind": "text",
                     "element_ids": ["fig-1-caption"],
-                    "dependency_edges": [
-                        {"parent_id": "fig-1", "child_id": "fig-1-caption"}
-                    ],
+                    "dependency_edges": [{"parent_id": "fig-1", "child_id": "fig-1-caption"}],
                 },
             ),
             RetrievedChunk(
@@ -2113,9 +2105,7 @@ class DependencyLookupOracleClient(OracleClient):
                     "content_kind": "text",
                     "element_ids": "fig-1-caption",
                     "parent_element_ids": "fig-1",
-                    "dependency_edges": (
-                        '[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'
-                    ),
+                    "dependency_edges": ('[{"parent_id":"fig-1","child_id":"fig-1-caption"}]'),
                 },
             )
         ]
@@ -2630,11 +2620,19 @@ def test_crag_confidence_prefers_rerank_score() -> None:
     """CRAG 信頼度は rerank 最高スコア(無ければ vector score)を [0,1] で返す。"""
     chunks = [
         RetrievedChunk(
-            document_id="d", chunk_id="d:0", text="a", score=0.9, rerank_score=0.42,
+            document_id="d",
+            chunk_id="d:0",
+            text="a",
+            score=0.9,
+            rerank_score=0.42,
             file_name="f.txt",
         ),
         RetrievedChunk(
-            document_id="d", chunk_id="d:1", text="b", score=0.5, rerank_score=0.18,
+            document_id="d",
+            chunk_id="d:1",
+            text="b",
+            score=0.5,
+            rerank_score=0.18,
             file_name="f.txt",
         ),
     ]
@@ -2656,7 +2654,11 @@ def test_crag_confidence_empty_is_zero() -> None:
 def test_crag_confidence_clamped_to_unit_range() -> None:
     chunks = [
         RetrievedChunk(
-            document_id="d", chunk_id="d:0", text="a", score=0.0, rerank_score=1.8,
+            document_id="d",
+            chunk_id="d:0",
+            text="a",
+            score=0.0,
+            rerank_score=1.8,
             file_name="f.txt",
         ),
     ]

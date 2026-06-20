@@ -85,9 +85,7 @@ def test_ingestion_config_without_owning_kb_uses_global(
     fake_oracle: FakeIngestionConfigOracle,
 ) -> None:
     """所属 KB が無ければグローバル既定が effective として返り、ドリフトは立たない。"""
-    fake_oracle.add_document(
-        "doc-1", status=FileStatus.INDEXED, chunk_strategy="structure_aware"
-    )
+    fake_oracle.add_document("doc-1", status=FileStatus.INDEXED, chunk_strategy="structure_aware")
 
     resp = client.get("/api/documents/doc-1/ingestion-config")
 
@@ -121,9 +119,7 @@ def test_ingestion_config_detects_drift(
     fake_oracle: FakeIngestionConfigOracle,
 ) -> None:
     """owning KB の現行戦略が取込済みチャンクと異なるとドリフトを立てる。"""
-    fake_oracle.add_document(
-        "doc-1", status=FileStatus.INDEXED, chunk_strategy="structure_aware"
-    )
+    fake_oracle.add_document("doc-1", status=FileStatus.INDEXED, chunk_strategy="structure_aware")
     fake_oracle.set_owning("doc-1", _config(chunking_strategy="page_level"))
 
     data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
@@ -153,9 +149,7 @@ def test_ingestion_config_falls_back_on_inconsistent_kb_config(
     fake_oracle: FakeIngestionConfigOracle,
 ) -> None:
     """KB 設定がグローバルと矛盾する場合はグローバルへ縮退し、500 にならない。"""
-    fake_oracle.add_document(
-        "doc-1", status=FileStatus.INDEXED, chunk_strategy="structure_aware"
-    )
+    fake_oracle.add_document("doc-1", status=FileStatus.INDEXED, chunk_strategy="structure_aware")
     fake_oracle.set_owning("doc-1", _config(chunk_size=200, chunk_overlap=500))
 
     resp = client.get("/api/documents/doc-1/ingestion-config")

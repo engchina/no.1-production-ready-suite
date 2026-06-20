@@ -584,9 +584,7 @@ class OracleClient:
         """文書の所属ナレッジベース一覧を返す。"""
         return await self._list_document_knowledge_bases_with_oracle(document_id)
 
-    async def get_owning_knowledge_base(
-        self, document_id: str
-    ) -> KnowledgeBaseDetail | None:
+    async def get_owning_knowledge_base(self, document_id: str) -> KnowledgeBaseDetail | None:
         """取込設定の基準となる owning KB(最古割当)を返す。所属無しなら None。
 
         文書-KB は多対多だが、取込時の Parser/Chunking 上書きを決定論的にするため、
@@ -2424,10 +2422,7 @@ class OracleClient:
             ),
             binds,
         )
-        by_id = {
-            str(row["knowledge_base_id"]): str(row["name"])
-            for row in rows
-        }
+        by_id = {str(row["knowledge_base_id"]): str(row["name"]) for row in rows}
         # 入力順を保ち、存在しない KB は落とす。
         return [
             KnowledgeBaseRef(id=knowledge_base_id, name=by_id[knowledge_base_id])
@@ -6223,9 +6218,7 @@ def _element_ids_from_metadata(value: object) -> list[str]:
     """chunk metadata の element_ids を list にする。"""
     if isinstance(value, list):
         return [
-            str(item).strip()
-            for item in value
-            if isinstance(item, str | int) and str(item).strip()
+            str(item).strip() for item in value if isinstance(item, str | int) and str(item).strip()
         ]
     text = _metadata_str(value)
     if not text:

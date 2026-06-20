@@ -83,9 +83,7 @@ def build_navigation_tree(extraction: StructuredExtraction) -> list[DocumentNavi
                 title=path[-1],
                 section_path=list(path),
                 depth=len(path),
-                parent_section_id=(
-                    navigation_section_id(path[:-1]) if len(path) > 1 else None
-                ),
+                parent_section_id=(navigation_section_id(path[:-1]) if len(path) > 1 else None),
                 child_section_ids=list(acc.child_ids),
                 element_ids=list(acc.element_ids),
                 page_start=min(acc.pages) if acc.pages else None,
@@ -130,9 +128,7 @@ async def summarize_navigation_nodes(
     件までで止める。要約器が失敗した node は summary 無しのまま据え置く（best-effort）。
     """
     element_text_by_id = {
-        element.element_id: element.text
-        for element in extraction.elements
-        if element.element_id
+        element.element_id: element.text for element in extraction.elements if element.element_id
     }
     summarized: list[DocumentNavigationNode] = []
     remaining = max_nodes

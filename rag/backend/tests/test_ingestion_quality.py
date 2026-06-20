@@ -36,9 +36,7 @@ def test_quality_report_counts_first_class_structure_and_parser_artifacts() -> N
                 cells=[ExtractionTableCell(row=0, col=0, text="金額", confidence=0.4)],
             )
         ],
-        assets=[
-            ExtractionAsset(asset_id="fig-1", kind="image", page_number=4, alt_text="構成図")
-        ],
+        assets=[ExtractionAsset(asset_id="fig-1", kind="image", page_number=4, alt_text="構成図")],
         parser_artifacts={
             "page_count": 5,
             "table_count": 2,
@@ -96,14 +94,10 @@ def test_legacy_quality_summary_infers_first_class_tables_assets_and_artifacts()
                     {
                         "table_id": "tbl-1",
                         "page_number": 2,
-                        "cells": [
-                            {"row": 0, "col": 0, "text": "A", "confidence": 0.4}
-                        ],
+                        "cells": [{"row": 0, "col": 0, "text": "A", "confidence": 0.4}],
                     }
                 ],
-                "assets": [
-                    {"asset_id": "chart-1", "kind": "chart", "page_number": 2}
-                ],
+                "assets": [{"asset_id": "chart-1", "kind": "chart", "page_number": 2}],
                 "parser_artifacts": {
                     "page_count": "4",
                     "adapter_table_count": 2,

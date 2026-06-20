@@ -434,9 +434,7 @@ async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
     document_statuses = {call.parameters.get("status") for call in document_updates}
     assert "UPLOADED" in document_statuses  # 再キューした EXTRACT job の文書
     assert "ERROR" in document_statuses  # 試行上限超過 job の文書
-    assert any(
-        "DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls
-    )
+    assert any("DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls)
 
 
 async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
@@ -1610,9 +1608,7 @@ async def test_oci_delete_document_removes_chunks_and_document_with_access_scope
         if "DELETE FROM rag_ingestion_jobs" in statement
     )
     chunk_delete_index = next(
-        index
-        for index, statement in enumerate(statements)
-        if "DELETE FROM rag_chunks" in statement
+        index for index, statement in enumerate(statements) if "DELETE FROM rag_chunks" in statement
     )
     document_delete = next(
         call

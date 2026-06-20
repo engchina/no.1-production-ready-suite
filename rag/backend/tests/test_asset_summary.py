@@ -23,11 +23,7 @@ def _extraction(assets: list[ExtractionAsset]) -> StructuredExtraction:
 @pytest.mark.anyio
 async def test_summarize_assets_fills_summary_and_appends_searchable_element() -> None:
     extraction = _extraction(
-        [
-            ExtractionAsset(
-                asset_id="fig-1", kind="figure", page_number=2, alt_text="売上推移"
-            )
-        ]
+        [ExtractionAsset(asset_id="fig-1", kind="figure", page_number=2, alt_text="売上推移")]
     )
 
     async def _summarize(asset: ExtractionAsset) -> str | None:

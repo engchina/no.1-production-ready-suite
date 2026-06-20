@@ -125,9 +125,7 @@ class KnowledgeBaseAdapterConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     version: int = ADAPTER_CONFIG_VERSION
-    ingestion: KnowledgeBaseIngestionConfig = Field(
-        default_factory=KnowledgeBaseIngestionConfig
-    )
+    ingestion: KnowledgeBaseIngestionConfig = Field(default_factory=KnowledgeBaseIngestionConfig)
     query: KnowledgeBaseQueryConfig = Field(default_factory=KnowledgeBaseQueryConfig)
 
     def is_empty(self) -> bool:
@@ -137,11 +135,7 @@ class KnowledgeBaseAdapterConfig(BaseModel):
     def _scope_overrides(self, scope: AdapterConfigScope) -> dict[str, object]:
         """scope の非 None 上書きを {KB フィールド名: 値} で返す。"""
         section = self.ingestion if scope == "ingestion" else self.query
-        return {
-            key: value
-            for key, value in section.model_dump().items()
-            if value is not None
-        }
+        return {key: value for key, value in section.model_dump().items() if value is not None}
 
     def settings_overrides(self, scope: AdapterConfigScope) -> dict[str, object]:
         """scope の上書きを {Settings フィールド名: 値} へ変換する。"""

@@ -476,9 +476,7 @@ def test_strict_manifest_requires_schema_remap_fixture_for_each_routed_source(
     assert source_gap_case.source_kind == "pdf"
     assert source_gap_case.status == "failed"
     assert source_gap_case.blocking is True
-    assert source_gap_case.reason_codes == (
-        "adapter_schema_remap_fixture_missing_for_source",
-    )
+    assert source_gap_case.reason_codes == ("adapter_schema_remap_fixture_missing_for_source",)
     summary = parser_adapter_contract_summary(matrix)
     assert summary["missing_source_kinds"] == ["pdf"]
     assert summary["blocking_failure_source_kinds"] == ["pdf"]

@@ -34,16 +34,12 @@ def test_vector_and_keyword_disable_expansion_and_set_mode() -> None:
 def test_graph_and_select_ai_set_strategy_bias() -> None:
     graph = resolve_retrieval_adapter(Settings(rag_retrieval_strategy="graph_augmented"))
     assert graph.strategy_bias == SearchStrategy.GRAPH_GLOBAL
-    select_ai = resolve_retrieval_adapter(
-        Settings(rag_retrieval_strategy="select_ai_structured")
-    )
+    select_ai = resolve_retrieval_adapter(Settings(rag_retrieval_strategy="select_ai_structured"))
     assert select_ai.strategy_bias == SearchStrategy.SELECT_AI
 
 
 def test_business_context_strict_enables_gap_stop_and_business_fit() -> None:
-    params = resolve_retrieval_adapter(
-        Settings(rag_retrieval_strategy="business_context_strict")
-    )
+    params = resolve_retrieval_adapter(Settings(rag_retrieval_strategy="business_context_strict"))
     assert params.gap_stop is True
     assert params.business_fit_weighting is True
     assert params.corrective_retrieval is False

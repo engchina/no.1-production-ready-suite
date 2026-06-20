@@ -375,9 +375,7 @@ def test_ingestion_trace_structure_attributes_follow_quality_report_counts() -> 
                 cells=[ExtractionTableCell(row=0, col=0, text="金額", confidence=0.4)],
             )
         ],
-        assets=[
-            ExtractionAsset(asset_id="fig-1", kind="image", page_number=4, alt_text="構成図")
-        ],
+        assets=[ExtractionAsset(asset_id="fig-1", kind="image", page_number=4, alt_text="構成図")],
         parser_artifacts={
             "page_count": 5,
             "table_count": 2,
@@ -518,9 +516,7 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
     artifact_path = oracle.saved_extraction.parser_artifacts["extraction_artifact_path"]
     assert isinstance(artifact_path, str)
     assert artifact_path.startswith("oci://namespace/bucket/artifacts/extractions/doc-artifact/")
-    assert (
-        oracle.saved_extraction.parser_artifacts["extraction_artifact_schema_version"] == 1
-    )
+    assert oracle.saved_extraction.parser_artifacts["extraction_artifact_schema_version"] == 1
     assert oracle.saved_extraction.parser_artifacts["extraction_artifact_kind"] == "full"
     assert oracle.segments
     assert all(segment.status == "SUCCEEDED" for segment in oracle.segments.values())
@@ -537,9 +533,7 @@ async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys() -> None:
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
         settings=Settings(
-            rag_extraction_artifact_prefix=(
-                "../unsafe//prefix with space\\nested/./../final"
-            ),
+            rag_extraction_artifact_prefix=("../unsafe//prefix with space\\nested/./../final"),
         ),
     )
 
@@ -706,14 +700,10 @@ async def test_ingestion_pipeline_creates_openxml_office_segment_checkpoints(
     assert oracle.saved_extraction is not None
     full_artifact_path = oracle.saved_extraction.parser_artifacts["extraction_artifact_path"]
     assert all(segment.artifact_path for segment in oracle.segments.values())
-    assert all(
-        segment.artifact_path != full_artifact_path for segment in oracle.segments.values()
-    )
+    assert all(segment.artifact_path != full_artifact_path for segment in oracle.segments.values())
     assert all("/segments/" in str(segment.artifact_path) for segment in oracle.segments.values())
     segment_puts = [
-        (key, json.loads(data))
-        for key, data, _content_type in storage.puts
-        if "/segments/" in key
+        (key, json.loads(data)) for key, data, _content_type in storage.puts if "/segments/" in key
     ]
     assert len(segment_puts) == 2
     segment_artifacts = [payload["parser_artifacts"] for _key, payload in segment_puts]

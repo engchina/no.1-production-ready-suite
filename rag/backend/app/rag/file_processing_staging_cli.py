@@ -342,9 +342,7 @@ def _report_payload(
     require_real_world_policy: bool = False,
 ) -> dict[str, Any]:
     settings = (
-        strict_parser_adapter_settings(settings)
-        if parser_adapter_contract_strict
-        else settings
+        strict_parser_adapter_settings(settings) if parser_adapter_contract_strict else settings
     )
     payload = asdict(report)
     parser_adapters = parser_adapter_runtime_settings(settings)
@@ -382,9 +380,7 @@ def _report_payload(
         observed_templates=observed_chunk_templates,
         metrics_source="file_processing_staging",
         template_evidence=(
-            _chunk_template_manifest_evidence(manifest, report)
-            if report.case_results
-            else None
+            _chunk_template_manifest_evidence(manifest, report) if report.case_results else None
         ),
     )
     adapter_golden_gate = _adapter_golden_gate(
@@ -467,10 +463,7 @@ def _contract_aware_source_routes(
     }
     if not passed_pairs:
         return tuple(routes)
-    return tuple(
-        _contract_aware_source_route(route, passed_pairs=passed_pairs)
-        for route in routes
-    )
+    return tuple(_contract_aware_source_route(route, passed_pairs=passed_pairs) for route in routes)
 
 
 def _contract_aware_source_route(
@@ -482,11 +475,7 @@ def _contract_aware_source_route(
     if selected == "local" or (selected, route.source_kind) in passed_pairs:
         return route
     verified_backend: ParserAdapterScoreBackend = next(
-        (
-            backend
-            for backend in route.active_order
-            if (backend, route.source_kind) in passed_pairs
-        ),
+        (backend for backend in route.active_order if (backend, route.source_kind) in passed_pairs),
         "local",
     )
     reason_codes = [
@@ -619,7 +608,7 @@ def _redact_sensitive_payload(value: object) -> object:
     if isinstance(value, list):
         return [_redact_sensitive_payload(item) for item in value]
     if isinstance(value, tuple):
-            return tuple(_redact_sensitive_payload(item) for item in value)
+        return tuple(_redact_sensitive_payload(item) for item in value)
     return value
 
 
@@ -717,9 +706,7 @@ def _promotion_blockers(
         _staging_policy(manifest)["required_for_promotion"]
     ):
         blockers.extend(
-            _object_storage_artifact_chain_promotion_blockers(
-                object_storage_artifact_chain
-            )
+            _object_storage_artifact_chain_promotion_blockers(object_storage_artifact_chain)
         )
     blockers.extend(_promotion_threshold_policy_blockers(manifest))
     return blockers
@@ -752,9 +739,7 @@ def _staging_dataset_policy_promotion_blockers(
         blockers.append(
             {
                 "code": "staging_dataset_policy_not_required",
-                "real_world_case_count": _int_value(
-                    summary.get("real_world_case_count")
-                ),
+                "real_world_case_count": _int_value(summary.get("real_world_case_count")),
                 "compliant_real_world_case_count": _int_value(
                     summary.get("compliant_real_world_case_count")
                 ),
@@ -765,25 +750,17 @@ def _staging_dataset_policy_promotion_blockers(
             {
                 "code": "staging_dataset_policy_failed",
                 "policy_error_count": _int_value(summary.get("policy_error_count")),
-                "min_real_world_cases": _int_value(
-                    summary.get("min_real_world_cases")
-                ),
-                "real_world_case_count": _int_value(
-                    summary.get("real_world_case_count")
-                ),
+                "min_real_world_cases": _int_value(summary.get("min_real_world_cases")),
+                "real_world_case_count": _int_value(summary.get("real_world_case_count")),
                 "compliant_real_world_case_count": _int_value(
                     summary.get("compliant_real_world_case_count")
                 ),
-                "missing_source_kinds": _string_list(
-                    summary.get("missing_source_kinds")
-                ),
+                "missing_source_kinds": _string_list(summary.get("missing_source_kinds")),
                 "missing_scenarios": _string_list(summary.get("missing_scenarios")),
                 "sensitivity_violation_count": _int_value(
                     summary.get("sensitivity_violation_count")
                 ),
-                "review_missing_count": _int_value(
-                    summary.get("review_missing_count")
-                ),
+                "review_missing_count": _int_value(summary.get("review_missing_count")),
                 "fixture_prefix_mismatch_count": _int_value(
                     summary.get("fixture_prefix_mismatch_count")
                 ),
@@ -799,9 +776,7 @@ def _staging_dataset_policy_promotion_blockers(
                 "missing_executed_scenarios": _string_list(
                     summary.get("missing_executed_scenarios")
                 ),
-                "execution_error_count": _int_value(
-                    summary.get("execution_error_count")
-                ),
+                "execution_error_count": _int_value(summary.get("execution_error_count")),
             }
         )
     return blockers
@@ -818,9 +793,7 @@ def _staging_dataset_policy_summary(
 
     required_for_promotion = bool(summary.get("required_for_promotion"))
     executed_case_ids = {
-        case_result.case_id
-        for case_result in report.case_results
-        if case_result.gate_results
+        case_result.case_id for case_result in report.case_results if case_result.gate_results
     }
     required_fixture_prefix = _string_value(summary.get("required_fixture_prefix"))
     executed_real_world_case_count = 0
@@ -868,26 +841,21 @@ def _staging_dataset_policy_summary(
     summary.update(
         {
             "executed_real_world_case_count": executed_real_world_case_count,
-            "executed_compliant_real_world_case_count": (
-                executed_compliant_real_world_case_count
-            ),
+            "executed_compliant_real_world_case_count": (executed_compliant_real_world_case_count),
             "executed_source_kinds": sorted(executed_source_kinds),
             "missing_executed_source_kinds": sorted(missing_executed_source_kinds),
             "executed_scenarios": sorted(executed_scenarios),
             "missing_executed_scenarios": sorted(missing_executed_scenarios),
             "execution_error_count": execution_error_count,
             "execution_error_codes": execution_error_codes,
-            "promotion_ready": bool(summary.get("promotion_ready"))
-            and execution_error_count == 0,
+            "promotion_ready": bool(summary.get("promotion_ready")) and execution_error_count == 0,
         }
     )
     return summary
 
 
 def _is_real_world_staging_case(case: Mapping[str, object]) -> bool:
-    return _string_value(case.get("fixture_kind")) == "real_world" or case.get(
-        "real_world"
-    ) is True
+    return _string_value(case.get("fixture_kind")) == "real_world" or case.get("real_world") is True
 
 
 def _is_compliant_real_world_staging_case(
@@ -969,9 +937,7 @@ def _parser_adapter_contract_promotion_blockers(
     if matrix.passed:
         return []
     failed_cases = [
-        case
-        for case in matrix.cases
-        if case.blocking and case.status in BLOCKING_FAILURE_STATUSES
+        case for case in matrix.cases if case.blocking and case.status in BLOCKING_FAILURE_STATUSES
     ]
     if not failed_cases:
         return []
@@ -1027,9 +993,7 @@ def _adapter_golden_gate(
         blocker_codes.append("adapter_golden_gate_metric_failed")
     if not parser_adapter_contract.passed:
         blocker_codes.append("adapter_golden_gate_contract_failed")
-    route_contract_gap_source_kinds = _source_route_contract_gap_source_kinds(
-        parser_source_routes
-    )
+    route_contract_gap_source_kinds = _source_route_contract_gap_source_kinds(parser_source_routes)
     if route_contract_gap_source_kinds:
         blocker_codes.append("adapter_golden_gate_source_route_contract_missing")
     if (
@@ -1121,15 +1085,11 @@ def _adapter_golden_gate_promotion_blockers(
             "code": "adapter_golden_gate_failed",
             "blocker_codes": blocker_codes,
             "selected_backend": adapter_golden_gate.get("selected_backend"),
-            "missing_source_kinds": _string_list(
-                adapter_golden_gate.get("missing_source_kinds")
-            ),
+            "missing_source_kinds": _string_list(adapter_golden_gate.get("missing_source_kinds")),
             "source_route_contract_gap_source_kinds": _string_list(
                 adapter_golden_gate.get("source_route_contract_gap_source_kinds")
             ),
-            "missing_metric_names": _string_list(
-                adapter_golden_gate.get("missing_metric_names")
-            ),
+            "missing_metric_names": _string_list(adapter_golden_gate.get("missing_metric_names")),
         }
     ]
 
@@ -1150,9 +1110,7 @@ def _object_storage_artifact_chain(
         blocker_codes.append("object_storage_artifact_roundtrip_not_ok")
     if roundtrip_status == "ok" and roundtrip_object_uri_scheme != "oci":
         blocker_codes.append("object_storage_artifact_roundtrip_not_oci")
-    full_artifact_cached_case_count = _int_value(
-        evidence.get("full_artifact_cached_case_count")
-    )
+    full_artifact_cached_case_count = _int_value(evidence.get("full_artifact_cached_case_count"))
     full_artifact_oci_case_count = _int_value(evidence.get("full_artifact_oci_case_count"))
     full_artifact_identity_present_case_count = _int_value(
         evidence.get("full_artifact_identity_present_case_count")
@@ -1163,24 +1121,16 @@ def _object_storage_artifact_chain(
     full_artifact_identity_verified_case_count = _int_value(
         evidence.get("full_artifact_identity_verified_case_count")
     )
-    segment_artifact_expected_count = _int_value(
-        evidence.get("segment_artifact_expected_count")
-    )
-    segment_artifact_oci_uri_count = _int_value(
-        evidence.get("segment_artifact_oci_uri_count")
-    )
+    segment_artifact_expected_count = _int_value(evidence.get("segment_artifact_expected_count"))
+    segment_artifact_oci_uri_count = _int_value(evidence.get("segment_artifact_oci_uri_count"))
     segment_artifact_non_oci_uri_count = _int_value(
         evidence.get("segment_artifact_non_oci_uri_count")
     )
-    segment_artifact_readable_count = _int_value(
-        evidence.get("segment_artifact_readable_count")
-    )
+    segment_artifact_readable_count = _int_value(evidence.get("segment_artifact_readable_count"))
     segment_artifact_identity_verified_count = _int_value(
         evidence.get("segment_artifact_identity_verified_count")
     )
-    artifact_integrity_error_count = _int_value(
-        evidence.get("artifact_integrity_error_count")
-    )
+    artifact_integrity_error_count = _int_value(evidence.get("artifact_integrity_error_count"))
     if full_artifact_cached_case_count <= 0:
         blocker_codes.append("object_storage_full_artifact_not_cached")
     if full_artifact_oci_case_count < full_artifact_cached_case_count:
@@ -1219,13 +1169,9 @@ def _object_storage_artifact_chain(
             evidence.get("full_artifact_cached_case_refs")
         ),
         "full_artifact_oci_case_count": full_artifact_oci_case_count,
-        "full_artifact_identity_present_case_count": (
-            full_artifact_identity_present_case_count
-        ),
+        "full_artifact_identity_present_case_count": (full_artifact_identity_present_case_count),
         "full_artifact_readable_case_count": full_artifact_readable_case_count,
-        "full_artifact_identity_verified_case_count": (
-            full_artifact_identity_verified_case_count
-        ),
+        "full_artifact_identity_verified_case_count": (full_artifact_identity_verified_case_count),
         "full_artifact_identity_verified_case_refs": _string_list(
             evidence.get("full_artifact_identity_verified_case_refs")
         ),
@@ -1250,9 +1196,7 @@ def _object_storage_artifact_chain(
             evidence.get("successful_segment_rewrite_case_refs")
         ),
         "segment_cache_miss_count": _int_value(evidence.get("segment_cache_miss_count")),
-        "segment_cache_miss_case_refs": _string_list(
-            evidence.get("segment_cache_miss_case_refs")
-        ),
+        "segment_cache_miss_case_refs": _string_list(evidence.get("segment_cache_miss_case_refs")),
         "artifact_integrity_error_case_refs": _string_list(
             evidence.get("artifact_integrity_error_case_refs")
         ),
@@ -1343,9 +1287,7 @@ def _preflight_payload(
     require_real_world_policy: bool = False,
 ) -> dict[str, Any]:
     settings = (
-        strict_parser_adapter_settings(settings)
-        if parser_adapter_contract_strict
-        else settings
+        strict_parser_adapter_settings(settings) if parser_adapter_contract_strict else settings
     )
     parser_adapters = parser_adapter_runtime_settings(settings)
     parser_adapter_preflight = _parser_adapter_preflight(parser_adapters)
@@ -1372,18 +1314,13 @@ def _preflight_payload(
         preflight.ok
         and bool(parser_adapter_preflight["ok"])
         and bool(real_world_policy_preflight["ok"])
-        and (
-            parser_adapter_contract is None
-            or parser_adapter_contract.passed
-        )
+        and (parser_adapter_contract is None or parser_adapter_contract.passed)
     )
     payload: dict[str, Any] = {
         "passed": passed,
         "preflight": asdict(preflight),
         "parser_adapters": asdict(parser_adapters),
-        "parser_adapter_contract_mode": (
-            "strict" if parser_adapter_contract_strict else "runtime"
-        ),
+        "parser_adapter_contract_mode": ("strict" if parser_adapter_contract_strict else "runtime"),
         "parser_adapter_preflight": parser_adapter_preflight,
         "real_world_policy_preflight": real_world_policy_preflight,
         "parser_adapter_scorecard": asdict(parser_scorecard),
@@ -1652,9 +1589,7 @@ def _preflight_failure_count(
     failures = parser_adapter_preflight.get("failures")
     if isinstance(failures, list):
         count += len(failures)
-    if real_world_policy_preflight is not None and not bool(
-        real_world_policy_preflight.get("ok")
-    ):
+    if real_world_policy_preflight is not None and not bool(real_world_policy_preflight.get("ok")):
         policy_failures = real_world_policy_preflight.get("failures")
         count += len(policy_failures) if isinstance(policy_failures, list) else 1
     if parser_adapter_contract is not None and not parser_adapter_contract.passed:
@@ -1773,9 +1708,7 @@ def _parser_adapter_contract_trend(payload: Mapping[str, Any]) -> dict[str, obje
             "reason_code_counts": summary.get("reason_code_counts"),
             "warning_code_counts": summary.get("warning_code_counts"),
             "blocking_failure_reason_counts": summary.get("blocking_failure_reason_counts"),
-            "adapter_package_version_pairs": _adapter_package_version_pairs(
-                contract.get("cases")
-            ),
+            "adapter_package_version_pairs": _adapter_package_version_pairs(contract.get("cases")),
         }.items()
         if value is not None and value != []
     }
@@ -1818,12 +1751,8 @@ def _adapter_golden_gate_trend(payload: Mapping[str, Any]) -> dict[str, object]:
             "contract_case_count": gate.get("contract_case_count"),
             "contract_blocking_failure_count": gate.get("contract_blocking_failure_count"),
             "contract_missing_source_kinds": gate.get("contract_missing_source_kinds"),
-            "contract_passed_case_refs": _string_list(
-                gate.get("contract_passed_case_refs")
-            ),
-            "contract_backend_passed_case_refs": gate.get(
-                "contract_backend_passed_case_refs"
-            ),
+            "contract_passed_case_refs": _string_list(gate.get("contract_passed_case_refs")),
+            "contract_backend_passed_case_refs": gate.get("contract_backend_passed_case_refs"),
             "contract_blocking_failure_case_refs": _string_list(
                 gate.get("contract_blocking_failure_case_refs")
             ),
@@ -1851,9 +1780,7 @@ def _parser_adapter_source_routes_trend(payload: Mapping[str, Any]) -> list[dict
             "reason_codes": _string_list(route.get("reason_codes")),
             "warning_codes": _string_list(route.get("warning_codes")),
         }
-        routes.append(
-            {key: value for key, value in safe_route.items() if value is not None}
-        )
+        routes.append({key: value for key, value in safe_route.items() if value is not None})
     return routes
 
 
@@ -1865,9 +1792,7 @@ def _object_storage_artifact_chain_trend(payload: Mapping[str, Any]) -> dict[str
             "passed": chain.get("passed"),
             "roundtrip_check": chain.get("roundtrip_check"),
             "roundtrip_object_uri_scheme": chain.get("roundtrip_object_uri_scheme"),
-            "full_artifact_cached_case_count": chain.get(
-                "full_artifact_cached_case_count"
-            ),
+            "full_artifact_cached_case_count": chain.get("full_artifact_cached_case_count"),
             "full_artifact_cached_case_refs": _string_list(
                 chain.get("full_artifact_cached_case_refs")
             ),
@@ -1875,25 +1800,17 @@ def _object_storage_artifact_chain_trend(payload: Mapping[str, Any]) -> dict[str
             "full_artifact_identity_present_case_count": chain.get(
                 "full_artifact_identity_present_case_count"
             ),
-            "full_artifact_readable_case_count": chain.get(
-                "full_artifact_readable_case_count"
-            ),
+            "full_artifact_readable_case_count": chain.get("full_artifact_readable_case_count"),
             "full_artifact_identity_verified_case_count": chain.get(
                 "full_artifact_identity_verified_case_count"
             ),
             "full_artifact_identity_verified_case_refs": _string_list(
                 chain.get("full_artifact_identity_verified_case_refs")
             ),
-            "segment_artifact_expected_count": chain.get(
-                "segment_artifact_expected_count"
-            ),
+            "segment_artifact_expected_count": chain.get("segment_artifact_expected_count"),
             "segment_artifact_oci_uri_count": chain.get("segment_artifact_oci_uri_count"),
-            "segment_artifact_non_oci_uri_count": chain.get(
-                "segment_artifact_non_oci_uri_count"
-            ),
-            "segment_artifact_readable_count": chain.get(
-                "segment_artifact_readable_count"
-            ),
+            "segment_artifact_non_oci_uri_count": chain.get("segment_artifact_non_oci_uri_count"),
+            "segment_artifact_readable_count": chain.get("segment_artifact_readable_count"),
             "segment_artifact_identity_verified_count": chain.get(
                 "segment_artifact_identity_verified_count"
             ),
@@ -1913,15 +1830,11 @@ def _object_storage_artifact_chain_trend(payload: Mapping[str, Any]) -> dict[str
                 chain.get("successful_segment_rewrite_case_refs")
             ),
             "segment_cache_miss_count": chain.get("segment_cache_miss_count"),
-            "segment_cache_miss_case_refs": _string_list(
-                chain.get("segment_cache_miss_case_refs")
-            ),
+            "segment_cache_miss_case_refs": _string_list(chain.get("segment_cache_miss_case_refs")),
             "artifact_integrity_error_case_refs": _string_list(
                 chain.get("artifact_integrity_error_case_refs")
             ),
-            "audit_payload_redaction_enforced": chain.get(
-                "audit_payload_redaction_enforced"
-            ),
+            "audit_payload_redaction_enforced": chain.get("audit_payload_redaction_enforced"),
             "blocker_codes": chain.get("blocker_codes"),
         }.items()
         if value is not None
@@ -2036,31 +1949,19 @@ def _backend_source_kind_matrix_trend(payload: Mapping[str, Any]) -> dict[str, o
 def _segment_artifact_reuse_trend(payload: Mapping[str, Any]) -> dict[str, object]:
     metric_evidence = _mapping(payload.get("metric_evidence"))
     evidence = _mapping(metric_evidence.get("segment_artifact_reuse"))
-    return {
-        key: value
-        for key, value in evidence.items()
-        if _trend_safe_evidence_value(value)
-    }
+    return {key: value for key, value in evidence.items() if _trend_safe_evidence_value(value)}
 
 
 def _table_cell_lineage_trend(payload: Mapping[str, Any]) -> dict[str, object]:
     metric_evidence = _mapping(payload.get("metric_evidence"))
     evidence = _mapping(metric_evidence.get("table_cell_lineage"))
-    return {
-        key: value
-        for key, value in evidence.items()
-        if _trend_safe_evidence_value(value)
-    }
+    return {key: value for key, value in evidence.items() if _trend_safe_evidence_value(value)}
 
 
 def _preview_addressability_trend(payload: Mapping[str, Any]) -> dict[str, object]:
     metric_evidence = _mapping(payload.get("metric_evidence"))
     evidence = _mapping(metric_evidence.get("preview_addressability"))
-    return {
-        key: value
-        for key, value in evidence.items()
-        if _trend_safe_evidence_value(value)
-    }
+    return {key: value for key, value in evidence.items() if _trend_safe_evidence_value(value)}
 
 
 def _trend_safe_evidence_value(value: object) -> bool:

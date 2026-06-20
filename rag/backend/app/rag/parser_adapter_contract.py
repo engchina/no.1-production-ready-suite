@@ -185,9 +185,7 @@ def run_parser_adapter_compatibility_matrix(
             source_kinds=resolved_source_kinds,
         )
     blocking_failure_count = sum(
-        1
-        for case in cases
-        if case.blocking and case.status in BLOCKING_FAILURE_STATUSES
+        1 for case in cases if case.blocking and case.status in BLOCKING_FAILURE_STATUSES
     )
     return ParserAdapterCompatibilityMatrix(
         passed=blocking_failure_count == 0,
@@ -324,9 +322,7 @@ def parser_adapter_contract_summary(
             backend_passed_source_kinds.setdefault(case.backend, set()).add(case.source_kind)
             if case.scenario:
                 passed_scenarios.add(case.scenario)
-                backend_passed_scenarios.setdefault(case.backend, set()).add(
-                    case.scenario
-                )
+                backend_passed_scenarios.setdefault(case.backend, set()).add(case.scenario)
         if case.blocking and case.status in BLOCKING_FAILURE_STATUSES:
             blocking_failure_case_refs.add(case_ref)
             blocking_failure_source_kinds.add(case.source_kind)
@@ -370,9 +366,7 @@ def parser_adapter_contract_summary(
         "blocking_failure_backends": sorted(blocking_failure_backends),
         "blocking_failure_case_refs": sorted(blocking_failure_case_refs),
         "backend_status_counts": backend_status_counts,
-        "backend_source_status": _aggregate_backend_source_status(
-            backend_source_status_counts
-        ),
+        "backend_source_status": _aggregate_backend_source_status(backend_source_status_counts),
         "backend_source_status_counts": backend_source_status_counts,
         "source_kind_status_counts": source_kind_status_counts,
         "backend_passed_source_kinds": {
@@ -685,17 +679,16 @@ def _backend_evidence_failure_cases(
         if any(case.status == "passed" for case in backend_cases):
             continue
         if any(
-            case.blocking and case.status in BLOCKING_FAILURE_STATUSES
-            for case in backend_cases
+            case.blocking and case.status in BLOCKING_FAILURE_STATUSES for case in backend_cases
         ):
             continue
         failures.append(
             _compatibility_case_result(
                 adapter=adapter,
                 fixture=evidence_fixture,
-                status=_inactive_adapter_status(adapter)
-                if adapter.status != "active"
-                else "failed",
+                status=(
+                    _inactive_adapter_status(adapter) if adapter.status != "active" else "failed"
+                ),
                 blocking=True,
                 warning_codes=(adapter.warning_code,) if adapter.warning_code else (),
                 reason_codes=(
@@ -727,10 +720,7 @@ def _backend_source_evidence_failure_cases(
         source_cases = cases_by_source.get(source_kind, [])
         if any(case.status == "passed" for case in source_cases):
             continue
-        if any(
-            case.blocking and case.status in BLOCKING_FAILURE_STATUSES
-            for case in source_cases
-        ):
+        if any(case.blocking and case.status in BLOCKING_FAILURE_STATUSES for case in source_cases):
             continue
         reason_code = (
             "adapter_schema_remap_fixture_missing_for_source"
@@ -751,9 +741,9 @@ def _backend_source_evidence_failure_cases(
                     ),
                     scenario="adapter_schema_remap_source_evidence",
                 ),
-                status=_inactive_adapter_status(adapter)
-                if adapter.status != "active"
-                else "failed",
+                status=(
+                    _inactive_adapter_status(adapter) if adapter.status != "active" else "failed"
+                ),
                 blocking=True,
                 warning_codes=(adapter.warning_code,) if adapter.warning_code else (),
                 reason_codes=(reason_code,),
@@ -854,9 +844,7 @@ def _has_html_semantic_lineage(extraction: StructuredExtraction) -> bool:
     if extraction.tables or extraction.assets:
         return True
     return any(
-        element.section_path
-        or element.kind == "title"
-        or "link_count" in element.metadata
+        element.section_path or element.kind == "title" or "link_count" in element.metadata
         for element in extraction.elements
     )
 
@@ -881,8 +869,7 @@ def _resolved_fixture_specs(
 ) -> tuple[ParserAdapterFixtureSpec, ...]:
     if fixture_specs is None:
         return tuple(
-            DEFAULT_FIXTURES[source_kind]
-            for source_kind in _normalized_source_kinds(source_kinds)
+            DEFAULT_FIXTURES[source_kind] for source_kind in _normalized_source_kinds(source_kinds)
         )
     source_kind_filter = (
         set(_normalized_source_kinds(source_kinds)) if source_kinds is not None else None

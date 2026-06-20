@@ -126,7 +126,7 @@ def test_nightly_rag_workflow_runs_parser_adapter_contract_gate() -> None:
     assert "--output ../artifacts/parser-adapter-compatibility.json" in workflow
     assert "--require-real-world-policy" in workflow
     assert "parser_adapter_contract_args+=(--strict)" in workflow
-    assert 'staging_args+=(--parser-adapter-contract-strict)' in workflow
+    assert "staging_args+=(--parser-adapter-contract-strict)" in workflow
     assert "parser adapter contract gate failed" in workflow
     assert workflow.index("app.rag.parser_adapter_contract_cli") < workflow.index(
         "app.rag.file_processing_golden_cli"

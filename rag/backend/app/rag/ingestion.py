@@ -392,9 +392,7 @@ class IngestionPipeline:
             if self._settings.rag_review_gate_enabled:
                 # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 index で再利用する。
                 await self._oracle.save_extraction(document_id, extraction)
-                detail = await self._oracle.update_document_status(
-                    document_id, FileStatus.REVIEW
-                )
+                detail = await self._oracle.update_document_status(document_id, FileStatus.REVIEW)
                 record_ingestion("review", 0)
                 return detail
             return await self._run_index_phase(
@@ -651,8 +649,12 @@ class IngestionPipeline:
         profile = resolve_preprocess_profile(self._settings)
         source_sha = hashlib.sha256(source_bytes).hexdigest()
         if profile == "passthrough":
-            return source_bytes, content_type, _passthrough_derivation(
-                profile=profile, source_sha=source_sha, content_type=content_type
+            return (
+                source_bytes,
+                content_type,
+                _passthrough_derivation(
+                    profile=profile, source_sha=source_sha, content_type=content_type
+                ),
             )
         outcome: ConvertOutcome = await _observe_cpu_ingestion_stage(
             trace_id,
@@ -674,12 +676,16 @@ class IngestionPipeline:
             },
         )
         if not outcome.converted or outcome.derived_bytes is None:
-            return source_bytes, content_type, _passthrough_derivation(
-                profile=profile,
-                source_sha=source_sha,
-                content_type=content_type,
-                converter_name=outcome.converter_name,
-                warnings=list(outcome.warnings),
+            return (
+                source_bytes,
+                content_type,
+                _passthrough_derivation(
+                    profile=profile,
+                    source_sha=source_sha,
+                    content_type=content_type,
+                    converter_name=outcome.converter_name,
+                    warnings=list(outcome.warnings),
+                ),
             )
         derived_bytes = outcome.derived_bytes
         derived_content_type = outcome.derived_content_type or content_type
@@ -807,7 +813,7 @@ class IngestionPipeline:
         async def _extract(text: str, field_defs: list[FieldDefinition]) -> list[ExtractionField]:
             prompt = (
                 "次の文書から、指定された field を抽出してください。"
-                "各 field は {\"name\", \"value\", \"value_type\", \"confidence\"} の "
+                '各 field は {"name", "value", "value_type", "confidence"} の '
                 "JSON 配列だけで出力し、見つからない field は省略してください。"
                 f"抽出する field 定義: {field_definitions_prompt(field_defs)}"
             )
@@ -2392,8 +2398,7 @@ def _cached_segment_artifact_matches(
         and _artifact_string(artifacts.get("extraction_artifact_kind")) == "segment"
         and _artifact_string(artifacts.get("extraction_artifact_document_id"))
         == segment.document_id
-        and _artifact_string(artifacts.get("extraction_artifact_segment_id"))
-        == segment.segment_id
+        and _artifact_string(artifacts.get("extraction_artifact_segment_id")) == segment.segment_id
         and _artifact_int(artifacts.get("extraction_artifact_page_start")) == segment.page_start
         and _artifact_int(artifacts.get("extraction_artifact_page_end")) == segment.page_end
     )
@@ -2596,9 +2601,7 @@ def _extraction_with_segment_cache_miss_context(
         **extraction.parser_artifacts,
         "segment_extraction_artifact_cache_miss_count": len(missing_ranges),
     }
-    warnings = _dedupe_text(
-        [*extraction.warnings, "segment_extraction_artifact_cache_miss"]
-    )
+    warnings = _dedupe_text([*extraction.warnings, "segment_extraction_artifact_cache_miss"])
     return extraction.model_copy(
         update={"parser_artifacts": parser_artifacts, "warnings": warnings}
     )

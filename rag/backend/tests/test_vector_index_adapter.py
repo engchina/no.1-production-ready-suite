@@ -48,9 +48,7 @@ def test_fast_lowers_accuracy_and_requires_reprovision() -> None:
 
 
 def test_runtime_settings_orders_and_marks_selected() -> None:
-    runtime = vector_index_adapter_runtime_settings(
-        Settings(rag_vector_index_profile="accurate")
-    )
+    runtime = vector_index_adapter_runtime_settings(Settings(rag_vector_index_profile="accurate"))
     assert tuple(status.name for status in runtime.profiles) == VECTOR_INDEX_PROFILE_ORDER
     selected = [status.name for status in runtime.profiles if status.selected]
     assert selected == ["accurate"]

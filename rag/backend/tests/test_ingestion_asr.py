@@ -33,9 +33,7 @@ class _FakeParserService:
         self, backend: str, source_bytes: bytes, source_profile: object, content_type: str
     ) -> ParserRegistryResult:
         self.called = True
-        return ParserRegistryResult(
-            extraction=cast(Any, self._extraction), parser_backend=backend
-        )
+        return ParserRegistryResult(extraction=cast(Any, self._extraction), parser_backend=backend)
 
 
 def _pipeline(*, speech_payload: dict[str, object] | None, local_extraction: object | None):

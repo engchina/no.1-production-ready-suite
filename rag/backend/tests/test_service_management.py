@@ -149,14 +149,31 @@ def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
     assert mineru is not None
     args = _compose_args(settings, mineru, "start")
     assert args == [
-        "docker", "compose", "--profile", "gpu", "up", "-d", "--no-build", "parser-mineru",
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "up",
+        "-d",
+        "--no-build",
+        "parser-mineru",
     ]
     # GPU は profile gate に隠れるため stop / restart でも --profile gpu を付ける。
     assert _compose_args(settings, mineru, "stop") == [
-        "docker", "compose", "--profile", "gpu", "stop", "parser-mineru",
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "stop",
+        "parser-mineru",
     ]
     assert _compose_args(settings, mineru, "restart") == [
-        "docker", "compose", "--profile", "gpu", "restart", "parser-mineru",
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "restart",
+        "parser-mineru",
     ]
 
 
@@ -512,9 +529,7 @@ class _RecordingDriver:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def run(
-        self, settings: Any, entry: ServiceCatalogEntry, action: str
-    ) -> ControlResult:
+    async def run(self, settings: Any, entry: ServiceCatalogEntry, action: str) -> ControlResult:
         self.calls.append(action)
         return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
 

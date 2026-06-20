@@ -110,9 +110,7 @@ def resolve_graph_adapter(settings: Settings) -> GraphAdapterParams:
     `rag_graph_service_enabled` のときは pipeline-graphrag サービスへ委譲し、未達/失敗時は
     in-process(同一 rag_pipeline_core ロジック)へ安全縮退する。
     """
-    profile = normalize_graph_profile(
-        getattr(settings, "rag_graph_profile", DEFAULT_GRAPH_PROFILE)
-    )
+    profile = normalize_graph_profile(getattr(settings, "rag_graph_profile", DEFAULT_GRAPH_PROFILE))
     legacy_enabled = bool(getattr(settings, "rag_graph_enabled", False))
     temporal = bool(getattr(settings, "rag_graph_temporal_enabled", False))
     remote = _resolve_remote(settings, profile, legacy_enabled, temporal)
@@ -139,9 +137,7 @@ def _resolve_remote(
     client = PipelineStageClient(settings)
     if not client.is_enabled("graphrag"):
         return None
-    response = client.run_graph(
-        GraphStageRequest(profile=profile, legacy_enabled=legacy_enabled)
-    )
+    response = client.run_graph(GraphStageRequest(profile=profile, legacy_enabled=legacy_enabled))
     if response is None:
         return None
     return GraphAdapterParams(

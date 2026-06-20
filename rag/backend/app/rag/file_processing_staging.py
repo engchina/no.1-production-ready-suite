@@ -227,10 +227,7 @@ class FileProcessingStagingReport:
         threshold_failures = sum(1 for result in self.threshold_results if not result.passed)
         runtime_failures = sum(1 for check in self.runtime_checks if not check.passed)
         return (
-            len(self.local_manifest_errors)
-            + runtime_failures
-            + gate_failures
-            + threshold_failures
+            len(self.local_manifest_errors) + runtime_failures + gate_failures + threshold_failures
         )
 
 
@@ -854,9 +851,7 @@ async def _collect_search_evidence(
         table_qa_cell_refs_resolved_count=len(
             expected_table_cell_refs & extraction_table_cell_refs
         ),
-        table_qa_cell_refs_covered_count=len(
-            expected_table_cell_refs & covered_table_cell_refs
-        ),
+        table_qa_cell_refs_covered_count=len(expected_table_cell_refs & covered_table_cell_refs),
         dependency_lineage_traceable=_search_has_dependency_lineage_citation(
             search_response,
             evidence,
@@ -933,8 +928,8 @@ async def _verify_artifact_integrity(
         payload, payload_bytes = await _read_artifact_payload(storage, full_path)
         full_payload_bytes = payload_bytes
         full_readable = payload is not None
-        full_identity_verified = (
-            payload is not None and _full_artifact_payload_matches(payload, document_id)
+        full_identity_verified = payload is not None and _full_artifact_payload_matches(
+            payload, document_id
         )
         if not full_identity_verified:
             error_count += 1
@@ -1105,9 +1100,8 @@ def _enterprise_ai_file_extraction_passed(
 
 def _preview_bbox_citation_passed(evidence: _StagingEvidence) -> tuple[bool, str | None]:
     extraction_violation = _extraction_preview_addressability_violation(evidence)
-    if (
-        extraction_violation is None
-        and any(_chunk_preview_addressable(chunk, evidence) for chunk in evidence.chunks)
+    if extraction_violation is None and any(
+        _chunk_preview_addressable(chunk, evidence) for chunk in evidence.chunks
     ):
         return True, None
     if extraction_violation is not None:
@@ -1661,10 +1655,7 @@ ADAPTER_CONTRACT_COMPONENT_METRICS = (
 
 def _adapter_contract_coverage(metrics: Mapping[str, float]) -> float:
     """adapter/schema/chunk/citation の重要構造契約を 1 つの gate に畳み込む。"""
-    values = [
-        _metric_ratio(metrics.get(metric))
-        for metric in ADAPTER_CONTRACT_COMPONENT_METRICS
-    ]
+    values = [_metric_ratio(metrics.get(metric)) for metric in ADAPTER_CONTRACT_COMPONENT_METRICS]
     return round(sum(values) / len(values), 4)
 
 
@@ -1690,9 +1681,7 @@ def _local_contract_metrics(report: FileProcessingContractReport) -> dict[str, f
         ),
     }
     page_coverages = [
-        result.page_coverage
-        for result in report.case_results
-        if result.page_coverage is not None
+        result.page_coverage for result in report.case_results if result.page_coverage is not None
     ]
     if page_coverages:
         metrics["extraction_page_coverage"] = round(
@@ -1736,9 +1725,7 @@ def _local_contract_metrics(report: FileProcessingContractReport) -> dict[str, f
 
 
 def _local_metric_evidence(report: FileProcessingContractReport) -> dict[str, object]:
-    return {
-        "backend_source_kind_coverage": _local_backend_source_kind_coverage_evidence(report)
-    }
+    return {"backend_source_kind_coverage": _local_backend_source_kind_coverage_evidence(report)}
 
 
 def _staging_metric_evidence(
@@ -1815,11 +1802,7 @@ def _table_cell_lineage_metric_evidence(
         lineage_ref_count += lineage
     unresolved_ref_count = max(expected_ref_count - resolved_ref_count, 0)
     uncovered_ref_count = max(expected_ref_count - lineage_ref_count, 0)
-    coverage = (
-        _safe_ratio(lineage_ref_count, expected_ref_count)
-        if expected_ref_count
-        else None
-    )
+    coverage = _safe_ratio(lineage_ref_count, expected_ref_count) if expected_ref_count else None
     return {
         "case_count": case_count,
         "expected_case_count": expected_case_count,
@@ -1835,10 +1818,8 @@ def _table_cell_lineage_metric_evidence(
         "lineage_case_refs": sorted(lineage_case_refs),
         "unresolved_case_refs": sorted(unresolved_case_refs),
         "uncovered_case_refs": sorted(uncovered_case_refs),
-        "all_expected_refs_resolved": bool(expected_ref_count)
-        and unresolved_ref_count == 0,
-        "all_expected_refs_covered": bool(expected_ref_count)
-        and uncovered_ref_count == 0,
+        "all_expected_refs_resolved": bool(expected_ref_count) and unresolved_ref_count == 0,
+        "all_expected_refs_covered": bool(expected_ref_count) and uncovered_ref_count == 0,
         "coverage": coverage,
     }
 
@@ -1857,8 +1838,7 @@ def _preview_addressability_metric_evidence(
         _positive_int(evidence.get("chunk_count")) for evidence in preview_gate_evidence
     )
     chunk_bbox_count = sum(
-        _positive_int(evidence.get("bbox_chunk_count"))
-        for evidence in preview_gate_evidence
+        _positive_int(evidence.get("bbox_chunk_count")) for evidence in preview_gate_evidence
     )
     chunk_addressable_count = sum(
         _positive_int(evidence.get("preview_addressable_chunk_count"))
@@ -1921,9 +1901,7 @@ def _preview_addressability_metric_evidence(
         elif case_chunk_target_count > 0:
             chunk_missing_bbox_case_refs.add(case_ref)
     target_count = chunk_target_count + extraction_bbox_target_count
-    addressable_target_count = (
-        chunk_addressable_count + extraction_addressable_target_count
-    )
+    addressable_target_count = chunk_addressable_count + extraction_addressable_target_count
     unaddressable_target_count = max(target_count - addressable_target_count, 0)
     coverage = _safe_ratio(addressable_target_count, target_count) if target_count else None
     return {
@@ -1943,15 +1921,11 @@ def _preview_addressability_metric_evidence(
         "chunk_bbox_case_refs": sorted(chunk_bbox_case_refs),
         "chunk_missing_bbox_case_refs": sorted(chunk_missing_bbox_case_refs),
         "chunk_bbox_coverage": (
-            _safe_ratio(chunk_bbox_count, chunk_target_count)
-            if chunk_target_count
-            else None
+            _safe_ratio(chunk_bbox_count, chunk_target_count) if chunk_target_count else None
         ),
         "coverage": coverage,
-        "all_targets_addressable": bool(target_count)
-        and unaddressable_target_count == 0,
-        "all_chunks_have_bbox": bool(chunk_target_count)
-        and chunk_bbox_count == chunk_target_count,
+        "all_targets_addressable": bool(target_count) and unaddressable_target_count == 0,
+        "all_chunks_have_bbox": bool(chunk_target_count) and chunk_bbox_count == chunk_target_count,
     }
 
 
@@ -2025,8 +1999,7 @@ def _segment_artifact_reuse_metric_evidence(
             for summary in retry_cases.values()
         ),
         "segment_cache_miss_count": sum(
-            _positive_int(summary.get("segment_cache_miss_count"))
-            for summary in summaries.values()
+            _positive_int(summary.get("segment_cache_miss_count")) for summary in summaries.values()
         ),
         "segment_cache_miss_case_count": sum(
             1
@@ -2053,9 +2026,7 @@ def _segment_artifact_reuse_metric_evidence(
             for summary in summaries.values()
             if summary.get("artifact_full_identity_verified") is True
         ),
-        "full_artifact_identity_verified_case_refs": (
-            full_artifact_identity_verified_cases
-        ),
+        "full_artifact_identity_verified_case_refs": (full_artifact_identity_verified_cases),
         "retained_successful_segment_artifact_case_refs": (
             retained_successful_segment_artifact_cases
         ),
@@ -2196,9 +2167,7 @@ def _local_backend_source_kind_coverage(
     ):
         return None
     covered_source_kinds = {
-        source_kind
-        for source_kind in raw_covered_source_kinds
-        if isinstance(source_kind, str)
+        source_kind for source_kind in raw_covered_source_kinds if isinstance(source_kind, str)
     }
     return _safe_ratio(
         len(covered_source_kinds),
@@ -3225,12 +3194,7 @@ def _bbox_numbers(value: object) -> tuple[float, float, float, float] | None:
     if any(number is None for number in numbers):
         return None
     x, y, right_or_width, bottom_or_height = numbers
-    if (
-        x is None
-        or y is None
-        or right_or_width is None
-        or bottom_or_height is None
-    ):
+    if x is None or y is None or right_or_width is None or bottom_or_height is None:
         return None
     return (x, y, right_or_width, bottom_or_height)
 
@@ -3338,11 +3302,7 @@ def _section_set(value: object) -> set[str]:
         return {section} if section else set()
     if not isinstance(value, Sequence) or isinstance(value, bytes | bytearray):
         return set()
-    return {
-        section
-        for item in value
-        if (section := _normalize_section_label(item))
-    }
+    return {section for item in value if (section := _normalize_section_label(item))}
 
 
 def _string_set(value: object) -> set[str]:

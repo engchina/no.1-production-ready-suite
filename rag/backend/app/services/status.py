@@ -60,6 +60,5 @@ async def probe_service_statuses(settings: Settings) -> dict[str, ServiceRuntime
         *(probe_service_status(settings, entry) for entry in SERVICE_CATALOG)
     )
     return {
-        entry.service_id: status
-        for entry, status in zip(SERVICE_CATALOG, results, strict=True)
+        entry.service_id: status for entry, status in zip(SERVICE_CATALOG, results, strict=True)
     }

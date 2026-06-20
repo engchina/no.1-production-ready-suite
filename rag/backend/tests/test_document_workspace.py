@@ -1391,9 +1391,7 @@ def test_delete_document_removes_extraction_artifacts(
     ].model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "extraction": {
-                "parser_artifacts": {"extraction_artifact_path": full_artifact_path}
-            },
+            "extraction": {"parser_artifacts": {"extraction_artifact_path": full_artifact_path}},
         }
     )
     fake_document_dependencies.ingestion_segments[document_id] = [

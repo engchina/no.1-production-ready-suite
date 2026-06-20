@@ -272,9 +272,7 @@ def _metric_summary(report: FileProcessingContractReport) -> dict[str, Any]:
 
 def _page_coverage_metric_summary(report: FileProcessingContractReport) -> dict[str, Any]:
     coverages = [
-        result.page_coverage
-        for result in report.case_results
-        if result.page_coverage is not None
+        result.page_coverage for result in report.case_results if result.page_coverage is not None
     ]
     measured_count = len(coverages)
     status = "measured"
@@ -407,8 +405,7 @@ def _check_metric_summary(
         if any(failure.startswith(f"{check}:") for failure in result.failures):
             failed_count += 1
         if any(
-            pending.startswith(f"{check}:")
-            and not _is_supplemental_staging_pending(pending, check)
+            pending.startswith(f"{check}:") and not _is_supplemental_staging_pending(pending, check)
             for pending in result.pending_checks
         ):
             pending_count += 1

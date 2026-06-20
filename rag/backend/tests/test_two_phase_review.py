@@ -86,9 +86,7 @@ def test_review_gate_stops_at_review_and_excludes_from_search(monkeypatch: Monke
     assert chunks_resp.json()["data"] == []
     # REVIEW 文書は検索対象に入らない。
     search = _search("経費申請の承認者は？")
-    assert all(
-        citation["document_id"] != document_id for citation in search["citations"]
-    )
+    assert all(citation["document_id"] != document_id for citation in search["citations"])
 
 
 def test_approve_indexes_and_makes_searchable(monkeypatch: MonkeyPatch) -> None:
@@ -111,9 +109,7 @@ def test_approve_indexes_and_makes_searchable(monkeypatch: MonkeyPatch) -> None:
     assert chunks_resp.json()["data"]
 
     search = _search("経費申請の承認者は？")
-    assert any(
-        citation["document_id"] == document_id for citation in search["citations"]
-    )
+    assert any(citation["document_id"] == document_id for citation in search["citations"])
 
 
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
@@ -127,9 +123,7 @@ def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
     assert reject_resp.json()["data"]["status"] == "UPLOADED"
 
     search = _search("経費申請の承認者は？")
-    assert all(
-        citation["document_id"] != document_id for citation in search["citations"]
-    )
+    assert all(citation["document_id"] != document_id for citation in search["citations"])
 
 
 def test_approve_requires_review_status(monkeypatch: MonkeyPatch) -> None:

@@ -222,12 +222,11 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert contract_summary["passed"] is True
     assert contract_summary["case_count"] == payload["parser_adapter_contract"]["case_count"]
     assert contract_summary["backend_source_status"]
-    assert adapter_golden_gate["contract_passed_case_refs"] == contract_summary[
-        "passed_case_refs"
-    ]
-    assert adapter_golden_gate["contract_backend_passed_case_refs"] == contract_summary[
-        "backend_passed_case_refs"
-    ]
+    assert adapter_golden_gate["contract_passed_case_refs"] == contract_summary["passed_case_refs"]
+    assert (
+        adapter_golden_gate["contract_backend_passed_case_refs"]
+        == contract_summary["backend_passed_case_refs"]
+    )
     assert "raw_text" not in str(contract_summary)
     backend_source_matrix = payload["backend_source_kind_matrix"]
     assert backend_source_matrix["value"] == 1.0
@@ -346,18 +345,8 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert trend["staging_dataset_policy"]["configured"] is False
     assert trend["object_storage_artifact_chain"]["passed"] is True
     assert trend["object_storage_artifact_chain"]["roundtrip_check"] == "ok"
-    assert (
-        trend["object_storage_artifact_chain"][
-            "full_artifact_identity_present_case_count"
-        ]
-        >= 1
-    )
-    assert (
-        trend["object_storage_artifact_chain"][
-            "full_artifact_identity_verified_case_count"
-        ]
-        >= 1
-    )
+    assert trend["object_storage_artifact_chain"]["full_artifact_identity_present_case_count"] >= 1
+    assert trend["object_storage_artifact_chain"]["full_artifact_identity_verified_case_count"] >= 1
     assert trend["object_storage_artifact_chain"]["artifact_integrity_error_count"] == 0
     assert trend["segment_artifact_reuse"]["retry_case_count"] == 1
     assert trend["segment_artifact_reuse"]["retained_successful_segment_artifact_count"] == 1
@@ -411,16 +400,13 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
     assert payload_segment_gate["evidence"]["retry_failed_segment_retried_count"] == 1
     html = by_case["html-semantic-blocks"]
     assert any(
-        gate.suggested_gate == "dependency_lineage_search_gate"
-        for gate in html.gate_results
+        gate.suggested_gate == "dependency_lineage_search_gate" for gate in html.gate_results
     )
     assert any(
-        gate.suggested_gate == "dependency_context_recall_gate"
-        for gate in html.gate_results
+        gate.suggested_gate == "dependency_context_recall_gate" for gate in html.gate_results
     )
     assert any(
-        gate.suggested_gate == "structural_section_search_gate"
-        for gate in html.gate_results
+        gate.suggested_gate == "structural_section_search_gate" for gate in html.gate_results
     )
     assert any(
         deleted.startswith("oci://namespace/bucket/artifacts/extractions/staging-preflight/run-1/")
@@ -521,17 +507,12 @@ def test_file_processing_staging_payload_redacts_raw_document_evidence() -> None
         "payload_bytes": 48,
     }
     assert payload["object_storage_artifact_chain"]["passed"] is False
+    assert payload["object_storage_artifact_chain"]["audit_payload_redaction_enforced"] is False
+    assert payload["object_storage_artifact_chain"]["sensitive_evidence_key_detected"] is True
     assert (
-        payload["object_storage_artifact_chain"]["audit_payload_redaction_enforced"]
-        is False
+        "object_storage_audit_payload_not_redacted"
+        in payload["object_storage_artifact_chain"]["blocker_codes"]
     )
-    assert (
-        payload["object_storage_artifact_chain"]["sensitive_evidence_key_detected"]
-        is True
-    )
-    assert "object_storage_audit_payload_not_redacted" in payload[
-        "object_storage_artifact_chain"
-    ]["blocker_codes"]
 
 
 def test_file_processing_staging_trend_keeps_adapter_package_version_evidence() -> None:
@@ -1064,10 +1045,7 @@ async def test_file_processing_staging_runner_rejects_invalid_page_rotation_for_
 
     assert report.passed is False
     assert report.metrics["preview_addressability_coverage"] < 1.0
-    assert any(
-        gate.failure_code == "bbox_page_rotation_invalid"
-        for gate in failed_gates
-    )
+    assert any(gate.failure_code == "bbox_page_rotation_invalid" for gate in failed_gates)
 
 
 async def test_file_processing_staging_runner_rejects_unaddressable_table_cell_bbox() -> None:
@@ -1200,9 +1178,7 @@ async def test_file_processing_staging_runner_requires_traceable_search_citation
     assert report.metrics["page_hit_accuracy"] == 0.0
     assert threshold_by_metric["retrieval_recall"].status == "failed"
     assert threshold_by_metric["page_hit_accuracy"].status == "failed"
-    assert any(
-        gate.failure_code == "search_citation_traceability_missing" for gate in failed_gates
-    )
+    assert any(gate.failure_code == "search_citation_traceability_missing" for gate in failed_gates)
     assert any(
         gate.failure_code == "canonical_search_citation_traceability_missing"
         for gate in failed_gates
@@ -1237,9 +1213,7 @@ async def test_file_processing_staging_runner_requires_table_qa_search_answer() 
     assert report.passed is False
     assert report.metrics["table_qa_accuracy"] < 1.0
     assert threshold_by_metric["table_qa_accuracy"].status == "failed"
-    assert any(
-        gate.failure_code == "expected_answer_not_in_search_answer" for gate in failed_gates
-    )
+    assert any(gate.failure_code == "expected_answer_not_in_search_answer" for gate in failed_gates)
 
 
 async def test_file_processing_staging_runner_requires_table_cell_citation() -> None:
@@ -1340,10 +1314,7 @@ async def test_file_processing_staging_requires_table_cell_refs_to_resolve_to_ex
     failed_gates = [gate for gate in table_result.gate_results if not gate.passed]
 
     assert report.passed is False
-    assert any(
-        gate.failure_code == "table_cell_extraction_ref_missing"
-        for gate in failed_gates
-    )
+    assert any(gate.failure_code == "table_cell_extraction_ref_missing" for gate in failed_gates)
     assert any(
         gate.evidence is not None
         and gate.evidence["table_qa_cell_refs_expected_count"] == 1
@@ -1378,10 +1349,7 @@ async def test_file_processing_staging_runner_requires_dependency_lineage_citati
     failed_gates = [gate for gate in html_result.gate_results if not gate.passed]
 
     assert report.passed is False
-    assert any(
-        gate.failure_code == "dependency_lineage_citation_missing"
-        for gate in failed_gates
-    )
+    assert any(gate.failure_code == "dependency_lineage_citation_missing" for gate in failed_gates)
 
 
 async def test_file_processing_staging_runner_requires_dependency_context_recall() -> None:
@@ -1498,15 +1466,15 @@ def test_file_processing_staging_cli_preflight_only_reports_safe_config_gap(
             oracle_user="",
             oracle_dsn="",
             object_storage_namespace="",
-                object_storage_bucket="",
-                upload_storage_backend="oci",
-                oracle_password="super-secret-password",
-                rag_parser_adapter_backend="local",
-                rag_parser_docling_enabled=False,
-                rag_parser_marker_enabled=False,
-                rag_parser_unstructured_enabled=False,
-            ),
-        )
+            object_storage_bucket="",
+            upload_storage_backend="oci",
+            oracle_password="super-secret-password",
+            rag_parser_adapter_backend="local",
+            rag_parser_docling_enabled=False,
+            rag_parser_marker_enabled=False,
+            rag_parser_unstructured_enabled=False,
+        ),
+    )
 
     exit_code = file_processing_staging_cli.main(
         [str(manifest_path), "--preflight-only", "--output", str(output_path)]
@@ -1745,10 +1713,9 @@ def test_report_payload_reflects_parser_adapter_contract_metric_failure(
         settings=Settings(rag_parser_adapter_backend="docling", rag_parser_docling_enabled=True),
     )
 
-    threshold = {
-        result["metric"]: result
-        for result in payload["threshold_results"]
-    }["adapter_contract_coverage"]
+    threshold = {result["metric"]: result for result in payload["threshold_results"]}[
+        "adapter_contract_coverage"
+    ]
     assert payload["passed"] is False
     assert payload["promotion_ready"] is False
     assert payload["metrics"]["adapter_contract_coverage"] == 0.0
@@ -1774,9 +1741,7 @@ def test_report_payload_reflects_parser_adapter_contract_metric_failure(
     )
     assert "secret-contract-case" not in summary_text
     assert "policy-ja.pdf" not in summary_text
-    assert payload["adapter_contract_matrix_summary"]["blocking_failures"][0][
-        "case_ref_hash"
-    ]
+    assert payload["adapter_contract_matrix_summary"]["blocking_failures"][0]["case_ref_hash"]
     assert {
         "code": "parser_adapter_contract_failed",
         "count": 1,
@@ -1851,15 +1816,10 @@ def test_report_payload_source_routes_are_contract_aware(
     assert route_by_kind["pdf"]["selected_backend"] == "marker"
     assert "contract_aware_source_route" in route_by_kind["pdf"]["reason_codes"]
     assert "contract_verified_alternative_selected" in route_by_kind["pdf"]["reason_codes"]
-    assert (
-        "docling_adapter_contract_unverified_for_source"
-        in route_by_kind["pdf"]["warning_codes"]
-    )
+    assert "docling_adapter_contract_unverified_for_source" in route_by_kind["pdf"]["warning_codes"]
     assert route_by_kind["office"]["selected_backend"] == "docling"
     assert route_by_kind["email"]["selected_backend"] == "unstructured"
-    assert payload["adapter_golden_gate"]["source_route_contract_gap_source_kinds"] == [
-        "pdf"
-    ]
+    assert payload["adapter_golden_gate"]["source_route_contract_gap_source_kinds"] == ["pdf"]
     assert (
         "adapter_golden_gate_source_route_contract_missing"
         in payload["adapter_golden_gate"]["blocker_codes"]
@@ -1969,9 +1929,7 @@ def test_preflight_payload_strict_runs_manifest_adapter_contract(
         captured_contract_args["backend"] = settings.rag_parser_adapter_backend
         captured_contract_args["docling_enabled"] = settings.rag_parser_docling_enabled
         captured_contract_args["marker_enabled"] = settings.rag_parser_marker_enabled
-        captured_contract_args["unstructured_enabled"] = (
-            settings.rag_parser_unstructured_enabled
-        )
+        captured_contract_args["unstructured_enabled"] = settings.rag_parser_unstructured_enabled
         captured_contract_args.update(kwargs)
         return ParserAdapterCompatibilityMatrix(
             passed=True,
@@ -2107,9 +2065,7 @@ def test_preflight_payload_strict_blocks_schema_remap_failure(
     )
     assert "secret-real-world-case" not in summary_text
     assert "scanned-contract-ja.pdf" not in summary_text
-    assert payload["adapter_contract_matrix_summary"]["blocking_failures"][0][
-        "case_ref_hash"
-    ]
+    assert payload["adapter_contract_matrix_summary"]["blocking_failures"][0]["case_ref_hash"]
 
 
 def test_file_processing_staging_cli_stops_before_clients_when_preflight_fails(
@@ -2373,9 +2329,7 @@ def test_file_processing_staging_cli_blocks_chunk_template_evidence_gap() -> Non
         settings=Settings(),
     )
 
-    entries = {
-        entry["template"]: entry for entry in payload["chunk_template_scorecard"]["entries"]
-    }
+    entries = {entry["template"]: entry for entry in payload["chunk_template_scorecard"]["entries"]}
     assert payload["promotion_ready"] is False
     assert entries["pdf_layout"]["promotion_blocking"] is False
     assert entries["html_semantic"]["promotion_blocking"] is True
@@ -3198,8 +3152,10 @@ def _fake_extraction_artifact_payload(key: str) -> bytes | None:
             page_start = 1
             page_end = 1
         else:
-            segment_id = segment_name if segment_name.startswith(document_id) else (
-                f"{document_id}:{segment_name}"
+            segment_id = (
+                segment_name
+                if segment_name.startswith(document_id)
+                else (f"{document_id}:{segment_name}")
             )
             page_start = None
             page_end = None
@@ -3424,11 +3380,11 @@ class FakeReprocessingStagingOracle(FakeStagingOracle):
         if not had_previous_segments:
             return
         self.segments[document_id] = [
-            segment.model_copy(
-                update={"attempt_count": (segment.attempt_count or 0) + 1}
+            (
+                segment.model_copy(update={"attempt_count": (segment.attempt_count or 0) + 1})
+                if segment.status == "SUCCEEDED"
+                else segment
             )
-            if segment.status == "SUCCEEDED"
-            else segment
             for segment in self.segments[document_id]
         ]
 
@@ -3559,9 +3515,7 @@ class FakeIngestion:
             metadata["chunk_template"] = chunk_template
         if file_name == "manual.html":
             metadata["parent_element_ids"] = "fig-1"
-            metadata["dependency_edges"] = (
-                '[{"child_id":"fig-1-caption","parent_id":"fig-1"}]'
-            )
+            metadata["dependency_edges"] = '[{"child_id":"fig-1-caption","parent_id":"fig-1"}]'
             metadata["context_dependency_promoted"] = "true"
             metadata["context_dependency_reason"] = "child_of_anchor"
             metadata["context_dependency_shared_element_ids"] = "fig-1"
@@ -3699,15 +3653,12 @@ class FakeMissingTableCellExtractionIngestion(FakeIngestion):
         tables = super()._tables(file_name)
         if file_name not in {"long-table-expenses.xlsx", "long-table-expenses.tsv"}:
             return tables
+
         def cells_without_metadata(table: Mapping[str, object]) -> list[dict[str, object]]:
             raw_cells = table.get("cells")
             if not isinstance(raw_cells, list):
                 return []
-            return [
-                {**dict(cell), "metadata": {}}
-                for cell in raw_cells
-                if isinstance(cell, dict)
-            ]
+            return [{**dict(cell), "metadata": {}} for cell in raw_cells if isinstance(cell, dict)]
 
         return [
             {

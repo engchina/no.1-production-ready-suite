@@ -98,9 +98,7 @@ def _build_command_hint(settings: Settings, entry: ServiceCatalogEntry) -> str:
     return f"docker compose {files}{profile}build {entry.service_id}"
 
 
-def _friendly_compose_error(
-    detail: str, settings: Settings, entry: ServiceCatalogEntry
-) -> str:
+def _friendly_compose_error(detail: str, settings: Settings, entry: ServiceCatalogEntry) -> str:
     """compose の生エラーを、実行可能な案内付きの分かりやすい文言へ正規化する。"""
     low = detail.lower()
     if "no such image" in low or "image not found" in low:
@@ -283,13 +281,9 @@ class UvProcessDriver:
         detail = "起動直後にプロセスが終了しました(ポート競合や依存エラーの可能性)。"
         if tail:
             detail = f"{detail}\n{tail}"
-        return ControlResult(
-            ok=False, action="start", service_id=entry.service_id, detail=detail
-        )
+        return ControlResult(ok=False, action="start", service_id=entry.service_id, detail=detail)
 
-    def _start(
-        self, settings: Settings, entry: ServiceCatalogEntry
-    ) -> tuple[ControlResult, bool]:
+    def _start(self, settings: Settings, entry: ServiceCatalogEntry) -> tuple[ControlResult, bool]:
         """起動処理本体。``(結果, 新規 spawn したか)`` を返す。"""
         runtime = _runtime_dir()
         pidfile = runtime / f"{entry.service_id}.pid"

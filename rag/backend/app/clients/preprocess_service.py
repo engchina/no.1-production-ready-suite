@@ -28,9 +28,7 @@ from app.schemas.document import SourceModality, SourceProfile
 logger = logging.getLogger(__name__)
 
 # in-process で text_normalize の対象にする modality。
-_TEXT_LIKE_MODALITIES = frozenset(
-    {SourceModality.TEXT, SourceModality.HTML, SourceModality.EMAIL}
-)
+_TEXT_LIKE_MODALITIES = frozenset({SourceModality.TEXT, SourceModality.HTML, SourceModality.EMAIL})
 
 
 def _is_text_like(content_type: str, source_profile: SourceProfile | None) -> bool:
@@ -100,9 +98,9 @@ class PreprocessServiceClient:
     ) -> ConvertOutcome:
         """選択プリセットで原本を変換する。失敗・未対応は passthrough へ安全に縮退する。"""
         resolved = normalize_preprocess_profile(
-            profile if profile is not None else getattr(
-                self._settings, "rag_preprocess_profile", "passthrough"
-            )
+            profile
+            if profile is not None
+            else getattr(self._settings, "rag_preprocess_profile", "passthrough")
         )
         if resolved == "passthrough":
             return ConvertOutcome.passthrough()
