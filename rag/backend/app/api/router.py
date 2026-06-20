@@ -10,6 +10,7 @@ from app.api.routes import (
     evaluation,
     health,
     knowledge_bases,
+    nl2sql,
     search,
     services,
     settings,
@@ -31,6 +32,7 @@ api_router.include_router(
     tags=["business-views"],
 )
 api_router.include_router(search.router, prefix="/search", tags=["search"])
+api_router.include_router(nl2sql.router, prefix="/nl2sql", tags=["nl2sql"])
 api_router.include_router(evaluation.router, prefix="/evaluation", tags=["evaluation"])
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])
 api_router.include_router(services.router, prefix="/services", tags=["services"])

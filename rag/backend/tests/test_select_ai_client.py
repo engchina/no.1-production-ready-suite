@@ -19,10 +19,20 @@ from app.select_ai.provisioning import SelectAiProvisioningSpec
 Responder = Callable[[str, Mapping[str, object]], object]
 
 
+class _Rows:
+    """run_select 用の複数列・複数行レスポンス(responder 戻り値)。"""
+
+    def __init__(self, columns: tuple[str, ...], rows: list[tuple[object, ...]]) -> None:
+        self.columns = columns
+        self.rows = rows
+
+
 class _FakeCursor:
     def __init__(self, conn: "_FakeConnection") -> None:
         self._conn = conn
         self._result: object = None
+        self._rows: list[tuple[object, ...]] | None = None
+        self.description: list[tuple[object, ...]] | None = None
 
     def execute(self, sql: str, binds: Mapping[str, object] | None = None) -> None:
         b = dict(binds or {})
@@ -30,12 +40,21 @@ class _FakeCursor:
         outcome = self._conn.responder(sql, b)
         if isinstance(outcome, Exception):
             raise outcome
-        self._result = outcome
+        if isinstance(outcome, _Rows):
+            self._rows = outcome.rows
+            self.description = [(col,) for col in outcome.columns]
+            self._result = None
+        else:
+            self._result = outcome
+            self._rows = None
+            self.description = None
 
     def fetchone(self) -> Any:
         return None if self._result is None else (self._result,)
 
     def fetchall(self) -> Any:
+        if self._rows is not None:
+            return self._rows
         return [] if self._result is None else [(self._result,)]
 
     def close(self) -> None:
@@ -261,3 +280,29 @@ async def test_apply_provisioning_rolls_back_on_error() -> None:
         await client.apply_provisioning_plan(plan)
     assert conn.rolled_back == 1
     assert conn.committed == 0
+
+
+@pytest.mark.asyncio
+async def test_run_select_returns_columns_and_rows() -> None:
+    rows = _Rows(("EMPLOYEE_NAME", "SALARY"), [("佐藤", 420000), ("鈴木", 510000)])
+    client, conn = _client(lambda sql, binds: rows)
+
+    result = await client.run_select("SELECT employee_name, salary FROM employee", max_rows=10)
+
+    assert result.columns == ("EMPLOYEE_NAME", "SALARY")
+    assert result.rows == (("佐藤", 420000), ("鈴木", 510000))
+    assert result.row_count == 2
+    assert result.truncated is False
+    assert conn.executed[0][0].startswith("SELECT")
+
+
+@pytest.mark.asyncio
+async def test_run_select_truncates_to_max_rows() -> None:
+    rows = _Rows(("N",), [(1,), (2,), (3,)])
+    client, _ = _client(lambda sql, binds: rows)
+
+    result = await client.run_select("SELECT n FROM t", max_rows=2)
+
+    assert result.row_count == 2
+    assert result.truncated is True
+    assert result.rows == ((1,), (2,))

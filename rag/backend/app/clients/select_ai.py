@@ -126,6 +126,16 @@ class ProvisioningResult:
     executed_kinds: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SqlExecutionResult:
+    """承認済み SELECT の実行結果(read-only)。"""
+
+    columns: tuple[str, ...]
+    rows: tuple[tuple[object, ...], ...]
+    row_count: int
+    truncated: bool
+
+
 async def _default_db_call_runner(operation: Callable[[], Any]) -> Any:
     """同期 python-oracledb 呼び出しを event loop 外の thread で実行する。"""
     return await asyncio.to_thread(operation)
@@ -174,6 +184,19 @@ def _is_missing_privilege(error: Exception) -> bool:
     """エラーが EXECUTE 権限不足(コンパイル時)を示すか。"""
     message = str(error).upper()
     return any(marker in message for marker in _MISSING_PRIVILEGE_MARKERS)
+
+
+def _coerce_cell(value: object) -> object:
+    """結果セルを JSON 親和な値へ正規化する(LOB は ``.read()``、それ以外の非基本型は文字列化)。"""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    reader = getattr(value, "read", None)
+    if callable(reader):
+        try:
+            return str(reader())
+        except Exception:  # noqa: BLE001 - LOB 読み取り失敗は文字列化で代替
+            return str(value)
+    return str(value)
 
 
 def _extract_reply(raw: str) -> str:
@@ -283,6 +306,40 @@ class SelectAiClient:
             conversation_id=conversation,
             reply=_extract_reply(raw),
             raw=raw,
+        )
+
+    async def run_select(
+        self,
+        sql: str,
+        *,
+        binds: Mapping[str, object] | None = None,
+        max_rows: int = 1000,
+    ) -> SqlExecutionResult:
+        """承認済み read-only SELECT を実行して行を取得する。
+
+        ガードレールで read-only 検証済みの SQL を前提とする。``max_rows`` を超えた分は
+        切り捨て(``truncated=True``)。**実行前の人手承認は呼び出し側の責務。**
+        """
+        bound = dict(binds or {})
+
+        def _op(connection: OracleConnectionProtocol) -> tuple[tuple[str, ...], list[Any], bool]:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(sql, bound)
+                description = getattr(cursor, "description", None) or []
+                columns = tuple(str(col[0]) for col in description)
+                fetched = list(cursor.fetchall())
+                truncated = len(fetched) > max_rows
+                return columns, fetched[:max_rows], truncated
+            finally:
+                cursor.close()
+
+        columns, fetched, truncated = cast(
+            "tuple[tuple[str, ...], list[Any], bool]", await self._with_connection(_op)
+        )
+        rows = tuple(tuple(_coerce_cell(cell) for cell in row) for row in fetched)
+        return SqlExecutionResult(
+            columns=columns, rows=rows, row_count=len(rows), truncated=truncated
         )
 
     async def check_privileges(self) -> PrivilegeCheckResult:
