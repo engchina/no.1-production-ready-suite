@@ -6,7 +6,9 @@ from app.config import get_settings
 from app.rag.kb_adapter_config import (
     KbAdapterConfigError,
     KnowledgeBaseAdapterConfig,
+    KnowledgeBaseQueryConfig,
     apply_adapter_config_or_global,
+    compose_query_settings,
     dump_adapter_config,
     parse_adapter_config,
     resolve_effective_adapter_config,
@@ -215,6 +217,48 @@ def test_resolve_effective_adapter_config_all_global_when_empty() -> None:
     assert effective.query.evaluation_suite == settings.rag_evaluation_suite
     # 解決済みは表示専用なので継承判定の元データ(config)は変更しない。
     assert KnowledgeBaseAdapterConfig().is_empty()
+
+
+def test_compose_query_settings_empty_returns_global() -> None:
+    """overlay が空(全継承)ならグローバルをそのまま返し applied=False。"""
+    settings = get_settings()
+    merged, applied = compose_query_settings(settings, [])
+    assert merged is settings
+    assert applied is False
+
+    merged2, applied2 = compose_query_settings(
+        settings, [KnowledgeBaseQueryConfig(), KnowledgeBaseQueryConfig()]
+    )
+    assert merged2 is settings
+    assert applied2 is False
+
+
+def test_compose_query_settings_higher_precedence_wins_per_field() -> None:
+    """後の overlay(高優先)が同一フィールドを上書きし、別フィールドは両方効く。"""
+    settings = get_settings()
+    kb = KnowledgeBaseQueryConfig(
+        vector_index_profile="accurate", generation_profile="detailed_cited"
+    )
+    view = KnowledgeBaseQueryConfig(generation_profile="strict_extractive")
+
+    # 低優先=kb, 高優先=view の順で渡す。
+    merged, applied = compose_query_settings(settings, [kb, view])
+
+    assert applied is True
+    # 同一フィールド(generation)は高優先 view が勝つ。
+    assert merged.rag_generation_profile == "strict_extractive"
+    # view が触れていない vector_index は kb の値が残る(per-field merge の肝)。
+    assert merged.rag_vector_index_profile == "accurate"
+
+
+def test_compose_query_settings_null_does_not_wipe_lower_layer() -> None:
+    """高優先 overlay の None フィールドは下位層の値を消さない。"""
+    settings = get_settings()
+    kb = KnowledgeBaseQueryConfig(guardrail_policy="strict")
+    view = KnowledgeBaseQueryConfig()  # 何も設定しない
+
+    merged, _ = compose_query_settings(settings, [kb, view])
+    assert merged.rag_guardrail_policy == "strict"
 
 
 def test_invalid_literal_value_is_rejected_at_validation() -> None:
