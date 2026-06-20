@@ -24,6 +24,8 @@ jobs:
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
+          # gitleaks-action@v2 は PR スキャンに GITHUB_TOKEN を要求する(未指定だと失敗する)。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # pre-commit hook と同一の設定/ルールで走査する
           GITLEAKS_CONFIG: .gitleaks.toml
           # OSS リポジトリ向けライセンスは不要(private の場合のみ要設定)
