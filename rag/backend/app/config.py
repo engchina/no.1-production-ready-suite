@@ -579,6 +579,16 @@ class Settings(BaseSettings):
             "LLM context 投入前に query 関連 sentence/line だけを抽出して chunk text を圧縮する。"
         ),
     )
+    rag_grounding_crag_confidence_threshold: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "CRAG: grounding preset が corrective(verified_context/full_governed)のとき、rerank の"
+            "最高スコアがこの閾値未満なら query を書き換えて 1 回だけ corrective 再検索する。"
+            "閾値 0.0 は実質無効(corrective 経路でも再検索しない)。"
+        ),
+    )
     rag_context_compression_max_sentences: int = Field(
         default=3,
         ge=1,

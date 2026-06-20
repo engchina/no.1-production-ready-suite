@@ -191,6 +191,8 @@ class SearchDiagnostics(BaseModel):
     fallback_reason: str | None = None
     gap_stopped: bool = False
     corrective_retried: bool = False
+    crag_confidence_score: float | None = None
+    crag_fallback_triggered: bool = False
     business_context: dict[str, object] = Field(default_factory=dict)
     retrieval_plan: dict[str, object] = Field(default_factory=dict)
     retrieved_context_pack: dict[str, object] = Field(default_factory=dict)

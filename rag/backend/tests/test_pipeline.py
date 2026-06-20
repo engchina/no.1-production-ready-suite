@@ -21,6 +21,7 @@ from app.rag.pipeline import (
     _apply_business_fit_weighting,
     _build_context,
     _business_context_scope_pinned,
+    _crag_confidence,
     _dedupe_ranked_chunks,
     _relaxed_corrective_request,
 )
@@ -2623,3 +2624,40 @@ async def test_pipeline_default_generation_profile_uses_client_default_prompt() 
     assert response.diagnostics.generation_profile == "grounded_concise"
     # 既定 path は generate(query, context) を呼ぶため system_prompt は未指定(None)。
     assert llm.system_prompt is None
+
+
+def test_crag_confidence_prefers_rerank_score() -> None:
+    """CRAG 信頼度は rerank 最高スコア(無ければ vector score)を [0,1] で返す。"""
+    chunks = [
+        RetrievedChunk(
+            document_id="d", chunk_id="d:0", text="a", score=0.9, rerank_score=0.42,
+            file_name="f.txt",
+        ),
+        RetrievedChunk(
+            document_id="d", chunk_id="d:1", text="b", score=0.5, rerank_score=0.18,
+            file_name="f.txt",
+        ),
+    ]
+    # rerank_score の最高(0.42)を採用。
+    assert _crag_confidence(chunks) == 0.42
+
+
+def test_crag_confidence_falls_back_to_vector_score() -> None:
+    chunks = [
+        RetrievedChunk(document_id="d", chunk_id="d:0", text="a", score=0.7, file_name="f.txt"),
+    ]
+    assert _crag_confidence(chunks) == 0.7
+
+
+def test_crag_confidence_empty_is_zero() -> None:
+    assert _crag_confidence([]) == 0.0
+
+
+def test_crag_confidence_clamped_to_unit_range() -> None:
+    chunks = [
+        RetrievedChunk(
+            document_id="d", chunk_id="d:0", text="a", score=0.0, rerank_score=1.8,
+            file_name="f.txt",
+        ),
+    ]
+    assert _crag_confidence(chunks) == 1.0

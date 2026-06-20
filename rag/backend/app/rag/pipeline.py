@@ -190,6 +190,8 @@ class RagPipeline:
         runtime_graph_hit_count = 0
         business_fit_reordered_count = 0
         corrective_retried = False
+        crag_confidence_score: float | None = None
+        crag_fallback_triggered = False
         agentic_subquery_count = 0
         agentic_hops = 0
         graph_profile = resolve_graph_adapter(self._settings).profile
@@ -220,6 +222,9 @@ class RagPipeline:
                 agentic_profile=agentic_params.profile,
                 agentic_subquery_count=agentic_subquery_count,
                 agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
                 route_reason=resolved_strategy.route_reason,
                 fallback_reason="gap_stop_scope_unresolved",
                 business_context=business_context.diagnostics(),
@@ -362,6 +367,9 @@ class RagPipeline:
                 agentic_profile=agentic_params.profile,
                 agentic_subquery_count=agentic_subquery_count,
                 agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
@@ -398,6 +406,50 @@ class RagPipeline:
                     elapsed_ms=elapsed,
                     diagnostics=diagnostics,
                 )
+
+            # CRAG: grounding preset が corrective(verified_context/full_governed)で、rerank の
+            # 最高スコアが閾値未満なら query を書き換えて 1 回だけ corrective 再検索する。
+            crag_confidence_score = _crag_confidence(ranked)
+            crag_threshold = float(
+                getattr(self._settings, "rag_grounding_crag_confidence_threshold", 0.0)
+            )
+            if (
+                grounding_params.corrective_enabled
+                and not corrective_retried
+                and crag_threshold > 0.0
+                and crag_confidence_score < crag_threshold
+            ):
+                corrective_retried = True
+                crag_fallback_triggered = True
+                error_stage = "crag_corrective"
+                rewritten = await self._llm.plan_query(
+                    query_guardrail.sanitized_text,
+                    mode="query_rewrite",
+                    max_subqueries=agentic_params.max_subqueries,
+                )
+                crag_variants = (
+                    _dedupe_strings([*rewritten, *query_variants]) if rewritten else query_variants
+                )
+                crag_vectors = await self._genai.embed(
+                    crag_variants, input_type="SEARCH_QUERY"
+                )
+                crag_result = await self._retrieve_with_strategy(
+                    query_variants=crag_variants,
+                    vectors=crag_vectors,
+                    request=effective_request,
+                    resolved_strategy=resolved_strategy,
+                )
+                crag_ranked = await self._rerank(
+                    query_guardrail.sanitized_text,
+                    crag_result.chunks,
+                    request.rerank_top_n,
+                )
+                crag_new_confidence = _crag_confidence(crag_ranked)
+                if crag_ranked and crag_new_confidence > crag_confidence_score:
+                    # 書き換え後の方が信頼度が高ければ採用する。
+                    ranked = crag_ranked
+                    retrieved = crag_result.chunks
+                    crag_confidence_score = crag_new_confidence
 
             if retrieval_params.business_fit_weighting:
                 error_stage = "business_fit_weighting"
@@ -620,6 +672,9 @@ class RagPipeline:
                 agentic_profile=agentic_params.profile,
                 agentic_subquery_count=agentic_subquery_count,
                 agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
                     fallback_reason=runtime_fallback_reason,
@@ -694,6 +749,9 @@ class RagPipeline:
                 agentic_profile=agentic_params.profile,
                 agentic_subquery_count=agentic_subquery_count,
                 agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
                 memory_plan_id=retrieval_plan.plan_id,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
@@ -817,6 +875,9 @@ class RagPipeline:
                 agentic_profile=agentic_params.profile,
                 agentic_subquery_count=agentic_subquery_count,
                 agentic_hops=agentic_hops,
+                corrective_retried=corrective_retried,
+                crag_confidence_score=crag_confidence_score,
+                crag_fallback_triggered=crag_fallback_triggered,
                 memory_plan_id=retrieval_plan.plan_id if retrieval_plan is not None else None,
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
@@ -1553,6 +1614,17 @@ def _business_context_scope_pinned(business_context: BusinessContextPack) -> boo
             business_context.version_filter_present,
         )
     )
+
+
+def _crag_confidence(ranked: list[RetrievedChunk]) -> float:
+    """CRAG の信頼度シグナル: rerank 最高スコア(無ければ vector score)を [0,1] で返す。"""
+    if not ranked:
+        return 0.0
+    best = max(
+        (chunk.rerank_score if chunk.rerank_score is not None else chunk.score)
+        for chunk in ranked
+    )
+    return max(0.0, min(1.0, float(best)))
 
 
 def _relaxed_corrective_request(request: SearchRequest) -> SearchRequest:
