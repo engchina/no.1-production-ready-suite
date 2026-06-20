@@ -11,13 +11,80 @@ from collections.abc import Callable
 from fastapi import FastAPI
 
 from rag_pipeline_core.chunking import Chunk, chunk_extraction_with_strategy
+from rag_pipeline_core.graph import resolve_graph_profile
 from rag_pipeline_core.stage import (
     ChunkingStageRequest,
     ChunkingStageResponse,
+    GraphStageRequest,
+    GraphStageResponse,
     StageHealth,
+    VectorIndexStageRequest,
+    VectorIndexStageResponse,
 )
+from rag_pipeline_core.vector_index import resolve_vector_index
 
 ChunkingHealthProbe = Callable[[], StageHealth]
+HealthProbe = Callable[[], StageHealth]
+
+
+def _health_routes(app: FastAPI, probe: HealthProbe) -> None:
+    @app.get("/health", response_model=StageHealth)
+    def health() -> StageHealth:
+        return probe()
+
+    @app.get("/api/ready", response_model=StageHealth)
+    def ready() -> StageHealth:
+        return probe()
+
+
+def create_vector_index_app(
+    *, health_probe: HealthProbe | None = None, title: str = "pipeline-vector-index"
+) -> FastAPI:
+    """vector_index ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
+    app = FastAPI(title=title)
+    probe = health_probe or (
+        lambda: StageHealth(status="ok", stage="vector_index", package_name="rag_pipeline_core")
+    )
+    _health_routes(app, probe)
+
+    @app.post("/run", response_model=VectorIndexStageResponse)
+    def run(request: VectorIndexStageRequest) -> VectorIndexStageResponse:
+        resolved = resolve_vector_index(request.profile, request.settings_target_accuracy)
+        return VectorIndexStageResponse(
+            profile=resolved.profile,
+            target_accuracy=resolved.target_accuracy,
+            neighbors=resolved.neighbors,
+            efconstruction=resolved.efconstruction,
+            distance=resolved.distance,
+            requires_reprovision=resolved.requires_reprovision,
+        )
+
+    return app
+
+
+def create_graph_app(
+    *, health_probe: HealthProbe | None = None, title: str = "pipeline-graphrag"
+) -> FastAPI:
+    """graphrag ステージサービスの FastAPI app(``POST /run`` + ``GET /health``)。"""
+    app = FastAPI(title=title)
+    probe = health_probe or (
+        lambda: StageHealth(status="ok", stage="graphrag", package_name="rag_pipeline_core")
+    )
+    _health_routes(app, probe)
+
+    @app.post("/run", response_model=GraphStageResponse)
+    def run(request: GraphStageRequest) -> GraphStageResponse:
+        resolved = resolve_graph_profile(request.profile, legacy_enabled=request.legacy_enabled)
+        return GraphStageResponse(
+            profile=resolved.profile,
+            build_entities=resolved.build_entities,
+            build_relationships=resolved.build_relationships,
+            build_claims=resolved.build_claims,
+            build_community_summary=resolved.build_community_summary,
+            temporal=resolved.temporal,
+        )
+
+    return app
 
 
 def create_chunking_app(

@@ -970,6 +970,35 @@ class Settings(BaseSettings):
         default="http://pipeline-chunking:8000",
         description="chunking ステージマイクロサービスの base URL。",
     )
+    rag_vector_index_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "vector_index プロファイル解決を vector_index マイクロサービスへ委譲する。OFF(既定)は "
+            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+        ),
+    )
+    rag_vector_index_service_url: str = Field(
+        default="http://pipeline-vector-index:8000",
+        description="vector_index ステージマイクロサービスの base URL。",
+    )
+    rag_graph_service_enabled: bool = Field(
+        default=False,
+        description=(
+            "graphrag プロファイル解決を graphrag マイクロサービスへ委譲する。OFF(既定)は "
+            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+        ),
+    )
+    rag_graph_service_url: str = Field(
+        default="http://pipeline-graphrag:8000",
+        description="graphrag ステージマイクロサービスの base URL。",
+    )
+    rag_graph_temporal_enabled: bool = Field(
+        default=False,
+        description=(
+            "Temporal GraphRAG: full プロファイル時に KG の entity/relationship へ timestamp を"
+            "付与し、検索時に時間文脈フィルタを可能にする。off/entities では無効。"
+        ),
+    )
     rag_parser_readiness_probe_enabled: bool = Field(
         default=False,
         description=(

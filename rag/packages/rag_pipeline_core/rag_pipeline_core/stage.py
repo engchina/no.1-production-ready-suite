@@ -60,3 +60,39 @@ class ChunkingStageResponse(BaseModel):
             for chunk in chunks
         ]
         return cls(chunks=items)
+
+
+class VectorIndexStageRequest(BaseModel):
+    """``POST /run``(vector_index)の入力。profile + balanced 用 target accuracy。"""
+
+    profile: str = "balanced"
+    settings_target_accuracy: int = 95
+
+
+class VectorIndexStageResponse(BaseModel):
+    """``POST /run``(vector_index)の出力(解決済みパラメータ)。"""
+
+    profile: str
+    target_accuracy: int
+    neighbors: int
+    efconstruction: int
+    distance: str
+    requires_reprovision: bool
+
+
+class GraphStageRequest(BaseModel):
+    """``POST /run``(graphrag)の入力。profile + legacy enabled。"""
+
+    profile: str = "off"
+    legacy_enabled: bool = False
+
+
+class GraphStageResponse(BaseModel):
+    """``POST /run``(graphrag)の出力(KG 構築フラグ)。"""
+
+    profile: str
+    build_entities: bool
+    build_relationships: bool
+    build_claims: bool
+    build_community_summary: bool
+    temporal: bool

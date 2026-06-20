@@ -1,13 +1,17 @@
 """GraphRAG アダプター(知識グラフ構築の深さプロファイル)。
 
-`vector_index_adapter.py` と同型で、選択された KG 構築プロファイルと利用可能なプリセット一覧を
-非機密の runtime snapshot として返す。ビルド側(ingest)の構築深度を決め、検索側 routing は
-Retrieval アダプターの `graph_augmented` が担う(両者は合成)。外部グラフ DB は導入しない。
+決定論ロジックは共有パッケージ ``rag_pipeline_core.graph`` を単一ソースとして使い、backend と
+graphrag マイクロサービスが同一結果を返す。`rag_graph_service_enabled` が真のとき profile 解決を
+pipeline-graphrag サービスへ委譲し、未達/失敗時は in-process(同一ロジック)へ安全縮退する。
+legacy `rag_graph_enabled=True` は full 相当(後方互換)。Temporal GraphRAG は
+`rag_graph_temporal_enabled`(full のとき timestamp 付与)。外部グラフ DB は導入しない。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from rag_pipeline_core.graph import resolve_graph_profile
 
 from app.config import GraphProfile, Settings
 
@@ -64,6 +68,7 @@ class GraphAdapterParams:
     enabled: bool
     build_claims: bool
     build_community_summaries: bool
+    temporal: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,6 +92,7 @@ class GraphAdapterRuntimeSettings:
     enabled: bool
     build_claims: bool
     build_community_summaries: bool
+    temporal: bool
     profiles: tuple[GraphProfileStatus, ...]
 
 
@@ -101,26 +107,50 @@ def normalize_graph_profile(value: object) -> GraphProfileName:
 def resolve_graph_adapter(settings: Settings) -> GraphAdapterParams:
     """Settings から GraphRAG アダプターの解決済みパラメータを作る。
 
-    legacy の `rag_graph_enabled=True` は profile が off でも full 相当として扱い、後方互換を保つ。
+    `rag_graph_service_enabled` のときは pipeline-graphrag サービスへ委譲し、未達/失敗時は
+    in-process(同一 rag_pipeline_core ロジック)へ安全縮退する。
     """
     profile = normalize_graph_profile(
         getattr(settings, "rag_graph_profile", DEFAULT_GRAPH_PROFILE)
     )
-    spec = GRAPH_ADAPTER_SPECS[profile]
     legacy_enabled = bool(getattr(settings, "rag_graph_enabled", False))
-    if profile == "off" and legacy_enabled:
-        full = GRAPH_ADAPTER_SPECS["full"]
-        return GraphAdapterParams(
-            profile="full",
-            enabled=True,
-            build_claims=full.build_claims,
-            build_community_summaries=full.build_community_summaries,
-        )
+    temporal = bool(getattr(settings, "rag_graph_temporal_enabled", False))
+    remote = _resolve_remote(settings, profile, legacy_enabled, temporal)
+    if remote is not None:
+        return remote
+    resolved = resolve_graph_profile(profile, legacy_enabled=legacy_enabled, temporal=temporal)
     return GraphAdapterParams(
-        profile=profile,
-        enabled=spec.enabled,
-        build_claims=spec.build_claims,
-        build_community_summaries=spec.build_community_summaries,
+        profile=resolved.profile,  # type: ignore[arg-type]
+        enabled=resolved.build_entities,
+        build_claims=resolved.build_claims,
+        build_community_summaries=resolved.build_community_summary,
+        temporal=resolved.temporal,
+    )
+
+
+def _resolve_remote(
+    settings: Settings, profile: str, legacy_enabled: bool, temporal: bool
+) -> GraphAdapterParams | None:
+    """サービス委譲が有効なら remote 解決する(未達/無効は None)。"""
+    from rag_pipeline_core.stage import GraphStageRequest
+
+    from app.clients.pipeline_stage import PipelineStageClient
+
+    client = PipelineStageClient(settings)
+    if not client.is_enabled("graphrag"):
+        return None
+    response = client.run_graph(
+        GraphStageRequest(profile=profile, legacy_enabled=legacy_enabled)
+    )
+    if response is None:
+        return None
+    return GraphAdapterParams(
+        profile=response.profile,  # type: ignore[arg-type]
+        enabled=response.build_entities,
+        build_claims=response.build_claims,
+        build_community_summaries=response.build_community_summary,
+        # temporal はサービス未対応版でも backend 設定を尊重する。
+        temporal=bool(temporal and response.profile == "full"),
     )
 
 
@@ -144,5 +174,6 @@ def graph_adapter_runtime_settings(settings: Settings) -> GraphAdapterRuntimeSet
         enabled=params.enabled,
         build_claims=params.build_claims,
         build_community_summaries=params.build_community_summaries,
+        temporal=params.temporal,
         profiles=statuses,
     )

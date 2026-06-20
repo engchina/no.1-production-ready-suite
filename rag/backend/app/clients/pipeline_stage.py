@@ -13,7 +13,14 @@ from __future__ import annotations
 import logging
 
 import httpx
-from rag_pipeline_core.stage import ChunkingStageRequest, ChunkingStageResponse
+from rag_pipeline_core.stage import (
+    ChunkingStageRequest,
+    ChunkingStageResponse,
+    GraphStageRequest,
+    GraphStageResponse,
+    VectorIndexStageRequest,
+    VectorIndexStageResponse,
+)
 
 from app.config import Settings
 from app.rag.chunking import Chunk
@@ -23,9 +30,13 @@ logger = logging.getLogger(__name__)
 # ステージ名 → サービス URL の Settings フィールド。
 _STAGE_URL_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_url",
+    "vector_index": "rag_vector_index_service_url",
+    "graphrag": "rag_graph_service_url",
 }
 _STAGE_ENABLED_FIELDS: dict[str, str] = {
     "chunking": "rag_chunking_service_enabled",
+    "vector_index": "rag_vector_index_service_enabled",
+    "graphrag": "rag_graph_service_enabled",
 }
 
 
@@ -51,24 +62,34 @@ class PipelineStageClient:
         enabled = bool(getattr(self._settings, field, False)) if field else False
         return enabled and self._service_url(stage) is not None
 
-    def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk] | None:
-        """chunking ステージを remote 実行する。委譲不可/失敗時は None(呼び出し側で縮退)。"""
-        if not self.is_enabled("chunking"):
+    def _post_run(self, stage: str, request_json: str) -> dict[str, object] | None:
+        """``POST /run`` を呼び JSON を返す。委譲不可/失敗時は None(呼び出し側で縮退)。"""
+        if not self.is_enabled(stage):
             return None
-        url = self._service_url("chunking")
+        url = self._service_url(stage)
         try:
             with httpx.Client(timeout=self._timeout) as client:
                 response = client.post(
-                    f"{url}/run", content=request.model_dump_json(), headers=_JSON_HEADERS
+                    f"{url}/run", content=request_json, headers=_JSON_HEADERS
                 )
                 response.raise_for_status()
-                payload = response.json()
-            parsed = ChunkingStageResponse.model_validate(payload)
+                payload: dict[str, object] = response.json()
+                return payload
         except (httpx.HTTPError, ValueError) as exc:
             logger.warning(
-                "chunking stage service call failed; falling back to in-process",
-                extra={"service_url": url, "error": str(exc)},
+                "pipeline stage service call failed; falling back to in-process",
+                extra={"stage": stage, "service_url": url, "error": str(exc)},
             )
+            return None
+
+    def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk] | None:
+        """chunking ステージを remote 実行する。委譲不可/失敗時は None(呼び出し側で縮退)。"""
+        payload = self._post_run("chunking", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            parsed = ChunkingStageResponse.model_validate(payload)
+        except ValueError:
             return None
         return [
             Chunk(
@@ -80,6 +101,28 @@ class PipelineStageClient:
             )
             for item in parsed.chunks
         ]
+
+    def run_vector_index(
+        self, request: VectorIndexStageRequest
+    ) -> VectorIndexStageResponse | None:
+        """vector_index ステージを remote 実行する。委譲不可/失敗時は None。"""
+        payload = self._post_run("vector_index", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            return VectorIndexStageResponse.model_validate(payload)
+        except ValueError:
+            return None
+
+    def run_graph(self, request: GraphStageRequest) -> GraphStageResponse | None:
+        """graphrag ステージを remote 実行する。委譲不可/失敗時は None。"""
+        payload = self._post_run("graphrag", request.model_dump_json())
+        if payload is None:
+            return None
+        try:
+            return GraphStageResponse.model_validate(payload)
+        except ValueError:
+            return None
 
 
 _JSON_HEADERS = {"content-type": "application/json"}

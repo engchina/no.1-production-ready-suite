@@ -222,6 +222,18 @@ services:
       dockerfile: services/pipeline/chunking/Dockerfile
     restart: unless-stopped
 
+  pipeline-vector-index:
+    build:
+      context: .
+      dockerfile: services/pipeline/vector_index/Dockerfile
+    restart: unless-stopped
+
+  pipeline-graphrag:
+    build:
+      context: .
+      dockerfile: services/pipeline/graphrag/Dockerfile
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     environment:

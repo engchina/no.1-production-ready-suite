@@ -1,69 +1,31 @@
 """Vector Index アダプター(索引/検索精度の手動選択プリセット)。
 
-`retrieval_adapter.py` と同型で、選択された Oracle 26ai AI Vector Search の
-accuracy/latency プロファイルと利用可能なプリセット一覧を非機密の runtime snapshot として返す。
-機能レバーは検索時 target accuracy(runtime 即時)で、HNSW ビルドパラメータは推奨値の表示に
-留める(適用には索引再作成が必要)。外部ベクトル DB は導入しない。
+決定論ロジック・spec は共有パッケージ ``rag_pipeline_core.vector_index`` を単一ソースとして使い、
+backend と vector_index マイクロサービスが同一結果を返す。`rag_vector_index_service_enabled` が
+真のとき profile 解決を pipeline-vector-index サービスへ委譲し、未達/失敗時は in-process(同一
+ロジック)へ安全縮退する。外部ベクトル DB は導入しない。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rag_pipeline_core.vector_index import (
+    DISTANCE,
+    VECTOR_INDEX_PROFILES,
+    VECTOR_INDEX_SPECS,
+    profile_target_accuracy,
+    resolve_vector_index,
+)
+from rag_pipeline_core.vector_index import (
+    normalize_vector_index_profile as _core_normalize,
+)
+
 from app.config import Settings, VectorIndexProfile
 
 VectorIndexProfileName = VectorIndexProfile
 DEFAULT_VECTOR_INDEX_PROFILE: VectorIndexProfileName = "balanced"
-VECTOR_INDEX_PROFILE_ORDER: tuple[VectorIndexProfileName, ...] = (
-    "balanced",
-    "accurate",
-    "fast",
-)
-# 現行 schema DDL のビルドパラメータ(balanced 基準)。
-_CURRENT_NEIGHBORS = 32
-_CURRENT_EFCONSTRUCTION = 500
-_DISTANCE = "COSINE"
-
-
-@dataclass(frozen=True)
-class VectorIndexProfileSpec:
-    """1 索引プロファイルの由来と accuracy/build 推奨値。"""
-
-    name: VectorIndexProfileName
-    origin: str
-    recommended_for: tuple[str, ...]
-    # None は balanced(既存 oracle_vector_target_accuracy を使う)を意味する。
-    target_accuracy: int | None
-    neighbors: int
-    efconstruction: int
-
-
-VECTOR_INDEX_ADAPTER_SPECS: dict[VectorIndexProfileName, VectorIndexProfileSpec] = {
-    "balanced": VectorIndexProfileSpec(
-        name="balanced",
-        origin="current_hnsw_default",
-        recommended_for=("general", "default"),
-        target_accuracy=None,
-        neighbors=_CURRENT_NEIGHBORS,
-        efconstruction=_CURRENT_EFCONSTRUCTION,
-    ),
-    "accurate": VectorIndexProfileSpec(
-        name="accurate",
-        origin="high_recall",
-        recommended_for=("compliance", "high_recall"),
-        target_accuracy=98,
-        neighbors=48,
-        efconstruction=800,
-    ),
-    "fast": VectorIndexProfileSpec(
-        name="fast",
-        origin="low_latency",
-        recommended_for=("low_latency", "interactive"),
-        target_accuracy=85,
-        neighbors=16,
-        efconstruction=300,
-    ),
-}
+VECTOR_INDEX_PROFILE_ORDER: tuple[VectorIndexProfileName, ...] = VECTOR_INDEX_PROFILES  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -107,39 +69,60 @@ class VectorIndexAdapterRuntimeSettings:
 
 def normalize_vector_index_profile(value: object) -> VectorIndexProfileName:
     """未知のプロファイル名は既定 balanced へ寄せる。"""
-    normalized = str(value).casefold()
-    if normalized in VECTOR_INDEX_ADAPTER_SPECS:
-        return normalized
-    return DEFAULT_VECTOR_INDEX_PROFILE
+    return _core_normalize(value)  # type: ignore[return-value]
 
 
 def _settings_target_accuracy(settings: Settings) -> int:
     return int(getattr(settings, "oracle_vector_target_accuracy", 95))
 
 
-def _profile_target_accuracy(spec: VectorIndexProfileSpec, settings: Settings) -> int:
-    if spec.target_accuracy is None:
-        return _settings_target_accuracy(settings)
-    return spec.target_accuracy
-
-
 def resolve_vector_index_adapter(settings: Settings) -> VectorIndexParams:
-    """Settings から Vector Index アダプターの解決済みパラメータを作る。"""
+    """Settings から Vector Index アダプターの解決済みパラメータを作る。
+
+    `rag_vector_index_service_enabled` のときは pipeline-vector-index サービスへ委譲し、
+    未達/失敗時は in-process(同一 rag_pipeline_core ロジック)へ安全縮退する。
+    """
     profile = normalize_vector_index_profile(
         getattr(settings, "rag_vector_index_profile", DEFAULT_VECTOR_INDEX_PROFILE)
     )
-    spec = VECTOR_INDEX_ADAPTER_SPECS[profile]
+    settings_accuracy = _settings_target_accuracy(settings)
+    remote = _resolve_remote(settings, profile, settings_accuracy)
+    if remote is not None:
+        return remote
+    resolved = resolve_vector_index(profile, settings_accuracy)
     return VectorIndexParams(
-        profile=profile,
-        target_accuracy=_profile_target_accuracy(spec, settings),
-        neighbors=spec.neighbors,
-        efconstruction=spec.efconstruction,
-        distance=_DISTANCE,
-        # balanced 以外はビルドパラメータが現行 DDL と異なるため索引再作成が必要。
-        requires_reprovision=(
-            spec.neighbors != _CURRENT_NEIGHBORS
-            or spec.efconstruction != _CURRENT_EFCONSTRUCTION
-        ),
+        profile=resolved.profile,  # type: ignore[arg-type]
+        target_accuracy=resolved.target_accuracy,
+        neighbors=resolved.neighbors,
+        efconstruction=resolved.efconstruction,
+        distance=resolved.distance,
+        requires_reprovision=resolved.requires_reprovision,
+    )
+
+
+def _resolve_remote(
+    settings: Settings, profile: str, settings_accuracy: int
+) -> VectorIndexParams | None:
+    """サービス委譲が有効なら remote 解決する(未達/無効は None)。"""
+    from rag_pipeline_core.stage import VectorIndexStageRequest
+
+    from app.clients.pipeline_stage import PipelineStageClient
+
+    client = PipelineStageClient(settings)
+    if not client.is_enabled("vector_index"):
+        return None
+    response = client.run_vector_index(
+        VectorIndexStageRequest(profile=profile, settings_target_accuracy=settings_accuracy)
+    )
+    if response is None:
+        return None
+    return VectorIndexParams(
+        profile=response.profile,  # type: ignore[arg-type]
+        target_accuracy=response.target_accuracy,
+        neighbors=response.neighbors,
+        efconstruction=response.efconstruction,
+        distance=response.distance,
+        requires_reprovision=response.requires_reprovision,
     )
 
 
@@ -148,18 +131,19 @@ def vector_index_adapter_runtime_settings(
 ) -> VectorIndexAdapterRuntimeSettings:
     """Settings から Vector Index アダプター readiness snapshot を作る。"""
     params = resolve_vector_index_adapter(settings)
+    settings_accuracy = _settings_target_accuracy(settings)
     statuses = tuple(
         VectorIndexProfileStatus(
-            name=spec.name,
+            name=spec.name,  # type: ignore[arg-type]
             origin=spec.origin,
             recommended_for=spec.recommended_for,
             selected=spec.name == params.profile,
-            target_accuracy=_profile_target_accuracy(spec, settings),
+            target_accuracy=profile_target_accuracy(spec, settings_accuracy),
             neighbors=spec.neighbors,
             efconstruction=spec.efconstruction,
-            distance=_DISTANCE,
+            distance=DISTANCE,
         )
-        for spec in (VECTOR_INDEX_ADAPTER_SPECS[name] for name in VECTOR_INDEX_PROFILE_ORDER)
+        for spec in (VECTOR_INDEX_SPECS[name] for name in VECTOR_INDEX_PROFILES)
     )
     return VectorIndexAdapterRuntimeSettings(
         profile=params.profile,

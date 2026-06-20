@@ -211,6 +211,26 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         dev_port=8030,
         dev_runner="uv",
     ),
+    ServiceCatalogEntry(
+        service_id="pipeline-vector-index",
+        category="vector_index",
+        profile="cpu",
+        url_field="rag_vector_index_service_url",
+        label_key="settings.services.item.pipelineVectorIndex",
+        working_dir="services/pipeline/vector_index",
+        dev_port=8031,
+        dev_runner="uv",
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-graphrag",
+        category="graphrag",
+        profile="cpu",
+        url_field="rag_graph_service_url",
+        label_key="settings.services.item.pipelineGraphrag",
+        working_dir="services/pipeline/graphrag",
+        dev_port=8032,
+        dev_runner="uv",
+    ),
 )
 
 _CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {

@@ -87,3 +87,103 @@ def test_remote_failure_degrades_to_none(monkeypatch: MonkeyPatch) -> None:
     )
     # 未達は None(呼び出し側で in-process 縮退)。例外を投げない。
     assert client.run_chunking(_request()) is None
+
+
+# --- vector_index / graphrag 委譲 -------------------------------------------
+
+
+def _fake_post(monkeypatch: MonkeyPatch, payload: dict[str, Any]) -> None:
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return payload
+
+    class _Client:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            pass
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *a: Any) -> bool:
+            return False
+
+        def post(self, *a: Any, **k: Any) -> _Resp:
+            return _Resp()
+
+    monkeypatch.setattr(module.httpx, "Client", _Client)
+
+
+def test_run_vector_index_remote(monkeypatch: MonkeyPatch) -> None:
+    _fake_post(
+        monkeypatch,
+        {
+            "profile": "accurate",
+            "target_accuracy": 98,
+            "neighbors": 48,
+            "efconstruction": 800,
+            "distance": "COSINE",
+            "requires_reprovision": True,
+        },
+    )
+    from rag_pipeline_core.stage import VectorIndexStageRequest
+
+    client = PipelineStageClient(
+        Settings(rag_vector_index_service_enabled=True, rag_vector_index_service_url="http://svc")
+    )
+    res = client.run_vector_index(VectorIndexStageRequest(profile="accurate"))
+    assert res is not None and res.target_accuracy == 98 and res.requires_reprovision is True
+
+
+def test_run_graph_remote(monkeypatch: MonkeyPatch) -> None:
+    _fake_post(
+        monkeypatch,
+        {
+            "profile": "full",
+            "build_entities": True,
+            "build_relationships": True,
+            "build_claims": True,
+            "build_community_summary": True,
+            "temporal": False,
+        },
+    )
+    from rag_pipeline_core.stage import GraphStageRequest
+
+    client = PipelineStageClient(
+        Settings(rag_graph_service_enabled=True, rag_graph_service_url="http://svc")
+    )
+    res = client.run_graph(GraphStageRequest(profile="full"))
+    assert res is not None and res.build_claims is True
+
+
+def test_vector_index_adapter_delegates_when_enabled(monkeypatch: MonkeyPatch) -> None:
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
+    _fake_post(
+        monkeypatch,
+        {
+            "profile": "fast",
+            "target_accuracy": 85,
+            "neighbors": 16,
+            "efconstruction": 300,
+            "distance": "COSINE",
+            "requires_reprovision": True,
+        },
+    )
+    settings = Settings(
+        rag_vector_index_profile="fast",
+        rag_vector_index_service_enabled=True,
+        rag_vector_index_service_url="http://svc",
+    )
+    params = resolve_vector_index_adapter(settings)
+    assert params.profile == "fast" and params.target_accuracy == 85
+
+
+def test_vector_index_adapter_falls_back_when_disabled() -> None:
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
+    # 既定(service 無効)は in-process 解決(現行挙動)。
+    params = resolve_vector_index_adapter(Settings(rag_vector_index_profile="accurate"))
+    assert params.profile == "accurate" and params.target_accuracy == 98
