@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+/*
+ * Production Ready NL2SQL — グローバルスタイル
+ * デザイントークン（日本語第一・semantic 状態色・shadcn/ui テーマ）は共有 UI パッケージが正本。
+ */
+@import "@engchina/production-ready-ui/tokens.css";
+
+/* 共有コンポーネントの utility クラスを Tailwind v4 のスキャン対象に含める。 */
+@source "../node_modules/@engchina/production-ready-ui/dist";
