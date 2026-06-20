@@ -110,6 +110,7 @@ export const queryKeys = {
   evaluationSettings: ["settings", "evaluation-suite"] as const,
   graphSettings: ["settings", "graph"] as const,
   agenticSettings: ["settings", "agentic"] as const,
+  nl2sqlPipelineSettings: ["settings", "nl2sql-pipeline"] as const,
   services: ["services"] as const,
 };
 
@@ -972,6 +973,27 @@ export function useGenerateNl2Sql() {
 export function useExecuteNl2Sql() {
   return useMutation({
     mutationFn: (payload: Parameters<typeof api.executeNl2Sql>[0]) => api.executeNl2Sql(payload),
+  });
+}
+
+/** NL2SQL パイプライン preset 群の runtime 設定。 */
+export function useNl2SqlPipelineSettings() {
+  return useQuery({
+    queryKey: queryKeys.nl2sqlPipelineSettings,
+    queryFn: api.getNl2SqlPipelineSettings,
+    retry: false,
+  });
+}
+
+/** NL2SQL パイプライン preset を 1 アダプター分ランタイム保存。 */
+export function useUpdateNl2SqlPipelineSetting() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { adapterKey: string; selection: string }) =>
+      api.updateNl2SqlPipelineSetting(payload.adapterKey, { selection: payload.selection }),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.nl2sqlPipelineSettings, data);
+    },
   });
 }
 

@@ -40,6 +40,7 @@ import { VectorIndexSettingsClient } from "@/components/settings/VectorIndexSett
 import { EvaluationSettingsClient } from "@/components/settings/EvaluationSettingsClient";
 import { GraphSettingsClient } from "@/components/settings/GraphSettingsClient";
 import { AgenticSettingsClient } from "@/components/settings/AgenticSettingsClient";
+import { Nl2SqlPipelineSettingsClient } from "@/components/settings/Nl2SqlPipelineSettingsClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -99,6 +100,10 @@ export function App() {
         <Route path={APP_ROUTES.settingsEvaluation} element={<SettingsEvaluationRoute />} />
         <Route path={APP_ROUTES.settingsGraph} element={<SettingsGraphRoute />} />
         <Route path={APP_ROUTES.settingsAgentic} element={<SettingsAgenticRoute />} />
+        <Route
+          path={APP_ROUTES.settingsNl2SqlPipeline}
+          element={<SettingsNl2SqlPipelineRoute />}
+        />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsServices} element={<SettingsServicesRoute />} />
@@ -441,6 +446,18 @@ function SettingsAgenticRoute() {
     <div>
       <PageHeader title={t("nav.settingsAgentic")} subtitle={t("settings.agentic.subtitle")} />
       <AgenticSettingsClient />
+    </div>
+  );
+}
+
+function SettingsNl2SqlPipelineRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsNl2SqlPipeline")}
+        subtitle={t("settings.nl2sqlPipeline.subtitle")}
+      />
+      <Nl2SqlPipelineSettingsClient />
     </div>
   );
 }

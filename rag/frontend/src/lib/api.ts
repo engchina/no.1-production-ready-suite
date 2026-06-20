@@ -1695,6 +1695,29 @@ export interface Nl2SqlExecuteResponse {
   result: Nl2SqlSqlResult | null;
 }
 
+// --- NL2SQL パイプライン preset アダプター(schema_source 〜 evaluation)---
+export interface PipelineAdapterOptionData {
+  name: string;
+  origin: string;
+  recommended_for: string[];
+  summary: string;
+  selected: boolean;
+}
+export interface PipelineAdapterData {
+  key: string;
+  settings_field: string;
+  label: string;
+  selected: string;
+  options: PipelineAdapterOptionData[];
+}
+export interface Nl2SqlPipelineSettingsData {
+  adapters: PipelineAdapterData[];
+  config_source: "runtime";
+}
+export interface PipelinePresetUpdate {
+  selection: string;
+}
+
 async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
   try {
     return (await res.json()) as ApiResponse<T>;
@@ -2042,6 +2065,17 @@ export const api = {
     request<Nl2SqlGenerateResponse>("/api/nl2sql/generate", jsonBody(body)),
   executeNl2Sql: (body: Nl2SqlExecuteRequestBody) =>
     request<Nl2SqlExecuteResponse>("/api/nl2sql/execute", jsonBody(body)),
+  getNl2SqlPipelineSettings: () =>
+    request<Nl2SqlPipelineSettingsData>("/api/settings/nl2sql/pipeline"),
+  updateNl2SqlPipelineSetting: (adapterKey: string, body: PipelinePresetUpdate) =>
+    request<Nl2SqlPipelineSettingsData>(
+      `/api/settings/nl2sql/pipeline/${encodeURIComponent(adapterKey)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    ),
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>

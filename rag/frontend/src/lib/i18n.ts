@@ -2015,6 +2015,18 @@ export const ja = {
   "nl2sql.console.generateError": "SQL 生成に失敗しました。",
   "nl2sql.console.executeError": "SQL 実行に失敗しました。",
   "nl2sql.console.blocked": "この SQL は実行できません。",
+  // NL2SQL パイプライン preset 設定
+  "nav.settingsNl2SqlPipeline": "NL2SQL パイプライン (Pipeline)",
+  "nav.settingsNl2SqlPipeline.sidebar": "NL2SQL パイプライン",
+  "settings.nl2sqlPipeline.subtitle":
+    "NL2SQL パイプライン各段の preset を切り替えます。各既定は現行(最小)挙動です。",
+  "settings.nl2sqlPipeline.overview.title": "パイプライン preset",
+  "settings.nl2sqlPipeline.overview.description":
+    "schema_source 〜 evaluation の挙動を preset で選びます。選択は即時にランタイムへ反映されます。",
+  "settings.nl2sqlPipeline.current": "現在の選択",
+  "settings.nl2sqlPipeline.applied": "{label} を {selection} に変更しました。",
+  "settings.nl2sqlPipeline.loadError": "パイプライン設定の取得に失敗しました。",
+  "settings.nl2sqlPipeline.saveError": "パイプライン設定の保存に失敗しました。",
 } as const;
 
 export type I18nKey = keyof typeof ja;

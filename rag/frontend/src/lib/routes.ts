@@ -23,6 +23,7 @@ export const APP_ROUTES = {
   settingsEvaluation: "/settings/evaluation",
   settingsGraph: "/settings/graph",
   settingsAgentic: "/settings/agentic",
+  settingsNl2SqlPipeline: "/settings/nl2sql-pipeline",
   settingsModel: "/settings/model",
   settingsDatabase: "/settings/database",
   settingsServices: "/settings/services",
