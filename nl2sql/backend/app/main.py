@@ -15,4 +15,5 @@ app = create_app(
     cors_origins=settings.cors_origins,
     api_router=api_router,
     readiness_checks_getter=lambda: readiness_checks(get_settings()),
+    enable_metrics=settings.enable_metrics,
 )

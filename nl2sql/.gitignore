@@ -11,6 +11,19 @@ backend/.venv/
 .ruff_cache/
 .coverage
 
+# --- local secrets / environment ---
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# --- test artifacts ---
+frontend/test-results/
+frontend/playwright-report/
+playwright-report/
+
 *.log
 .DS_Store
 
