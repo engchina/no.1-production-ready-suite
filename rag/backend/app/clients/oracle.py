@@ -810,6 +810,53 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def tag_document_chunks_with_chunk_set(
+        self, *, document_id: str, chunk_set_id: str
+    ) -> None:
+        """文書の全 chunk を指定 chunk_set に紐付ける(取込後のタグ付け)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_chunks SET chunk_set_id = :chunk_set_id
+                WHERE document_id = :document_id
+                """,
+                {"chunk_set_id": chunk_set_id, "document_id": document_id},
+            )
+
+        await self._run_transaction(operation)
+
+    async def delete_stale_document_chunk_sets(
+        self, *, document_id: str, keep_chunk_set_id: str
+    ) -> list[str]:
+        """文書の chunk_set のうち keep 以外を削除する(取込設定変更時の旧 chunk_set GC)。
+
+        binding は FK の ON DELETE CASCADE で連動削除される。削除した chunk_set id を返す。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> list[str]:
+            rows = _fetch_all(
+                connection,
+                """
+                SELECT chunk_set_id FROM rag_chunk_sets
+                WHERE document_id = :document_id AND chunk_set_id <> :keep_chunk_set_id
+                """,
+                {"document_id": document_id, "keep_chunk_set_id": keep_chunk_set_id},
+            )
+            removed = [str(next(iter(row.values()))) for row in rows]
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunk_sets
+                WHERE document_id = :document_id AND chunk_set_id <> :keep_chunk_set_id
+                """,
+                {"document_id": document_id, "keep_chunk_set_id": keep_chunk_set_id},
+            )
+            return removed
+
+        return await self._run_transaction(operation)
+
     async def create_business_view(
         self,
         *,

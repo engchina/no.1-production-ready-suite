@@ -7,7 +7,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import documents as documents_route
-from app.clients.oracle import reset_local_store
+from app.clients.oracle import OracleClient, reset_local_store
 from app.config import get_settings
 from app.main import app
 from tests.support import AsgiTestClient
@@ -110,6 +110,32 @@ def test_approve_indexes_and_makes_searchable(monkeypatch: MonkeyPatch) -> None:
 
     search = _search("経費申請の承認者は？")
     assert any(citation["document_id"] == document_id for citation in search["citations"])
+
+
+def test_approve_records_chunk_set_and_kb_binding(monkeypatch: MonkeyPatch) -> None:
+    """索引後に reconcile が chunk_set を記録し所属 KB を binding する(planner 駆動の基盤)。"""
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    _extract_to_review(document_id)
+
+    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    assert approve_resp.status_code == 200
+    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+    assert _get_document(document_id)["status"] == "INDEXED"
+
+    oracle = OracleClient()
+    chunk_set_ids = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
+    # 単一 materialization なので chunk_set は 1 つ。
+    assert len(chunk_set_ids) == 1
+
+    chunk_set = asyncio.run(oracle.get_chunk_set(chunk_set_ids[0]))
+    assert chunk_set is not None
+    assert chunk_set["status"] == "INDEXED"
+    # chunk がタグ付け・計数されている。
+    assert chunk_set["chunk_count"]
+
+    # 既定ナレッジベースがこの chunk_set を参照(refcount=1)。
+    assert asyncio.run(oracle.chunk_set_refcount(chunk_set_ids[0])) == 1
 
 
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
