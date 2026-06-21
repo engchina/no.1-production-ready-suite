@@ -46,9 +46,7 @@ def test_manual_integration_cleanup_assets_is_dry_run_without_confirm(
     monkeypatch.setattr(
         script,
         "_diagnostics_with_timeout",
-        lambda _require_oracle, _timeout: pytest.fail(
-            "cleanup dry-run should not run diagnostics"
-        ),
+        lambda _require_oracle, _timeout: pytest.fail("cleanup dry-run should not run diagnostics"),
     )
 
     exit_code = script.main(

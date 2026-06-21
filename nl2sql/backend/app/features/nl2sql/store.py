@@ -130,15 +130,13 @@ class OracleJsonNl2SqlStore:
             return
         with self._connection_factory() as conn, conn.cursor() as cursor:
             try:
-                cursor.execute(
-                    f"""
+                cursor.execute(f"""
                     CREATE TABLE {self._table_name} (
                         state_key VARCHAR2(64) PRIMARY KEY,
                         state_json CLOB CHECK (state_json IS JSON),
                         updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
                     )
-                    """
-                )
+                    """)
                 conn.commit()
             except Exception as exc:
                 if "ORA-00955" not in str(exc):

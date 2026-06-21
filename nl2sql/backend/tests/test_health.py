@@ -289,9 +289,7 @@ async def test_allowed_objects_rejects_wildcard_when_columns_are_limited() -> No
     data = resp.json()["data"]
     assert data["safety"]["is_safe"] is False
     assert "SELECT *" in " ".join(data["safety"]["warnings"])
-    assert data["repaired_sql"] == (
-        "SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY"
-    )
+    assert data["repaired_sql"] == ("SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY")
     assert data["optimization_hints"]
 
 
@@ -307,9 +305,7 @@ async def test_analyze_repairs_first_select_from_multi_statement() -> None:
     assert data["safety"]["is_safe"] is False
     assert data["safety"]["is_select_only"] is False
     assert data["executable_sql"] == ""
-    assert data["repaired_sql"] == (
-        "SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY"
-    )
+    assert data["repaired_sql"] == ("SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY")
     assert "修復候補" in " ".join(data["recommendations"])
 
 
@@ -593,8 +589,7 @@ def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:
     assert any(sql.startswith("CREATE TABLE NL2SQL_STATE_STORE") for sql in fake_db.executed)
     assert any(sql.startswith("MERGE INTO NL2SQL_STATE_STORE") for sql in fake_db.executed)
     assert any(
-        sql.startswith("SELECT state_json FROM NL2SQL_STATE_STORE")
-        for sql in fake_db.executed
+        sql.startswith("SELECT state_json FROM NL2SQL_STATE_STORE") for sql in fake_db.executed
     )
 
 

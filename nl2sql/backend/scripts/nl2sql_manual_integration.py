@@ -181,8 +181,7 @@ def _prepare_profile(
             name="manual_profile",
             ok=True,
             message=(
-                f"{action}; profile_id={resolved_profile_id}; "
-                f"tables={','.join(allowed_tables)}"
+                f"{action}; profile_id={resolved_profile_id}; " f"tables={','.join(allowed_tables)}"
             ),
         ),
         resolved_profile_id,
@@ -231,10 +230,7 @@ def _cleanup_assets(
 
 def _cleanup_result(data: AssetCleanupData) -> StepResult:
     asset_names = ", ".join(f"{kind}={name}" for kind, name in sorted(data.asset_names.items()))
-    message = (
-        f"status={data.status}; executed={data.executed}; "
-        f"{asset_names or 'assets=-'}"
-    )
+    message = f"status={data.status}; executed={data.executed}; " f"{asset_names or 'assets=-'}"
     if data.warning:
         message = f"{message}; warning={data.warning}"
     return StepResult(
@@ -308,9 +304,7 @@ def _job(
             message=f"timeout after {timeout_seconds:.1f}s",
         )
     result_runtime = (
-        str(data.result.engine_meta.get("runtime") or "deterministic")
-        if data.result
-        else "-"
+        str(data.result.engine_meta.get("runtime") or "deterministic") if data.result else "-"
     )
     ok = data.status == JobStatus.DONE and data.result is not None and data.result.safety.is_safe
     if require_oracle and engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}:
@@ -428,9 +422,7 @@ def main(argv: list[str] | None = None) -> int:
                 confirm=False,
             )
         )
-    diagnostics_result = _diagnostics_with_timeout(
-        args.require_oracle, args.diagnostics_timeout
-    )
+    diagnostics_result = _diagnostics_with_timeout(args.require_oracle, args.diagnostics_timeout)
     results: list[StepResult] = [diagnostics_result]
     if args.require_oracle and not diagnostics_result.ok:
         return _print_results(results)

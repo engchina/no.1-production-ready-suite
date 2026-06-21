@@ -107,9 +107,7 @@ _FROM_JOIN_WITH_ALIAS = re.compile(
 _SELECT_TOKEN = re.compile(r"\bselect\b", re.IGNORECASE)
 _SQL_IDENTIFIER = re.compile(r"[a-zA-Z_][\w$#]*")
 _STRICT_IDENTIFIER = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
-_QUALIFIED_COLUMN = re.compile(
-    r"([a-zA-Z_][\w$#]*)\s*\.\s*([a-zA-Z_*][\w$#*]*)", re.IGNORECASE
-)
+_QUALIFIED_COLUMN = re.compile(r"([a-zA-Z_][\w$#]*)\s*\.\s*([a-zA-Z_*][\w$#*]*)", re.IGNORECASE)
 _SQL_RESERVED_OR_FUNCTIONS = {
     "AS",
     "CASE",
@@ -458,18 +456,13 @@ class Nl2SqlService:
             return
         try:
             catalog = SchemaCatalog.model_validate(snapshot.get("catalog", self._catalog))
-            profiles = [
-                Nl2SqlProfile.model_validate(item)
-                for item in snapshot.get("profiles", [])
-            ]
+            profiles = [Nl2SqlProfile.model_validate(item) for item in snapshot.get("profiles", [])]
             jobs = {
                 item["job_id"]: self._job_from_snapshot(item)
                 for item in snapshot.get("jobs", [])
                 if item.get("job_id")
             }
-            history = [
-                HistoryItem.model_validate(item) for item in snapshot.get("history", [])
-            ]
+            history = [HistoryItem.model_validate(item) for item in snapshot.get("history", [])]
             asset_meta = {
                 Nl2SqlEngine(engine): AssetRefreshData.model_validate(data)
                 for engine, data in snapshot.get("asset_meta", {}).items()
@@ -513,9 +506,7 @@ class Nl2SqlService:
         return {
             "schema_version": 1,
             "catalog": self._catalog.model_dump(mode="json"),
-            "profiles": [
-                profile.model_dump(mode="json") for profile in self._profiles.values()
-            ],
+            "profiles": [profile.model_dump(mode="json") for profile in self._profiles.values()],
             "jobs": [self._job_to_snapshot(job) for job in self._jobs.values()],
             "history": [item.model_dump(mode="json") for item in self._history],
             "asset_meta": {
@@ -548,13 +539,9 @@ class Nl2SqlService:
             started_at=data.get("started_at"),
             finished_at=data.get("finished_at"),
             elapsed_ms=data.get("elapsed_ms"),
-            result=Nl2SqlResult.model_validate(data["result"])
-            if data.get("result")
-            else None,
+            result=Nl2SqlResult.model_validate(data["result"]) if data.get("result") else None,
             error_message=data.get("error_message"),
-            timing=TimingEnvelope.model_validate(data["timing"])
-            if data.get("timing")
-            else None,
+            timing=TimingEnvelope.model_validate(data["timing"]) if data.get("timing") else None,
         )
 
     def get_catalog(self) -> SchemaCatalog:
@@ -675,8 +662,10 @@ class Nl2SqlService:
         if not analysis.safety.is_safe:
             return analysis.safety, executable, QueryResults(columns=[], rows=[], total=0)
         if self._use_oracle_runtime():
-            return analysis.safety, executable, self._oracle_adapter.execute_select(
-                executable, row_limit
+            return (
+                analysis.safety,
+                executable,
+                self._oracle_adapter.execute_select(executable, row_limit),
             )
         return analysis.safety, executable, self._mock_execute(executable, row_limit)
 
@@ -695,9 +684,7 @@ class Nl2SqlService:
         if not _column_allowed(referenced_columns, has_wildcard, referenced, allowed):
             blocked_reason = "許可されていない列を参照しています。"
         if re.search(r"\s+limit\s+\d+\s*;?\s*$", sql, flags=re.IGNORECASE):
-            warnings.append(
-                "Oracle では LIMIT ではなく FETCH FIRST n ROWS ONLY を使用します。"
-            )
+            warnings.append("Oracle では LIMIT ではなく FETCH FIRST n ROWS ONLY を使用します。")
         elif "fetch first" not in sql.lower():
             warnings.append("行数制限が見つからないため実行時に FETCH FIRST を付与します。")
         if sql.strip().endswith(";") and ";" not in sql.strip().rstrip(";"):
@@ -725,12 +712,10 @@ class Nl2SqlService:
         )
         return AnalyzeData(
             safety=safety,
-            explanation="SQL は参照系クエリとして解析されました。"
-            if safety.is_safe
-            else blocked_reason,
-            recommendations=self._recommendations(
-                safety, repaired_sql, sql=sql, allowed=allowed
+            explanation=(
+                "SQL は参照系クエリとして解析されました。" if safety.is_safe else blocked_reason
             ),
+            recommendations=self._recommendations(safety, repaired_sql, sql=sql, allowed=allowed),
             executable_sql=executable_sql,
             repaired_sql=repaired_sql,
             optimization_hints=self._optimization_hints(
@@ -748,11 +733,11 @@ class Nl2SqlService:
         with self._lock:
             self._feedback[history_id] = rating
             self._history = [
-                item.model_copy(
-                    update={"feedback_rating": rating, "feedback_comment": comment}
+                (
+                    item.model_copy(update={"feedback_rating": rating, "feedback_comment": comment})
+                    if item.id == history_id
+                    else item
                 )
-                if item.id == history_id
-                else item
                 for item in self._history
             ]
         self._persist_state()
@@ -770,9 +755,7 @@ class Nl2SqlService:
             )[: request.limit]
         )
 
-    def recommend_profile(
-        self, request: ProfileRecommendationRequest
-    ) -> ProfileRecommendationData:
+    def recommend_profile(self, request: ProfileRecommendationRequest) -> ProfileRecommendationData:
         profiles = self.list_profiles()
         if not profiles:
             profile = self.get_profile(request.current_profile_id)
@@ -839,9 +822,11 @@ class Nl2SqlService:
             total_cases=total,
             executable_rate=round(executable / total, 3),
             select_only_rate=round(select_only / total, 3),
-            findings=[]
-            if executable == total
-            else ["一部のケースで安全境界により実行不可になりました。"],
+            findings=(
+                []
+                if executable == total
+                else ["一部のケースで安全境界により実行不可になりました。"]
+            ),
         )
 
     def compare_engines(self, request: CompareRequest) -> CompareData:
@@ -924,9 +909,11 @@ class Nl2SqlService:
         safe_results = [result for result in results if result.is_safe]
         fastest = min(
             safe_results,
-            key=lambda result: result.timing.elapsed_ms
-            if result.timing and result.timing.elapsed_ms is not None
-            else 999_999,
+            key=lambda result: (
+                result.timing.elapsed_ms
+                if result.timing and result.timing.elapsed_ms is not None
+                else 999_999
+            ),
             default=None,
         )
         recommendation = (
@@ -936,9 +923,7 @@ class Nl2SqlService:
         )
         execution_errors = [item for item in execution_results if not item.executed]
         error_rate = (
-            round(len(execution_errors) / len(execution_results), 3)
-            if execution_results
-            else 0.0
+            round(len(execution_errors) / len(execution_results), 3) if execution_results else 0.0
         )
         return CompareData(
             question=request.question,
@@ -1026,10 +1011,12 @@ class Nl2SqlService:
             check_present("OCI_COMPARTMENT_ID", "OCI compartment"),
             DiagnosticCheck(
                 name="NL2SQL_PERSISTENCE_MODE",
-                status="ok"
-                if settings.nl2sql_persistence_mode.strip().lower()
-                in {"memory", "in_memory", "deterministic", "oracle"}
-                else "warning",
+                status=(
+                    "ok"
+                    if settings.nl2sql_persistence_mode.strip().lower()
+                    in {"memory", "in_memory", "deterministic", "oracle"}
+                    else "warning"
+                ),
                 message=f"persistence mode は {self._store.mode} です。",
             ),
             DiagnosticCheck(
@@ -1040,56 +1027,72 @@ class Nl2SqlService:
             DiagnosticCheck(
                 name="NL2SQL_SELECT_AI_ENABLED",
                 status="ok" if settings.nl2sql_select_ai_enabled else "warning",
-                message="Select AI engine は有効です。"
-                if settings.nl2sql_select_ai_enabled
-                else "Select AI engine は無効です。",
+                message=(
+                    "Select AI engine は有効です。"
+                    if settings.nl2sql_select_ai_enabled
+                    else "Select AI engine は無効です。"
+                ),
             ),
             DiagnosticCheck(
                 name="NL2SQL_SELECT_AI_PROVIDER",
                 status="ok" if settings.nl2sql_select_ai_provider else "warning",
-                message=f"Select AI provider は {settings.nl2sql_select_ai_provider} です。"
-                if settings.nl2sql_select_ai_provider
-                else "Select AI provider が未設定です。",
+                message=(
+                    f"Select AI provider は {settings.nl2sql_select_ai_provider} です。"
+                    if settings.nl2sql_select_ai_provider
+                    else "Select AI provider が未設定です。"
+                ),
             ),
             DiagnosticCheck(
                 name="NL2SQL_SELECT_AI_CREDENTIAL_NAME",
-                status="ok"
-                if settings.nl2sql_select_ai_credential_name or not uses_oracle_runtime
-                else "warning",
+                status=(
+                    "ok"
+                    if settings.nl2sql_select_ai_credential_name or not uses_oracle_runtime
+                    else "warning"
+                ),
                 message=(
                     "Select AI credential name は設定済みです。"
                     if settings.nl2sql_select_ai_credential_name
-                    else "Oracle runtime では Select AI credential name の設定を推奨します。"
-                    if uses_oracle_runtime
-                    else "deterministic runtime のため credential name は任意です。"
+                    else (
+                        "Oracle runtime では Select AI credential name の設定を推奨します。"
+                        if uses_oracle_runtime
+                        else "deterministic runtime のため credential name は任意です。"
+                    )
                 ),
             ),
             DiagnosticCheck(
                 name="NL2SQL_SELECT_AI_AGENT_ENABLED",
                 status="ok" if settings.nl2sql_select_ai_agent_enabled else "warning",
-                message="Select AI Agent engine は有効です。"
-                if settings.nl2sql_select_ai_agent_enabled
-                else "Select AI Agent engine は無効です。",
+                message=(
+                    "Select AI Agent engine は有効です。"
+                    if settings.nl2sql_select_ai_agent_enabled
+                    else "Select AI Agent engine は無効です。"
+                ),
             ),
             DiagnosticCheck(
                 name="NL2SQL_RUNTIME_MODE",
-                status="ok"
-                if settings.nl2sql_runtime_mode.strip().lower() in {"deterministic", "oracle"}
-                else "warning",
+                status=(
+                    "ok"
+                    if settings.nl2sql_runtime_mode.strip().lower() in {"deterministic", "oracle"}
+                    else "warning"
+                ),
                 message=f"runtime mode は {settings.nl2sql_runtime_mode} です。",
             ),
             DiagnosticCheck(
                 name="PYTHON_ORACLEDB",
                 status="ok" if oracle_module_available else "warning",
-                message="python-oracledb は利用可能です。"
-                if oracle_module_available
-                else "python-oracledb が見つかりません。Oracle runtime には追加が必要です。",
+                message=(
+                    "python-oracledb は利用可能です。"
+                    if oracle_module_available
+                    else "python-oracledb が見つかりません。Oracle runtime には追加が必要です。"
+                ),
             ),
             DiagnosticCheck(
                 name="ORACLE_RUNTIME_READY",
-                status="ok"
-                if (not uses_oracle_runtime) or (oracle_configured and oracle_live_ok)
-                else "warning",
+                status=(
+                    "ok"
+                    if (not uses_oracle_runtime) or (oracle_configured and oracle_live_ok)
+                    else "warning"
+                ),
                 message=oracle_live_message,
             ),
         ]
@@ -1237,8 +1240,7 @@ class Nl2SqlService:
                     [row[index] if index < len(row) else "" for row in raw_rows]
                 ),
                 nullable=any(
-                    (row[index] if index < len(row) else "").strip() == ""
-                    for row in raw_rows
+                    (row[index] if index < len(row) else "").strip() == "" for row in raw_rows
                 ),
             )
             for index, column_name in enumerate(column_names)
@@ -1377,9 +1379,7 @@ class Nl2SqlService:
         self._persist_state()
         return cleaned
 
-    def _cleanup_select_ai_profile(
-        self, profile_id: str | None, execute: bool
-    ) -> AssetCleanupData:
+    def _cleanup_select_ai_profile(self, profile_id: str | None, execute: bool) -> AssetCleanupData:
         profile = self.get_profile(profile_id)
         profile_name = self._select_ai_profile_name(profile)
         warning = ""
@@ -1781,9 +1781,9 @@ class Nl2SqlService:
                     "question": example.item.question,
                     "sql": example.item.generated_sql,
                     "score": example.score,
-                    "feedback": example.item.feedback_rating.value
-                    if example.item.feedback_rating
-                    else None,
+                    "feedback": (
+                        example.item.feedback_rating.value if example.item.feedback_rating else None
+                    ),
                 }
                 for example in learned_examples
             ]
@@ -1949,11 +1949,11 @@ class Nl2SqlService:
         rows = [
             {
                 columns[0]: f"{table.table_name}-{index + 1}",
-                columns[1]: table.columns[1].sample_values[
-                    index % len(table.columns[1].sample_values)
-                ]
-                if len(table.columns) > 1 and table.columns[1].sample_values
-                else f"値{index + 1}",
+                columns[1]: (
+                    table.columns[1].sample_values[index % len(table.columns[1].sample_values)]
+                    if len(table.columns) > 1 and table.columns[1].sample_values
+                    else f"値{index + 1}"
+                ),
                 columns[2]: (index + 1) * 1000 if len(columns) > 2 else "",
                 columns[3]: "2026-06-21" if len(columns) > 3 else "",
             }
@@ -1995,9 +1995,7 @@ class Nl2SqlService:
             referenced_columns, has_wildcard, referenced_tables, allowed
         ):
             table_name = (
-                referenced_tables[0]
-                if referenced_tables
-                else self._first_allowed_table(allowed)
+                referenced_tables[0] if referenced_tables else self._first_allowed_table(allowed)
             )
             if not table_name:
                 return enforce_row_limit(stripped, row_limit)
@@ -2045,9 +2043,7 @@ class Nl2SqlService:
         columns = [column.column_name for column in table.columns[:6]] if table else []
         return ", ".join(columns) or "*"
 
-    def _optimization_hints(
-        self, *, safety: SafetyReport, sql: str, row_limit: int
-    ) -> list[str]:
+    def _optimization_hints(self, *, safety: SafetyReport, sql: str, row_limit: int) -> list[str]:
         if not safety.is_select_only:
             return ["参照系 SQL に修正してから最適化を確認してください。"]
         hints: list[str] = []
@@ -2082,9 +2078,7 @@ class Nl2SqlService:
                 allowed_tables = allowed.table_names or [
                     table.table_name for table in self._catalog.tables[:5]
                 ]
-                recommendations.append(
-                    f"参照可能な表は {', '.join(allowed_tables[:5])} です。"
-                )
+                recommendations.append(f"参照可能な表は {', '.join(allowed_tables[:5])} です。")
             if allowed and "許可されていない列" in safety.blocked_reason:
                 allowed_columns = [
                     f"{_normalize_identifier(table)}.{_normalize_identifier(column)}"

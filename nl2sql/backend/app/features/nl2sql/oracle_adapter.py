@@ -174,8 +174,7 @@ class OracleNl2SqlAdapter:
         )
 
     def _load_constraints(self, cursor: Any, tables: dict[str, SchemaTable]) -> None:
-        cursor.execute(
-            """
+        cursor.execute("""
             SELECT
                 uc.table_name,
                 uc.constraint_name,
@@ -188,8 +187,7 @@ class OracleNl2SqlAdapter:
             WHERE uc.constraint_type IN ('P', 'R', 'U', 'C')
             GROUP BY uc.table_name, uc.constraint_name, uc.constraint_type
             ORDER BY uc.table_name, uc.constraint_name
-            """
-        )
+            """)
         for table_name, constraint_name, constraint_type, columns in cursor:
             table = tables.get(str(table_name))
             if not table:
@@ -230,10 +228,7 @@ class OracleNl2SqlAdapter:
             rows: list[dict[str, Any]] = []
             for row in cursor.fetchmany(max_rows):
                 rows.append(
-                    {
-                        columns[index]: _coerce_result_value(value)
-                        for index, value in enumerate(row)
-                    }
+                    {columns[index]: _coerce_result_value(value) for index, value in enumerate(row)}
                 )
         return QueryResults(columns=columns, rows=rows, total=len(rows))
 
