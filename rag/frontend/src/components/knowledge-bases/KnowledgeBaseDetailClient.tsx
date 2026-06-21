@@ -1,6 +1,6 @@
 "use client";
 
-import { FilePlus2, Files, Trash2 } from "lucide-react";
+import { ChevronRight, FilePlus2, Files, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -15,12 +15,14 @@ import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
   useAssignDocumentsToKnowledgeBase,
+  useDocumentChunkSets,
   useDocuments,
   useKnowledgeBase,
   useRemoveDocumentFromKnowledgeBase,
 } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 import { KnowledgeBaseAdapterConfigPanel } from "./KnowledgeBaseAdapterConfigPanel";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
 
@@ -234,25 +236,12 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
       ) : documents.data.items.length > 0 ? (
         <ul className="bounded-scroll-area divide-y divide-border rounded-md border border-border">
           {documents.data.items.map((document) => (
-            <li key={document.id} className="flex items-center gap-3 px-3 py-2">
-              <Link
-                to={`${APP_ROUTES.documents}/${document.id}`}
-                className="min-w-0 flex-1 truncate text-sm font-medium text-primary hover:underline"
-                title={document.file_name}
-              >
-                {document.file_name}
-              </Link>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void handleRemove(document)}
-                loading={remove.isPending && remove.variables?.documentId === document.id}
-                className="shrink-0 whitespace-nowrap"
-              >
-                <Trash2 size={14} aria-hidden />
-                {t("knowledgeBases.actions.remove")}
-              </Button>
-            </li>
+            <KnowledgeBaseDocumentRow
+              key={document.id}
+              document={document}
+              onRemove={() => void handleRemove(document)}
+              removing={remove.isPending && remove.variables?.documentId === document.id}
+            />
           ))}
         </ul>
       ) : (
@@ -262,6 +251,94 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
         />
       )}
     </div>
+  );
+}
+
+/** 所属文書 1 行。展開で variant(chunk_set)を遅延取得して比較表示する。 */
+function KnowledgeBaseDocumentRow({
+  document,
+  onRemove,
+  removing,
+}: {
+  document: DocumentSummary;
+  onRemove: () => void;
+  removing: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const chunkSets = useDocumentChunkSets(document.id, expanded);
+
+  return (
+    <li className="px-3 py-2">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          aria-label={t(
+            expanded ? "knowledgeBases.variant.collapse" : "knowledgeBases.variant.expand"
+          )}
+          className="shrink-0 rounded p-0.5 text-muted transition-colors hover:bg-border/60 hover:text-foreground"
+        >
+          <ChevronRight
+            size={16}
+            className={cn("transition-transform", expanded && "rotate-90")}
+            aria-hidden
+          />
+        </button>
+        <Link
+          to={`${APP_ROUTES.documents}/${document.id}`}
+          className="min-w-0 flex-1 truncate text-sm font-medium text-primary hover:underline"
+          title={document.file_name}
+        >
+          {document.file_name}
+        </Link>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onRemove}
+          loading={removing}
+          className="shrink-0 whitespace-nowrap"
+        >
+          <Trash2 size={14} aria-hidden />
+          {t("knowledgeBases.actions.remove")}
+        </Button>
+      </div>
+      {expanded ? (
+        <div className="mt-2 pl-6">
+          {chunkSets.isPending ? (
+            <p className="text-xs text-muted">{t("knowledgeBases.variant.loading")}</p>
+          ) : chunkSets.isError ? (
+            <p className="text-xs text-danger">{t("knowledgeBases.variant.error")}</p>
+          ) : chunkSets.data && chunkSets.data.length > 0 ? (
+            <ul className="space-y-1.5" aria-label={t("knowledgeBases.variant.title")}>
+              {chunkSets.data.map((chunkSet) => (
+                <li
+                  key={chunkSet.chunk_set_id}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+                >
+                  <span className="font-mono text-muted" title={chunkSet.chunk_set_id}>
+                    {chunkSet.chunk_set_id.slice(0, 10)}
+                  </span>
+                  <span className="rounded-sm bg-muted/10 px-1.5 py-0.5 text-muted">
+                    {chunkSet.status}
+                  </span>
+                  <span className="tnum text-muted">
+                    {t("knowledgeBases.variant.chunkCount", { count: chunkSet.chunk_count })}
+                  </span>
+                  <span className="tnum text-muted">
+                    {t("knowledgeBases.variant.servingCount", {
+                      count: chunkSet.serving_knowledge_base_ids.length,
+                    })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-muted">{t("knowledgeBases.variant.empty")}</p>
+          )}
+        </div>
+      ) : null}
+    </li>
   );
 }
 

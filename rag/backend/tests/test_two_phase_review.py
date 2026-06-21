@@ -411,3 +411,39 @@ def test_multi_chunk_set_records_single_success_audit(monkeypatch: MonkeyPatch) 
     assert len(asyncio.run(oracle.list_document_chunk_set_ids(document_id))) == 2
     # それでも成功 audit はこの文書につき 1 回だけ(複数化前は chunk_set 数だけ出ていた)。
     assert success_audit_docs.count(document_id) == 1
+
+
+def test_document_chunk_sets_endpoint_lists_variants(monkeypatch: MonkeyPatch) -> None:
+    """/chunk-sets が文書の複数 chunk_set(variant)を状態/件数/配信 KB つきで返す。"""
+    monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
+    document_id = _upload_sample()
+    kb_resp = client.post(
+        "/api/knowledge-bases",
+        json={"name": "高chunk-KB-csapi", "adapter_config": {"ingestion": {"chunk_size": 3500}}},
+    )
+    assert kb_resp.status_code == 200
+    kb_b = kb_resp.json()["data"]["id"]
+    assert (
+        client.post(
+            f"/api/knowledge-bases/{kb_b}/documents", json={"document_ids": [document_id]}
+        ).status_code
+        == 200
+    )
+
+    job = _enqueue_extract(document_id)
+    _run_job(cast(str, job["id"]))
+    assert _get_document(document_id)["status"] == "INDEXED"
+
+    resp = client.get(f"/api/documents/{document_id}/chunk-sets")
+    assert resp.status_code == 200
+    chunk_sets = cast(list[dict[str, Any]], resp.json()["data"])
+    # default + 高chunk = 2 variant。
+    assert len(chunk_sets) == 2
+    for chunk_set in chunk_sets:
+        assert chunk_set["status"] == "INDEXED"
+        assert chunk_set["chunk_count"] > 0
+        # 各 variant はいずれかの KB に配信 binding される。
+        assert chunk_set["serving_knowledge_base_ids"]
+    # 全 binding KB の和集合に追加した kb_b が含まれる。
+    all_kbs = {kb for chunk_set in chunk_sets for kb in chunk_set["knowledge_base_ids"]}
+    assert kb_b in all_kbs

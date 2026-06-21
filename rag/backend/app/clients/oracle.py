@@ -722,6 +722,60 @@ class OracleClient:
         )
         return [str(next(iter(row.values()))) for row in rows]
 
+    async def list_document_chunk_sets(self, document_id: str) -> list[dict[str, object]]:
+        """文書の chunk_set 一覧(状態/件数/所属・配信 KB)を返す。variant 可視化に使う。
+
+        rag_chunk_sets と rag_kb_chunk_set_bindings を join し、chunk_set ごとに集約する。
+        created_at 昇順で安定。binding が無い chunk_set も(KB 未割当でも)返す。
+        """
+        rows = await self._fetch_all(
+            """
+            SELECT cs.chunk_set_id AS chunk_set_id,
+                   cs.status AS status,
+                   cs.chunk_count AS chunk_count,
+                   cs.vector_count AS vector_count,
+                   b.knowledge_base_id AS knowledge_base_id,
+                   b.is_serving AS is_serving
+            FROM rag_chunk_sets cs
+            LEFT JOIN rag_kb_chunk_set_bindings b ON b.chunk_set_id = cs.chunk_set_id
+            WHERE cs.document_id = :document_id
+            ORDER BY cs.created_at, cs.chunk_set_id, b.knowledge_base_id
+            """,
+            {"document_id": document_id},
+        )
+        by_id: dict[str, dict[str, object]] = {}
+        members: dict[str, list[str]] = {}
+        serving: dict[str, list[str]] = {}
+        order: list[str] = []
+        for row in rows:
+            norm = {str(key).lower(): value for key, value in row.items()}
+            chunk_set_id = str(norm["chunk_set_id"])
+            if chunk_set_id not in by_id:
+                by_id[chunk_set_id] = {
+                    "chunk_set_id": chunk_set_id,
+                    "status": str(norm["status"]),
+                    "chunk_count": int(str(norm["chunk_count"] or 0)),
+                    "vector_count": int(str(norm["vector_count"] or 0)),
+                }
+                members[chunk_set_id] = []
+                serving[chunk_set_id] = []
+                order.append(chunk_set_id)
+            kb_value = norm.get("knowledge_base_id")
+            if kb_value is None:
+                continue
+            kb_id = str(kb_value)
+            if kb_id not in members[chunk_set_id]:
+                members[chunk_set_id].append(kb_id)
+            if int(str(norm.get("is_serving") or 0)) == 1 and kb_id not in serving[chunk_set_id]:
+                serving[chunk_set_id].append(kb_id)
+        result: list[dict[str, object]] = []
+        for chunk_set_id in order:
+            entry = by_id[chunk_set_id]
+            entry["knowledge_base_ids"] = members[chunk_set_id]
+            entry["serving_knowledge_base_ids"] = serving[chunk_set_id]
+            result.append(entry)
+        return result
+
     async def upsert_chunk_set_binding(
         self,
         *,

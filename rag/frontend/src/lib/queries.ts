@@ -70,6 +70,7 @@ export const queryKeys = {
     ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
   documentChunks: (id: string) => ["documents", id, "chunks"] as const,
+  documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentExtractionExport: (id: string, format: DocumentExtractionExportFormat) =>
     ["documents", id, "extraction-export", format] as const,
   documentIngestionSegments: (id: string) =>
@@ -240,6 +241,16 @@ export function useDocumentChunks(id: string | null) {
     queryKey: queryKeys.documentChunks(id ?? ""),
     queryFn: () => api.listDocumentChunks(id as string),
     enabled: id != null,
+    retry: false,
+  });
+}
+
+/** 文書の chunk_set(variant)一覧。展開時のみ lazy 取得する。 */
+export function useDocumentChunkSets(id: string | null, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.documentChunkSets(id ?? ""),
+    queryFn: () => api.listDocumentChunkSets(id as string),
+    enabled: id != null && enabled,
     retry: false,
   });
 }
