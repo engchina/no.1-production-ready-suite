@@ -217,6 +217,62 @@ async function expectNoHorizontalOverflow(page: Page) {
     .toBeTruthy();
 }
 
+async function expectRagStyleShellFillsViewport(page: Page) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const main = document.querySelector("main");
+        const sidebar = document.querySelector(".sidebar-shell");
+        if (!main || !sidebar) return false;
+
+        const viewportBottom = window.innerHeight;
+        const mainBottomGap = viewportBottom - main.getBoundingClientRect().bottom;
+        const sidebarBottomGap = viewportBottom - sidebar.getBoundingClientRect().bottom;
+        return (
+          Math.abs(mainBottomGap) <= 1 &&
+          Math.abs(sidebarBottomGap) <= 1
+        );
+      })
+    )
+    .toBeTruthy();
+}
+
+async function expectNoExcessBottomWhitespace(page: Page) {
+  const metrics = await page.evaluate(() => {
+    const main = document.querySelector("main");
+    const scroller = main instanceof HTMLElement ? main : null;
+    if (!scroller) {
+      throw new Error("main scroller が見つかりません。");
+    }
+
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: "instant" });
+    const mainBottom = scroller.getBoundingClientRect().bottom;
+    const cards = Array.from(scroller.querySelectorAll("div")).filter((element) => {
+      const className = element.getAttribute("class") ?? "";
+      return className.includes("border-border") && className.includes("bg-card");
+    });
+    if (cards.length === 0) {
+      throw new Error("設定カードが見つかりません。");
+    }
+
+    const lastVisibleCardBottom = Math.max(
+      ...cards
+        .map((card) => card.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0)
+        .map((rect) => rect.bottom)
+    );
+
+    return {
+      bottomWhitespace: Math.round(mainBottom - lastVisibleCardBottom),
+      scrollHeight: scroller.scrollHeight,
+      clientHeight: scroller.clientHeight,
+    };
+  });
+
+  expect(metrics.bottomWhitespace).toBeGreaterThanOrEqual(0);
+  expect(metrics.bottomWhitespace).toBeLessThanOrEqual(96);
+}
+
 test.beforeEach(async ({ page }) => {
   await mockRagSettingsApi(page);
 });
@@ -225,6 +281,8 @@ test("RAG 由来の 4 つのシステム設定画面を表示できる", async (
   await page.goto("/settings/oci");
   await expect(page.getByRole("heading", { name: "OCI 認証設定" }).first()).toBeVisible();
   await expect(page.getByLabel("ユーザー OCID")).toBeVisible();
+  await expectRagStyleShellFillsViewport(page);
+  await expectNoExcessBottomWhitespace(page);
   await expectNoHorizontalOverflow(page);
 
   await page.goto("/settings/upload-storage");

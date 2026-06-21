@@ -1,6 +1,11 @@
-import { Navigate, Route, Routes } from "react-router-dom";
-
-import { AppShell } from "@engchina/production-ready-ui";
+import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigationType,
+} from "react-router-dom";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { PageHeader } from "@/components/PageHeader";
@@ -10,6 +15,7 @@ import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
+import { useUiStore } from "@/lib/ui-store";
 import { Nl2SqlWorkbench } from "@/features/nl2sql/Nl2SqlWorkbench";
 import { DataToolsPage } from "@/features/nl2sql/pages/DataToolsPage";
 import { EngineOperationsPage } from "@/features/nl2sql/pages/EngineOperationsPage";
@@ -29,7 +35,7 @@ import { DashboardPage } from "@/pages/DashboardPage";
 
 export function App() {
   return (
-    <AppShell sidebar={<AppSidebar />}>
+    <AppLayout>
       <Routes>
         <Route path={APP_ROUTES.dashboard} element={<DashboardPage />} />
         <Route path={APP_ROUTES.schema} element={<SchemaCatalogPage />} />
@@ -63,8 +69,121 @@ export function App() {
         />
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
       </Routes>
-    </AppShell>
+    </AppLayout>
   );
+}
+
+function AppLayout({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const mainRef = useRef<HTMLElement | null>(null);
+  const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
+
+  useCollapseSidebarOnNarrowViewport(setSidebarCollapsed);
+  useMainScrollRestoration(mainRef, location, navigationType);
+
+  return (
+    <div className="flex">
+      <AppSidebar />
+      <main
+        ref={mainRef}
+        className="h-screen min-w-0 flex-1 overflow-y-auto [contain:layout] focus:outline-none"
+        aria-label="メイン領域"
+        tabIndex={-1}
+      >
+        {children}
+      </main>
+    </div>
+  );
+}
+
+type RouterLocation = ReturnType<typeof useLocation>;
+type RouterNavigationType = ReturnType<typeof useNavigationType>;
+
+function useCollapseSidebarOnNarrowViewport(setSidebarCollapsed: (collapsed: boolean) => void) {
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 640px)");
+    const collapseIfNarrow = () => {
+      if (media.matches) setSidebarCollapsed(true);
+    };
+    collapseIfNarrow();
+    media.addEventListener("change", collapseIfNarrow);
+    return () => media.removeEventListener("change", collapseIfNarrow);
+  }, [setSidebarCollapsed]);
+}
+
+const mainScrollPositions = new Map<string, number>();
+
+function useMainScrollRestoration(
+  mainRef: RefObject<HTMLElement | null>,
+  location: RouterLocation,
+  navigationType: RouterNavigationType
+) {
+  const pathnameRef = useRef(location.pathname);
+  const hashRef = useRef(location.hash);
+  const scrollKey = mainScrollPositionKey(location);
+
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+
+    const save = () => {
+      mainScrollPositions.set(scrollKey, main.scrollTop);
+    };
+    main.addEventListener("scroll", save, { passive: true });
+
+    return () => {
+      main.removeEventListener("scroll", save);
+    };
+  }, [mainRef, scrollKey]);
+
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+
+    const pathnameChanged = pathnameRef.current !== location.pathname;
+    const hashChanged = hashRef.current !== location.hash;
+    pathnameRef.current = location.pathname;
+    hashRef.current = location.hash;
+
+    if (!pathnameChanged && !hashChanged && navigationType !== "POP") return;
+
+    const nextTop =
+      navigationType === "POP" ? mainScrollPositions.get(scrollKey) ?? 0 : 0;
+    const scroll = () => {
+      if (location.hash && scrollHashTargetIntoView(location.hash)) return;
+      main.scrollTo({ top: nextTop, left: 0, behavior: "auto" });
+    };
+
+    if (pathnameChanged) main.focus({ preventScroll: true });
+    scroll();
+    const animationFrame = window.requestAnimationFrame(scroll);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [location.hash, location.pathname, mainRef, navigationType, scrollKey]);
+}
+
+function mainScrollPositionKey(location: RouterLocation) {
+  return `${location.pathname}${location.search}${location.hash}`;
+}
+
+function scrollHashTargetIntoView(hash: string) {
+  const id = decodeHashId(hash);
+  if (!id) return false;
+
+  const target = document.getElementById(id);
+  if (!target) return false;
+
+  target.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
+  return true;
+}
+
+function decodeHashId(hash: string) {
+  const id = hash.slice(1);
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
 }
 
 function SettingsOciRoute() {

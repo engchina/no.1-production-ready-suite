@@ -1,6 +1,7 @@
 """サービス設定。共通基底 BaseServiceSettings を継承し、ドメイン設定を足す。"""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pr_backend_core.config import BaseServiceSettings
 
@@ -16,12 +17,14 @@ class Settings(BaseServiceSettings):
     oracle_user: str = ""
     oracle_password: str = ""
     oracle_dsn: str = ""
-    oracle_client_lib_dir: str = ""
+    oracle_client_lib_dir: str = "/u01/aipoc/instantclient_23_26"
+    oracle_wallet_dir: str = ""
     oracle_wallet_password: str = ""
     oracle_adb_ocid: str = ""
     oci_region: str = ""
     oci_compartment_id: str = ""
-    oci_config_file: str = ""
+    oci_config_file: str = "~/.oci/config"
+    oci_config_profile: str = "DEFAULT"
     oci_profile: str = "DEFAULT"
     oci_auth_mode: str = "config_file"
     oci_user_ocid: str = ""
@@ -44,14 +47,15 @@ class Settings(BaseServiceSettings):
     oci_enterprise_ai_vlm_response_path: str = ""
     oci_enterprise_ai_vlm_input_mode: str = "auto"
     oci_enterprise_ai_timeout_seconds: float = 600.0
-    oci_enterprise_ai_max_retries: int = 2
+    oci_enterprise_ai_max_retries: int = 3
     oci_enterprise_ai_llm_max_output_tokens: int = 1200
+    model_settings_file: str = "model-settings.json"
     upload_storage_backend: str = "local"
     local_storage_dir: str = "/u01/production-ready-rag"
     object_storage_region: str = ""
     object_storage_namespace: str = ""
     object_storage_bucket: str = ""
-    max_upload_bytes: int = 104857600
+    max_upload_bytes: int = 200 * 1024 * 1024
     # NL2SQL 安全境界（既定: SELECT のみ許可）。DDL/DML/PLSQL は禁止する方針。
     nl2sql_allow_select_only: bool = True
     nl2sql_default_row_limit: int = 100
@@ -77,6 +81,14 @@ class Settings(BaseServiceSettings):
     nl2sql_feedback_embedding_enabled: bool = False
     nl2sql_feedback_vector_table: str = "NL2SQL_FEEDBACK_VECTORS"
     nl2sql_feedback_vector_index: str = "NL2SQL_FEEDBACK_VEC_IDX"
+
+    @property
+    def resolved_oracle_wallet_dir(self) -> str:
+        """RAG と同じく ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
+        client_lib_dir = self.oracle_client_lib_dir.strip()
+        if client_lib_dir:
+            return str(Path(client_lib_dir).expanduser() / "network" / "admin")
+        return self.oracle_wallet_dir.strip()
 
 
 @lru_cache
