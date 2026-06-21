@@ -35,7 +35,7 @@ from app.rag.graph_index import (
     GraphIndex,
     GraphRelationship,
 )
-from app.rag.kb_adapter_config import parse_adapter_config
+from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig, parse_adapter_config
 from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
@@ -681,6 +681,38 @@ class OracleClient:
         if row is None:
             return None
         return {str(key).lower(): value for key, value in row.items()}
+
+    async def list_document_knowledge_base_configs(
+        self, document_id: str
+    ) -> list[tuple[str, KnowledgeBaseAdapterConfig]]:
+        """文書の所属 KB id と各 adapter_config を返す(variant_planner の plan 入力)。"""
+        rows = await self._fetch_all(
+            """
+            SELECT
+                kb.knowledge_base_id,
+                kb.retrieval_config
+            FROM rag_document_knowledge_bases dkb
+            JOIN rag_knowledge_bases kb
+                ON kb.knowledge_base_id = dkb.knowledge_base_id
+            JOIN rag_documents d
+                ON d.document_id = dkb.document_id
+            WHERE dkb.document_id = :document_id
+              AND {document_access_sql}
+              AND {knowledge_base_access_sql}
+            ORDER BY kb.knowledge_base_id ASC
+            """.format(
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        return [
+            (
+                str(row["knowledge_base_id"]),
+                parse_adapter_config(_json_loads(row.get("retrieval_config"))),
+            )
+            for row in rows
+        ]
 
     async def list_document_chunk_set_ids(self, document_id: str) -> list[str]:
         """文書が持つ chunk_set id 一覧(planner の既存状態 = diff_plan 入力)。"""

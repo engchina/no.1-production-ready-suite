@@ -10,6 +10,7 @@ from app.api.routes import documents as documents_route
 from app.clients.oracle import OracleClient, reset_local_store
 from app.config import get_settings
 from app.main import app
+from app.rag.variant_planner import plan_document_materializations
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -163,6 +164,34 @@ def test_kb_scoped_search_finds_serving_chunk_set(monkeypatch: MonkeyPatch) -> N
     assert response.status_code == 200
     citations = response.json()["data"]["citations"]
     assert any(citation["document_id"] == document_id for citation in citations)
+
+
+def test_plan_yields_the_single_materialized_chunk_set(monkeypatch: MonkeyPatch) -> None:
+    """plan_document_materializations が、実際に materialize した単一 chunk_set と一致する。
+
+    Stage 1: per-recipe ループの入力(KB configs → plan)が live の materialization と一致する
+    ことを保証する(同一設定なら 1 chunk_set)。取込挙動は変えない。
+    """
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    _extract_to_review(document_id)
+    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    assert approve_resp.status_code == 200
+    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+
+    detail = _get_document(document_id)
+    assert detail["status"] == "INDEXED"
+
+    oracle = OracleClient()
+    materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
+    assert len(materialized) == 1
+
+    configs = dict(asyncio.run(oracle.list_document_knowledge_base_configs(document_id)))
+    plan = plan_document_materializations(
+        cast(str, detail["content_sha256"]), get_settings(), configs
+    )
+    # plan が出す chunk_set 集合 == 実際に materialize した chunk_set 集合(単一・一致)。
+    assert set(plan.chunk_sets) == set(materialized)
 
 
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
