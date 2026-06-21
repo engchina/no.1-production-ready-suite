@@ -22,6 +22,17 @@ async function expectDocumentScrollLocked(page: Page) {
   expect(metrics.rootScrollHeight).toBeLessThanOrEqual(metrics.rootClientHeight + 1);
 }
 
+async function fillOrSelectDsn(page: Page, value: string) {
+  const dsnControl = page.getByLabel("サービス名 / DSN");
+  const tagName = await dsnControl.evaluate((element) => element.tagName.toLowerCase());
+  if (tagName === "button") {
+    await dsnControl.click();
+    await page.getByRole("option", { name: value }).click();
+    return;
+  }
+  await dsnControl.fill(value);
+}
+
 async function mockMissingOciRuntimeSettings(page: Page) {
   await page.route("**/api/settings/oci/object-storage/namespace", async (route) => {
     await route.fulfill({
@@ -98,6 +109,37 @@ async function mockMissingOciRuntimeSettings(page: Page) {
       }),
     });
   });
+  await page.route("**/api/settings/database", async (route) => {
+    const method = route.request().method();
+    if (!["GET", "PATCH"].includes(method)) {
+      await route.continue();
+      return;
+    }
+    const body =
+      method === "PATCH"
+        ? ((route.request().postDataJSON() ?? {}) as { user?: string; dsn?: string })
+        : {};
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          user: body.user ?? "",
+          dsn: body.dsn ?? "ragdb_high",
+          wallet_dir: "/u01/aipoc/instantclient_23_26/network/admin",
+          wallet_uploaded: true,
+          available_services: ["ragdb_high"],
+          has_password: method === "PATCH",
+          has_wallet_password: false,
+          readiness: "ok",
+          embedding_dimension: 1536,
+          vector_column: "VECTOR(1536, FLOAT32)",
+          adb_ocid: "",
+          region: "ap-osaka-1",
+          config_source: "runtime",
+        },
+      }),
+    });
+  });
 }
 
 test.describe("Agent Runtime settings", () => {
@@ -150,7 +192,7 @@ test.describe("Agent Runtime settings", () => {
     await page.goto("/settings/database");
     await expect(page.getByRole("heading", { name: "データベース設定", level: 1 })).toBeVisible();
     await page.getByLabel("データベースユーザー").fill("rag_app");
-    await page.getByLabel("サービス名 / DSN").fill("ragdb_high");
+    await fillOrSelectDsn(page, "ragdb_high");
     await page.getByLabel("データベースパスワード").fill("secret-password");
     await page.getByRole("button", { name: /DB設定を保存/ }).click();
     await expect(page.getByText("保存しました")).toBeVisible();

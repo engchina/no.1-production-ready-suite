@@ -98,12 +98,14 @@ def _settings_fixture(**overrides: object) -> SimpleNamespace:
         "oci_user_ocid": "",
         "oci_fingerprint": "",
         "oci_tenancy_ocid": "",
+        "oci_compartment_id": "",
         "model_settings_file": "model-settings.json",
         "enterprise_ai_api_key": "",
         "oci_enterprise_ai_api_key": "",
         "oracle_user": "",
         "oracle_password": "",
         "oracle_dsn": "",
+        "oracle_client_lib_dir": "",
         "oracle_wallet_dir": "",
         "oracle_wallet_password": "",
         "oracle_adb_ocid": "",
@@ -1068,7 +1070,7 @@ def test_oci_config_test_checks_files_permissions_and_key_like_rag(
     assert data["key_file_mode"] == "0600"
 
 
-def test_upload_database_wallet_extracts_zip_and_writes_env_like_rag(
+def test_upload_database_wallet_extracts_zip_like_rag(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1085,6 +1087,8 @@ def test_upload_database_wallet_extracts_zip_and_writes_env_like_rag(
     with zipfile.ZipFile(archive, "w") as wallet:
         wallet.writestr("tnsnames.ora", "mydb_high = (DESCRIPTION=(ADDRESS=(HOST=db)))\n")
         wallet.writestr("sqlnet.ora", "WALLET_LOCATION=(SOURCE=(METHOD=file))\n")
+        wallet.writestr("cwallet.sso", "wallet")
+        wallet.writestr("ewallet.pem", "wallet")
 
     resp = client.post(
         "/api/settings/database/wallet",
@@ -1093,7 +1097,7 @@ def test_upload_database_wallet_extracts_zip_and_writes_env_like_rag(
 
     assert resp.status_code == 200
     assert (wallet_dir / "tnsnames.ora").is_file()
-    assert f"ORACLE_WALLET_DIR={wallet_dir}" in env_file.read_text(encoding="utf-8")
+    assert not env_file.exists()
     data = resp.json()["data"]
     assert data["wallet_uploaded"] is True
     assert data["wallet_dir"] == str(wallet_dir)
@@ -1117,6 +1121,7 @@ def test_database_save_preserves_uploaded_wallet_and_writes_env_like_rag(
         oracle_user="OLD",
         oracle_password="old-password",
         oracle_dsn="old_dsn",
+        oracle_client_lib_dir="",
         oracle_wallet_dir=str(wallet_dir),
     )
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
@@ -1139,6 +1144,7 @@ def test_database_save_preserves_uploaded_wallet_and_writes_env_like_rag(
     assert "ORACLE_USER=ADMIN" in env_text
     assert "ORACLE_PASSWORD=old-password" in env_text
     assert "ORACLE_DSN=mydb_high" in env_text
+    assert "ORACLE_CLIENT_LIB_DIR=" in env_text
     assert f"ORACLE_WALLET_DIR={wallet_dir}" in env_text
     assert settings.oracle_wallet_dir == str(wallet_dir)
     data = resp.json()["data"]
@@ -1299,6 +1305,76 @@ def test_model_settings_save_persists_json_like_rag(
     data = resp.json()["data"]
     assert data["settings"]["enterprise_ai"]["api_key"] == ""
     assert data["settings"]["enterprise_ai"]["has_api_key"] is True
+
+
+def test_model_settings_test_runs_real_test_helper_like_rag(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    async def fake_run_model_settings_test(
+        settings: object,
+        request: agent_router.ModelSettingsTestRequest,
+    ) -> dict[str, str | int | float | bool | None]:
+        assert cast(Any, settings).enterprise_ai_api_key == "saved-secret"
+        assert request.target_type == "enterprise_text"
+        return {"response_chars": 2, "surface": "llm"}
+
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: _settings_fixture(
+            enterprise_ai_api_key="saved-secret",
+            oci_enterprise_ai_api_key="saved-secret",
+        ),
+    )
+    monkeypatch.setattr(agent_router, "_run_model_settings_test", fake_run_model_settings_test)
+    payload = {
+        "enterprise_ai": {
+            "endpoint": "https://enterprise.example.test",
+            "project_ocid": "ocid1.generativeaiproject.oc1..aaaaaaaa",
+            "api_key": "",
+            "has_api_key": True,
+            "clear_api_key": False,
+            "models": [
+                {
+                    "model_id": "enterprise-model",
+                    "display_name": "Enterprise Model",
+                    "vision_enabled": True,
+                }
+            ],
+            "default_model_id": "enterprise-model",
+            "api_path": "/responses",
+            "vlm_input_mode": "auto",
+            "text_payload_template": "",
+            "vision_payload_template": "",
+            "text_response_path": "/output_text",
+            "vision_response_path": "/output_text",
+            "timeout_seconds": 30.0,
+            "max_retries": 1,
+            "llm_max_output_tokens": 1200,
+            "vlm_max_output_tokens": 2048,
+        },
+        "generative_ai": {
+            "embedding_model": "cohere.embed-v4.0",
+            "embedding_dim": 1536,
+            "rerank_model": "cohere.rerank-v4.0-fast",
+        },
+    }
+
+    resp = client.post(
+        "/api/settings/model/test",
+        json={
+            "settings": payload,
+            "target_type": "enterprise_text",
+            "model_id": "enterprise-model",
+            "vision_enabled": False,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "success"
+    assert data["details"] == {"response_chars": 2, "surface": "llm"}
+    assert "dry_run" not in data["details"]
 
 
 def test_list_tools_v2_includes_external_tools() -> None:

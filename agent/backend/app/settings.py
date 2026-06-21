@@ -1,6 +1,7 @@
 """サービス設定。共通基底 BaseServiceSettings を継承し、ドメイン設定を足す。"""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pr_backend_core.config import BaseServiceSettings
 
@@ -21,6 +22,7 @@ class Settings(BaseServiceSettings):
     oci_key_file: str = "~/.oci/oci_api_key.pem"
     oci_key_file_exists: bool = False
     oci_config_file_exists: bool = False
+    oci_compartment_id: str = ""
     oci_region: str = "ap-osaka-1"
     object_storage_region: str = "ap-osaka-1"
     object_storage_namespace: str = ""
@@ -67,6 +69,7 @@ class Settings(BaseServiceSettings):
     oracle_dsn: str | None = None
     oracle_user: str | None = None
     oracle_password: str | None = None
+    oracle_client_lib_dir: str = "/u01/aipoc/instantclient_23_26"
     oracle_wallet_dir: str | None = None
     oracle_wallet_password: str | None = None
     oracle_wallet_uploaded: bool = False
@@ -181,6 +184,14 @@ class Settings(BaseServiceSettings):
     agent_command_container_user: str | None = None
     agent_artifact_storage_backend: str = "inline"
     agent_artifact_storage_path: str = ".agent-artifacts"
+
+    @property
+    def resolved_oracle_wallet_dir(self) -> str:
+        """参照実装と同じく ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
+        client_lib_dir = self.oracle_client_lib_dir.strip()
+        if client_lib_dir:
+            return str(Path(client_lib_dir).expanduser() / "network" / "admin")
+        return (self.oracle_wallet_dir or "").strip()
 
 
 @lru_cache

@@ -117,12 +117,21 @@ MODEL_SETTINGS_FILE_MODE = 0o600
 OCI_DIRECTORY_MODE = 0o700
 OCI_CONFIG_FILE_MODE = 0o600
 OCI_PRIVATE_KEY_FILE_MODE = 0o600
-OCI_PRIVATE_KEY_MAX_BYTES = 128 * 1024
-ORACLE_WALLET_MAX_BYTES = 64 * 1024 * 1024
-ORACLE_WALLET_MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
+OCI_PRIVATE_KEY_MAX_BYTES = 64 * 1024
+ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
+ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 ORACLE_WALLET_DIR_NAME = "wallet"
-ORACLE_WALLET_SKIPPED_FILES = frozenset({"ojdbc.properties", "README"})
+ORACLE_WALLET_REQUIRED_FILES = frozenset(
+    {"tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"}
+)
+ORACLE_WALLET_SKIPPED_FILES = frozenset(
+    {"readme", "keystore.jks", "truststore.jks", "ojdbc.properties", "ewallet.p12"}
+)
 ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
+MODEL_TEST_IMAGE_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9s"
+    "AAAAASUVORK5CYII="
+)
 ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal[
@@ -338,7 +347,7 @@ class ModelSettingsTestResult(BaseModel):
     error_type: str | None = None
     elapsed_ms: int = 0
     checked_at: str
-    details: dict[str, str | int | bool | None] = Field(default_factory=dict)
+    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 
 class DatabaseSettingsData(BaseModel):
@@ -1320,6 +1329,458 @@ def _model_settings_data(
     )
 
 
+async def _run_model_settings_test(
+    settings: object,
+    request: ModelSettingsTestRequest,
+) -> dict[str, str | int | float | bool | None]:
+    _require_model_test_id(request)
+    payload = _apply_model_test_target(
+        _model_settings_with_resolved_secret(settings, request.settings),
+        request,
+    )
+    if request.target_type == "enterprise_text":
+        text = await _run_enterprise_text_model_test(payload.enterprise_ai)
+        return {"response_chars": len(text), "surface": "llm"}
+    if request.target_type == "enterprise_vision":
+        text = await _run_enterprise_vision_model_test(payload.enterprise_ai)
+        return {"response_chars": len(text), "surface": "vision"}
+    if request.target_type == "embedding":
+        vector_dim = await _run_oci_embedding_model_test(settings, payload.generative_ai)
+        return {"vector_dim": vector_dim, "input_count": 1}
+    ranked_count, top_score = await _run_oci_rerank_model_test(settings, payload.generative_ai)
+    return {"ranked_count": ranked_count, "top_score": top_score}
+
+
+def _apply_model_test_target(
+    payload: ModelSettingsPayload,
+    request: ModelSettingsTestRequest,
+) -> ModelSettingsPayload:
+    model_id = request.model_id.strip()
+    if request.target_type in {"enterprise_text", "enterprise_vision"}:
+        enterprise_ai = payload.enterprise_ai
+        models = [
+            model.model_copy(
+                update={
+                    "vision_enabled": (
+                        model.vision_enabled
+                        or (
+                            request.target_type == "enterprise_vision"
+                            and model.model_id == model_id
+                        )
+                    )
+                }
+            )
+            for model in enterprise_ai.models
+        ]
+        if model_id and all(model.model_id != model_id for model in models):
+            models.append(
+                EnterpriseAiConfiguredModel(
+                    model_id=model_id,
+                    display_name=model_id,
+                    vision_enabled=request.target_type == "enterprise_vision",
+                )
+            )
+        return payload.model_copy(
+            update={
+                "enterprise_ai": enterprise_ai.model_copy(
+                    update={"default_model_id": model_id, "models": models}
+                )
+            }
+        )
+    if request.target_type == "embedding":
+        generative_ai = payload.generative_ai.model_copy(update={"embedding_model": model_id})
+    else:
+        generative_ai = payload.generative_ai.model_copy(update={"rerank_model": model_id})
+    return payload.model_copy(update={"generative_ai": generative_ai})
+
+
+def _require_model_test_id(request: ModelSettingsTestRequest) -> None:
+    if not request.model_id.strip():
+        raise ValueError("テストするモデル ID を入力してください。")
+
+
+async def _run_enterprise_text_model_test(settings: EnterpriseAiModelSettings) -> str:
+    payload = _enterprise_text_payload(
+        settings,
+        prompt="モデル接続テストです。短く応答してください。",
+        context="これは Production Ready RAG のモデル接続テスト用コンテキストです。",
+    )
+    response = await _post_enterprise_ai(settings, settings.api_path, payload)
+    return _parse_enterprise_text_response(response, settings.text_response_path)
+
+
+async def _run_enterprise_vision_model_test(settings: EnterpriseAiModelSettings) -> str:
+    payload = _enterprise_vision_payload(
+        settings,
+        prompt="白い背景にある大きな図形の色を日本語で1語だけ返してください。",
+    )
+    response = await _post_enterprise_ai(settings, settings.api_path, payload)
+    return _parse_enterprise_text_response(response, settings.vision_response_path)
+
+
+def _enterprise_text_payload(
+    settings: EnterpriseAiModelSettings,
+    *,
+    prompt: str,
+    context: str,
+) -> dict[str, object]:
+    system_prompt = "根拠に基づいて日本語で簡潔に回答してください。"
+    user_message = f"{context}\n\n質問: {prompt}" if context else prompt
+    values = {
+        "model": settings.default_model_id,
+        "project": settings.project_ocid,
+        "project_ocid": settings.project_ocid,
+        "prompt": prompt,
+        "context": context,
+        "system_prompt": system_prompt,
+        "user_message": user_message,
+        "input": [{"role": "user", "content": user_message}],
+        "instructions": system_prompt,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        "temperature": 0,
+        "max_output_tokens": settings.llm_max_output_tokens,
+    }
+    if settings.text_payload_template.strip():
+        return _render_model_payload_template(settings.text_payload_template, values)
+    return {
+        "model": settings.default_model_id,
+        "instructions": system_prompt,
+        "input": [{"role": "user", "content": user_message}],
+        "temperature": 0,
+        "max_output_tokens": settings.llm_max_output_tokens,
+    }
+
+
+def _enterprise_vision_payload(
+    settings: EnterpriseAiModelSettings,
+    *,
+    prompt: str,
+) -> dict[str, object]:
+    image_data = base64.b64encode(MODEL_TEST_IMAGE_BYTES).decode("ascii")
+    content = [
+        {"type": "input_text", "text": prompt},
+        {"type": "input_image", "image_url": f"data:image/png;base64,{image_data}"},
+    ]
+    values = {
+        "model": settings.default_model_id,
+        "project": settings.project_ocid,
+        "project_ocid": settings.project_ocid,
+        "prompt": prompt,
+        "input": [{"role": "user", "content": content}],
+        "messages": [{"role": "user", "content": content}],
+        "max_output_tokens": settings.vlm_max_output_tokens,
+    }
+    if settings.vision_payload_template.strip():
+        return _render_model_payload_template(settings.vision_payload_template, values)
+    return {
+        "model": settings.default_model_id,
+        "input": [{"role": "user", "content": content}],
+        "max_output_tokens": settings.vlm_max_output_tokens,
+    }
+
+
+def _render_model_payload_template(
+    template: str,
+    values: Mapping[str, object],
+) -> dict[str, object]:
+    try:
+        rendered = template
+        for key, value in values.items():
+            rendered = rendered.replace("{{" + key + "}}", json.dumps(value, ensure_ascii=False))
+            rendered = rendered.replace("{" + key + "}", str(value))
+        parsed = json.loads(rendered)
+    except ValueError as exc:
+        raise ValueError("payload template は JSON object で入力してください。") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("payload template は JSON object で入力してください。")
+    return parsed
+
+
+async def _post_enterprise_ai(
+    settings: EnterpriseAiModelSettings,
+    api_path: str,
+    payload: Mapping[str, object],
+) -> Mapping[str, object]:
+    endpoint = settings.endpoint.rstrip("/")
+    url = (
+        api_path
+        if api_path.startswith(("http://", "https://"))
+        else endpoint + "/" + api_path.lstrip("/")
+    )
+    api_key = _require_non_empty(settings.api_key, "OCI Enterprise AI API key")
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    if settings.project_ocid:
+        headers["OpenAI-Project"] = settings.project_ocid
+    async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
+        response = await client.post(url, headers=headers, json=dict(payload))
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, Mapping):
+        raise ValueError("Enterprise AI response は JSON object である必要があります。")
+    return data
+
+
+def _parse_enterprise_text_response(
+    response: Mapping[str, object],
+    response_path: str,
+) -> str:
+    if response_path.strip():
+        value = _json_pointer_value(response, response_path)
+        if isinstance(value, str) and value.strip():
+            return value
+        raise ValueError("Enterprise AI response path から回答 text を取得できませんでした。")
+    output_text = response.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text
+    choices = response.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, Mapping):
+            message = first.get("message")
+            if isinstance(message, Mapping):
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content
+    output = response.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, Mapping):
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if isinstance(part, Mapping):
+                    text = part.get("text")
+                    if isinstance(text, str) and text.strip():
+                        return text
+    raise ValueError("Enterprise AI response から回答 text を取得できませんでした。")
+
+
+def _json_pointer_value(document: Mapping[str, object], pointer: str) -> object:
+    current: object = document
+    for raw_part in pointer.strip().split("/")[1:]:
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, Mapping):
+            current = current.get(part)
+            continue
+        if isinstance(current, list) and part.isdigit():
+            index = int(part)
+            current = current[index] if index < len(current) else None
+            continue
+        return None
+    return current
+
+
+async def _run_oci_embedding_model_test(
+    settings: object,
+    model_settings: GenerativeAiModelSettings,
+) -> int:
+    models = import_module("oci.generative_ai_inference.models")
+    client = cast(Any, _oci_genai_inference_client(settings))
+    details = models.EmbedTextDetails(
+        inputs=["モデル接続テスト"],
+        serving_mode=models.OnDemandServingMode(model_id=model_settings.embedding_model),
+        compartment_id=_require_non_empty(
+            _settings_str_from(settings, "oci_compartment_id"),
+            "OCI compartment OCID",
+        ),
+        input_type="SEARCH_QUERY",
+        output_dimensions=model_settings.embedding_dim,
+    )
+    response = await anyio_to_thread.run_sync(lambda: client.embed_text(details))
+    embeddings = getattr(response.data, "embeddings", None)
+    if not isinstance(embeddings, list) or not embeddings:
+        raise ValueError("OCI embedding response に embeddings がありません。")
+    vector = embeddings[0]
+    if not isinstance(vector, list):
+        raise ValueError("OCI embedding response の vector が不正です。")
+    if len(vector) != model_settings.embedding_dim:
+        raise ValueError(
+            "embedding の次元数が不正です。"
+            f"expected={model_settings.embedding_dim}, actual={len(vector)}"
+        )
+    return len(vector)
+
+
+async def _run_oci_rerank_model_test(
+    settings: object,
+    model_settings: GenerativeAiModelSettings,
+) -> tuple[int, float | None]:
+    models = import_module("oci.generative_ai_inference.models")
+    client = cast(Any, _oci_genai_inference_client(settings))
+    details = models.RerankTextDetails(
+        input="モデル接続テスト",
+        documents=[
+            "これはモデル接続テストに関する候補文書です。",
+            "別の業務文書に関する候補文書です。",
+        ],
+        serving_mode=models.OnDemandServingMode(model_id=model_settings.rerank_model),
+        compartment_id=_require_non_empty(
+            _settings_str_from(settings, "oci_compartment_id"),
+            "OCI compartment OCID",
+        ),
+        top_n=1,
+    )
+    response = await anyio_to_thread.run_sync(lambda: client.rerank_text(details))
+    document_ranks = getattr(response.data, "document_ranks", None)
+    if not isinstance(document_ranks, list):
+        raise ValueError("OCI rerank response に document_ranks がありません。")
+    top_score = None
+    if document_ranks:
+        raw_score = getattr(document_ranks[0], "relevance_score", None)
+        top_score = float(raw_score) if raw_score is not None else None
+    return len(document_ranks), top_score
+
+
+def _oci_genai_inference_client(settings: object) -> object:
+    oci_config = import_module("oci.config")
+    genai = import_module("oci.generative_ai_inference")
+    config = _load_oci_config_without_prompt(
+        oci_config,
+        _settings_str_from(settings, "oci_config_file", "~/.oci/config"),
+        _settings_str_from(settings, "oci_config_profile", "DEFAULT"),
+        region=_settings_str_from(settings, "oci_region", "ap-osaka-1"),
+    )
+    return genai.GenerativeAiInferenceClient(config)
+
+
+def _successful_model_test_result(
+    request: ModelSettingsTestRequest,
+    *,
+    details: dict[str, str | int | float | bool | None],
+    elapsed_ms: int,
+) -> ModelSettingsTestResult:
+    return ModelSettingsTestResult(
+        status="success",
+        target_type=request.target_type,
+        model_id=request.model_id,
+        message=_model_test_success_message(request.target_type, request.model_id),
+        troubleshooting=[],
+        elapsed_ms=elapsed_ms,
+        checked_at=_now_iso(),
+        details=details,
+    )
+
+
+def _failed_model_test_result(
+    request: ModelSettingsTestRequest,
+    exc: Exception,
+    *,
+    elapsed_ms: int,
+    secrets: list[str],
+) -> ModelSettingsTestResult:
+    raw_error = _sanitize_model_test_error(str(exc), secrets)
+    return ModelSettingsTestResult(
+        status="failed",
+        target_type=request.target_type,
+        model_id=request.model_id,
+        message=_model_test_failure_message(request.target_type, request.model_id),
+        troubleshooting=_model_test_troubleshooting(
+            request.target_type,
+            raw_error,
+            type(exc).__name__,
+        ),
+        raw_error=raw_error,
+        error_type=type(exc).__name__,
+        elapsed_ms=elapsed_ms,
+        checked_at=_now_iso(),
+        details={},
+    )
+
+
+def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
+    if target_type == "enterprise_text":
+        return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
+    if target_type == "enterprise_vision":
+        return (
+            f"Enterprise AI の Vision モデル「{model_id}」から"
+            "構造化抽出レスポンスを取得しました。"
+        )
+    if target_type == "embedding":
+        return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"
+    return f"Rerank モデル「{model_id}」から順位スコアを取得しました。"
+
+
+def _model_test_failure_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
+    if target_type in {"enterprise_text", "enterprise_vision"}:
+        return f"Enterprise AI モデル「{model_id or '未入力'}」のテストに失敗しました。"
+    if target_type == "embedding":
+        return f"Embedding モデル「{model_id or '未入力'}」のテストに失敗しました。"
+    return f"Rerank モデル「{model_id or '未入力'}」のテストに失敗しました。"
+
+
+def _model_test_troubleshooting(
+    target_type: ModelSettingsTestTargetType,
+    raw_error: str,
+    error_type: str,
+) -> list[str]:
+    lowered = f"{raw_error} {error_type}".lower()
+    tips: list[str] = []
+    if target_type in {"enterprise_text", "enterprise_vision"}:
+        tips.extend(
+            [
+                "Endpoint URL、API パス、Project OCID、API key が Enterprise AI の"
+                " OpenAI-compatible gateway と一致しているか確認してください。",
+                "モデル ID が Enterprise AI 側の model deployment / gateway で"
+                "利用可能か確認してください。",
+            ]
+        )
+        if "response path" in lowered or "回答 text" in raw_error:
+            tips.append(
+                "独自 gateway の場合は payload template と response path が"
+                "実レスポンスの JSON 構造に合っているか確認してください。"
+            )
+    else:
+        tips.extend(
+            [
+                "OCI config file、profile、region、compartment OCID が"
+                "バックエンド実行環境から参照できるか確認してください。",
+                "モデル ID と IAM policy が OCI Generative AI Inference の"
+                " embedding/rerank 呼び出しを許可しているか確認してください。",
+            ]
+        )
+    if any(token in lowered for token in ("401", "unauthorized", "authentication")):
+        tips.append(
+            "認証エラーです。API key / OCI config の資格情報を"
+            "再発行または再保存してください。"
+        )
+    if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
+        tips.append("権限エラーです。Project / compartment / IAM policy を確認してください。")
+    if any(token in lowered for token in ("404", "not found")):
+        tips.append("Endpoint、API パス、model ID、リージョンを確認してください。")
+    if any(token in lowered for token in ("timeout", "timed out")):
+        tips.append("タイムアウトです。ネットワーク経路を確認してください。")
+    if any(token in lowered for token in ("429", "quota", "rate")):
+        tips.append("レート制限または quota の可能性があります。")
+    if any(token in lowered for token in ("500", "502", "503", "504")):
+        tips.append("サービス側または gateway 側の一時障害の可能性があります。")
+    return list(dict.fromkeys(tips))
+
+
+def _sanitize_model_test_error(raw_error: str, secrets: list[str]) -> str:
+    sanitized = raw_error.strip() or "詳細メッセージは返されませんでした。"
+    for secret in secrets:
+        cleaned = secret.strip()
+        if cleaned:
+            sanitized = sanitized.replace(cleaned, "<secret>")
+    return sanitized[:2000]
+
+
+def _require_non_empty(value: str, label: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{label} を設定してください。")
+    return cleaned
+
+
 def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettingsPayload:
     enterprise_ai = payload.enterprise_ai.model_copy(
         update={
@@ -1357,13 +1818,17 @@ def _set_database_settings_state(patch: DatabaseSettingsUpdate) -> DatabaseSetti
 def _database_settings_data(settings: object) -> DatabaseSettingsData:
     dsn = str(_settings_first_from(settings, ("oracle_dsn", "agent_runtime_oracle_dsn")))
     user = str(_settings_first_from(settings, ("oracle_user", "agent_runtime_oracle_user")))
-    wallet_dir = _settings_str_from(settings, "oracle_wallet_dir")
+    wallet_dir = _settings_str_from(settings, "resolved_oracle_wallet_dir") or _settings_str_from(
+        settings,
+        "oracle_wallet_dir",
+    )
     wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
-    wallet_uploaded = bool(_settings_first_from(settings, ("oracle_wallet_uploaded",), False))
-    available_services: list[str] = [dsn] if dsn else []
-    if wallet_path is not None and wallet_path.is_dir():
-        wallet_uploaded = True
-        available_services = _extract_wallet_services(wallet_path) or available_services
+    if wallet_path is not None:
+        _sanitize_database_wallet_dir(wallet_path)
+    wallet_uploaded = wallet_path is not None and wallet_path.is_dir()
+    available_services = (
+        _extract_wallet_services(wallet_path) if wallet_path is not None and wallet_uploaded else []
+    )
     has_password = bool(
         _settings_first_from(settings, ("oracle_password", "agent_runtime_oracle_password"))
     )
@@ -1394,18 +1859,46 @@ def _database_settings_data(settings: object) -> DatabaseSettingsData:
 def _extract_wallet_services(wallet_path: Path) -> list[str]:
     tnsnames = wallet_path / "tnsnames.ora"
     if not tnsnames.is_file():
-        nested = list(wallet_path.rglob("tnsnames.ora"))
-        tnsnames = nested[0] if nested else tnsnames
+        return []
     try:
-        content = tnsnames.read_text(encoding="utf-8", errors="ignore")
+        content = tnsnames.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
+    reserved_names = {
+        "ADDRESS",
+        "ADDRESS_LIST",
+        "CONNECT_DATA",
+        "DESCRIPTION",
+        "DESCRIPTION_LIST",
+        "HOST",
+        "PORT",
+        "PROTOCOL",
+        "SECURITY",
+        "SERVICE_NAME",
+        "SSL_SERVER_CERT_DN",
+    }
     services: list[str] = []
-    for line in content.splitlines():
-        match = re.match(r"^\s*([A-Za-z0-9_.-]+)\s*=", line)
-        if match:
-            services.append(match.group(1))
+    seen: set[str] = set()
+    for match in re.finditer(r"(?m)^([A-Za-z0-9_.-]+)\s*=", content):
+        service = match.group(1)
+        normalized = service.upper()
+        if normalized in reserved_names or normalized in seen:
+            continue
+        seen.add(normalized)
+        services.append(service)
     return services
+
+
+def _sanitize_database_wallet_dir(wallet_path: Path) -> None:
+    if not wallet_path.is_dir():
+        return
+    for file_name in ORACLE_WALLET_SKIPPED_FILES:
+        try:
+            path = wallet_path / file_name
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            continue
 
 
 def _database_settings_candidate(
@@ -1800,15 +2293,22 @@ def _persist_database_settings(
         update=payload.wallet_password,
         clear=payload.clear_wallet_password,
     )
+    values = {
+        "ORACLE_USER": data.user,
+        "ORACLE_PASSWORD": oracle_password,
+        "ORACLE_DSN": data.dsn,
+        "ORACLE_CLIENT_LIB_DIR": _settings_str_from(
+            settings,
+            "oracle_client_lib_dir",
+            "/u01/aipoc/instantclient_23_26",
+        ),
+        "ORACLE_WALLET_PASSWORD": wallet_password,
+    }
+    if not values["ORACLE_CLIENT_LIB_DIR"].strip() and data.wallet_dir:
+        values["ORACLE_WALLET_DIR"] = data.wallet_dir
     _write_env_values(
         BACKEND_ENV_FILE,
-        {
-            "ORACLE_USER": data.user,
-            "ORACLE_PASSWORD": oracle_password,
-            "ORACLE_DSN": data.dsn,
-            "ORACLE_WALLET_DIR": data.wallet_dir,
-            "ORACLE_WALLET_PASSWORD": wallet_password,
-        },
+        values,
         section_comment="# Oracle 26ai",
         error_detail="Oracle 26ai 接続設定を backend/.env へ保存できませんでした。",
     )
@@ -2360,7 +2860,7 @@ def _validate_private_key_pem(data: bytes) -> None:
 
 
 def _install_database_wallet(settings: object, data: bytes, file_name: str | None) -> Path:
-    safe_name = PurePosixPath((file_name or "wallet.zip").replace("\\", "/")).name
+    safe_name = _safe_wallet_filename(file_name)
     if not safe_name.lower().endswith(".zip"):
         raise HTTPException(
             status_code=415,
@@ -2372,10 +2872,10 @@ def _install_database_wallet(settings: object, data: bytes, file_name: str | Non
         raise HTTPException(status_code=413, detail="Wallet ZIP のサイズが上限を超えています。")
 
     target = _wallet_storage_root(settings)
+    target.parent.mkdir(parents=True, exist_ok=True)
     tmp_dir = target.parent / f".{target.name}.tmp-{uuid4().hex}"
     try:
         wallet_dir = _extract_wallet_zip(data, tmp_dir)
-        target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             if target.is_dir():
                 shutil.rmtree(target)
@@ -2391,15 +2891,17 @@ def _install_database_wallet(settings: object, data: bytes, file_name: str | Non
             detail="Wallet ZIP をバックエンドの保存先へ展開できませんでした。",
         ) from exc
     finally:
-        if tmp_dir.exists():
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        _remove_tmp_wallet_dir(tmp_dir)
 
 
 def _wallet_storage_root(settings: object) -> Path:
-    configured = _settings_str_from(settings, "oracle_wallet_dir")
-    if configured:
-        return Path(configured).expanduser()
-    return BACKEND_ROOT / ".oracle" / ORACLE_WALLET_DIR_NAME
+    configured = _settings_str_from(settings, "resolved_oracle_wallet_dir") or _settings_str_from(
+        settings,
+        "oracle_wallet_dir",
+    )
+    if not configured:
+        configured = str(BACKEND_ROOT / ".oracle" / ORACLE_WALLET_DIR_NAME)
+    return Path(configured).expanduser().resolve()
 
 
 def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
@@ -2418,33 +2920,76 @@ def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
                 if total_uncompressed > ORACLE_WALLET_MAX_EXTRACTED_BYTES:
                     raise HTTPException(
                         status_code=413,
-                        detail="Wallet ZIP 展開後サイズが上限を超えています。",
+                        detail="Wallet ZIP の展開後サイズが上限を超えています。",
                     )
-                member_path = target_dir / member.filename
-                if not _is_relative_to(member_path.resolve(), target_dir.resolve()):
-                    raise HTTPException(status_code=400, detail="Wallet ZIP の path が不正です。")
-                archive.extract(member, target_dir)
-                extracted_files.append(member_path)
+                destination = _wallet_member_destination(target_dir, member.filename)
+                if destination.name.lower() in ORACLE_WALLET_SKIPPED_FILES:
+                    continue
+                if _zip_member_is_symlink(member.external_attr):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Wallet ZIP にシンボリックリンクは含められません。",
+                    )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as src, destination.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                extracted_files.append(destination)
     except BadZipFile as exc:
         raise HTTPException(
             status_code=400,
             detail="Wallet ZIP の形式を確認してください。",
         ) from exc
 
-    if not any(path.name.lower() == "tnsnames.ora" for path in extracted_files):
+    wallet_dir = _find_wallet_config_dir(extracted_files)
+    if wallet_dir is None:
+        required = ", ".join(sorted(ORACLE_WALLET_REQUIRED_FILES))
         raise HTTPException(
             status_code=400,
-            detail="Wallet ZIP に tnsnames.ora が含まれていません。",
+            detail=f"Wallet ZIP に {required} が含まれているか確認してください。",
         )
-    return target_dir
+    return wallet_dir
 
 
-def _is_relative_to(path: Path, base: Path) -> bool:
-    try:
-        path.relative_to(base)
-        return True
-    except ValueError:
-        return False
+def _wallet_member_destination(root: Path, member_name: str) -> Path:
+    path = PurePosixPath(member_name.replace("\\", "/"))
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet ZIP に安全でないファイルパスが含まれています。",
+        )
+    destination = (root.joinpath(*path.parts)).resolve()
+    resolved_root = root.resolve()
+    if resolved_root != destination and resolved_root not in destination.parents:
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet ZIP に安全でないファイルパスが含まれています。",
+        )
+    return destination
+
+
+def _find_wallet_config_dir(extracted_files: list[Path]) -> Path | None:
+    candidates = {path.parent for path in extracted_files}
+    for candidate in sorted(candidates, key=lambda path: len(path.parts)):
+        names = {path.name.lower() for path in extracted_files if path.parent == candidate}
+        if ORACLE_WALLET_REQUIRED_FILES.issubset(names):
+            return candidate
+    return None
+
+
+def _zip_member_is_symlink(external_attr: int) -> bool:
+    mode = external_attr >> 16
+    return bool(mode and stat.S_ISLNK(mode))
+
+
+def _safe_wallet_filename(file_name: str | None) -> str:
+    name = PurePosixPath((file_name or "wallet.zip").replace("\\", "/")).name.strip()
+    name = re.sub(r"[\x00-\x1f\x7f]+", "_", name).strip(" .")
+    return name[:255] if name else "wallet.zip"
+
+
+def _remove_tmp_wallet_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @router.get("/settings/model", response_model=ApiResponse[ModelSettingsData])
@@ -2473,30 +3018,25 @@ async def check_model_settings(patch: ModelSettingsPayload) -> ApiResponse[Model
 async def test_model_settings(
     request: ModelSettingsTestRequest,
 ) -> ApiResponse[ModelSettingsTestResult]:
-    checks = _model_settings_checks(request.settings)
-    target_ok = (
-        checks["enterprise_ai"] == "ok"
-        if request.target_type in {"enterprise_text", "enterprise_vision"}
-        else checks["generative_ai"] == "ok" and checks["embedding_dim"] == "ok"
-    )
+    started = monotonic()
+    settings = get_settings()
+    resolved = _model_settings_with_resolved_secret(settings, request.settings)
+    try:
+        details = await _run_model_settings_test(settings, request)
+    except Exception as exc:  # noqa: BLE001 - 外部 SDK/API の多様な例外を表示用に握る
+        return ApiResponse(
+            data=_failed_model_test_result(
+                request,
+                exc,
+                elapsed_ms=_elapsed_ms(started),
+                secrets=[resolved.enterprise_ai.api_key],
+            )
+        )
     return ApiResponse(
-        data=ModelSettingsTestResult(
-            status="success" if target_ok else "failed",
-            target_type=request.target_type,
-            model_id=request.model_id,
-            message=(
-                "設定形式を確認しました。"
-                if target_ok
-                else "必要な設定値が不足しているためテストできません。"
-            ),
-            troubleshooting=(
-                []
-                if target_ok
-                else ["Endpoint / Project / API key / model ID を確認してください。"]
-            ),
-            error_type=None if target_ok else "missing_settings",
-            checked_at=_now_iso(),
-            details={"dry_run": True, "vision_enabled": request.vision_enabled},
+        data=_successful_model_test_result(
+            request,
+            details=details,
+            elapsed_ms=_elapsed_ms(started),
         )
     )
 
@@ -2529,12 +3069,6 @@ async def upload_database_wallet(
     _set_if_possible(settings, "oracle_wallet_dir", str(wallet_dir))
     data = _database_settings_data(settings)
     _database_settings_state = data
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {"ORACLE_WALLET_DIR": str(wallet_dir)},
-        section_comment="# Oracle 26ai",
-        error_detail="Oracle Wallet 設定を backend/.env へ保存できませんでした。",
-    )
     return ApiResponse(data=data)
 
 
