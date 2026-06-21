@@ -194,6 +194,42 @@ def test_plan_yields_the_single_materialized_chunk_set(monkeypatch: MonkeyPatch)
     assert set(plan.chunk_sets) == set(materialized)
 
 
+def test_multiple_kb_configs_materialize_separate_chunk_sets(monkeypatch: MonkeyPatch) -> None:
+    """取込設定が分岐する 2 KB に属する文書は、2 つの chunk_set を共存 materialize する。
+
+    Stage 2: per-recipe ループ。default(chunk_size=800)と別 KB(chunk_size=3500)で別 chunk_set
+    になり、各 KB が自分の chunk_set を refcount=1 で参照する。
+    """
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    _extract_to_review(document_id)
+
+    # 別 chunk_size の 2 つ目の KB を作り、文書を両方に所属させる。
+    kb_resp = client.post(
+        "/api/knowledge-bases",
+        json={"name": "高chunk-KB", "adapter_config": {"ingestion": {"chunk_size": 3500}}},
+    )
+    assert kb_resp.status_code == 200
+    kb_b = kb_resp.json()["data"]["id"]
+    assign_resp = client.post(
+        f"/api/knowledge-bases/{kb_b}/documents", json={"document_ids": [document_id]}
+    )
+    assert assign_resp.status_code == 200
+
+    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    assert approve_resp.status_code == 200
+    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+    assert _get_document(document_id)["status"] == "INDEXED"
+
+    oracle = OracleClient()
+    materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
+    # 2 つの取込設定 → 2 chunk_set が共存。
+    assert len(materialized) == 2
+    # 各 chunk_set はちょうど 1 KB に bind(materialization が KB ごとに分裂)。
+    for chunk_set_id in materialized:
+        assert asyncio.run(oracle.chunk_set_refcount(chunk_set_id)) == 1
+
+
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
     """却下すると UPLOADED へ戻り、検索対象に入らない。"""
     _enable_review_gate(monkeypatch)

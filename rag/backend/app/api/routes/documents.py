@@ -43,6 +43,7 @@ from app.rag.navigation import build_navigation_tree
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.source_profile import build_source_profile
 from app.rag.variant_keys import compute_chunk_set_id
+from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
     BatchUploadFailedItem,
@@ -1045,14 +1046,72 @@ async def _index_reviewed_document(
             status_code=409,
             detail="プレビュー確認待ちの文書のみ索引できます。",
         )
-    effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
-    chunk_set_id = _document_chunk_set_id(detail, effective_settings)
-    pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-    result = await pipeline.index_reviewed(
-        document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+    global_settings = get_settings()
+    configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
+    plan = (
+        plan_document_materializations(detail.content_sha256, global_settings, configs)
+        if detail.content_sha256 and configs
+        else None
     )
-    await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+    if plan is None or not plan.chunk_sets:
+        # 所属 KB / content_sha256 が無い → 現行の単一(owning)挙動へ縮退する。
+        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        chunk_set_id = _document_chunk_set_id(detail, effective_settings)
+        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
+        result = await pipeline.index_reviewed(
+            document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+        )
+        await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+        return result
+    # plan 駆動: 各 distinct chunk_set を recipe 設定で materialize(保存済み extraction 再利用)。
+    result = detail
+    for chunk_set_id in sorted(plan.chunk_sets):
+        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
+        recipe_settings, _applied = apply_adapter_config_or_global(
+            global_settings, configs[representative_kb_id], scope="ingestion"
+        )
+        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        result = await pipeline.index_reviewed(
+            document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+        )
+    await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
     return result
+
+
+async def _reconcile_plan_chunk_sets(
+    oracle: OracleClient,
+    document_id: str,
+    detail: DocumentDetail,
+    plan: MaterializationPlan,
+) -> None:
+    """plan の各 chunk_set を永続化し、KB グループを binding、plan に無い chunk_set を GC する。
+
+    chunk は save_index で挿入時タグ付け済み。bookkeeping なので失敗しても取込は止めず warning。
+    """
+    if detail.status != FileStatus.INDEXED:
+        return
+    try:
+        for chunk_set_id, knowledge_base_ids in plan.chunk_sets.items():
+            chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
+            await oracle.upsert_chunk_set(chunk_set_id=chunk_set_id, document_id=document_id)
+            await oracle.mark_chunk_set_indexed(
+                chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
+            )
+            for knowledge_base_id in knowledge_base_ids:
+                await oracle.upsert_chunk_set_binding(
+                    knowledge_base_id=knowledge_base_id,
+                    document_id=document_id,
+                    chunk_set_id=chunk_set_id,
+                )
+        await oracle.delete_document_chunk_sets_except(
+            document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
+        )
+    except Exception:  # noqa: BLE001 - reconcile は bookkeeping。失敗しても取込は止めない。
+        logger.warning(
+            "chunk_set plan reconcile に失敗しました（取込は完了済み）。document_id=%s",
+            document_id,
+            exc_info=True,
+        )
 
 
 def _document_chunk_set_id(detail: DocumentDetail, settings: Settings) -> str | None:

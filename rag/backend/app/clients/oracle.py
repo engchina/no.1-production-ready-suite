@@ -805,6 +805,68 @@ class OracleClient:
         )
         return int(str(next(iter(row.values())))) if row else 0
 
+    async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
+        """指定 chunk_set の chunk 行数(chunk_set 単位の件数記録用)。"""
+        row = await self._fetch_one(
+            "SELECT COUNT(*) AS cnt FROM rag_chunks WHERE chunk_set_id = :chunk_set_id",
+            {"chunk_set_id": chunk_set_id},
+        )
+        return int(str(next(iter(row.values())))) if row else 0
+
+    async def delete_document_chunk_sets_except(
+        self, *, document_id: str, keep_chunk_set_ids: Sequence[str]
+    ) -> list[str]:
+        """plan に無い chunk_set(とその chunk、未タグ chunk)を削除する。keep だけ残す。
+
+        複数 materialization の cleanup。keep が空なら何もしない(安全側・現行 chunk は保持)。
+        binding は FK cascade。削除した chunk_set id を返す。
+        """
+        keep = list(dict.fromkeys(keep_chunk_set_ids))
+        if not keep:
+            return []
+        keep_in_sql, keep_binds = _oracle_in_predicate("chunk_set_id", "keep_cs", keep)
+        binds: dict[str, object] = {"document_id": document_id, **keep_binds}
+
+        def operation(connection: OracleConnectionProtocol) -> list[str]:
+            rows = _fetch_all(
+                connection,
+                _render_sql(
+                    """
+                    SELECT chunk_set_id FROM rag_chunk_sets
+                    WHERE document_id = :document_id AND NOT ({keep_in_sql})
+                    """,
+                    keep_in_sql=keep_in_sql,
+                ),
+                binds,
+            )
+            removed = [str(next(iter(row.values()))) for row in rows]
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                    DELETE FROM rag_chunks
+                    WHERE document_id = :document_id
+                      AND (NOT ({keep_in_sql}) OR chunk_set_id IS NULL)
+                    """,
+                    keep_in_sql=keep_in_sql,
+                ),
+                binds,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                    DELETE FROM rag_chunk_sets
+                    WHERE document_id = :document_id AND NOT ({keep_in_sql})
+                    """,
+                    keep_in_sql=keep_in_sql,
+                ),
+                binds,
+            )
+            return removed
+
+        return await self._run_transaction(operation)
+
     async def collect_unreferenced_chunk_sets(self, document_id: str) -> list[str]:
         """文書の chunk_set のうち refcount 0 のものを GC する。削除した chunk_set id を返す。
 
