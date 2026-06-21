@@ -139,3 +139,51 @@ async def test_save_index_without_chunk_set_replaces_all_chunks() -> None:
     # 再保存は全置換(2 件)= 2(加算されない)。
     await client.save_index(document_id, extraction, _chunks("Y", 2), [_EMBEDDING] * 2)
     assert await client.count_document_chunks(document_id) == 2
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_document_extraction_upsert_get_list_and_gc() -> None:
+    """extraction 層(#6 P1b)の永続化: upsert/get/list/mark/GC が実 Oracle で動く。
+
+    migration が rag_document_extractions 表 + rag_chunk_sets.extraction_id を作る前提
+    (ensure_schema が適用)。1 文書が複数抽出(preprocess×parser)を持てることの永続層。
+    """
+    client = OracleClient()
+    document_id = await _new_document(client)
+    extraction = StructuredExtraction(raw_text="抽出本文の一文目です。")
+
+    ex_a = "ex_test_aaaaaaaaaa01"
+    ex_b = "ex_test_bbbbbbbbbb02"
+    await client.upsert_document_extraction(
+        extraction_id=ex_a,
+        document_id=document_id,
+        extraction=extraction,
+        recipe_subset={"preprocess": "none", "parser": "docling"},
+        status="EXTRACTED",
+    )
+    await client.upsert_document_extraction(
+        extraction_id=ex_b,
+        document_id=document_id,
+        extraction=extraction,
+        recipe_subset={"preprocess": "none", "parser": "unstructured"},
+        status="EXTRACTED",
+    )
+
+    got = await client.get_document_extraction(ex_a)
+    assert got is not None
+    assert got["status"] == "EXTRACTED"
+    assert got["document_id"] == document_id
+    assert got["extraction_json"]  # 抽出 payload が保存されている
+
+    assert set(await client.list_document_extraction_ids(document_id)) == {ex_a, ex_b}
+
+    await client.mark_document_extraction(extraction_id=ex_a, status="ERROR")
+    reloaded = await client.get_document_extraction(ex_a)
+    assert reloaded is not None and reloaded["status"] == "ERROR"
+
+    # ex_b 以外を残す GC → ex_a が消える。
+    removed = await client.delete_document_extractions_except(
+        document_id=document_id, keep_extraction_ids=[ex_b]
+    )
+    assert removed == [ex_a]
+    assert await client.list_document_extraction_ids(document_id) == [ex_b]

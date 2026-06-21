@@ -601,6 +601,131 @@ class OracleClient:
     # 本メソッド群はその計画を Oracle へ反映する手。refcount は binding 件数から導出する。
     # ------------------------------------------------------------------
 
+    async def upsert_document_extraction(
+        self,
+        *,
+        extraction_id: str,
+        document_id: str,
+        extraction: StructuredExtraction,
+        recipe_subset: Mapping[str, object] | None = None,
+        quality: Mapping[str, object] | None = None,
+        status: str = "EXTRACTED",
+    ) -> None:
+        """抽出(extraction 層)を冪等に作成/更新する。preprocess×parser ごとに 1 行。"""
+        tenant = current_audit_request_context().tenant_id_hash
+        binds = {
+            "extraction_id": extraction_id,
+            "document_id": document_id,
+            "tenant_id_hash": tenant,
+            "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
+            "extraction_json": _json_dumps(extraction.to_document_payload()),
+            "quality_json": _json_dumps(quality) if quality is not None else None,
+            "status": status,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_document_extractions t
+                USING (SELECT :extraction_id AS extraction_id FROM dual) s
+                ON (t.extraction_id = s.extraction_id)
+                WHEN MATCHED THEN UPDATE SET
+                    t.extraction_json = :extraction_json,
+                    t.recipe_subset = :recipe_subset,
+                    t.quality_json = :quality_json,
+                    t.status = :status,
+                    t.updated_at = SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT
+                    (extraction_id, document_id, tenant_id_hash, recipe_subset,
+                     extraction_json, quality_json, status)
+                    VALUES (:extraction_id, :document_id, :tenant_id_hash, :recipe_subset,
+                            :extraction_json, :quality_json, :status)
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
+    async def get_document_extraction(self, extraction_id: str) -> dict[str, object] | None:
+        """抽出 1 件(status / recipe_subset / extraction payload)を返す。無ければ None。"""
+        row = await self._fetch_one(
+            """
+            SELECT extraction_id, document_id, status, recipe_subset, extraction_json
+            FROM rag_document_extractions WHERE extraction_id = :extraction_id
+            """,
+            {"extraction_id": extraction_id},
+        )
+        if row is None:
+            return None
+        return {str(key).lower(): value for key, value in row.items()}
+
+    async def list_document_extraction_ids(self, document_id: str) -> list[str]:
+        """文書が持つ extraction_id 一覧(diff/GC 入力)。"""
+        rows = await self._fetch_all(
+            "SELECT extraction_id FROM rag_document_extractions WHERE document_id = :document_id",
+            {"document_id": document_id},
+        )
+        return [str(next(iter(row.values()))) for row in rows]
+
+    async def mark_document_extraction(self, *, extraction_id: str, status: str) -> None:
+        """抽出の status(EXTRACTING/EXTRACTED/ERROR)を更新する。"""
+        binds = {"extraction_id": extraction_id, "status": status}
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_document_extractions
+                SET status = :status, updated_at = SYSTIMESTAMP
+                WHERE extraction_id = :extraction_id
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
+    async def delete_document_extractions_except(
+        self, *, document_id: str, keep_extraction_ids: Sequence[str]
+    ) -> list[str]:
+        """plan に無い extraction を削除する(GC)。keep が空なら何もしない(安全側)。
+
+        chunk_set GC を先に走らせた後に呼ぶ前提(参照されない抽出だけ残る)。削除した id を返す。
+        """
+        keep = list(dict.fromkeys(keep_extraction_ids))
+        if not keep:
+            return []
+        keep_in_sql, keep_binds = _oracle_in_predicate("extraction_id", "keep_ex", keep)
+        binds: dict[str, object] = {"document_id": document_id, **keep_binds}
+
+        def operation(connection: OracleConnectionProtocol) -> list[str]:
+            rows = _fetch_all(
+                connection,
+                _render_sql(
+                    """
+                    SELECT extraction_id FROM rag_document_extractions
+                    WHERE document_id = :document_id AND NOT ({keep_in_sql})
+                    """,
+                    keep_in_sql=keep_in_sql,
+                ),
+                binds,
+            )
+            removed = [str(next(iter(row.values()))) for row in rows]
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                    DELETE FROM rag_document_extractions
+                    WHERE document_id = :document_id AND NOT ({keep_in_sql})
+                    """,
+                    keep_in_sql=keep_in_sql,
+                ),
+                binds,
+            )
+            return removed
+
+        return await self._run_transaction(operation)
+
     async def upsert_chunk_set(
         self,
         *,
@@ -7363,6 +7488,34 @@ CREATE TABLE rag_kb_chunk_set_bindings (
 
 CREATE INDEX rag_kb_cs_bind_cs_idx
     ON rag_kb_chunk_set_bindings (chunk_set_id);
+""".strip()
+
+
+def oracle_document_extractions_schema_sql() -> str:
+    """variant の extraction 層(1 文書 × N 抽出 = preprocess×parser ごと)の DDL を返す。
+
+    chunk_set_id は preprocess/parser をキーに含むのに抽出が 1 文書 1 つだと parser 軸が潰れる
+    問題を解く土台。各 chunk_set は親 extraction_id を指し、extract は parser グループごとに 1 回。
+    """
+    return """
+CREATE TABLE rag_document_extractions (
+    extraction_id   VARCHAR2(64) PRIMARY KEY,
+    document_id     VARCHAR2(64) NOT NULL,
+    tenant_id_hash  CHAR(64),
+    recipe_subset   JSON,
+    extraction_json JSON,
+    status          VARCHAR2(32) DEFAULT 'EXTRACTING' NOT NULL,
+    quality_json    JSON,
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_document_extractions_document_fk
+        FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_document_extractions_status_ck
+        CHECK (status IN ('EXTRACTING', 'EXTRACTED', 'ERROR'))
+);
+
+CREATE INDEX rag_document_extractions_document_idx
+    ON rag_document_extractions (document_id, status);
 """.strip()
 
 
