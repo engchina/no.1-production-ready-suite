@@ -452,6 +452,16 @@ export interface DocumentChunkView {
   metadata: Record<string, JsonValue>;
 }
 
+/** 文書の chunk_set(variant = 1 レシピのチャンク集合)1 件分。 */
+export interface DocumentChunkSet {
+  chunk_set_id: string;
+  status: string;
+  chunk_count: number;
+  vector_count: number;
+  knowledge_base_ids: string[];
+  serving_knowledge_base_ids: string[];
+}
+
 export type DocumentExtractionExportFormat = "json" | "markdown" | "html" | "chunks";
 
 export interface DocumentExtractionExport {
@@ -1875,6 +1885,8 @@ export const api = {
   getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
   listDocumentChunks: (id: string) =>
     request<DocumentChunkView[]>(`/api/documents/${encodeURIComponent(id)}/chunks`),
+  listDocumentChunkSets: (id: string) =>
+    request<DocumentChunkSet[]>(`/api/documents/${encodeURIComponent(id)}/chunk-sets`),
   getDocumentIngestionConfig: (id: string) =>
     request<DocumentIngestionConfigData>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-config`
