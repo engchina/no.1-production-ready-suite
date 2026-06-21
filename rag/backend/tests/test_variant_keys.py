@@ -117,15 +117,23 @@ def test_layer_ids_are_consistent_bundle() -> None:
     cs = compute_chunk_set_id(SRC, settings)
 
     assert bundle["chunk_set_id"] == cs
+    assert bundle["extraction_id"] == compute_extraction_id(SRC, settings)
     assert bundle["metadata_layer_id"] == compute_metadata_layer_id(cs, settings)
     assert bundle["graph_layer_id"] == compute_graph_layer_id(cs, settings)
     assert bundle["nav_layer_id"] == compute_nav_layer_id(cs, settings)
-    assert set(bundle) == {"chunk_set_id", "metadata_layer_id", "graph_layer_id", "nav_layer_id"}
+    assert set(bundle) == {
+        "extraction_id",
+        "chunk_set_id",
+        "metadata_layer_id",
+        "graph_layer_id",
+        "nav_layer_id",
+    }
 
 
 def test_ids_carry_layer_prefixes() -> None:
     """各層 ID は層を識別する prefix を持つ(運用・デバッグ可読性)。"""
     bundle = compute_layer_ids(SRC, get_settings())
+    assert bundle["extraction_id"].startswith("ex_")
     assert bundle["chunk_set_id"].startswith("cs_")
     assert bundle["metadata_layer_id"].startswith("md_")
     assert bundle["graph_layer_id"].startswith("gr_")

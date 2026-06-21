@@ -122,9 +122,10 @@ def compute_nav_layer_id(chunk_set_id: str, settings: Settings) -> str:
 
 
 def compute_layer_ids(source_sha256: str, settings: Settings) -> dict[str, str]:
-    """1 取込レシピの全層 ID をまとめて返す(chunk_set とその派生層)。"""
+    """1 取込レシピの全層 ID をまとめて返す(extraction → chunk_set → 派生層)。"""
     chunk_set_id = compute_chunk_set_id(source_sha256, settings)
     return {
+        "extraction_id": compute_extraction_id(source_sha256, settings),
         "chunk_set_id": chunk_set_id,
         "metadata_layer_id": compute_metadata_layer_id(chunk_set_id, settings),
         "graph_layer_id": compute_graph_layer_id(chunk_set_id, settings),
