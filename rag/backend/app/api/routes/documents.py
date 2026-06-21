@@ -1043,12 +1043,15 @@ async def _ingest_existing_document(
         await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
         return result
     result = detail
-    for index, chunk_set_id in enumerate(sorted(plan.chunk_sets)):
+    chunk_set_ids = sorted(plan.chunk_sets)
+    for index, chunk_set_id in enumerate(chunk_set_ids):
         representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
         recipe_settings, _applied = apply_adapter_config_or_global(
             global_settings, configs[representative_kb_id], scope="ingestion"
         )
         pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
+        record_outcome = index == len(chunk_set_ids) - 1
         if index == 0:
             result = await pipeline.ingest(
                 document_id=document_id,
@@ -1057,11 +1060,15 @@ async def _ingest_existing_document(
                 content_type=ingest_content_type,
                 source_profile=source_profile,
                 chunk_set_id=chunk_set_id,
+                record_outcome=record_outcome,
                 cancel_checker=cancel_checker,
             )
         else:
             result = await pipeline.index_reviewed(
-                document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+                document_id,
+                chunk_set_id=chunk_set_id,
+                record_outcome=record_outcome,
+                cancel_checker=cancel_checker,
             )
     await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
     return result
@@ -1101,14 +1108,19 @@ async def _index_reviewed_document(
         return result
     # plan 駆動: 各 distinct chunk_set を recipe 設定で materialize(保存済み extraction 再利用)。
     result = detail
-    for chunk_set_id in sorted(plan.chunk_sets):
+    chunk_set_ids = sorted(plan.chunk_sets)
+    for index, chunk_set_id in enumerate(chunk_set_ids):
         representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
         recipe_settings, _applied = apply_adapter_config_or_global(
             global_settings, configs[representative_kb_id], scope="ingestion"
         )
         pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
         result = await pipeline.index_reviewed(
-            document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+            document_id,
+            chunk_set_id=chunk_set_id,
+            record_outcome=index == len(chunk_set_ids) - 1,
+            cancel_checker=cancel_checker,
         )
     await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
     return result
