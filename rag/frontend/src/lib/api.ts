@@ -579,6 +579,9 @@ export interface BusinessViewRef {
   name: string;
 }
 
+/** 配信モード。1 文書が複数 chunk_set を持つときの検索時配信方法。 */
+export type ServingMode = "single" | "fused" | "routed";
+
 /** 業務アシスタント(Business View)の設定一式。query は KB の query 上書きを再利用。 */
 export interface BusinessViewConfig {
   version: number;
@@ -586,6 +589,7 @@ export interface BusinessViewConfig {
   query: KnowledgeBaseQueryConfig;
   system_prompt: string | null;
   default_language: string | null;
+  serving_mode: ServingMode;
 }
 
 export interface BusinessViewSummary extends BusinessViewRef {

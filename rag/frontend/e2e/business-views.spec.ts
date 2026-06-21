@@ -62,6 +62,9 @@ test("業務アシスタントを作成すると参照 KB と方針を含めて 
   await page
     .getByLabel(/persona/)
     .fill("あなたは経理規程に詳しいアシスタントです。");
+  // 配信モードを fused に切り替える(複数 chunk_set 融合)。
+  await page.getByRole("combobox", { name: /配信モード/ }).click();
+  await page.getByRole("option", { name: /fused/ }).click();
   await page.getByRole("button", { name: "作成する" }).click();
 
   await expect
@@ -71,6 +74,8 @@ test("業務アシスタントを作成すると参照 KB と方針を含めて 
   expect((createBody?.config as { system_prompt?: string })?.system_prompt).toContain(
     "経理規程"
   );
+  // 配信モードが POST payload に含まれる。
+  expect((createBody?.config as { serving_mode?: string })?.serving_mode).toBe("fused");
 });
 
 test("RAG 検索は業務アシスタントを選ぶと business_view_id を送る", async ({ page }) => {

@@ -1378,6 +1378,9 @@ export const ja = {
     "設定すると回答生成の system prompt を上書きします(Generation プロファイルより優先)。",
   "businessViews.field.defaultLanguage": "既定の回答言語",
   "businessViews.field.defaultLanguagePlaceholder": "例: 日本語",
+  "businessViews.field.servingMode": "配信モード (Serving Mode)",
+  "businessViews.field.servingModeHelper":
+    "1 文書が複数チャンク集合(レシピ)を持つときの検索時の配信方法。single は配信中の単一集合のみ、fused は複数集合を融合し重複を除去、routed は query ごとに選択(後続)。",
   "businessViews.query.title": "検索・回答方針(query 上書き)",
   "businessViews.query.helper":
     "未設定の項目はグローバル既定を継承します。複数 KB を束ねても方針はこの 1 枚で一貫します。",
