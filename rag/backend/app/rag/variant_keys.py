@@ -31,6 +31,16 @@ from app.config import Settings
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
 KEY_VERSION = "v1"
 
+# 1 文書あたりの抽出(preprocess×parser 組合せ)上限。組合せ暴発の安全弁。
+MAX_EXTRACTIONS_PER_DOCUMENT = 8
+
+# 抽出(StructuredExtraction)を決める取込軸。preprocess/parser が同じなら抽出を共有する。
+# chunk_set の親キー: chunk_set_id はこの軸 + chunking 軸で、chunk_set は自分の親抽出を計算できる。
+_EXTRACTION_FIELDS: tuple[str, ...] = (
+    "rag_preprocess_profile",
+    "rag_parser_adapter_backend",
+)
+
 # chunk text(と、それに従属する embedding)を決める取込軸。
 # これらが同じなら chunk 集合は同一とみなして共有する。
 _CHUNK_SET_FIELDS: tuple[str, ...] = (
@@ -65,6 +75,20 @@ def _digest(prefix: str, payload: dict[str, object]) -> str:
 def _fields(settings: Settings, names: tuple[str, ...]) -> dict[str, object]:
     """Settings から対象フィールド値を取り出す(欠落は None)。"""
     return {name: getattr(settings, name, None) for name in names}
+
+
+def compute_extraction_id(source_sha256: str, settings: Settings) -> str:
+    """抽出(StructuredExtraction)層の決定論 ID。
+
+    同一原本 + 同一の前処理/Parser なら同じ抽出 = 共有対象。chunk_set_id の親キーで、
+    chunk_set は自分の設定(preprocess/parser)から親 extraction_id を計算できる。
+    """
+    payload: dict[str, object] = {
+        "v": KEY_VERSION,
+        "src": source_sha256,
+        **_fields(settings, _EXTRACTION_FIELDS),
+    }
+    return _digest("ex", payload)
 
 
 def compute_chunk_set_id(source_sha256: str, settings: Settings) -> str:
