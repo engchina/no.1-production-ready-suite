@@ -171,6 +171,17 @@ class DocumentChunkView(BaseModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class DocumentChunkSet(BaseModel):
+    """文書の chunk_set(variant = 1 レシピのチャンク集合)1 件分の状態・件数・所属/配信 KB。"""
+
+    chunk_set_id: str
+    status: str
+    chunk_count: int = 0
+    vector_count: int = 0
+    knowledge_base_ids: list[str] = Field(default_factory=list)
+    serving_knowledge_base_ids: list[str] = Field(default_factory=list)
+
+
 class DocumentExtractionExportFormat(StrEnum):
     """構造化抽出の監査用 export 形式。"""
 

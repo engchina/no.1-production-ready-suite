@@ -49,6 +49,7 @@ from app.schemas.document import (
     BatchUploadFailedItem,
     BatchUploadResult,
     DocumentApproveRequest,
+    DocumentChunkSet,
     DocumentChunkView,
     DocumentDeleteResult,
     DocumentDetail,
@@ -549,6 +550,16 @@ async def list_document_chunks(document_id: str) -> ApiResponse[list[DocumentChu
     if await oracle.get_document(document_id) is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return ApiResponse(data=await oracle.list_document_chunks(document_id))
+
+
+@router.get("/{document_id}/chunk-sets", response_model=ApiResponse[list[DocumentChunkSet]])
+async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[DocumentChunkSet]]:
+    """文書の chunk_set(variant)一覧を返す。KB 詳細での variant 可視化に使う。"""
+    oracle = OracleClient()
+    if await oracle.get_document(document_id) is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    rows = await oracle.list_document_chunk_sets(document_id)
+    return ApiResponse(data=[DocumentChunkSet.model_validate(row) for row in rows])
 
 
 @router.get(
