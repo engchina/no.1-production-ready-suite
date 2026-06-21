@@ -42,6 +42,8 @@ from app.rag.kb_adapter_config import apply_adapter_config_or_global
 from app.rag.navigation import build_navigation_tree
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.source_profile import build_source_profile
+from app.rag.variant_keys import compute_chunk_set_id
+from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
     BatchUploadFailedItem,
@@ -1014,15 +1016,19 @@ async def _ingest_existing_document(
     # owning KB(最古割当)の取込上書きをスナップショットとして適用する。
     # 後から KB を変えても再 enqueue しない限り既存チャンクは作り直されない。
     effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+    chunk_set_id = _document_chunk_set_id(detail, effective_settings)
     pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-    return await pipeline.ingest(
+    result = await pipeline.ingest(
         document_id=document_id,
         image_bytes=data,
         prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
         content_type=detail.content_type or "application/octet-stream",
         source_profile=source_profile,
+        chunk_set_id=chunk_set_id,
         cancel_checker=cancel_checker,
     )
+    await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+    return result
 
 
 async def _index_reviewed_document(
@@ -1040,9 +1046,120 @@ async def _index_reviewed_document(
             status_code=409,
             detail="プレビュー確認待ちの文書のみ索引できます。",
         )
-    effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
-    pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-    return await pipeline.index_reviewed(document_id, cancel_checker=cancel_checker)
+    global_settings = get_settings()
+    configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
+    plan = (
+        plan_document_materializations(detail.content_sha256, global_settings, configs)
+        if detail.content_sha256 and configs
+        else None
+    )
+    if plan is None or not plan.chunk_sets:
+        # 所属 KB / content_sha256 が無い → 現行の単一(owning)挙動へ縮退する。
+        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        chunk_set_id = _document_chunk_set_id(detail, effective_settings)
+        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
+        result = await pipeline.index_reviewed(
+            document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+        )
+        await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+        return result
+    # plan 駆動: 各 distinct chunk_set を recipe 設定で materialize(保存済み extraction 再利用)。
+    result = detail
+    for chunk_set_id in sorted(plan.chunk_sets):
+        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
+        recipe_settings, _applied = apply_adapter_config_or_global(
+            global_settings, configs[representative_kb_id], scope="ingestion"
+        )
+        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        result = await pipeline.index_reviewed(
+            document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+        )
+    await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
+    return result
+
+
+async def _reconcile_plan_chunk_sets(
+    oracle: OracleClient,
+    document_id: str,
+    detail: DocumentDetail,
+    plan: MaterializationPlan,
+) -> None:
+    """plan の各 chunk_set を永続化し、KB グループを binding、plan に無い chunk_set を GC する。
+
+    chunk は save_index で挿入時タグ付け済み。bookkeeping なので失敗しても取込は止めず warning。
+    """
+    if detail.status != FileStatus.INDEXED:
+        return
+    try:
+        for chunk_set_id, knowledge_base_ids in plan.chunk_sets.items():
+            chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
+            await oracle.upsert_chunk_set(chunk_set_id=chunk_set_id, document_id=document_id)
+            await oracle.mark_chunk_set_indexed(
+                chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
+            )
+            for knowledge_base_id in knowledge_base_ids:
+                await oracle.upsert_chunk_set_binding(
+                    knowledge_base_id=knowledge_base_id,
+                    document_id=document_id,
+                    chunk_set_id=chunk_set_id,
+                )
+        await oracle.delete_document_chunk_sets_except(
+            document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
+        )
+    except Exception:  # noqa: BLE001 - reconcile は bookkeeping。失敗しても取込は止めない。
+        logger.warning(
+            "chunk_set plan reconcile に失敗しました（取込は完了済み）。document_id=%s",
+            document_id,
+            exc_info=True,
+        )
+
+
+def _document_chunk_set_id(detail: DocumentDetail, settings: Settings) -> str | None:
+    """文書の content_sha256 と effective 取込設定から chunk_set_id を求める(無ければ None)。"""
+    if not detail.content_sha256:
+        return None
+    return compute_chunk_set_id(detail.content_sha256, settings)
+
+
+async def _reconcile_document_chunk_sets(
+    oracle: OracleClient,
+    document_id: str,
+    detail: DocumentDetail,
+    chunk_set_id: str | None,
+) -> None:
+    """取込後、materialize した chunk_set を記録し所属 KB を binding する(planner 駆動の基盤)。
+
+    chunk は save_index で**挿入時に chunk_set_id タグ付け済み**。本関数は chunk_set 行の永続化・
+    KB binding・旧 chunk_set(とその chunk、未タグ chunk)の GC を行う。bookkeeping なので失敗
+    しても取込自体は止めず warning に留める(chunk は既に INDEXED 済み)。
+    """
+    if detail.status != FileStatus.INDEXED or chunk_set_id is None:
+        return
+    try:
+        chunk_count = await oracle.count_document_chunks(document_id)
+        await oracle.upsert_chunk_set(chunk_set_id=chunk_set_id, document_id=document_id)
+        await oracle.mark_chunk_set_indexed(
+            chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
+        )
+        # 取込設定変更で生じた旧 chunk_set とその chunk(+未タグ chunk)を削除し、keep だけ残す。
+        await oracle.delete_stale_document_chunk_sets(
+            document_id=document_id, keep_chunk_set_id=chunk_set_id
+        )
+        # 現状は単一 materialization なので、所属 KB すべてをこの chunk_set に bind する。
+        # KB ごとに取込設定が分岐する複数 materialization は後続の増分で対応する。
+        knowledge_bases = await oracle.list_document_knowledge_bases(document_id)
+        for knowledge_base in knowledge_bases:
+            await oracle.upsert_chunk_set_binding(
+                knowledge_base_id=knowledge_base.id,
+                document_id=document_id,
+                chunk_set_id=chunk_set_id,
+            )
+    except Exception:  # noqa: BLE001 - reconcile は bookkeeping。失敗しても取込は止めない。
+        logger.warning(
+            "chunk_set reconcile に失敗しました（取込は完了済み）。document_id=%s",
+            document_id,
+            exc_info=True,
+        )
 
 
 async def _resolve_ingestion_settings(

@@ -15,7 +15,10 @@ from app.rag.audit import record_rag_search_audit
 from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.guardrails import GuardrailPolicy
-from app.rag.kb_adapter_config import apply_adapter_config_or_global
+from app.rag.kb_adapter_config import (
+    KnowledgeBaseQueryConfig,
+    apply_adapter_config_or_global,
+)
 from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
 from app.rag.pipeline import RagPipeline, SearchStageProgress, SearchTokenDelta
 from app.rag.rate_limit import enforce_rate_limit
@@ -143,9 +146,16 @@ async def _resolve_query_context(
             # request 明示の KB があればそちらを優先し、無ければ参照 KB 群を展開する。
             if not request.knowledge_base_ids and kb_ids:
                 effective_request = _with_knowledge_base_ids(request, kb_ids)
-            settings, applied = resolve_business_view_settings(global_settings, view.config)
+            # 検索対象が単一 KB に解決したら、その KB の query 既定を業務アシスタントの
+            # 下層に per-field merge で重ねる(global < KB < 業務アシスタント < request)。
+            kb_query, applied_kb = await _single_kb_query_overlay(
+                effective_request.knowledge_base_ids
+            )
+            settings, applied = resolve_business_view_settings(
+                global_settings, view.config, kb_query=kb_query
+            )
             applied_view = view.id if (applied or kb_ids) else None
-            return effective_request, settings, None, applied_view
+            return effective_request, settings, applied_kb, applied_view
 
     knowledge_base_ids = request.knowledge_base_ids
     if len(knowledge_base_ids) != 1:
@@ -159,6 +169,25 @@ async def _resolve_query_context(
         scope="query",
     )
     return request, effective, (knowledge_base_ids[0] if applied else None), None
+
+
+async def _single_kb_query_overlay(
+    knowledge_base_ids: list[str],
+) -> tuple[KnowledgeBaseQueryConfig | None, str | None]:
+    """検索対象が単一 KB のとき、その KB の query 上書きと適用 KB id を返す。
+
+    複数 KB / 0 件、KB 不在、query 上書きが空のときは (None, None)。業務アシスタント
+    分岐から呼ばれ、業務アシスタントの下層に重ねる KB query 既定を得る。
+    """
+    if len(knowledge_base_ids) != 1:
+        return None, None
+    knowledge_base = await OracleClient().get_knowledge_base(knowledge_base_ids[0])
+    if knowledge_base is None:
+        return None, None
+    kb_query = knowledge_base.adapter_config.query
+    if kb_query == KnowledgeBaseQueryConfig():
+        return None, None
+    return kb_query, knowledge_base_ids[0]
 
 
 def _with_knowledge_base_ids(

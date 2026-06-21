@@ -197,6 +197,7 @@ class IngestionPipeline:
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
+        chunk_set_id: str | None = None,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う。"""
@@ -404,6 +405,7 @@ class IngestionPipeline:
                 checkpoint_segments=checkpoint_segments,
                 source_bytes=image_bytes,
                 started_at=started_at,
+                chunk_set_id=chunk_set_id,
                 cancel_checker=cancel_checker,
             )
         except IngestionCancelledError as exc:
@@ -444,6 +446,7 @@ class IngestionPipeline:
         self,
         document_id: str,
         *,
+        chunk_set_id: str | None = None,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """REVIEW で承認済みの文書を後段(chunk→embed→index)だけ実行する。
@@ -472,6 +475,7 @@ class IngestionPipeline:
                 checkpoint_segments=checkpoint_segments,
                 source_bytes=b"",
                 started_at=started_at,
+                chunk_set_id=chunk_set_id,
                 cancel_checker=cancel_checker,
             )
         except IngestionCancelledError as exc:
@@ -517,6 +521,7 @@ class IngestionPipeline:
         checkpoint_segments: list[IngestionSegment],
         source_bytes: bytes,
         started_at: float,
+        chunk_set_id: str | None = None,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """抽出結果から chunk→embed→index を実行し INDEXED まで進める後段。
@@ -601,6 +606,7 @@ class IngestionPipeline:
                 extraction,
                 chunks,
                 vectors,
+                chunk_set_id=chunk_set_id,
                 cancel_checker=cancel_checker,
             ),
             attributes={
@@ -1786,11 +1792,18 @@ class IngestionPipeline:
         chunks: list[Chunk],
         vectors: list[list[float]],
         *,
+        chunk_set_id: str | None = None,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
-        """抽出本文とチャンクを一貫した indexing stage として保存する。"""
+        """抽出本文とチャンクを一貫した indexing stage として保存する。
+
+        chunk_set_id を渡すと、その chunk_set だけを置換・タグ付けする(複数 chunk_set 共存)。
+        None は文書の全 chunk を置換し未タグ保存(現行挙動)。
+        """
         await _raise_if_cancelled(cancel_checker)
-        await self._oracle.save_index(document_id, extraction, chunks, vectors)
+        await self._oracle.save_index(
+            document_id, extraction, chunks, vectors, chunk_set_id=chunk_set_id
+        )
         await _raise_if_cancelled(cancel_checker)
         if not resolve_graph_adapter(self._settings).enabled:
             return

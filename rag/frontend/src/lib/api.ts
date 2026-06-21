@@ -526,6 +526,10 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_child_size: number | null;
   chunk_sentence_window_size: number | null;
   chunk_min_chars: number | null;
+  graph_profile: GraphProfileName | null;
+  field_extraction_enabled: boolean | null;
+  asset_summary_enabled: boolean | null;
+  navigation_summary_enabled: boolean | null;
 }
 
 /** KB 単位のクエリ時上書き(Retrieval 以降)。null はグローバル継承。 */
@@ -548,6 +552,8 @@ export interface KnowledgeBaseAdapterConfig {
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   retrieval_config: Record<string, unknown>;
   adapter_config: KnowledgeBaseAdapterConfig;
+  /** KB 上書きをグローバル既定で埋めた解決済み設定(表示専用)。継承行の実効値表示に使う。 */
+  effective_adapter_config?: KnowledgeBaseAdapterConfig | null;
 }
 
 export interface KnowledgeBaseCreateRequest {

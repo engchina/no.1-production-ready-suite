@@ -17,6 +17,7 @@ import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
 import { FileListClient } from "@/components/file-list/FileListClient";
 import { KnowledgeBaseManagementClient } from "@/components/knowledge-bases/KnowledgeBaseManagementClient";
+import { KnowledgeBaseDetailClient } from "@/components/knowledge-bases/KnowledgeBaseDetailClient";
 import { BusinessViewManagementClient } from "@/components/business-views/BusinessViewManagementClient";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { CommandPalette } from "@/components/layout/CommandPalette";
@@ -76,6 +77,10 @@ export function App() {
         <Route path={APP_ROUTES.upload} element={<UploadWorkspace />} />
         <Route path={APP_ROUTES.fileList} element={<FileListClient />} />
         <Route path={APP_ROUTES.knowledgeBases} element={<KnowledgeBaseManagementClient />} />
+        <Route
+          path={`${APP_ROUTES.knowledgeBases}/:id`}
+          element={<KnowledgeBaseDetailRoute />}
+        />
         <Route path={APP_ROUTES.businessViews} element={<BusinessViewManagementClient />} />
         <Route path={`${APP_ROUTES.documents}/:id`} element={<DocumentDetailRoute />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
@@ -286,6 +291,28 @@ function DocumentDetailRoute() {
       </div>
       <div className="p-8">
         <DocumentWorkspace documentId={id} />
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeBaseDetailRoute() {
+  const { id } = useParams<{ id: string }>();
+  if (!id) return <Navigate to={APP_ROUTES.knowledgeBases} replace />;
+
+  return (
+    <div>
+      <div className="border-b border-border bg-card px-8 py-4">
+        <Link
+          to={APP_ROUTES.knowledgeBases}
+          className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground"
+        >
+          <ChevronLeft size={16} aria-hidden />
+          {t("knowledgeBases.detail.back")}
+        </Link>
+      </div>
+      <div className="p-8">
+        <KnowledgeBaseDetailClient knowledgeBaseId={id} />
       </div>
     </div>
   );

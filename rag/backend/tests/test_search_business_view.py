@@ -14,8 +14,9 @@ from app.config import Settings
 from app.main import app
 from app.rag.business_view_config import BusinessViewConfig
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig, KnowledgeBaseQueryConfig
 from app.schemas.business_view import BusinessViewDetail, BusinessViewStatus
+from app.schemas.knowledge_base import KnowledgeBaseDetail, KnowledgeBaseStatus
 from app.schemas.search import SearchRequest, SearchResponse
 from tests.support import AsgiTestClient
 
@@ -165,3 +166,78 @@ def test_missing_business_view_falls_back_to_global(monkeypatch: MonkeyPatch) ->
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["business_view_applied"] is None
     assert diagnostics["generation_profile"] == "grounded_concise"
+
+
+class FakeViewAndKbOracle:
+    """業務アシスタントと、その参照 KB(query 上書き付き)を返すテスト用 Oracle。"""
+
+    def __init__(
+        self,
+        views: dict[str, BusinessViewConfig],
+        kb_configs: dict[str, KnowledgeBaseAdapterConfig],
+    ) -> None:
+        self._views = views
+        self._kb_configs = kb_configs
+
+    async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
+        config = self._views.get(business_view_id)
+        if config is None:
+            return None
+        return BusinessViewDetail(
+            id=business_view_id,
+            name=f"view {business_view_id}",
+            status=BusinessViewStatus.ACTIVE,
+            config=config,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    async def get_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail | None:
+        config = self._kb_configs.get(knowledge_base_id)
+        if config is None:
+            return None
+        return KnowledgeBaseDetail(
+            id=knowledge_base_id,
+            name=f"KB {knowledge_base_id}",
+            status=KnowledgeBaseStatus.ACTIVE,
+            adapter_config=config,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+
+def test_business_view_layers_over_single_kb_query(monkeypatch: MonkeyPatch) -> None:
+    """業務アシスタントが単一 KB に解決するとき、KB query 既定の上に per-field merge で重なる。
+
+    KB は vector_index=accurate、業務アシスタントは generation=detailed_cited を設定。
+    → generation は業務アシスタント値、業務アシスタントが触れない vector_index は KB 既定が残る。
+    """
+    kb_config = KnowledgeBaseAdapterConfig.model_validate(
+        {"query": {"vector_index_profile": "accurate"}}
+    )
+    view_config = BusinessViewConfig(
+        knowledge_base_ids=["kb-1"],
+        query=KnowledgeBaseQueryConfig(generation_profile="detailed_cited"),
+    )
+    monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
+    monkeypatch.setattr(
+        search_route,
+        "OracleClient",
+        lambda: FakeViewAndKbOracle({"bv-1": view_config}, {"kb-1": kb_config}),
+    )
+
+    response = client.post(
+        "/api/search",
+        json={"query": "上限額", "business_view_id": "bv-1"},
+    )
+
+    assert response.status_code == 200
+    settings = RecordingPipeline.captured_settings
+    assert settings is not None
+    # 業務アシスタントが設定した generation は業務アシスタント値が勝つ。
+    assert settings.rag_generation_profile == "detailed_cited"
+    # 業務アシスタントが触れない vector_index は KB 既定が残る(per-field merge の肝)。
+    assert settings.rag_vector_index_profile == "accurate"
+    diagnostics = response.json()["data"]["diagnostics"]
+    assert diagnostics["business_view_applied"] == "bv-1"
+    assert diagnostics["kb_adapter_config_applied"] == "kb-1"

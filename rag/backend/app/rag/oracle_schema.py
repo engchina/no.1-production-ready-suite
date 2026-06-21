@@ -16,6 +16,7 @@ from typing import Any
 from app.clients.oracle import (
     oracle_agent_memory_schema_sql,
     oracle_business_view_schema_sql,
+    oracle_chunk_set_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
     oracle_feedback_schema_sql,
@@ -30,7 +31,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260619_001"
+MIGRATION_ARTIFACT_VERSION = "20260621_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -82,6 +83,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="chunks",
             table_name="rag_chunks",
             sql=oracle_vector_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="chunk_sets",
+            table_name="rag_chunk_sets",
+            sql=oracle_chunk_set_schema_sql(),
         ),
         OracleSchemaSection(
             name="search_audit",
@@ -194,6 +200,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260619_001_business_views",
             table_name="rag_business_views",
             sql=_business_views_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260621_001_chunk_sets",
+            table_name="rag_chunk_sets",
+            sql=_chunk_sets_migration_sql(),
         ),
     ]
 
@@ -632,6 +643,93 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_business_views_tenant_status_idx '
             || 'ON rag_business_views (tenant_id_hash, status, updated_at DESC)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _chunk_sets_migration_sql() -> str:
+    """variant の chunk_set / KB binding table と rag_chunks.chunk_set_id 列を追加する(冪等)。"""
+    return """
+DECLARE
+    v_table_count NUMBER;
+    v_index_count NUMBER;
+    v_col_count   NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables WHERE table_name = 'RAG_CHUNK_SETS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_chunk_sets ('
+            || 'chunk_set_id VARCHAR2(64) PRIMARY KEY,'
+            || 'document_id VARCHAR2(64) NOT NULL,'
+            || 'tenant_id_hash CHAR(64),'
+            || 'recipe_subset JSON,'
+            || 'status VARCHAR2(32) DEFAULT ''INGESTING'' NOT NULL,'
+            || 'chunk_count NUMBER(10) DEFAULT 0 NOT NULL,'
+            || 'vector_count NUMBER(10) DEFAULT 0 NOT NULL,'
+            || 'metrics_json JSON,'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_chunk_sets_document_fk FOREIGN KEY (document_id) '
+            || 'REFERENCES rag_documents (document_id) ON DELETE CASCADE,'
+            || 'CONSTRAINT rag_chunk_sets_status_ck CHECK '
+            || '(status IN (''INGESTING'', ''INDEXED'', ''ERROR''))'
+            || ')';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes WHERE index_name = 'RAG_CHUNK_SETS_DOCUMENT_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_chunk_sets_document_idx ON rag_chunk_sets (document_id, status)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables WHERE table_name = 'RAG_KB_CHUNK_SET_BINDINGS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_kb_chunk_set_bindings ('
+            || 'knowledge_base_id VARCHAR2(64) NOT NULL,'
+            || 'document_id VARCHAR2(64) NOT NULL,'
+            || 'chunk_set_id VARCHAR2(64) NOT NULL,'
+            || 'tenant_id_hash CHAR(64),'
+            || 'is_serving NUMBER(1) DEFAULT 1 NOT NULL,'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_kb_chunk_set_bindings_pk '
+            || 'PRIMARY KEY (knowledge_base_id, document_id, chunk_set_id),'
+            || 'CONSTRAINT rag_kb_cs_bind_cs_fk FOREIGN KEY (chunk_set_id) '
+            || 'REFERENCES rag_chunk_sets (chunk_set_id) ON DELETE CASCADE,'
+            || 'CONSTRAINT rag_kb_cs_bind_serving_ck CHECK (is_serving IN (0, 1))'
+            || ')';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes WHERE index_name = 'RAG_KB_CS_BIND_CS_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_kb_cs_bind_cs_idx ON rag_kb_chunk_set_bindings (chunk_set_id)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_col_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'CHUNK_SET_ID';
+
+    IF v_col_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunks ADD (chunk_set_id VARCHAR2(64))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes WHERE index_name = 'RAG_CHUNKS_CHUNK_SET_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_chunks_chunk_set_idx ON rag_chunks (chunk_set_id, chunk_index)';
     END IF;
 END;
 /
