@@ -3,11 +3,14 @@
 import base64
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import zipfile
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -78,6 +81,40 @@ class _AsgiTestClient:
 
 
 client = _AsgiTestClient()
+
+
+def _settings_fixture(**overrides: object) -> SimpleNamespace:
+    defaults: dict[str, object] = {
+        "agent_rbac_enabled": False,
+        "upload_storage_backend": "local",
+        "local_storage_dir": "/u01/production-ready-rag",
+        "object_storage_region": "ap-osaka-1",
+        "object_storage_namespace": "",
+        "object_storage_bucket": "",
+        "max_upload_bytes": 100 * 1024 * 1024,
+        "oci_config_file": "~/.oci/config",
+        "oci_config_profile": "DEFAULT",
+        "oci_region": "ap-osaka-1",
+        "oci_user_ocid": "",
+        "oci_fingerprint": "",
+        "oci_tenancy_ocid": "",
+        "model_settings_file": "model-settings.json",
+        "enterprise_ai_api_key": "",
+        "oci_enterprise_ai_api_key": "",
+        "oracle_user": "",
+        "oracle_password": "",
+        "oracle_dsn": "",
+        "oracle_wallet_dir": "",
+        "oracle_wallet_password": "",
+        "oracle_adb_ocid": "",
+        "adb_ocid": "",
+        "oracle_region": "",
+        "oracle_tcp_connect_timeout_seconds": 10.0,
+        "oracle_db_test_timeout_seconds": 15.0,
+        "agent_runtime_oracle_password": "",
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
 
 
 class _FakeResponse:
@@ -921,6 +958,347 @@ def test_oci_object_storage_namespace_reads_from_sdk_like_rag(
         "key_file": str(key_file),
         "region": "ap-osaka-1",
     }
+
+
+def test_oci_settings_save_writes_config_and_env_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / ".oci" / "config"
+    env_file = tmp_path / ".env"
+    key_file = tmp_path / ".oci" / "oci_api_key.pem"
+    monkeypatch.setattr(agent_router, "_oci_settings_state", None)
+    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", str(key_file))
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: _settings_fixture(oci_config_file=str(config_file)),
+    )
+
+    resp = client.patch(
+        "/api/settings/oci",
+        json={
+            "user": "ocid1.user.oc1..aaaaaaaa",
+            "fingerprint": "12:34:56:78:90:ab:cd:ef",
+            "tenancy": "ocid1.tenancy.oc1..aaaaaaaa",
+            "region": "us-chicago-1",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert config_file.is_file()
+    assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
+    config_text = config_file.read_text(encoding="utf-8")
+    assert "user=ocid1.user.oc1..aaaaaaaa" in config_text
+    assert "key_file=" + str(key_file) in config_text
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "OCI_CONFIG_FILE=" + str(config_file) in env_text
+    assert "OCI_CONFIG_PROFILE=DEFAULT" in env_text
+    assert "OCI_REGION=us-chicago-1" in env_text
+    data = resp.json()["data"]
+    assert data["user"] == "ocid1.user.oc1..aaaaaaaa"
+    assert data["region"] == "us-chicago-1"
+    assert data["config_file_exists"] is True
+
+
+def test_upload_oci_private_key_writes_pem_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    key_file = tmp_path / ".oci" / "oci_api_key.pem"
+    monkeypatch.setattr(agent_router, "_oci_settings_state", None)
+    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", str(key_file))
+    monkeypatch.setattr(agent_router, "get_settings", lambda: _settings_fixture())
+    pem = b"-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"
+
+    resp = client.post(
+        "/api/settings/oci/key-file",
+        files={"file": ("oci_api_key.pem", pem, "application/x-pem-file")},
+    )
+
+    assert resp.status_code == 200
+    assert key_file.read_bytes() == pem
+    assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+    assert resp.json()["data"] == {"key_file": str(key_file), "saved": True}
+
+
+def test_oci_config_test_checks_files_permissions_and_key_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    oci_dir = tmp_path / ".oci"
+    oci_dir.mkdir()
+    oci_dir.chmod(0o700)
+    key_file = oci_dir / "oci_api_key.pem"
+    key_file.write_text("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n")
+    key_file.chmod(0o600)
+    config_file = oci_dir / "config"
+    config_file.write_text(
+        "\n".join(
+            [
+                "[DEFAULT]",
+                "user=ocid1.user.oc1..aaaaaaaa",
+                "fingerprint=12:34:56:78:90:ab:cd:ef",
+                "tenancy=ocid1.tenancy.oc1..aaaaaaaa",
+                "region=ap-osaka-1",
+                f"key_file={key_file}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config_file.chmod(0o600)
+    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", str(key_file))
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: _settings_fixture(oci_config_file=str(config_file)),
+    )
+
+    resp = client.post("/api/settings/oci/config/test")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "success"
+    assert data["missing_fields"] == []
+    assert data["permission_issues"] == []
+    assert data["oci_directory_mode"] == "0700"
+    assert data["config_file_mode"] == "0600"
+    assert data["key_file_mode"] == "0600"
+
+
+def test_upload_database_wallet_extracts_zip_and_writes_env_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    wallet_dir = tmp_path / "wallet"
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(agent_router, "_database_settings_state", None)
+    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: _settings_fixture(oracle_wallet_dir=str(wallet_dir)),
+    )
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as wallet:
+        wallet.writestr("tnsnames.ora", "mydb_high = (DESCRIPTION=(ADDRESS=(HOST=db)))\n")
+        wallet.writestr("sqlnet.ora", "WALLET_LOCATION=(SOURCE=(METHOD=file))\n")
+
+    resp = client.post(
+        "/api/settings/database/wallet",
+        files={"file": ("wallet.zip", archive.getvalue(), "application/zip")},
+    )
+
+    assert resp.status_code == 200
+    assert (wallet_dir / "tnsnames.ora").is_file()
+    assert f"ORACLE_WALLET_DIR={wallet_dir}" in env_file.read_text(encoding="utf-8")
+    data = resp.json()["data"]
+    assert data["wallet_uploaded"] is True
+    assert data["wallet_dir"] == str(wallet_dir)
+    assert data["available_services"] == ["mydb_high"]
+
+
+def test_database_save_preserves_uploaded_wallet_and_writes_env_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text(
+        "mydb_high = (DESCRIPTION=(ADDRESS=(HOST=db)))\n",
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(agent_router, "_database_settings_state", None)
+    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    settings = _settings_fixture(
+        oracle_user="OLD",
+        oracle_password="old-password",
+        oracle_dsn="old_dsn",
+        oracle_wallet_dir=str(wallet_dir),
+    )
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+
+    resp = client.patch(
+        "/api/settings/database",
+        json={
+            "user": "ADMIN",
+            "dsn": "mydb_high",
+            "wallet_dir": "",
+            "password": "",
+            "wallet_password": "",
+            "clear_password": False,
+            "clear_wallet_password": False,
+        },
+    )
+
+    assert resp.status_code == 200
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "ORACLE_USER=ADMIN" in env_text
+    assert "ORACLE_PASSWORD=old-password" in env_text
+    assert "ORACLE_DSN=mydb_high" in env_text
+    assert f"ORACLE_WALLET_DIR={wallet_dir}" in env_text
+    assert settings.oracle_wallet_dir == str(wallet_dir)
+    data = resp.json()["data"]
+    assert data["wallet_dir"] == str(wallet_dir)
+    assert data["wallet_uploaded"] is True
+
+
+def test_database_connection_test_uses_oracledb_like_rag(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeCursor:
+        def execute(self, statement: str) -> None:
+            captured["statement"] = statement
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+        def close(self) -> None:
+            captured["cursor_closed"] = True
+
+    class FakeConnection:
+        def cursor(self) -> FakeCursor:
+            return FakeCursor()
+
+        def close(self) -> None:
+            captured["connection_closed"] = True
+
+    class FakeOracleDb:
+        @staticmethod
+        def connect(**kwargs: object) -> FakeConnection:
+            captured["connect_kwargs"] = kwargs
+            return FakeConnection()
+
+    def fake_import_module(name: str) -> object:
+        if name == "oracledb":
+            return FakeOracleDb
+        raise AssertionError(name)
+
+    monkeypatch.setattr(agent_router, "import_module", fake_import_module)
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: _settings_fixture(
+            oracle_user="ADMIN",
+            oracle_password="secret",
+            oracle_dsn="mydb_high",
+            oracle_tcp_connect_timeout_seconds=3.0,
+            oracle_db_test_timeout_seconds=5.0,
+        ),
+    )
+
+    resp = client.post(
+        "/api/settings/database/test",
+        json={"user": "ADMIN", "dsn": "mydb_high"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "success"
+    assert data["readiness"] == "ok"
+    assert captured["statement"] == "SELECT 1 FROM DUAL"
+    assert captured["cursor_closed"] is True
+    assert captured["connection_closed"] is True
+    assert captured["connect_kwargs"] == {
+        "user": "ADMIN",
+        "dsn": "mydb_high",
+        "retry_count": 0,
+        "retry_delay": 0,
+        "tcp_connect_timeout": 3.0,
+        "password": "secret",
+    }
+
+
+def test_upload_storage_save_writes_env_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(agent_router, "_upload_storage_settings_state", None)
+    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    settings = _settings_fixture()
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+
+    resp = client.patch(
+        "/api/settings/upload-storage",
+        json={
+            "backend": "oci",
+            "local_storage_dir": "/var/uploads",
+            "object_storage_namespace": "mytenancynamespace",
+            "object_storage_bucket": "rag-uploads",
+        },
+    )
+
+    assert resp.status_code == 200
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "UPLOAD_STORAGE_BACKEND=oci" in env_text
+    assert "LOCAL_STORAGE_DIR=/var/uploads" in env_text
+    assert "OBJECT_STORAGE_NAMESPACE=mytenancynamespace" in env_text
+    assert "OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
+    assert settings.upload_storage_backend == "oci"
+    assert settings.object_storage_bucket == "rag-uploads"
+
+
+def test_model_settings_save_persists_json_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "model-settings.json"
+    monkeypatch.setattr(agent_router, "_model_settings_state", None)
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: _settings_fixture(model_settings_file=str(settings_file)),
+    )
+    payload = {
+        "enterprise_ai": {
+            "endpoint": "https://enterprise.example.test",
+            "project_ocid": "ocid1.aiproject.oc1..aaaaaaaa",
+            "api_key": "enterprise-secret",
+            "has_api_key": False,
+            "clear_api_key": False,
+            "models": [
+                {
+                    "model_id": "enterprise-model",
+                    "display_name": "Enterprise Model",
+                    "vision_enabled": True,
+                }
+            ],
+            "default_model_id": "enterprise-model",
+            "api_path": "/responses",
+            "vlm_input_mode": "auto",
+            "text_payload_template": "",
+            "vision_payload_template": "",
+            "text_response_path": "/output_text",
+            "vision_response_path": "/output_text",
+            "timeout_seconds": 30.0,
+            "max_retries": 1,
+            "llm_max_output_tokens": 1200,
+            "vlm_max_output_tokens": 2048,
+        },
+        "generative_ai": {
+            "embedding_model": "cohere.embed-v4.0",
+            "embedding_dim": 1536,
+            "rerank_model": "cohere.rerank-v4.0-fast",
+        },
+    }
+
+    resp = client.patch("/api/settings/model", json=payload)
+
+    assert resp.status_code == 200
+    saved = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert saved["enterprise_ai"]["api_key"] == "enterprise-secret"
+    assert saved["enterprise_ai"]["default_model_id"] == "enterprise-model"
+    assert saved["generative_ai"]["embedding_dim"] == 1536
+    assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
+    data = resp.json()["data"]
+    assert data["settings"]["enterprise_ai"]["api_key"] == ""
+    assert data["settings"]["enterprise_ai"]["has_api_key"] is True
 
 
 def test_list_tools_v2_includes_external_tools() -> None:

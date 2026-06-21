@@ -10,19 +10,29 @@ import base64
 import configparser
 import hashlib
 import hmac
+import io
 import json
 import re
+import shutil
+import stat
 from asyncio import sleep, wait_for
 from collections.abc import Iterable, Mapping
 from csv import DictWriter
 from datetime import UTC, datetime
+from email import policy
+from email.parser import BytesParser
 from importlib import import_module
 from io import StringIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from time import monotonic
+from types import SimpleNamespace
 from typing import Any, Literal, cast
+from uuid import uuid4
+from zipfile import BadZipFile, ZipFile
 
 import httpx
+from anyio import fail_after
+from anyio import to_thread as anyio_to_thread
 from fastapi import (
     APIRouter,
     Depends,
@@ -91,6 +101,8 @@ from app.settings import get_settings
 
 router = APIRouter(tags=["agent-runtime"])
 
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
+BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
 OCI_CONFIG_MAX_BYTES = 64 * 1024
 OCI_PRIVATE_KEY_FILE = "~/.oci/oci_api_key.pem"
 OCI_CONFIG_KEYS = ("user", "fingerprint", "tenancy", "region", "key_file")
@@ -99,6 +111,18 @@ OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR = (  # nosec B105 - エラーメッセ
     " pass_phrase を OCI config に設定するか、パスフレーズなしの秘密鍵 PEM を使用してください。"
 )
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
+ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+ENV_FILE_MODE = 0o600
+MODEL_SETTINGS_FILE_MODE = 0o600
+OCI_DIRECTORY_MODE = 0o700
+OCI_CONFIG_FILE_MODE = 0o600
+OCI_PRIVATE_KEY_FILE_MODE = 0o600
+OCI_PRIVATE_KEY_MAX_BYTES = 128 * 1024
+ORACLE_WALLET_MAX_BYTES = 64 * 1024 * 1024
+ORACLE_WALLET_MAX_EXTRACTED_BYTES = 256 * 1024 * 1024
+ORACLE_WALLET_DIR_NAME = "wallet"
+ORACLE_WALLET_SKIPPED_FILES = frozenset({"ojdbc.properties", "README"})
+ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
 ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal[
@@ -354,7 +378,7 @@ class DatabaseConnectionTestResult(BaseModel):
     message: str
     elapsed_ms: int = 0
     troubleshooting: list[str] = Field(default_factory=list)
-    details: dict[str, str | int | bool | None] = Field(default_factory=dict)
+    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     checked_at: str
     error_type: str | None = None
 
@@ -774,10 +798,249 @@ def _json_pointer_or_empty(value: str) -> str:
     return normalized if not normalized or normalized.startswith("/") else ""
 
 
+def _write_env_values(
+    path: Path,
+    values: dict[str, str],
+    *,
+    section_comment: str,
+    error_detail: str,
+) -> None:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        next_lines: list[str] = []
+        written: set[str] = set()
+        for line in lines:
+            key = _env_assignment_key(line)
+            if key not in values:
+                next_lines.append(line)
+                continue
+            if key in written:
+                continue
+            next_lines.append(f"{key}={_format_env_value(values[key])}")
+            written.add(key)
+
+        missing = [key for key in values if key not in written]
+        if missing:
+            if next_lines and next_lines[-1].strip():
+                next_lines.append("")
+            next_lines.append(section_comment)
+            for key in missing:
+                next_lines.append(f"{key}={_format_env_value(values[key])}")
+
+        _replace_env_file(path, "\n".join(next_lines).rstrip() + "\n")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=error_detail) from exc
+
+
+def _env_assignment_key(line: str) -> str | None:
+    if line.lstrip().startswith("#"):
+        return None
+    match = ENV_ASSIGNMENT_RE.match(line)
+    return match.group(1) if match else None
+
+
+def _format_env_value(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    if re.search(r"[\s#\"']", normalized):
+        return '"' + normalized.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return normalized
+
+
+def _replace_env_file(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else ENV_FILE_MODE
+    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        tmp_path.chmod(mode)
+        tmp_path.replace(path)
+        path.chmod(mode)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _model_settings_path(settings: object) -> Path:
+    raw_path = _settings_str_from(settings, "model_settings_file", "model-settings.json")
+    path = Path(raw_path).expanduser()
+    return path if path.is_absolute() else BACKEND_ROOT / path
+
+
+def _load_persisted_model_settings(settings: object) -> ModelSettingsPayload | None:
+    path = _model_settings_path(settings)
+    if not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        payload = ModelSettingsPayload.model_validate(
+            {
+                "enterprise_ai": document.get("enterprise_ai", {}),
+                "generative_ai": document.get("generative_ai", {}),
+            }
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="モデル設定ファイルを読み取れませんでした。",
+        ) from exc
+    _apply_model_settings(settings, payload)
+    return payload
+
+
+def _persist_model_settings(settings: object, payload: ModelSettingsPayload) -> None:
+    path = _model_settings_path(settings)
+    document = _model_settings_document(payload)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
+        try:
+            tmp_path.write_text(
+                json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            tmp_path.chmod(MODEL_SETTINGS_FILE_MODE)
+            tmp_path.replace(path)
+            path.chmod(MODEL_SETTINGS_FILE_MODE)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="モデル設定を永続化ファイルへ保存できませんでした。",
+        ) from exc
+
+
+def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]:
+    enterprise_ai = payload.enterprise_ai
+    generative_ai = payload.generative_ai
+    return {
+        "version": 1,
+        "enterprise_ai": {
+            "endpoint": enterprise_ai.endpoint,
+            "project_ocid": enterprise_ai.project_ocid,
+            "api_key": enterprise_ai.api_key,
+            "models": [
+                {
+                    "model_id": model.model_id,
+                    "display_name": model.display_name,
+                    "vision_enabled": model.vision_enabled,
+                }
+                for model in enterprise_ai.models
+                if model.model_id
+            ],
+            "default_model_id": enterprise_ai.default_model_id,
+            "api_path": enterprise_ai.api_path,
+            "vlm_input_mode": enterprise_ai.vlm_input_mode,
+            "text_payload_template": enterprise_ai.text_payload_template,
+            "vision_payload_template": enterprise_ai.vision_payload_template,
+            "text_response_path": enterprise_ai.text_response_path,
+            "vision_response_path": enterprise_ai.vision_response_path,
+            "timeout_seconds": enterprise_ai.timeout_seconds,
+            "max_retries": enterprise_ai.max_retries,
+            "llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
+            "vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
+        },
+        "generative_ai": {
+            "embedding_model": generative_ai.embedding_model,
+            "embedding_dim": generative_ai.embedding_dim,
+            "rerank_model": generative_ai.rerank_model,
+        },
+    }
+
+
+def _model_settings_with_resolved_secret(
+    settings: object,
+    request: ModelSettingsPayload,
+) -> ModelSettingsPayload:
+    current_api_key = str(
+        _settings_first_from(
+            settings,
+            ("oci_enterprise_ai_api_key", "enterprise_ai_api_key"),
+        )
+    )
+    enterprise_ai = request.enterprise_ai
+    resolved_api_key = _secret_value(
+        current=current_api_key,
+        update=enterprise_ai.api_key,
+        clear=enterprise_ai.clear_api_key,
+    )
+    resolved_enterprise_ai = enterprise_ai.model_copy(
+        update={
+            "api_key": resolved_api_key,
+            "has_api_key": bool(resolved_api_key.strip()),
+            "clear_api_key": False,
+        }
+    )
+    return request.model_copy(update={"enterprise_ai": resolved_enterprise_ai})
+
+
+def _apply_model_settings(settings: object, payload: ModelSettingsPayload) -> None:
+    enterprise_ai = payload.enterprise_ai
+    generative_ai = payload.generative_ai
+    models = [model for model in enterprise_ai.models if model.model_id]
+    default_model = enterprise_ai.default_model_id or (models[0].model_id if models else "")
+    vision_model = (
+        next((model.model_id for model in models if model.vision_enabled), default_model)
+        if models
+        else ""
+    )
+    updates: dict[str, object] = {
+        "enterprise_ai_endpoint": enterprise_ai.endpoint,
+        "enterprise_ai_project_ocid": enterprise_ai.project_ocid,
+        "enterprise_ai_api_key": enterprise_ai.api_key,
+        "enterprise_ai_default_model_id": default_model,
+        "enterprise_ai_api_path": enterprise_ai.api_path,
+        "enterprise_ai_vlm_input_mode": enterprise_ai.vlm_input_mode,
+        "enterprise_ai_text_payload_template": enterprise_ai.text_payload_template,
+        "enterprise_ai_vision_payload_template": enterprise_ai.vision_payload_template,
+        "enterprise_ai_text_response_path": enterprise_ai.text_response_path,
+        "enterprise_ai_vision_response_path": enterprise_ai.vision_response_path,
+        "enterprise_ai_timeout_seconds": enterprise_ai.timeout_seconds,
+        "enterprise_ai_max_retries": enterprise_ai.max_retries,
+        "enterprise_ai_llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
+        "enterprise_ai_vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
+        "oci_enterprise_ai_endpoint": enterprise_ai.endpoint,
+        "oci_enterprise_ai_project_ocid": enterprise_ai.project_ocid,
+        "oci_enterprise_ai_api_key": enterprise_ai.api_key,
+        "oci_enterprise_ai_models": models,
+        "oci_enterprise_ai_default_model": default_model,
+        "oci_enterprise_ai_llm_model": default_model,
+        "oci_enterprise_ai_vlm_model": vision_model,
+        "oci_enterprise_ai_llm_path": enterprise_ai.api_path,
+        "oci_enterprise_ai_vlm_path": enterprise_ai.api_path,
+        "oci_enterprise_ai_vlm_input_mode": enterprise_ai.vlm_input_mode,
+        "oci_enterprise_ai_llm_payload_template": enterprise_ai.text_payload_template,
+        "oci_enterprise_ai_vlm_payload_template": enterprise_ai.vision_payload_template,
+        "oci_enterprise_ai_llm_response_path": enterprise_ai.text_response_path,
+        "oci_enterprise_ai_vlm_response_path": enterprise_ai.vision_response_path,
+        "oci_enterprise_ai_timeout_seconds": enterprise_ai.timeout_seconds,
+        "oci_enterprise_ai_max_retries": enterprise_ai.max_retries,
+        "oci_enterprise_ai_llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
+        "oci_enterprise_ai_vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
+        "embedding_model": generative_ai.embedding_model,
+        "embedding_dim": generative_ai.embedding_dim,
+        "rerank_model": generative_ai.rerank_model,
+        "oci_genai_embedding_model": generative_ai.embedding_model,
+        "oci_genai_embedding_dim": generative_ai.embedding_dim,
+        "oci_genai_rerank_model": generative_ai.rerank_model,
+    }
+    for key, value in updates.items():
+        try:
+            setattr(settings, key, value)
+        except (AttributeError, ValueError):
+            continue
+
+
 def _get_model_settings_state() -> ModelSettingsPayload:
     global _model_settings_state
     if _model_settings_state is None:
         settings = get_settings()
+        persisted = _load_persisted_model_settings(settings)
+        if persisted is not None:
+            public_payload = _public_model_settings_payload(persisted)
+            _model_settings_state = public_payload.model_copy(deep=True)
+            return _model_settings_state.model_copy(deep=True)
         model_id = str(
             _settings_first_from(
                 settings,
@@ -1097,8 +1360,10 @@ def _database_settings_data(settings: object) -> DatabaseSettingsData:
     wallet_dir = _settings_str_from(settings, "oracle_wallet_dir")
     wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
     wallet_uploaded = bool(_settings_first_from(settings, ("oracle_wallet_uploaded",), False))
+    available_services: list[str] = [dsn] if dsn else []
     if wallet_path is not None and wallet_path.is_dir():
         wallet_uploaded = True
+        available_services = _extract_wallet_services(wallet_path) or available_services
     has_password = bool(
         _settings_first_from(settings, ("oracle_password", "agent_runtime_oracle_password"))
     )
@@ -1111,7 +1376,7 @@ def _database_settings_data(settings: object) -> DatabaseSettingsData:
         dsn=dsn,
         wallet_dir=wallet_dir,
         wallet_uploaded=wallet_uploaded,
-        available_services=[dsn] if dsn else [],
+        available_services=available_services,
         has_password=has_password,
         has_wallet_password=bool(_settings_str_from(settings, "oracle_wallet_password")),
         embedding_dimension=embedding_dim,
@@ -1126,6 +1391,23 @@ def _database_settings_data(settings: object) -> DatabaseSettingsData:
     return data
 
 
+def _extract_wallet_services(wallet_path: Path) -> list[str]:
+    tnsnames = wallet_path / "tnsnames.ora"
+    if not tnsnames.is_file():
+        nested = list(wallet_path.rglob("tnsnames.ora"))
+        tnsnames = nested[0] if nested else tnsnames
+    try:
+        content = tnsnames.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    services: list[str] = []
+    for line in content.splitlines():
+        match = re.match(r"^\s*([A-Za-z0-9_.-]+)\s*=", line)
+        if match:
+            services.append(match.group(1))
+    return services
+
+
 def _database_settings_candidate(
     base: DatabaseSettingsData,
     payload: DatabaseSettingsUpdate,
@@ -1134,7 +1416,7 @@ def _database_settings_candidate(
         update={
             "user": payload.user,
             "dsn": payload.dsn,
-            "wallet_dir": payload.wallet_dir,
+            "wallet_dir": payload.wallet_dir or base.wallet_dir,
             "available_services": [payload.dsn] if payload.dsn else [],
             "has_password": bool(
                 _secret_value(
@@ -1357,7 +1639,379 @@ def _parse_oci_config(content: str, profile: str) -> OciConfigReadData:
     )
 
 
+def _safe_oci_profile_name(profile: str) -> str:
+    selected = profile.strip() or "DEFAULT"
+    if any(char in selected for char in "[]\r\n"):
+        raise HTTPException(status_code=422, detail="プロファイル名に [ ] や改行は使用できません。")
+    return selected
+
+
+def _write_oci_config(settings: object, payload: OciSettingsUpdate) -> Path:
+    target = Path(_settings_str_from(settings, "oci_config_file", "~/.oci/config")).expanduser()
+    profile = _safe_oci_profile_name(_settings_str_from(settings, "oci_config_profile", "DEFAULT"))
+    parser = _load_oci_config_for_write(target)
+    values = {
+        "user": payload.user,
+        "fingerprint": payload.fingerprint,
+        "tenancy": payload.tenancy,
+        "region": payload.region,
+        "key_file": OCI_PRIVATE_KEY_FILE,
+    }
+    _set_oci_config_profile(parser, profile, values)
+    _atomic_write_oci_config(target, parser)
+    return target
+
+
+def _load_oci_config_for_write(path: Path) -> configparser.ConfigParser:
+    parser = configparser.ConfigParser(interpolation=None)
+    if not path.exists():
+        return parser
+    if path.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイル path がディレクトリを指しています。",
+        )
+    try:
+        if path.stat().st_size > OCI_CONFIG_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="OCI config ファイルが大きすぎます。")
+        content = path.read_text(encoding="utf-8")
+    except HTTPException:
+        raise
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイルは UTF-8 テキストとして読み取れる必要があります。",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="OCI config ファイルを更新前に読み取れませんでした。",
+        ) from exc
+    if not content.strip():
+        return parser
+    try:
+        parser.read_string(content)
+    except configparser.Error as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイルの形式を確認してください。",
+        ) from exc
+    return parser
+
+
+def _set_oci_config_profile(
+    parser: configparser.ConfigParser,
+    profile: str,
+    values: dict[str, str],
+) -> None:
+    if profile.upper() == "DEFAULT":
+        for key, value in values.items():
+            parser["DEFAULT"][key] = value
+        return
+    if not parser.has_section(profile):
+        parser.add_section(profile)
+    for key, value in values.items():
+        parser[profile][key] = value
+
+
+def _atomic_write_oci_config(path: Path, parser: configparser.ConfigParser) -> None:
+    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
+    try:
+        _ensure_private_directory(path.parent)
+        buffer = StringIO()
+        parser.write(buffer, space_around_delimiters=False)
+        tmp_path.write_text(buffer.getvalue(), encoding="utf-8")
+        tmp_path.chmod(OCI_CONFIG_FILE_MODE)
+        tmp_path.replace(path)
+        path.chmod(OCI_CONFIG_FILE_MODE)
+    except OSError as exc:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail="OCI config ファイルをバックエンドの固定 path へ保存できませんでした。",
+        ) from exc
+
+
+def _ensure_private_directory(path: Path) -> None:
+    path.mkdir(mode=OCI_DIRECTORY_MODE, parents=True, exist_ok=True)
+    path.chmod(OCI_DIRECTORY_MODE)
+
+
+def _persist_oci_settings(settings: object, payload: OciSettingsUpdate) -> None:
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "OCI_CONFIG_FILE": _settings_str_from(settings, "oci_config_file", "~/.oci/config"),
+            "OCI_CONFIG_PROFILE": _settings_str_from(settings, "oci_config_profile", "DEFAULT"),
+            "OCI_REGION": payload.region,
+        },
+        section_comment="# OCI 共通",
+        error_detail="OCI 認証設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _persist_oci_object_storage_settings(settings: object) -> None:
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "OBJECT_STORAGE_REGION": _settings_str_from(
+                settings,
+                "object_storage_region",
+                "ap-osaka-1",
+            ),
+            "OBJECT_STORAGE_NAMESPACE": _settings_str_from(settings, "object_storage_namespace"),
+        },
+        section_comment="# OCI Object Storage",
+        error_detail="OCI Object Storage 設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _persist_upload_storage_settings(data: UploadStorageSettingsData) -> None:
+    values = {
+        "UPLOAD_STORAGE_BACKEND": data.backend,
+        "LOCAL_STORAGE_DIR": data.local_storage_dir,
+    }
+    if data.backend == "oci":
+        values["OBJECT_STORAGE_REGION"] = data.object_storage_region
+        values["OBJECT_STORAGE_NAMESPACE"] = data.object_storage_namespace
+        values["OBJECT_STORAGE_BUCKET"] = data.object_storage_bucket
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        values,
+        section_comment="# アップロード保存先",
+        error_detail="アップロード保存先設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _persist_database_settings(
+    settings: object,
+    data: DatabaseSettingsData,
+    payload: DatabaseSettingsUpdate,
+) -> None:
+    oracle_password = _secret_value(
+        current=_settings_str_from(settings, "oracle_password")
+        or _settings_str_from(settings, "agent_runtime_oracle_password"),
+        update=payload.password,
+        clear=payload.clear_password,
+    )
+    wallet_password = _secret_value(
+        current=_settings_str_from(settings, "oracle_wallet_password"),
+        update=payload.wallet_password,
+        clear=payload.clear_wallet_password,
+    )
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "ORACLE_USER": data.user,
+            "ORACLE_PASSWORD": oracle_password,
+            "ORACLE_DSN": data.dsn,
+            "ORACLE_WALLET_DIR": data.wallet_dir,
+            "ORACLE_WALLET_PASSWORD": wallet_password,
+        },
+        section_comment="# Oracle 26ai",
+        error_detail="Oracle 26ai 接続設定を backend/.env へ保存できませんでした。",
+    )
+    _set_if_possible(settings, "oracle_user", data.user)
+    _set_if_possible(settings, "oracle_password", oracle_password)
+    _set_if_possible(settings, "oracle_dsn", data.dsn)
+    _set_if_possible(settings, "oracle_wallet_dir", data.wallet_dir)
+    _set_if_possible(settings, "oracle_wallet_password", wallet_password)
+
+
+def _database_connection_test_candidate(
+    settings: object,
+    payload: DatabaseSettingsUpdate,
+) -> SimpleNamespace:
+    base = _database_settings_data(settings)
+    candidate = _database_settings_candidate(base, payload)
+    oracle_password = _secret_value(
+        current=_settings_str_from(settings, "oracle_password")
+        or _settings_str_from(settings, "agent_runtime_oracle_password"),
+        update=payload.password,
+        clear=payload.clear_password,
+    )
+    wallet_password = _secret_value(
+        current=_settings_str_from(settings, "oracle_wallet_password"),
+        update=payload.wallet_password,
+        clear=payload.clear_wallet_password,
+    )
+    return SimpleNamespace(
+        oracle_user=candidate.user,
+        oracle_dsn=candidate.dsn,
+        oracle_password=oracle_password,
+        oracle_wallet_dir=candidate.wallet_dir,
+        oracle_wallet_password=wallet_password,
+        oracle_tcp_connect_timeout_seconds=_coerce_float(
+            _settings_first_from(settings, ("oracle_tcp_connect_timeout_seconds",), 10.0),
+            10.0,
+        ),
+        oracle_db_test_timeout_seconds=_coerce_float(
+            _settings_first_from(settings, ("oracle_db_test_timeout_seconds",), 15.0),
+            15.0,
+        ),
+        readiness=_database_readiness(candidate),
+        display_dsn=candidate.dsn,
+    )
+
+
+async def _test_oracle_connection(settings: SimpleNamespace) -> None:
+    timeout_seconds = float(settings.oracle_db_test_timeout_seconds)
+    try:
+        with fail_after(timeout_seconds):
+            await anyio_to_thread.run_sync(_test_oracle_connection_sync, settings)
+    except TimeoutError as exc:
+        raise OracleConnectionTimeoutError(
+            f"Oracle 26ai 接続テストが {timeout_seconds:g} 秒でタイムアウトしました。"
+            "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
+        ) from exc
+
+
+def _test_oracle_connection_sync(settings: SimpleNamespace) -> None:
+    oracledb = import_module("oracledb")
+    connection = oracledb.connect(**_oracle_connect_kwargs(settings))
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT 1 FROM DUAL")
+            cursor.fetchone()
+        finally:
+            cursor.close()
+    finally:
+        connection.close()
+
+
+def _oracle_connect_kwargs(settings: SimpleNamespace) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "user": settings.oracle_user,
+        "dsn": settings.oracle_dsn,
+        "retry_count": 0,
+        "retry_delay": 0,
+    }
+    tcp_connect_timeout = float(settings.oracle_tcp_connect_timeout_seconds)
+    if tcp_connect_timeout > 0:
+        kwargs["tcp_connect_timeout"] = tcp_connect_timeout
+    if str(settings.oracle_password).strip():
+        kwargs["password"] = settings.oracle_password
+    wallet_dir = str(settings.oracle_wallet_dir or "").strip()
+    if wallet_dir:
+        kwargs["config_dir"] = str(Path(wallet_dir).expanduser())
+        kwargs["wallet_location"] = str(Path(wallet_dir).expanduser())
+    if str(settings.oracle_wallet_password).strip():
+        kwargs["wallet_password"] = settings.oracle_wallet_password
+    return kwargs
+
+
+def _oracle_error_codes(error_text: str) -> list[str]:
+    return list(dict.fromkeys(match.upper() for match in ORACLE_ERROR_CODE_RE.findall(error_text)))
+
+
+def _database_connection_error_message(exc: Exception, oracle_error_codes: list[str]) -> str:
+    if getattr(exc, "safe_for_user", False):
+        return str(exc)
+
+    code_label = f"（{', '.join(oracle_error_codes)}）" if oracle_error_codes else ""
+    code_set = set(oracle_error_codes)
+    if isinstance(exc, ModuleNotFoundError):
+        return "python-oracledb がインストールされていないため、Oracle 26ai へ接続できません。"
+    if "ORA-01017" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ユーザー名または DB パスワードを確認してください。"
+        )
+    if "ORA-12154" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet サービス名が tnsnames.ora に存在するか確認してください。"
+        )
+    if "ORA-12506" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ADB のアクセス制御リストまたは network ACL が"
+            "この接続元を許可しているか確認してください。"
+        )
+    if code_set & {"ORA-12514", "ORA-12505"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet サービス名と ADB の稼働状態を確認してください。"
+        )
+    if code_set & {"ORA-12541", "DPY-6005", "DPY-6000"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ADB の listener と TCPS 1522 への到達性を確認してください。"
+        )
+    if "DPY-4011" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet ZIP と Wallet パスワードを確認してください。"
+        )
+    if code_set & {"DPI-1047", "DPI-1072"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Oracle Instant Client の配置を確認してください。"
+        )
+    if oracle_error_codes:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "下の確認ポイントと backend ログを確認してください。"
+        )
+    return "Oracle 26ai へ接続できませんでした。下の確認ポイントと backend ログを確認してください。"
+
+
+def _database_connection_troubleshooting(
+    *,
+    readiness: str,
+    error_text: str = "",
+    error_type: str = "",
+) -> list[str]:
+    tips: list[str] = []
+    if readiness == "missing":
+        tips.append("ユーザー名、DSN、Wallet ZIP が入力・アップロード済みか確認してください。")
+    if readiness == "missing_credentials":
+        tips.append("DB パスワードまたは Wallet パスワードが保存済みか確認してください。")
+
+    combined = f"{error_text} {error_type}".lower()
+    if "modulenotfounderror" in combined or "oracledb" in combined:
+        tips.append("backend の依存関係に python-oracledb が含まれているか確認してください。")
+    if any(token in combined for token in ("timeout", "timed out", "oracleconnectiontimeouterror")):
+        tips.append(
+            "接続テストがタイムアウトしました。ADB が起動中か、ネットワーク経路から "
+            "TCPS 1522 に到達できるか確認してください。"
+        )
+    if "ora-01017" in combined:
+        tips.append("ユーザー名または DB パスワードが正しいか確認してください。")
+    if "ora-12154" in combined or "tns" in combined:
+        tips.append("Wallet サービス名が tnsnames.ora に存在するか確認してください。")
+    if "ora-12506" in combined:
+        tips.append("ADB のアクセス制御リストまたは network ACL を確認してください。")
+    if "dpy-4011" in combined:
+        tips.append("Wallet ZIP と Wallet パスワードを確認してください。")
+    if "dpi-1047" in combined:
+        tips.append(
+            "Oracle Instant Client が必要な実行環境では"
+            "配置とライブラリパスを確認してください。"
+        )
+    if not tips:
+        tips.append("backend ログの Oracle エラーコードと設定値を確認してください。")
+    return list(dict.fromkeys(tips))
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((monotonic() - started) * 1000))
+
+
+def _set_if_possible(target: object, name: str, value: object) -> None:
+    try:
+        setattr(target, name, value)
+    except (AttributeError, ValueError):
+        return
+
+
 class OciPrivateKeyPassPhraseRequiredError(RuntimeError):
+    safe_for_user = True
+
+
+class OracleConnectionTimeoutError(RuntimeError):
     safe_for_user = True
 
 
@@ -1407,6 +2061,125 @@ def _pem_file_is_encrypted(path: Path) -> bool:
 
 def _has_pass_phrase(config: Mapping[str, object]) -> bool:
     return any(str(config.get(key, "") or "").strip() for key in PASSPHRASE_CONFIG_KEYS)
+
+
+def _test_oci_config(settings: object) -> OciConfigTestResult:
+    config_file = _settings_str_from(settings, "oci_config_file", "~/.oci/config")
+    profile = _safe_oci_profile_name(_settings_str_from(settings, "oci_config_profile", "DEFAULT"))
+    config_path = Path(config_file).expanduser()
+    default_key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+    try:
+        content = _read_oci_config_text(config_file)
+        parsed = _parse_oci_config(content, profile)
+    except HTTPException as exc:
+        return OciConfigTestResult(
+            status="failed",
+            profile=profile,
+            config_file=config_file,
+            key_file=OCI_PRIVATE_KEY_FILE,
+            config_file_exists=config_path.is_file(),
+            key_file_exists=default_key_path.is_file(),
+            message=str(exc.detail),
+            checked_at=_now_iso(),
+            error_type=type(exc).__name__,
+            oci_directory_mode=_mode_string(config_path.parent),
+            config_file_mode=_mode_string(config_path),
+            key_file_mode=_mode_string(default_key_path),
+        )
+
+    parsed_values = {
+        "user": parsed.user,
+        "fingerprint": parsed.fingerprint,
+        "tenancy": parsed.tenancy,
+        "region": parsed.region,
+        "key_file": parsed.key_file,
+    }
+    missing_fields = [field for field in OCI_CONFIG_KEYS if not parsed_values[field].strip()]
+    key_path = _resolve_oci_key_file(parsed.key_file or OCI_PRIVATE_KEY_FILE, config_path)
+    key_file_exists = key_path.is_file()
+    permission_issues = _oci_permission_issues(config_path, key_path)
+    pass_phrase_required = (
+        key_file_exists
+        and _pem_file_is_encrypted(key_path)
+        and not _oci_config_has_private_key_pass_phrase(content, profile)
+    )
+    can_use_config = (
+        not missing_fields
+        and key_file_exists
+        and not permission_issues
+        and not pass_phrase_required
+    )
+
+    if missing_fields:
+        message = "OCI config の必須項目が不足しています。"
+    elif not key_file_exists:
+        message = "OCI config の key_file が指す秘密鍵ファイルが見つかりません。"
+    elif pass_phrase_required:
+        message = OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR
+    elif permission_issues:
+        message = "OCI 認証ファイルの権限を確認してください。"
+    else:
+        message = "OCI config と秘密鍵ファイルを確認できました。"
+
+    return OciConfigTestResult(
+        status="success" if can_use_config else "failed",
+        profile=parsed.profile,
+        config_file=config_file,
+        key_file=parsed.key_file or OCI_PRIVATE_KEY_FILE,
+        config_file_exists=config_path.is_file(),
+        key_file_exists=key_file_exists,
+        missing_fields=missing_fields,
+        permission_issues=permission_issues,
+        oci_directory_mode=_mode_string(config_path.parent),
+        config_file_mode=_mode_string(config_path),
+        key_file_mode=_mode_string(key_path),
+        message=message,
+        checked_at=_now_iso(),
+        error_type="OciPrivateKeyPassPhraseRequiredError" if pass_phrase_required else None,
+    )
+
+
+def _oci_permission_issues(config_path: Path, key_path: Path) -> list[str]:
+    issues: list[str] = []
+    directory_mode = _path_mode(config_path.parent)
+    config_mode = _path_mode(config_path)
+    key_mode = _path_mode(key_path)
+    if directory_mode is not None and directory_mode != OCI_DIRECTORY_MODE:
+        issues.append("~/.oci ディレクトリは 0700 にしてください。")
+    if config_mode is not None and config_mode & 0o077:
+        issues.append("OCI config ファイルは 0600 にしてください。")
+    if key_mode is not None and key_mode & 0o077:
+        issues.append("秘密鍵ファイルは 0600 にしてください。")
+    return issues
+
+
+def _mode_string(path: Path) -> str | None:
+    mode = _path_mode(path)
+    return f"{mode:04o}" if mode is not None else None
+
+
+def _path_mode(path: Path) -> int | None:
+    try:
+        return stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return None
+
+
+def _oci_config_has_private_key_pass_phrase(content: str, profile: str) -> bool:
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(content)
+    except configparser.Error:
+        return False
+
+    selected_profile = profile.strip() or "DEFAULT"
+    if selected_profile.upper() == "DEFAULT":
+        entries = parser.defaults()
+    elif parser.has_section(selected_profile):
+        entries = parser[selected_profile]
+    else:
+        return False
+    return any(str(entries.get(key, "")).strip() for key in PASSPHRASE_CONFIG_KEYS)
 
 
 def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) -> str:
@@ -1508,6 +2281,172 @@ async def _uploaded_filename(request: Request) -> str:
     return preview[start:end] if end >= start else ""
 
 
+async def _uploaded_file_from_request(request: Request) -> tuple[str, bytes]:
+    body = await request.body()
+    if not body:
+        return "", b""
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        return "", body
+
+    message = BytesParser(policy=policy.default).parsebytes(
+        b"Content-Type: "
+        + content_type.encode("utf-8", errors="ignore")
+        + b"\r\nMIME-Version: 1.0\r\n\r\n"
+        + body
+    )
+    for part in message.iter_parts():
+        filename = part.get_filename()
+        if not filename:
+            continue
+        payload = part.get_payload(decode=True)
+        return filename, payload if isinstance(payload, bytes) else b""
+    return "", b""
+
+
+def _install_oci_private_key(data: bytes, file_name: str | None) -> Path:
+    safe_name = PurePosixPath((file_name or "oci_api_key.pem").replace("\\", "/")).name
+    if Path(safe_name).suffix.lower() not in {".pem", ".key"}:
+        raise HTTPException(
+            status_code=415,
+            detail="秘密鍵は .pem または .key ファイルを選択してください。",
+        )
+    if not data:
+        raise HTTPException(status_code=400, detail="空の秘密鍵ファイルはアップロードできません。")
+    if len(data) > OCI_PRIVATE_KEY_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="秘密鍵ファイルのサイズが上限を超えています。")
+    _validate_private_key_pem(data)
+
+    target = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+    tmp_path = target.with_name(f".{target.name}.tmp-{uuid4().hex}")
+    try:
+        _ensure_private_directory(target.parent)
+        tmp_path.write_bytes(data)
+        tmp_path.chmod(OCI_PRIVATE_KEY_FILE_MODE)
+        tmp_path.replace(target)
+        target.chmod(OCI_PRIVATE_KEY_FILE_MODE)
+    except OSError as exc:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail="秘密鍵ファイルをバックエンドの固定 path へ保存できませんでした。",
+        ) from exc
+    return target
+
+
+def _validate_private_key_pem(data: bytes) -> None:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="秘密鍵ファイルは UTF-8 の PEM テキストとして読み取れる必要があります。",
+        ) from exc
+    if "\x00" in text or "-----BEGIN " not in text or "PRIVATE KEY-----" not in text:
+        raise HTTPException(
+            status_code=400,
+            detail="秘密鍵 PEM ファイルの形式を確認してください。",
+        )
+    upper_text = text.upper()
+    if "BEGIN ENCRYPTED PRIVATE KEY" in upper_text or "PROC-TYPE: 4,ENCRYPTED" in upper_text:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "暗号化された OCI API 秘密鍵は pass phrase 入力が必要です。"
+                "パスフレーズなしの秘密鍵 PEM を使用してください。"
+            ),
+        )
+
+
+def _install_database_wallet(settings: object, data: bytes, file_name: str | None) -> Path:
+    safe_name = PurePosixPath((file_name or "wallet.zip").replace("\\", "/")).name
+    if not safe_name.lower().endswith(".zip"):
+        raise HTTPException(
+            status_code=415,
+            detail="Oracle Wallet は ZIP ファイルを選択してください。",
+        )
+    if not data:
+        raise HTTPException(status_code=400, detail="空の Wallet ZIP はアップロードできません。")
+    if len(data) > ORACLE_WALLET_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Wallet ZIP のサイズが上限を超えています。")
+
+    target = _wallet_storage_root(settings)
+    tmp_dir = target.parent / f".{target.name}.tmp-{uuid4().hex}"
+    try:
+        wallet_dir = _extract_wallet_zip(data, tmp_dir)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.move(str(wallet_dir), str(target))
+        return target
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Wallet ZIP をバックエンドの保存先へ展開できませんでした。",
+        ) from exc
+    finally:
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _wallet_storage_root(settings: object) -> Path:
+    configured = _settings_str_from(settings, "oracle_wallet_dir")
+    if configured:
+        return Path(configured).expanduser()
+    return BACKEND_ROOT / ".oracle" / ORACLE_WALLET_DIR_NAME
+
+
+def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
+    extracted_files: list[Path] = []
+    total_uncompressed = 0
+    try:
+        with ZipFile(io.BytesIO(data)) as archive:
+            members = [member for member in archive.infolist() if not member.is_dir()]
+            if not members:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Wallet ZIP にファイルが含まれていません。",
+                )
+            for member in members:
+                total_uncompressed += member.file_size
+                if total_uncompressed > ORACLE_WALLET_MAX_EXTRACTED_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Wallet ZIP 展開後サイズが上限を超えています。",
+                    )
+                member_path = target_dir / member.filename
+                if not _is_relative_to(member_path.resolve(), target_dir.resolve()):
+                    raise HTTPException(status_code=400, detail="Wallet ZIP の path が不正です。")
+                archive.extract(member, target_dir)
+                extracted_files.append(member_path)
+    except BadZipFile as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet ZIP の形式を確認してください。",
+        ) from exc
+
+    if not any(path.name.lower() == "tnsnames.ora" for path in extracted_files):
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet ZIP に tnsnames.ora が含まれていません。",
+        )
+    return target_dir
+
+
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
 @router.get("/settings/model", response_model=ApiResponse[ModelSettingsData])
 async def get_model_settings() -> ApiResponse[ModelSettingsData]:
     return ApiResponse(data=_model_settings_data())
@@ -1518,7 +2457,11 @@ async def patch_model_settings(
     patch: ModelSettingsPayload,
     _: None = Depends(require_admin),
 ) -> ApiResponse[ModelSettingsData]:
-    return ApiResponse(data=_model_settings_data(_set_model_settings_state(patch)))
+    settings = get_settings()
+    resolved = _model_settings_with_resolved_secret(settings, patch)
+    _persist_model_settings(settings, resolved)
+    _apply_model_settings(settings, resolved)
+    return ApiResponse(data=_model_settings_data(_set_model_settings_state(resolved), settings))
 
 
 @router.post("/settings/model/check", response_model=ApiResponse[ModelSettingsData])
@@ -1568,7 +2511,10 @@ async def patch_database_settings(
     patch: DatabaseSettingsUpdate,
     _: None = Depends(require_admin),
 ) -> ApiResponse[DatabaseSettingsData]:
-    return ApiResponse(data=_set_database_settings_state(patch))
+    settings = get_settings()
+    data = _set_database_settings_state(patch)
+    _persist_database_settings(settings, data, patch)
+    return ApiResponse(data=_database_settings_data(settings))
 
 
 @router.post("/settings/database/wallet", response_model=ApiResponse[DatabaseSettingsData])
@@ -1577,13 +2523,18 @@ async def upload_database_wallet(
     _: None = Depends(require_admin),
 ) -> ApiResponse[DatabaseSettingsData]:
     global _database_settings_state
-    filename = await _uploaded_filename(request)
-    if filename and not filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Wallet ZIP を選択してください")
-    data = _get_database_settings_state()
-    data.wallet_uploaded = True
-    data.readiness = _database_readiness(data)
+    settings = get_settings()
+    filename, content = await _uploaded_file_from_request(request)
+    wallet_dir = _install_database_wallet(settings, content, filename)
+    _set_if_possible(settings, "oracle_wallet_dir", str(wallet_dir))
+    data = _database_settings_data(settings)
     _database_settings_state = data
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"ORACLE_WALLET_DIR": str(wallet_dir)},
+        section_comment="# Oracle 26ai",
+        error_detail="Oracle Wallet 設定を backend/.env へ保存できませんでした。",
+    )
     return ApiResponse(data=data)
 
 
@@ -1591,26 +2542,64 @@ async def upload_database_wallet(
 async def test_database_settings(
     patch: DatabaseSettingsUpdate,
 ) -> ApiResponse[DatabaseConnectionTestResult]:
-    data = _database_settings_candidate(_get_database_settings_state(), patch)
-    readiness = _database_readiness(data)
-    ok = readiness == "ok"
+    started = monotonic()
+    candidate = _database_connection_test_candidate(get_settings(), patch)
+    readiness = str(candidate.readiness)
+    if readiness != "ok":
+        return ApiResponse(
+            data=DatabaseConnectionTestResult(
+                status="failed",
+                readiness=readiness,
+                message="Oracle 26ai 接続に必要な設定が不足しています。",
+                elapsed_ms=_elapsed_ms(started),
+                troubleshooting=_database_connection_troubleshooting(readiness=readiness),
+                checked_at=_now_iso(),
+                error_type=readiness,
+                details={"dsn": str(candidate.display_dsn) or None},
+            )
+        )
+
+    try:
+        await _test_oracle_connection(candidate)
+    except Exception as exc:  # noqa: BLE001 - Oracle SDK の多様な例外を表示用に握る
+        oracle_error_codes = _oracle_error_codes(str(exc))
+        return ApiResponse(
+            data=DatabaseConnectionTestResult(
+                status="failed",
+                readiness=readiness,
+                message=_database_connection_error_message(exc, oracle_error_codes),
+                elapsed_ms=_elapsed_ms(started),
+                troubleshooting=_database_connection_troubleshooting(
+                    readiness=readiness,
+                    error_text=str(exc),
+                    error_type=type(exc).__name__,
+                ),
+                checked_at=_now_iso(),
+                error_type=type(exc).__name__,
+                details={
+                    "timeout_seconds": float(candidate.oracle_db_test_timeout_seconds),
+                    "tcp_connect_timeout_seconds": float(
+                        candidate.oracle_tcp_connect_timeout_seconds
+                    ),
+                    "oracle_error_codes": ", ".join(oracle_error_codes) or None,
+                    "dsn": str(candidate.display_dsn) or None,
+                },
+            )
+        )
+
     return ApiResponse(
         data=DatabaseConnectionTestResult(
-            status="success" if ok else "failed",
+            status="success",
             readiness=readiness,
-            message=(
-                "接続設定の形式を確認しました。"
-                if ok
-                else "接続に必要な設定が不足しています。"
-            ),
-            troubleshooting=(
-                []
-                if ok
-                else ["ユーザー名、DSN、パスワードまたは Wallet を確認してください。"]
-            ),
+            message="Oracle 26ai への接続に成功しました。",
+            elapsed_ms=_elapsed_ms(started),
+            troubleshooting=[],
             checked_at=_now_iso(),
-            error_type=None if ok else readiness,
-            details={"dry_run": True, "dsn": data.dsn or None},
+            details={
+                "timeout_seconds": float(candidate.oracle_db_test_timeout_seconds),
+                "tcp_connect_timeout_seconds": float(candidate.oracle_tcp_connect_timeout_seconds),
+                "dsn": str(candidate.display_dsn) or None,
+            },
         )
     )
 
@@ -1664,7 +2653,14 @@ async def patch_upload_storage_settings(
     patch: UploadStorageSettingsUpdate,
     _: None = Depends(require_admin),
 ) -> ApiResponse[UploadStorageSettingsData]:
-    return ApiResponse(data=_set_upload_storage_settings_state(patch))
+    settings = get_settings()
+    data = _set_upload_storage_settings_state(patch)
+    _persist_upload_storage_settings(data)
+    _set_if_possible(settings, "upload_storage_backend", data.backend)
+    _set_if_possible(settings, "local_storage_dir", data.local_storage_dir)
+    _set_if_possible(settings, "object_storage_namespace", data.object_storage_namespace)
+    _set_if_possible(settings, "object_storage_bucket", data.object_storage_bucket)
+    return ApiResponse(data=_upload_storage_settings_data(settings))
 
 
 @router.get("/settings/oci", response_model=ApiResponse[OciSettingsData])
@@ -1677,7 +2673,16 @@ async def patch_oci_settings(
     patch: OciSettingsUpdate,
     _: None = Depends(require_admin),
 ) -> ApiResponse[OciSettingsData]:
-    return ApiResponse(data=_set_oci_settings_state(patch))
+    global _oci_settings_state
+    settings = get_settings()
+    _write_oci_config(settings, patch)
+    _persist_oci_settings(settings, patch)
+    _set_if_possible(settings, "oci_region", patch.region)
+    _set_if_possible(settings, "oci_user_ocid", patch.user)
+    _set_if_possible(settings, "oci_fingerprint", patch.fingerprint)
+    _set_if_possible(settings, "oci_tenancy_ocid", patch.tenancy)
+    _oci_settings_state = _oci_settings_data(settings)
+    return ApiResponse(data=_oci_settings_state.model_copy(deep=True))
 
 
 @router.patch("/settings/oci/object-storage", response_model=ApiResponse[UploadStorageSettingsData])
@@ -1686,6 +2691,7 @@ async def patch_oci_object_storage_settings(
     _: None = Depends(require_admin),
 ) -> ApiResponse[UploadStorageSettingsData]:
     global _upload_storage_settings_state
+    settings = get_settings()
     current = _get_upload_storage_settings_state()
     updated = _set_upload_storage_settings_state(
         UploadStorageSettingsUpdate(
@@ -1698,7 +2704,10 @@ async def patch_oci_object_storage_settings(
     updated.object_storage_region = patch.object_storage_region.strip()
     updated.readiness = _upload_storage_readiness(updated)
     _upload_storage_settings_state = updated
-    return ApiResponse(data=updated)
+    _set_if_possible(settings, "object_storage_region", updated.object_storage_region)
+    _set_if_possible(settings, "object_storage_namespace", updated.object_storage_namespace)
+    _persist_oci_object_storage_settings(settings)
+    return ApiResponse(data=_upload_storage_settings_data(settings))
 
 
 @router.post("/settings/oci/config/read", response_model=ApiResponse[OciConfigReadData])
@@ -1709,26 +2718,7 @@ async def read_oci_config(payload: OciConfigReadRequest) -> ApiResponse[OciConfi
 
 @router.post("/settings/oci/config/test", response_model=ApiResponse[OciConfigTestResult])
 async def test_oci_config() -> ApiResponse[OciConfigTestResult]:
-    data = _get_oci_settings_state()
-    missing = _oci_missing_fields(data)
-    return ApiResponse(
-        data=OciConfigTestResult(
-            status="success" if not missing else "failed",
-            profile=data.profile,
-            config_file=data.config_file,
-            key_file=data.key_file,
-            config_file_exists=data.config_file_exists,
-            key_file_exists=data.key_file_exists,
-            missing_fields=missing,
-            message=(
-                "OCI 設定の形式を確認しました。"
-                if not missing
-                else "OCI 設定に不足があります。"
-            ),
-            checked_at=_now_iso(),
-            error_type=None if not missing else "missing_fields",
-        )
-    )
+    return ApiResponse(data=_test_oci_config(get_settings()))
 
 
 @router.post(
@@ -1748,13 +2738,10 @@ async def upload_oci_private_key(
     _: None = Depends(require_admin),
 ) -> ApiResponse[OciPrivateKeyUploadData]:
     global _oci_settings_state
-    filename = await _uploaded_filename(request)
-    if filename and not filename.lower().endswith((".pem", ".key")):
-        raise HTTPException(status_code=400, detail=".pem または .key ファイルを選択してください")
-    data = _get_oci_settings_state()
-    data.key_file_exists = True
-    _oci_settings_state = data
-    return ApiResponse(data=OciPrivateKeyUploadData(key_file=data.key_file, saved=True))
+    filename, content = await _uploaded_file_from_request(request)
+    _install_oci_private_key(content, filename)
+    _oci_settings_state = _oci_settings_data(get_settings())
+    return ApiResponse(data=OciPrivateKeyUploadData(key_file=OCI_PRIVATE_KEY_FILE, saved=True))
 
 
 @router.get("/runtime/snapshot", response_model=ApiResponse[AgentRuntimeSnapshot])

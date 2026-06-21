@@ -73,6 +73,8 @@ class Settings(BaseServiceSettings):
     oracle_region: str | None = None
     oracle_adb_ocid: str | None = None
     adb_ocid: str | None = None
+    oracle_tcp_connect_timeout_seconds: float = 10.0
+    oracle_db_test_timeout_seconds: float = 15.0
     agent_external_rag_base_url: str | None = None
     agent_external_rag_api_key: str | None = None
     agent_external_rag_timeout_seconds: float = 10.0

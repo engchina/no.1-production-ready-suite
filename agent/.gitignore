@@ -11,6 +11,7 @@ backend/.env
 backend/model-settings.json
 backend/.model-settings.json.tmp-*
 backend/.oci/
+backend/.oracle/
 **/oci_api_key.pem
 backend/validation-evidence.*.json
 backend/validation-evidence.*.md
