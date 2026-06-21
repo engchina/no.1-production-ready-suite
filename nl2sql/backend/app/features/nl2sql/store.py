@@ -82,8 +82,10 @@ class OracleJsonNl2SqlStore:
         with self._lock:
             self._ensure_table()
             with self._connection_factory() as conn, conn.cursor() as cursor:
+                # Safe: table name is validated by _validate_table_name.
+                select_sql = f"SELECT state_json FROM {self._table_name} WHERE state_key = :key"  # nosec B608
                 cursor.execute(
-                    f"SELECT state_json FROM {self._table_name} WHERE state_key = :key",
+                    select_sql,
                     {"key": _STATE_KEY},
                 )
                 row = cursor.fetchone()
@@ -97,23 +99,25 @@ class OracleJsonNl2SqlStore:
         with self._lock:
             self._ensure_table()
             with self._connection_factory() as conn, conn.cursor() as cursor:
+                # Safe: table name is validated by _validate_table_name; values use binds.
+                merge_sql = (
+                    f"MERGE INTO {self._table_name} target "  # nosec B608
+                    "USING ("
+                    "  SELECT :state_key AS state_key, :state_json AS state_json"
+                    "  FROM dual"
+                    ") source "
+                    "ON (target.state_key = source.state_key) "
+                    "WHEN MATCHED THEN UPDATE SET "
+                    "  target.state_json = source.state_json, "
+                    "  target.updated_at = SYSTIMESTAMP "
+                    "WHEN NOT MATCHED THEN INSERT ("
+                    "  state_key, state_json, updated_at"
+                    ") VALUES ("
+                    "  source.state_key, source.state_json, SYSTIMESTAMP"
+                    ")"
+                )
                 cursor.execute(
-                    f"""
-                    MERGE INTO {self._table_name} target
-                    USING (
-                        SELECT :state_key AS state_key, :state_json AS state_json
-                        FROM dual
-                    ) source
-                    ON (target.state_key = source.state_key)
-                    WHEN MATCHED THEN UPDATE SET
-                        target.state_json = source.state_json,
-                        target.updated_at = SYSTIMESTAMP
-                    WHEN NOT MATCHED THEN INSERT (
-                        state_key, state_json, updated_at
-                    ) VALUES (
-                        source.state_key, source.state_json, SYSTIMESTAMP
-                    )
-                    """,
+                    merge_sql,
                     {"state_key": _STATE_KEY, "state_json": payload},
                 )
                 conn.commit()

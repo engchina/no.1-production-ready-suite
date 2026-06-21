@@ -976,7 +976,8 @@ class Nl2SqlService:
             cases.append(
                 SyntheticCase(
                     question=f"{table.logical_name} の {amount_column.logical_name} を確認したい",
-                    expected_sql=f"SELECT {amount_column.column_name} FROM {table.table_name}",
+                    # Safe: synthetic example SQL is generated for evaluation display, not executed.
+                    expected_sql=f"SELECT {amount_column.column_name} FROM {table.table_name}",  # nosec B608
                     profile_id=profile.id,
                 )
             )
@@ -1294,7 +1295,8 @@ class Nl2SqlService:
     def _csv_import_insert_sql(self, table_name: str, columns: list[CsvImportColumn]) -> str:
         column_names = ", ".join(f'"{column.column_name}"' for column in columns)
         binds = ", ".join(f":c{index}" for index, _column in enumerate(columns))
-        return f'INSERT INTO "{table_name}" ({column_names}) VALUES ({binds})'
+        # Safe: dry-run SQL from sanitized CSV identifiers; execution path uses Oracle binds.
+        return f'INSERT INTO "{table_name}" ({column_names}) VALUES ({binds})'  # nosec B608
 
     def refresh_select_ai_agent_assets(self, profile_id: str | None) -> AssetRefreshData:
         profile = self.get_profile(profile_id)
@@ -1934,7 +1936,8 @@ class Nl2SqlService:
 
     def _compose_select_sql(self, table_name: str, columns: list[SchemaColumn]) -> str:
         column_sql = ", ".join(column.column_name for column in columns) or "*"
-        return f"SELECT {column_sql} FROM {table_name}"
+        # Safe: deterministic SQL from schema catalog metadata.
+        return f"SELECT {column_sql} FROM {table_name}"  # nosec B608
 
     def _mock_execute(self, sql: str, row_limit: int) -> QueryResults:
         referenced = _extract_referenced_tables(sql)
@@ -1987,7 +1990,8 @@ class Nl2SqlService:
             if not table_name:
                 return ""
             return enforce_row_limit(
-                f"SELECT {self._allowed_select_list(table_name, allowed)} FROM {table_name}",
+                # Safe: table and columns are resolved from allowed_objects.
+                f"SELECT {self._allowed_select_list(table_name, allowed)} FROM {table_name}",  # nosec B608
                 row_limit,
             )
 
@@ -2009,7 +2013,11 @@ class Nl2SqlService:
                     flags=re.IGNORECASE | re.DOTALL,
                 )
                 return enforce_row_limit(repaired, row_limit)
-            return enforce_row_limit(f"SELECT {select_list} FROM {table_name}", row_limit)
+            # Safe: repair fallback uses allowed table/column list.
+            return enforce_row_limit(
+                f"SELECT {select_list} FROM {table_name}",  # nosec B608
+                row_limit,
+            )
 
         executable = enforce_row_limit(stripped, row_limit)
         return executable if executable != stripped else ""

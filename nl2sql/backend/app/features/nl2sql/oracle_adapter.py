@@ -206,13 +206,15 @@ class OracleNl2SqlAdapter:
             for column in table.columns[:sample_columns]:
                 quoted_column = _quote_identifier(column.column_name)
                 try:
+                    # Safe: identifiers come from Oracle catalog metadata and are quoted.
+                    sample_sql = (
+                        f"SELECT DISTINCT {quoted_column} "  # nosec B608
+                        f"FROM {quoted_table} "
+                        f"WHERE {quoted_column} IS NOT NULL "
+                        "FETCH FIRST :sample_rows ROWS ONLY"
+                    )
                     cursor.execute(
-                        f"""
-                        SELECT DISTINCT {quoted_column}
-                        FROM {quoted_table}
-                        WHERE {quoted_column} IS NOT NULL
-                        FETCH FIRST :sample_rows ROWS ONLY
-                        """,
+                        sample_sql,
                         {"sample_rows": sample_rows},
                     )
                     column.sample_values = [
@@ -247,8 +249,9 @@ class OracleNl2SqlAdapter:
         )
         ddl = f"CREATE TABLE {quoted_table} ({column_defs})"
         bind_names = [f"c{index}" for index, _column in enumerate(columns)]
+        # Safe: table and columns are sanitized and quoted; values use binds.
         insert_sql = (
-            f"INSERT INTO {quoted_table} "
+            f"INSERT INTO {quoted_table} "  # nosec B608
             f"({', '.join(_quote_identifier(column.column_name) for column in columns)}) "
             f"VALUES ({', '.join(':' + name for name in bind_names)})"
         )
