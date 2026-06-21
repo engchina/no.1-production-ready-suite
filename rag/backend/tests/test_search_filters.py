@@ -98,3 +98,19 @@ def test_retrieval_where_builds_content_kind_in_predicate() -> None:
 def test_retrieval_where_rejects_unknown_filter_key() -> None:
     with pytest.raises(ValueError, match="未対応の検索フィルター"):
         _oracle_retrieval_where({"totally_unknown": "x"})
+
+
+def test_retrieval_where_adds_serving_chunk_set_filter_for_kb_scope() -> None:
+    """KB スコープ検索では配信中 chunk_set 以外を除外する NOT EXISTS を足す。"""
+    sql, binds = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
+    assert "rag_kb_chunk_set_bindings b" in sql
+    assert "b.is_serving = 1" in sql
+    assert "b.chunk_set_id <> c.chunk_set_id" in sql
+    assert "b.document_id = c.document_id" in sql
+    assert any(name.startswith("filter_knowledge_base_id") for name in binds)
+
+
+def test_retrieval_where_omits_chunk_set_filter_without_kb_scope() -> None:
+    """KB 未指定のグローバル検索では chunk_set フィルタを足さない(現行挙動と同一)。"""
+    sql, _ = _oracle_retrieval_where({})
+    assert "rag_kb_chunk_set_bindings" not in sql

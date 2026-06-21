@@ -138,6 +138,33 @@ def test_approve_records_chunk_set_and_kb_binding(monkeypatch: MonkeyPatch) -> N
     assert asyncio.run(oracle.chunk_set_refcount(chunk_set_ids[0])) == 1
 
 
+def test_kb_scoped_search_finds_serving_chunk_set(monkeypatch: MonkeyPatch) -> None:
+    """KB スコープ検索でも、配信中 chunk_set はフィルタで除外されない(回帰なし)。"""
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    _extract_to_review(document_id)
+    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    assert approve_resp.status_code == 200
+    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+
+    detail = _get_document(document_id)
+    assert detail["status"] == "INDEXED"
+    knowledge_base_id = detail["knowledge_bases"][0]["id"]
+
+    response = client.post(
+        "/api/search",
+        json={
+            "query": "経費申請の承認者は？",
+            "knowledge_base_ids": [knowledge_base_id],
+            "top_k": 5,
+            "rerank_top_n": 3,
+        },
+    )
+    assert response.status_code == 200
+    citations = response.json()["data"]["citations"]
+    assert any(citation["document_id"] == document_id for citation in citations)
+
+
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
     """却下すると UPLOADED へ戻り、検索対象に入らない。"""
     _enable_review_gate(monkeypatch)

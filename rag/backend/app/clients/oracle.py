@@ -5758,6 +5758,24 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         )
         binds.update(knowledge_base_binds)
         knowledge_base_filter_sql = f"AND {knowledge_base_filter_sql}"
+        # variant: 配信中(is_serving)の chunk_set だけを検索対象にする。
+        # スコープ KB が「この文書で別 chunk_set を配信中」のときだけ、その chunk_set 以外の
+        # chunk を除外する。単一 materialization では別 chunk_set が無いので no-op(回帰なし)。
+        # chunk_set 未タグ(NULL)や binding 未整備の chunk は除外しない(後方互換)。
+        served_in_sql, served_binds = _oracle_in_predicate(
+            "b.knowledge_base_id", "filter_knowledge_base_id", knowledge_base_ids
+        )
+        binds.update(served_binds)
+        clauses.append(f"""
+            NOT EXISTS (
+                SELECT 1
+                FROM rag_kb_chunk_set_bindings b
+                WHERE b.document_id = c.document_id
+                  AND b.is_serving = 1
+                  AND b.chunk_set_id <> c.chunk_set_id
+                  AND {served_in_sql}
+            )
+            """)
     if knowledge_base_ids or current_audit_request_context().allowed_knowledge_base_ids is not None:
         clauses.append(
             """
