@@ -830,10 +830,13 @@ class OracleClient:
     async def delete_stale_document_chunk_sets(
         self, *, document_id: str, keep_chunk_set_id: str
     ) -> list[str]:
-        """文書の chunk_set のうち keep 以外を削除する(取込設定変更時の旧 chunk_set GC)。
+        """文書の keep 以外の chunk_set と、その chunk(+未タグ chunk)を削除する。
 
-        binding は FK の ON DELETE CASCADE で連動削除される。削除した chunk_set id を返す。
+        取込設定変更時の旧 chunk_set GC。keep の chunk だけを残し、別 chunk_set の chunk・
+        未タグ(NULL)chunk・別 chunk_set 行を削除する(binding は FK cascade)。削除した
+        chunk_set id を返す。
         """
+        binds = {"document_id": document_id, "keep_chunk_set_id": keep_chunk_set_id}
 
         def operation(connection: OracleConnectionProtocol) -> list[str]:
             rows = _fetch_all(
@@ -842,16 +845,26 @@ class OracleClient:
                 SELECT chunk_set_id FROM rag_chunk_sets
                 WHERE document_id = :document_id AND chunk_set_id <> :keep_chunk_set_id
                 """,
-                {"document_id": document_id, "keep_chunk_set_id": keep_chunk_set_id},
+                binds,
             )
             removed = [str(next(iter(row.values()))) for row in rows]
+            # keep 以外の chunk と未タグ(NULL)chunk を削除する(挿入時タグの一貫性を保つ)。
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunks
+                WHERE document_id = :document_id
+                  AND (chunk_set_id <> :keep_chunk_set_id OR chunk_set_id IS NULL)
+                """,
+                binds,
+            )
             _execute(
                 connection,
                 """
                 DELETE FROM rag_chunk_sets
                 WHERE document_id = :document_id AND chunk_set_id <> :keep_chunk_set_id
                 """,
-                {"document_id": document_id, "keep_chunk_set_id": keep_chunk_set_id},
+                binds,
             )
             return removed
 

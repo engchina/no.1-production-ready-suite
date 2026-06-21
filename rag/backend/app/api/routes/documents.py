@@ -1015,6 +1015,7 @@ async def _ingest_existing_document(
     # owning KB(最古割当)の取込上書きをスナップショットとして適用する。
     # 後から KB を変えても再 enqueue しない限り既存チャンクは作り直されない。
     effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+    chunk_set_id = _document_chunk_set_id(detail, effective_settings)
     pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
     result = await pipeline.ingest(
         document_id=document_id,
@@ -1022,9 +1023,10 @@ async def _ingest_existing_document(
         prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
         content_type=detail.content_type or "application/octet-stream",
         source_profile=source_profile,
+        chunk_set_id=chunk_set_id,
         cancel_checker=cancel_checker,
     )
-    await _reconcile_document_chunk_sets(oracle, document_id, effective_settings, result)
+    await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
     return result
 
 
@@ -1044,41 +1046,43 @@ async def _index_reviewed_document(
             detail="プレビュー確認待ちの文書のみ索引できます。",
         )
     effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+    chunk_set_id = _document_chunk_set_id(detail, effective_settings)
     pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-    result = await pipeline.index_reviewed(document_id, cancel_checker=cancel_checker)
-    await _reconcile_document_chunk_sets(oracle, document_id, effective_settings, result)
+    result = await pipeline.index_reviewed(
+        document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+    )
+    await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
     return result
+
+
+def _document_chunk_set_id(detail: DocumentDetail, settings: Settings) -> str | None:
+    """文書の content_sha256 と effective 取込設定から chunk_set_id を求める(無ければ None)。"""
+    if not detail.content_sha256:
+        return None
+    return compute_chunk_set_id(detail.content_sha256, settings)
 
 
 async def _reconcile_document_chunk_sets(
     oracle: OracleClient,
     document_id: str,
-    effective_settings: Settings,
     detail: DocumentDetail,
+    chunk_set_id: str | None,
 ) -> None:
     """取込後、materialize した chunk_set を記録し所属 KB を binding する(planner 駆動の基盤)。
 
-    決定論 `variant_keys`/`variant_planner` の keying に従い、effective 取込設定から
-    chunk_set_id を求めて文書の chunk をタグ付けし、chunk_set と KB binding を永続化、
-    取込設定変更で生じた旧 chunk_set を GC する。bookkeeping なので失敗しても取込自体は
-    止めず warning に留める(chunk は既に INDEXED 済み)。
+    chunk は save_index で**挿入時に chunk_set_id タグ付け済み**。本関数は chunk_set 行の永続化・
+    KB binding・旧 chunk_set(とその chunk、未タグ chunk)の GC を行う。bookkeeping なので失敗
+    しても取込自体は止めず warning に留める(chunk は既に INDEXED 済み)。
     """
-    if detail.status != FileStatus.INDEXED:
-        return
-    source_sha256 = detail.content_sha256
-    if not source_sha256:
+    if detail.status != FileStatus.INDEXED or chunk_set_id is None:
         return
     try:
-        chunk_set_id = compute_chunk_set_id(source_sha256, effective_settings)
         chunk_count = await oracle.count_document_chunks(document_id)
-        await oracle.tag_document_chunks_with_chunk_set(
-            document_id=document_id, chunk_set_id=chunk_set_id
-        )
         await oracle.upsert_chunk_set(chunk_set_id=chunk_set_id, document_id=document_id)
         await oracle.mark_chunk_set_indexed(
             chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
         )
-        # 取込設定変更で生じた旧 chunk_set(別 chunk_set_id)を削除する。
+        # 取込設定変更で生じた旧 chunk_set とその chunk(+未タグ chunk)を削除し、keep だけ残す。
         await oracle.delete_stale_document_chunk_sets(
             document_id=document_id, keep_chunk_set_id=chunk_set_id
         )
