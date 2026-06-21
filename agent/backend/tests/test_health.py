@@ -871,6 +871,58 @@ def test_oci_config_read_parses_default_profile_like_rag(tmp_path: Path) -> None
     }
 
 
+def test_oci_object_storage_namespace_reads_from_sdk_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "config"
+    key_file = tmp_path / "oci_api_key.pem"
+    key_file.write_text("-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n")
+    captured: dict[str, object] = {}
+
+    class FakeOciConfig:
+        @staticmethod
+        def from_file(path: str, profile: str) -> dict[str, object]:
+            captured["config_file"] = path
+            captured["profile"] = profile
+            return {"key_file": str(key_file), "region": "us-chicago-1"}
+
+    class FakeObjectStorage:
+        class ObjectStorageClient:
+            def __init__(self, config: dict[str, object]) -> None:
+                captured["client_config"] = config
+
+            def get_namespace(self) -> SimpleNamespace:
+                return SimpleNamespace(data=" mytenancynamespace ")
+
+    def fake_import_module(name: str) -> object:
+        if name == "oci.config":
+            return FakeOciConfig
+        if name == "oci.object_storage":
+            return FakeObjectStorage
+        raise AssertionError(name)
+
+    monkeypatch.setattr(agent_router, "import_module", fake_import_module)
+
+    resp = client.post(
+        "/api/settings/oci/object-storage/namespace",
+        json={
+            "config_file": str(config_file),
+            "profile": "DEFAULT",
+            "region": "ap-osaka-1",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"] == {"namespace": "mytenancynamespace"}
+    assert captured["config_file"] == str(config_file)
+    assert captured["profile"] == "DEFAULT"
+    assert captured["client_config"] == {
+        "key_file": str(key_file),
+        "region": "ap-osaka-1",
+    }
+
+
 def test_list_tools_v2_includes_external_tools() -> None:
     resp = client.get("/api/tools")
     assert resp.status_code == 200

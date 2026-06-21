@@ -23,6 +23,37 @@ async function expectDocumentScrollLocked(page: Page) {
 }
 
 async function mockMissingOciRuntimeSettings(page: Page) {
+  await page.route("**/api/settings/oci/object-storage/namespace", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          namespace: "mytenancynamespace",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/settings/oci/object-storage", async (route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          backend: "local",
+          local_storage_dir: "/u01/production-ready-rag",
+          object_storage_region: "ap-osaka-1",
+          object_storage_namespace: "mytenancynamespace",
+          object_storage_bucket: "",
+          readiness: "ok",
+          max_upload_bytes: 104857600,
+          config_source: "runtime",
+        },
+      }),
+    });
+  });
   await page.route("**/api/settings/oci", async (route) => {
     if (route.request().method() !== "GET") {
       await route.continue();
@@ -90,6 +121,16 @@ test.describe("Agent Runtime settings", () => {
     await page.getByLabel("フィンガープリント").fill("12:34:56:78:90:ab:cd:ef");
     await page.getByRole("button", { name: /OCI 設定を保存/ }).click();
     await expect(page.getByText("保存しました").first()).toBeVisible();
+    await page.getByRole("button", { name: /Object Storage ネームスペース: 取得/ }).click();
+    await expect(
+      page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
+    ).toHaveValue(
+      "mytenancynamespace"
+    );
+    await expect(page.getByText("9/9 入力済み")).toBeVisible();
+    await expect(page.getByText("namespace の取得に失敗しました。")).toHaveCount(0);
+    await page.getByRole("button", { name: /Object Storage: 保存/ }).click();
+    await expect(page.getByRole("button", { name: /Object Storage: 保存しました/ })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     await page.goto("/settings/upload-storage");

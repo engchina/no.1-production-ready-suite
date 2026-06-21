@@ -94,6 +94,11 @@ router = APIRouter(tags=["agent-runtime"])
 OCI_CONFIG_MAX_BYTES = 64 * 1024
 OCI_PRIVATE_KEY_FILE = "~/.oci/oci_api_key.pem"
 OCI_CONFIG_KEYS = ("user", "fingerprint", "tenancy", "region", "key_file")
+OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR = (  # nosec B105 - エラーメッセージ定数
+    "OCI API 秘密鍵 PEM が暗号化されています。"
+    " pass_phrase を OCI config に設定するか、パスフレーズなしの秘密鍵 PEM を使用してください。"
+)
+PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
 ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal[
@@ -1352,6 +1357,92 @@ def _parse_oci_config(content: str, profile: str) -> OciConfigReadData:
     )
 
 
+class OciPrivateKeyPassPhraseRequiredError(RuntimeError):
+    safe_for_user = True
+
+
+def _load_oci_config_without_prompt(
+    oci_config_module: object,
+    config_file: str,
+    profile: str,
+    *,
+    region: str | None = None,
+) -> dict[str, object]:
+    config_path = Path(config_file).expanduser()
+    from_file = cast(Any, oci_config_module).from_file
+    config = dict(from_file(str(config_path), profile))
+    if region:
+        config["region"] = region
+    _assert_oci_private_key_can_load_without_prompt(config, config_path)
+    return config
+
+
+def _assert_oci_private_key_can_load_without_prompt(
+    config: Mapping[str, object],
+    config_file: str | Path,
+) -> None:
+    key_file = str(config.get("key_file", "") or "").strip()
+    if not key_file or _has_pass_phrase(config):
+        return
+    key_path = _resolve_oci_key_file(key_file, config_file)
+    if _pem_file_is_encrypted(key_path):
+        raise OciPrivateKeyPassPhraseRequiredError(OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR)
+
+
+def _resolve_oci_key_file(key_file: str, config_file: str | Path) -> Path:
+    path = Path(key_file).expanduser()
+    if path.is_absolute():
+        return path
+    return Path(config_file).expanduser().parent / path
+
+
+def _pem_file_is_encrypted(path: Path) -> bool:
+    try:
+        head = path.read_bytes()[:4096]
+    except OSError:
+        return False
+    text = head.decode("utf-8", errors="ignore").upper()
+    return "BEGIN ENCRYPTED PRIVATE KEY" in text or "PROC-TYPE: 4,ENCRYPTED" in text
+
+
+def _has_pass_phrase(config: Mapping[str, object]) -> bool:
+    return any(str(config.get(key, "") or "").strip() for key in PASSPHRASE_CONFIG_KEYS)
+
+
+def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) -> str:
+    try:
+        oci_config = import_module("oci.config")
+        object_storage = import_module("oci.object_storage")
+        config = _load_oci_config_without_prompt(
+            oci_config,
+            payload.config_file,
+            payload.profile,
+            region=payload.region,
+        )
+        response = object_storage.ObjectStorageClient(config).get_namespace()
+    except Exception as exc:
+        detail = (
+            str(exc)
+            if getattr(exc, "safe_for_user", False)
+            else (
+                "OCI Object Storage namespace を取得できませんでした。"
+                "OCI config / profile / region を確認してください。"
+            )
+        )
+        raise HTTPException(status_code=502, detail=detail) from exc
+
+    namespace = getattr(response, "data", "")
+    if not isinstance(namespace, str):
+        namespace = str(namespace) if namespace is not None else ""
+    namespace = namespace.strip()
+    if not namespace:
+        raise HTTPException(
+            status_code=502,
+            detail="OCI Object Storage namespace が空で返されました。",
+        )
+    return namespace
+
+
 def _get_adb_info_state() -> AdbInfoData:
     global _adb_info_state
     if _adb_info_state is None:
@@ -1645,12 +1736,10 @@ async def test_oci_config() -> ApiResponse[OciConfigTestResult]:
     response_model=ApiResponse[OciObjectStorageNamespaceData],
 )
 async def read_oci_object_storage_namespace(
-    _: OciObjectStorageNamespaceRequest,
+    payload: OciObjectStorageNamespaceRequest,
 ) -> ApiResponse[OciObjectStorageNamespaceData]:
-    storage = _get_upload_storage_settings_state()
-    return ApiResponse(
-        data=OciObjectStorageNamespaceData(namespace=storage.object_storage_namespace)
-    )
+    namespace = _read_object_storage_namespace(payload)
+    return ApiResponse(data=OciObjectStorageNamespaceData(namespace=namespace))
 
 
 @router.post("/settings/oci/key-file", response_model=ApiResponse[OciPrivateKeyUploadData])
