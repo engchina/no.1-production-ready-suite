@@ -36,11 +36,18 @@ test.describe("自前ホストフォント", () => {
     expect(externalFontRequests, "外部フォント CDN への通信").toEqual([]);
 
     // Noto Sans JP が weight 400/500/700 で読み込まれていること。
-    const loaded = await page.evaluate(() => ({
-      w400: document.fonts.check("400 14px 'Noto Sans JP'"),
-      w500: document.fonts.check("500 14px 'Noto Sans JP'"),
-      w700: document.fonts.check("700 14px 'Noto Sans JP'"),
-    }));
+    // check だけだと、可視テキストが未使用の weight(例: 700/太字)は document.fonts.ready
+    // 解決後も未ロードのままで false になり得る(CI で 700 のみ落ちていた競合の原因)。
+    // ローカル(@fontsource)から各 weight を明示ロードして決定論化する。
+    const loaded = await page.evaluate(async () => {
+      const sample = "規程 Aa";
+      const load = (weight: number) =>
+        document.fonts
+          .load(`${weight} 14px 'Noto Sans JP'`, sample)
+          .then((faces) => faces.length > 0)
+          .catch(() => false);
+      return { w400: await load(400), w500: await load(500), w700: await load(700) };
+    });
     expect(loaded.w400, "Noto Sans JP 400").toBe(true);
     expect(loaded.w500, "Noto Sans JP 500").toBe(true);
     expect(loaded.w700, "Noto Sans JP 700").toBe(true);

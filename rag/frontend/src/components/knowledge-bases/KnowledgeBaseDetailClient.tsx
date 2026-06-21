@@ -1,12 +1,12 @@
 "use client";
 
-import { FilePlus2, Trash2 } from "lucide-react";
+import { FilePlus2, Files, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormStatus } from "@/components/ui/form-status";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -49,6 +49,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
 
   return (
     <div className="space-y-5">
+      {/* 概要: 名称・状態・メトリクス(この KB が何か) */}
       <Card>
         <CardContent className="space-y-5 pt-6">
           <div>
@@ -64,7 +65,21 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
             <Metric label={t("knowledgeBases.metric.indexed")} value={kb.indexed_document_count} />
             <Metric label={t("knowledgeBases.metric.errors")} value={kb.error_document_count} />
           </div>
+        </CardContent>
+      </Card>
 
+      {/* 所属文書: 追加ツールバー(左寄せ)+ 一覧。追加操作は対象一覧の直上に置く。 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Files className="size-4 text-muted" aria-hidden />
+            {t("knowledgeBases.documents.title")}
+            <span className="tnum rounded-md bg-muted/10 px-2 py-0.5 text-xs font-medium text-muted">
+              {kb.document_count}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
           {isActive ? (
             <DocumentAssignment knowledgeBase={kb} />
           ) : (
@@ -137,8 +152,9 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
   };
 
   return (
-    <div className="space-y-2 border-t border-border pt-4">
-      <div className="flex items-end gap-2">
+    <div className="space-y-2">
+      {/* 追加ツールバー: コンボボックスは幅制約し、追加ボタンを入力のすぐ隣へ左寄せ(右端に孤立させない)。 */}
+      <div className="flex flex-wrap items-end gap-2">
         <SelectField
           id="knowledge-base-add-document"
           label={t("knowledgeBases.assignment.title")}
@@ -146,7 +162,7 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
           options={selectOptions}
           onValueChange={setDocumentId}
           placeholder={t("knowledgeBases.assignment.noOptions")}
-          className="min-w-0 flex-1"
+          className="w-full min-w-0 sm:w-80"
           buttonClassName="h-9"
         />
         <Button
@@ -156,6 +172,7 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
           onClick={handleAssign}
           loading={assign.isPending}
           disabled={!documentId}
+          className="h-9 shrink-0"
         >
           <FilePlus2 size={15} aria-hidden />
           {t("knowledgeBases.actions.assign")}
@@ -202,8 +219,7 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
   };
 
   return (
-    <div className="space-y-2 border-t border-border pt-4">
-      <h2 className="text-sm font-medium text-foreground">{t("knowledgeBases.documents.title")}</h2>
+    <div className="space-y-2">
       {documents.isError ? (
         <ErrorState
           message={
@@ -218,10 +234,10 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
       ) : documents.data.items.length > 0 ? (
         <ul className="bounded-scroll-area divide-y divide-border rounded-md border border-border">
           {documents.data.items.map((document) => (
-            <li key={document.id} className="flex items-center justify-between gap-3 px-3 py-2">
+            <li key={document.id} className="flex items-center gap-3 px-3 py-2">
               <Link
                 to={`${APP_ROUTES.documents}/${document.id}`}
-                className="min-w-0 truncate text-sm font-medium text-primary hover:underline"
+                className="min-w-0 flex-1 truncate text-sm font-medium text-primary hover:underline"
                 title={document.file_name}
               >
                 {document.file_name}
@@ -231,6 +247,7 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
                 size="sm"
                 onClick={() => void handleRemove(document)}
                 loading={remove.isPending && remove.variables?.documentId === document.id}
+                className="shrink-0 whitespace-nowrap"
               >
                 <Trash2 size={14} aria-hidden />
                 {t("knowledgeBases.actions.remove")}

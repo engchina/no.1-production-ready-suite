@@ -55,7 +55,10 @@ _HASH_HEX_LEN = 16
 def _digest(prefix: str, payload: dict[str, object]) -> str:
     """canonical JSON(キー順非依存)から決定論ハッシュ ID を作る。"""
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    digest = hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:_HASH_HEX_LEN]
+    # 暗号用途ではなく決定論的 ID 生成のための SHA1(衝突耐性のみ必要)。
+    digest = hashlib.sha1(canonical.encode("utf-8"), usedforsecurity=False).hexdigest()[
+        :_HASH_HEX_LEN
+    ]
     return f"{prefix}_{digest}"
 
 

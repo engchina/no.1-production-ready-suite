@@ -8,6 +8,9 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
   workers: 1,
+  // CI はヘッドレス環境のタイミング差で e2e が稀に flake するため retry する。
+  // retries 未設定だと trace: "on-first-retry" も機能せず、1 件の flake で CI 全体が赤になる。
+  retries: process.env.CI ? 2 : 0,
   expect: {
     timeout: 5_000,
   },

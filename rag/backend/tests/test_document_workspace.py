@@ -299,9 +299,10 @@ class FakeWorkspaceIngestionPipeline:
         *,
         content_type: str = "application/octet-stream",
         source_profile: object | None = None,
+        chunk_set_id: str | None = None,
         cancel_checker: object | None = None,
     ) -> DocumentDetail:
-        _ = prompt, content_type, source_profile, cancel_checker
+        _ = prompt, content_type, source_profile, chunk_set_id, cancel_checker
         detail = await self._oracle.get_document(document_id)
         assert detail is not None
         raw_text = image_bytes.decode("utf-8", errors="replace")

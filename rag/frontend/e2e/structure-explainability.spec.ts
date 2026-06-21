@@ -134,6 +134,11 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   });
 
   await page.goto("/search");
+  await page.getByRole("combobox", { name: /対象の業務アシスタント/ }).click();
+  await page
+    .getByRole("listbox", { name: /対象の業務アシスタント/ })
+    .getByRole("option", { name: "経理アシスタント" })
+    .click();
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
   await page.getByRole("button", { name: "検索" }).click();
 
@@ -195,6 +200,33 @@ async function mockDocumentDetail(page: Page) {
         data: {
           items: catalog,
           total: catalog.length,
+          limit: 50,
+          offset: 0,
+          has_next: false,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/business-views**", async (route) => {
+    // 検索ページは業務アシスタント選択が前提のため、最低 1 件を返す。
+    await route.fulfill({
+      json: {
+        data: {
+          items: [
+            {
+              id: "bv-1",
+              name: "経理アシスタント",
+              description: null,
+              status: "ACTIVE",
+              knowledge_base_count: 1,
+              created_at: "2026-06-19T00:00:00Z",
+              updated_at: "2026-06-19T00:00:00Z",
+              archived_at: null,
+            },
+          ],
+          total: 1,
           limit: 50,
           offset: 0,
           has_next: false,

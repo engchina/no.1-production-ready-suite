@@ -108,7 +108,10 @@ def _sanitize_prefix(prefix: str) -> str:
 def build_identifier(prefix: str, fingerprint: str) -> str:
     """prefix + fingerprint の SHA1 先頭桁から 30 byte 以内の決定論識別子を作る。"""
     normalized_prefix = _sanitize_prefix(prefix)
-    digest = hashlib.sha1((fingerprint or "").encode("utf-8")).hexdigest().upper()
+    # 暗号用途ではなく決定論的識別子生成のための SHA1。
+    digest = (
+        hashlib.sha1((fingerprint or "").encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+    )
     # prefix を残しつつ 30 文字に収まる長さの digest を採用する。
     budget = max(MAX_IDENTIFIER_LENGTH - len(normalized_prefix), 8)
     identifier = f"{normalized_prefix}{digest[:budget]}"
