@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import Settings
+from app.config import ServingMode, Settings
 from app.rag.kb_adapter_config import (
     KnowledgeBaseQueryConfig,
     compose_query_settings,
@@ -53,6 +53,14 @@ class BusinessViewConfig(BaseModel):
     query: KnowledgeBaseQueryConfig = Field(default_factory=KnowledgeBaseQueryConfig)
     system_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_CHARS)
     default_language: str | None = Field(default=None, max_length=MAX_DEFAULT_LANGUAGE_CHARS)
+    serving_mode: ServingMode = Field(
+        default="single",
+        description=(
+            "配信モード。1 文書が複数 chunk_set を持つときの検索時配信方法。single(既定)は "
+            "is_serving の単一 chunk_set のみ、fused は複数 chunk_set を RRF 融合 + source-span "
+            "重複除去、routed は Router で query ごと選択(後続)。"
+        ),
+    )
 
     def normalized_knowledge_base_ids(self) -> list[str]:
         """参照 KB ID の前後空白・重複を取り除く。"""
@@ -102,12 +110,17 @@ def resolve_business_view_settings(
     if kb_query is not None:
         overlays.append(kb_query)  # 低優先(KB 既定)
     overlays.append(config.query)  # 高優先(業務アシスタント)
-    merged, query_applied = compose_query_settings(global_settings, overlays)
+    merged, applied = compose_query_settings(global_settings, overlays)
+    updates: dict[str, object] = {}
     persona = config.resolved_system_prompt()
-    if persona is None:
-        return merged, query_applied
-    merged = merged.model_copy(update={"rag_generation_system_prompt_override": persona})
-    return merged, True
+    if persona is not None:
+        updates["rag_generation_system_prompt_override"] = persona
+    if config.serving_mode != merged.rag_serving_mode:
+        updates["rag_serving_mode"] = config.serving_mode
+    if updates:
+        merged = merged.model_copy(update=updates)
+        applied = True
+    return merged, applied
 
 
 def _unique_clean_ids(values: Sequence[str]) -> list[str]:

@@ -71,6 +71,10 @@ PostRetrievalPipeline = Literal[
     "compact",
     "full_governed",
 ]
+# 配信モード(業務アシスタント層): 1 文書が複数 chunk_set を持つとき、検索時にどう配信するか。
+# single=is_serving の単一 chunk_set のみ(既定・現挙動)、fused=複数 chunk_set を RRF 融合 +
+# source-span 重複除去(opt-in)、routed=Router で query ごと選択(後続)。
+ServingMode = Literal["single", "fused", "routed"]
 GenerationProfile = Literal[
     "grounded_concise",
     "detailed_cited",
@@ -743,6 +747,14 @@ class Settings(BaseSettings):
             "business_context_strict は業務適合加重 + gap-stop、"
             "corrective_multi_query は多 query + 不足時の再検索。"
             "per-request の strategy/mode を明示した場合はそちらを優先する。"
+        ),
+    )
+    rag_serving_mode: ServingMode = Field(
+        default="single",
+        description=(
+            "配信モード(業務アシスタント層)。1 文書が複数 chunk_set を持つときの検索時配信。"
+            "single(既定)は is_serving の単一 chunk_set のみ(現挙動)、fused は複数 chunk_set を "
+            "RRF 融合 + source-span 重複除去、routed は Router で query ごと選択(後続)。"
         ),
     )
     rag_post_retrieval_pipeline: PostRetrievalPipeline = Field(

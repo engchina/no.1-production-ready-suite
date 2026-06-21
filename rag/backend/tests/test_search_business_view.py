@@ -168,6 +168,27 @@ def test_missing_business_view_falls_back_to_global(monkeypatch: MonkeyPatch) ->
     assert diagnostics["generation_profile"] == "grounded_concise"
 
 
+def test_business_view_serving_mode_flows_to_settings_and_diagnostics(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """業務アシスタントの serving_mode=fused が pipeline settings と diagnostics へ流れる。"""
+    config = BusinessViewConfig(knowledge_base_ids=["kb-1"], serving_mode="fused")
+    _install(monkeypatch, {"bv-1": config})
+
+    response = client.post(
+        "/api/search",
+        json={"query": "上限額", "business_view_id": "bv-1"},
+    )
+
+    assert response.status_code == 200
+    settings = RecordingPipeline.captured_settings
+    assert settings is not None
+    assert settings.rag_serving_mode == "fused"
+    diagnostics = response.json()["data"]["diagnostics"]
+    assert diagnostics["serving_mode"] == "fused"
+    assert diagnostics["business_view_applied"] == "bv-1"
+
+
 class FakeViewAndKbOracle:
     """業務アシスタントと、その参照 KB(query 上書き付き)を返すテスト用 Oracle。"""
 

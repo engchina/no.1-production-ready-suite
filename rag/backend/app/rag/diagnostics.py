@@ -74,6 +74,7 @@ def build_search_diagnostics(
         guardrail_policy=guardrail_policy or "standard",
         vector_index_profile=vector_index_profile or "balanced",
         graph_profile=graph_profile or "off",
+        serving_mode=resolved_settings.rag_serving_mode,
         agentic_profile=agentic_profile or "off",
         agentic_subquery_count=agentic_subquery_count,
         agentic_hops=agentic_hops,
