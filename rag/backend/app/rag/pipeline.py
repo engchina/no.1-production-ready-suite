@@ -129,6 +129,10 @@ class RagPipeline:
         started_at = perf_counter()
         trace_id = trace_id or new_trace_id()
         stream_stage_timings: dict[str, float] = {}
+        # 配信モードを retrieval where へ伝播する(filters 経由)。fused は chunk_set 制限を外し、
+        # 複数 chunk_set を横断検索する。重複は後段の source-span dedup で除去する。
+        request.filters["serving_mode"] = self._settings.rag_serving_mode
+        collapse_spans = self._settings.rag_serving_mode == "fused"
         query_guardrail = self._guardrails.validate_query(request.query)
         record_guardrail_findings(
             "query",
@@ -477,7 +481,9 @@ class RagPipeline:
                     progress_callback=progress_callback,
                     stage_timings=stream_stage_timings,
                 )
-            packed_chunks, deduplicated_count = _dedupe_ranked_chunks(ranked)
+            packed_chunks, deduplicated_count = _dedupe_ranked_chunks(
+                ranked, collapse_overlapping_spans=collapse_spans
+            )
             if grounding_params.diversity_enabled:
                 error_stage = "context_diversity"
                 packed_chunks, context_diversified_count = await _observe_stage(
@@ -610,7 +616,9 @@ class RagPipeline:
                     request.rerank_top_n,
                 )
                 if corrective_ranked:
-                    corrective_packed, _ = _dedupe_ranked_chunks(corrective_ranked)
+                    corrective_packed, _ = _dedupe_ranked_chunks(
+                        corrective_ranked, collapse_overlapping_spans=collapse_spans
+                    )
                     corrective_pack = resolve_context_pack(
                         corrective_packed,
                         plan=retrieval_plan,
@@ -650,7 +658,9 @@ class RagPipeline:
                         request.rerank_top_n,
                     )
                     if hop_ranked:
-                        hop_packed, _ = _dedupe_ranked_chunks(hop_ranked)
+                        hop_packed, _ = _dedupe_ranked_chunks(
+                            hop_ranked, collapse_overlapping_spans=collapse_spans
+                        )
                         hop_pack = resolve_context_pack(hop_packed, plan=retrieval_plan)
                         if hop_pack.evidence_count > 0:
                             retrieved = hop_result.chunks
@@ -1687,17 +1697,46 @@ def _oracle_method_is_inherited(oracle: OracleClient, method_name: str) -> bool:
     return getattr(oracle_type, method_name, None) is getattr(OracleClient, method_name, None)
 
 
-def _dedupe_ranked_chunks(chunks: list[RetrievedChunk]) -> tuple[list[RetrievedChunk], int]:
-    """同一本文の chunk を rerank 後に除外し、context 枠を節約する。"""
+def _dedupe_ranked_chunks(
+    chunks: list[RetrievedChunk], *, collapse_overlapping_spans: bool = False
+) -> tuple[list[RetrievedChunk], int]:
+    """同一本文の chunk を rerank 後に除外し、context 枠を節約する。
+
+    ``collapse_overlapping_spans=True``(fused 配信)では、text-hash 完全一致に加え、
+    異なる chunk_set 由来で **source span(start_offset..end_offset)が重なる** chunk も
+    冗長として除外する(ランク順に走査し高ランクを優先)。offset 欠落 chunk は除外しない。
+    """
     seen: set[str] = set()
     unique: list[RetrievedChunk] = []
+    kept_spans: dict[str, list[tuple[int, int]]] = {}
     for chunk in chunks:
         key = _chunk_dedupe_key(chunk)
         if key in seen:
             continue
+        if collapse_overlapping_spans:
+            span = _chunk_source_span(chunk)
+            if span is not None:
+                spans = kept_spans.setdefault(chunk.document_id, [])
+                if any(_source_spans_overlap(span, kept) for kept in spans):
+                    continue
+                spans.append(span)
         seen.add(key)
         unique.append(chunk)
     return unique, len(chunks) - len(unique)
+
+
+def _chunk_source_span(chunk: RetrievedChunk) -> tuple[int, int] | None:
+    """chunk の元文書 source span(start_offset, end_offset)を返す。欠落なら None。"""
+    start = chunk.metadata.get("start_offset")
+    end = chunk.metadata.get("end_offset")
+    if isinstance(start, int) and isinstance(end, int) and end > start:
+        return (start, end)
+    return None
+
+
+def _source_spans_overlap(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    """半開区間 [start, end) 同士が重なるか(隣接は重ならない)。"""
+    return a[0] < b[1] and b[0] < a[1]
 
 
 def _chunk_dedupe_key(chunk: RetrievedChunk) -> str:

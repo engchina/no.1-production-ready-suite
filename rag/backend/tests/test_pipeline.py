@@ -920,6 +920,84 @@ def test_dedupe_ranked_chunks_falls_back_to_normalized_text_hash() -> None:
     assert removed == 1
 
 
+def test_dedupe_ranked_chunks_collapses_overlapping_spans_when_fused() -> None:
+    """fused 配信では、異 chunk_set 由来で source span が重なる chunk を高ランク優先で除外する。
+
+    隣接(重ならない)・別文書・offset 欠落 は残す。text はすべて別なので span dedup を分離検証。
+    """
+    chunks = [
+        RetrievedChunk(
+            document_id="doc-1",
+            chunk_id="doc-1:csA:0",
+            text="span A 0-2000",
+            score=0.95,
+            metadata={"start_offset": 0, "end_offset": 2000},
+        ),
+        RetrievedChunk(
+            document_id="doc-1",
+            chunk_id="doc-1:csB:0",
+            text="span B 0-1000",
+            score=0.90,
+            metadata={"start_offset": 0, "end_offset": 1000},
+        ),
+        RetrievedChunk(
+            document_id="doc-1",
+            chunk_id="doc-1:csB:2",
+            text="span B 2000-3000",
+            score=0.85,
+            metadata={"start_offset": 2000, "end_offset": 3000},
+        ),
+        RetrievedChunk(
+            document_id="doc-2",
+            chunk_id="doc-2:csA:0",
+            text="other document",
+            score=0.80,
+            metadata={"start_offset": 0, "end_offset": 2000},
+        ),
+        RetrievedChunk(
+            document_id="doc-1",
+            chunk_id="doc-1:csB:9",
+            text="no offsets",
+            score=0.70,
+        ),
+    ]
+
+    unique, removed = _dedupe_ranked_chunks(chunks, collapse_overlapping_spans=True)
+
+    assert [chunk.chunk_id for chunk in unique] == [
+        "doc-1:csA:0",
+        "doc-1:csB:2",
+        "doc-2:csA:0",
+        "doc-1:csB:9",
+    ]
+    assert removed == 1
+
+
+def test_dedupe_ranked_chunks_keeps_overlapping_spans_in_single_mode() -> None:
+    """single(既定)は overlap dedup をせず、現挙動どおり重なる span を両方残す。"""
+    chunks = [
+        RetrievedChunk(
+            document_id="doc-1",
+            chunk_id="doc-1:0",
+            text="span A 0-2000",
+            score=0.95,
+            metadata={"start_offset": 0, "end_offset": 2000},
+        ),
+        RetrievedChunk(
+            document_id="doc-1",
+            chunk_id="doc-1:1",
+            text="span B 0-1000",
+            score=0.90,
+            metadata={"start_offset": 0, "end_offset": 1000},
+        ),
+    ]
+
+    unique, removed = _dedupe_ranked_chunks(chunks)
+
+    assert [chunk.chunk_id for chunk in unique] == ["doc-1:0", "doc-1:1"]
+    assert removed == 0
+
+
 async def test_pipeline_expands_retrieval_queries_without_changing_generation_prompt(
     caplog: LogCaptureFixture,
 ) -> None:
@@ -2167,6 +2245,7 @@ class BusinessContextOracleClient(OracleClient):
             "source_acl": "support",
             "document_version": "2024.05",
             "knowledge_base_id": "kb-a",
+            "serving_mode": "single",
         }
         return [
             RetrievedChunk(
@@ -2210,6 +2289,7 @@ class BusinessContextOracleClient(OracleClient):
             "source_acl": "support",
             "document_version": "2024.05",
             "knowledge_base_id": "kb-a",
+            "serving_mode": "single",
         }
         return [
             RetrievedChunk(
@@ -2246,6 +2326,7 @@ class ScopedAgentMemoryOracleClient(OracleClient):
             "knowledge_base_id": "kb-scope",
             "source_acl": "support",
             "document_version": "2024.05",
+            "serving_mode": "single",
         }
         return [
             RetrievedChunk(
@@ -2276,6 +2357,7 @@ class ScopedAgentMemoryOracleClient(OracleClient):
             "knowledge_base_id": "kb-scope",
             "source_acl": "support",
             "document_version": "2024.05",
+            "serving_mode": "single",
         }
         return [
             RetrievedChunk(

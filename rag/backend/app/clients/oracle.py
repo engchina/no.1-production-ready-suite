@@ -5894,6 +5894,7 @@ def _oracle_business_view_where(
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
+    serving_mode = (filters.get("serving_mode") or "single").strip().lower()
     knowledge_base_ids = _filter_id_values(filters.get("knowledge_base_id"))
     knowledge_base_filter_sql = ""
     if knowledge_base_ids:
@@ -5904,15 +5905,18 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         )
         binds.update(knowledge_base_binds)
         knowledge_base_filter_sql = f"AND {knowledge_base_filter_sql}"
-        # variant: 配信中(is_serving)の chunk_set だけを検索対象にする。
+        # variant: 配信中(is_serving)の chunk_set だけを検索対象にする(single/routed)。
         # スコープ KB が「この文書で別 chunk_set を配信中」のときだけ、その chunk_set 以外の
         # chunk を除外する。単一 materialization では別 chunk_set が無いので no-op(回帰なし)。
         # chunk_set 未タグ(NULL)や binding 未整備の chunk は除外しない(後方互換)。
-        served_in_sql, served_binds = _oracle_in_predicate(
-            "b.knowledge_base_id", "filter_knowledge_base_id", knowledge_base_ids
-        )
-        binds.update(served_binds)
-        clauses.append(f"""
+        # fused は全 serving chunk_set を横断検索するため、この制限をかけない(重複は
+        # アプリ側の source-span dedup で除去する)。
+        if serving_mode != "fused":
+            served_in_sql, served_binds = _oracle_in_predicate(
+                "b.knowledge_base_id", "filter_knowledge_base_id", knowledge_base_ids
+            )
+            binds.update(served_binds)
+            clauses.append(f"""
             NOT EXISTS (
                 SELECT 1
                 FROM rag_kb_chunk_set_bindings b
@@ -5958,6 +5962,8 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
             binds["filter_category_name"] = _like_pattern(cleaned)
         elif key == "knowledge_base_id":
             continue
+        elif key == "serving_mode":
+            continue  # フィルタ値ではなく配信モード制御。chunk_set 制限の有無で既に処理済み。
         elif key == "content_kind":
             clauses.append(
                 "LOWER(JSON_VALUE(c.metadata_json, '$.content_kind')) = :filter_content_kind"

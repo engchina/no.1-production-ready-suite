@@ -182,6 +182,7 @@ class SearchDiagnostics(BaseModel):
     guardrail_policy: str = "standard"
     vector_index_profile: str = "balanced"
     graph_profile: str = "off"
+    serving_mode: str = "single"
     agentic_profile: str = "off"
     agentic_subquery_count: int = 0
     agentic_hops: int = 0

@@ -114,3 +114,17 @@ def test_retrieval_where_omits_chunk_set_filter_without_kb_scope() -> None:
     """KB 未指定のグローバル検索では chunk_set フィルタを足さない(現行挙動と同一)。"""
     sql, _ = _oracle_retrieval_where({})
     assert "rag_kb_chunk_set_bindings" not in sql
+
+
+def test_retrieval_where_omits_chunk_set_filter_for_fused_serving_mode() -> None:
+    """fused 配信では KB スコープでも chunk_set 制限(NOT EXISTS)を足さず全 chunk_set を横断する。"""
+    sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "fused"})
+    assert "rag_kb_chunk_set_bindings b" not in sql
+    # KB スコープ自体(所属 KB の EXISTS)は維持する。
+    assert "rag_document_knowledge_bases dkb" in sql
+
+
+def test_retrieval_where_keeps_chunk_set_filter_for_single_serving_mode() -> None:
+    """single(既定)では従来どおり配信中 chunk_set 制限を足す。"""
+    sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "single"})
+    assert "b.is_serving = 1" in sql
