@@ -595,6 +595,221 @@ class OracleClient:
             return None
         return await self.get_knowledge_base(owning_id)
 
+    # ------------------------------------------------------------------
+    # variant materialization: chunk_set / KB binding 永続層
+    # dedup/refcount/GC の計算は app.rag.variant_planner(決定論)が担い、
+    # 本メソッド群はその計画を Oracle へ反映する手。refcount は binding 件数から導出する。
+    # ------------------------------------------------------------------
+
+    async def upsert_chunk_set(
+        self,
+        *,
+        chunk_set_id: str,
+        document_id: str,
+        recipe_subset: Mapping[str, object] | None = None,
+        status: str = "INGESTING",
+    ) -> None:
+        """chunk_set(chunk text/embedding 層)を冪等に作成する。既存なら updated_at のみ更新。"""
+        tenant = current_audit_request_context().tenant_id_hash
+        binds = {
+            "chunk_set_id": chunk_set_id,
+            "document_id": document_id,
+            "tenant_id_hash": tenant,
+            "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
+            "status": status,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_chunk_sets t
+                USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
+                ON (t.chunk_set_id = s.chunk_set_id)
+                WHEN MATCHED THEN UPDATE SET t.updated_at = SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT
+                    (chunk_set_id, document_id, tenant_id_hash, recipe_subset, status)
+                    VALUES (:chunk_set_id, :document_id, :tenant_id_hash, :recipe_subset, :status)
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
+    async def mark_chunk_set_indexed(
+        self,
+        *,
+        chunk_set_id: str,
+        chunk_count: int,
+        vector_count: int,
+        metrics: Mapping[str, object] | None = None,
+    ) -> None:
+        """chunk_set を INDEXED にし、件数/metrics を記録する。"""
+        binds = {
+            "chunk_set_id": chunk_set_id,
+            "chunk_count": chunk_count,
+            "vector_count": vector_count,
+            "metrics_json": _json_dumps(metrics) if metrics is not None else None,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_chunk_sets
+                SET status = 'INDEXED',
+                    chunk_count = :chunk_count,
+                    vector_count = :vector_count,
+                    metrics_json = :metrics_json,
+                    updated_at = SYSTIMESTAMP
+                WHERE chunk_set_id = :chunk_set_id
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
+    async def get_chunk_set(self, chunk_set_id: str) -> dict[str, object] | None:
+        """chunk_set の状態(status/件数)を返す。キーは小文字へ正規化。"""
+        row = await self._fetch_one(
+            """
+            SELECT chunk_set_id, document_id, status, chunk_count, vector_count
+            FROM rag_chunk_sets WHERE chunk_set_id = :chunk_set_id
+            """,
+            {"chunk_set_id": chunk_set_id},
+        )
+        if row is None:
+            return None
+        return {str(key).lower(): value for key, value in row.items()}
+
+    async def list_document_chunk_set_ids(self, document_id: str) -> list[str]:
+        """文書が持つ chunk_set id 一覧(planner の既存状態 = diff_plan 入力)。"""
+        rows = await self._fetch_all(
+            "SELECT chunk_set_id FROM rag_chunk_sets WHERE document_id = :document_id",
+            {"document_id": document_id},
+        )
+        return [str(next(iter(row.values()))) for row in rows]
+
+    async def upsert_chunk_set_binding(
+        self,
+        *,
+        knowledge_base_id: str,
+        document_id: str,
+        chunk_set_id: str,
+        is_serving: bool = True,
+    ) -> None:
+        """KB→chunk_set の参照(refcount の実体)を冪等に作成/更新する。"""
+        tenant = current_audit_request_context().tenant_id_hash
+        binds = {
+            "knowledge_base_id": knowledge_base_id,
+            "document_id": document_id,
+            "chunk_set_id": chunk_set_id,
+            "tenant_id_hash": tenant,
+            "is_serving": 1 if is_serving else 0,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_kb_chunk_set_bindings t
+                USING (
+                    SELECT :knowledge_base_id AS knowledge_base_id,
+                           :document_id AS document_id,
+                           :chunk_set_id AS chunk_set_id
+                    FROM dual
+                ) s
+                ON (t.knowledge_base_id = s.knowledge_base_id
+                    AND t.document_id = s.document_id
+                    AND t.chunk_set_id = s.chunk_set_id)
+                WHEN MATCHED THEN UPDATE SET t.is_serving = :is_serving
+                WHEN NOT MATCHED THEN INSERT
+                    (knowledge_base_id, document_id, chunk_set_id, tenant_id_hash, is_serving)
+                    VALUES
+                    (:knowledge_base_id, :document_id, :chunk_set_id, :tenant_id_hash, :is_serving)
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
+    async def delete_chunk_set_binding(
+        self,
+        *,
+        knowledge_base_id: str,
+        document_id: str,
+        chunk_set_id: str,
+    ) -> None:
+        """KB→chunk_set の参照を削除する(refcount を減らす)。chunk_set 自体は消さない。"""
+        binds = {
+            "knowledge_base_id": knowledge_base_id,
+            "document_id": document_id,
+            "chunk_set_id": chunk_set_id,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_kb_chunk_set_bindings
+                WHERE knowledge_base_id = :knowledge_base_id
+                  AND document_id = :document_id
+                  AND chunk_set_id = :chunk_set_id
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
+    async def chunk_set_refcount(self, chunk_set_id: str) -> int:
+        """chunk_set を参照する KB binding 数(= refcount)。"""
+        row = await self._fetch_one(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM rag_kb_chunk_set_bindings
+            WHERE chunk_set_id = :chunk_set_id
+            """,
+            {"chunk_set_id": chunk_set_id},
+        )
+        return int(str(next(iter(row.values())))) if row else 0
+
+    async def collect_unreferenced_chunk_sets(self, document_id: str) -> list[str]:
+        """文書の chunk_set のうち refcount 0 のものを GC する。削除した chunk_set id を返す。
+
+        他 KB が参照中(binding 存在)の chunk_set は削除しない。削除直前に DB で refcount 0 を
+        再確認(NOT EXISTS)してから chunk と chunk_set を消すため、早すぎる削除を防ぐ。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> list[str]:
+            rows = _fetch_all(
+                connection,
+                """
+                SELECT cs.chunk_set_id
+                FROM rag_chunk_sets cs
+                WHERE cs.document_id = :document_id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM rag_kb_chunk_set_bindings b
+                      WHERE b.chunk_set_id = cs.chunk_set_id
+                  )
+                """,
+                {"document_id": document_id},
+            )
+            collected = [str(next(iter(row.values()))) for row in rows]
+            for chunk_set_id in collected:
+                _execute(
+                    connection,
+                    "DELETE FROM rag_chunks WHERE chunk_set_id = :chunk_set_id",
+                    {"chunk_set_id": chunk_set_id},
+                )
+                _execute(
+                    connection,
+                    "DELETE FROM rag_chunk_sets WHERE chunk_set_id = :chunk_set_id",
+                    {"chunk_set_id": chunk_set_id},
+                )
+            return collected
+
+        return await self._run_transaction(operation)
+
     async def create_business_view(
         self,
         *,
