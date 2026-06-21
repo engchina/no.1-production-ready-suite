@@ -42,7 +42,7 @@ from app.rag.kb_adapter_config import apply_adapter_config_or_global
 from app.rag.navigation import build_navigation_tree
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.source_profile import build_source_profile
-from app.rag.variant_keys import compute_chunk_set_id
+from app.rag.variant_keys import compute_chunk_set_id, compute_extraction_id
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
@@ -981,28 +981,20 @@ async def reject_document(
     return ApiResponse(data=updated)
 
 
-async def _ingest_existing_document(
-    document_id: str,
-    *,
-    force: bool = False,
-    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-) -> DocumentDetail:
-    """保存済み原本を検証して取込パイプラインへ渡す。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None or detail.object_storage_path is None:
+async def _load_source_bytes(
+    oracle: OracleClient, document_id: str, detail: DocumentDetail
+) -> tuple[bytes, SourceProfile]:
+    """保存済み原本を取得し、整合性検証して source_profile を組む(失敗は HTTPException)。
+
+    取込(extract)経路と、案 A の承認後 非 owning parser 再抽出で共有する。
+    """
+    if detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status in (FileStatus.INGESTING, FileStatus.INDEXING):
-        raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
-    if detail.status == FileStatus.INDEXED and not force:
-        return detail
     try:
         data = await ObjectStorageClient().get(detail.object_storage_path)
     except FileNotFoundError as exc:
         await oracle.update_document_status(
-            document_id,
-            FileStatus.ERROR,
-            "原本ファイルが見つかりません。",
+            document_id, FileStatus.ERROR, "原本ファイルが見つかりません。"
         )
         raise HTTPException(status_code=409, detail="原本ファイルが見つかりません。") from exc
     except ValueError as exc:
@@ -1026,10 +1018,39 @@ async def _ingest_existing_document(
         duplicate_of_document_id=detail.duplicate_of_document_id,
         data=data,
     )
+    return data, source_profile
+
+
+def _owning_first(extraction_ids: list[str], owning_extraction_id: str | None) -> list[str]:
+    """抽出グループを owning(既定 parser)優先で並べる。
+
+    gate-ON では先頭グループだけが REVIEW で抽出されるため、利用者が確認するのは
+    既定 parser の抽出(owning)であるべき。owning が無ければ元の順序のまま。
+    """
+    if owning_extraction_id is None or owning_extraction_id not in extraction_ids:
+        return extraction_ids
+    return [owning_extraction_id, *(e for e in extraction_ids if e != owning_extraction_id)]
+
+
+async def _ingest_existing_document(
+    document_id: str,
+    *,
+    force: bool = False,
+    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+) -> DocumentDetail:
+    """保存済み原本を検証して取込パイプラインへ渡す。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None or detail.object_storage_path is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status in (FileStatus.INGESTING, FileStatus.INDEXING):
+        raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
+    if detail.status == FileStatus.INDEXED and not force:
+        return detail
+    data, source_profile = await _load_source_bytes(oracle, document_id, detail)
     # plan 駆動の複数 chunk_set materialization（_index_reviewed_document と整合）。
-    # 先頭 chunk_set は ingest（extract+index）で抽出を保存し、残りはその抽出を再利用して
-    # index_reviewed で再チャンクする（chunking 軸 variant 前提。preprocess/parser 軸の
-    # 再抽出は別 follow-up）。所属 KB / content_sha256 が無ければ現行の単一(owning)挙動へ縮退。
+    # 抽出グループ(parser×preprocess)ごとに extract 1 回 → 同抽出の chunking 変種は再チャンク。
+    # 所属 KB / content_sha256 が無ければ現行の単一(owning)挙動へ縮退。
     global_settings = get_settings()
     configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
     plan = (
@@ -1056,11 +1077,17 @@ async def _ingest_existing_document(
         await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
         return result
     # plan 2 段実体化: 抽出グループ(parser×preprocess)ごとに extract 1 回 → 各 chunking で index。
+    # gate-ON では先頭グループ(owning)で REVIEW 停止するため owning を先頭に並べる。
     result = detail
     groups = plan.extraction_groups()
+    owning_extraction_id = (
+        compute_extraction_id(detail.content_sha256, global_settings)
+        if detail.content_sha256
+        else None
+    )
     total_chunk_sets = len(plan.chunk_sets)
     done = 0
-    for extraction_id in sorted(groups):
+    for extraction_id in _owning_first(sorted(groups), owning_extraction_id):
         for position, chunk_set_id in enumerate(sorted(groups[extraction_id])):
             representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
             recipe_settings, _applied = apply_adapter_config_or_global(
@@ -1129,22 +1156,56 @@ async def _index_reviewed_document(
         )
         await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
         return result
-    # plan 駆動: 各 distinct chunk_set を recipe 設定で materialize(保存済み extraction 再利用)。
+    # 案 A の plan 駆動: owning 抽出グループは REVIEW 済み抽出を再利用して index、
+    # 他 parser グループは原本を再取得して extract+index(派生自動・gate off)。
     result = detail
-    chunk_set_ids = sorted(plan.chunk_sets)
-    for index, chunk_set_id in enumerate(chunk_set_ids):
-        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
-        recipe_settings, _applied = apply_adapter_config_or_global(
-            global_settings, configs[representative_kb_id], scope="ingestion"
-        )
-        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
-        # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
-        result = await pipeline.index_reviewed(
-            document_id,
-            chunk_set_id=chunk_set_id,
-            record_outcome=index == len(chunk_set_ids) - 1,
-            cancel_checker=cancel_checker,
-        )
+    groups = plan.extraction_groups()
+    owning_extraction_id = (
+        compute_extraction_id(detail.content_sha256, global_settings)
+        if detail.content_sha256
+        else None
+    )
+    total_chunk_sets = len(plan.chunk_sets)
+    done = 0
+    source: tuple[bytes, SourceProfile] | None = None
+    for extraction_id in _owning_first(sorted(groups), owning_extraction_id):
+        is_owning = extraction_id == owning_extraction_id
+        for position, chunk_set_id in enumerate(sorted(groups[extraction_id])):
+            representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
+            recipe_settings, _applied = apply_adapter_config_or_global(
+                global_settings, configs[representative_kb_id], scope="ingestion"
+            )
+            done += 1
+            # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
+            record_outcome = done == total_chunk_sets
+            if is_owning or position > 0:
+                # owning(REVIEW 済み抽出)/ 同抽出の chunking 変種: 抽出を再利用して index。
+                pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+                result = await pipeline.index_reviewed(
+                    document_id,
+                    chunk_set_id=chunk_set_id,
+                    record_outcome=record_outcome,
+                    cancel_checker=cancel_checker,
+                )
+            else:
+                # 非 owning parser グループの先頭: 原本を再取得し gate off で extract+index。
+                if source is None:
+                    source = await _load_source_bytes(oracle, document_id, detail)
+                data, source_profile = source
+                derived_settings = recipe_settings.model_copy(
+                    update={"rag_review_gate_enabled": False}
+                )
+                pipeline = IngestionPipeline(oracle=oracle, settings=derived_settings)
+                result = await pipeline.ingest(
+                    document_id=document_id,
+                    image_bytes=data,
+                    prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
+                    content_type=detail.content_type or "application/octet-stream",
+                    source_profile=source_profile,
+                    chunk_set_id=chunk_set_id,
+                    record_outcome=record_outcome,
+                    cancel_checker=cancel_checker,
+                )
     await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
     return result
 
