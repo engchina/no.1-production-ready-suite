@@ -11,14 +11,24 @@ from .models import (
     AnalyzeData,
     AnalyzeRequest,
     AssetRefreshData,
+    CommentApplyData,
+    CommentApplyRequest,
     CommentSuggestionData,
     CompareData,
+    CompareHistoryData,
     CompareRequest,
+    DemoLearningData,
     DiagnosticsData,
     EvaluateData,
     EvaluateRequest,
+    EvaluationRunsData,
+    EvaluationSet,
+    EvaluationSetsData,
+    EvaluationSetUpsertRequest,
     ExecuteRequest,
     FeedbackData,
+    FeedbackIndexData,
+    FeedbackIndexRequest,
     FeedbackRequest,
     HistoryData,
     JobCreateData,
@@ -31,6 +41,8 @@ from .models import (
     ProfileRecommendationRequest,
     ProfileUpsertRequest,
     QueryResults,
+    RepairData,
+    RepairRequest,
     ReverseSqlData,
     ReverseSqlRequest,
     SimilarHistoryData,
@@ -151,6 +163,30 @@ async def feedback(req: FeedbackRequest) -> ApiResponse[FeedbackData]:
     return ApiResponse(data=nl2sql_service.save_feedback(req.history_id, req.rating, req.comment))
 
 
+@router.post("/demo/learning", response_model=ApiResponse[DemoLearningData])
+async def seed_demo_learning() -> ApiResponse[DemoLearningData]:
+    """Learning / feedback 画面の検証用 demo データを投入する。"""
+    return ApiResponse(data=nl2sql_service.seed_demo_learning_data())
+
+
+@router.get("/feedback-index", response_model=ApiResponse[FeedbackIndexData])
+async def feedback_index_status() -> ApiResponse[FeedbackIndexData]:
+    """Feedback learning vector index の状態を返す。"""
+    return ApiResponse(data=nl2sql_service.feedback_index_status())
+
+
+@router.post("/feedback-index/rebuild", response_model=ApiResponse[FeedbackIndexData])
+async def rebuild_feedback_index(req: FeedbackIndexRequest) -> ApiResponse[FeedbackIndexData]:
+    """Feedback learning vector index の再構築 plan / 実行。"""
+    return ApiResponse(data=nl2sql_service.rebuild_feedback_index(req))
+
+
+@router.post("/feedback-index/clear", response_model=ApiResponse[FeedbackIndexData])
+async def clear_feedback_index(req: FeedbackIndexRequest) -> ApiResponse[FeedbackIndexData]:
+    """Feedback learning vector index の clear plan / 実行。"""
+    return ApiResponse(data=nl2sql_service.clear_feedback_index(req))
+
+
 @router.post("/similar-history", response_model=ApiResponse[SimilarHistoryData])
 async def similar_history(req: SimilarHistoryRequest) -> ApiResponse[SimilarHistoryData]:
     """質問に近い履歴を few-shot / feedback 学習候補として返す。"""
@@ -177,16 +213,78 @@ async def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
     )
 
 
+@router.post("/repair", response_model=ApiResponse[RepairData])
+async def repair(req: RepairRequest) -> ApiResponse[RepairData]:
+    """Oracle error message に基づいて SELECT SQL の修復候補を返す。"""
+    return ApiResponse(
+        data=nl2sql_service.repair_oracle_error(
+            req,
+            req.row_limit or nl2sql_service.get_profile(None).default_row_limit,
+        )
+    )
+
+
 @router.post("/evaluate", response_model=ApiResponse[EvaluateData])
 async def evaluate(req: EvaluateRequest) -> ApiResponse[EvaluateData]:
     """Deterministic NL2SQL 評価。外部 LLM-as-judge は使わない。"""
     return ApiResponse(data=nl2sql_service.evaluate(req))
 
 
+@router.get("/evaluation-runs", response_model=ApiResponse[EvaluationRunsData])
+async def evaluation_runs(limit: int = 20) -> ApiResponse[EvaluationRunsData]:
+    """保存済み deterministic NL2SQL 評価実行 record の最近分を返す。"""
+    return ApiResponse(data=nl2sql_service.list_evaluation_runs(limit=max(1, min(limit, 100))))
+
+
+@router.get("/evaluation-sets", response_model=ApiResponse[EvaluationSetsData])
+async def evaluation_sets(include_archived: bool = False) -> ApiResponse[EvaluationSetsData]:
+    """保存済み NL2SQL 評価セットを返す。"""
+    return ApiResponse(data=nl2sql_service.list_evaluation_sets(include_archived=include_archived))
+
+
+@router.post("/evaluation-sets", response_model=ApiResponse[EvaluationSet])
+async def create_evaluation_set(req: EvaluationSetUpsertRequest) -> ApiResponse[EvaluationSet]:
+    """NL2SQL 評価セットを作成する。"""
+    return ApiResponse(data=nl2sql_service.create_evaluation_set(req))
+
+
+@router.patch("/evaluation-sets/{evaluation_set_id}", response_model=ApiResponse[EvaluationSet])
+async def update_evaluation_set(
+    evaluation_set_id: str, req: EvaluationSetUpsertRequest
+) -> ApiResponse[EvaluationSet]:
+    """NL2SQL 評価セットを更新する。"""
+    try:
+        return ApiResponse(data=nl2sql_service.update_evaluation_set(evaluation_set_id, req))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された評価セットが見つかりません。"
+        ) from exc
+
+
+@router.post(
+    "/evaluation-sets/{evaluation_set_id}/archive",
+    response_model=ApiResponse[EvaluationSet],
+)
+async def archive_evaluation_set(evaluation_set_id: str) -> ApiResponse[EvaluationSet]:
+    """NL2SQL 評価セットを archive する。"""
+    try:
+        return ApiResponse(data=nl2sql_service.archive_evaluation_set(evaluation_set_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された評価セットが見つかりません。"
+        ) from exc
+
+
 @router.post("/compare", response_model=ApiResponse[CompareData])
 async def compare(req: CompareRequest) -> ApiResponse[CompareData]:
     """同一質問を複数 engine で preview し、SQL・安全性・時間を比較する。"""
     return ApiResponse(data=nl2sql_service.compare_engines(req))
+
+
+@router.get("/compare-history", response_model=ApiResponse[CompareHistoryData])
+async def compare_history(limit: int = 20) -> ApiResponse[CompareHistoryData]:
+    """保存済み engine 比較 record の最近分を返す。"""
+    return ApiResponse(data=nl2sql_service.list_compare_records(limit=max(1, min(limit, 50))))
 
 
 @router.post("/reverse", response_model=ApiResponse[ReverseSqlData])
@@ -199,6 +297,12 @@ async def reverse(req: ReverseSqlRequest) -> ApiResponse[ReverseSqlData]:
 async def suggest_comments() -> ApiResponse[CommentSuggestionData]:
     """表/列コメント候補を決定論で生成する。"""
     return ApiResponse(data=nl2sql_service.suggest_comments())
+
+
+@router.post("/comments/apply", response_model=ApiResponse[CommentApplyData])
+async def apply_comments(req: CommentApplyRequest) -> ApiResponse[CommentApplyData]:
+    """COMMENT ON TABLE/COLUMN の dry-run / restricted execution。"""
+    return ApiResponse(data=nl2sql_service.apply_comments(req))
 
 
 @router.post("/synthetic-cases", response_model=ApiResponse[SyntheticCasesData])

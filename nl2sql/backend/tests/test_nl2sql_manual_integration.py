@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
-from app.features.nl2sql.models import Nl2SqlEngine
+from app.features.nl2sql.models import (
+    DiagnosticReadiness,
+    DiagnosticsData,
+    Nl2SqlEngine,
+)
+from app.settings import get_settings
 from scripts import nl2sql_manual_integration as script
 
 
@@ -35,8 +43,496 @@ def test_manual_integration_preview_smoke(capsys: pytest.CaptureFixture[str]) ->
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "[ok] diagnostics:" in output
+    assert "readiness=" in output
     assert "[ok] preview_enterprise_ai_direct:" in output
+    assert "meta=provider=oci_enterprise_ai,mode=direct" in output
     assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_execute_smoke(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = script.main(
+        [
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--execute",
+            "--timeout",
+            "5",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] preview_enterprise_ai_direct:" in output
+    assert "[ok] job_enterprise_ai_direct:" in output
+    assert "status=done" in output
+    assert "meta=provider=oci_enterprise_ai,mode=direct" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_diagnostics_only_writes_single_step_report(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "diagnostics-only.json"
+
+    monkeypatch.setattr(
+        script,
+        "_diagnostics_with_timeout",
+        lambda *args, **kwargs: script.StepResult(
+            name="diagnostics", ok=True, message="runtime=oracle; readiness=ok"
+        ),
+    )
+    monkeypatch.setattr(
+        script,
+        "_refresh_catalog",
+        lambda refresh: pytest.fail("diagnostics-only must not refresh catalog"),
+    )
+
+    exit_code = script.main(
+        [
+            "--diagnostics-only",
+            "--engines",
+            "select_ai_agent,select_ai",
+            "--json-report",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] diagnostics:" in output
+    assert "[ok] json_report:" in output
+    assert "preview_select_ai" not in output
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["ok"] is True
+    assert report["started_at"].endswith("Z")
+    assert report["finished_at"].endswith("Z")
+    assert report["generated_at"] == report["finished_at"]
+    assert isinstance(report["elapsed_ms"], int)
+    assert report["elapsed_ms"] >= 0
+    assert report["summary"] == {"failed": 0, "passed": 1, "total": 1}
+    assert [step["name"] for step in report["steps"]] == ["diagnostics"]
+
+
+def test_manual_integration_require_enterprise_ai_stops_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_llm_model", "")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_default_model", "")
+
+    exit_code = script.main(
+        [
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--require-enterprise-ai",
+        ]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "[ng] diagnostics:" in output
+    assert "Enterprise AI Direct is not ready" in output
+    assert "OCI_ENTERPRISE_AI_ENDPOINT" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_require_feedback_embedding_stops_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", False)
+
+    exit_code = script.main(
+        [
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--require-feedback-embedding",
+        ]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "[ng] diagnostics:" in output
+    assert "Feedback embedding is not ready" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_require_oracle_persistence_stops_when_memory_store(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _MemoryStore:
+        mode = "memory"
+
+        def check(self) -> tuple[bool, str]:
+            return True, "memory store を使用しています。"
+
+    monkeypatch.setattr(cast(Any, script).nl2sql_service, "_store", _MemoryStore())
+
+    exit_code = script.main(
+        [
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--require-oracle-persistence",
+        ]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "[ng] diagnostics:" in output
+    assert "Oracle persistence is not ready" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_require_refreshed_assets_checks_selected_engines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cast(Any, script).nl2sql_service,
+        "diagnostics",
+        lambda: DiagnosticsData(
+            checks=[],
+            readiness=[
+                DiagnosticReadiness(
+                    area="select_ai",
+                    label="Select AI",
+                    status="ok",
+                    summary="ready",
+                ),
+                DiagnosticReadiness(
+                    area="select_ai_agent",
+                    label="Select AI Agent",
+                    status="warning",
+                    summary="not refreshed",
+                ),
+            ],
+        ),
+    )
+
+    select_ai_only = script._diagnostics(
+        require_oracle=False,
+        require_refreshed_assets=True,
+        engines=[Nl2SqlEngine.SELECT_AI],
+    )
+    agent_required = script._diagnostics(
+        require_oracle=False,
+        require_refreshed_assets=True,
+        engines=[Nl2SqlEngine.SELECT_AI_AGENT],
+    )
+
+    assert select_ai_only.ok
+    assert not agent_required.ok
+    assert "select_ai_agent:warning" in agent_required.message
+
+
+def test_manual_integration_execute_feedback_index_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        script,
+        "_feedback_index_smoke",
+        lambda *, execute, include_bad: script.StepResult(
+            name="feedback_index_rebuild",
+            ok=execute and include_bad,
+            message=(
+                "execute=True; executed=True; runtime=oracle; status=ready; "
+                "indexable=3; indexed=3; backend=oracle_26ai; "
+                "embedding_configured=True; warnings=0"
+            ),
+        ),
+    )
+
+    exit_code = script.main(
+        [
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--seed-demo-learning",
+            "--execute-feedback-index",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] seed_demo_learning:" in output
+    assert "[ok] feedback_index_rebuild:" in output
+    assert "executed=True" in output
+    assert "backend=oracle_26ai" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_full_smoke_runs_supporting_compare_and_jobs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = script.main(
+        [
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--full-smoke",
+            "--timeout",
+            "5",
+            "--synthetic-limit",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] refresh_enterprise_ai_direct:" in output
+    assert "[ok] diagnostics_after_refresh:" in output
+    assert "[ok] support_synthetic_evaluation:" in output
+    assert "[ok] support_evaluation_sets:" in output
+    assert "[ok] preview_enterprise_ai_direct:" in output
+    assert "[ok] job_enterprise_ai_direct:" in output
+    assert "[ok] compare_engines:" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_release_gate_expands_production_gate_steps(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    diagnostics_calls: list[dict[str, object]] = []
+    report_path = tmp_path / "release-gate-report.json"
+
+    def diagnostics_stub(
+        require_oracle: bool,
+        timeout_seconds: float,
+        require_enterprise_ai: bool = False,
+        require_feedback_embedding: bool = False,
+        require_oracle_persistence: bool = False,
+        require_refreshed_assets: bool = False,
+        engines: object = None,
+    ) -> script.StepResult:
+        diagnostics_calls.append(
+            {
+                "require_oracle": require_oracle,
+                "require_oracle_persistence": require_oracle_persistence,
+                "require_refreshed_assets": require_refreshed_assets,
+                "engines": engines,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return script.StepResult(
+            name="diagnostics",
+            ok=True,
+            message="runtime=oracle; readiness=release_gate",
+        )
+
+    monkeypatch.setattr(script, "_diagnostics_with_timeout", diagnostics_stub)
+    monkeypatch.setattr(
+        script,
+        "_refresh_catalog",
+        lambda refresh: script.StepResult(
+            name="refresh_catalog", ok=True, message=f"refresh={refresh}"
+        ),
+    )
+    monkeypatch.setattr(
+        script,
+        "_prepare_profile",
+        lambda *, profile_id, allowed_tables, row_limit: (
+            script.StepResult(name="prepare_profile", ok=True, message="profile=manual"),
+            "manual_integration",
+        ),
+    )
+    monkeypatch.setattr(
+        script,
+        "_refresh_asset",
+        lambda engine, profile_id: script.StepResult(
+            name=f"refresh_{engine.value}", ok=True, message=f"profile={profile_id}"
+        ),
+    )
+    monkeypatch.setattr(
+        script,
+        "_supporting_features",
+        lambda *, profile_id, engine, synthetic_limit: [
+            script.StepResult(name="support_synthetic_evaluation", ok=True, message="cases=1"),
+            script.StepResult(name="support_evaluation_sets", ok=True, message="archived=True"),
+        ],
+    )
+    monkeypatch.setattr(
+        script,
+        "_preview",
+        lambda **kwargs: (
+            script.StepResult(
+                name=f"preview_{kwargs['engine'].value}", ok=True, message="safe=True"
+            ),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        script,
+        "_job",
+        lambda **kwargs: script.StepResult(
+            name=f"job_{kwargs['engine'].value}", ok=True, message="status=done"
+        ),
+    )
+    monkeypatch.setattr(
+        script,
+        "_compare_smoke",
+        lambda **kwargs: script.StepResult(
+            name="compare_engines", ok=True, message="error_rate=0.0"
+        ),
+    )
+
+    exit_code = script.main(
+        [
+            "--release-gate",
+            "--engines",
+            "select_ai_agent,select_ai",
+            "--allowed-table",
+            "DENPYO_REGISTRATIONS",
+            "--json-report",
+            str(report_path),
+            "--timeout",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] refresh_select_ai_agent:" in output
+    assert "[ok] refresh_select_ai:" in output
+    assert "[ok] diagnostics_after_refresh:" in output
+    assert "[ok] support_evaluation_sets:" in output
+    assert "[ok] preview_select_ai_agent:" in output
+    assert "[ok] job_select_ai:" in output
+    assert "[ok] compare_engines:" in output
+    assert "[ok] json_report:" in output
+    assert diagnostics_calls[0]["require_oracle"] is True
+    assert diagnostics_calls[0]["require_oracle_persistence"] is True
+    assert diagnostics_calls[0]["require_refreshed_assets"] is False
+    assert diagnostics_calls[1]["require_refreshed_assets"] is True
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["schema_version"] == "nl2sql_manual_integration_report_v1"
+    assert report["release_gate"] is True
+    assert report["ok"] is True
+    assert report["exit_code"] == 0
+    assert report["started_at"].endswith("Z")
+    assert report["finished_at"].endswith("Z")
+    assert report["generated_at"] == report["finished_at"]
+    assert isinstance(report["elapsed_ms"], int)
+    assert report["elapsed_ms"] >= 0
+    assert report["engines"] == ["select_ai_agent", "select_ai"]
+    assert report["allowed_tables"] == ["DENPYO_REGISTRATIONS"]
+    assert report["summary"]["failed"] == 0
+    assert {step["name"] for step in report["steps"]} >= {
+        "diagnostics",
+        "diagnostics_after_refresh",
+        "preview_select_ai_agent",
+        "job_select_ai",
+        "compare_engines",
+    }
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_reports_diagnostics_after_asset_refresh(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = script.main(
+        [
+            "--engines",
+            "select_ai",
+            "--question",
+            "請求金額を確認したい",
+            "--refresh-assets",
+            "--require-refreshed-assets",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] refresh_select_ai:" in output
+    assert "[ok] diagnostics_after_refresh:" in output
+    assert "select_ai:ok" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_supporting_features_smoke(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = script.main(
+        [
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--check-supporting-features",
+            "--synthetic-limit",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] support_comments:" in output
+    assert "[ok] support_comment_apply_dry_run:" in output
+    assert "[ok] support_synthetic_evaluation:" in output
+    assert "[ok] support_evaluation_sets:" in output
+    assert "[ok] support_feedback_index:" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_debug_raw_preview_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        script,
+        "_debug_raw_preview",
+        lambda *, profile_id, question: [
+            script.StepResult(
+                name="debug_select_ai_generate_raw",
+                ok=True,
+                message="profile=NL2SQL_DEFAULT_PROFILE; len=8; raw='SELECT 1'",
+            )
+        ],
+    )
+
+    exit_code = script.main(
+        [
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--debug-raw-preview",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] debug_select_ai_generate_raw:" in output
+    assert "raw='SELECT 1'" in output
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_raw_summary_truncates_multiline_text() -> None:
+    raw = "SELECT 1\nFROM DUAL " + ("x" * 2000)
+
+    summary = script._raw_summary(raw, max_len=80)
+
+    assert summary.startswith("len=")
+    assert "\n" not in summary
+    assert summary.endswith("...'")
 
 
 def test_manual_integration_cleanup_assets_is_dry_run_without_confirm(
@@ -104,7 +600,7 @@ def test_manual_integration_stops_when_required_oracle_diagnostics_fails(
     monkeypatch.setattr(
         script,
         "_diagnostics_with_timeout",
-        lambda _require_oracle, _timeout: script.StepResult(
+        lambda *_args, **_kwargs: script.StepResult(
             name="diagnostics", ok=False, message="diagnostics timeout after 1.0s"
         ),
     )

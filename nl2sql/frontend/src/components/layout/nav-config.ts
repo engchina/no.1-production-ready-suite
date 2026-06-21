@@ -1,10 +1,16 @@
 import {
+  BookOpen,
+  Bot,
+  Cloud,
   Database,
+  FileSpreadsheet,
   FlaskConical,
   History,
   KeyRound,
   LayoutDashboard,
+  MessageSquareText,
   Settings,
+  ShieldCheck,
   Sparkles,
   Table2,
   type LucideIcon,
@@ -33,6 +39,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: APP_ROUTES.dashboard, labelKey: "nav.dashboard", icon: LayoutDashboard },
       { href: APP_ROUTES.schema, labelKey: "nav.schema", icon: Table2 },
+      { href: APP_ROUTES.dataTools, labelKey: "nav.dataTools", icon: FileSpreadsheet },
     ],
   },
   {
@@ -40,16 +47,51 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: APP_ROUTES.query, labelKey: "nav.query", icon: Sparkles },
       { href: APP_ROUTES.profiles, labelKey: "nav.profiles", icon: Settings },
+      { href: APP_ROUTES.glossaryRules, labelKey: "nav.glossaryRules", icon: BookOpen },
+      { href: APP_ROUTES.sqlAnalysis, labelKey: "nav.sqlAnalysis", icon: ShieldCheck },
+      { href: APP_ROUTES.learning, labelKey: "nav.learning", icon: MessageSquareText },
       { href: APP_ROUTES.history, labelKey: "nav.history", icon: History },
       { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical },
+      { href: APP_ROUTES.engineOperations, labelKey: "nav.engineOperations", icon: Bot },
+      {
+        href: APP_ROUTES.nl2sqlSettingsConnection,
+        labelKey: "nav.nl2sqlSettingsConnection",
+        icon: KeyRound,
+      },
+      {
+        href: APP_ROUTES.nl2sqlSettingsModel,
+        labelKey: "nav.nl2sqlSettingsModel",
+        icon: Settings,
+      },
+      {
+        href: APP_ROUTES.nl2sqlSettingsDatabase,
+        labelKey: "nav.nl2sqlSettingsDatabase",
+        icon: Database,
+      },
     ],
   },
   {
     titleKey: "nav.section.settings",
     items: [
-      { href: APP_ROUTES.settingsConnection, labelKey: "nav.settingsConnection", icon: KeyRound },
-      { href: APP_ROUTES.settingsModel, labelKey: "nav.settingsModel", icon: Settings },
-      { href: APP_ROUTES.settingsDatabase, labelKey: "nav.settingsDatabase", icon: Database },
+      {
+        href: APP_ROUTES.settingsOci,
+        labelKey: "nav.settingsOci",
+        sidebarLabelKey: "nav.settingsOci.sidebar",
+        icon: KeyRound,
+      },
+      { href: APP_ROUTES.settingsUploadStorage, labelKey: "nav.settingsUploadStorage", icon: Cloud },
+      {
+        href: APP_ROUTES.settingsModel,
+        labelKey: "nav.settingsModel",
+        sidebarLabelKey: "nav.settingsModel.sidebar",
+        icon: Settings,
+      },
+      {
+        href: APP_ROUTES.settingsDatabase,
+        labelKey: "nav.settingsDatabase",
+        sidebarLabelKey: "nav.settingsDatabase.sidebar",
+        icon: Database,
+      },
     ],
   },
 ];

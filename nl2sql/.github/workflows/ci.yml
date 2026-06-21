@@ -56,12 +56,24 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Logic tests
+        run: npm run test
+
       - name: Build
         run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E tests
+        run: npm run test:e2e
 
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    env:
+      NL2SQL_RUNTIME_MODE: memory
+      NL2SQL_FEEDBACK_EMBEDDING_ENABLED: "false"
     defaults:
       run:
         working-directory: no.1-production-ready-nl2sql/backend
@@ -101,7 +113,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check
-        run: uv run mypy app
+        run: uv run mypy .
 
       - name: Test
         run: uv run pytest --cov=app

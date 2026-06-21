@@ -191,6 +191,41 @@ export interface HistoryData {
   items: HistoryItem[];
 }
 
+export type FeedbackRating = "good" | "bad" | "needs_review";
+
+export interface FeedbackData {
+  history_id: string;
+  rating: FeedbackRating;
+  saved: boolean;
+  comment: string;
+}
+
+export interface FeedbackIndexData {
+  operation: string;
+  status: string;
+  executed: boolean;
+  runtime: string;
+  source_history_count: number;
+  indexable_count: number;
+  indexed_count: number;
+  vector_dimension: number;
+  vector_backend: string;
+  embedding_provider: string;
+  embedding_model: string;
+  embedding_configured: boolean;
+  ddl: string[];
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface DemoLearningData {
+  seeded_history_count: number;
+  seeded_feedback_count: number;
+  history_ids: string[];
+  profile_ids: string[];
+  message: string;
+}
+
 export interface SimilarHistoryItem {
   item: HistoryItem;
   score: number;
@@ -207,6 +242,22 @@ export interface CompareData {
   execution_results: CompareExecutionData[];
   error_rate: number;
   recommendation: string;
+}
+
+export interface CompareRecord {
+  id: string;
+  created_at: string;
+  profile_id: string;
+  profile_name: string;
+  question: string;
+  engines: Nl2SqlEngine[];
+  execute: boolean;
+  report: string;
+  comparison: CompareData;
+}
+
+export interface CompareHistoryData {
+  items: CompareRecord[];
 }
 
 export interface CompareExecutionData {
@@ -236,6 +287,48 @@ export interface SyntheticCasesData {
   cases: SyntheticCase[];
 }
 
+export interface EvaluationSet {
+  id: string;
+  name: string;
+  description: string;
+  profile_id: string;
+  profile_name: string;
+  engine: Nl2SqlEngine;
+  cases: SyntheticCase[];
+  created_at: string;
+  updated_at: string;
+  archived: boolean;
+}
+
+export interface EvaluationSetsData {
+  items: EvaluationSet[];
+}
+
+export interface EvaluationSetPayload {
+  name: string;
+  description: string;
+  profile_id: string;
+  engine: Nl2SqlEngine;
+  cases: SyntheticCase[];
+}
+
+export interface EvaluationRunRecord {
+  id: string;
+  created_at: string;
+  evaluation_set_id: string;
+  evaluation_set_name: string;
+  profile_id: string;
+  profile_name: string;
+  engine: Nl2SqlEngine;
+  cases: SyntheticCase[];
+  result: EvaluateData;
+  report: string;
+}
+
+export interface EvaluationRunsData {
+  items: EvaluationRunRecord[];
+}
+
 export interface ReverseSqlData {
   question: string;
   explanation: string;
@@ -251,6 +344,15 @@ export interface AnalyzeData {
   optimization_hints: string[];
 }
 
+export interface RepairData {
+  error_code: string;
+  repaired_sql: string;
+  explanation: string;
+  recommendations: string[];
+  safety: SafetyReport;
+  executable_sql: string;
+}
+
 export interface CommentSuggestion {
   object_name: string;
   object_type: string;
@@ -261,14 +363,83 @@ export interface CommentSuggestionData {
   suggestions: CommentSuggestion[];
 }
 
+export interface CommentApplyItem {
+  object_name: string;
+  object_type: string;
+  comment: string;
+}
+
+export interface CommentApplyStatement {
+  object_name: string;
+  object_type: string;
+  comment: string;
+  sql: string;
+  status: string;
+  error_message: string;
+}
+
+export interface CommentApplyData {
+  executed: boolean;
+  runtime: string;
+  statements: CommentApplyStatement[];
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
 export interface DiagnosticCheck {
   name: string;
   status: string;
   message: string;
 }
 
+export interface DiagnosticReadiness {
+  area: string;
+  label: string;
+  status: string;
+  summary: string;
+  next_action: string;
+  related_checks: string[];
+}
+
+export interface DiagnosticSmokeCheck {
+  id: string;
+  label: string;
+  category: string;
+  status: string;
+  method: string;
+  endpoint: string;
+  request_hint: string;
+  command: string;
+  expected: string;
+  next_action: string;
+  related_readiness: string[];
+}
+
+export interface DiagnosticConfigVar {
+  name: string;
+  status: string;
+  required: boolean;
+  note: string;
+}
+
+export interface DiagnosticConfigGuide {
+  id: string;
+  label: string;
+  status: string;
+  summary: string;
+  next_action: string;
+  required_env_vars: DiagnosticConfigVar[];
+  optional_env_vars: DiagnosticConfigVar[];
+  env_template: string;
+  smoke_command: string;
+  related_readiness: string[];
+}
+
 export interface DiagnosticsData {
   checks: DiagnosticCheck[];
+  readiness?: DiagnosticReadiness[];
+  smoke_checks?: DiagnosticSmokeCheck[];
+  config_guides?: DiagnosticConfigGuide[];
 }
 
 export interface AssetRefreshData {

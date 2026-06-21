@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 import re
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,24 +25,52 @@ from dotenv import dotenv_values
 
 from app.settings import get_settings
 
+from .embedding_client import (
+    EmbeddingClientError,
+    FeedbackEmbeddingClient,
+    OciGenAiEmbeddingClient,
+)
+from .enterprise_ai_client import (
+    EnterpriseAiDirectClient,
+    EnterpriseAiDirectError,
+    OciEnterpriseAiDirectClient,
+)
 from .models import (
     AllowedObjects,
     AnalyzeData,
     AssetCleanupData,
     AssetRefreshData,
+    CommentApplyData,
+    CommentApplyItem,
+    CommentApplyRequest,
+    CommentApplyStatement,
     CommentSuggestion,
     CommentSuggestionData,
     CompareData,
     CompareExecutionData,
+    CompareHistoryData,
+    CompareRecord,
     CompareRequest,
     CsvImportColumn,
     CsvImportData,
     CsvImportRequest,
+    DemoLearningData,
     DiagnosticCheck,
+    DiagnosticConfigGuide,
+    DiagnosticConfigVar,
+    DiagnosticReadiness,
     DiagnosticsData,
+    DiagnosticSmokeCheck,
     EvaluateData,
     EvaluateRequest,
+    EvaluationRunRecord,
+    EvaluationRunsData,
+    EvaluationSet,
+    EvaluationSetsData,
+    EvaluationSetUpsertRequest,
     FeedbackData,
+    FeedbackIndexData,
+    FeedbackIndexRequest,
     FeedbackRating,
     HistoryData,
     HistoryItem,
@@ -58,6 +87,8 @@ from .models import (
     ProfileRecommendationData,
     ProfileRecommendationRequest,
     QueryResults,
+    RepairData,
+    RepairRequest,
     ReverseSqlData,
     ReverseSqlRequest,
     SafetyReport,
@@ -96,12 +127,10 @@ _DANGEROUS_TOKENS = re.compile(
     r"\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b",
     re.IGNORECASE,
 )
-_FROM_JOIN_TABLE = re.compile(
-    r"\b(?:from|join)\s+([a-zA-Z_][\w$#]*(?:\.[a-zA-Z_][\w$#]*)?)", re.IGNORECASE
-)
+_SQL_OBJECT_REF = r'(?:"[^"]+"|[a-zA-Z_][\w$#]*)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][\w$#]*))?'
+_FROM_JOIN_TABLE = re.compile(rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})", re.IGNORECASE)
 _FROM_JOIN_WITH_ALIAS = re.compile(
-    r"\b(?:from|join)\s+([a-zA-Z_][\w$#]*(?:\.[a-zA-Z_][\w$#]*)?)"
-    r"(?:\s+(?:as\s+)?([a-zA-Z_][\w$#]*))?",
+    rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})(?:\s+(?:as\s+)?([a-zA-Z_][\w$#]*))?",
     re.IGNORECASE,
 )
 _SELECT_TOKEN = re.compile(r"\bselect\b", re.IGNORECASE)
@@ -153,7 +182,8 @@ def _elapsed_ms(started: float) -> int:
 
 
 def _normalize_identifier(value: str) -> str:
-    return value.strip().strip('"').split(".")[-1].upper()
+    parts = [part.strip().strip('"') for part in value.strip().split(".")]
+    return (parts[-1] if parts else "").upper()
 
 
 def _csv_identifier(value: str, fallback: str) -> str:
@@ -163,6 +193,14 @@ def _csv_identifier(value: str, fallback: str) -> str:
     if normalized[0].isdigit():
         normalized = f"C_{normalized}"
     return normalized[:128]
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _quote_sql_string(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _similarity_tokens(value: str) -> set[str]:
@@ -373,6 +411,10 @@ def _strip_row_limit(sql: str) -> str:
     return re.sub(r"\s+limit\s+\d+\s*;?\s*$", "", without_fetch, flags=re.IGNORECASE)
 
 
+def one_line_sql(sql: str) -> str:
+    return re.sub(r"\s+", " ", sql).strip()
+
+
 def enforce_row_limit(sql: str, row_limit: int) -> str:
     """Oracle 向けに row limit を明示する。すでに FETCH FIRST があれば置換する。"""
     normalized = _strip_row_limit(sql.strip().rstrip(";"))
@@ -386,6 +428,17 @@ class GeneratedSql:
     explanation: str
     engine_meta: dict[str, Any]
     fallback_reason: str = ""
+
+
+@dataclass(frozen=True)
+class LearningExample:
+    source: str
+    question: str
+    sql: str
+    history_id: str | None = None
+    score: float | None = None
+    feedback: str | None = None
+    reason: str = ""
 
 
 @dataclass
@@ -410,6 +463,8 @@ class Nl2SqlService:
         self._lock = threading.RLock()
         self._catalog = self._build_default_catalog()
         self._oracle_adapter = OracleNl2SqlAdapter(settings)
+        self._embedding_client: FeedbackEmbeddingClient = OciGenAiEmbeddingClient(settings)
+        self._enterprise_ai_client: EnterpriseAiDirectClient = OciEnterpriseAiDirectClient(settings)
         self._store = store or self._build_store(settings)
         self._profiles: dict[str, Nl2SqlProfile] = {
             "default": Nl2SqlProfile(
@@ -430,7 +485,11 @@ class Nl2SqlService:
         }
         self._jobs: dict[str, StoredJob] = {}
         self._history: list[HistoryItem] = []
+        self._compare_records: list[CompareRecord] = []
+        self._evaluation_sets: list[EvaluationSet] = []
+        self._evaluation_runs: list[EvaluationRunRecord] = []
         self._feedback: dict[str, FeedbackRating] = {}
+        self._feedback_indexed_ids: set[str] = set()
         self._asset_meta: dict[Nl2SqlEngine, AssetRefreshData] = {}
         self._load_snapshot()
         self._persist_state()
@@ -463,10 +522,21 @@ class Nl2SqlService:
                 if item.get("job_id")
             }
             history = [HistoryItem.model_validate(item) for item in snapshot.get("history", [])]
+            compare_records = [
+                CompareRecord.model_validate(item) for item in snapshot.get("compare_records", [])
+            ]
+            evaluation_sets = [
+                EvaluationSet.model_validate(item) for item in snapshot.get("evaluation_sets", [])
+            ]
+            evaluation_runs = [
+                EvaluationRunRecord.model_validate(item)
+                for item in snapshot.get("evaluation_runs", [])
+            ]
             asset_meta = {
                 Nl2SqlEngine(engine): AssetRefreshData.model_validate(data)
                 for engine, data in snapshot.get("asset_meta", {}).items()
             }
+            feedback_indexed_ids = {str(item) for item in snapshot.get("feedback_indexed_ids", [])}
         except Exception as exc:
             logger.warning("NL2SQL store snapshot restore failed: %s", exc)
             return
@@ -477,11 +547,15 @@ class Nl2SqlService:
             self._jobs = jobs
             self._recover_interrupted_jobs()
             self._history = history
+            self._compare_records = compare_records
+            self._evaluation_sets = evaluation_sets
+            self._evaluation_runs = evaluation_runs
             self._feedback = {
                 item.id: item.feedback_rating
                 for item in history
                 if item.feedback_rating is not None
             }
+            self._feedback_indexed_ids = feedback_indexed_ids
             self._asset_meta = asset_meta
 
     def _recover_interrupted_jobs(self) -> None:
@@ -509,6 +583,10 @@ class Nl2SqlService:
             "profiles": [profile.model_dump(mode="json") for profile in self._profiles.values()],
             "jobs": [self._job_to_snapshot(job) for job in self._jobs.values()],
             "history": [item.model_dump(mode="json") for item in self._history],
+            "compare_records": [item.model_dump(mode="json") for item in self._compare_records],
+            "evaluation_sets": [item.model_dump(mode="json") for item in self._evaluation_sets],
+            "evaluation_runs": [item.model_dump(mode="json") for item in self._evaluation_runs],
+            "feedback_indexed_ids": sorted(self._feedback_indexed_ids),
             "asset_meta": {
                 engine.value: data.model_dump(mode="json")
                 for engine, data in self._asset_meta.items()
@@ -723,6 +801,44 @@ class Nl2SqlService:
             ),
         )
 
+    def repair_oracle_error(self, request: RepairRequest, row_limit: int) -> RepairData:
+        """Oracle error message をヒントに SELECT SQL の修復候補を返す。"""
+        error_code = self._oracle_error_code(request.error_message)
+        base = self.analyze_sql(request.sql, request.allowed_objects, row_limit)
+        referenced = base.safety.referenced_tables
+        repaired_sql = self._repair_sql_for_oracle_error(
+            sql=request.sql,
+            error_code=error_code,
+            allowed=request.allowed_objects,
+            row_limit=row_limit,
+            referenced_tables=referenced,
+        )
+        if not repaired_sql:
+            repaired_sql = base.repaired_sql or base.executable_sql
+        if repaired_sql:
+            repaired = self.analyze_sql(repaired_sql, request.allowed_objects, row_limit)
+            safety = repaired.safety
+            executable_sql = repaired.executable_sql
+            recommendations = self._oracle_error_recommendations(
+                error_code=error_code,
+                fallback_recommendations=repaired.recommendations,
+            )
+        else:
+            safety = base.safety
+            executable_sql = ""
+            recommendations = self._oracle_error_recommendations(
+                error_code=error_code,
+                fallback_recommendations=base.recommendations,
+            )
+        return RepairData(
+            error_code=error_code,
+            repaired_sql=repaired_sql,
+            explanation=self._oracle_error_explanation(error_code),
+            recommendations=recommendations,
+            safety=safety,
+            executable_sql=executable_sql,
+        )
+
     def list_history(self) -> HistoryData:
         with self._lock:
             return HistoryData(items=list(reversed(self._history[-50:])))
@@ -743,16 +859,309 @@ class Nl2SqlService:
         self._persist_state()
         return FeedbackData(history_id=history_id, rating=rating, saved=True, comment=comment)
 
-    def similar_history(self, request: SimilarHistoryRequest) -> SimilarHistoryData:
+    def seed_demo_learning_data(self) -> DemoLearningData:
+        """学習/feedback 機能をすぐ検証できる demo 履歴を投入する。"""
+        now = _utc_now()
+        profile = self.get_profile("default")
+        demo_items = [
+            HistoryItem(
+                id="demo-learning-invoice-total",
+                question="今月の請求金額が大きい取引先を見たい",
+                engine=Nl2SqlEngine.SELECT_AI_AGENT,
+                generated_sql=(
+                    "SELECT c.CUSTOMER_NAME, SUM(i.TOTAL_AMOUNT) AS TOTAL_AMOUNT "
+                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
+                    "GROUP BY c.CUSTOMER_NAME ORDER BY TOTAL_AMOUNT DESC"
+                ),
+                created_at=now,
+                elapsed_ms=842,
+                feedback_rating=FeedbackRating.GOOD,
+                profile_id=profile.id,
+                profile_name=profile.name,
+                rewritten_question="今月の請求金額合計が大きい取引先を降順で確認する",
+                executable_sql=(
+                    "SELECT c.CUSTOMER_NAME, SUM(i.TOTAL_AMOUNT) AS TOTAL_AMOUNT "
+                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
+                    "GROUP BY c.CUSTOMER_NAME ORDER BY TOTAL_AMOUNT DESC "
+                    "FETCH FIRST 100 ROWS ONLY"
+                ),
+                result_row_count=5,
+                result_columns=["CUSTOMER_NAME", "TOTAL_AMOUNT"],
+                feedback_comment="集計軸と並び順が期待通り。few-shot に利用できる。",
+            ),
+            HistoryItem(
+                id="demo-learning-customer-sales",
+                question="顧客別の売上推移を確認したい",
+                engine=Nl2SqlEngine.SELECT_AI,
+                generated_sql=(
+                    "SELECT c.CUSTOMER_NAME, TRUNC(i.INVOICE_DATE, 'MM') AS SALES_MONTH, "
+                    "SUM(i.TOTAL_AMOUNT) AS SALES_AMOUNT "
+                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
+                    "GROUP BY c.CUSTOMER_NAME, TRUNC(i.INVOICE_DATE, 'MM')"
+                ),
+                created_at=now,
+                elapsed_ms=706,
+                feedback_rating=FeedbackRating.GOOD,
+                profile_id=profile.id,
+                profile_name=profile.name,
+                rewritten_question="顧客別・月別に請求金額合計を集計する",
+                executable_sql=(
+                    "SELECT c.CUSTOMER_NAME, TRUNC(i.INVOICE_DATE, 'MM') AS SALES_MONTH, "
+                    "SUM(i.TOTAL_AMOUNT) AS SALES_AMOUNT "
+                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
+                    "GROUP BY c.CUSTOMER_NAME, TRUNC(i.INVOICE_DATE, 'MM') "
+                    "FETCH FIRST 100 ROWS ONLY"
+                ),
+                result_row_count=12,
+                result_columns=["CUSTOMER_NAME", "SALES_MONTH", "SALES_AMOUNT"],
+                feedback_comment="顧客別・月別の粒度が正しい。",
+            ),
+            HistoryItem(
+                id="demo-learning-payment-delay",
+                question="入金が遅れている請求を確認したい",
+                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+                generated_sql=(
+                    "SELECT i.INVOICE_ID, c.CUSTOMER_NAME, i.DUE_DATE, p.PAID_AT "
+                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
+                    "LEFT JOIN PAYMENTS p ON p.INVOICE_ID = i.INVOICE_ID "
+                    "WHERE p.PAID_AT IS NULL OR p.PAID_AT > i.DUE_DATE"
+                ),
+                created_at=now,
+                elapsed_ms=918,
+                feedback_rating=FeedbackRating.NEEDS_REVIEW,
+                profile_id=profile.id,
+                profile_name=profile.name,
+                rewritten_question="支払期日を過ぎた未入金または遅延入金の請求を確認する",
+                executable_sql=(
+                    "SELECT i.INVOICE_ID, c.CUSTOMER_NAME, i.DUE_DATE, p.PAID_AT "
+                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
+                    "LEFT JOIN PAYMENTS p ON p.INVOICE_ID = i.INVOICE_ID "
+                    "WHERE p.PAID_AT IS NULL OR p.PAID_AT > i.DUE_DATE "
+                    "FETCH FIRST 100 ROWS ONLY"
+                ),
+                result_row_count=3,
+                result_columns=["INVOICE_ID", "CUSTOMER_NAME", "DUE_DATE", "PAID_AT"],
+                feedback_comment="遅延条件は妥当。業務上の猶予日数があれば追加したい。",
+            ),
+        ]
         with self._lock:
-            history = list(self._history)
-        return SimilarHistoryData(
-            items=self._rank_similar_history(
-                question=request.question,
-                profile_id=request.profile_id,
-                history=history,
-                include_bad=False,
-            )[: request.limit]
+            existing_ids = {item.id for item in self._history}
+            new_items = [item for item in demo_items if item.id not in existing_ids]
+            self._history.extend(new_items)
+            for item in demo_items:
+                if item.feedback_rating is not None:
+                    self._feedback[item.id] = item.feedback_rating
+            if new_items:
+                self._feedback_indexed_ids.difference_update(item.id for item in new_items)
+        if new_items:
+            self._persist_state()
+        return DemoLearningData(
+            seeded_history_count=len(new_items),
+            seeded_feedback_count=sum(1 for item in new_items if item.feedback_rating is not None),
+            history_ids=[item.id for item in new_items],
+            profile_ids=[profile.id],
+            message=(
+                "Demo 学習データを投入しました。"
+                if new_items
+                else "Demo 学習データは投入済みです。"
+            ),
+        )
+
+    def feedback_index_status(self) -> FeedbackIndexData:
+        return self._feedback_index_data(operation="status", execute=False, include_bad=False)
+
+    def rebuild_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
+        return self._feedback_index_data(
+            operation="rebuild", execute=request.execute, include_bad=request.include_bad
+        )
+
+    def clear_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
+        started = time.monotonic()
+        created_at = _utc_now()
+        warnings: list[str] = []
+        executed = False
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        with self._lock:
+            source_count = len(self._history)
+            indexable_count = len(self._feedback_indexable_history(request.include_bad))
+            current_indexed = len(self._feedback_indexed_ids)
+        if request.execute:
+            if not self._use_oracle_runtime():
+                warnings.append(
+                    "Feedback vector index の clear 実行には "
+                    "NL2SQL_RUNTIME_MODE=oracle が必要です。"
+                )
+            else:
+                try:
+                    settings = get_settings()
+                    self._oracle_adapter.clear_feedback_vector_index(
+                        table_name=settings.nl2sql_feedback_vector_table,
+                        index_name=settings.nl2sql_feedback_vector_index,
+                    )
+                    with self._lock:
+                        self._feedback_indexed_ids = set()
+                    executed = True
+                    self._persist_state()
+                except OracleAdapterError as exc:
+                    warnings.append(str(exc))
+        else:
+            warnings.append("Dry-run のため feedback index は削除していません。")
+        embedding_configured = self._embedding_client.is_configured()
+        settings = get_settings()
+        return FeedbackIndexData(
+            operation="clear",
+            status=(
+                "empty"
+                if executed
+                else self._feedback_index_status(current_indexed, indexable_count)
+            ),
+            executed=executed,
+            runtime=runtime,
+            source_history_count=source_count,
+            indexable_count=indexable_count,
+            indexed_count=0 if executed else current_indexed,
+            ddl=self._feedback_index_ddl(),
+            embedding_model=settings.oci_genai_embed_model_id,
+            embedding_configured=embedding_configured,
+            warnings=warnings,
+            timing=self._timing(created_at, started, "feedback_index"),
+        )
+
+    def similar_history(self, request: SimilarHistoryRequest) -> SimilarHistoryData:
+        ranked = self._similar_history_candidates(
+            question=request.question,
+            profile_id=request.profile_id,
+            include_bad=False,
+        )
+        return SimilarHistoryData(items=ranked[: request.limit])
+
+    def _feedback_index_data(
+        self, *, operation: str, execute: bool, include_bad: bool
+    ) -> FeedbackIndexData:
+        started = time.monotonic()
+        created_at = _utc_now()
+        warnings: list[str] = []
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        with self._lock:
+            indexable = self._feedback_indexable_history(include_bad)
+            source_count = len(self._history)
+            indexed_count = len(self._feedback_indexed_ids)
+        executed = False
+        if operation == "rebuild" and execute:
+            if not self._use_oracle_runtime():
+                warnings.append(
+                    "Feedback vector index の rebuild 実行には "
+                    "NL2SQL_RUNTIME_MODE=oracle が必要です。"
+                )
+            elif not self._embedding_client.is_configured():
+                warnings.append(
+                    "OCI GenAI embedding が未設定です。"
+                    "NL2SQL_FEEDBACK_EMBEDDING_ENABLED と OCI 設定を確認してください。"
+                )
+            else:
+                try:
+                    texts = [self._feedback_embedding_text(item) for item in indexable]
+                    vectors = self._embedding_client.embed_texts(texts)
+                    settings = get_settings()
+                    rows = [
+                        {
+                            "history_id": item.id,
+                            "profile_id": item.profile_id,
+                            "question": item.question,
+                            "generated_sql": item.generated_sql,
+                            "feedback_rating": (
+                                item.feedback_rating.value if item.feedback_rating else ""
+                            ),
+                            "embedding": vector,
+                        }
+                        for item, vector in zip(indexable, vectors, strict=True)
+                    ]
+                    self._oracle_adapter.rebuild_feedback_vector_index(
+                        table_name=settings.nl2sql_feedback_vector_table,
+                        index_name=settings.nl2sql_feedback_vector_index,
+                        rows=rows,
+                    )
+                    with self._lock:
+                        self._feedback_indexed_ids = {item.id for item in indexable}
+                        indexed_count = len(self._feedback_indexed_ids)
+                    executed = True
+                    self._persist_state()
+                except (EmbeddingClientError, OracleAdapterError, ValueError) as exc:
+                    warnings.append(str(exc))
+        elif operation == "rebuild":
+            warnings.append("Dry-run のため feedback index は再構築していません。")
+            indexed_count = len(indexable)
+        settings = get_settings()
+        return FeedbackIndexData(
+            operation=operation,
+            status=self._feedback_index_status(indexed_count, len(indexable)),
+            executed=executed,
+            runtime=runtime,
+            source_history_count=source_count,
+            indexable_count=len(indexable),
+            indexed_count=indexed_count,
+            ddl=self._feedback_index_ddl(),
+            embedding_model=settings.oci_genai_embed_model_id,
+            embedding_configured=self._embedding_client.is_configured(),
+            warnings=warnings,
+            timing=self._timing(created_at, started, "feedback_index"),
+        )
+
+    def _feedback_indexable_history(self, include_bad: bool) -> list[HistoryItem]:
+        return [
+            item
+            for item in self._history
+            if item.feedback_rating and (include_bad or item.feedback_rating != FeedbackRating.BAD)
+        ]
+
+    def _feedback_index_status(self, indexed_count: int, indexable_count: int) -> str:
+        if indexable_count == 0 and indexed_count == 0:
+            return "empty"
+        if indexed_count < indexable_count:
+            return "stale"
+        if indexed_count > indexable_count:
+            return "needs_cleanup"
+        return "ready"
+
+    def _feedback_index_ddl(self) -> list[str]:
+        settings = get_settings()
+        table_name = settings.nl2sql_feedback_vector_table
+        index_name = settings.nl2sql_feedback_vector_index
+        return [
+            (
+                f"CREATE TABLE {table_name} ("
+                "HISTORY_ID VARCHAR2(64) PRIMARY KEY, "
+                "PROFILE_ID VARCHAR2(128), "
+                "QUESTION CLOB, GENERATED_SQL CLOB, FEEDBACK_RATING VARCHAR2(32), "
+                "EMBEDDING VECTOR(1536, FLOAT32), CREATED_AT TIMESTAMP WITH TIME ZONE)"
+            ),
+            (
+                f"CREATE VECTOR INDEX {index_name} "
+                f"ON {table_name} (EMBEDDING) "
+                "ORGANIZATION INMEMORY NEIGHBOR GRAPH DISTANCE COSINE"
+            ),
+        ]
+
+    def _feedback_embedding_text(self, item: HistoryItem) -> str:
+        return "\n".join(
+            [
+                f"question: {item.question}",
+                f"rewritten_question: {item.rewritten_question}",
+                f"sql: {item.generated_sql}",
+                f"feedback: {item.feedback_rating.value if item.feedback_rating else ''}",
+                f"comment: {item.feedback_comment}",
+                f"profile: {item.profile_name or item.profile_id}",
+            ]
+        )
+
+    def _timing(self, created_at: str, started: float, stage: str) -> TimingEnvelope:
+        elapsed = _elapsed_ms(started)
+        return TimingEnvelope(
+            created_at=created_at,
+            started_at=created_at,
+            finished_at=_utc_now(),
+            elapsed_ms=elapsed,
+            stage_timings=[StageTiming(stage=stage, elapsed_ms=elapsed)],
         )
 
     def recommend_profile(self, request: ProfileRecommendationRequest) -> ProfileRecommendationData:
@@ -794,21 +1203,32 @@ class Nl2SqlService:
         )
 
     def evaluate(self, request: EvaluateRequest) -> EvaluateData:
-        total = len(request.cases)
+        profile, evaluation_set_id, evaluation_set_name = self._evaluation_context(request)
+        cases = self._evaluation_cases_from_request(request, profile.id)
+        total = len(cases)
         if total == 0:
-            return EvaluateData(
+            data = EvaluateData(
                 evaluation_suite="deterministic_mock",
                 total_cases=0,
                 executable_rate=0.0,
                 select_only_rate=0.0,
                 findings=["評価ケースがありません。"],
             )
+            self._save_evaluation_run(
+                request=request,
+                data=data,
+                cases=cases,
+                profile=profile,
+                evaluation_set_id=evaluation_set_id,
+                evaluation_set_name=evaluation_set_name,
+            )
+            return data
         select_only = 0
         executable = 0
-        for case in request.cases:
+        for case in cases:
             preview = self.preview(
                 PreviewRequest(
-                    question=case.get("question", ""),
+                    question=case.question,
                     engine=request.engine,
                     allowed_objects=AllowedObjects(),
                 )
@@ -817,7 +1237,7 @@ class Nl2SqlService:
                 select_only += 1
             if preview.is_safe:
                 executable += 1
-        return EvaluateData(
+        data = EvaluateData(
             evaluation_suite="deterministic_mock",
             total_cases=total,
             executable_rate=round(executable / total, 3),
@@ -827,6 +1247,204 @@ class Nl2SqlService:
                 if executable == total
                 else ["一部のケースで安全境界により実行不可になりました。"]
             ),
+        )
+        self._save_evaluation_run(
+            request=request,
+            data=data,
+            cases=cases,
+            profile=profile,
+            evaluation_set_id=evaluation_set_id,
+            evaluation_set_name=evaluation_set_name,
+        )
+        return data
+
+    def list_evaluation_runs(self, limit: int = 20) -> EvaluationRunsData:
+        with self._lock:
+            items = list(reversed(self._evaluation_runs[-limit:]))
+        return EvaluationRunsData(items=items)
+
+    def _evaluation_context(self, request: EvaluateRequest) -> tuple[Nl2SqlProfile, str, str]:
+        evaluation_set = self._find_evaluation_set(request.evaluation_set_id)
+        profile = self.get_profile(
+            request.profile_id or (evaluation_set.profile_id if evaluation_set else None)
+        )
+        return (
+            profile,
+            evaluation_set.id if evaluation_set else request.evaluation_set_id or "",
+            evaluation_set.name if evaluation_set else "",
+        )
+
+    def _find_evaluation_set(self, evaluation_set_id: str | None) -> EvaluationSet | None:
+        if not evaluation_set_id:
+            return None
+        with self._lock:
+            return next(
+                (item for item in self._evaluation_sets if item.id == evaluation_set_id),
+                None,
+            )
+
+    def _evaluation_cases_from_request(
+        self, request: EvaluateRequest, profile_id: str
+    ) -> list[SyntheticCase]:
+        cases: list[SyntheticCase] = []
+        for case in request.cases:
+            question = str(case.get("question") or "").strip()
+            expected_sql = str(case.get("expected_sql") or case.get("sql") or "").strip()
+            if not question and not expected_sql:
+                continue
+            cases.append(
+                SyntheticCase(
+                    question=question,
+                    expected_sql=expected_sql,
+                    profile_id=profile_id,
+                )
+            )
+        return cases
+
+    def _save_evaluation_run(
+        self,
+        *,
+        request: EvaluateRequest,
+        data: EvaluateData,
+        cases: list[SyntheticCase],
+        profile: Nl2SqlProfile,
+        evaluation_set_id: str,
+        evaluation_set_name: str,
+    ) -> None:
+        record = EvaluationRunRecord(
+            id=str(uuid.uuid4()),
+            created_at=_utc_now(),
+            evaluation_set_id=evaluation_set_id,
+            evaluation_set_name=evaluation_set_name,
+            profile_id=profile.id,
+            profile_name=profile.name,
+            engine=request.engine,
+            cases=cases,
+            result=data,
+            report=self._evaluation_report_text(
+                data=data,
+                engine=request.engine,
+                profile=profile,
+                evaluation_set_name=evaluation_set_name,
+            ),
+        )
+        with self._lock:
+            self._evaluation_runs.append(record)
+            self._evaluation_runs = self._evaluation_runs[-100:]
+        self._persist_state()
+
+    def _evaluation_report_text(
+        self,
+        *,
+        data: EvaluateData,
+        engine: Nl2SqlEngine,
+        profile: Nl2SqlProfile,
+        evaluation_set_name: str,
+    ) -> str:
+        lines = [
+            "NL2SQL deterministic evaluation",
+            f"Suite: {data.evaluation_suite}",
+            f"Evaluation set: {evaluation_set_name or '-'}",
+            f"Profile: {profile.name}",
+            f"Engine: {engine.value}",
+            f"Cases: {data.total_cases}",
+            f"Executable rate: {round(data.executable_rate * 100)}%",
+            f"SELECT-only rate: {round(data.select_only_rate * 100)}%",
+        ]
+        if data.findings:
+            lines.extend(["", "Findings:", *[f"- {item}" for item in data.findings]])
+        return "\n".join(lines)
+
+    def list_evaluation_sets(self, include_archived: bool = False) -> EvaluationSetsData:
+        with self._lock:
+            items = [
+                item for item in self._evaluation_sets if include_archived or not item.archived
+            ]
+        return EvaluationSetsData(items=list(reversed(items)))
+
+    def create_evaluation_set(self, request: EvaluationSetUpsertRequest) -> EvaluationSet:
+        now = _utc_now()
+        evaluation_set = self._evaluation_set_from_request(
+            evaluation_set_id=str(uuid.uuid4()),
+            request=request,
+            created_at=now,
+            updated_at=now,
+            archived=False,
+        )
+        with self._lock:
+            self._evaluation_sets.append(evaluation_set)
+        self._persist_state()
+        return evaluation_set
+
+    def update_evaluation_set(
+        self, evaluation_set_id: str, request: EvaluationSetUpsertRequest
+    ) -> EvaluationSet:
+        with self._lock:
+            current = next(
+                (item for item in self._evaluation_sets if item.id == evaluation_set_id),
+                None,
+            )
+            if current is None:
+                raise KeyError(evaluation_set_id)
+            updated = self._evaluation_set_from_request(
+                evaluation_set_id=evaluation_set_id,
+                request=request,
+                created_at=current.created_at,
+                updated_at=_utc_now(),
+                archived=current.archived,
+            )
+            self._evaluation_sets = [
+                updated if item.id == evaluation_set_id else item for item in self._evaluation_sets
+            ]
+        self._persist_state()
+        return updated
+
+    def archive_evaluation_set(self, evaluation_set_id: str) -> EvaluationSet:
+        with self._lock:
+            current = next(
+                (item for item in self._evaluation_sets if item.id == evaluation_set_id),
+                None,
+            )
+            if current is None:
+                raise KeyError(evaluation_set_id)
+            archived = current.model_copy(update={"archived": True, "updated_at": _utc_now()})
+            self._evaluation_sets = [
+                archived if item.id == evaluation_set_id else item for item in self._evaluation_sets
+            ]
+        self._persist_state()
+        return archived
+
+    def _evaluation_set_from_request(
+        self,
+        *,
+        evaluation_set_id: str,
+        request: EvaluationSetUpsertRequest,
+        created_at: str,
+        updated_at: str,
+        archived: bool,
+    ) -> EvaluationSet:
+        profile_id = (
+            request.profile_id
+            or next((case.profile_id for case in request.cases if case.profile_id), None)
+            or "default"
+        )
+        profile = self.get_profile(profile_id)
+        cases = [
+            case.model_copy(update={"profile_id": profile.id})
+            for case in request.cases
+            if case.question.strip() and case.expected_sql.strip()
+        ]
+        return EvaluationSet(
+            id=evaluation_set_id,
+            name=request.name.strip(),
+            description=request.description.strip(),
+            profile_id=profile.id,
+            profile_name=profile.name,
+            engine=request.engine,
+            cases=cases,
+            created_at=created_at,
+            updated_at=updated_at,
+            archived=archived,
         )
 
     def compare_engines(self, request: CompareRequest) -> CompareData:
@@ -925,13 +1543,81 @@ class Nl2SqlService:
         error_rate = (
             round(len(execution_errors) / len(execution_results), 3) if execution_results else 0.0
         )
-        return CompareData(
+        data = CompareData(
             question=request.question,
             results=results,
             execution_results=execution_results,
             error_rate=error_rate,
             recommendation=recommendation,
         )
+        self._save_compare_record(request=request, data=data, engines=engines)
+        return data
+
+    def list_compare_records(self, limit: int = 20) -> CompareHistoryData:
+        with self._lock:
+            items = list(reversed(self._compare_records[-limit:]))
+        return CompareHistoryData(items=items)
+
+    def _save_compare_record(
+        self, *, request: CompareRequest, data: CompareData, engines: Sequence[Nl2SqlEngine]
+    ) -> None:
+        profile = self.get_profile(request.profile_id)
+        record = CompareRecord(
+            id=str(uuid.uuid4()),
+            created_at=_utc_now(),
+            profile_id=profile.id,
+            profile_name=profile.name,
+            question=request.question,
+            engines=list(engines),
+            execute=request.execute,
+            report=self._compare_report_text(data),
+            comparison=data,
+        )
+        with self._lock:
+            self._compare_records.append(record)
+            self._compare_records = self._compare_records[-50:]
+        self._persist_state()
+
+    def _compare_report_text(self, data: CompareData) -> str:
+        lines = [
+            "NL2SQL engine comparison",
+            f"Question: {data.question}",
+            f"Recommendation: {data.recommendation}",
+            f"Error rate: {round(data.error_rate * 100)}%",
+            "",
+        ]
+        for result in data.results:
+            execution = next(
+                (item for item in data.execution_results if item.engine == result.engine),
+                None,
+            )
+            execution_text = "not executed"
+            if execution:
+                execution_text = (
+                    f"{execution.row_count} rows"
+                    if execution.executed
+                    else execution.error_message or "not executed"
+                )
+            elapsed = (
+                f"{result.timing.elapsed_ms}ms"
+                if result.timing and result.timing.elapsed_ms is not None
+                else "-"
+            )
+            safety = result.safety
+            lines.extend(
+                [
+                    f"## {result.engine.value}",
+                    f"Safe: {'yes' if result.is_safe else 'no'}",
+                    f"Elapsed: {elapsed}",
+                    f"Row limit: {result.row_limit}",
+                    "Tables: " + (", ".join(safety.referenced_tables) if safety else "-"),
+                    "Columns: " + (", ".join(safety.referenced_columns) if safety else "-"),
+                    f"Execution: {execution_text}",
+                    f"SQL: {one_line_sql(result.executable_sql or result.sql)}",
+                    "",
+                ]
+            )
+        return "\n".join(lines).strip()
 
     def reverse_sql(self, request: ReverseSqlRequest) -> ReverseSqlData:
         referenced = _extract_referenced_tables(request.sql)
@@ -962,6 +1648,127 @@ class Nl2SqlService:
                     )
                 )
         return CommentSuggestionData(suggestions=suggestions)
+
+    def apply_comments(self, request: CommentApplyRequest) -> CommentApplyData:
+        started = time.monotonic()
+        created_at = _utc_now()
+        warnings: list[str] = []
+        statements: list[CommentApplyStatement] = []
+        for item in request.items:
+            try:
+                statements.append(self._comment_statement(item))
+            except ValueError as exc:
+                warnings.append(str(exc))
+
+        executed = False
+        runtime = "deterministic"
+        if request.execute and statements:
+            if not self._use_oracle_runtime():
+                warnings.append("COMMENT ON の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
+                statements = [
+                    statement.model_copy(update={"status": "requires_oracle"})
+                    for statement in statements
+                ]
+            else:
+                runtime = "oracle"
+                try:
+                    self._oracle_adapter.apply_comment_statements(
+                        [statement.sql for statement in statements]
+                    )
+                    executed = True
+                    statements = [
+                        statement.model_copy(update={"status": "applied"})
+                        for statement in statements
+                    ]
+                    try:
+                        self._catalog = self._oracle_adapter.fetch_catalog()
+                    except OracleAdapterError as exc:
+                        warnings.append(f"COMMENT 適用後の catalog refresh に失敗しました: {exc}")
+                except OracleAdapterError as exc:
+                    warnings.append(str(exc))
+                    statements = [
+                        statement.model_copy(update={"status": "error", "error_message": str(exc)})
+                        for statement in statements
+                    ]
+        elif request.execute and not statements:
+            warnings.append("適用対象の COMMENT がありません。")
+
+        if not request.items:
+            warnings.append("COMMENT 対象が指定されていません。")
+
+        finished_at = _utc_now()
+        return CommentApplyData(
+            executed=executed,
+            runtime=runtime,
+            statements=statements,
+            warnings=warnings,
+            timing=TimingEnvelope(
+                created_at=created_at,
+                started_at=created_at,
+                finished_at=finished_at,
+                elapsed_ms=_elapsed_ms(started),
+                stage_timings=[StageTiming(stage="comments", elapsed_ms=_elapsed_ms(started))],
+            ),
+        )
+
+    def _comment_statement(self, item: CommentApplyItem) -> CommentApplyStatement:
+        object_type = item.object_type.strip().lower()
+        comment = item.comment.strip()
+        if not comment:
+            raise ValueError(f"{item.object_name}: コメントが空です。")
+        if object_type == "table":
+            table = self._find_catalog_table(item.object_name)
+            if table is None:
+                raise ValueError(f"{item.object_name}: catalog に存在しない table です。")
+            return CommentApplyStatement(
+                object_name=table.table_name,
+                object_type="table",
+                comment=comment,
+                sql=(
+                    f"COMMENT ON TABLE {_quote_identifier(table.table_name)} "
+                    f"IS {_quote_sql_string(comment)};"
+                ),
+            )
+        if object_type == "column":
+            table_name, column_name = self._split_comment_column_name(item.object_name)
+            table = self._find_catalog_table(table_name)
+            if table is None:
+                raise ValueError(f"{item.object_name}: catalog に存在しない table です。")
+            column = self._find_catalog_column(table, column_name)
+            if column is None:
+                raise ValueError(f"{item.object_name}: catalog に存在しない column です。")
+            return CommentApplyStatement(
+                object_name=f"{table.table_name}.{column.column_name}",
+                object_type="column",
+                comment=comment,
+                sql=(
+                    f"COMMENT ON COLUMN {_quote_identifier(table.table_name)}."
+                    f"{_quote_identifier(column.column_name)} IS {_quote_sql_string(comment)};"
+                ),
+            )
+        raise ValueError(
+            f"{item.object_name}: object_type は table または column のみ指定できます。"
+        )
+
+    def _split_comment_column_name(self, object_name: str) -> tuple[str, str]:
+        parts = [part.strip() for part in object_name.split(".") if part.strip()]
+        if len(parts) != 2:
+            raise ValueError(f"{object_name}: column は TABLE.COLUMN 形式で指定してください。")
+        return parts[0], parts[1]
+
+    def _find_catalog_table(self, table_name: str) -> SchemaTable | None:
+        normalized = _normalize_identifier(table_name)
+        return next(
+            (table for table in self._catalog.tables if table.table_name == normalized),
+            None,
+        )
+
+    def _find_catalog_column(self, table: SchemaTable, column_name: str) -> SchemaColumn | None:
+        normalized = _normalize_identifier(column_name)
+        return next(
+            (column for column in table.columns if column.column_name == normalized),
+            None,
+        )
 
     def synthetic_cases(self, profile_id: str | None = None, limit: int = 6) -> SyntheticCasesData:
         profile = self.get_profile(profile_id)
@@ -999,7 +1806,23 @@ class Nl2SqlService:
         settings = get_settings()
         oracle_configured = self._oracle_adapter.is_configured()
         oracle_module_available = self._oracle_adapter.module_available()
+        embedding_configured = self._embedding_client.is_configured()
+        embedding_module_available = self._embedding_client.module_available()
+        enterprise_ai_configured = self._enterprise_ai_client.is_configured()
         uses_oracle_runtime = self._use_oracle_runtime()
+        with self._lock:
+            select_ai_asset_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI)
+            agent_asset_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI_AGENT)
+        select_ai_assets_ready = (
+            select_ai_asset_meta is not None
+            and select_ai_asset_meta.refreshed
+            and select_ai_asset_meta.status == "ready"
+        )
+        agent_assets_ready = (
+            agent_asset_meta is not None
+            and agent_asset_meta.refreshed
+            and agent_asset_meta.status == "ready"
+        )
         oracle_live_ok = False
         oracle_live_message = "deterministic runtime のため live 接続は未確認です。"
         if uses_oracle_runtime:
@@ -1008,8 +1831,36 @@ class Nl2SqlService:
         checks = [
             check_present("ORACLE_DSN", "Oracle DSN"),
             check_present("ORACLE_USER", "Oracle user"),
+            check_present("ORACLE_ADB_OCID", "ADB OCID"),
             check_present("OCI_REGION", "OCI region"),
             check_present("OCI_COMPARTMENT_ID", "OCI compartment"),
+            DiagnosticCheck(
+                name="OCI_ENTERPRISE_AI_ENDPOINT",
+                status="ok" if settings.oci_enterprise_ai_endpoint.strip() else "warning",
+                message=(
+                    "OCI Enterprise AI endpoint は設定済みです。"
+                    if settings.oci_enterprise_ai_endpoint.strip()
+                    else "OCI Enterprise AI endpoint が未設定です。"
+                ),
+            ),
+            DiagnosticCheck(
+                name="OCI_ENTERPRISE_AI_API_KEY",
+                status="ok" if settings.oci_enterprise_ai_api_key.strip() else "warning",
+                message=(
+                    "OCI Enterprise AI API key は設定済みです。"
+                    if settings.oci_enterprise_ai_api_key.strip()
+                    else "OCI Enterprise AI API key が未設定です。"
+                ),
+            ),
+            DiagnosticCheck(
+                name="OCI_ENTERPRISE_AI_LLM_MODEL",
+                status="ok" if self._enterprise_ai_client.model_id() else "warning",
+                message=(
+                    f"OCI Enterprise AI LLM model は {self._enterprise_ai_client.model_id()} です。"
+                    if self._enterprise_ai_client.model_id()
+                    else "OCI Enterprise AI LLM model が未設定です。"
+                ),
+            ),
             DiagnosticCheck(
                 name="NL2SQL_PERSISTENCE_MODE",
                 status=(
@@ -1061,12 +1912,38 @@ class Nl2SqlService:
                 ),
             ),
             DiagnosticCheck(
+                name="NL2SQL_SELECT_AI_PROFILE_REFRESHED",
+                status="ok" if (select_ai_assets_ready or not uses_oracle_runtime) else "warning",
+                message=(
+                    f"Select AI profile は {select_ai_asset_meta.profile_name} として更新済みです。"
+                    if select_ai_assets_ready and select_ai_asset_meta is not None
+                    else (
+                        "deterministic runtime のため Select AI profile refresh は任意です。"
+                        if not uses_oracle_runtime
+                        else "Select AI profile refresh がこの app state では未確認です。"
+                    )
+                ),
+            ),
+            DiagnosticCheck(
                 name="NL2SQL_SELECT_AI_AGENT_ENABLED",
                 status="ok" if settings.nl2sql_select_ai_agent_enabled else "warning",
                 message=(
                     "Select AI Agent engine は有効です。"
                     if settings.nl2sql_select_ai_agent_enabled
                     else "Select AI Agent engine は無効です。"
+                ),
+            ),
+            DiagnosticCheck(
+                name="NL2SQL_SELECT_AI_AGENT_ASSETS_REFRESHED",
+                status="ok" if (agent_assets_ready or not uses_oracle_runtime) else "warning",
+                message=(
+                    f"Select AI Agent team は {agent_asset_meta.team_name} として更新済みです。"
+                    if agent_assets_ready and agent_asset_meta is not None
+                    else (
+                        "deterministic runtime のため Agent assets refresh は任意です。"
+                        if not uses_oracle_runtime
+                        else "Select AI Agent assets refresh がこの app state では未確認です。"
+                    )
                 ),
             ),
             DiagnosticCheck(
@@ -1096,8 +1973,623 @@ class Nl2SqlService:
                 ),
                 message=oracle_live_message,
             ),
+            DiagnosticCheck(
+                name="NL2SQL_FEEDBACK_EMBEDDING_ENABLED",
+                status="ok" if settings.nl2sql_feedback_embedding_enabled else "warning",
+                message=(
+                    "feedback embedding は有効です。"
+                    if settings.nl2sql_feedback_embedding_enabled
+                    else "feedback embedding は無効です。"
+                ),
+            ),
+            DiagnosticCheck(
+                name="OCI_GENAI_ENDPOINT",
+                status=(
+                    "ok"
+                    if settings.oci_genai_endpoint.strip()
+                    or not settings.nl2sql_feedback_embedding_enabled
+                    else "warning"
+                ),
+                message=(
+                    "OCI GenAI endpoint は設定済みです。"
+                    if settings.oci_genai_endpoint.strip()
+                    else (
+                        "feedback embedding は無効なため OCI GenAI endpoint は任意です。"
+                        if not settings.nl2sql_feedback_embedding_enabled
+                        else "OCI GenAI endpoint が未設定です。"
+                    )
+                ),
+            ),
+            DiagnosticCheck(
+                name="OCI_GENAI_EMBED_MODEL_ID",
+                status="ok" if settings.oci_genai_embed_model_id.strip() else "warning",
+                message=(
+                    f"OCI GenAI embedding model は {settings.oci_genai_embed_model_id} です。"
+                    if settings.oci_genai_embed_model_id.strip()
+                    else "OCI GenAI embedding model が未設定です。"
+                ),
+            ),
+            DiagnosticCheck(
+                name="OCI_GENAI_EMBEDDING",
+                status=(
+                    "ok"
+                    if (
+                        not settings.nl2sql_feedback_embedding_enabled
+                        or (embedding_configured and embedding_module_available)
+                    )
+                    else "warning"
+                ),
+                message=(
+                    f"feedback embedding model は {settings.oci_genai_embed_model_id} です。"
+                    if embedding_configured and embedding_module_available
+                    else (
+                        "feedback embedding は無効です。"
+                        if not settings.nl2sql_feedback_embedding_enabled
+                        else "feedback embedding の OCI 設定または OCI SDK が不足しています。"
+                    )
+                ),
+            ),
         ]
-        return DiagnosticsData(checks=checks)
+        readiness = self._diagnostic_readiness(
+            checks=checks,
+            settings=settings,
+            uses_oracle_runtime=uses_oracle_runtime,
+            oracle_configured=oracle_configured,
+            oracle_live_ok=oracle_live_ok,
+            oracle_live_message=oracle_live_message,
+            persistence_ready=persistence_ready,
+            embedding_configured=embedding_configured,
+            embedding_module_available=embedding_module_available,
+            enterprise_ai_configured=enterprise_ai_configured,
+            select_ai_assets_ready=select_ai_assets_ready,
+            agent_assets_ready=agent_assets_ready,
+        )
+        smoke_checks = self._diagnostic_smoke_checks(readiness=readiness)
+        config_guides = self._diagnostic_config_guides(
+            checks=checks,
+            readiness=readiness,
+            settings=settings,
+        )
+        return DiagnosticsData(
+            checks=checks,
+            readiness=readiness,
+            smoke_checks=smoke_checks,
+            config_guides=config_guides,
+        )
+
+    def _diagnostic_smoke_checks(
+        self, *, readiness: list[DiagnosticReadiness]
+    ) -> list[DiagnosticSmokeCheck]:
+        readiness_by_area = {item.area: item for item in readiness}
+
+        def is_ready(areas: list[str]) -> bool:
+            for area in areas:
+                item = readiness_by_area.get(area)
+                if item is None or item.status != "ok":
+                    return False
+            return True
+
+        def next_action(areas: list[str], fallback: str) -> str:
+            for area in areas:
+                item = readiness_by_area.get(area)
+                if item and item.next_action:
+                    return item.next_action
+            return "" if is_ready(areas) else fallback
+
+        def status(areas: list[str]) -> str:
+            return "ok" if is_ready(areas) else "warning"
+
+        return [
+            DiagnosticSmokeCheck(
+                id="refresh_select_ai_profile",
+                label="Select AI profile refresh",
+                category="asset_refresh",
+                status=status(["oracle_adb", "select_ai"]),
+                method="POST",
+                endpoint="/api/nl2sql/select-ai/profiles/refresh?profile_id=default",
+                expected="refreshed=true, status=ready, profile_name が返ること。",
+                next_action=next_action(
+                    ["oracle_adb", "select_ai"],
+                    "Oracle runtime と Select AI provider / credential を設定してください。",
+                ),
+                related_readiness=["oracle_adb", "select_ai"],
+            ),
+            DiagnosticSmokeCheck(
+                id="refresh_select_ai_agent_assets",
+                label="Select AI Agent assets refresh",
+                category="asset_refresh",
+                status=status(["oracle_adb", "select_ai_agent"]),
+                method="POST",
+                endpoint="/api/nl2sql/select-ai-agent/assets/refresh?profile_id=default",
+                expected="tool / agent / task / team 名と status=ready が返ること。",
+                next_action=next_action(
+                    ["oracle_adb", "select_ai_agent"],
+                    "Select AI profile 更新後に Agent assets refresh を実行してください。",
+                ),
+                related_readiness=["oracle_adb", "select_ai_agent"],
+            ),
+            DiagnosticSmokeCheck(
+                id="preview_select_ai",
+                label="Select AI preview",
+                category="engine_preview",
+                status=status(["oracle_adb", "select_ai"]),
+                method="POST",
+                endpoint="/api/nl2sql/preview",
+                request_hint='{"engine":"select_ai","question":"請求金額を確認したい"}',
+                expected="engine=select_ai, safety.is_safe=true, generated SQL が SELECT/WITH。",
+                next_action=next_action(
+                    ["oracle_adb", "select_ai"],
+                    "Select AI profile refresh を先に完了してください。",
+                ),
+                related_readiness=["oracle_adb", "select_ai"],
+            ),
+            DiagnosticSmokeCheck(
+                id="preview_select_ai_agent",
+                label="Select AI Agent preview",
+                category="engine_preview",
+                status=status(["oracle_adb", "select_ai_agent"]),
+                method="POST",
+                endpoint="/api/nl2sql/preview",
+                request_hint='{"engine":"select_ai_agent","question":"請求金額を確認したい"}',
+                expected=(
+                    "engine=select_ai_agent, engine_meta.team_name / conversation_id, "
+                    "safety.is_safe=true。"
+                ),
+                next_action=next_action(
+                    ["oracle_adb", "select_ai_agent"],
+                    "Agent tool / task / team assets refresh を先に完了してください。",
+                ),
+                related_readiness=["oracle_adb", "select_ai_agent"],
+            ),
+            DiagnosticSmokeCheck(
+                id="preview_enterprise_ai_direct",
+                label="Enterprise AI Direct preview",
+                category="engine_preview",
+                status=status(["enterprise_ai_direct"]),
+                method="POST",
+                endpoint="/api/nl2sql/preview",
+                request_hint=(
+                    '{"engine":"enterprise_ai_direct","question":"請求金額を確認したい"}'
+                ),
+                expected=(
+                    "engine=enterprise_ai_direct, provider=enterprise_ai_direct, "
+                    "SQL が返ること。"
+                ),
+                next_action=next_action(
+                    ["enterprise_ai_direct"],
+                    "OCI Enterprise AI endpoint / API key / model を設定してください。",
+                ),
+                related_readiness=["enterprise_ai_direct"],
+            ),
+            DiagnosticSmokeCheck(
+                id="feedback_vector_rebuild",
+                label="Feedback vector rebuild",
+                category="learning",
+                status=status(["oracle_adb", "feedback_embedding"]),
+                method="POST",
+                endpoint="/api/nl2sql/feedback-index/rebuild",
+                request_hint='{"execute":true}',
+                expected=(
+                    "executed=true, VECTOR(1536, FLOAT32) index が Oracle 26ai に"
+                    "作成されること。"
+                ),
+                next_action=next_action(
+                    ["oracle_adb", "feedback_embedding"],
+                    "Oracle runtime と OCI GenAI embedding 設定を確認してください。",
+                ),
+                related_readiness=["oracle_adb", "feedback_embedding"],
+            ),
+            DiagnosticSmokeCheck(
+                id="manual_integration_script",
+                label="Manual integration script",
+                category="manual_script",
+                status=status(["oracle_adb", "select_ai", "select_ai_agent"]),
+                command=(
+                    "cd backend && uv run python scripts/nl2sql_manual_integration.py "
+                    "--require-oracle --refresh-assets --execute "
+                    "--check-supporting-features "
+                    "--engines select_ai_agent,select_ai,enterprise_ai_direct"
+                ),
+                expected="[ok] diagnostics / refresh / preview / job lines が表示されること。",
+                next_action=next_action(
+                    ["oracle_adb", "select_ai", "select_ai_agent"],
+                    "Oracle / Select AI / Agent readiness を ok にしてください。",
+                ),
+                related_readiness=["oracle_adb", "select_ai", "select_ai_agent"],
+            ),
+        ]
+
+    def _diagnostic_config_guides(
+        self,
+        *,
+        checks: list[DiagnosticCheck],
+        readiness: list[DiagnosticReadiness],
+        settings: Any,
+    ) -> list[DiagnosticConfigGuide]:
+        checks_by_name = {check.name: check for check in checks}
+        readiness_by_area = {item.area: item for item in readiness}
+
+        def env_var(name: str, *, required: bool = True, note: str = "") -> DiagnosticConfigVar:
+            check = checks_by_name.get(name)
+            return DiagnosticConfigVar(
+                name=name,
+                status=check.status if check else ("warning" if required else "optional"),
+                required=required,
+                note=note or (check.message if check else ""),
+            )
+
+        def guide_status(area: str) -> str:
+            readiness_item = readiness_by_area.get(area)
+            return readiness_item.status if readiness_item else "warning"
+
+        def guide_summary(area: str, fallback: str) -> str:
+            readiness_item = readiness_by_area.get(area)
+            return readiness_item.summary if readiness_item else fallback
+
+        def guide_next_action(area: str, fallback: str) -> str:
+            readiness_item = readiness_by_area.get(area)
+            return (
+                readiness_item.next_action
+                if readiness_item and readiness_item.next_action
+                else fallback
+            )
+
+        enterprise_model_name = (
+            "OCI_ENTERPRISE_AI_DEFAULT_MODEL"
+            if settings.oci_enterprise_ai_default_model.strip()
+            else "OCI_ENTERPRISE_AI_LLM_MODEL"
+        )
+
+        return [
+            DiagnosticConfigGuide(
+                id="enterprise_ai_direct",
+                label="Enterprise AI Direct",
+                status=guide_status("enterprise_ai_direct"),
+                summary=guide_summary(
+                    "enterprise_ai_direct",
+                    "OCI Enterprise AI Direct fallback の設定状態です。",
+                ),
+                next_action=guide_next_action(
+                    "enterprise_ai_direct",
+                    "OCI Enterprise AI endpoint / API key / model を設定してください。",
+                ),
+                required_env_vars=[
+                    env_var("OCI_ENTERPRISE_AI_ENDPOINT"),
+                    env_var("OCI_ENTERPRISE_AI_API_KEY"),
+                    env_var("OCI_ENTERPRISE_AI_LLM_MODEL"),
+                ],
+                optional_env_vars=[
+                    env_var("OCI_ENTERPRISE_AI_PROJECT_OCID", required=False),
+                    env_var("OCI_ENTERPRISE_AI_DEFAULT_MODEL", required=False),
+                    env_var("OCI_ENTERPRISE_AI_LLM_PATH", required=False),
+                    env_var("OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE", required=False),
+                    env_var("OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH", required=False),
+                ],
+                env_template=(
+                    "NL2SQL_ENTERPRISE_AI_DIRECT_ENABLED=true\n"
+                    "OCI_ENTERPRISE_AI_ENDPOINT=<enterprise-ai-endpoint>\n"
+                    "OCI_ENTERPRISE_AI_API_KEY=<enterprise-ai-api-key>\n"
+                    f"{enterprise_model_name}=<enterprise-ai-model>\n"
+                    "OCI_ENTERPRISE_AI_LLM_PATH=/responses"
+                ),
+                smoke_command=(
+                    "uv run python scripts/nl2sql_manual_integration.py "
+                    "--require-enterprise-ai --engines enterprise_ai_direct --execute "
+                    "--json-report reports/nl2sql-enterprise-ai-direct.json"
+                ),
+                related_readiness=["enterprise_ai_direct"],
+            ),
+            DiagnosticConfigGuide(
+                id="feedback_embedding",
+                label="Feedback vector learning",
+                status=guide_status("feedback_embedding"),
+                summary=guide_summary(
+                    "feedback_embedding",
+                    "Oracle 26ai feedback vector learning の設定状態です。",
+                ),
+                next_action=guide_next_action(
+                    "feedback_embedding",
+                    "NL2SQL_FEEDBACK_EMBEDDING_ENABLED と OCI GenAI embedding "
+                    "設定を確認してください。",
+                ),
+                required_env_vars=[
+                    env_var("NL2SQL_FEEDBACK_EMBEDDING_ENABLED"),
+                    env_var("OCI_REGION"),
+                    env_var("OCI_COMPARTMENT_ID"),
+                    env_var("OCI_GENAI_ENDPOINT"),
+                    env_var("OCI_GENAI_EMBED_MODEL_ID"),
+                ],
+                optional_env_vars=[
+                    env_var("NL2SQL_FEEDBACK_VECTOR_TABLE", required=False),
+                    env_var("NL2SQL_FEEDBACK_VECTOR_INDEX", required=False),
+                ],
+                env_template=(
+                    "NL2SQL_FEEDBACK_EMBEDDING_ENABLED=true\n"
+                    "OCI_REGION=<oci-region>\n"
+                    "OCI_COMPARTMENT_ID=<compartment-ocid>\n"
+                    "OCI_GENAI_ENDPOINT=<oci-genai-endpoint>\n"
+                    "OCI_GENAI_EMBED_MODEL_ID=cohere.embed-v4.0\n"
+                    "NL2SQL_FEEDBACK_VECTOR_TABLE=NL2SQL_FEEDBACK_VECTORS\n"
+                    "NL2SQL_FEEDBACK_VECTOR_INDEX=NL2SQL_FEEDBACK_VEC_IDX"
+                ),
+                smoke_command=(
+                    "uv run python scripts/nl2sql_manual_integration.py "
+                    "--require-oracle --require-feedback-embedding "
+                    "--seed-demo-learning --execute-feedback-index "
+                    "--engines enterprise_ai_direct "
+                    "--json-report reports/nl2sql-feedback-vector.json"
+                ),
+                related_readiness=["oracle_adb", "feedback_embedding"],
+            ),
+            DiagnosticConfigGuide(
+                id="production_release_gate",
+                label="Production release gate",
+                status=(
+                    "ok"
+                    if all(
+                        readiness_by_area.get(area) and readiness_by_area[area].status == "ok"
+                        for area in ["oracle_adb", "persistence", "select_ai", "select_ai_agent"]
+                    )
+                    else "warning"
+                ),
+                summary=("Oracle / persistence / Select AI / Agent assets の本番 gate 設定です。"),
+                next_action=(
+                    "Select AI / Agent assets refresh と diagnostics-only を実行してから "
+                    "release gate を実行してください。"
+                ),
+                required_env_vars=[
+                    env_var("ORACLE_USER"),
+                    env_var("ORACLE_DSN"),
+                    env_var("NL2SQL_RUNTIME_MODE"),
+                    env_var("NL2SQL_PERSISTENCE_MODE"),
+                    env_var("NL2SQL_SELECT_AI_CREDENTIAL_NAME"),
+                ],
+                optional_env_vars=[
+                    env_var("NL2SQL_ORACLE_STATE_TABLE", required=False),
+                    env_var("NL2SQL_SELECT_AI_PROFILE_PREFIX", required=False),
+                    env_var("NL2SQL_SELECT_AI_MODEL", required=False),
+                ],
+                env_template=(
+                    "NL2SQL_RUNTIME_MODE=oracle\n"
+                    "NL2SQL_PERSISTENCE_MODE=oracle\n"
+                    "NL2SQL_SELECT_AI_ENABLED=true\n"
+                    "NL2SQL_SELECT_AI_AGENT_ENABLED=true\n"
+                    "NL2SQL_SELECT_AI_CREDENTIAL_NAME=<dbms-cloud-ai-credential>\n"
+                    "NL2SQL_SELECT_AI_MODEL=<select-ai-model>"
+                ),
+                smoke_command=(
+                    "uv run python scripts/nl2sql_manual_integration.py "
+                    "--release-gate --engines select_ai_agent,select_ai "
+                    "--allowed-table YOUR_TABLE --json-report reports/nl2sql-release-gate.json"
+                ),
+                related_readiness=["oracle_adb", "persistence", "select_ai", "select_ai_agent"],
+            ),
+        ]
+
+    def _diagnostic_readiness(
+        self,
+        *,
+        checks: list[DiagnosticCheck],
+        settings: Any,
+        uses_oracle_runtime: bool,
+        oracle_configured: bool,
+        oracle_live_ok: bool,
+        oracle_live_message: str,
+        persistence_ready: bool,
+        embedding_configured: bool,
+        embedding_module_available: bool,
+        enterprise_ai_configured: bool,
+        select_ai_assets_ready: bool,
+        agent_assets_ready: bool,
+    ) -> list[DiagnosticReadiness]:
+        oracle_ready = uses_oracle_runtime and oracle_configured and oracle_live_ok
+        select_ai_config_ready = (
+            settings.nl2sql_select_ai_enabled
+            and bool(settings.nl2sql_select_ai_provider)
+            and (
+                not uses_oracle_runtime
+                or (oracle_ready and bool(settings.nl2sql_select_ai_credential_name))
+            )
+        )
+        select_ai_ready = select_ai_config_ready and (
+            select_ai_assets_ready or not uses_oracle_runtime
+        )
+        agent_ready = (
+            settings.nl2sql_select_ai_agent_enabled
+            and select_ai_ready
+            and (agent_assets_ready or not uses_oracle_runtime)
+        )
+        direct_ready = settings.nl2sql_enterprise_ai_direct_enabled and enterprise_ai_configured
+        embedding_ready = (
+            settings.nl2sql_feedback_embedding_enabled
+            and embedding_configured
+            and embedding_module_available
+        )
+        persistence_production_ready = persistence_ready and self._store.mode == "oracle"
+
+        oracle_summary = (
+            "Oracle / ADB runtime は live 接続まで確認済みです。"
+            if oracle_ready
+            else (
+                "deterministic runtime のため Oracle / ADB live 接続は未確認です。"
+                if not uses_oracle_runtime
+                else oracle_live_message
+            )
+        )
+        select_ai_summary = (
+            "Select AI profile 作成・実行に必要な設定が揃っています。"
+            if select_ai_ready
+            else (
+                "Select AI profile refresh が未確認です。"
+                if select_ai_config_ready and uses_oracle_runtime
+                else "Select AI の provider / credential / Oracle runtime 設定を確認してください。"
+            )
+        )
+        agent_summary = (
+            "Select AI Agent assets を更新・実行できる設定です。"
+            if agent_ready
+            else (
+                "Select AI Agent assets refresh が未確認です。"
+                if (
+                    settings.nl2sql_select_ai_agent_enabled
+                    and select_ai_ready
+                    and uses_oracle_runtime
+                )
+                else "Agent は Select AI profile と credential を前提にするため未準備です。"
+            )
+        )
+        direct_summary = (
+            "Enterprise AI Direct fallback に必要な OCI 基本設定があります。"
+            if direct_ready
+            else "Enterprise AI Direct 用の endpoint / API key / model を確認してください。"
+        )
+        embedding_summary = (
+            (
+                f"Feedback 学習は {settings.oci_genai_embed_model_id} で "
+                "1536 次元 embedding を作成できます。"
+            )
+            if embedding_ready
+            else (
+                "Feedback embedding は無効です。必要な場合は "
+                "NL2SQL_FEEDBACK_EMBEDDING_ENABLED=true にしてください。"
+                if not settings.nl2sql_feedback_embedding_enabled
+                else (
+                    "Feedback embedding 用 OCI SDK / endpoint / region / compartment を"
+                    "確認してください。"
+                )
+            )
+        )
+        persistence_summary = (
+            "profile / job / history を Oracle に永続化できます。"
+            if persistence_production_ready
+            else "現在は local/CI 向け persistence です。本番は Oracle 永続化を推奨します。"
+        )
+
+        return [
+            DiagnosticReadiness(
+                area="oracle_adb",
+                label="Oracle / ADB",
+                status="ok" if oracle_ready else "warning",
+                summary=oracle_summary,
+                next_action=(
+                    ""
+                    if oracle_ready
+                    else (
+                        "NL2SQL_RUNTIME_MODE=oracle と ORACLE_DSN / ORACLE_USER / "
+                        "Wallet 設定を確認してください。"
+                    )
+                ),
+                related_checks=[
+                    "NL2SQL_RUNTIME_MODE",
+                    "ORACLE_DSN",
+                    "ORACLE_USER",
+                    "ORACLE_ADB_OCID",
+                    "PYTHON_ORACLEDB",
+                    "ORACLE_RUNTIME_READY",
+                ],
+            ),
+            DiagnosticReadiness(
+                area="select_ai",
+                label="Oracle Select AI",
+                status="ok" if select_ai_ready else "warning",
+                summary=select_ai_summary,
+                next_action=(
+                    ""
+                    if select_ai_ready
+                    else (
+                        "NL2SQL_SELECT_AI_PROVIDER と NL2SQL_SELECT_AI_CREDENTIAL_NAME "
+                        "を設定し、profile refresh を実行してください。"
+                        if not (select_ai_config_ready and uses_oracle_runtime)
+                        else "Select AI profile refresh を実行してください。"
+                    )
+                ),
+                related_checks=[
+                    "NL2SQL_SELECT_AI_ENABLED",
+                    "NL2SQL_SELECT_AI_PROVIDER",
+                    "NL2SQL_SELECT_AI_CREDENTIAL_NAME",
+                    "NL2SQL_SELECT_AI_PROFILE_REFRESHED",
+                    "ORACLE_RUNTIME_READY",
+                ],
+            ),
+            DiagnosticReadiness(
+                area="select_ai_agent",
+                label="Oracle Select AI Agent",
+                status="ok" if agent_ready else "warning",
+                summary=agent_summary,
+                next_action=(
+                    ""
+                    if agent_ready
+                    else (
+                        "Agent tool / task / team assets を refresh してください。"
+                        if select_ai_ready
+                        else (
+                            "Select AI profile を更新後、Agent tool / task / team assets "
+                            "を refresh してください。"
+                        )
+                    )
+                ),
+                related_checks=[
+                    "NL2SQL_SELECT_AI_AGENT_ENABLED",
+                    "NL2SQL_SELECT_AI_PROFILE_REFRESHED",
+                    "NL2SQL_SELECT_AI_AGENT_ASSETS_REFRESHED",
+                    "NL2SQL_SELECT_AI_PROVIDER",
+                    "NL2SQL_SELECT_AI_CREDENTIAL_NAME",
+                    "ORACLE_RUNTIME_READY",
+                ],
+            ),
+            DiagnosticReadiness(
+                area="enterprise_ai_direct",
+                label="OCI Enterprise AI Direct",
+                status="ok" if direct_ready else "warning",
+                summary=direct_summary,
+                next_action=(
+                    ""
+                    if direct_ready
+                    else (
+                        "OCI_ENTERPRISE_AI_ENDPOINT / OCI_ENTERPRISE_AI_API_KEY / "
+                        "OCI_ENTERPRISE_AI_LLM_MODEL を設定してください。"
+                    )
+                ),
+                related_checks=[
+                    "OCI_ENTERPRISE_AI_ENDPOINT",
+                    "OCI_ENTERPRISE_AI_API_KEY",
+                    "OCI_ENTERPRISE_AI_LLM_MODEL",
+                ],
+            ),
+            DiagnosticReadiness(
+                area="feedback_embedding",
+                label="Feedback Vector Learning",
+                status="ok" if embedding_ready else "warning",
+                summary=embedding_summary,
+                next_action=(
+                    ""
+                    if embedding_ready
+                    else (
+                        "OCI GenAI embedding 設定を有効化して feedback index rebuild "
+                        "を実行してください。"
+                    )
+                ),
+                related_checks=[
+                    "NL2SQL_FEEDBACK_EMBEDDING_ENABLED",
+                    "OCI_GENAI_EMBEDDING",
+                ],
+            ),
+            DiagnosticReadiness(
+                area="persistence",
+                label="Oracle Persistence",
+                status="ok" if persistence_production_ready else "warning",
+                summary=persistence_summary,
+                next_action=(
+                    ""
+                    if persistence_production_ready
+                    else (
+                        "NL2SQL_PERSISTENCE_MODE=oracle と NL2SQL_ORACLE_STATE_TABLE "
+                        "を確認してください。"
+                    )
+                ),
+                related_checks=["NL2SQL_PERSISTENCE_MODE", "NL2SQL_PERSISTENCE_READY"],
+            ),
+        ]
 
     def import_csv_sample(self, request: CsvImportRequest) -> CsvImportData:
         started = time.monotonic()
@@ -1317,22 +2809,49 @@ class Nl2SqlService:
         }
         if self._use_oracle_runtime():
             try:
-                engine_meta.update(
-                    self._oracle_adapter.refresh_select_ai_agent_assets(
-                        profile_name=profile_name,
-                        tool_name=tool_name,
-                        agent_name=agent_name,
-                        task_name=task_name,
-                        team_name=team_name,
-                        allowed_tables=profile.allowed_tables,
-                        row_limit=profile.default_row_limit,
-                        description=profile.description,
-                    )
+                previous_warning = self._cleanup_previous_select_ai_agent_team(
+                    profile_name=profile_name,
+                    tool_name=tool_name,
+                    agent_name=agent_name,
+                    task_name=task_name,
+                    base_team_name=team_name,
                 )
+                if previous_warning:
+                    warning = previous_warning
+                try:
+                    engine_meta.update(
+                        self._refresh_select_ai_agent_assets_with_team(
+                            profile=profile,
+                            profile_name=profile_name,
+                            tool_name=tool_name,
+                            agent_name=agent_name,
+                            task_name=task_name,
+                            team_name=team_name,
+                        )
+                    )
+                except OracleAdapterError as exc:
+                    if not self._looks_like_agent_generated_profile_conflict(str(exc)):
+                        raise
+                    team_name = self._versioned_select_ai_team_name(team_name)
+                    version_warning = (
+                        "Oracle maintained Agent profile が残っていたため、"
+                        f"versioned team {team_name} を使用しました。"
+                    )
+                    warning = f"{warning} {version_warning}".strip()
+                    engine_meta.update(
+                        self._refresh_select_ai_agent_assets_with_team(
+                            profile=profile,
+                            profile_name=profile_name,
+                            tool_name=tool_name,
+                            agent_name=agent_name,
+                            task_name=task_name,
+                            team_name=team_name,
+                        )
+                    )
             except OracleAdapterError as exc:
                 refreshed = False
                 status = "error"
-                warning = str(exc)
+                warning = f"{warning} {exc}".strip()
         data = AssetRefreshData(
             engine=Nl2SqlEngine.SELECT_AI_AGENT,
             refreshed=refreshed,
@@ -1354,6 +2873,35 @@ class Nl2SqlService:
             self._asset_meta[Nl2SqlEngine.SELECT_AI_AGENT] = data
         self._persist_state()
         return data
+
+    def _cleanup_previous_select_ai_agent_team(
+        self,
+        *,
+        profile_name: str,
+        tool_name: str,
+        agent_name: str,
+        task_name: str,
+        base_team_name: str,
+    ) -> str:
+        previous = self._asset_meta.get(Nl2SqlEngine.SELECT_AI_AGENT)
+        if (
+            previous is None
+            or previous.profile_name != profile_name
+            or not previous.team_name
+            or previous.team_name == base_team_name
+        ):
+            return ""
+        try:
+            self._oracle_adapter.drop_select_ai_agent_assets(
+                profile_name=profile_name,
+                tool_name=tool_name,
+                agent_name=agent_name,
+                task_name=task_name,
+                team_name=previous.team_name,
+            )
+        except OracleAdapterError as exc:
+            return f"previous Agent team cleanup warning: {exc}"
+        return f"previous Agent team {previous.team_name} を cleanup しました。"
 
     def cleanup_select_ai_assets(
         self, profile_id: str | None, engines: list[Nl2SqlEngine], execute: bool
@@ -1421,6 +2969,9 @@ class Nl2SqlService:
         profile = self._cleanup_profile_target(profile_id)
         profile_name = self._select_ai_profile_name(profile)
         asset_names = self._select_ai_agent_asset_names(profile)
+        asset_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI_AGENT)
+        if asset_meta and asset_meta.profile_name == profile_name and asset_meta.team_name:
+            asset_names["team"] = asset_meta.team_name
         warning = ""
         status = "dry_run"
         executed = False
@@ -1459,6 +3010,27 @@ class Nl2SqlService:
             engine_meta=engine_meta,
         )
 
+    def _refresh_select_ai_agent_assets_with_team(
+        self,
+        *,
+        profile: Nl2SqlProfile,
+        profile_name: str,
+        tool_name: str,
+        agent_name: str,
+        task_name: str,
+        team_name: str,
+    ) -> dict[str, Any]:
+        return self._oracle_adapter.refresh_select_ai_agent_assets(
+            profile_name=profile_name,
+            tool_name=tool_name,
+            agent_name=agent_name,
+            task_name=task_name,
+            team_name=team_name,
+            allowed_tables=profile.allowed_tables,
+            row_limit=profile.default_row_limit,
+            description=profile.description,
+        )
+
     def _cleanup_profile_target(self, profile_id: str | None) -> Nl2SqlProfile:
         if not profile_id:
             return self.get_profile(None)
@@ -1479,6 +3051,85 @@ class Nl2SqlService:
             if term in rewritten and replacement not in rewritten:
                 rewritten = f"{rewritten}（{term}={replacement}）"
         return rewritten
+
+    def _learning_examples_for_generation(
+        self, *, question: str, profile: Nl2SqlProfile
+    ) -> list[LearningExample]:
+        examples: list[LearningExample] = []
+        for profile_example in profile.few_shot_examples[:3]:
+            example_question = str(profile_example.get("question") or "").strip()
+            sql = str(
+                profile_example.get("sql") or profile_example.get("expected_sql") or ""
+            ).strip()
+            if example_question and sql:
+                examples.append(
+                    LearningExample(
+                        source="profile_few_shot",
+                        question=example_question,
+                        sql=sql,
+                    )
+                )
+        for history_candidate in self._similar_history_candidates(
+            question=question,
+            profile_id=profile.id,
+            include_bad=False,
+        )[:3]:
+            if history_candidate.item.generated_sql.strip():
+                examples.append(
+                    LearningExample(
+                        source="similar_history",
+                        question=history_candidate.item.question,
+                        sql=history_candidate.item.generated_sql,
+                        history_id=history_candidate.item.id,
+                        score=history_candidate.score,
+                        feedback=(
+                            history_candidate.item.feedback_rating.value
+                            if history_candidate.item.feedback_rating
+                            else None
+                        ),
+                        reason=history_candidate.reason,
+                    )
+                )
+        return examples[:5]
+
+    def _learning_example_meta(self, example: LearningExample) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "source": example.source,
+            "question": example.question,
+            "sql": example.sql,
+        }
+        if example.history_id:
+            data["history_id"] = example.history_id
+        if example.score is not None:
+            data["score"] = example.score
+        if example.feedback:
+            data["feedback"] = example.feedback
+        if example.reason:
+            data["reason"] = example.reason
+        return data
+
+    def _learning_examples_context(self, examples: list[LearningExample]) -> str:
+        if not examples:
+            return ""
+        lines = ["learning_examples:"]
+        for index, example in enumerate(examples, start=1):
+            lines.append(f"- example {index} source={example.source}")
+            lines.append(f"  question: {example.question}")
+            lines.append(f"  sql: {one_line_sql(example.sql)}")
+        return "\n".join(lines)
+
+    def _augment_question_with_learning_examples(
+        self, question: str, examples: list[LearningExample]
+    ) -> str:
+        context = self._learning_examples_context(examples)
+        if not context:
+            return question
+        return (
+            "以下は過去の成功例です。表・列・粒度の参考にし、危険な SQL は生成しないでください。\n"
+            f"{context}\n"
+            "今回の質問:\n"
+            f"{question}"
+        )
 
     def _recommendation_from_profile(
         self,
@@ -1542,6 +3193,100 @@ class Nl2SqlService:
         if not matched_terms and profile.id == "default":
             score += 0.5
         return score, matched_terms
+
+    def _similar_history_candidates(
+        self,
+        *,
+        question: str,
+        profile_id: str | None,
+        include_bad: bool,
+    ) -> list[SimilarHistoryItem]:
+        with self._lock:
+            history = list(self._history)
+        vector_ranked = self._rank_oracle_vector_history(
+            question=question,
+            profile_id=profile_id,
+            history=history,
+            include_bad=include_bad,
+            limit=10,
+        )
+        if vector_ranked:
+            return vector_ranked
+        return self._rank_similar_history(
+            question=question,
+            profile_id=profile_id,
+            history=history,
+            include_bad=include_bad,
+        )
+
+    def _rank_oracle_vector_history(
+        self,
+        *,
+        question: str,
+        profile_id: str | None,
+        history: list[HistoryItem],
+        include_bad: bool,
+        limit: int,
+    ) -> list[SimilarHistoryItem]:
+        settings = get_settings()
+        if (
+            not self._use_oracle_runtime()
+            or not settings.nl2sql_feedback_embedding_enabled
+            or not self._embedding_client.is_configured()
+        ):
+            return []
+        try:
+            embedding = self._embedding_client.embed_texts([question])[0]
+            rows = self._oracle_adapter.search_feedback_vector_index(
+                table_name=settings.nl2sql_feedback_vector_table,
+                embedding=embedding,
+                profile_id=profile_id,
+                include_bad=include_bad,
+                limit=limit,
+            )
+        except (EmbeddingClientError, OracleAdapterError, IndexError, ValueError) as exc:
+            logger.warning("oracle feedback vector search fallback: %s", exc)
+            return []
+        history_by_id = {item.id: item for item in history}
+        ranked: list[SimilarHistoryItem] = []
+        for row in rows:
+            history_id = str(row.get("history_id") or "")
+            if not history_id:
+                continue
+            item = history_by_id.get(history_id)
+            if item is None:
+                item = HistoryItem(
+                    id=history_id,
+                    question=str(row.get("question") or ""),
+                    engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+                    generated_sql=str(row.get("generated_sql") or ""),
+                    created_at=_utc_now(),
+                    feedback_rating=self._feedback_rating_from_text(
+                        str(row.get("feedback_rating") or "")
+                    ),
+                    profile_id=str(row.get("profile_id") or ""),
+                    profile_name=str(row.get("profile_id") or ""),
+                )
+            if item.feedback_rating == FeedbackRating.BAD and not include_bad:
+                continue
+            if not item.safety_is_safe:
+                continue
+            score = float(row.get("score") or 0)
+            ranked.append(
+                SimilarHistoryItem(
+                    item=item,
+                    score=round(max(0.0, min(score, 1.0)), 3),
+                    reason="Oracle 26ai vector search で質問意味が近い履歴です。",
+                )
+            )
+        return ranked
+
+    def _feedback_rating_from_text(self, value: str) -> FeedbackRating | None:
+        normalized = value.strip().lower()
+        try:
+            return FeedbackRating(normalized) if normalized else None
+        except ValueError:
+            return None
 
     def _rank_similar_history(
         self,
@@ -1784,24 +3529,33 @@ class Nl2SqlService:
             "row_limit": row_limit or profile.default_row_limit,
             "allowed_tables": allowed.table_names or profile.allowed_tables,
         }
-        learned_examples = self._rank_similar_history(
+        learning_examples = self._learning_examples_for_generation(
             question=question,
-            profile_id=profile.id,
-            history=list(self._history),
-            include_bad=False,
-        )[:3]
-        if learned_examples:
+            profile=profile,
+        )
+        history_examples = [
+            example for example in learning_examples if example.source == "similar_history"
+        ]
+        if learning_examples:
+            meta["learning_example_count"] = len(learning_examples)
+            meta["learning_examples"] = [
+                self._learning_example_meta(example) for example in learning_examples
+            ]
+        if history_examples:
+            meta["similar_history_source"] = (
+                "oracle_vector"
+                if history_examples[0].reason.startswith("Oracle 26ai")
+                else "deterministic"
+            )
             meta["similar_history_examples"] = [
                 {
-                    "history_id": example.item.id,
-                    "question": example.item.question,
-                    "sql": example.item.generated_sql,
+                    "question": example.question,
+                    "sql": example.sql,
+                    "history_id": example.history_id,
                     "score": example.score,
-                    "feedback": (
-                        example.item.feedback_rating.value if example.item.feedback_rating else None
-                    ),
+                    "feedback": example.feedback,
                 }
-                for example in learned_examples
+                for example in history_examples
             ]
         if self._use_oracle_runtime() and engine in {
             Nl2SqlEngine.SELECT_AI,
@@ -1814,8 +3568,23 @@ class Nl2SqlService:
                     profile=profile,
                     fallback_messages=fallback_messages,
                     meta=dict(meta),
+                    learning_examples=learning_examples,
                 )
             except OracleAdapterError as exc:
+                fallback_messages.append(f"{engine.value}: {exc}")
+        direct_configured = self._enterprise_ai_client.is_configured()
+        if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and direct_configured:
+            try:
+                return self._generate_enterprise_ai_direct_sql(
+                    question=question,
+                    profile=profile,
+                    allowed=allowed,
+                    row_limit=row_limit or profile.default_row_limit,
+                    fallback_messages=fallback_messages,
+                    meta=dict(meta),
+                    learning_examples=learning_examples,
+                )
+            except EnterpriseAiDirectError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
 
         sql = self._compose_select_sql(table.table_name, columns)
@@ -1839,6 +3608,132 @@ class Nl2SqlService:
             fallback_reason="; ".join(fallback_messages),
         )
 
+    def _generate_enterprise_ai_direct_sql(
+        self,
+        *,
+        question: str,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+        row_limit: int,
+        fallback_messages: list[str],
+        meta: dict[str, Any],
+        learning_examples: list[LearningExample],
+    ) -> GeneratedSql:
+        context = self._enterprise_ai_schema_context(
+            profile=profile,
+            allowed=allowed,
+            learning_examples=learning_examples,
+        )
+        system_prompt = self._enterprise_ai_sql_system_prompt(row_limit)
+        raw_text = self._enterprise_ai_client.generate(
+            prompt=question,
+            context=context,
+            system_prompt=system_prompt,
+        )
+        sql, explanation = self._extract_enterprise_ai_sql(raw_text)
+        if not sql:
+            raise EnterpriseAiDirectError("OCI Enterprise AI response から SQL を抽出できません。")
+        meta.update(
+            {
+                "provider": "oci_enterprise_ai",
+                "mode": "direct",
+                "runtime": "oci_enterprise_ai",
+                "model": self._enterprise_ai_client.model_id(),
+                "response_format": "json_or_sql_text",
+            }
+        )
+        return GeneratedSql(
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql=sql,
+            explanation=explanation or "OCI Enterprise AI Direct で SQL を生成しました。",
+            engine_meta=meta,
+            fallback_reason="; ".join(fallback_messages),
+        )
+
+    def _enterprise_ai_schema_context(
+        self,
+        *,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+        learning_examples: list[LearningExample] | None = None,
+    ) -> str:
+        allowed_tables = {
+            _normalize_identifier(table)
+            for table in (allowed.table_names or profile.allowed_tables)
+        }
+        allowed_columns = {
+            _normalize_identifier(table): {_normalize_identifier(column) for column in columns}
+            for table, columns in allowed.columns.items()
+            if columns
+        }
+        lines = [
+            f"profile: {profile.name}",
+            f"description: {profile.description}",
+            "glossary:",
+        ]
+        lines.extend(f"- {term}: {definition}" for term, definition in profile.glossary.items())
+        lines.append("sql_rules:")
+        lines.extend(f"- {rule}" for rule in profile.sql_rules)
+        lines.append("schema:")
+        for table in self._catalog.tables:
+            if allowed_tables and table.table_name not in allowed_tables:
+                continue
+            lines.append(
+                f"- table {table.table_name} logical={table.logical_name} comment={table.comment}"
+            )
+            table_allowed_columns = allowed_columns.get(table.table_name, set())
+            for column in table.columns:
+                if table_allowed_columns and column.column_name not in table_allowed_columns:
+                    continue
+                lines.append(
+                    "  - column "
+                    f"{column.column_name} logical={column.logical_name} "
+                    f"type={column.data_type} comment={column.comment}"
+                )
+        learning_context = self._learning_examples_context(learning_examples or [])
+        if learning_context:
+            lines.append(learning_context)
+        return "\n".join(line for line in lines if line.strip())
+
+    def _enterprise_ai_sql_system_prompt(self, row_limit: int) -> str:
+        return (
+            "あなたは Oracle Database 26ai 向け NL2SQL エンジンです。"
+            "与えられた schema/context の表と列だけを使用してください。"
+            "DDL/DML/PLSQL/複数 statement/説明付き markdown は禁止です。"
+            "必ず SELECT または WITH で始まる 1 つの Oracle SQL を生成してください。"
+            f"必要に応じて FETCH FIRST {row_limit} ROWS ONLY を使ってください。"
+            '出力は JSON のみ: {"sql":"...", "explanation":"..."}。'
+            "説明は日本語で簡潔にしてください。"
+        )
+
+    def _extract_enterprise_ai_sql(self, raw_text: str) -> tuple[str, str]:
+        cleaned = raw_text.strip()
+        fence_match = re.match(
+            r"^\s*```(?:json|sql)?\s*(.*?)\s*```\s*$",
+            cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if fence_match:
+            cleaned = fence_match.group(1).strip()
+        explanation = ""
+        try:
+            payload = json.loads(cleaned)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            explanation = str(payload.get("explanation") or "")
+            for key in ("sql", "generated_sql", "query", "result"):
+                candidate = str(payload.get(key) or "").strip()
+                if candidate:
+                    return self._extract_select_from_text(candidate), explanation
+        return self._extract_select_from_text(cleaned), explanation
+
+    def _extract_select_from_text(self, text: str) -> str:
+        match = re.search(r"\b(with|select)\b.+", text.strip(), flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return ""
+        return match.group(0).split(";", 1)[0].strip()
+
     def _generate_oracle_sql(
         self,
         *,
@@ -1847,17 +3742,23 @@ class Nl2SqlService:
         profile: Nl2SqlProfile,
         fallback_messages: list[str],
         meta: dict[str, Any],
+        learning_examples: list[LearningExample],
     ) -> GeneratedSql:
+        runtime_question = self._augment_question_with_learning_examples(
+            question,
+            learning_examples,
+        )
         if engine == Nl2SqlEngine.SELECT_AI:
             profile_name = self._select_ai_profile_name(profile)
             sql = self._oracle_adapter.generate_select_ai_sql(
-                profile_name=profile_name, question=question
+                profile_name=profile_name, question=runtime_question
             )
             meta.update({"select_ai_profile": profile_name, "runtime": "oracle"})
         else:
-            team_name = self._select_ai_team_name(profile)
+            team_name = self._select_ai_runtime_team_name(profile)
+            tool_name = self._select_ai_agent_asset_names(profile)["tool"]
             sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(
-                team_name=team_name, question=question
+                team_name=team_name, question=runtime_question, tool_name=tool_name
             )
             meta.update(
                 {
@@ -1887,6 +3788,21 @@ class Nl2SqlService:
     def _select_ai_team_name(self, profile: Nl2SqlProfile) -> str:
         prefix = get_settings().nl2sql_select_ai_profile_prefix.strip() or "NL2SQL"
         return f"{prefix}_{profile.id.upper()}_TEAM"
+
+    def _select_ai_runtime_team_name(self, profile: Nl2SqlProfile) -> str:
+        profile_name = self._select_ai_profile_name(profile)
+        asset_meta = self._asset_meta.get(Nl2SqlEngine.SELECT_AI_AGENT)
+        if asset_meta and asset_meta.profile_name == profile_name and asset_meta.team_name:
+            return asset_meta.team_name
+        return self._select_ai_team_name(profile)
+
+    def _versioned_select_ai_team_name(self, base_team_name: str) -> str:
+        suffix = uuid.uuid4().hex[:8].upper()
+        return f"{base_team_name[:118]}_V{suffix}"
+
+    def _looks_like_agent_generated_profile_conflict(self, message: str) -> bool:
+        normalized = message.upper()
+        return "AGENT$" in normalized and "PROFILE" in normalized and "ALREADY EXISTS" in normalized
 
     def _select_ai_agent_asset_names(self, profile: Nl2SqlProfile) -> dict[str, str]:
         prefix = get_settings().nl2sql_select_ai_profile_prefix.strip() or "NL2SQL"
@@ -2035,6 +3951,111 @@ class Nl2SqlService:
 
         executable = enforce_row_limit(stripped, row_limit)
         return executable if executable != stripped else ""
+
+    def _repair_sql_for_oracle_error(
+        self,
+        *,
+        sql: str,
+        error_code: str,
+        allowed: AllowedObjects,
+        row_limit: int,
+        referenced_tables: list[str],
+    ) -> str:
+        stripped = sql.strip().rstrip(";")
+        if not stripped:
+            return ""
+        table_name = (
+            referenced_tables[0] if referenced_tables else self._first_allowed_table(allowed)
+        )
+        if error_code in {"ORA-00933", "ORA-00911"}:
+            first_select = next(
+                (part.strip() for part in sql.split(";") if is_select_only(part.strip())),
+                stripped,
+            )
+            first_select = re.sub(
+                r"\s+limit\s+(\d+)\s*$",
+                r" FETCH FIRST \1 ROWS ONLY",
+                first_select,
+                flags=re.IGNORECASE,
+            )
+            return (
+                enforce_row_limit(first_select, row_limit) if is_select_only(first_select) else ""
+            )
+        if error_code == "ORA-00942":
+            replacement_table = self._first_allowed_table(allowed)
+            if not replacement_table:
+                return ""
+            return enforce_row_limit(
+                f"SELECT {self._allowed_select_list(replacement_table, allowed)} "  # nosec B608
+                f"FROM {replacement_table}",
+                row_limit,
+            )
+        if error_code in {"ORA-00904", "ORA-00918", "ORA-00979"}:
+            if not table_name:
+                return ""
+            select_list = self._allowed_select_list(table_name, allowed)
+            from_match = re.search(r"\bfrom\b\s+.+", stripped, flags=re.IGNORECASE | re.DOTALL)
+            if from_match:
+                return enforce_row_limit(
+                    f"SELECT {select_list} {from_match.group(0)}",  # nosec B608
+                    row_limit,
+                )
+            return enforce_row_limit(
+                f"SELECT {select_list} FROM {table_name}",  # nosec B608
+                row_limit,
+            )
+        if error_code == "ORA-01722":
+            return enforce_row_limit(stripped, row_limit) if is_select_only(stripped) else ""
+        return ""
+
+    def _oracle_error_code(self, message: str) -> str:
+        match = re.search(r"\bORA-\d{5}\b", message.upper())
+        return match.group(0) if match else ""
+
+    def _oracle_error_explanation(self, error_code: str) -> str:
+        explanations = {
+            "ORA-00904": "存在しない列名または alias を参照している可能性があります。",
+            "ORA-00911": "SQL に無効な文字が含まれている可能性があります。",
+            "ORA-00918": "結合時に列名が曖昧になっている可能性があります。",
+            "ORA-00933": (
+                "Oracle 構文に合わない句、末尾セミコロン、LIMIT 句が"
+                "含まれている可能性があります。"
+            ),
+            "ORA-00942": (
+                "参照表または view が存在しない、または権限が不足している可能性があります。"
+            ),
+            "ORA-00979": "GROUP BY に含めるべき非集計列が SELECT に残っている可能性があります。",
+            "ORA-01722": "文字列列を数値として比較している可能性があります。",
+        }
+        return explanations.get(
+            error_code,
+            "Oracle error message をもとに安全な修復候補を生成しました。",
+        )
+
+    def _oracle_error_recommendations(
+        self, *, error_code: str, fallback_recommendations: list[str]
+    ) -> list[str]:
+        recommendations = {
+            "ORA-00904": ["Schema catalog の列名・alias を確認してください。"],
+            "ORA-00911": ["末尾セミコロンや不可視文字を削除してください。"],
+            "ORA-00918": ["結合 SQL では table alias を付けて列を明示してください。"],
+            "ORA-00933": [
+                "Oracle では LIMIT ではなく FETCH FIRST n ROWS ONLY を使用してください。"
+            ],
+            "ORA-00942": ["許可 table / schema owner / 権限を確認してください。"],
+            "ORA-00979": ["非集計列を GROUP BY に追加するか、SELECT から外してください。"],
+            "ORA-01722": [
+                "数値比較対象の列型を確認し、必要なら文字列比較または明示変換を使ってください。"
+            ],
+        }
+        merged = [*recommendations.get(error_code, []), *fallback_recommendations]
+        seen: set[str] = set()
+        unique: list[str] = []
+        for item in merged:
+            if item and item not in seen:
+                seen.add(item)
+                unique.append(item)
+        return unique
 
     def _first_allowed_table(self, allowed: AllowedObjects) -> str:
         if allowed.table_names:

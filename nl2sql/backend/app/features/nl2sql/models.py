@@ -276,6 +276,43 @@ class FeedbackData(BaseModel):
     comment: str = ""
 
 
+class FeedbackIndexRequest(BaseModel):
+    """Feedback learning index management request."""
+
+    execute: bool = False
+    include_bad: bool = False
+
+
+class FeedbackIndexData(BaseModel):
+    """Feedback learning vector index status / operation response."""
+
+    operation: str
+    status: str
+    executed: bool = False
+    runtime: str = "deterministic"
+    source_history_count: int = 0
+    indexable_count: int = 0
+    indexed_count: int = 0
+    vector_dimension: int = 1536
+    vector_backend: str = "oracle_26ai"
+    embedding_provider: str = "oci_genai"
+    embedding_model: str = ""
+    embedding_configured: bool = False
+    ddl: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class DemoLearningData(BaseModel):
+    """Demo learning data seed response."""
+
+    seeded_history_count: int
+    seeded_feedback_count: int
+    history_ids: list[str] = Field(default_factory=list)
+    profile_ids: list[str] = Field(default_factory=list)
+    message: str
+
+
 class SimilarHistoryRequest(BaseModel):
     """類似履歴検索 request."""
 
@@ -346,11 +383,41 @@ class AnalyzeData(BaseModel):
     optimization_hints: list[str] = Field(default_factory=list)
 
 
+class RepairRequest(BaseModel):
+    """Oracle error message を使った SQL repair request."""
+
+    sql: str = Field(min_length=1)
+    error_message: str = Field(min_length=1)
+    allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
+    row_limit: int | None = Field(default=None, ge=1, le=5000)
+
+
+class RepairData(BaseModel):
+    """Oracle error-aware SQL repair response."""
+
+    error_code: str = ""
+    repaired_sql: str = ""
+    explanation: str
+    recommendations: list[str] = Field(default_factory=list)
+    safety: SafetyReport
+    executable_sql: str = ""
+
+
+class SyntheticCase(BaseModel):
+    """Synthetic / persisted NL2SQL evaluation case."""
+
+    question: str
+    expected_sql: str
+    profile_id: str = "default"
+
+
 class EvaluateRequest(BaseModel):
     """Deterministic NL2SQL evaluation request."""
 
     cases: list[dict[str, str]] = Field(default_factory=list)
     engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    profile_id: str | None = None
+    evaluation_set_id: str | None = None
 
 
 class EvaluateData(BaseModel):
@@ -425,6 +492,78 @@ class CompareData(BaseModel):
     recommendation: str
 
 
+class CompareRecord(BaseModel):
+    """Persisted engine comparison record for evaluation operations."""
+
+    id: str
+    created_at: str
+    profile_id: str = ""
+    profile_name: str = ""
+    question: str
+    engines: list[Nl2SqlEngine] = Field(default_factory=list)
+    execute: bool = False
+    report: str = ""
+    comparison: CompareData
+
+
+class CompareHistoryData(BaseModel):
+    """Recent engine comparison records."""
+
+    items: list[CompareRecord] = Field(default_factory=list)
+
+
+class EvaluationSet(BaseModel):
+    """Persisted deterministic NL2SQL evaluation set."""
+
+    id: str
+    name: str
+    description: str = ""
+    profile_id: str = "default"
+    profile_name: str = ""
+    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    cases: list[SyntheticCase] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+    archived: bool = False
+
+
+class EvaluationSetUpsertRequest(BaseModel):
+    """Evaluation set create/update request."""
+
+    name: str = Field(min_length=1)
+    description: str = ""
+    profile_id: str | None = None
+    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    cases: list[SyntheticCase] = Field(default_factory=list)
+
+
+class EvaluationSetsData(BaseModel):
+    """Evaluation set list response."""
+
+    items: list[EvaluationSet] = Field(default_factory=list)
+
+
+class EvaluationRunRecord(BaseModel):
+    """Persisted deterministic NL2SQL evaluation run result."""
+
+    id: str
+    created_at: str
+    evaluation_set_id: str = ""
+    evaluation_set_name: str = ""
+    profile_id: str = ""
+    profile_name: str = ""
+    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    cases: list[SyntheticCase] = Field(default_factory=list)
+    result: EvaluateData
+    report: str = ""
+
+
+class EvaluationRunsData(BaseModel):
+    """Recent evaluation run records."""
+
+    items: list[EvaluationRunRecord] = Field(default_factory=list)
+
+
 class ReverseSqlRequest(BaseModel):
     """SQL から自然言語説明を生成する request."""
 
@@ -453,12 +592,40 @@ class CommentSuggestionData(BaseModel):
     suggestions: list[CommentSuggestion]
 
 
-class SyntheticCase(BaseModel):
-    """Synthetic NL2SQL evaluation case."""
+class CommentApplyItem(BaseModel):
+    """Table / column comment apply request item."""
 
-    question: str
-    expected_sql: str
-    profile_id: str = "default"
+    object_name: str = Field(min_length=1, max_length=260)
+    object_type: str = Field(default="column", min_length=1, max_length=16)
+    comment: str = Field(min_length=1, max_length=4000)
+
+
+class CommentApplyRequest(BaseModel):
+    """Restricted COMMENT ON dry-run / execution request."""
+
+    items: list[CommentApplyItem] = Field(default_factory=list)
+    execute: bool = False
+
+
+class CommentApplyStatement(BaseModel):
+    """Generated COMMENT ON statement result."""
+
+    object_name: str
+    object_type: str
+    comment: str
+    sql: str
+    status: str = "dry_run"
+    error_message: str = ""
+
+
+class CommentApplyData(BaseModel):
+    """Restricted COMMENT ON dry-run / execution response."""
+
+    executed: bool = False
+    runtime: str = "deterministic"
+    statements: list[CommentApplyStatement] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
 
 
 class SyntheticCasesData(BaseModel):
@@ -475,10 +642,64 @@ class DiagnosticCheck(BaseModel):
     message: str
 
 
+class DiagnosticReadiness(BaseModel):
+    """運用 readiness の集約表示。"""
+
+    area: str
+    label: str
+    status: str
+    summary: str
+    next_action: str = ""
+    related_checks: list[str] = Field(default_factory=list)
+
+
+class DiagnosticSmokeCheck(BaseModel):
+    """Manual/live smoke check item for Oracle / OCI NL2SQL engines."""
+
+    id: str
+    label: str
+    category: str
+    status: str
+    method: str = ""
+    endpoint: str = ""
+    request_hint: str = ""
+    command: str = ""
+    expected: str
+    next_action: str = ""
+    related_readiness: list[str] = Field(default_factory=list)
+
+
+class DiagnosticConfigVar(BaseModel):
+    """診断設定ガイドで表示する env var。値は返さず状態だけ返す。"""
+
+    name: str
+    status: str
+    required: bool = True
+    note: str = ""
+
+
+class DiagnosticConfigGuide(BaseModel):
+    """OCI / Oracle 設定を完了するための非 secret ガイド。"""
+
+    id: str
+    label: str
+    status: str
+    summary: str
+    next_action: str = ""
+    required_env_vars: list[DiagnosticConfigVar] = Field(default_factory=list)
+    optional_env_vars: list[DiagnosticConfigVar] = Field(default_factory=list)
+    env_template: str = ""
+    smoke_command: str = ""
+    related_readiness: list[str] = Field(default_factory=list)
+
+
 class DiagnosticsData(BaseModel):
     """OCI / Oracle / engine 設定診断 response."""
 
     checks: list[DiagnosticCheck]
+    readiness: list[DiagnosticReadiness] = Field(default_factory=list)
+    smoke_checks: list[DiagnosticSmokeCheck] = Field(default_factory=list)
+    config_guides: list[DiagnosticConfigGuide] = Field(default_factory=list)
 
 
 class CsvImportRequest(BaseModel):

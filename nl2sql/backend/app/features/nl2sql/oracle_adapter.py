@@ -42,8 +42,6 @@ def _coerce_result_value(value: Any) -> Any:
 def _extract_select_statement(text: str) -> str:
     """LLM/Select AI response から最初の SELECT/WITH statement を抽出する。"""
     cleaned = text.strip()
-    if "could not be generated" in cleaned.lower():
-        return ""
     try:
         payload = json.loads(cleaned)
     except json.JSONDecodeError:
@@ -52,17 +50,35 @@ def _extract_select_statement(text: str) -> str:
         for key in ("sql", "generated_sql", "query", "result"):
             candidate = str(payload.get(key) or "").strip()
             if candidate:
-                return candidate
-    match = re.search(r"\b(with|select)\b.+", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    if not match:
+                extracted = _extract_select_statement(candidate)
+                if extracted:
+                    return extracted
+    candidates: list[str] = []
+    for match in re.finditer(r"\b(with|select)\b", cleaned, flags=re.IGNORECASE):
+        candidate = cleaned[match.start() :].strip()
+        if match.group(1).lower() == "with" or re.search(
+            r"\bfrom\b", candidate, flags=re.IGNORECASE
+        ):
+            candidates.append(candidate)
+    if not candidates:
         return ""
-    statement = match.group(0).strip()
+    statement = candidates[-1]
+    error_match = re.search(r"\bException encountered\s*:", statement, flags=re.IGNORECASE)
+    if error_match:
+        statement = statement[: error_match.start()].strip()
     return statement.split(";", 1)[0].strip()
 
 
 def _quote_identifier(identifier: str) -> str:
     escaped = identifier.replace('"', '""')
     return f'"{escaped}"'
+
+
+def _strict_sql_name(value: str) -> str:
+    normalized = value.strip().strip('"').upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", normalized):
+        raise OracleAdapterError(f"安全でない Oracle object name です: {value}")
+    return normalized
 
 
 class OracleNl2SqlAdapter:
@@ -234,6 +250,146 @@ class OracleNl2SqlAdapter:
                 )
         return QueryResults(columns=columns, rows=rows, total=len(rows))
 
+    def apply_comment_statements(self, statements: list[str]) -> dict[str, Any]:
+        """Execute generated COMMENT ON statements.
+
+        Callers must generate the statements from validated catalog metadata; this method
+        intentionally does not accept arbitrary DDL from API clients.
+        """
+        with self.connection() as conn, conn.cursor() as cursor:
+            for statement in statements:
+                self._execute_plsql_like(cursor, statement.strip().rstrip(";"), {})
+            conn.commit()
+        return {
+            "runtime": "oracle",
+            "statement_count": len(statements),
+        }
+
+    def rebuild_feedback_vector_index(
+        self,
+        *,
+        table_name: str,
+        index_name: str,
+        rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Recreate the NL2SQL feedback VECTOR table and vector index."""
+        safe_table = _strict_sql_name(table_name)
+        safe_index = _strict_sql_name(index_name)
+        quoted_table = _quote_identifier(safe_table)
+        quoted_index = _quote_identifier(safe_index)
+        create_table = (
+            f"CREATE TABLE {quoted_table} ("  # nosec B608
+            "HISTORY_ID VARCHAR2(64) PRIMARY KEY, "
+            "PROFILE_ID VARCHAR2(128), "
+            "QUESTION CLOB, "
+            "GENERATED_SQL CLOB, "
+            "FEEDBACK_RATING VARCHAR2(32), "
+            "EMBEDDING VECTOR(1536, FLOAT32), "
+            "CREATED_AT TIMESTAMP WITH TIME ZONE)"
+        )
+        insert_sql = (
+            f"INSERT INTO {quoted_table} "  # nosec B608
+            "(HISTORY_ID, PROFILE_ID, QUESTION, GENERATED_SQL, "
+            "FEEDBACK_RATING, EMBEDDING, CREATED_AT) "
+            "VALUES (:history_id, :profile_id, :question, :generated_sql, :feedback_rating, "
+            "TO_VECTOR(:embedding_json), SYSTIMESTAMP)"
+        )
+        create_index = (
+            f"CREATE VECTOR INDEX {quoted_index} "  # nosec B608
+            f"ON {quoted_table} (EMBEDDING) "
+            "ORGANIZATION INMEMORY NEIGHBOR GRAPH DISTANCE COSINE"
+        )
+        bind_rows = [
+            {
+                "history_id": str(row["history_id"]),
+                "profile_id": str(row.get("profile_id") or ""),
+                "question": str(row.get("question") or ""),
+                "generated_sql": str(row.get("generated_sql") or ""),
+                "feedback_rating": str(row.get("feedback_rating") or ""),
+                "embedding_json": json.dumps(row.get("embedding") or []),
+            }
+            for row in rows
+        ]
+        with self.connection() as conn, conn.cursor() as cursor:
+            self._drop_best_effort(cursor, f"DROP INDEX {quoted_index}", {})
+            self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
+            self._execute_plsql_like(cursor, create_table, {})
+            if bind_rows:
+                cursor.executemany(insert_sql, bind_rows)
+            self._execute_plsql_like(cursor, create_index, {})
+            conn.commit()
+        return {
+            "runtime": "oracle",
+            "table_name": safe_table,
+            "index_name": safe_index,
+            "row_count": len(bind_rows),
+        }
+
+    def clear_feedback_vector_index(self, *, table_name: str, index_name: str) -> dict[str, Any]:
+        """Drop the NL2SQL feedback VECTOR index/table if present."""
+        safe_table = _strict_sql_name(table_name)
+        safe_index = _strict_sql_name(index_name)
+        quoted_table = _quote_identifier(safe_table)
+        quoted_index = _quote_identifier(safe_index)
+        with self.connection() as conn, conn.cursor() as cursor:
+            self._drop_best_effort(cursor, f"DROP INDEX {quoted_index}", {})
+            self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
+            conn.commit()
+        return {
+            "runtime": "oracle",
+            "table_name": safe_table,
+            "index_name": safe_index,
+        }
+
+    def search_feedback_vector_index(
+        self,
+        *,
+        table_name: str,
+        embedding: list[float],
+        profile_id: str | None,
+        include_bad: bool,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Search feedback history with Oracle 26ai vector similarity."""
+        safe_table = _strict_sql_name(table_name)
+        quoted_table = _quote_identifier(safe_table)
+        filters = ["1 = 1"]
+        binds: dict[str, Any] = {
+            "embedding_json": json.dumps(embedding),
+            "limit": max(limit, 1),
+        }
+        if profile_id:
+            filters.append("PROFILE_ID = :profile_id")
+            binds["profile_id"] = profile_id
+        if not include_bad:
+            filters.append("(FEEDBACK_RATING IS NULL OR FEEDBACK_RATING <> 'bad')")
+        where_clause = " AND ".join(filters)
+        query = (
+            "SELECT HISTORY_ID, PROFILE_ID, QUESTION, GENERATED_SQL, FEEDBACK_RATING, "
+            "VECTOR_DISTANCE(EMBEDDING, TO_VECTOR(:embedding_json), COSINE) AS DISTANCE "
+            f"FROM {quoted_table} "  # nosec B608
+            f"WHERE {where_clause} "
+            "ORDER BY DISTANCE FETCH FIRST :limit ROWS ONLY"
+        )
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(query, binds)
+            rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            distance = float(row[5] or 0)
+            results.append(
+                {
+                    "history_id": str(row[0] or ""),
+                    "profile_id": str(row[1] or ""),
+                    "question": _coerce_text(row[2]),
+                    "generated_sql": _coerce_text(row[3]),
+                    "feedback_rating": str(row[4] or ""),
+                    "distance": distance,
+                    "score": round(max(0.0, 1.0 - distance), 3),
+                }
+            )
+        return results
+
     def import_csv_table(
         self,
         *,
@@ -315,18 +471,7 @@ class OracleNl2SqlAdapter:
             description=description,
         )
         with self.connection() as conn, conn.cursor() as cursor:
-            self._drop_best_effort(
-                cursor,
-                """
-                BEGIN
-                    DBMS_CLOUD_AI.DROP_PROFILE(
-                        profile_name => :name,
-                        force => TRUE
-                    );
-                END;
-                """,
-                {"name": profile_name},
-            )
+            self._drop_cloud_ai_profile_best_effort(cursor, profile_name)
             self._execute_plsql(
                 cursor,
                 """
@@ -350,18 +495,7 @@ class OracleNl2SqlAdapter:
     def drop_select_ai_profile(self, *, profile_name: str) -> dict[str, Any]:
         """Drop an Oracle Select AI profile if it exists."""
         with self.connection() as conn, conn.cursor() as cursor:
-            self._drop_best_effort(
-                cursor,
-                """
-                BEGIN
-                    DBMS_CLOUD_AI.DROP_PROFILE(
-                        profile_name => :name,
-                        force => TRUE
-                    );
-                END;
-                """,
-                {"name": profile_name},
-            )
+            self._drop_cloud_ai_profile_best_effort(cursor, profile_name)
             conn.commit()
         return {
             "runtime": "oracle",
@@ -437,18 +571,8 @@ class OracleNl2SqlAdapter:
                     """,
                     {"name": name},
                 )
-            self._drop_best_effort(
-                cursor,
-                """
-                BEGIN
-                    DBMS_CLOUD_AI.DROP_PROFILE(
-                        profile_name => :name,
-                        force => TRUE
-                    );
-                END;
-                """,
-                {"name": f"AGENT${team_name}"},
-            )
+            self._drop_cloud_ai_profile_best_effort(cursor, f"AGENT${team_name}")
+            self._drop_sql_translator_profile_best_effort(cursor, f"AGENT${team_name}")
             conn.commit()
             self._execute_agent_create(
                 cursor,
@@ -471,13 +595,27 @@ class OracleNl2SqlAdapter:
                 name=task_name,
                 attributes=task_attributes,
             )
-            self._execute_agent_create(
-                cursor,
-                procedure="CREATE_TEAM",
-                name_param="team_name",
-                name=team_name,
-                attributes=team_attributes,
-            )
+            try:
+                self._execute_agent_create(
+                    cursor,
+                    procedure="CREATE_TEAM",
+                    name_param="team_name",
+                    name=team_name,
+                    attributes=team_attributes,
+                )
+            except OracleAdapterError as exc:
+                if not self._looks_like_profile_already_exists(str(exc)):
+                    raise
+                self._drop_cloud_ai_profile_best_effort(cursor, f"AGENT${team_name}")
+                self._drop_sql_translator_profile_best_effort(cursor, f"AGENT${team_name}")
+                conn.commit()
+                self._execute_agent_create(
+                    cursor,
+                    procedure="CREATE_TEAM",
+                    name_param="team_name",
+                    name=team_name,
+                    attributes=team_attributes,
+                )
             conn.commit()
         return {
             "runtime": "oracle",
@@ -517,18 +655,8 @@ class OracleNl2SqlAdapter:
                     {"name": name},
                 )
             for name in [f"AGENT${team_name}", profile_name]:
-                self._drop_best_effort(
-                    cursor,
-                    """
-                    BEGIN
-                        DBMS_CLOUD_AI.DROP_PROFILE(
-                            profile_name => :name,
-                            force => TRUE
-                        );
-                    END;
-                    """,
-                    {"name": name},
-                )
+                self._drop_cloud_ai_profile_best_effort(cursor, name)
+            self._drop_sql_translator_profile_best_effort(cursor, f"AGENT${team_name}")
             conn.commit()
         return {
             "runtime": "oracle",
@@ -540,32 +668,108 @@ class OracleNl2SqlAdapter:
             "team_name": team_name,
         }
 
-    def run_select_ai_agent_team(self, *, team_name: str, question: str) -> tuple[str, str]:
+    def run_select_ai_agent_team(
+        self, *, team_name: str, question: str, tool_name: str | None = None
+    ) -> tuple[str, str]:
         conversation_id = ""
-        params = json.dumps({}, ensure_ascii=False)
-        with self.connection() as conn, conn.cursor() as cursor:
-            try:
-                cursor.execute(
+        try:
+            conversation_id = self.create_agent_conversation()
+        except OracleAdapterError:
+            conversation_id = ""
+        params = json.dumps(
+            {"conversation_id": conversation_id} if conversation_id else {},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        candidates = [
+            (
+                """
+                SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
+                    team_name => :team_name,
+                    user_prompt => :user_prompt,
+                    conversation_id => :conversation_id,
+                    params => :params
+                )
+                FROM DUAL
+                """,
+                {
+                    "team_name": team_name,
+                    "user_prompt": question,
+                    "conversation_id": conversation_id,
+                    "params": params,
+                },
+            )
+        ]
+        candidates.append(
+            (
+                """
+                SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
+                    team_name => :team_name,
+                    user_prompt => :user_prompt,
+                    params => :params
+                )
+                FROM DUAL
+                """,
+                {"team_name": team_name, "user_prompt": question, "params": params},
+            )
+        )
+        candidates.extend(
+            [
+                (
                     """
-                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
-                        team_name => :team_name,
-                        user_prompt => :user_prompt,
-                        params => :params
-                    )
+                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(:team_name, :user_prompt, :params)
                     FROM DUAL
                     """,
                     {"team_name": team_name, "user_prompt": question, "params": params},
-                )
-                row = cursor.fetchone()
-                text = _coerce_text(row[0] if row else "")
-            except Exception as exc:
-                if self._looks_like_agent_profile_loss(str(exc)):
-                    return self.run_select_ai_agent_tool(
-                        tool_name=self._tool_name_from_team_name(team_name),
-                        question=question,
+                ),
+                (
+                    """
+                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(
+                        :team_name,
+                        :user_prompt,
+                        :conversation_id,
+                        :params
                     )
-                raise self._agent_runtime_error(exc) from exc
-        return _extract_select_statement(text), conversation_id
+                    FROM DUAL
+                    """,
+                    {
+                        "team_name": team_name,
+                        "user_prompt": question,
+                        "conversation_id": conversation_id,
+                        "params": params,
+                    },
+                ),
+                (
+                    """
+                    SELECT DBMS_CLOUD_AI_AGENT.RUN_TEAM(:team_name, :user_prompt)
+                    FROM DUAL
+                    """,
+                    {"team_name": team_name, "user_prompt": question},
+                ),
+            ]
+        )
+        errors: list[str] = []
+        with self.connection() as conn, conn.cursor() as cursor:
+            for sql, bindings in candidates:
+                try:
+                    cursor.execute(sql, bindings)
+                    row = cursor.fetchone()
+                    text = _coerce_text(row[0] if row else "")
+                    return _extract_select_statement(text), conversation_id
+                except Exception as exc:
+                    message = str(exc)
+                    if self._looks_like_agent_profile_loss(message):
+                        return self.run_select_ai_agent_tool(
+                            tool_name=tool_name or self._tool_name_from_team_name(team_name),
+                            question=question,
+                        )
+                    if self._looks_like_signature_error(message):
+                        errors.append(message)
+                        continue
+                    raise self._agent_runtime_error(exc) from exc
+        if errors:
+            raise self._agent_runtime_error(RuntimeError("; ".join(errors)))
+        raise OracleAdapterError("Select AI Agent team の実行結果を取得できませんでした。")
 
     def run_select_ai_agent_tool(self, *, tool_name: str, question: str) -> tuple[str, str]:
         payload = json.dumps(
@@ -608,6 +812,8 @@ class OracleNl2SqlAdapter:
         del row_limit, description
         attributes: dict[str, Any] = {
             "provider": self.settings.nl2sql_select_ai_provider,
+            "enforce_object_list": True,
+            "annotations": True,
             "comments": True,
             "constraints": True,
             "object_list": self._object_list(allowed_tables),
@@ -616,6 +822,10 @@ class OracleNl2SqlAdapter:
             attributes["credential_name"] = self.settings.nl2sql_select_ai_credential_name
         if self.settings.nl2sql_select_ai_model:
             attributes["model"] = self.settings.nl2sql_select_ai_model
+        if self.settings.oci_region:
+            attributes["region"] = self.settings.oci_region
+        if self.settings.oci_compartment_id:
+            attributes["oci_compartment_id"] = self.settings.oci_compartment_id
         return attributes
 
     def _object_list(self, allowed_tables: list[str]) -> list[dict[str, str]]:
@@ -704,14 +914,80 @@ class OracleNl2SqlAdapter:
         except Exception:
             return
 
+    def _drop_cloud_ai_profile_best_effort(self, cursor: Any, profile_name: str) -> None:
+        for sql, params in [
+            (
+                """
+                BEGIN
+                    DBMS_CLOUD_AI.DROP_PROFILE(
+                        profile_name => :name,
+                        force => TRUE
+                    );
+                END;
+                """,
+                {"name": profile_name},
+            ),
+            (
+                """
+                BEGIN
+                    DBMS_CLOUD_AI.DROP_PROFILE(profile_name => :name);
+                END;
+                """,
+                {"name": profile_name},
+            ),
+            (
+                """
+                BEGIN
+                    DBMS_CLOUD_AI.DROP_PROFILE(:name, TRUE);
+                END;
+                """,
+                {"name": profile_name},
+            ),
+            (
+                """
+                BEGIN
+                    DBMS_CLOUD_AI.DROP_PROFILE(:name);
+                END;
+                """,
+                {"name": profile_name},
+            ),
+        ]:
+            self._drop_best_effort(cursor, sql, params)
+
+    def _drop_sql_translator_profile_best_effort(self, cursor: Any, profile_name: str) -> None:
+        for sql, params in [
+            (
+                """
+                BEGIN
+                    DBMS_SQL_TRANSLATOR.DROP_PROFILE(profile_name => :name);
+                END;
+                """,
+                {"name": profile_name},
+            ),
+            (
+                """
+                BEGIN
+                    DBMS_SQL_TRANSLATOR.DROP_PROFILE(:name);
+                END;
+                """,
+                {"name": profile_name},
+            ),
+        ]:
+            self._drop_best_effort(cursor, sql, params)
+
     def _looks_like_signature_error(self, message: str) -> bool:
         normalized = message.upper()
         return (
             "PLS-00306" in normalized
+            or "PLS-306" in normalized
             or "PLS-00302" in normalized
             or "ORA-00904" in normalized
             or "ORA-06550" in normalized
         )
+
+    def _looks_like_profile_already_exists(self, message: str) -> bool:
+        normalized = message.upper()
+        return "PROFILE" in normalized and "ALREADY EXISTS" in normalized
 
     def _agent_runtime_error(self, exc: Exception) -> OracleAdapterError:
         message = str(exc)

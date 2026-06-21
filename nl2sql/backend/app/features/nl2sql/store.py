@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
-from typing import Any, Protocol
+from importlib import import_module
+from typing import Any, Protocol, cast
 
 _STATE_KEY = "default"
 _TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$#]*$")
@@ -91,8 +92,11 @@ class OracleJsonNl2SqlStore:
                 row = cursor.fetchone()
             if not row:
                 return None
-            raw = _read_lob(row[0])
-            return json.loads(raw) if raw else None
+            value = row[0]
+            if isinstance(value, Mapping):
+                return cast(dict[str, Any], json.loads(json.dumps(value, ensure_ascii=False)))
+            raw = _read_lob(value)
+            return cast(dict[str, Any], json.loads(raw)) if raw else None
 
     def save_snapshot(self, snapshot: dict[str, Any]) -> None:
         payload = json.dumps(snapshot, ensure_ascii=False)
@@ -116,6 +120,7 @@ class OracleJsonNl2SqlStore:
                     "  source.state_key, source.state_json, SYSTIMESTAMP"
                     ")"
                 )
+                _set_json_clob_input_size(cursor)
                 cursor.execute(
                     merge_sql,
                     {"state_key": _STATE_KEY, "state_json": payload},
@@ -159,5 +164,23 @@ def _read_lob(value: Any) -> str:
         return ""
     read = getattr(value, "read", None)
     if callable(read):
-        return str(read())
+        raw = read()
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8")
+        return str(raw)
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
     return str(value)
+
+
+def _set_json_clob_input_size(cursor: Any) -> None:
+    """Bind large JSON snapshots as CLOB to avoid ORA-01461 on Oracle."""
+    set_input_sizes = getattr(cursor, "setinputsizes", None)
+    if not callable(set_input_sizes):
+        return
+    try:
+        oracledb = import_module("oracledb")
+        db_type_clob = oracledb.DB_TYPE_CLOB
+    except Exception:  # pragma: no cover - defensive when oracle driver is absent
+        return
+    set_input_sizes(state_json=db_type_clob)

@@ -15,7 +15,7 @@ dependencies = [
   "python-json-logger>=4.0",
   "prometheus-client>=0.24",
   "production-ready-backend-core",
-  # OCI SDK は Enterprise AI Direct の実 adapter 実装時に追加する。
+  "oci>=2.160",
   "oracledb>=3.4",
 ]
 

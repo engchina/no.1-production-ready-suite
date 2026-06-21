@@ -1,0 +1,822 @@
+import { type ChangeEvent, useEffect, useState } from "react";
+import { Bot, Database, Download, FileJson, Gauge, ListChecks, RefreshCw, ShieldCheck, Upload } from "lucide-react";
+
+import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
+
+import { apiGet, apiPost } from "@/lib/api";
+import { t } from "@/lib/i18n";
+import { engineLabel } from "../labels";
+import { formatElapsed } from "../useOperationTimer";
+import type {
+  AssetRefreshData,
+  DiagnosticConfigGuide,
+  DiagnosticConfigVar,
+  DiagnosticReadiness,
+  DiagnosticSmokeCheck,
+  DiagnosticsData,
+  Nl2SqlEngine,
+  Nl2SqlProfile,
+} from "../types";
+import { AssetStatusPanel } from "./SettingsPages";
+
+export function EngineOperationsPage() {
+  const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
+  const [profileId, setProfileId] = useState("");
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
+  const [refreshResults, setRefreshResults] = useState<AssetRefreshData[]>([]);
+  const [reportInput, setReportInput] = useState("");
+  const [parsedReport, setParsedReport] = useState<ManualIntegrationReport | null>(null);
+  const [reportMessage, setReportMessage] = useState("");
+  const [loading, setLoading] = useState("");
+  const [message, setMessage] = useState("");
+
+  const load = async () => {
+    setLoading("load");
+    setMessage("");
+    try {
+      const [profileData, diagnosticsData] = await Promise.all([
+        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
+        apiGet<DiagnosticsData>("/api/nl2sql/diagnostics"),
+      ]);
+      setProfiles(profileData);
+      setDiagnostics(diagnosticsData);
+      setProfileId((current) => current || profileData[0]?.id || "default");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("engineOps.error.load"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const refresh = async (kind: "select_ai" | "select_ai_agent") => {
+    setLoading(kind);
+    setMessage("");
+    try {
+      const path =
+        kind === "select_ai"
+          ? "/api/nl2sql/select-ai/profiles/refresh"
+          : "/api/nl2sql/select-ai-agent/assets/refresh";
+      const result = await apiPost<AssetRefreshData>(`${path}?profile_id=${encodeURIComponent(profileId || "default")}`);
+      setRefreshResults((current) => [result, ...current.filter((item) => item.engine !== result.engine)]);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("engineOps.error.refresh"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const parseReport = (rawValue = reportInput) => {
+    setReportMessage("");
+    try {
+      const parsed = normalizeManualIntegrationReport(JSON.parse(rawValue));
+      if (!parsed) {
+        setParsedReport(null);
+        setReportMessage(t("engineOps.report.error.invalid"));
+        return;
+      }
+      setParsedReport(parsed);
+      setReportInput(JSON.stringify(parsed, null, 2));
+    } catch {
+      setParsedReport(null);
+      setReportMessage(t("engineOps.report.error.parse"));
+    }
+  };
+
+  const importReportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) {
+      return;
+    }
+    const text = await file.text();
+    setReportInput(text);
+    parseReport(text);
+  };
+
+  return (
+    <>
+      <PageHeader
+        title={t("nav.engineOperations")}
+        subtitle={t("engineOps.subtitle")}
+        actions={
+          <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={() => void load()}>
+            <RefreshCw size={15} aria-hidden="true" />
+            <span>{t("engineOps.action.refresh")}</span>
+          </Button>
+        }
+      />
+
+      <main className="grid gap-5 p-4 lg:p-8">
+        {message && (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+            {message}
+          </div>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bot size={18} aria-hidden="true" />
+              {t("engineOps.assets.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <label className="grid max-w-xl gap-1 text-sm font-medium text-slate-800">
+              <span>{t("settings.model.profile")}</span>
+              <select
+                value={profileId}
+                onChange={(event) => setProfileId(event.currentTarget.value)}
+                className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              >
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <EngineActionCard
+                engine="select_ai_agent"
+                description={t("nl2sql.engine.agent.desc")}
+                action={t("settings.model.refreshAgent")}
+                loading={loading === "select_ai_agent"}
+                onClick={() => void refresh("select_ai_agent")}
+              />
+              <EngineActionCard
+                engine="select_ai"
+                description={t("nl2sql.engine.selectAi.desc")}
+                action={t("settings.model.refreshSelectAi")}
+                loading={loading === "select_ai"}
+                onClick={() => void refresh("select_ai")}
+              />
+              <EngineActionCard
+                engine="enterprise_ai_direct"
+                description={t("nl2sql.engine.direct.desc")}
+                action={t("settings.model.directReady")}
+                disabled
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Gauge size={18} aria-hidden="true" />
+              {t("ops.readiness.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-2">
+            {(diagnostics?.readiness ?? []).map((item) => (
+              <section key={item.area} className="grid gap-3 rounded-md border border-slate-200 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="font-semibold text-slate-900">{item.label}</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-700">{item.summary}</p>
+                  </div>
+                  <StatusBadge variant={item.status === "ok" ? "success" : "warning"} label={item.status} />
+                </div>
+                {item.next_action && (
+                  <p className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
+                    <span className="font-medium text-slate-900">{t("ops.readiness.nextAction")}: </span>
+                    {item.next_action}
+                  </p>
+                )}
+                <p className="text-xs leading-5 text-slate-500">
+                  {t("ops.readiness.relatedChecks")}: {item.related_checks.join(", ")}
+                </p>
+              </section>
+            ))}
+            {(!diagnostics?.readiness || diagnostics.readiness.length === 0) && (
+              <div className="grid min-h-32 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 md:col-span-2">
+                {t("ops.readiness.empty")}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ListChecks size={18} aria-hidden="true" />
+              {t("engineOps.smoke.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 xl:grid-cols-2">
+            {(diagnostics?.smoke_checks ?? []).map((item) => (
+              <SmokeCheckCard key={item.id} item={item} />
+            ))}
+            {(!diagnostics?.smoke_checks || diagnostics.smoke_checks.length === 0) && (
+              <div className="grid min-h-32 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 xl:col-span-2">
+                {t("engineOps.smoke.empty")}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ListChecks size={18} aria-hidden="true" />
+              {t("engineOps.requiredSmoke.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 lg:grid-cols-2">
+            <RequiredSmokeCommand
+              label={t("engineOps.requiredSmoke.diagnosticsOnly")}
+              command="uv run python scripts/nl2sql_manual_integration.py --diagnostics-only --json-report reports/nl2sql-diagnostics.json"
+              readiness={findReadiness(diagnostics, "oracle_adb")}
+              requiredEnvVars={["ORACLE_USER", "ORACLE_DSN", "NL2SQL_RUNTIME_MODE"]}
+            />
+            <RequiredSmokeCommand
+              label={t("engineOps.requiredSmoke.releaseGate")}
+              command='uv run python scripts/nl2sql_manual_integration.py --release-gate --engines select_ai_agent,select_ai --allowed-table YOUR_TABLE --question "YOUR_QUESTION" --timeout 15 --diagnostics-timeout 8 --synthetic-limit 2 --json-report reports/nl2sql-release-gate.json'
+              readiness={releaseGateReadiness(diagnostics)}
+              requiredEnvVars={[
+                "ORACLE_USER",
+                "ORACLE_DSN",
+                "NL2SQL_RUNTIME_MODE",
+                "NL2SQL_PERSISTENCE_MODE",
+                "NL2SQL_SELECT_AI_CREDENTIAL_NAME",
+                "NL2SQL_SELECT_AI_MODEL",
+              ]}
+            />
+            <RequiredSmokeCommand
+              label={t("engineOps.requiredSmoke.enterpriseAi")}
+              command="uv run python scripts/nl2sql_manual_integration.py --require-enterprise-ai --engines enterprise_ai_direct --execute"
+              readiness={findReadiness(diagnostics, "enterprise_ai_direct")}
+              requiredEnvVars={[
+                "OCI_ENTERPRISE_AI_ENDPOINT",
+                "OCI_ENTERPRISE_AI_API_KEY",
+                "OCI_ENTERPRISE_AI_LLM_MODEL",
+              ]}
+            />
+            <RequiredSmokeCommand
+              label={t("engineOps.requiredSmoke.feedback")}
+              command="uv run python scripts/nl2sql_manual_integration.py --require-oracle --require-feedback-embedding --seed-demo-learning --execute-feedback-index --engines enterprise_ai_direct"
+              readiness={findReadiness(diagnostics, "feedback_embedding")}
+              requiredEnvVars={[
+                "NL2SQL_FEEDBACK_EMBEDDING_ENABLED",
+                "OCI_REGION",
+                "OCI_COMPARTMENT_ID",
+                "OCI_GENAI_ENDPOINT",
+                "OCI_GENAI_EMBED_MODEL_ID",
+              ]}
+            />
+            <RequiredSmokeCommand
+              label={t("engineOps.requiredSmoke.persistence")}
+              command="uv run python scripts/nl2sql_manual_integration.py --require-oracle --require-oracle-persistence --engines select_ai"
+              readiness={findReadiness(diagnostics, "persistence")}
+              requiredEnvVars={["NL2SQL_PERSISTENCE_MODE", "NL2SQL_ORACLE_STATE_TABLE", "ORACLE_USER", "ORACLE_DSN"]}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldCheck size={18} aria-hidden="true" />
+              {t("engineOps.configGuide.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 xl:grid-cols-3">
+            {(diagnostics?.config_guides ?? []).map((guide) => (
+              <ConfigGuideCard key={guide.id} guide={guide} />
+            ))}
+            {(!diagnostics?.config_guides || diagnostics.config_guides.length === 0) && (
+              <div className="grid min-h-32 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 xl:col-span-3">
+                {t("engineOps.configGuide.empty")}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileJson size={18} aria-hidden="true" />
+              {t("engineOps.report.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+            <section className="grid gap-3">
+              <label className="grid gap-1 text-sm font-medium text-slate-800">
+                <span>{t("engineOps.report.input")}</span>
+                <textarea
+                  value={reportInput}
+                  onChange={(event) => setReportInput(event.currentTarget.value)}
+                  className="min-h-44 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 text-slate-800 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                />
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={() => parseReport()}>
+                  <FileJson size={15} aria-hidden="true" />
+                  <span>{t("engineOps.report.parse")}</span>
+                </Button>
+                <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-sky-200">
+                  <Upload size={15} aria-hidden="true" />
+                  <span>{t("engineOps.report.import")}</span>
+                  <input className="sr-only" type="file" accept="application/json,.json" onChange={importReportFile} />
+                </label>
+              </div>
+              {reportMessage && (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-950">
+                  {reportMessage}
+                </p>
+              )}
+            </section>
+            <ManualReportSummary report={parsedReport} />
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ShieldCheck size={18} aria-hidden="true" />
+                {t("settings.connection.checks")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              {diagnostics?.checks.map((check) => (
+                <div
+                  key={check.name}
+                  className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-slate-200 p-3"
+                >
+                  <div>
+                    <p className="font-mono text-xs text-slate-500">{check.name}</p>
+                    <p className="mt-1 text-sm text-slate-800">{check.message}</p>
+                  </div>
+                  <StatusBadge variant={check.status === "ok" ? "success" : "warning"} label={check.status} />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Database size={18} aria-hidden="true" />
+                {t("settings.model.lastRefresh")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              {refreshResults.length > 0 ? (
+                refreshResults.map((result) => <AssetStatusPanel key={result.engine} result={result} />)
+              ) : (
+                <div className="grid min-h-40 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                  {t("engineOps.assets.empty")}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </main>
+    </>
+  );
+}
+
+interface ManualIntegrationReportStep {
+  name: string;
+  ok: boolean;
+  message: string;
+}
+
+interface ManualIntegrationReport {
+  schema_version: string;
+  generated_at: string;
+  started_at: string;
+  finished_at: string;
+  elapsed_ms: number;
+  release_gate: boolean;
+  ok: boolean;
+  exit_code: number;
+  profile_id: string;
+  engines: string[];
+  allowed_tables: string[];
+  summary: {
+    total: number;
+    passed: number;
+    failed: number;
+  };
+  steps: ManualIntegrationReportStep[];
+}
+
+function ManualReportSummary({ report }: { report: ManualIntegrationReport | null }) {
+  if (!report) {
+    return (
+      <section className="grid min-h-56 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+        {t("engineOps.report.empty")}
+      </section>
+    );
+  }
+
+  return (
+    <section className="grid gap-3 rounded-md border border-slate-200 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">{report.schema_version}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-700">
+            {t("engineOps.report.generatedAt")}: {report.generated_at || "-"}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge variant={report.ok ? "success" : "warning"} label={report.ok ? "ok" : "ng"} />
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => downloadTextFile(manualReportFileName(report), buildManualReportMarkdown(report))}
+          >
+            <Download size={15} aria-hidden="true" />
+            <span>{t("engineOps.report.download")}</span>
+          </Button>
+        </div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <ReportMetric label={t("engineOps.report.total")} value={report.summary.total} />
+        <ReportMetric label={t("engineOps.report.passed")} value={report.summary.passed} />
+        <ReportMetric label={t("engineOps.report.failed")} value={report.summary.failed} />
+        <ReportMetric label={t("engineOps.report.exitCode")} value={report.exit_code} />
+        <ReportMetric label={t("engineOps.report.elapsed")} value={formatElapsed(report.elapsed_ms)} />
+      </div>
+      <div className="grid gap-2 text-sm leading-6 text-slate-700">
+        <p>
+          <span className="font-medium text-slate-900">{t("engineOps.report.profile")}: </span>
+          {report.profile_id || "-"}
+        </p>
+        <p>
+          <span className="font-medium text-slate-900">{t("engineOps.report.engines")}: </span>
+          {report.engines.join(", ") || "-"}
+        </p>
+        <p>
+          <span className="font-medium text-slate-900">{t("engineOps.report.tables")}: </span>
+          {report.allowed_tables.join(", ") || "-"}
+        </p>
+      </div>
+      <div className="grid gap-2">
+        <p className="text-xs font-medium text-slate-500">{t("engineOps.report.steps")}</p>
+        <div className="grid max-h-80 gap-2 overflow-y-auto pr-1">
+          {report.steps.map((step) => (
+            <div key={step.name} className="grid gap-2 rounded-md border border-slate-200 p-3 text-sm">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <p className="font-mono text-xs font-semibold text-slate-900">{step.name}</p>
+                <StatusBadge variant={step.ok ? "success" : "warning"} label={step.ok ? "ok" : "ng"} />
+              </div>
+              <p className="break-words text-sm leading-6 text-slate-700">{step.message || "-"}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReportMetric({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <p className="mt-1 font-mono text-lg font-semibold text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function normalizeManualIntegrationReport(value: unknown): ManualIntegrationReport | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const steps = normalizeReportSteps(value.steps);
+  if (steps.length === 0) {
+    return null;
+  }
+  const summary = isRecord(value.summary) ? value.summary : {};
+  const failed = numberValue(summary.failed, steps.filter((step) => !step.ok).length);
+  const passed = numberValue(summary.passed, steps.filter((step) => step.ok).length);
+  const total = numberValue(summary.total, steps.length);
+  return {
+    schema_version: stringValue(value.schema_version, "nl2sql_manual_integration_report_v1"),
+    generated_at: stringValue(value.generated_at, ""),
+    started_at: stringValue(value.started_at, ""),
+    finished_at: stringValue(value.finished_at, stringValue(value.generated_at, "")),
+    elapsed_ms: numberValue(value.elapsed_ms, 0),
+    release_gate: Boolean(value.release_gate),
+    ok: Boolean(value.ok),
+    exit_code: numberValue(value.exit_code, failed > 0 ? 1 : 0),
+    profile_id: stringValue(value.profile_id, "default"),
+    engines: stringList(value.engines),
+    allowed_tables: stringList(value.allowed_tables),
+    summary: { total, passed, failed },
+    steps,
+  };
+}
+
+function normalizeReportSteps(value: unknown): ManualIntegrationReportStep[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (!isRecord(item)) {
+      return [];
+    }
+    const name = stringValue(item.name, "");
+    if (!name) {
+      return [];
+    }
+    return [
+      {
+        name,
+        ok: Boolean(item.ok),
+        message: stringValue(item.message, ""),
+      },
+    ];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function manualReportFileName(report: ManualIntegrationReport): string {
+  const timestamp = report.generated_at.replace(/\D/g, "").slice(0, 14) || "undated";
+  return `nl2sql_manual_report_${timestamp}.md`;
+}
+
+function buildManualReportMarkdown(report: ManualIntegrationReport): string {
+  const lines = [
+    "# NL2SQL Manual Integration Report",
+    "",
+    `- Schema: ${report.schema_version}`,
+    `- Generated at: ${report.generated_at || "-"}`,
+    `- Started at: ${report.started_at || "-"}`,
+    `- Finished at: ${report.finished_at || "-"}`,
+    `- Elapsed: ${formatElapsed(report.elapsed_ms)}`,
+    `- Result: ${report.ok ? "ok" : "ng"}`,
+    `- Exit code: ${report.exit_code}`,
+    `- Profile: ${report.profile_id || "-"}`,
+    `- Engines: ${report.engines.join(", ") || "-"}`,
+    `- Allowed tables: ${report.allowed_tables.join(", ") || "-"}`,
+    `- Steps: ${report.summary.passed}/${report.summary.total} passed, ${report.summary.failed} failed`,
+    "",
+    "## Steps",
+    "",
+  ];
+  for (const step of report.steps) {
+    lines.push(`### ${step.ok ? "[ok]" : "[ng]"} ${step.name}`, "", step.message || "-", "");
+  }
+  return `${lines.join("\n").trim()}\n`;
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function ConfigGuideCard({ guide }: { guide: DiagnosticConfigGuide }) {
+  return (
+    <section className="grid gap-3 rounded-md border border-slate-200 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">{guide.label}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-700">{guide.summary}</p>
+        </div>
+        <StatusBadge variant={guide.status === "ok" ? "success" : "warning"} label={guide.status} />
+      </div>
+      {guide.next_action && (
+        <p className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
+          <span className="font-medium text-slate-900">{t("ops.readiness.nextAction")}: </span>
+          {guide.next_action}
+        </p>
+      )}
+      <ConfigVarList label={t("engineOps.configGuide.required")} items={guide.required_env_vars} />
+      {guide.optional_env_vars.length > 0 && (
+        <ConfigVarList label={t("engineOps.configGuide.optional")} items={guide.optional_env_vars} />
+      )}
+      {guide.env_template && <CompactCode label={t("engineOps.configGuide.envTemplate")} value={guide.env_template} />}
+      {guide.smoke_command && <CompactCode label={t("engineOps.configGuide.smokeCommand")} value={guide.smoke_command} />}
+    </section>
+  );
+}
+
+function ConfigVarList({ label, items }: { label: string; items: DiagnosticConfigVar[] }) {
+  return (
+    <div className="grid gap-2">
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <div className="flex flex-wrap gap-2">
+        {items.map((item) => (
+          <code
+            key={`${label}-${item.name}`}
+            className={`max-w-full break-all rounded border px-2 py-1 text-xs font-medium leading-5 ${
+              item.status === "ok"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+                : item.required
+                  ? "border-amber-200 bg-amber-50 text-amber-950"
+                  : "border-slate-200 bg-slate-50 text-slate-700"
+            }`}
+            title={item.note || item.status}
+          >
+            {item.name}
+          </code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SmokeCheckCard({ item }: { item: DiagnosticSmokeCheck }) {
+  return (
+    <section className="grid gap-3 rounded-md border border-slate-200 p-4 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="font-semibold text-slate-900">{item.label}</p>
+          <p className="mt-1 text-xs font-medium text-slate-500">{item.category}</p>
+        </div>
+        <StatusBadge variant={item.status === "ok" ? "success" : "warning"} label={item.status} />
+      </div>
+      {(item.endpoint || item.command) && (
+        <div className="grid gap-2">
+          {item.endpoint && (
+            <CompactCode label={t("engineOps.smoke.endpoint")} value={`${item.method} ${item.endpoint}`} />
+          )}
+          {item.request_hint && (
+            <CompactCode label={t("engineOps.smoke.request")} value={item.request_hint} />
+          )}
+          {item.command && <CompactCode label={t("engineOps.smoke.command")} value={item.command} />}
+        </div>
+      )}
+      <p className="rounded-md bg-slate-50 px-3 py-2 leading-6 text-slate-700">
+        <span className="font-medium text-slate-900">{t("engineOps.smoke.expected")}: </span>
+        {item.expected}
+      </p>
+      {item.next_action && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 leading-6 text-amber-950">
+          <span className="font-medium">{t("ops.readiness.nextAction")}: </span>
+          {item.next_action}
+        </p>
+      )}
+      <p className="text-xs leading-5 text-slate-500">
+        {t("engineOps.smoke.related")}: {item.related_readiness.join(", ") || "-"}
+      </p>
+    </section>
+  );
+}
+
+function findReadiness(diagnostics: DiagnosticsData | null, area: string) {
+  return (diagnostics?.readiness ?? []).find((item) => item.area === area) ?? null;
+}
+
+const releaseGateReadinessAreas = [
+  { area: "oracle_adb", label: "Oracle / ADB" },
+  { area: "persistence", label: "NL2SQL persistence" },
+  { area: "select_ai", label: "Oracle Select AI" },
+  { area: "select_ai_agent", label: "Oracle Select AI Agent" },
+];
+
+function releaseGateReadiness(diagnostics: DiagnosticsData | null): DiagnosticReadiness | null {
+  const readiness = diagnostics?.readiness ?? [];
+  if (readiness.length === 0) {
+    return null;
+  }
+
+  const required = releaseGateReadinessAreas.map((requiredArea) => ({
+    ...requiredArea,
+    readiness: readiness.find((item) => item.area === requiredArea.area),
+  }));
+  const notReady = required.filter((item) => item.readiness?.status !== "ok");
+  const missingLabels = notReady.map((item) => item.readiness?.label || item.label);
+  const nextActions = notReady
+    .map((item) => {
+      if (item.readiness?.next_action) {
+        return `${item.readiness.label}: ${item.readiness.next_action}`;
+      }
+      if (item.readiness?.summary) {
+        return `${item.readiness.label}: ${item.readiness.summary}`;
+      }
+      return `${item.label}: ${t("engineOps.requiredSmoke.releaseGateMissingReadiness")}`;
+    })
+    .join(" / ");
+
+  return {
+    area: "release_gate",
+    label: t("engineOps.requiredSmoke.releaseGate"),
+    status: notReady.length === 0 ? "ok" : "warning",
+    summary:
+      notReady.length === 0
+        ? t("engineOps.requiredSmoke.releaseGateReady")
+        : t("engineOps.requiredSmoke.releaseGateNeeds", { areas: missingLabels.join(", ") }),
+    next_action: nextActions,
+    related_checks: releaseGateReadinessAreas.map((item) => item.area),
+  };
+}
+
+function RequiredSmokeCommand({
+  label,
+  command,
+  readiness,
+  requiredEnvVars = [],
+}: {
+  label: string;
+  command: string;
+  readiness: DiagnosticReadiness | null;
+  requiredEnvVars?: string[];
+}) {
+  return (
+    <section className="grid gap-3 rounded-md border border-slate-200 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">{label}</p>
+          {readiness && <p className="mt-1 text-sm leading-6 text-slate-700">{readiness.summary}</p>}
+        </div>
+        {readiness && (
+          <StatusBadge variant={readiness.status === "ok" ? "success" : "warning"} label={readiness.status} />
+        )}
+      </div>
+      {readiness?.next_action && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-950">
+          <span className="font-medium">{t("ops.readiness.nextAction")}: </span>
+          {readiness.next_action}
+        </p>
+      )}
+      <CompactCode label={t("engineOps.smoke.command")} value={command} />
+      {requiredEnvVars.length > 0 && (
+        <div className="grid gap-2">
+          <p className="text-xs font-medium text-slate-500">{t("engineOps.requiredSmoke.envVars")}</p>
+          <div className="flex flex-wrap gap-2">
+            {requiredEnvVars.map((envVar) => (
+              <code
+                key={`${label}-${envVar}`}
+                className="max-w-full break-all rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium leading-5 text-slate-700"
+              >
+                {envVar}
+              </code>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CompactCode({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-1">
+      <p className="text-xs font-medium text-slate-500">{label}</p>
+      <code className="block overflow-x-auto rounded-md border border-slate-200 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-50">
+        {value}
+      </code>
+    </div>
+  );
+}
+
+function EngineActionCard({
+  engine,
+  description,
+  action,
+  loading,
+  disabled,
+  onClick,
+}: {
+  engine: Nl2SqlEngine;
+  description: string;
+  action: string;
+  loading?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <section className="grid gap-3 rounded-md border border-slate-200 p-4">
+      <div>
+        <p className="font-semibold text-slate-900">{engineLabel(engine)}</p>
+        <p className="mt-1 text-sm text-slate-600">{description}</p>
+      </div>
+      <Button type="button" variant="secondary" size="sm" loading={loading} disabled={disabled} onClick={onClick}>
+        {!disabled && <RefreshCw size={15} aria-hidden="true" />}
+        <span>{action}</span>
+      </Button>
+    </section>
+  );
+}

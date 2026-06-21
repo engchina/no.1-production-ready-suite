@@ -6,19 +6,27 @@ from contextlib import contextmanager
 from typing import Any
 
 import httpx
+import pytest
 
 from app.features.nl2sql.models import (
     CompareRequest,
     CsvImportRequest,
+    EvaluateRequest,
+    EvaluationSetUpsertRequest,
+    FeedbackIndexRequest,
     FeedbackRating,
+    HistoryItem,
     JobCreateRequest,
     JobStatus,
     Nl2SqlEngine,
     Nl2SqlProfile,
+    PreviewRequest,
+    SimilarHistoryRequest,
+    SyntheticCase,
 )
-from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
+from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter, _extract_select_statement
 from app.features.nl2sql.router import is_select_only
-from app.features.nl2sql.service import Nl2SqlService
+from app.features.nl2sql.service import Nl2SqlService, _extract_referenced_tables
 from app.features.nl2sql.store import MemoryNl2SqlStore, OracleJsonNl2SqlStore
 from app.main import app
 from app.settings import get_settings
@@ -30,14 +38,22 @@ def _transport() -> httpx.ASGITransport:
 
 class _FakeOracleDb:
     def __init__(self) -> None:
-        self.state_json = ""
+        self.state_json: object = ""
         self.executed: list[str] = []
+        self.executed_params: list[dict[str, object] | None] = []
+        self.input_sizes: list[dict[str, object]] = []
         self.insert_batches: list[tuple[str, list[dict[str, object]]]] = []
         self.commits = 0
         self.catalog_rows: list[tuple[object, ...]] = []
         self.constraint_rows: list[tuple[object, ...]] = []
         self.sample_values: dict[tuple[str, str], list[object]] = {}
+        self.feedback_vector_rows: list[tuple[object, ...]] = []
         self.unsupported_agent_runtime = False
+        self.run_team_signature_failures = 0
+        self.run_team_calls = 0
+        self.run_team_profile_loss = False
+        self.create_team_profile_exists_failures = 0
+        self.create_team_calls = 0
 
     def connection(self) -> "_FakeOracleConnection":
         return _FakeOracleConnection(self)
@@ -63,7 +79,7 @@ class _FakeOracleConnection:
 class _FakeOracleCursor:
     def __init__(self, db: _FakeOracleDb) -> None:
         self.db = db
-        self._row: tuple[str] | None = None
+        self._row: tuple[object, ...] | None = None
         self._rows: list[tuple[object, ...]] = []
         self.description: list[tuple[str]] = []
 
@@ -76,10 +92,15 @@ class _FakeOracleCursor:
     def execute(self, sql: str, params: dict[str, object] | None = None) -> None:
         normalized_sql = " ".join(sql.split())
         self.db.executed.append(normalized_sql)
+        self.db.executed_params.append(dict(params) if params is not None else None)
         self._row = None
         self._rows = []
         if self.db.unsupported_agent_runtime and "DBMS_CLOUD_AI_AGENT" in normalized_sql:
             raise RuntimeError("ORA-00904: invalid identifier")
+        if "DBMS_CLOUD_AI_AGENT.CREATE_TEAM" in normalized_sql:
+            self.db.create_team_calls += 1
+            if self.db.create_team_calls <= self.db.create_team_profile_exists_failures:
+                raise RuntimeError("ORA-20046: Profile AGENT$NL2SQL_DEFAULT_TEAM already exists.")
         if normalized_sql.startswith("MERGE INTO"):
             self.db.state_json = str((params or {})["state_json"])
         elif normalized_sql.startswith("SELECT state_json"):
@@ -97,6 +118,25 @@ class _FakeOracleCursor:
         elif normalized_sql.startswith("SELECT CLOB_COL FROM"):
             self.description = [("CLOB_COL",)]
             self._rows = [(_FakeLob("long text"),)]
+        elif "VECTOR_DISTANCE" in normalized_sql:
+            self._rows = self.db.feedback_vector_rows
+        elif "DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in normalized_sql:
+            self._row = ("conversation-001",)
+        elif "DBMS_CLOUD_AI_AGENT.RUN_TEAM" in normalized_sql:
+            self.db.run_team_calls += 1
+            if self.db.run_team_profile_loss:
+                raise RuntimeError("ORA-20046: Invalid profile")
+            if self.db.run_team_calls <= self.db.run_team_signature_failures:
+                raise RuntimeError(
+                    "ORA-06553: PLS-306: wrong number or types of arguments "
+                    "in call to 'RUN_TEAM'"
+                )
+            self._row = ('{"sql":"SELECT TOTAL_AMOUNT FROM INVOICES"}',)
+        elif "DBMS_CLOUD_AI_AGENT.RUN_TOOL" in normalized_sql:
+            self._row = ("SELECT TOTAL_AMOUNT FROM INVOICES",)
+
+    def setinputsizes(self, **kwargs: object) -> None:
+        self.db.input_sizes.append(kwargs)
 
     def executemany(self, sql: str, rows: list[dict[str, object]]) -> None:
         normalized_sql = " ".join(sql.split())
@@ -106,18 +146,21 @@ class _FakeOracleCursor:
     def __iter__(self) -> Iterator[tuple[object, ...]]:
         return iter(self._rows)
 
-    def fetchone(self) -> tuple[str] | None:
+    def fetchone(self) -> tuple[object, ...] | None:
         return self._row
 
     def fetchmany(self, _max_rows: int) -> list[tuple[object, ...]]:
         return self._rows
 
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self._rows
+
 
 class _FakeLob:
-    def __init__(self, value: str) -> None:
+    def __init__(self, value: str | bytes) -> None:
         self.value = value
 
-    def read(self) -> str:
+    def read(self) -> str | bytes:
         return self.value
 
 
@@ -135,6 +178,24 @@ class _FakeRuntimeOracleAdapter(OracleNl2SqlAdapter):
             yield conn
 
 
+class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
+    def __init__(self, db: _FakeOracleDb) -> None:
+        super().__init__(db)
+        self.questions: list[str] = []
+
+    def generate_select_ai_sql(
+        self, *, profile_name: str, question: str, action: str = "showsql"
+    ) -> str:
+        self.questions.append(question)
+        return "SELECT TOTAL_AMOUNT FROM INVOICES"
+
+    def run_select_ai_agent_team(
+        self, *, team_name: str, question: str, tool_name: str | None = None
+    ) -> tuple[str, str]:
+        self.questions.append(question)
+        return "SELECT TOTAL_AMOUNT FROM INVOICES", "conversation-001"
+
+
 class _OracleRuntimeNl2SqlService(Nl2SqlService):
     def __init__(self, adapter: OracleNl2SqlAdapter) -> None:
         super().__init__(store=MemoryNl2SqlStore())
@@ -142,6 +203,33 @@ class _OracleRuntimeNl2SqlService(Nl2SqlService):
 
     def _use_oracle_runtime(self) -> bool:
         return True
+
+
+class _FakeEmbeddingClient:
+    def is_configured(self) -> bool:
+        return True
+
+    def module_available(self) -> bool:
+        return True
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [[0.01 for _ in range(1536)] for _text in texts]
+
+
+class _FakeEnterpriseAiClient:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.calls: list[dict[str, str]] = []
+
+    def is_configured(self) -> bool:
+        return True
+
+    def model_id(self) -> str:
+        return "enterprise-nl2sql-model"
+
+    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+        self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
+        return self.text
 
 
 async def test_health() -> None:
@@ -167,6 +255,72 @@ async def test_nl2sql_preview_returns_safe_select() -> None:
     assert data["sql"].lower().startswith("select")
     assert data["engine"] == "select_ai_agent"
     assert data["timing"]["elapsed_ms"] >= 0
+
+
+def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    fake_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",'
+        '"explanation":"請求金額を取得します。"}'
+    )
+    service._enterprise_ai_client = fake_client
+
+    preview = service.preview(
+        PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
+    )
+
+    assert preview.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+    assert preview.sql == "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
+    assert preview.engine_meta["runtime"] == "oci_enterprise_ai"
+    assert preview.engine_meta["model"] == "enterprise-nl2sql-model"
+    assert preview.executable_sql.endswith("FETCH FIRST 100 ROWS ONLY")
+    assert fake_client.calls
+    assert "INVOICES" in fake_client.calls[0]["context"]
+    assert "learning_examples:" in fake_client.calls[0]["context"]
+    assert "今月の請求金額が大きい取引先を見たい" in fake_client.calls[0]["context"]
+    assert "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES" in fake_client.calls[0]["context"]
+    assert "SELECT または WITH" in fake_client.calls[0]["system_prompt"]
+
+
+def test_oracle_runtime_question_includes_learning_examples() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+
+    preview = service.preview(
+        PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.SELECT_AI)
+    )
+
+    assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert adapter.questions
+    assert "learning_examples:" in adapter.questions[0]
+    assert "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES" in adapter.questions[0]
+    assert "今回の質問:" in adapter.questions[0]
+    assert "請求金額を確認したい" in adapter.questions[0]
+
+
+def test_oracle_select_ai_extracts_sql_from_error_wrapped_response() -> None:
+    raw = (
+        "Sorry, unfortunately a valid SELECT statement could not be generated. "
+        'SELECT t1."name", SUM(t2."amount") FROM "owner"."trading_partners" t1 '
+        'JOIN "owner"."bills" t2 ON t1."id" = t2."trading_partner_id" '
+        "Exception encountered: ORA-00942: table or view does not exist"
+    )
+
+    sql = _extract_select_statement(raw)
+
+    assert sql == (
+        'SELECT t1."name", SUM(t2."amount") FROM "owner"."trading_partners" t1 '
+        'JOIN "owner"."bills" t2 ON t1."id" = t2."trading_partner_id"'
+    )
+
+
+def test_referenced_tables_include_quoted_schema_qualified_names() -> None:
+    sql = (
+        'SELECT * FROM "owner"."trading_partners" t '
+        'JOIN "owner"."bills" b ON t."id" = b."trading_partner_id"'
+    )
+
+    assert _extract_referenced_tables(sql) == ["TRADING_PARTNERS", "BILLS"]
 
 
 def test_select_only_guard() -> None:
@@ -309,6 +463,47 @@ async def test_analyze_repairs_first_select_from_multi_statement() -> None:
     assert "修復候補" in " ".join(data["recommendations"])
 
 
+async def test_repair_oracle_error_replaces_invalid_column_with_allowed_columns() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/nl2sql/repair",
+            json={
+                "sql": "SELECT BAD_COLUMN FROM INVOICES",
+                "error_message": 'ORA-00904: "BAD_COLUMN": invalid identifier',
+                "allowed_objects": {
+                    "table_names": ["INVOICES"],
+                    "columns": {"INVOICES": ["INVOICE_ID", "TOTAL_AMOUNT"]},
+                },
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["error_code"] == "ORA-00904"
+    assert data["repaired_sql"] == (
+        "SELECT INVOICE_ID, TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY"
+    )
+    assert data["safety"]["is_safe"] is True
+    assert "列名" in data["explanation"]
+
+
+async def test_repair_oracle_error_converts_limit_syntax() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        resp = await client.post(
+            "/api/nl2sql/repair",
+            json={
+                "sql": "SELECT INVOICE_ID FROM INVOICES LIMIT 10;",
+                "error_message": "ORA-00933: SQL command not properly ended",
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["error_code"] == "ORA-00933"
+    assert data["repaired_sql"] == ("SELECT INVOICE_ID FROM INVOICES FETCH FIRST 100 ROWS ONLY")
+    assert "FETCH FIRST" in " ".join(data["recommendations"])
+
+
 async def test_asset_refresh_feedback_and_evaluation() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         profile_resp = await client.post("/api/nl2sql/select-ai-agent/assets/refresh")
@@ -358,6 +553,54 @@ async def test_profile_crud_create_update_archive() -> None:
 
     assert list_resp.status_code == 200
     assert profile_id not in {profile["id"] for profile in list_resp.json()["data"]}
+
+
+async def test_profile_training_examples_update_and_evaluate() -> None:
+    payload = {
+        "name": "モデル訓練",
+        "description": "few-shot 訓練データを管理する profile",
+        "allowed_tables": ["INVOICES"],
+        "glossary": {"粗利": "INVOICES.PROFIT"},
+        "sql_rules": ["SELECT/WITH のみ"],
+        "default_row_limit": 25,
+        "safety_policy": "select_only",
+        "few_shot_examples": [],
+    }
+    training_examples = [
+        {"question": "請求金額を見たい", "sql": "SELECT TOTAL_AMOUNT FROM INVOICES"},
+        {"question": "粗利を見たい", "sql": "SELECT PROFIT FROM INVOICES"},
+    ]
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        create_resp = await client.post("/api/nl2sql/profiles", json=payload)
+        assert create_resp.status_code == 200
+        profile_id = create_resp.json()["data"]["id"]
+
+        update_resp = await client.patch(
+            f"/api/nl2sql/profiles/{profile_id}",
+            json={**payload, "few_shot_examples": training_examples},
+        )
+        assert update_resp.status_code == 200
+        updated = update_resp.json()["data"]
+        assert updated["few_shot_examples"] == training_examples
+
+        eval_resp = await client.post(
+            "/api/nl2sql/evaluate",
+            json={
+                "cases": [
+                    {"question": item["question"], "expected_sql": item["sql"]}
+                    for item in updated["few_shot_examples"]
+                ],
+                "engine": "auto",
+            },
+        )
+        assert eval_resp.status_code == 200
+        eval_data = eval_resp.json()["data"]
+        assert eval_data["total_cases"] == 2
+        assert eval_data["executable_rate"] == 1.0
+        assert eval_data["select_only_rate"] == 1.0
+
+        archive_resp = await client.post(f"/api/nl2sql/profiles/{profile_id}/archive")
+        assert archive_resp.status_code == 200
 
 
 async def test_recommend_profile_returns_business_profile_and_rewrite() -> None:
@@ -427,6 +670,31 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         assert feedback_resp.status_code == 200
         assert feedback_resp.json()["data"]["comment"] == "few-shot に使える"
 
+        index_status_resp = await client.get("/api/nl2sql/feedback-index")
+        assert index_status_resp.status_code == 200
+        index_status = index_status_resp.json()["data"]
+        assert index_status["vector_dimension"] == 1536
+        assert index_status["vector_backend"] == "oracle_26ai"
+        assert index_status["indexable_count"] >= 1
+
+        rebuild_dry_run_resp = await client.post(
+            "/api/nl2sql/feedback-index/rebuild", json={"execute": False}
+        )
+        assert rebuild_dry_run_resp.status_code == 200
+        rebuild_dry_run = rebuild_dry_run_resp.json()["data"]
+        assert rebuild_dry_run["executed"] is False
+        assert "VECTOR(1536, FLOAT32)" in " ".join(rebuild_dry_run["ddl"])
+        assert rebuild_dry_run["indexed_count"] >= 1
+
+        rebuild_resp = await client.post(
+            "/api/nl2sql/feedback-index/rebuild", json={"execute": True}
+        )
+        assert rebuild_resp.status_code == 200
+        rebuild_data = rebuild_resp.json()["data"]
+        assert rebuild_data["executed"] is False
+        assert rebuild_data["status"] == "stale"
+        assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(rebuild_data["warnings"])
+
         similar_resp = await client.post(
             "/api/nl2sql/similar-history",
             json={"question": "請求金額をもう一度確認したい", "profile_id": "default"},
@@ -444,6 +712,46 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         assert preview_resp.status_code == 200
         examples = preview_resp.json()["data"]["engine_meta"]["similar_history_examples"]
         assert examples[0]["history_id"] == history_item["id"]
+
+        clear_resp = await client.post("/api/nl2sql/feedback-index/clear", json={"execute": True})
+        assert clear_resp.status_code == 200
+        clear_data = clear_resp.json()["data"]
+        assert clear_data["executed"] is False
+        assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(clear_data["warnings"])
+
+
+async def test_demo_learning_seed_creates_feedback_history() -> None:
+    demo_ids = {
+        "demo-learning-invoice-total",
+        "demo-learning-customer-sales",
+        "demo-learning-payment-delay",
+    }
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        seed_resp = await client.post("/api/nl2sql/demo/learning")
+        assert seed_resp.status_code == 200
+        seed_data = seed_resp.json()["data"]
+        assert set(seed_data["history_ids"]).issubset(demo_ids)
+        assert seed_data["profile_ids"] == ["default"]
+
+        history_resp = await client.get("/api/nl2sql/history")
+        assert history_resp.status_code == 200
+        history_items = history_resp.json()["data"]["items"]
+        history_by_id = {item["id"]: item for item in history_items}
+        assert demo_ids.issubset(history_by_id)
+        assert history_by_id["demo-learning-invoice-total"]["feedback_rating"] == "good"
+        assert history_by_id["demo-learning-payment-delay"]["feedback_rating"] == "needs_review"
+
+        similar_resp = await client.post(
+            "/api/nl2sql/similar-history",
+            json={"question": "顧客別の売上推移を見たい", "profile_id": "default"},
+        )
+        assert similar_resp.status_code == 200
+        similar_ids = {item["item"]["id"] for item in similar_resp.json()["data"]["items"]}
+        assert "demo-learning-customer-sales" in similar_ids
+
+        index_resp = await client.get("/api/nl2sql/feedback-index")
+        assert index_resp.status_code == 200
+        assert index_resp.json()["data"]["indexable_count"] >= 3
 
 
 async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
@@ -468,6 +776,15 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
         assert 0 <= compare_execute_data["error_rate"] <= 1
         assert compare_execute_data["execution_results"][0]["row_count"] >= 0
 
+        compare_history_resp = await client.get("/api/nl2sql/compare-history")
+        assert compare_history_resp.status_code == 200
+        compare_history = compare_history_resp.json()["data"]["items"]
+        assert compare_history
+        assert compare_history[0]["question"] == "請求金額を見たい"
+        assert compare_history[0]["comparison"]["recommendation"]
+        assert "NL2SQL engine comparison" in compare_history[0]["report"]
+        assert "SELECT" in compare_history[0]["report"]
+
         reverse_resp = await client.post(
             "/api/nl2sql/reverse", json={"sql": "SELECT TOTAL_AMOUNT FROM INVOICES"}
         )
@@ -478,13 +795,64 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
         assert comments_resp.status_code == 200
         assert comments_resp.json()["data"]["suggestions"]
 
+        apply_resp = await client.post(
+            "/api/nl2sql/comments/apply",
+            json={
+                "items": [
+                    {
+                        "object_name": "INVOICES",
+                        "object_type": "table",
+                        "comment": "請求情報's dry-run",
+                    },
+                    {
+                        "object_name": "INVOICES.TOTAL_AMOUNT",
+                        "object_type": "column",
+                        "comment": "税込請求金額",
+                    },
+                ],
+                "execute": False,
+            },
+        )
+        assert apply_resp.status_code == 200
+        apply_data = apply_resp.json()["data"]
+        assert apply_data["executed"] is False
+        assert apply_data["statements"][0]["status"] == "dry_run"
+        assert (
+            apply_data["statements"][0]["sql"]
+            == "COMMENT ON TABLE \"INVOICES\" IS '請求情報''s dry-run';"
+        )
+        assert (
+            apply_data["statements"][1]["sql"]
+            == 'COMMENT ON COLUMN "INVOICES"."TOTAL_AMOUNT" IS \'税込請求金額\';'
+        )
+
+        execute_apply_resp = await client.post(
+            "/api/nl2sql/comments/apply",
+            json={
+                "items": [
+                    {
+                        "object_name": "INVOICES.TOTAL_AMOUNT",
+                        "object_type": "column",
+                        "comment": "税込請求金額",
+                    }
+                ],
+                "execute": True,
+            },
+        )
+        assert execute_apply_resp.status_code == 200
+        execute_apply_data = execute_apply_resp.json()["data"]
+        assert execute_apply_data["executed"] is False
+        assert execute_apply_data["statements"][0]["status"] == "requires_oracle"
+        assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(execute_apply_data["warnings"])
+
         synthetic_resp = await client.post("/api/nl2sql/synthetic-cases")
         assert synthetic_resp.status_code == 200
         assert synthetic_resp.json()["data"]["cases"]
 
         diagnostics_resp = await client.get("/api/nl2sql/diagnostics")
         assert diagnostics_resp.status_code == 200
-        checks = diagnostics_resp.json()["data"]["checks"]
+        diagnostics_data = diagnostics_resp.json()["data"]
+        checks = diagnostics_data["checks"]
         assert checks
         check_names = {check["name"] for check in checks}
         assert {
@@ -493,7 +861,62 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
             "NL2SQL_PERSISTENCE_READY",
             "PYTHON_ORACLEDB",
             "ORACLE_RUNTIME_READY",
+            "OCI_ENTERPRISE_AI_ENDPOINT",
+            "OCI_ENTERPRISE_AI_API_KEY",
+            "OCI_ENTERPRISE_AI_LLM_MODEL",
+            "OCI_GENAI_ENDPOINT",
+            "OCI_GENAI_EMBED_MODEL_ID",
+            "NL2SQL_SELECT_AI_PROFILE_REFRESHED",
+            "NL2SQL_SELECT_AI_AGENT_ASSETS_REFRESHED",
         } <= check_names
+        readiness = diagnostics_data["readiness"]
+        assert readiness
+        readiness_areas = {item["area"] for item in readiness}
+        assert {
+            "oracle_adb",
+            "select_ai",
+            "select_ai_agent",
+            "enterprise_ai_direct",
+            "feedback_embedding",
+            "persistence",
+        } <= readiness_areas
+        smoke_checks = diagnostics_data["smoke_checks"]
+        assert smoke_checks
+        smoke_ids = {item["id"] for item in smoke_checks}
+        assert {
+            "refresh_select_ai_profile",
+            "refresh_select_ai_agent_assets",
+            "preview_select_ai",
+            "preview_select_ai_agent",
+            "preview_enterprise_ai_direct",
+            "feedback_vector_rebuild",
+            "manual_integration_script",
+        } <= smoke_ids
+        agent_smoke = next(item for item in smoke_checks if item["id"] == "preview_select_ai_agent")
+        assert agent_smoke["endpoint"] == "/api/nl2sql/preview"
+        assert "conversation_id" in agent_smoke["expected"]
+        config_guides = diagnostics_data["config_guides"]
+        guide_ids = {item["id"] for item in config_guides}
+        assert {
+            "enterprise_ai_direct",
+            "feedback_embedding",
+            "production_release_gate",
+        } <= guide_ids
+        enterprise_guide = next(
+            item for item in config_guides if item["id"] == "enterprise_ai_direct"
+        )
+        assert (
+            "OCI_ENTERPRISE_AI_ENDPOINT=<enterprise-ai-endpoint>"
+            in enterprise_guide["env_template"]
+        )
+        assert "ORACLE_PASSWORD" not in enterprise_guide["env_template"]
+        feedback_guide = next(item for item in config_guides if item["id"] == "feedback_embedding")
+        required_feedback_env = {item["name"] for item in feedback_guide["required_env_vars"]}
+        assert {
+            "NL2SQL_FEEDBACK_EMBEDDING_ENABLED",
+            "OCI_GENAI_ENDPOINT",
+            "OCI_GENAI_EMBED_MODEL_ID",
+        } <= required_feedback_env
 
 
 def test_compare_execute_collects_engine_execution_errors() -> None:
@@ -556,6 +979,37 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert job.status == JobStatus.DONE
     history_item = service.list_history().items[0]
     service.save_feedback(history_item.id, FeedbackRating.GOOD, "永続化された feedback")
+    compare_data = service.compare_engines(
+        CompareRequest(question="請求金額を比較したい", execute=True)
+    )
+    compare_record = service.list_compare_records().items[0]
+    evaluation_set = service.create_evaluation_set(
+        EvaluationSetUpsertRequest(
+            name="永続化評価セット",
+            profile_id=profile.id,
+            engine=Nl2SqlEngine.SELECT_AI,
+            cases=[
+                SyntheticCase(
+                    question="請求金額を一覧したい",
+                    expected_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+                )
+            ],
+        )
+    )
+    evaluation = service.evaluate(
+        EvaluateRequest(
+            evaluation_set_id=evaluation_set.id,
+            profile_id=profile.id,
+            engine=Nl2SqlEngine.SELECT_AI,
+            cases=[
+                {
+                    "question": "請求金額を一覧したい",
+                    "expected_sql": "SELECT TOTAL_AMOUNT FROM INVOICES",
+                }
+            ],
+        )
+    )
+    evaluation_run = service.list_evaluation_runs().items[0]
 
     reloaded = Nl2SqlService(store=store)
     assert reloaded.get_profile(profile.id).name == "永続化テスト"
@@ -566,6 +1020,21 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert restored_history.id == history_item.id
     assert restored_history.feedback_rating == FeedbackRating.GOOD
     assert restored_history.feedback_comment == "永続化された feedback"
+    restored_compare = reloaded.list_compare_records().items[0]
+    assert restored_compare.id == compare_record.id
+    assert restored_compare.comparison.recommendation == compare_data.recommendation
+    assert "NL2SQL engine comparison" in restored_compare.report
+    restored_evaluation_set = reloaded.list_evaluation_sets().items[0]
+    assert restored_evaluation_set.id == evaluation_set.id
+    assert restored_evaluation_set.name == "永続化評価セット"
+    assert restored_evaluation_set.profile_id == profile.id
+    assert restored_evaluation_set.cases[0].profile_id == profile.id
+    restored_evaluation_run = reloaded.list_evaluation_runs().items[0]
+    assert restored_evaluation_run.id == evaluation_run.id
+    assert restored_evaluation_run.evaluation_set_id == evaluation_set.id
+    assert restored_evaluation_run.profile_id == profile.id
+    assert restored_evaluation_run.result.total_cases == evaluation.total_cases
+    assert "NL2SQL deterministic evaluation" in restored_evaluation_run.report
 
 
 def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:
@@ -588,9 +1057,32 @@ def test_oracle_json_store_saves_loads_and_checks_snapshot() -> None:
     assert fake_db.commits >= 2
     assert any(sql.startswith("CREATE TABLE NL2SQL_STATE_STORE") for sql in fake_db.executed)
     assert any(sql.startswith("MERGE INTO NL2SQL_STATE_STORE") for sql in fake_db.executed)
+    assert any("state_json" in input_sizes for input_sizes in fake_db.input_sizes)
     assert any(
         sql.startswith("SELECT state_json FROM NL2SQL_STATE_STORE") for sql in fake_db.executed
     )
+
+
+def test_oracle_json_store_decodes_bytes_lob_snapshot() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.state_json = _FakeLob(b'{"schema_version":1,"profiles":[]}')
+    store = OracleJsonNl2SqlStore(
+        connection_factory=fake_db.connection,
+        table_name="nl2sql_state_store",
+    )
+
+    assert store.load_snapshot() == {"schema_version": 1, "profiles": []}
+
+
+def test_oracle_json_store_accepts_driver_decoded_json_snapshot() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.state_json = {"schema_version": 1, "profiles": []}
+    store = OracleJsonNl2SqlStore(
+        connection_factory=fake_db.connection,
+        table_name="nl2sql_state_store",
+    )
+
+    assert store.load_snapshot() == {"schema_version": 1, "profiles": []}
 
 
 def test_oracle_json_store_rejects_unsafe_table_name() -> None:
@@ -618,6 +1110,8 @@ def test_oracle_adapter_refresh_select_ai_profile_executes_dbms_cloud_ai() -> No
     assert meta["profile_name"] == "NL2SQL_DEFAULT_PROFILE"
     assert "max_rows" not in meta["profile_attributes"]
     assert "description" not in meta["profile_attributes"]
+    assert meta["profile_attributes"]["enforce_object_list"] is True
+    assert meta["profile_attributes"]["annotations"] is True
     assert {"owner": "APP", "name": "CUSTOMERS"} in meta["profile_attributes"]["object_list"]
     assert any("DBMS_CLOUD_AI.DROP_PROFILE" in sql for sql in fake_db.executed)
     assert any("DBMS_CLOUD_AI.CREATE_PROFILE" in sql for sql in fake_db.executed)
@@ -685,6 +1179,114 @@ def test_oracle_adapter_execute_select_coerces_lob_values() -> None:
     assert results.rows == [{"CLOB_COL": "long text"}]
 
 
+def test_oracle_adapter_apply_comment_statements_strips_semicolon() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    meta = adapter.apply_comment_statements(
+        ['COMMENT ON COLUMN "INVOICES"."TOTAL_AMOUNT" IS \'税込請求金額\';']
+    )
+
+    assert meta["runtime"] == "oracle"
+    assert meta["statement_count"] == 1
+    assert fake_db.executed[-1] == (
+        'COMMENT ON COLUMN "INVOICES"."TOTAL_AMOUNT" IS \'税込請求金額\''
+    )
+    assert fake_db.commits == 1
+
+
+def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table() -> None:
+    fake_db = _FakeOracleDb()
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+    service._embedding_client = _FakeEmbeddingClient()
+    service._history.append(
+        HistoryItem(
+            id="hist-vector-001",
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+            created_at="2026-06-21T10:00:00+00:00",
+            feedback_rating=FeedbackRating.GOOD,
+            profile_id="default",
+            profile_name="既定プロファイル",
+            rewritten_question="請求金額を確認したい",
+            feedback_comment="正しい SQL",
+        )
+    )
+
+    data = service.rebuild_feedback_index(FeedbackIndexRequest(execute=True))
+
+    assert data.executed is True
+    assert data.status == "ready"
+    assert data.indexed_count == 1
+    assert data.embedding_configured is True
+    assert any('CREATE TABLE "NL2SQL_FEEDBACK_VECTORS"' in sql for sql in fake_db.executed)
+    assert any('CREATE VECTOR INDEX "NL2SQL_FEEDBACK_VEC_IDX"' in sql for sql in fake_db.executed)
+    assert fake_db.insert_batches
+    insert_sql, rows = fake_db.insert_batches[0]
+    assert "TO_VECTOR(:embedding_json)" in insert_sql
+    assert rows[0]["history_id"] == "hist-vector-001"
+    assert str(rows[0]["embedding_json"]).startswith("[0.01")
+
+
+def test_service_similar_history_uses_oracle_vector_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    fake_db = _FakeOracleDb()
+    fake_db.feedback_vector_rows = [
+        (
+            "hist-vector-001",
+            "default",
+            "請求金額を確認したい",
+            "SELECT TOTAL_AMOUNT FROM INVOICES",
+            "good",
+            0.08,
+        )
+    ]
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+    service._embedding_client = _FakeEmbeddingClient()
+
+    similar = service.similar_history(
+        SimilarHistoryRequest(question="請求金額を見たい", profile_id="default")
+    )
+
+    assert similar.items
+    assert similar.items[0].item.id == "hist-vector-001"
+    assert similar.items[0].score == 0.92
+    assert "Oracle 26ai vector search" in similar.items[0].reason
+    assert any("VECTOR_DISTANCE" in sql for sql in fake_db.executed)
+    assert any("TO_VECTOR(:embedding_json)" in sql for sql in fake_db.executed)
+
+
+def test_service_preview_marks_oracle_vector_few_shot_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    fake_db = _FakeOracleDb()
+    fake_db.feedback_vector_rows = [
+        (
+            "hist-vector-001",
+            "default",
+            "請求金額を確認したい",
+            "SELECT TOTAL_AMOUNT FROM INVOICES",
+            "good",
+            0.1,
+        )
+    ]
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+    service._embedding_client = _FakeEmbeddingClient()
+
+    preview = service.preview(
+        PreviewRequest(question="請求金額を見たい", engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
+    )
+
+    assert preview.engine_meta["similar_history_source"] == "oracle_vector"
+    assert preview.engine_meta["similar_history_examples"][0]["history_id"] == "hist-vector-001"
+
+
 def test_oracle_adapter_refresh_select_ai_agent_assets_executes_dbms_cloud_ai_agent() -> None:
     fake_db = _FakeOracleDb()
     adapter = _FakeRuntimeOracleAdapter(fake_db)
@@ -744,7 +1346,8 @@ def test_oracle_adapter_drop_select_ai_agent_assets_executes_best_effort_drops()
         "DROP_TOOL",
     ]:
         assert any(f"DBMS_CLOUD_AI_AGENT.{procedure}" in sql for sql in fake_db.executed)
-    assert sum("DBMS_CLOUD_AI.DROP_PROFILE" in sql for sql in fake_db.executed) == 2
+    assert sum("DBMS_CLOUD_AI.DROP_PROFILE" in sql for sql in fake_db.executed) >= 2
+    assert any("DBMS_SQL_TRANSLATOR.DROP_PROFILE" in sql for sql in fake_db.executed)
 
 
 def test_oracle_adapter_wraps_unsupported_select_ai_agent_runtime() -> None:
@@ -758,6 +1361,71 @@ def test_oracle_adapter_wraps_unsupported_select_ai_agent_runtime() -> None:
         assert "Select AI Agent runtime API" in str(exc)
     else:  # pragma: no cover - defensive assertion branch
         raise AssertionError("unsupported Select AI Agent runtime must be wrapped")
+
+
+def test_oracle_adapter_run_select_ai_agent_team_uses_conversation() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    sql, conversation_id = adapter.run_select_ai_agent_team(
+        team_name="NL2SQL_DEFAULT_TEAM",
+        question="請求金額を確認したい",
+    )
+
+    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert conversation_id == "conversation-001"
+    assert any("DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in sql for sql in fake_db.executed)
+    assert any("DBMS_CLOUD_AI_AGENT.RUN_TEAM" in sql for sql in fake_db.executed)
+    assert any("conversation_id => :conversation_id" in sql for sql in fake_db.executed)
+
+
+def test_oracle_adapter_run_select_ai_agent_team_falls_back_to_positional_signature() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.run_team_signature_failures = 2
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    sql, conversation_id = adapter.run_select_ai_agent_team(
+        team_name="NL2SQL_DEFAULT_TEAM",
+        question="請求金額を確認したい",
+    )
+
+    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert conversation_id == "conversation-001"
+    assert fake_db.run_team_calls == 3
+    assert any(
+        "DBMS_CLOUD_AI_AGENT.RUN_TEAM(:team_name, :user_prompt, :params)" in sql
+        for sql in fake_db.executed
+    )
+
+
+def test_oracle_adapter_run_select_ai_agent_team_uses_explicit_tool_on_profile_loss() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.run_team_profile_loss = True
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    sql, conversation_id = adapter.run_select_ai_agent_team(
+        team_name="NL2SQL_DEFAULT_TEAM_VABC12345",
+        tool_name="NL2SQL_DEFAULT_TOOL",
+        question="請求金額を確認したい",
+    )
+
+    assert sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert conversation_id == "run_tool:NL2SQL_DEFAULT_TOOL"
+    assert any("DBMS_CLOUD_AI_AGENT.RUN_TOOL" in sql for sql in fake_db.executed)
+
+
+def test_service_preview_select_ai_agent_returns_oracle_conversation_meta() -> None:
+    fake_db = _FakeOracleDb()
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    preview = service.preview(
+        PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.SELECT_AI_AGENT)
+    )
+
+    assert preview.engine == Nl2SqlEngine.SELECT_AI_AGENT
+    assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert preview.engine_meta["runtime"] == "oracle"
+    assert preview.engine_meta["conversation_id"] == "conversation-001"
 
 
 def test_service_refresh_uses_oracle_adapter_when_runtime_is_oracle() -> None:
@@ -775,6 +1443,59 @@ def test_service_refresh_uses_oracle_adapter_when_runtime_is_oracle() -> None:
     assert agent.asset_names["team"].endswith("_TEAM")
     assert any("DBMS_CLOUD_AI.CREATE_PROFILE" in sql for sql in fake_db.executed)
     assert any("DBMS_CLOUD_AI_AGENT.CREATE_TEAM" in sql for sql in fake_db.executed)
+
+
+def test_service_refresh_agent_uses_versioned_team_when_generated_profile_remains() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.create_team_profile_exists_failures = 2
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    data = service.refresh_select_ai_agent_assets(None)
+    preview = service.preview(
+        PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.SELECT_AI_AGENT)
+    )
+
+    assert data.status == "ready"
+    assert data.team_name.startswith("NL2SQL_DEFAULT_TEAM_V")
+    assert "versioned team" in data.warning
+    assert preview.engine_meta["team_name"] == data.team_name
+
+
+def test_service_refresh_agent_cleans_previous_versioned_team() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.create_team_profile_exists_failures = 2
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    first = service.refresh_select_ai_agent_assets(None)
+    second = service.refresh_select_ai_agent_assets(None)
+
+    assert first.team_name.startswith("NL2SQL_DEFAULT_TEAM_V")
+    assert second.status == "ready"
+    assert any(
+        params and params.get("name") == first.team_name for params in fake_db.executed_params
+    )
+    assert "cleanup" in second.warning
+
+
+def test_oracle_adapter_refresh_agent_retries_when_generated_profile_exists() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.create_team_profile_exists_failures = 1
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    meta = adapter.refresh_select_ai_agent_assets(
+        profile_name="NL2SQL_DEFAULT_PROFILE",
+        tool_name="NL2SQL_DEFAULT_TOOL",
+        agent_name="NL2SQL_DEFAULT_AGENT",
+        task_name="NL2SQL_DEFAULT_TASK",
+        team_name="NL2SQL_DEFAULT_TEAM",
+        allowed_tables=["INVOICES"],
+        row_limit=20,
+    )
+
+    assert meta["runtime"] == "oracle"
+    assert fake_db.create_team_calls == 2
+    assert sum("DBMS_CLOUD_AI.DROP_PROFILE" in sql for sql in fake_db.executed) >= 2
+    assert any("DBMS_SQL_TRANSLATOR.DROP_PROFILE" in sql for sql in fake_db.executed)
 
 
 def test_service_cleanup_assets_dry_run_lists_targets_without_oracle_calls() -> None:

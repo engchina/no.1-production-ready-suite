@@ -21,6 +21,37 @@ class Settings(BaseServiceSettings):
     oracle_adb_ocid: str = ""
     oci_region: str = ""
     oci_compartment_id: str = ""
+    oci_config_file: str = ""
+    oci_profile: str = "DEFAULT"
+    oci_auth_mode: str = "config_file"
+    oci_user_ocid: str = ""
+    oci_fingerprint: str = ""
+    oci_tenancy_ocid: str = ""
+    oci_key_file: str = ""
+    oci_genai_endpoint: str = ""
+    oci_genai_embed_model_id: str = "cohere.embed-v4.0"
+    oci_genai_rerank_model_id: str = "cohere.rerank-v4.0-fast"
+    oci_enterprise_ai_endpoint: str = ""
+    oci_enterprise_ai_project_ocid: str = ""
+    oci_enterprise_ai_api_key: str = ""
+    oci_enterprise_ai_default_model: str = ""
+    oci_enterprise_ai_llm_model: str = ""
+    oci_enterprise_ai_llm_path: str = "/responses"
+    oci_enterprise_ai_llm_payload_template: str = ""
+    oci_enterprise_ai_llm_response_path: str = ""
+    oci_enterprise_ai_vlm_model: str = ""
+    oci_enterprise_ai_vlm_payload_template: str = ""
+    oci_enterprise_ai_vlm_response_path: str = ""
+    oci_enterprise_ai_vlm_input_mode: str = "auto"
+    oci_enterprise_ai_timeout_seconds: float = 600.0
+    oci_enterprise_ai_max_retries: int = 2
+    oci_enterprise_ai_llm_max_output_tokens: int = 1200
+    upload_storage_backend: str = "local"
+    local_storage_dir: str = "/u01/production-ready-rag"
+    object_storage_region: str = ""
+    object_storage_namespace: str = ""
+    object_storage_bucket: str = ""
+    max_upload_bytes: int = 104857600
     # NL2SQL 安全境界（既定: SELECT のみ許可）。DDL/DML/PLSQL は禁止する方針。
     nl2sql_allow_select_only: bool = True
     nl2sql_default_row_limit: int = 100
@@ -43,6 +74,9 @@ class Settings(BaseServiceSettings):
     nl2sql_oracle_connect_timeout_seconds: int = 5
     nl2sql_csv_import_max_rows: int = 5000
     nl2sql_csv_import_max_columns: int = 200
+    nl2sql_feedback_embedding_enabled: bool = False
+    nl2sql_feedback_vector_table: str = "NL2SQL_FEEDBACK_VECTORS"
+    nl2sql_feedback_vector_index: str = "NL2SQL_FEEDBACK_VEC_IDX"
 
 
 @lru_cache
