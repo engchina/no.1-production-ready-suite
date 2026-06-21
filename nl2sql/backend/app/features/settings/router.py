@@ -5,9 +5,6 @@ OCI 認証、アップロード保存先、モデル、データベース設定�
 反映し、secret 本文はレスポンスに返さない。
 """
 
-from __future__ import annotations
-
-import asyncio
 import configparser
 import importlib
 import io
@@ -17,15 +14,13 @@ import shutil
 import stat
 import time
 from base64 import b64decode
-from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pr_backend_core import ApiResponse
-from pydantic import BaseModel, Field
 
 from app.clients.oci_auth import (
     load_oci_config_without_prompt,
@@ -33,8 +28,39 @@ from app.clients.oci_auth import (
     resolve_oci_key_file,
 )
 from app.clients.oci_database import AutonomousDatabaseInfo, OciDatabaseClient
-from app.features.nl2sql.enterprise_ai_client import OciEnterpriseAiDirectClient
-from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
+from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+from app.clients.oci_genai import OciGenAiClient
+from app.clients.oracle import close_oracle_pool, test_oracle_connection
+from app.schemas.settings import (
+    AdbInfoData,
+    AdbOperationStatus,
+    AdbSettingsUpdate,
+    DatabaseConnectionTestResult,
+    DatabaseSettingsData,
+    DatabaseSettingsUpdate,
+    EnterpriseAiModelEntrySettings,
+    EnterpriseAiModelSettings,
+    GenerativeAiModelSettings,
+    ModelSettingsCheckStatus,
+    ModelSettingsData,
+    ModelSettingsPayload,
+    ModelSettingsTestRequest,
+    ModelSettingsTestResult,
+    ModelSettingsTestTargetType,
+    OciConfigField,
+    OciConfigReadData,
+    OciConfigReadRequest,
+    OciConfigTestResult,
+    OciConfigTestStatus,
+    OciObjectStorageNamespaceData,
+    OciObjectStorageNamespaceRequest,
+    OciObjectStorageSettingsUpdate,
+    OciPrivateKeyUploadData,
+    OciSettingsData,
+    OciSettingsUpdate,
+    UploadStorageSettingsData,
+    UploadStorageSettingsUpdate,
+)
 from app.settings import (
     EnterpriseAiConfiguredModel as SettingsEnterpriseAiConfiguredModel,
 )
@@ -47,19 +73,6 @@ from app.settings import (
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
-
-ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
-ModelSettingsTestStatus = Literal["success", "failed"]
-ModelSettingsTestTargetType = Literal[
-    "enterprise_text",
-    "enterprise_vision",
-    "embedding",
-    "rerank",
-]
-UploadStorageBackend = Literal["local", "oci"]
-DatabaseConnectionTestStatus = Literal["success", "failed", "skipped"]
-OciConfigTestStatus = Literal["success", "failed"]
-OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 ENV_FILE_MODE = 0o600
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -78,6 +91,7 @@ ORACLE_WALLET_SKIPPED_FILES = frozenset(
     {"readme", "keystore.jks", "truststore.jks", "ojdbc.properties", "ewallet.p12"}
 )
 MODEL_SETTINGS_FILE_MODE = 0o600
+ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
 OCI_CONFIG_KEYS: tuple[OciConfigField, ...] = (
     "user",
     "fingerprint",
@@ -88,229 +102,13 @@ OCI_CONFIG_KEYS: tuple[OciConfigField, ...] = (
 MODEL_TEST_IMAGE_BYTES = b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 )
-AdbOperationStatus = Literal[
-    "success",
-    "not_configured",
-    "error",
-    "accepted",
-    "already_available",
-    "already_stopped",
-    "cannot_start",
-    "cannot_stop",
-]
-
-
-class EnterpriseAiConfiguredModel(BaseModel):
-    model_id: str = ""
-    display_name: str = ""
-    vision_enabled: bool = False
-
-
-class EnterpriseAiModelSettings(BaseModel):
-    endpoint: str = ""
-    project_ocid: str = ""
-    api_key: str = ""
-    has_api_key: bool = False
-    clear_api_key: bool = False
-    models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
-    default_model_id: str = ""
-    api_path: str = "/responses"
-    vlm_input_mode: Literal["auto", "files_api", "inline_image"] = "auto"
-    text_payload_template: str = ""
-    vision_payload_template: str = ""
-    text_response_path: str = ""
-    vision_response_path: str = ""
-    timeout_seconds: float = 600.0
-    max_retries: int = 2
-
-
-class GenerativeAiModelSettings(BaseModel):
-    embedding_model: str = "cohere.embed-v4.0"
-    embedding_dim: int = 1536
-    rerank_model: str = "cohere.rerank-v4.0-fast"
-
-
-class ModelSettingsPayload(BaseModel):
-    enterprise_ai: EnterpriseAiModelSettings
-    generative_ai: GenerativeAiModelSettings
-
-
-class ModelSettingsData(BaseModel):
-    settings: ModelSettingsPayload
-    checks: dict[str, ModelSettingsCheckStatus]
-    model_settings_file: str = "runtime-settings"
-    source: Literal["runtime"] = "runtime"
-
-
-class ModelSettingsTestRequest(BaseModel):
-    settings: ModelSettingsPayload
-    target_type: ModelSettingsTestTargetType
-    model_id: str = ""
-    vision_enabled: bool = False
-
-
-class ModelSettingsTestResult(BaseModel):
-    status: ModelSettingsTestStatus
-    target_type: ModelSettingsTestTargetType
-    model_id: str
-    message: str
-    troubleshooting: list[str] = Field(default_factory=list)
-    raw_error: str | None = None
-    error_type: str | None = None
-    elapsed_ms: int = 0
-    checked_at: str
-    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
-
-
-class DatabaseSettingsData(BaseModel):
-    user: str = ""
-    dsn: str = ""
-    wallet_dir: str = ""
-    wallet_uploaded: bool = False
-    available_services: list[str] = Field(default_factory=list)
-    has_password: bool = False
-    has_wallet_password: bool = False
-    readiness: str = "missing"
-    embedding_dimension: int = 1536
-    vector_column: str = "VECTOR(1536, FLOAT32)"
-    adb_ocid: str = ""
-    region: str = ""
-    config_source: Literal["runtime"] = "runtime"
-
-
-class DatabaseSettingsUpdate(BaseModel):
-    user: str = ""
-    dsn: str = ""
-    wallet_dir: str = ""
-    password: str | None = None
-    wallet_password: str | None = None
-    clear_password: bool = False
-    clear_wallet_password: bool = False
-
-
-class DatabaseConnectionTestResult(BaseModel):
-    status: DatabaseConnectionTestStatus
-    readiness: str
-    message: str
-    elapsed_ms: int
-    troubleshooting: list[str] = Field(default_factory=list)
-    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
-    checked_at: str
-    error_type: str | None = None
-
-
-class AdbInfoData(BaseModel):
-    status: AdbOperationStatus
-    message: str
-    id: str | None = None
-    display_name: str | None = None
-    lifecycle_state: str | None = None
-    db_name: str | None = None
-    cpu_core_count: int | None = None
-    data_storage_size_in_tbs: int | None = None
-    region: str | None = None
-
-
-class AdbSettingsUpdate(BaseModel):
-    adb_ocid: str = ""
-    region: str = ""
-
-
-class UploadStorageSettingsData(BaseModel):
-    backend: UploadStorageBackend
-    local_storage_dir: str = ""
-    object_storage_region: str = ""
-    object_storage_namespace: str = ""
-    object_storage_bucket: str = ""
-    readiness: str = "missing"
-    max_upload_bytes: int = 104857600
-    config_source: Literal["runtime"] = "runtime"
-
-
-class UploadStorageSettingsUpdate(BaseModel):
-    backend: UploadStorageBackend = "local"
-    local_storage_dir: str = ""
-    object_storage_namespace: str | None = None
-    object_storage_bucket: str = ""
-
-
-class OciConfigReadRequest(BaseModel):
-    config_file: str = "~/.oci/config"
-    profile: str = "DEFAULT"
-
-
-class OciConfigReadData(BaseModel):
-    profile: str
-    user: str = ""
-    fingerprint: str = ""
-    tenancy: str = ""
-    region: str = ""
-    key_file: str = ""
-    applied_fields: list[OciConfigField] = Field(default_factory=list)
-
-
-class OciSettingsUpdate(BaseModel):
-    user: str = ""
-    fingerprint: str = ""
-    tenancy: str = ""
-    region: str = ""
-
-
-class OciSettingsData(BaseModel):
-    config_file: str = "~/.oci/config"
-    profile: str = "DEFAULT"
-    user: str = ""
-    fingerprint: str = ""
-    tenancy: str = ""
-    region: str = ""
-    key_file: str = "~/.oci/oci_api_key.pem"
-    key_file_exists: bool = False
-    config_file_exists: bool = False
-    config_source: Literal["runtime"] = "runtime"
-
-
-class OciObjectStorageSettingsUpdate(BaseModel):
-    object_storage_region: str = ""
-    object_storage_namespace: str = ""
-
-
-class OciConfigTestResult(BaseModel):
-    status: OciConfigTestStatus
-    profile: str
-    config_file: str
-    key_file: str
-    config_file_exists: bool
-    key_file_exists: bool
-    missing_fields: list[OciConfigField] = Field(default_factory=list)
-    permission_issues: list[str] = Field(default_factory=list)
-    oci_directory_mode: str | None = None
-    config_file_mode: str | None = None
-    key_file_mode: str | None = None
-    message: str
-    checked_at: str
-    error_type: str | None = None
-
-
-class OciObjectStorageNamespaceRequest(BaseModel):
-    config_file: str = "~/.oci/config"
-    profile: str = "DEFAULT"
-    region: str = ""
-
-
-class OciObjectStorageNamespaceData(BaseModel):
-    namespace: str = ""
-
-
-class OciPrivateKeyUploadData(BaseModel):
-    key_file: str = "~/.oci/oci_api_key.pem"
-    saved: bool = False
 
 
 @router.get("/model", response_model=ApiResponse[ModelSettingsData])
 async def get_model_settings() -> ApiResponse[ModelSettingsData]:
     settings = get_settings()
     payload = _model_payload(settings)
-    return ApiResponse(data=_model_settings_data(payload))
+    return ApiResponse(data=_model_settings_data(payload, settings))
 
 
 @router.patch("/model", response_model=ApiResponse[ModelSettingsData])
@@ -319,12 +117,12 @@ async def update_model_settings(payload: ModelSettingsPayload) -> ApiResponse[Mo
     resolved_payload = _model_settings_with_resolved_secret(settings, payload)
     _persist_model_settings(settings, resolved_payload)
     _apply_model_settings(settings, payload)
-    return ApiResponse(data=_model_settings_data(_model_payload(settings)))
+    return ApiResponse(data=_model_settings_data(_model_payload(settings), settings))
 
 
 @router.post("/model/check", response_model=ApiResponse[ModelSettingsData])
 async def check_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
-    return ApiResponse(data=_model_settings_data(payload))
+    return ApiResponse(data=_model_settings_data(payload, get_settings()))
 
 
 @router.post("/model/test", response_model=ApiResponse[ModelSettingsTestResult])
@@ -367,6 +165,7 @@ async def update_database_settings(
     candidate = _database_settings_candidate(settings, payload)
     _persist_database_settings(candidate)
     _apply_database_settings(settings, candidate)
+    close_oracle_pool()
     return ApiResponse(data=_database_settings_data(settings))
 
 
@@ -378,6 +177,7 @@ async def upload_database_wallet(
     data = await _read_upload_file(file, ORACLE_WALLET_MAX_BYTES)
     wallet_dir = _install_database_wallet(settings, data, file.filename)
     settings.oracle_wallet_dir = str(wallet_dir)
+    close_oracle_pool()
     return ApiResponse(data=_database_settings_data(settings))
 
 
@@ -396,25 +196,45 @@ async def test_database_settings(
                 readiness=readiness,
                 message="Oracle 26ai 接続に必要な設定が不足しています。",
                 elapsed_ms=_elapsed_ms(started),
-                troubleshooting=["ユーザー、DSN、パスワードまたは Wallet を確認してください。"],
-                checked_at=_now(),
-                error_type="missing_required_fields",
+                troubleshooting=_database_connection_troubleshooting(readiness=readiness),
             )
         )
 
-    ok, message = OracleNl2SqlAdapter(candidate).test_connection()
+    try:
+        await test_oracle_connection(candidate)
+    except Exception as exc:
+        oracle_error_codes = _oracle_error_codes(str(exc))
+        message = _database_connection_error_message(exc, oracle_error_codes)
+        return ApiResponse(
+            data=DatabaseConnectionTestResult(
+                status="failed",
+                readiness=readiness,
+                message=message,
+                elapsed_ms=_elapsed_ms(started),
+                troubleshooting=_database_connection_troubleshooting(
+                    readiness=readiness,
+                    error_text=str(exc),
+                    error_type=type(exc).__name__,
+                ),
+                details={
+                    "timeout_seconds": candidate.oracle_db_test_timeout_seconds,
+                    "tcp_connect_timeout_seconds": candidate.oracle_tcp_connect_timeout_seconds,
+                    "oracle_error_codes": ", ".join(oracle_error_codes) or None,
+                },
+                error_type=type(exc).__name__,
+            )
+        )
+
     return ApiResponse(
         data=DatabaseConnectionTestResult(
-            status="success" if ok else "failed",
+            status="success",
             readiness=readiness,
-            message=message,
+            message="Oracle 26ai への接続に成功しました。",
             elapsed_ms=_elapsed_ms(started),
-            troubleshooting=(
-                [] if ok else ["Oracle 接続情報、Wallet、ネットワーク疎通を確認してください。"]
-            ),
-            details={"network_call": True, "dsn": candidate.oracle_dsn.strip()},
-            checked_at=_now(),
-            error_type=None if ok else "OracleConnectionError",
+            details={
+                "timeout_seconds": candidate.oracle_db_test_timeout_seconds,
+                "tcp_connect_timeout_seconds": candidate.oracle_tcp_connect_timeout_seconds,
+            },
         )
     )
 
@@ -466,14 +286,9 @@ async def get_oci_settings() -> ApiResponse[OciSettingsData]:
 @router.patch("/oci", response_model=ApiResponse[OciSettingsData])
 async def update_oci_settings(payload: OciSettingsUpdate) -> ApiResponse[OciSettingsData]:
     settings = get_settings()
-    settings.oci_config_file = _oci_config_file(settings)
-    settings.oci_config_profile = _oci_profile(settings)
     _write_oci_config(settings, payload)
     _persist_oci_settings(settings, payload)
-    settings.oci_region = payload.region.strip()
-    settings.oci_user_ocid = payload.user.strip()
-    settings.oci_fingerprint = payload.fingerprint.strip()
-    settings.oci_tenancy_ocid = payload.tenancy.strip()
+    settings.oci_region = payload.region
     return ApiResponse(data=_oci_settings_data(settings))
 
 
@@ -527,7 +342,7 @@ async def upload_oci_private_key(
 def _model_payload(settings: Settings) -> ModelSettingsPayload:
     configured_models = enterprise_ai_model_catalog(settings)
     models = [
-        EnterpriseAiConfiguredModel(
+        EnterpriseAiModelEntrySettings(
             model_id=model.model_id,
             display_name=model.display_name,
             vision_enabled=model.vision_enabled,
@@ -536,8 +351,9 @@ def _model_payload(settings: Settings) -> ModelSettingsPayload:
     ]
     if not models:
         models.append(
-            EnterpriseAiConfiguredModel(model_id="", display_name="", vision_enabled=False)
+            EnterpriseAiModelEntrySettings(model_id="", display_name="", vision_enabled=False)
         )
+    api_path = settings.oci_enterprise_ai_llm_path or settings.oci_enterprise_ai_vlm_path
     return ModelSettingsPayload(
         enterprise_ai=EnterpriseAiModelSettings(
             endpoint=getattr(settings, "oci_enterprise_ai_endpoint", ""),
@@ -546,7 +362,7 @@ def _model_payload(settings: Settings) -> ModelSettingsPayload:
             has_api_key=bool(getattr(settings, "oci_enterprise_ai_api_key", "")),
             models=models,
             default_model_id=enterprise_ai_default_model_id(settings),
-            api_path=getattr(settings, "oci_enterprise_ai_llm_path", "") or "/responses",
+            api_path=api_path or "/responses",
             vlm_input_mode=getattr(settings, "oci_enterprise_ai_vlm_input_mode", "auto"),
             text_payload_template=getattr(settings, "oci_enterprise_ai_llm_payload_template", ""),
             vision_payload_template=getattr(settings, "oci_enterprise_ai_vlm_payload_template", ""),
@@ -554,11 +370,19 @@ def _model_payload(settings: Settings) -> ModelSettingsPayload:
             vision_response_path=getattr(settings, "oci_enterprise_ai_vlm_response_path", ""),
             timeout_seconds=getattr(settings, "oci_enterprise_ai_timeout_seconds", 600.0),
             max_retries=getattr(settings, "oci_enterprise_ai_max_retries", 3),
+            llm_max_output_tokens=getattr(
+                settings, "oci_enterprise_ai_llm_max_output_tokens", 1200
+            ),
+            vlm_max_output_tokens=getattr(
+                settings, "oci_enterprise_ai_vlm_max_output_tokens", 65536
+            ),
         ),
         generative_ai=GenerativeAiModelSettings(
-            embedding_model=getattr(settings, "oci_genai_embed_model_id", "cohere.embed-v4.0"),
-            embedding_dim=1536,
-            rerank_model=getattr(settings, "oci_genai_rerank_model_id", "cohere.rerank-v4.0-fast"),
+            embedding_model=getattr(settings, "oci_genai_embedding_model", "")
+            or getattr(settings, "oci_genai_embed_model_id", "cohere.embed-v4.0"),
+            embedding_dim=getattr(settings, "oci_genai_embedding_dim", 1536),
+            rerank_model=getattr(settings, "oci_genai_rerank_model", "")
+            or getattr(settings, "oci_genai_rerank_model_id", "cohere.rerank-v4.0-fast"),
         ),
     )
 
@@ -566,43 +390,46 @@ def _model_payload(settings: Settings) -> ModelSettingsPayload:
 def _apply_model_settings(settings: Settings, payload: ModelSettingsPayload) -> None:
     enterprise = payload.enterprise_ai
     generative = payload.generative_ai
-    settings.oci_enterprise_ai_endpoint = enterprise.endpoint.strip()
-    settings.oci_enterprise_ai_project_ocid = enterprise.project_ocid.strip()
-    if enterprise.clear_api_key:
-        settings.oci_enterprise_ai_api_key = ""
-    elif enterprise.api_key.strip():
-        settings.oci_enterprise_ai_api_key = enterprise.api_key
+    settings.oci_enterprise_ai_endpoint = enterprise.endpoint
+    settings.oci_enterprise_ai_project_ocid = enterprise.project_ocid
+    settings.oci_enterprise_ai_api_key = _secret_value(
+        current=settings.oci_enterprise_ai_api_key,
+        update=enterprise.api_key,
+        clear=enterprise.clear_api_key,
+    )
     settings.oci_enterprise_ai_models = [
         SettingsEnterpriseAiConfiguredModel(
-            model_id=model.model_id.strip(),
-            display_name=model.display_name.strip(),
+            model_id=model.model_id,
+            display_name=model.display_name,
             vision_enabled=model.vision_enabled,
         )
         for model in enterprise.models
-        if model.model_id.strip()
+        if model.model_id
     ]
-    settings.oci_enterprise_ai_default_model = enterprise.default_model_id.strip()
-    settings.oci_enterprise_ai_llm_model = (
+    settings.oci_enterprise_ai_default_model = enterprise.default_model_id
+    default_model = enterprise.default_model_id
+    vision_model = (
         next(
             (
-                model.model_id.strip()
+                model.model_id
                 for model in enterprise.models
-                if not model.vision_enabled and model.model_id.strip()
+                if model.model_id == default_model and model.vision_enabled
             ),
             "",
         )
-        or enterprise.default_model_id.strip()
+        or next(
+            (
+                model.model_id
+                for model in enterprise.models
+                if model.model_id and model.vision_enabled
+            ),
+            default_model,
+        )
     )
-    settings.oci_enterprise_ai_vlm_model = next(
-        (
-            model.model_id.strip()
-            for model in enterprise.models
-            if model.vision_enabled and model.model_id.strip()
-        ),
-        "",
-    )
-    settings.oci_enterprise_ai_llm_path = enterprise.api_path.strip() or "/responses"
-    settings.oci_enterprise_ai_vlm_path = enterprise.api_path.strip() or "/responses"
+    settings.oci_enterprise_ai_llm_model = default_model
+    settings.oci_enterprise_ai_vlm_model = vision_model
+    settings.oci_enterprise_ai_llm_path = enterprise.api_path
+    settings.oci_enterprise_ai_vlm_path = enterprise.api_path
     settings.oci_enterprise_ai_vlm_input_mode = enterprise.vlm_input_mode
     settings.oci_enterprise_ai_llm_payload_template = enterprise.text_payload_template
     settings.oci_enterprise_ai_vlm_payload_template = enterprise.vision_payload_template
@@ -610,8 +437,13 @@ def _apply_model_settings(settings: Settings, payload: ModelSettingsPayload) -> 
     settings.oci_enterprise_ai_vlm_response_path = enterprise.vision_response_path
     settings.oci_enterprise_ai_timeout_seconds = enterprise.timeout_seconds
     settings.oci_enterprise_ai_max_retries = enterprise.max_retries
-    settings.oci_genai_embed_model_id = generative.embedding_model.strip()
-    settings.oci_genai_rerank_model_id = generative.rerank_model.strip()
+    settings.oci_enterprise_ai_llm_max_output_tokens = enterprise.llm_max_output_tokens
+    settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise.vlm_max_output_tokens
+    settings.oci_genai_embedding_model = generative.embedding_model
+    settings.oci_genai_embedding_dim = generative.embedding_dim
+    settings.oci_genai_rerank_model = generative.rerank_model
+    settings.oci_genai_embed_model_id = generative.embedding_model
+    settings.oci_genai_rerank_model_id = generative.rerank_model
 
 
 def _model_settings_with_resolved_secret(
@@ -684,6 +516,8 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]
             "vision_response_path": enterprise.vision_response_path,
             "timeout_seconds": enterprise.timeout_seconds,
             "max_retries": enterprise.max_retries,
+            "llm_max_output_tokens": enterprise.llm_max_output_tokens,
+            "vlm_max_output_tokens": enterprise.vlm_max_output_tokens,
         },
         "generative_ai": {
             "embedding_model": generative.embedding_model,
@@ -704,37 +538,96 @@ def _ensure_model_settings_directory(path: Path) -> None:
         path.chmod(OCI_DIRECTORY_MODE)
 
 
-def _model_settings_data(payload: ModelSettingsPayload) -> ModelSettingsData:
+def _model_settings_data(payload: ModelSettingsPayload, settings: Settings) -> ModelSettingsData:
+    """payload と静的チェック結果を API data へ変換する。"""
     return ModelSettingsData(
-        settings=_public_model_payload(payload),
+        settings=_public_model_settings_payload(payload),
         checks={
-            "enterprise_ai": _enterprise_check(payload.enterprise_ai),
-            "generative_ai": _generative_check(payload.generative_ai),
-            "embedding_dim": "ok" if payload.generative_ai.embedding_dim == 1536 else "invalid",
+            "enterprise_ai": _enterprise_ai_status(payload.enterprise_ai),
+            "generative_ai": _generative_ai_status(payload.generative_ai),
+            "embedding_dim": _embedding_dim_status(payload.generative_ai),
         },
-        model_settings_file=getattr(get_settings(), "model_settings_file", "model-settings.json"),
+        model_settings_file=settings.model_settings_file,
+        source="runtime",
     )
 
 
-def _public_model_payload(payload: ModelSettingsPayload) -> ModelSettingsPayload:
-    public_payload = payload.model_copy(deep=True)
-    public_payload.enterprise_ai.api_key = ""
-    return public_payload
+def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettingsPayload:
+    """secret を除いたモデル設定 payload を返す。"""
+    enterprise_ai = payload.enterprise_ai.model_copy(
+        update={
+            "api_key": "",
+            "has_api_key": (
+                not payload.enterprise_ai.clear_api_key
+                and (
+                    payload.enterprise_ai.has_api_key or _is_present(payload.enterprise_ai.api_key)
+                )
+            ),
+            "clear_api_key": False,
+        }
+    )
+    return ModelSettingsPayload(
+        enterprise_ai=enterprise_ai,
+        generative_ai=payload.generative_ai,
+    )
 
 
-def _enterprise_check(settings: EnterpriseAiModelSettings) -> ModelSettingsCheckStatus:
-    has_model = any(model.model_id.strip() for model in settings.models)
-    if (
-        settings.endpoint.strip()
-        and has_model
-        and (settings.has_api_key or settings.api_key.strip())
-    ):
-        return "ok"
-    return "missing"
+def _enterprise_ai_status(
+    settings: EnterpriseAiModelSettings,
+) -> ModelSettingsCheckStatus:
+    """Enterprise AI の必須設定が揃っているか確認する。"""
+    required = (settings.endpoint, settings.project_ocid, settings.api_path)
+    if not all(_is_present(value) for value in required):
+        return "missing"
+    if not settings.endpoint.startswith(("http://", "https://")):
+        return "invalid"
+    if not settings.project_ocid.startswith("ocid1.generativeaiproject."):
+        return "invalid"
+    if not settings.api_path.startswith(("/", "http://", "https://")):
+        return "invalid"
+    if not _secret_is_available(settings):
+        return "missing"
+    model_ids = [model.model_id for model in settings.models if _is_present(model.model_id)]
+    if len(model_ids) != len(settings.models):
+        return "missing"
+    if len(model_ids) != len(set(model_ids)):
+        return "invalid"
+    if not model_ids or not _is_present(settings.default_model_id):
+        return "missing"
+    if settings.default_model_id not in model_ids:
+        return "invalid"
+    if not any(model.vision_enabled for model in settings.models if _is_present(model.model_id)):
+        return "missing"
+    return "ok"
 
 
-def _generative_check(settings: GenerativeAiModelSettings) -> ModelSettingsCheckStatus:
-    return "ok" if settings.embedding_model.strip() and settings.rerank_model.strip() else "missing"
+def _generative_ai_status(
+    settings: GenerativeAiModelSettings,
+) -> ModelSettingsCheckStatus:
+    """Generative AI の必須設定が揃っているか確認する。"""
+    if _embedding_dim_status(settings) == "invalid":
+        return "invalid"
+    required = (settings.embedding_model, settings.rerank_model)
+    return "ok" if all(_is_present(value) for value in required) else "missing"
+
+
+def _embedding_dim_status(
+    settings: GenerativeAiModelSettings,
+) -> ModelSettingsCheckStatus:
+    """Oracle 26ai VECTOR 列と embedding 次元の互換性を確認する。"""
+    return "ok" if settings.embedding_dim == 1536 else "invalid"
+
+
+def _is_present(value: str) -> bool:
+    """空白のみの値を未設定として扱う。"""
+    return bool(value.strip())
+
+
+def _secret_is_available(settings: EnterpriseAiModelSettings) -> bool:
+    """新規入力または保存済み Enterprise AI API key があるか確認する。"""
+    if settings.clear_api_key:
+        return False
+    return _is_present(settings.api_key) or settings.has_api_key
 
 
 def _model_test_candidate_settings(
@@ -767,8 +660,10 @@ def _apply_model_test_target(settings: Settings, request: ModelSettingsTestReque
             for model in enterprise_ai_model_catalog(settings)
         ]
     elif request.target_type == "embedding":
+        settings.oci_genai_embedding_model = model_id
         settings.oci_genai_embed_model_id = model_id
     elif request.target_type == "rerank":
+        settings.oci_genai_rerank_model = model_id
         settings.oci_genai_rerank_model_id = model_id
 
 
@@ -779,113 +674,44 @@ async def _run_model_settings_test(
     """対象モデルの実 API 呼び出しを行い、表示用 details を返す。"""
     _require_model_test_id(request)
     if request.target_type == "enterprise_text":
-        text = await asyncio.to_thread(
-            OciEnterpriseAiDirectClient(settings).generate,
-            prompt="モデル接続テストです。短く応答してください。",
-            context="これは Production Ready NL2SQL のモデル接続テスト用コンテキストです。",
-            system_prompt="日本語で簡潔に回答してください。",
+        text = await OciEnterpriseAiClient(settings=settings).generate(
+            "モデル接続テストです。短く応答してください。",
+            "これは Production Ready RAG のモデル接続テスト用コンテキストです。",
         )
-        return {"response_chars": len(text), "surface": "llm", "network_call": True}
+        return {"response_chars": len(text), "surface": "llm"}
     if request.target_type == "enterprise_vision":
-        text = await asyncio.to_thread(
-            OciEnterpriseAiDirectClient(settings).generate_from_image,
+        text = await OciEnterpriseAiClient(settings=settings).generate_from_image(
             MODEL_TEST_IMAGE_BYTES,
-            "画像内の色を日本語で1語だけ返してください。",
-            mime_type="image/png",
+            "白い背景にある大きな図形の色を日本語で1語だけ返してください。",
+            mime_type="image/jpeg",
         )
-        return {"response_chars": len(text), "surface": "vision", "network_call": True}
+        return {
+            "surface": "vision",
+            "response_chars": len(text),
+        }
     if request.target_type == "embedding":
-        vectors = await _run_genai_embedding_test(settings)
+        vectors = await OciGenAiClient(settings=settings).embed(
+            ["モデル接続テスト"],
+            input_type="SEARCH_QUERY",
+        )
         vector = vectors[0] if vectors else []
-        return {"vector_dim": len(vector), "input_count": len(vectors), "network_call": True}
-    ranks = await _run_genai_rerank_test(settings)
-    top_score = ranks[0][1] if ranks else None
-    return {"ranked_count": len(ranks), "top_score": top_score, "network_call": True}
-
-
-def _require_model_test_id(request: ModelSettingsTestRequest) -> None:
-    if not request.model_id.strip():
-        raise ValueError("テストするモデル ID を入力してください。")
-
-
-async def _run_genai_embedding_test(settings: Settings) -> list[list[float]]:
-    """OCI GenAI embedding の最小実呼び出し。"""
-    if not settings.oci_region.strip() or not settings.oci_compartment_id.strip():
-        raise ValueError("OCI region と compartment OCID を設定してください。")
-    models = importlib.import_module("oci.generative_ai_inference.models")
-    details = _model_details(
-        models.EmbedTextDetails,
-        inputs=["モデル接続テスト"],
-        serving_mode=models.OnDemandServingMode(model_id=settings.oci_genai_embed_model_id),
-        compartment_id=settings.oci_compartment_id,
-        input_type="SEARCH_QUERY",
-        output_dimensions=1536,
-    )
-    response = await asyncio.to_thread(_genai_client(settings).embed_text, details)
-    embeddings = getattr(getattr(response, "data", response), "embeddings", None)
-    if not isinstance(embeddings, list) or not embeddings:
-        raise ValueError("OCI embedding response に embeddings がありません。")
-    vectors = [[float(value) for value in vector] for vector in embeddings]
-    if len(vectors[0]) != 1536:
-        raise ValueError(f"embedding 次元が 1536 ではありません: {len(vectors[0])}")
-    return vectors
-
-
-async def _run_genai_rerank_test(settings: Settings) -> list[tuple[int, float]]:
-    """OCI GenAI rerank の最小実呼び出し。"""
-    if not settings.oci_region.strip() or not settings.oci_compartment_id.strip():
-        raise ValueError("OCI region と compartment OCID を設定してください。")
-    models = importlib.import_module("oci.generative_ai_inference.models")
-    details = _model_details(
-        models.RerankTextDetails,
-        input="モデル接続テスト",
-        documents=[
+        return {"vector_dim": len(vector), "input_count": len(vectors)}
+    ranks = await OciGenAiClient(settings=settings).rerank(
+        "モデル接続テスト",
+        [
             "これはモデル接続テストに関する候補文書です。",
             "別の業務文書に関する候補文書です。",
         ],
-        serving_mode=models.OnDemandServingMode(model_id=settings.oci_genai_rerank_model_id),
-        compartment_id=settings.oci_compartment_id,
         top_n=1,
     )
-    response = await asyncio.to_thread(_genai_client(settings).rerank_text, details)
-    document_ranks = getattr(getattr(response, "data", response), "document_ranks", None)
-    if not isinstance(document_ranks, list):
-        raise ValueError("OCI rerank response に document_ranks がありません。")
-    results = [
-        (int(rank.index), float(rank.relevance_score))
-        for rank in document_ranks
-        if getattr(rank, "index", None) is not None
-        and getattr(rank, "relevance_score", None) is not None
-    ]
-    if not results:
-        raise ValueError("OCI rerank response に有効な rank がありません。")
-    return sorted(results, key=lambda item: item[1], reverse=True)
+    top_score = ranks[0][1] if ranks else None
+    return {"ranked_count": len(ranks), "top_score": top_score}
 
 
-def _genai_client(settings: Settings) -> Any:
-    oci_config = importlib.import_module("oci.config")
-    genai = importlib.import_module("oci.generative_ai_inference")
-    config = load_oci_config_without_prompt(
-        oci_config,
-        settings.oci_config_file,
-        settings.oci_config_profile,
-        region=settings.oci_region.strip() or None,
-    )
-    endpoint = settings.oci_genai_endpoint.strip()
-    if endpoint:
-        return genai.GenerativeAiInferenceClient(config, service_endpoint=endpoint)
-    return genai.GenerativeAiInferenceClient(config)
-
-
-def _model_details(model_cls: type[object], **attrs: object) -> object:
-    """OCI SDK model の constructor 差異を吸収して属性を設定する。"""
-    try:
-        return model_cls(**attrs)
-    except TypeError:
-        details = model_cls()
-        for key, value in attrs.items():
-            setattr(details, key, value)
-        return details
+def _require_model_test_id(request: ModelSettingsTestRequest) -> None:
+    """空の model_id は実 API 呼び出し前に分かりやすく失敗させる。"""
+    if not request.model_id.strip():
+        raise ValueError("テストするモデル ID を入力してください。")
 
 
 def _successful_model_test_result(
@@ -901,7 +727,6 @@ def _successful_model_test_result(
         message=_model_test_success_message(request.target_type, request.model_id),
         troubleshooting=[],
         elapsed_ms=elapsed_ms,
-        checked_at=_now(),
         details=details,
     )
 
@@ -927,22 +752,26 @@ def _failed_model_test_result(
         raw_error=raw_error,
         error_type=type(exc).__name__,
         elapsed_ms=elapsed_ms,
-        checked_at=_now(),
         details={},
     )
 
 
 def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
+    """モデル種別別の成功メッセージ。"""
     if target_type == "enterprise_text":
         return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
     if target_type == "enterprise_vision":
-        return f"Enterprise AI の Vision モデル「{model_id}」から応答を取得しました。"
+        return (
+            f"Enterprise AI の Vision モデル「{model_id}」から"
+            "構造化抽出レスポンスを取得しました。"
+        )
     if target_type == "embedding":
         return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"
     return f"Rerank モデル「{model_id}」から順位スコアを取得しました。"
 
 
 def _model_test_failure_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
+    """モデル種別別の失敗メッセージ。"""
     if target_type in {"enterprise_text", "enterprise_vision"}:
         return f"Enterprise AI モデル「{model_id or '未入力'}」のテストに失敗しました。"
     if target_type == "embedding":
@@ -955,29 +784,72 @@ def _model_test_troubleshooting(
     raw_error: str,
     error_type: str,
 ) -> list[str]:
+    """実エラーからユーザーが次に確認しやすい項目を返す。"""
+    lowered = f"{raw_error} {error_type}".lower()
     tips: list[str] = []
     if target_type in {"enterprise_text", "enterprise_vision"}:
-        tips.append("Enterprise AI endpoint、API key、Project OCID、モデル ID を確認してください。")
-    else:
-        tips.append(
-            "OCI config、region、compartment OCID、Generative AI model ID を確認してください。"
+        tips.extend(
+            [
+                "Endpoint URL、API パス、Project OCID、API key が Enterprise AI の"
+                " OpenAI-compatible gateway と一致しているか確認してください。",
+                "モデル ID が Enterprise AI 側の model deployment / gateway で"
+                "利用可能か確認してください。",
+            ]
         )
-    combined = f"{raw_error} {error_type}".lower()
-    if "timeout" in combined:
-        tips.append("ネットワーク経路と timeout 設定を確認してください。")
-    if "401" in combined or "403" in combined or "notauthorized" in combined:
-        tips.append("認証情報と OCI IAM policy を確認してください。")
-    if "404" in combined or "notfound" in combined:
-        tips.append("endpoint / model ID / compartment が正しいか確認してください。")
+        if "response path" in lowered or "回答 text" in raw_error or "構造化抽出" in raw_error:
+            tips.append(
+                "独自 gateway の場合は payload template と response path が"
+                "実レスポンスの JSON 構造に合っているか確認してください。"
+            )
+    else:
+        tips.extend(
+            [
+                "OCI config file、profile、region、compartment OCID が"
+                "バックエンド実行環境から参照できるか確認してください。",
+                "モデル ID と IAM policy が OCI Generative AI Inference の"
+                " embedding/rerank 呼び出しを許可しているか確認してください。",
+            ]
+        )
+    if any(token in lowered for token in ("401", "unauthorized", "authentication")):
+        tips.append(
+            "認証エラーです。API key / OCI config の資格情報を" "再発行または再保存してください。"
+        )
+    if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
+        tips.append(
+            "権限エラーです。Project / compartment / IAM policy の対象が"
+            "このモデル呼び出しを許可しているか確認してください。"
+        )
+    if any(token in lowered for token in ("404", "not found")):
+        tips.append(
+            "Endpoint、API パス、model ID のいずれかが見つかっていません。"
+            "リージョンと model deployment 名も確認してください。"
+        )
+    if any(token in lowered for token in ("timeout", "timed out")):
+        tips.append(
+            "タイムアウトです。ネットワーク経路を確認し、"
+            "必要ならタイムアウト秒数を一時的に長くしてください。"
+        )
+    if any(token in lowered for token in ("429", "quota", "rate")):
+        tips.append(
+            "レート制限または quota の可能性があります。"
+            "しばらく待つか service limit を確認してください。"
+        )
+    if any(token in lowered for token in ("500", "502", "503", "504")):
+        tips.append(
+            "サービス側または gateway 側の一時障害の可能性があります。"
+            "少し待って再試行し、OCI 側の稼働状況を確認してください。"
+        )
     return list(dict.fromkeys(tips))
 
 
-def _sanitize_model_test_error(message: str, secrets: list[str]) -> str:
-    sanitized = message
+def _sanitize_model_test_error(raw_error: str, secrets: list[str]) -> str:
+    """実エラーは残しつつ、既知の secret だけを伏せる。"""
+    sanitized = raw_error.strip() or "詳細メッセージは返されませんでした。"
     for secret in secrets:
-        if secret:
-            sanitized = sanitized.replace(secret, "***")
-    return sanitized[:1000]
+        cleaned = secret.strip()
+        if cleaned:
+            sanitized = sanitized.replace(cleaned, "<secret>")
+    return sanitized[:2000]
 
 
 def _database_settings_data(
@@ -1001,8 +873,11 @@ def _database_settings_data(
         has_password=has_password,
         has_wallet_password=bool(getattr(settings, "oracle_wallet_password", "")),
         readiness=_database_readiness(settings),
+        embedding_dimension=settings.oci_genai_embedding_dim,
+        vector_column=f"VECTOR({settings.oci_genai_embedding_dim}, FLOAT32)",
         adb_ocid=getattr(settings, "oracle_adb_ocid", ""),
         region=getattr(settings, "oci_region", ""),
+        config_source="runtime",
     )
 
 
@@ -1139,7 +1014,7 @@ async def _load_adb_info(settings: Settings) -> AdbInfoData:
         )
     return _adb_info_data(
         "success",
-        f"データベース '{info.display_name or info.id}' の情報を取得しました。",
+        "データベース情報を取得しました。",
         info,
         region,
     )
@@ -1163,7 +1038,7 @@ async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) 
             region=region,
         )
 
-    state = (info.lifecycle_state or "").upper()
+    state = info.lifecycle_state
     if action == "start":
         if state == "AVAILABLE":
             return _adb_info_data(
@@ -1185,7 +1060,7 @@ async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) 
             return _adb_info_data("error", f"データベースの起動に失敗しました: {exc}", info, region)
         return _adb_info_data(
             "accepted",
-            f"データベース '{info.display_name or info.id}' の起動を開始しました。",
+            f"データベース '{info.display_name}' の起動を開始しました。",
             info,
             region,
             lifecycle_override="STARTING",
@@ -1206,7 +1081,7 @@ async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) 
         return _adb_info_data("error", f"データベースの停止に失敗しました: {exc}", info, region)
     return _adb_info_data(
         "accepted",
-        f"データベース '{info.display_name or info.id}' の停止を開始しました。",
+        f"データベース '{info.display_name}' の停止を開始しました。",
         info,
         region,
         lifecycle_override="STOPPING",
@@ -1247,6 +1122,7 @@ def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsDa
         object_storage_bucket=bucket,
         readiness=readiness,
         max_upload_bytes=getattr(settings, "max_upload_bytes", 104857600),
+        config_source="runtime",
     )
 
 
@@ -1307,6 +1183,7 @@ def _oci_settings_data(settings: Settings) -> OciSettingsData:
         key_file=key_file,
         key_file_exists=_expand(key_file).exists(),
         config_file_exists=_expand(config_file).exists(),
+        config_source="runtime",
     )
 
 
@@ -1801,7 +1678,6 @@ def _test_oci_config(settings: Settings) -> OciConfigTestResult:
             config_file_exists=config_path.is_file(),
             key_file_exists=key_path.is_file(),
             message=str(exc.detail),
-            checked_at=_now(),
             error_type="HTTPException",
             oci_directory_mode=_mode_string(config_path.parent),
             config_file_mode=_mode_string(config_path),
@@ -1862,7 +1738,6 @@ def _test_oci_config(settings: Settings) -> OciConfigTestResult:
         config_file_mode=_mode_string(config_path),
         key_file_mode=_mode_string(key_path),
         message=message,
-        checked_at=_now(),
         error_type="OciPrivateKeyPassPhraseRequiredError" if pass_phrase_required else None,
     )
 
@@ -1999,7 +1874,131 @@ def _parse_oci_config(content: str, profile: str) -> OciConfigReadData:
 
 
 def _elapsed_ms(started: float) -> int:
-    return max(1, int((time.perf_counter() - started) * 1000))
+    """perf_counter の開始時刻から経過 ms を返す。"""
+    return max(0, round((time.perf_counter() - started) * 1000))
+
+
+def _oracle_error_codes(error_text: str) -> list[str]:
+    """Oracle / python-oracledb の公開してよいエラーコードだけを抽出する。"""
+    return list(dict.fromkeys(match.upper() for match in ORACLE_ERROR_CODE_RE.findall(error_text)))
+
+
+def _database_connection_error_message(exc: Exception, oracle_error_codes: list[str]) -> str:
+    """secret を含めず、Oracle 接続エラーの原因カテゴリをユーザーへ返す。"""
+    if getattr(exc, "safe_for_user", False):
+        return str(exc)
+
+    code_label = f"（{', '.join(oracle_error_codes)}）" if oracle_error_codes else ""
+    code_set = set(oracle_error_codes)
+    if "ORA-01017" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ユーザー名または DB パスワードを確認してください。"
+        )
+    if "ORA-12154" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet サービス名が tnsnames.ora に存在するか確認してください。"
+        )
+    if "ORA-12506" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ADB のアクセス制御リストまたは network ACL が"
+            "この接続元を許可しているか確認してください。"
+        )
+    if code_set & {"ORA-12514", "ORA-12505"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet サービス名と ADB の稼働状態を確認してください。"
+        )
+    if code_set & {"ORA-12541", "DPY-6005", "DPY-6000"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ADB の listener と TCPS 1522 への到達性を確認してください。"
+        )
+    if "DPY-4011" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet ZIP と Wallet パスワードを確認してください。"
+        )
+    if code_set & {"DPI-1047", "DPI-1072"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Oracle Instant Client の配置と ORACLE_CLIENT_LIB_DIR を確認してください。"
+        )
+    if oracle_error_codes:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "下の確認ポイントと backend ログを確認してください。"
+        )
+    return (
+        "Oracle 26ai へ接続できませんでした。"
+        "下の確認ポイントと backend ログの Oracle エラーコードを確認してください。"
+    )
+
+
+def _database_connection_troubleshooting(
+    *,
+    readiness: str,
+    error_text: str = "",
+    error_type: str = "",
+) -> list[str]:
+    """Oracle 接続テストの結果から次に確認するポイントを返す。"""
+    tips: list[str] = []
+    if readiness == "missing":
+        tips.append(
+            "ユーザー名、Wallet サービス名、Wallet ZIP が"
+            "入力・アップロード済みか確認してください。"
+        )
+    if readiness == "missing_credentials":
+        tips.append("DB パスワードまたは Wallet パスワードが保存済みか確認してください。")
+    if readiness == "wallet_not_found":
+        tips.append("ADB からダウンロードした Wallet ZIP をアップロードし直してください。")
+    if readiness == "invalid":
+        tips.append("Wallet の tnsnames.ora / sqlnet.ora とサービス名の形式を確認してください。")
+
+    combined = f"{error_text} {error_type}".lower()
+    if any(token in combined for token in ("timeout", "timed out", "oracleconnectiontimeouterror")):
+        tips.append(
+            "接続テストがタイムアウトしました。ADB が起動中か、VCN/VPN/プロキシ経路から "
+            "TCPS 1522 に到達できるか確認してください。"
+        )
+    if "ora-01017" in combined:
+        tips.append("ユーザー名または DB パスワードが正しいか確認してください。")
+    if "ora-12154" in combined or "tns" in combined:
+        tips.append("Wallet サービス名が tnsnames.ora に存在するか確認してください。")
+    if "ora-12506" in combined:
+        tips.append(
+            "ADB の Network Access / ACL で、この実行ホストの public IP または VCN 経路を"
+            "許可してください。"
+        )
+    if "ora-12514" in combined or "ora-12505" in combined:
+        tips.append("Wallet サービス名が ADB の接続文字列として有効か確認してください。")
+    if "ora-12541" in combined or "dpy-6005" in combined or "dpy-6000" in combined:
+        tips.append(
+            "データベースが停止していないか、ADB の listener に" "到達できるか確認してください。"
+        )
+    if "wallet" in combined or "dpy-4011" in combined:
+        tips.append(
+            "Wallet ZIP の内容、Wallet パスワード、" "ORACLE_CLIENT_LIB_DIR を確認してください。"
+        )
+    if "dpi-1047" in combined or "dpi-1072" in combined:
+        tips.append(
+            "Oracle Instant Client が ORACLE_CLIENT_LIB_DIR に存在し、"
+            "実行環境から読み込めるか確認してください。"
+        )
+    if "operationalerror" in combined and not tips:
+        tips.append(
+            "backend ログに出ている ORA/DPY/DPI エラーコードを確認し、"
+            "Wallet、サービス名、認証情報、ネットワーク経路を切り分けてください。"
+        )
+
+    if not tips:
+        tips.append(
+            "バックエンドログの Oracle エラーコードと Wallet / DSN /"
+            "ネットワーク設定を確認してください。"
+        )
+    return list(dict.fromkeys(tips))
 
 
 def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) -> str:
@@ -2035,7 +2034,3 @@ def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) ->
             detail="OCI Object Storage namespace が空で返されました。",
         )
     return namespace
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()

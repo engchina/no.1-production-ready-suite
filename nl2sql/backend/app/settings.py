@@ -79,6 +79,9 @@ class Settings(BaseServiceSettings):
     oci_tenancy_ocid: str = ""
     oci_key_file: str = ""
     oci_genai_endpoint: str = ""
+    oci_genai_embedding_model: str = "cohere.embed-v4.0"
+    oci_genai_embedding_dim: int = 1536
+    oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"
     oci_genai_embed_model_id: str = "cohere.embed-v4.0"
     oci_genai_rerank_model_id: str = "cohere.rerank-v4.0-fast"
     oci_enterprise_ai_endpoint: str = ""
@@ -125,6 +128,8 @@ class Settings(BaseServiceSettings):
     nl2sql_select_ai_model: str = ""
     nl2sql_schema_sample_rows: int = 3
     nl2sql_schema_sample_columns_per_table: int = 6
+    oracle_db_test_timeout_seconds: float = 15.0
+    oracle_tcp_connect_timeout_seconds: float = 10.0
     nl2sql_oracle_connect_timeout_seconds: int = 5
     nl2sql_csv_import_max_rows: int = 5000
     nl2sql_csv_import_max_columns: int = 200
@@ -312,6 +317,9 @@ def _apply_persisted_model_settings(
     settings.oci_enterprise_ai_llm_max_output_tokens = enterprise_ai.llm_max_output_tokens
     settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise_ai.vlm_max_output_tokens
 
+    settings.oci_genai_embedding_model = generative_ai.embedding_model
+    settings.oci_genai_embedding_dim = generative_ai.embedding_dim
+    settings.oci_genai_rerank_model = generative_ai.rerank_model
     settings.oci_genai_embed_model_id = generative_ai.embedding_model
     settings.oci_genai_rerank_model_id = generative_ai.rerank_model
 

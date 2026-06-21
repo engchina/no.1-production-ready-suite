@@ -428,16 +428,15 @@ def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -
         def __init__(self, settings: Settings) -> None:
             self.settings = settings
 
-        def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+        async def generate(self, prompt: str, context: str = "") -> str:
             captured["prompt"] = prompt
             captured["context"] = context
-            captured["system_prompt"] = system_prompt
             captured["endpoint"] = self.settings.oci_enterprise_ai_endpoint
             captured["model_id"] = self.settings.oci_enterprise_ai_llm_model
             captured["api_key"] = self.settings.oci_enterprise_ai_api_key
             return "テスト応答"
 
-    monkeypatch.setattr(settings_router, "OciEnterpriseAiDirectClient", FakeEnterpriseClient)
+    monkeypatch.setattr(settings_router, "OciEnterpriseAiClient", FakeEnterpriseClient)
 
     resp = client.post(
         "/api/settings/model/test",
@@ -474,7 +473,6 @@ def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["status"] == "success"
-    assert data["details"]["network_call"] is True
     assert data["details"]["response_chars"] == 5
     assert captured["endpoint"] == "https://enterprise-ai.example.com"
     assert captured["model_id"] == "cohere.command-r-plus"
