@@ -1471,6 +1471,9 @@ export const ja = {
   "knowledgeBases.variant.preprocess": "前処理",
   "knowledgeBases.variant.unknownRecipe": "既定(未記録)",
   "knowledgeBases.variant.chunkSetCount": "{count} chunk_set",
+  "knowledgeBases.variant.addHint":
+    "variant は KB の取込設定(parser×前処理×chunking)から生まれます。",
+  "knowledgeBases.variant.addAction": "別設定の KB に追加",
   "knowledgeBases.empty.title": "知識ベースがありません。",
   "knowledgeBases.empty.hint": "名前を入力して、最初の知識ベースを作成してください。",
   "knowledgeBases.validation.nameRequired": "名前を入力してください。",

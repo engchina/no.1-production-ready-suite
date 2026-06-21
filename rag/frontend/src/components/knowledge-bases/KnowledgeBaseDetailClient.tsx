@@ -410,6 +410,18 @@ function KnowledgeBaseDocumentRow({
           ) : (
             <p className="text-xs text-muted">{t("knowledgeBases.variant.empty")}</p>
           )}
+          {!chunkSets.isPending && !chunkSets.isError ? (
+            <p className="mt-2 text-xs text-muted">
+              {t("knowledgeBases.variant.addHint")}{" "}
+              <Link
+                to={APP_ROUTES.knowledgeBases}
+                className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+              >
+                <FilePlus2 size={12} aria-hidden />
+                {t("knowledgeBases.variant.addAction")}
+              </Link>
+            </p>
+          ) : null}
         </div>
       ) : null}
     </li>
