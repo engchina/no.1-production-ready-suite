@@ -30,6 +30,35 @@ async function mockApi(page: Page) {
       return;
     }
 
+    if (url.pathname === "/api/business-views") {
+      // 検索ページは業務アシスタント選択が前提のため、最低 1 件を返してフィルタを描画する。
+      await route.fulfill({
+        json: {
+          data: {
+            items: [
+              {
+                id: "bv-1",
+                name: "経理アシスタント",
+                description: null,
+                status: "ACTIVE",
+                knowledge_base_count: 1,
+                created_at: "2026-06-19T00:00:00Z",
+                updated_at: "2026-06-19T00:00:00Z",
+                archived_at: null,
+              },
+            ],
+            total: 1,
+            limit: 50,
+            offset: 0,
+            has_next: false,
+          },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+
     await route.fulfill({
       json: { data: null, error_messages: [], warning_messages: [] },
     });
