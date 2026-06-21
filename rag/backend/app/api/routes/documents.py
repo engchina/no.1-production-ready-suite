@@ -1013,21 +1013,57 @@ async def _ingest_existing_document(
         duplicate_of_document_id=detail.duplicate_of_document_id,
         data=data,
     )
-    # owning KB(最古割当)の取込上書きをスナップショットとして適用する。
-    # 後から KB を変えても再 enqueue しない限り既存チャンクは作り直されない。
-    effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
-    chunk_set_id = _document_chunk_set_id(detail, effective_settings)
-    pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-    result = await pipeline.ingest(
-        document_id=document_id,
-        image_bytes=data,
-        prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
-        content_type=detail.content_type or "application/octet-stream",
-        source_profile=source_profile,
-        chunk_set_id=chunk_set_id,
-        cancel_checker=cancel_checker,
+    # plan 駆動の複数 chunk_set materialization（_index_reviewed_document と整合）。
+    # 先頭 chunk_set は ingest（extract+index）で抽出を保存し、残りはその抽出を再利用して
+    # index_reviewed で再チャンクする（chunking 軸 variant 前提。preprocess/parser 軸の
+    # 再抽出は別 follow-up）。所属 KB / content_sha256 が無ければ現行の単一(owning)挙動へ縮退。
+    global_settings = get_settings()
+    configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
+    plan = (
+        plan_document_materializations(detail.content_sha256, global_settings, configs)
+        if detail.content_sha256 and configs
+        else None
     )
-    await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+    ingest_prompt = "ドキュメントを日本語で OCR し、本文テキストを抽出してください。"
+    ingest_content_type = detail.content_type or "application/octet-stream"
+    if plan is None or not plan.chunk_sets:
+        # owning KB(最古割当)の取込上書きをスナップショットとして適用する。
+        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        chunk_set_id = _document_chunk_set_id(detail, effective_settings)
+        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
+        result = await pipeline.ingest(
+            document_id=document_id,
+            image_bytes=data,
+            prompt=ingest_prompt,
+            content_type=ingest_content_type,
+            source_profile=source_profile,
+            chunk_set_id=chunk_set_id,
+            cancel_checker=cancel_checker,
+        )
+        await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+        return result
+    result = detail
+    for index, chunk_set_id in enumerate(sorted(plan.chunk_sets)):
+        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
+        recipe_settings, _applied = apply_adapter_config_or_global(
+            global_settings, configs[representative_kb_id], scope="ingestion"
+        )
+        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        if index == 0:
+            result = await pipeline.ingest(
+                document_id=document_id,
+                image_bytes=data,
+                prompt=ingest_prompt,
+                content_type=ingest_content_type,
+                source_profile=source_profile,
+                chunk_set_id=chunk_set_id,
+                cancel_checker=cancel_checker,
+            )
+        else:
+            result = await pipeline.index_reviewed(
+                document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+            )
+    await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
     return result
 
 

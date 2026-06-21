@@ -334,3 +334,39 @@ def test_gate_disabled_keeps_single_pass_indexing(monkeypatch: MonkeyPatch) -> N
     _run_job(cast(str, job["id"]))
 
     assert _get_document(document_id)["status"] == "INDEXED"
+
+
+def test_gate_disabled_multiple_kb_configs_materialize_separate_chunk_sets(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """gate-off(ingest 経路)でも、取込設定が分岐する 2 KB は 2 chunk_set を共存 materialize する。
+
+    _ingest_existing_document の plan 駆動化(先頭 chunk_set=ingest で抽出保存、残りは
+    index_reviewed で抽出再利用)を検証。INDEX 経路の同名テストと対になる。
+    """
+    monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
+    document_id = _upload_sample()
+
+    # default(chunk_size=800)に加え、別 chunk_size の 2 つ目の KB を作り両方へ所属させる。
+    kb_resp = client.post(
+        "/api/knowledge-bases",
+        json={"name": "高chunk-KB-ingest", "adapter_config": {"ingestion": {"chunk_size": 3500}}},
+    )
+    assert kb_resp.status_code == 200
+    kb_b = kb_resp.json()["data"]["id"]
+    assign_resp = client.post(
+        f"/api/knowledge-bases/{kb_b}/documents", json={"document_ids": [document_id]}
+    )
+    assert assign_resp.status_code == 200
+
+    job = _enqueue_extract(document_id)
+    _run_job(cast(str, job["id"]))
+    assert _get_document(document_id)["status"] == "INDEXED"
+
+    oracle = OracleClient()
+    materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
+    # 2 つの取込設定 → 2 chunk_set が共存。
+    assert len(materialized) == 2
+    # 各 chunk_set はちょうど 1 KB に bind(materialization が KB ごとに分裂)。
+    for chunk_set_id in materialized:
+        assert asyncio.run(oracle.chunk_set_refcount(chunk_set_id)) == 1

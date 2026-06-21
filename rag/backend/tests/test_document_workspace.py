@@ -139,6 +139,13 @@ class FakeWorkspaceOracle:
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.documents.get(document_id)
 
+    async def list_document_knowledge_base_configs(
+        self, document_id: str
+    ) -> list[tuple[str, object]]:
+        # 所属 KB 無し → plan None で従来の単一 materialization 経路へ縮退する。
+        _ = document_id
+        return []
+
     async def delete_document(self, document_id: str) -> bool:
         if document_id not in self.documents:
             return False
