@@ -1152,8 +1152,13 @@ class OracleClient:
         extraction: StructuredExtraction,
         chunks: list[Chunk],
         embeddings: list[list[float]],
+        chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
-        """構造化抽出と chunk/vector を 1 transaction で保存する。"""
+        """構造化抽出と chunk/vector を 1 transaction で保存する。
+
+        chunk_set_id を渡すと、その chunk_set の chunk だけを置換・タグ付けする(複数 chunk_set
+        共存)。None は文書の全 chunk を置換し未タグ保存(現行挙動・後方互換)。
+        """
         if len(chunks) != len(embeddings):
             raise ValueError("chunks と embeddings の件数が一致しません。")
         for index, embedding in enumerate(embeddings):
@@ -1163,6 +1168,7 @@ class OracleClient:
             extraction,
             chunks,
             embeddings,
+            chunk_set_id=chunk_set_id,
         )
 
     async def replace_document_graph_index(
@@ -4334,11 +4340,22 @@ class OracleClient:
         document: StoredDocument,
         chunks: list[Chunk],
         embeddings: list[list[float]],
+        chunk_set_id: str | None = None,
     ) -> list[dict[str, object]]:
-        """rag_chunks へ挿入する bind row を構築する。"""
+        """rag_chunks へ挿入する bind row を構築する。chunk_set_id=None は未タグ(後方互換)。
+
+        chunk_id は chunk_set_id 指定時 ``document:chunk_set:index`` で chunk_set 間衝突を避ける。
+        None のときは現行どおり ``document:index``。
+        """
+
+        def chunk_id_for(index: int) -> str:
+            if chunk_set_id is not None:
+                return f"{document_id}:{chunk_set_id}:{index}"
+            return f"{document_id}:{index}"
+
         return [
             {
-                "chunk_id": f"{document_id}:{chunk.index}",
+                "chunk_id": chunk_id_for(chunk.index),
                 "document_id": document_id,
                 "tenant_id_hash": document.tenant_id_hash,
                 "chunk_index": chunk.index,
@@ -4346,7 +4363,7 @@ class OracleClient:
                 "metadata_json": _json_dumps(
                     {
                         "document_id": document_id,
-                        "chunk_id": f"{document_id}:{chunk.index}",
+                        "chunk_id": chunk_id_for(chunk.index),
                         "chunk_index": chunk.index,
                         "start_offset": chunk.start_offset,
                         "end_offset": chunk.end_offset,
@@ -4354,6 +4371,7 @@ class OracleClient:
                     }
                 ),
                 "embedding": _to_vector_bind(embedding),
+                "chunk_set_id": chunk_set_id,
             }
             for chunk, embedding in zip(chunks, embeddings, strict=True)
         ]
@@ -4433,8 +4451,14 @@ class OracleClient:
         extraction: StructuredExtraction,
         chunks: list[Chunk],
         embeddings: list[list[float]],
+        chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
-        """抽出 payload と chunk/vector を同一 Oracle transaction で置換する。"""
+        """抽出 payload と chunk/vector を同一 Oracle transaction で置換する。
+
+        chunk_set_id を渡すと chunk 置換を **その chunk_set に限定**(他 chunk_set の chunk は
+        残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
+        未タグで保存する(現行挙動・後方互換)。
+        """
 
         def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
             document = _select_document(connection, document_id)
@@ -4458,15 +4482,28 @@ class OracleClient:
                     }
                 ),
             )
+            # chunk_set_id 指定時はその chunk_set の chunk だけ置換する(複数 chunk_set 共存可)。
+            chunk_set_clause = (
+                "AND chunk_set_id = :chunk_set_id" if chunk_set_id is not None else ""
+            )
+            delete_binds: dict[str, object] = {"document_id": document_id}
+            if chunk_set_id is not None:
+                delete_binds["chunk_set_id"] = chunk_set_id
             _execute(
                 connection,
-                """
+                _render_sql(
+                    """
                 DELETE FROM rag_chunks
                 WHERE document_id = :document_id
+                  {chunk_set_clause}
                 """,
-                {"document_id": document_id},
+                    chunk_set_clause=chunk_set_clause,
+                ),
+                delete_binds,
             )
-            rows = self._chunk_insert_rows(document_id, document, chunks, embeddings)
+            rows = self._chunk_insert_rows(
+                document_id, document, chunks, embeddings, chunk_set_id=chunk_set_id
+            )
             if rows:
                 _executemany(
                     connection,
@@ -4478,7 +4515,8 @@ class OracleClient:
                         chunk_index,
                         chunk_text,
                         metadata_json,
-                        embedding
+                        embedding,
+                        chunk_set_id
                     ) VALUES (
                         :chunk_id,
                         :document_id,
@@ -4486,7 +4524,8 @@ class OracleClient:
                         :chunk_index,
                         :chunk_text,
                         :metadata_json,
-                        :embedding
+                        :embedding,
+                        :chunk_set_id
                     )
                     """,
                     rows,
