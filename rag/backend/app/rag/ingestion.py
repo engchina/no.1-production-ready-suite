@@ -198,6 +198,7 @@ class IngestionPipeline:
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
         chunk_set_id: str | None = None,
+        record_outcome: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う。"""
@@ -406,6 +407,7 @@ class IngestionPipeline:
                 source_bytes=image_bytes,
                 started_at=started_at,
                 chunk_set_id=chunk_set_id,
+                record_outcome=record_outcome,
                 cancel_checker=cancel_checker,
             )
         except IngestionCancelledError as exc:
@@ -447,6 +449,7 @@ class IngestionPipeline:
         document_id: str,
         *,
         chunk_set_id: str | None = None,
+        record_outcome: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """REVIEW で承認済みの文書を後段(chunk→embed→index)だけ実行する。
@@ -476,6 +479,7 @@ class IngestionPipeline:
                 source_bytes=b"",
                 started_at=started_at,
                 chunk_set_id=chunk_set_id,
+                record_outcome=record_outcome,
                 cancel_checker=cancel_checker,
             )
         except IngestionCancelledError as exc:
@@ -522,9 +526,13 @@ class IngestionPipeline:
         source_bytes: bytes,
         started_at: float,
         chunk_set_id: str | None = None,
+        record_outcome: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """抽出結果から chunk→embed→index を実行し INDEXED まで進める後段。
+
+        ``record_outcome=False`` のときは成功 metric / audit を出さない(複数 chunk_set を
+        materialize する loop で、1 文書 1 論理取込として記録を 1 回に集約するため)。
 
         例外はそのまま呼び出し側(ingest / index_reviewed)の except へ伝播させる。
         """
@@ -616,23 +624,24 @@ class IngestionPipeline:
         )
         await _raise_if_cancelled(cancel_checker)
         detail = await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
-        record_ingestion("success", len(chunks))
-        record_rag_ingestion_audit(
-            trace_id=trace_id,
-            document_id=document_id,
-            outcome="success",
-            source_bytes=source_bytes,
-            document_type=_observability_document_type(extraction.document_type),
-            extraction_confidence=extraction.confidence,
-            parser_backend=quality_report.parser_backend,
-            parser_profile=quality_report.parser_profile,
-            segment_count=len(checkpoint_segments),
-            fallback_count=1 if quality_report.fallback_used else 0,
-            failed_segment_count=quality_report.failed_segment_count,
-            chunk_count=len(chunks),
-            vector_count=len(vectors),
-            elapsed_ms=elapsed_ms(started_at),
-        )
+        if record_outcome:
+            record_ingestion("success", len(chunks))
+            record_rag_ingestion_audit(
+                trace_id=trace_id,
+                document_id=document_id,
+                outcome="success",
+                source_bytes=source_bytes,
+                document_type=_observability_document_type(extraction.document_type),
+                extraction_confidence=extraction.confidence,
+                parser_backend=quality_report.parser_backend,
+                parser_profile=quality_report.parser_profile,
+                segment_count=len(checkpoint_segments),
+                fallback_count=1 if quality_report.fallback_used else 0,
+                failed_segment_count=quality_report.failed_segment_count,
+                chunk_count=len(chunks),
+                vector_count=len(vectors),
+                elapsed_ms=elapsed_ms(started_at),
+            )
         return detail
 
     async def _preprocess_source(

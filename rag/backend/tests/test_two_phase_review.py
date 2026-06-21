@@ -10,6 +10,8 @@ from app.api.routes import documents as documents_route
 from app.clients.oracle import OracleClient, reset_local_store
 from app.config import get_settings
 from app.main import app
+from app.rag import ingestion as ingestion_module
+from app.rag.audit import record_rag_ingestion_audit
 from app.rag.variant_planner import plan_document_materializations
 from tests.support import AsgiTestClient
 
@@ -370,3 +372,42 @@ def test_gate_disabled_multiple_kb_configs_materialize_separate_chunk_sets(
     # 各 chunk_set はちょうど 1 KB に bind(materialization が KB ごとに分裂)。
     for chunk_set_id in materialized:
         assert asyncio.run(oracle.chunk_set_refcount(chunk_set_id)) == 1
+
+
+def test_multi_chunk_set_records_single_success_audit(monkeypatch: MonkeyPatch) -> None:
+    """複数 chunk_set を materialize しても成功 audit は 1 回(1 文書 1 論理取込に集約)。
+
+    record_outcome=最後のみ により、N chunk_set でも成功 audit/metric が N→1 になることを検証。
+    """
+    monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
+
+    success_audit_docs: list[str] = []
+
+    def _spy(**kwargs: Any) -> None:
+        if kwargs.get("outcome") == "success":
+            success_audit_docs.append(cast(str, kwargs.get("document_id")))
+        record_rag_ingestion_audit(**kwargs)
+
+    monkeypatch.setattr(ingestion_module, "record_rag_ingestion_audit", _spy)
+
+    document_id = _upload_sample()
+    kb_resp = client.post(
+        "/api/knowledge-bases",
+        json={"name": "高chunk-KB-audit", "adapter_config": {"ingestion": {"chunk_size": 3500}}},
+    )
+    assert kb_resp.status_code == 200
+    kb_b = kb_resp.json()["data"]["id"]
+    assign_resp = client.post(
+        f"/api/knowledge-bases/{kb_b}/documents", json={"document_ids": [document_id]}
+    )
+    assert assign_resp.status_code == 200
+
+    job = _enqueue_extract(document_id)
+    _run_job(cast(str, job["id"]))
+    assert _get_document(document_id)["status"] == "INDEXED"
+
+    oracle = OracleClient()
+    # 2 chunk_set が materialize されている。
+    assert len(asyncio.run(oracle.list_document_chunk_set_ids(document_id))) == 2
+    # それでも成功 audit はこの文書につき 1 回だけ(複数化前は chunk_set 数だけ出ていた)。
+    assert success_audit_docs.count(document_id) == 1
