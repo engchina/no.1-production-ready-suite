@@ -6805,6 +6805,7 @@ CREATE TABLE {table_name} (
     chunk_text      CLOB NOT NULL,
     metadata_json   JSON,
     embedding       VECTOR(1536, FLOAT32),
+    chunk_set_id    VARCHAR2(64),
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 
@@ -6825,6 +6826,57 @@ CREATE INDEX {table_name}_text_idx
 
 CREATE INDEX {table_name}_tenant_document_idx
     ON {table_name} (tenant_id_hash, document_id, chunk_index);
+
+CREATE INDEX {table_name}_chunk_set_idx
+    ON {table_name} (chunk_set_id, chunk_index);
+""".strip()
+
+
+def oracle_chunk_set_schema_sql() -> str:
+    """variant materialization の chunk_set 層 + KB binding の DDL を返す。
+
+    1 文書 × N レシピ(複数チャンク集合)を共有して保持するための土台。
+    refcount は ``rag_kb_chunk_set_bindings`` の件数から導出する(列で持たず drift しない)。
+    実際の dedup/GC 計算は :mod:`app.rag.variant_planner`(決定論)が行い、本表はその永続層。
+    """
+    return """
+CREATE TABLE rag_chunk_sets (
+    chunk_set_id    VARCHAR2(64) PRIMARY KEY,
+    document_id     VARCHAR2(64) NOT NULL,
+    tenant_id_hash  CHAR(64),
+    recipe_subset   JSON,
+    status          VARCHAR2(32) DEFAULT 'INGESTING' NOT NULL,
+    chunk_count     NUMBER(10) DEFAULT 0 NOT NULL,
+    vector_count    NUMBER(10) DEFAULT 0 NOT NULL,
+    metrics_json    JSON,
+    created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_chunk_sets_document_fk
+        FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_chunk_sets_status_ck
+        CHECK (status IN ('INGESTING', 'INDEXED', 'ERROR'))
+);
+
+CREATE INDEX rag_chunk_sets_document_idx
+    ON rag_chunk_sets (document_id, status);
+
+CREATE TABLE rag_kb_chunk_set_bindings (
+    knowledge_base_id VARCHAR2(64) NOT NULL,
+    document_id       VARCHAR2(64) NOT NULL,
+    chunk_set_id      VARCHAR2(64) NOT NULL,
+    tenant_id_hash    CHAR(64),
+    is_serving        NUMBER(1) DEFAULT 1 NOT NULL,
+    created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_kb_chunk_set_bindings_pk
+        PRIMARY KEY (knowledge_base_id, document_id, chunk_set_id),
+    CONSTRAINT rag_kb_cs_bind_cs_fk
+        FOREIGN KEY (chunk_set_id) REFERENCES rag_chunk_sets (chunk_set_id) ON DELETE CASCADE,
+    CONSTRAINT rag_kb_cs_bind_serving_ck
+        CHECK (is_serving IN (0, 1))
+);
+
+CREATE INDEX rag_kb_cs_bind_cs_idx
+    ON rag_kb_chunk_set_bindings (chunk_set_id);
 """.strip()
 
 
