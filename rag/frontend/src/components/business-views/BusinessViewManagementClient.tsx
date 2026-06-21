@@ -26,6 +26,7 @@ import {
   type KnowledgeBaseQueryConfig,
   type PostRetrievalPipelineName,
   type RetrievalStrategyName,
+  type ServingMode,
   type VectorIndexProfileName,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -87,6 +88,11 @@ const EVALUATION_OPTIONS: SelectFieldOption<EvaluationSuiteName>[] = [
   { value: "strict_ci", label: "strict_ci" },
   { value: "ragas_like", label: "ragas_like" },
 ];
+const SERVING_MODE_OPTIONS: SelectFieldOption<ServingMode>[] = [
+  { value: "single", label: "single(既定・単一 chunk_set)" },
+  { value: "fused", label: "fused(複数 chunk_set を融合)" },
+  { value: "routed", label: "routed(query ごと選択・後続)" },
+];
 
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {
@@ -106,6 +112,7 @@ function emptyConfig(): BusinessViewConfig {
     query: emptyQueryConfig(),
     system_prompt: null,
     default_language: null,
+    serving_mode: "single",
   };
 }
 
@@ -469,6 +476,18 @@ function BusinessViewForm({
               {t("businessViews.query.title")}
             </legend>
             <p className="text-xs text-muted">{t("businessViews.query.helper")}</p>
+            <div className="max-w-sm">
+              <SelectField
+                id="business-view-serving-mode"
+                label={t("businessViews.field.servingMode")}
+                value={config.serving_mode}
+                options={SERVING_MODE_OPTIONS}
+                onValueChange={(value) =>
+                  setConfig((current) => ({ ...current, serving_mode: value }))
+                }
+                helper={t("businessViews.field.servingModeHelper")}
+              />
+            </div>
             <div className="grid gap-3 md:grid-cols-2">
               <QuerySelectRow
                 id="business-view-retrieval"

@@ -66,6 +66,7 @@ describe("api 業務アシスタント(Business View)", () => {
         },
         system_prompt: "あなたは経理規程アシスタントです。",
         default_language: "日本語",
+        serving_mode: "fused",
       },
     });
 
