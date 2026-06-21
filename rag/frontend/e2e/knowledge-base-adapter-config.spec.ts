@@ -11,6 +11,7 @@ function emptyAdapterConfig() {
   return {
     version: 1,
     ingestion: {
+      preprocess_profile: null,
       parser_adapter_backend: null,
       parser_docling_enabled: null,
       parser_marker_enabled: null,
@@ -21,6 +22,10 @@ function emptyAdapterConfig() {
       chunk_child_size: null,
       chunk_sentence_window_size: null,
       chunk_min_chars: null,
+      graph_profile: null,
+      field_extraction_enabled: null,
+      asset_summary_enabled: null,
+      navigation_summary_enabled: null,
     },
     query: {
       retrieval_strategy: null,
@@ -106,13 +111,14 @@ test("知識ベース単位で Chunking 戦略を上書きして保存できる"
     await route.fulfill({ status: 404, json: { detail: "not found" } });
   });
 
-  await page.goto("/knowledge-bases");
+  await page.goto("/knowledge-bases/kb-1");
 
   await expect(page.getByRole("heading", { name: "アダプター設定" })).toBeVisible();
   await expectNoPageOverflow(page);
 
-  // Chunking 戦略の行で「上書き」を有効化する。
-  const chunkingRow = page
+  // Chunking 戦略の行で「上書き」を有効化する(リボンが同名ラベルを持つため取込 region に限定)。
+  const ingestSection = page.getByRole("region", { name: "取込アダプター(取込時に適用)" });
+  const chunkingRow = ingestSection
     .getByText("Chunking 戦略", { exact: true })
     .locator("xpath=ancestor::div[contains(@class,'rounded-lg')][1]");
   await expect(chunkingRow.getByText("グローバル設定に従う")).toBeVisible();
@@ -161,9 +167,10 @@ test("継承トグルに戻すと上書きが解除される", async ({ page }) 
     await route.fulfill({ status: 404, json: { detail: "not found" } });
   });
 
-  await page.goto("/knowledge-bases");
+  await page.goto("/knowledge-bases/kb-1");
 
-  const generationRow = page
+  const querySection = page.getByRole("region", { name: "クエリアダプター(検索時に適用)" });
+  const generationRow = querySection
     .getByText("Generation プロファイル", { exact: true })
     .locator("xpath=ancestor::div[contains(@class,'rounded-lg')][1]");
   // 既存上書きが選択欄として表示されている。
