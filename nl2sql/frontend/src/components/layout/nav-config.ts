@@ -39,6 +39,7 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.section.nl2sql",
     items: [
       { href: APP_ROUTES.query, labelKey: "nav.query", icon: Sparkles },
+      { href: APP_ROUTES.profiles, labelKey: "nav.profiles", icon: Settings },
       { href: APP_ROUTES.history, labelKey: "nav.history", icon: History },
       { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical },
     ],

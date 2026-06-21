@@ -3,6 +3,7 @@ export const APP_ROUTES = {
   dashboard: "/",
   schema: "/schema",
   query: "/query",
+  profiles: "/profiles",
   history: "/history",
   evaluation: "/evaluation",
   settingsConnection: "/settings/connection",
