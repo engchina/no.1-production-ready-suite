@@ -1852,6 +1852,8 @@ export const ja = {
   "search.filters.clear": "クリア",
   "search.answer": "回答",
   "search.citations": "引用（根拠）",
+  "search.citation.variant": "variant {id}",
+  "search.citation.variantTitle": "引用元のチャンク集合 (variant): {id}",
   "search.citation.pageLabel": "ページ",
   "search.citation.contentKindLabel": "内容種別",
   "search.citation.sectionTitleLabel": "章節タイトル",
