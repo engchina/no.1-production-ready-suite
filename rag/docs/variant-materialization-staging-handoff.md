@@ -165,3 +165,20 @@ CREATE INDEX rag_kb_cs_bind_cs_idx ON rag_kb_chunk_set_bindings (chunk_set_id);
 ## 7. 着手順の推奨
 A-1(DDL)→ A-4(検索フィルタ・既定 is_serving のみ)→ A-2(取込 planner 駆動 + backfill)→ A-3(GC)→ B → C。
 A だけで「1 文書 × 複数 chunk_set の共有」という中核価値が出る。B/C は opt-in 拡張。
+
+## 8. 実装進捗(2026-06-21、ブランチ claude/clever-mirzakhani-788f47・実 Oracle 検証済)
+- **A-1 DDL 適用済**(`79152e7`)、**A-2 永続化メソッド**(`a0affb5`)、**A-2 取込 reconcile 配線**(`490b015`)、**A-4 検索 chunk_set フィルタ**(`53eb9d9`)。
+  単一 materialization(所属 KB 全部を 1 chunk_set に bind)で「取込→記録→検索 is_serving 尊重」が実 DB で一貫動作。
+- **残り = per-recipe 複数 materialization**(KB 設定が chunking で分岐するとき chunk_set を分裂)。
+
+### per-recipe 複数 materialization の実装計画(コード調査済・要注意の深い変更)
+**重要な前提**: parse(`StructuredExtraction`)は **extract 相で 1 回だけ実行され文書に保存**、index 相([`ingestion._run_index_phase`](../backend/app/rag/ingestion.py))が再利用する。
+→ **chunking 軸だけ違う chunk_set は re-parse 不要**(同一 extraction を別 chunking で再 chunk するだけ)。preprocess/parser 軸の分岐は別 extraction が要る(後回し)。
+
+**ブロッカー**: チャンクストア [`oracle._save_index_with_oracle`](../backend/app/clients/oracle.py) は `DELETE FROM rag_chunks WHERE document_id = :document_id`(文書の全 chunk 削除)→ `INSERT`。これだと chunk_set を複数共存できない。
+
+**必要な改修**:
+1. `save_index` / `_save_index_with_oracle` / `_chunk_insert_rows` に `chunk_set_id: str | None = None` を通す。`None` のとき現行どおり(全削除・NULL タグ)で**完全後方互換**。指定時は DELETE を `AND chunk_set_id = :chunk_set_id` に scope し、INSERT 列に `chunk_set_id` を含めて**挿入時タグ付け**(現 reconcile の事後 UPDATE タグは不要に)。
+2. `_run_index_phase` を「1 chunk_set 分の chunk→embed→save」と「文書 finalize(status/audit)」に分け、**所属 KB を chunk_set_id でグルーピングした plan**(`variant_planner.plan_document_materializations`)に従い、**保存済み extraction を再利用**して chunk_set ごとに chunk→embed→save(chunk_set_id scope)。各 KB グループを binding、stale を GC。
+3. 検証: 実 Oracle で「同一文書を chunk_size 違いの 2 KB が参照 → chunk_set 2 つ共存、各 KB スコープ検索が自分の chunk_set だけを取得(§A-4 フィルタが効く)」を `oracle_db` fixture で。embedding は決定論スタブ。
+- 着手は専用セッション推奨(チャンクストア hot path・破壊的リスク)。`chunk_set_id=None` 既定で段階導入し、既存の `test_two_phase_review` / `test_oracle_chunk_set_adapter` を回帰の番人にする。
