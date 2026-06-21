@@ -67,6 +67,32 @@ def test_manual_integration_cleanup_assets_is_dry_run_without_confirm(
     assert "preview_select_ai_agent" not in output
 
 
+def test_manual_integration_cleanup_dry_run_honors_explicit_profile_id(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        script,
+        "_diagnostics_with_timeout",
+        lambda _require_oracle, _timeout: pytest.fail("cleanup dry-run should not run diagnostics"),
+    )
+
+    exit_code = script.main(
+        [
+            "--cleanup-assets",
+            "--engines",
+            "select_ai_agent",
+            "--profile-id",
+            "manual_agent_v9",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "NL2SQL_MANUAL_AGENT_V9_TEAM" in output
+    assert "NL2SQL_DEFAULT_TEAM" not in output
+
+
 def test_manual_integration_confirm_cleanup_requires_cleanup_flag() -> None:
     with pytest.raises(SystemExit):
         script.main(["--confirm-cleanup"])

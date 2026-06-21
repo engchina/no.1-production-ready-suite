@@ -1382,7 +1382,7 @@ class Nl2SqlService:
         return cleaned
 
     def _cleanup_select_ai_profile(self, profile_id: str | None, execute: bool) -> AssetCleanupData:
-        profile = self.get_profile(profile_id)
+        profile = self._cleanup_profile_target(profile_id)
         profile_name = self._select_ai_profile_name(profile)
         warning = ""
         status = "dry_run"
@@ -1418,7 +1418,7 @@ class Nl2SqlService:
     def _cleanup_select_ai_agent_assets(
         self, profile_id: str | None, execute: bool
     ) -> AssetCleanupData:
-        profile = self.get_profile(profile_id)
+        profile = self._cleanup_profile_target(profile_id)
         profile_name = self._select_ai_profile_name(profile)
         asset_names = self._select_ai_agent_asset_names(profile)
         warning = ""
@@ -1457,6 +1457,20 @@ class Nl2SqlService:
             warning=warning,
             asset_names={"profile": profile_name, **asset_names},
             engine_meta=engine_meta,
+        )
+
+    def _cleanup_profile_target(self, profile_id: str | None) -> Nl2SqlProfile:
+        if not profile_id:
+            return self.get_profile(None)
+        with self._lock:
+            existing = self._profiles.get(profile_id)
+        if existing:
+            return existing
+        return Nl2SqlProfile(
+            id=profile_id,
+            name=profile_id,
+            description="Cleanup target profile",
+            default_row_limit=get_settings().nl2sql_default_row_limit,
         )
 
     def rewrite_question(self, question: str, profile: Nl2SqlProfile) -> str:
