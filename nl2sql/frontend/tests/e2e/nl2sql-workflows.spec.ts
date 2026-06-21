@@ -8,6 +8,7 @@ interface MockApiState {
   feedbackPayload: Record<string, unknown> | null;
   profilePatchPayload: Record<string, unknown> | null;
   commentApplyPayload: Record<string, unknown> | null;
+  dbProfileDropPayload: Record<string, unknown> | null;
   evaluationSetPayload: Record<string, unknown> | null;
 }
 
@@ -110,6 +111,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     feedbackPayload: null,
     profilePatchPayload: null,
     commentApplyPayload: null,
+    dbProfileDropPayload: null,
     evaluationSetPayload: null,
   };
   let evaluationSets: Record<string, unknown>[] = [
@@ -274,6 +276,87 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       ddl: ["CREATE TABLE NL2SQL_FEEDBACK_VECTORS (EMBEDDING VECTOR(1536, FLOAT32))"],
       warnings: ["Dry-run のため feedback index は削除していません。"],
       timing,
+    })
+  );
+  await page.route("**/api/nl2sql/feedback-entries", (route) =>
+    fulfillJson(route, {
+      items: [
+        {
+          history_id: "hist-001",
+          question: historyItem.question,
+          generated_sql: historyItem.generated_sql,
+          profile_id: "default",
+          profile_name: "既定プロファイル",
+          feedback_rating: null,
+          feedback_comment: "",
+          indexed: false,
+          created_at: historyItem.created_at,
+        },
+      ],
+      total: 1,
+      indexed_count: 0,
+    })
+  );
+  await page.route("**/api/nl2sql/feedback-entries/delete", (route) =>
+    fulfillJson(route, {
+      items: [],
+      total: 0,
+      indexed_count: 0,
+    })
+  );
+  await page.route("**/api/nl2sql/feedback-config", (route) => {
+    if (route.request().method() === "PATCH") {
+      return fulfillJson(route, route.request().postDataJSON() as Record<string, unknown>);
+    }
+    return fulfillJson(route, {
+      similarity_threshold: 0,
+      match_limit: 3,
+    });
+  });
+  await page.route("**/api/nl2sql/classifier", (route) =>
+    fulfillJson(route, {
+      ready: true,
+      trained: true,
+      classifier_version: "classifier-001",
+      updated_at: "2026-06-21T10:00:00.000Z",
+      example_count: 4,
+      category_count: 2,
+      categories: ["既定プロファイル", "入金管理"],
+      embedding_model: "deterministic-hash-1536",
+      vector_dimension: 1536,
+      persistence_mode: "memory",
+      recommendation_source: "classifier",
+      metrics: { training_accuracy: 1 },
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/classifier/train", (route) =>
+    fulfillJson(route, {
+      ready: true,
+      trained: true,
+      classifier_version: "classifier-002",
+      updated_at: "2026-06-21T10:05:00.000Z",
+      example_count: 4,
+      category_count: 2,
+      categories: ["既定プロファイル", "入金管理"],
+      embedding_model: "deterministic-hash-1536",
+      vector_dimension: 1536,
+      persistence_mode: "memory",
+      recommendation_source: "classifier",
+      metrics: { training_accuracy: 1 },
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/classifier/predict", (route) =>
+    fulfillJson(route, {
+      recommendation_source: "classifier",
+      classifier_version: "classifier-002",
+      predicted_category: "既定プロファイル",
+      confidence: 0.92,
+      candidates: [
+        { category: "既定プロファイル", score: 0.92, profile_id: "default", profile_name: "既定プロファイル" },
+      ],
+      warnings: [],
     })
   );
   await page.route("**/api/nl2sql/diagnostics", (route) =>
@@ -487,6 +570,91 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       engine_meta: { runtime: "mock" },
     })
   );
+  await page.route("**/api/nl2sql/select-ai/assets/cleanup", (route) =>
+    fulfillJson(route, [
+      {
+        engine: "select_ai_agent",
+        executed: false,
+        status: "dry_run",
+        cleaned_at: "2026-06-21T10:00:00.000Z",
+        profile_name: "NL2SQL_DEFAULT_PROFILE",
+        team_name: "NL2SQL_DEFAULT_TEAM",
+        warning: "",
+        asset_names: { profile: "NL2SQL_DEFAULT_PROFILE", team: "NL2SQL_DEFAULT_TEAM" },
+        engine_meta: { runtime: "mock" },
+      },
+    ])
+  );
+  await page.route("**/api/nl2sql/select-ai/db-profiles", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      profiles: [
+        {
+          name: "NL2SQL_DEFAULT_PROFILE",
+          status: "ready",
+          owner: "APP",
+          created_at: "2026-06-21T10:00:00.000Z",
+          attributes: {},
+        },
+      ],
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/select-ai/db-profiles/*/drop", (route) => {
+    state.dbProfileDropPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, {
+      engine: "select_ai",
+      executed: false,
+      status: "dry_run",
+      cleaned_at: "2026-06-21T10:00:00.000Z",
+      profile_name: "NL2SQL_DEFAULT_PROFILE",
+      team_name: "",
+      warning: "",
+      asset_names: { profile: "NL2SQL_DEFAULT_PROFILE" },
+      engine_meta: { runtime: "mock" },
+    });
+  });
+  await page.route("**/api/nl2sql/select-ai-agent/run-team", (route) =>
+    fulfillJson(route, {
+      team_name: "NL2SQL_DEFAULT_TEAM",
+      prompt: "請求金額が大きい取引先を見たい",
+      generated_sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+      conversation_id: "conversation-001",
+      runtime: "deterministic",
+      warnings: [],
+      engine_meta: {},
+    })
+  );
+  await page.route("**/api/nl2sql/select-ai-agent/conversations**", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      items: [],
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/select-ai-agent/privileges/check", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      status: "warning",
+      checks: [
+        {
+          name: "nl2sql_runtime_mode",
+          status: "warning",
+          message: "NL2SQL_RUNTIME_MODE=oracle ではないため Oracle 権限を確認していません。",
+        },
+      ],
+      warnings: ["Oracle runtime ではないため Select AI Agent 権限は未確認です。"],
+    })
+  );
+  await page.route("**/api/nl2sql/rewrite", (route) =>
+    fulfillJson(route, {
+      original_question: "請求金額を一覧で見たい",
+      rewritten_question: "請求金額を一覧で見たい（請求金額=INVOICES.TOTAL_AMOUNT）",
+      source: "deterministic",
+      model: "",
+      warnings: [],
+    })
+  );
   await page.route("**/api/nl2sql/recommend-profile", (route) =>
     fulfillJson(route, {
       recommended_profile_id: "default",
@@ -627,6 +795,8 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           suggested_comment: "税込請求金額",
         },
       ],
+      source: "deterministic",
+      warnings: [],
     })
   );
   await page.route("**/api/nl2sql/comments/apply", (route) => {
@@ -648,6 +818,39 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       timing,
     });
   });
+  await page.route("**/api/nl2sql/annotations/generate", (route) =>
+    fulfillJson(route, {
+      suggestions: [
+        {
+          object_name: "INVOICES.TOTAL_AMOUNT",
+          object_type: "column",
+          annotation_name: "Display",
+          annotation_value: "税込請求金額",
+        },
+      ],
+      source: "deterministic",
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/annotations/apply", (route) =>
+    fulfillJson(route, {
+      executed: false,
+      runtime: "deterministic",
+      statements: [
+        {
+          object_name: "INVOICES.TOTAL_AMOUNT",
+          object_type: "column",
+          annotation_name: "DISPLAY",
+          annotation_value: "税込請求金額",
+          sql: "ALTER TABLE \"INVOICES\" MODIFY \"TOTAL_AMOUNT\" ANNOTATIONS (DISPLAY '税込請求金額');",
+          status: "dry_run",
+          error_message: "",
+        },
+      ],
+      warnings: [],
+      timing,
+    })
+  );
   await page.route("**/api/nl2sql/synthetic-cases**", (route) =>
     fulfillJson(route, {
       cases: [
@@ -657,6 +860,30 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           profile_id: "default",
         },
       ],
+    })
+  );
+  await page.route("**/api/nl2sql/synthetic-data/generate", (route) =>
+    fulfillJson(route, {
+      operation_id: "operation-001",
+      table_name: "INVOICES",
+      row_count: 10,
+      executed: false,
+      runtime: "deterministic",
+      status: "dry_run",
+      message: "INVOICES に 10 行の synthetic data を生成する plan です。",
+      warnings: [],
+      engine_meta: {},
+      timing,
+    })
+  );
+  await page.route("**/api/nl2sql/synthetic-data/operations/**", (route) =>
+    fulfillJson(route, {
+      operation_id: "operation-001",
+      runtime: "deterministic",
+      status: "requires_oracle",
+      message: "operation status の取得には NL2SQL_RUNTIME_MODE=oracle が必要です。",
+      result: {},
+      warnings: [],
     })
   );
   await page.route("**/api/nl2sql/preview", (route) => {
@@ -1091,7 +1318,7 @@ test("data tools and engine operations run imported SQL Assist workflows", async
   await expect(page.getByLabel("COMMENT ON SQL")).toHaveValue(/COMMENT ON COLUMN "INVOICES"."TOTAL_AMOUNT" IS '税込請求金額';/);
   await page.getByRole("button", { name: "COMMENT Dry-run" }).click();
   await expect(page.getByText("適用結果")).toBeVisible();
-  await expect(page.getByText("deterministic")).toBeVisible();
+  await expect(page.getByText("deterministic").first()).toBeVisible();
   expect(api.commentApplyPayload?.execute).toBe(false);
   expect(api.commentApplyPayload?.items).toEqual(
     expect.arrayContaining([
@@ -1120,13 +1347,16 @@ test("data tools and engine operations run imported SQL Assist workflows", async
   await expect(page.getByText("--release-gate").first()).toBeVisible();
   await expect(page.getByText("--allowed-table YOUR_TABLE").first()).toBeVisible();
   await expect(page.getByText("--json-report reports/nl2sql-release-gate.json").first()).toBeVisible();
-  await expect(page.getByText("不足: Oracle Select AI Agent")).toBeVisible();
+  await expect(page.getByText("不足: Oracle Select AI Agent").first()).toBeVisible();
+  await expect(page.getByText("旧版吸収 smoke")).toBeVisible();
+  await expect(page.getByText("--check-legacy-absorption").first()).toBeVisible();
+  await expect(page.getByText("--require-classifier-oracle-state").first()).toBeVisible();
   await expect(page.getByText("必要な環境変数").first()).toBeVisible();
   await expect(page.getByText("OCI_ENTERPRISE_AI_ENDPOINT").first()).toBeVisible();
   await expect(page.getByText("NL2SQL_FEEDBACK_EMBEDDING_ENABLED").first()).toBeVisible();
   await expect(page.getByText("--require-enterprise-ai").first()).toBeVisible();
   await expect(page.getByText("--require-feedback-embedding").first()).toBeVisible();
-  await expect(page.getByText("--require-oracle-persistence")).toBeVisible();
+  await expect(page.getByText("--require-oracle-persistence").first()).toBeVisible();
   await expect(page.getByText("設定完了ガイド")).toBeVisible();
   await expect(page.getByText("必須 env").first()).toBeVisible();
   await expect(page.getByText("任意 env").first()).toBeVisible();
@@ -1177,14 +1407,18 @@ test("data tools and engine operations run imported SQL Assist workflows", async
   await expect(page.getByText("NL2SQL_DEFAULT_AGENT_PROFILE")).toBeVisible();
   await page.getByRole("button", { name: "Profile 更新" }).click();
   await expect(page.getByText("NL2SQL_DEFAULT_SELECT_AI")).toBeVisible();
+  await page.getByRole("button", { name: "Drop Dry-run" }).click();
+  await expect(page.getByText("DB profile drop 結果")).toBeVisible();
+  await expect(page.getByText("dry_run").first()).toBeVisible();
+  expect(api.dbProfileDropPayload?.execute).toBe(false);
   await expectNoHorizontalScroll(page);
 
-  await page.goto("/settings/connection");
+  await page.goto("/settings/nl2sql-connection");
   await expect(page.getByText("運用 readiness")).toBeVisible();
   await expect(page.getByText("Agent assets need refresh.").first()).toBeVisible();
   await expectNoHorizontalScroll(page);
 
-  await page.goto("/settings/database");
+  await page.goto("/settings/nl2sql-database");
   await expect(page.getByText("データベース安全境界")).toBeVisible();
   await expect(page.getByText("Oracle 運用サマリー")).toBeVisible();
   await expect(page.getByText("Oracle-backed state persistence is ready.")).toBeVisible();
@@ -1195,7 +1429,7 @@ test("data tools and engine operations run imported SQL Assist workflows", async
 test("model settings manages training data and evaluation cases", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
 
-  await page.goto("/settings/model");
+  await page.goto("/settings/nl2sql-model");
   await page.getByLabel("few-shot 訓練データ").fill("粗利を見たい => SELECT PROFIT FROM INVOICES");
   await page.getByRole("button", { name: "訓練データ保存" }).click();
   await expect(page.getByText("訓練データを保存しました。")).toBeVisible();

@@ -22,11 +22,17 @@ from pathlib import Path
 from typing import Any, cast
 
 from app.features.nl2sql.models import (
+    AgentTeamRunRequest,
     AllowedObjects,
+    AnnotationApplyItem,
+    AnnotationApplyRequest,
     AssetCleanupData,
     AssetRefreshData,
+    ClassifierPredictRequest,
+    ClassifierTrainRequest,
     CommentApplyItem,
     CommentApplyRequest,
+    CommentSuggestionRequest,
     CompareRequest,
     EvaluateRequest,
     EvaluationSetUpsertRequest,
@@ -38,7 +44,9 @@ from app.features.nl2sql.models import (
     Nl2SqlProfile,
     PreviewData,
     PreviewRequest,
+    SimilarHistoryRequest,
     SyntheticCase,
+    SyntheticDataGenerateRequest,
 )
 from app.features.nl2sql.service import nl2sql_service
 from app.settings import get_settings
@@ -718,6 +726,294 @@ def _feedback_index_smoke(*, execute: bool, include_bad: bool) -> StepResult:
     return StepResult(name="feedback_index_rebuild", ok=ok, message=message)
 
 
+def _legacy_absorption_checks(
+    *,
+    profile_id: str | None,
+    question: str,
+    allowed_tables: list[str],
+    execute_db_profile_drop: bool,
+    execute_comments: bool,
+    execute_annotations: bool,
+    execute_synthetic_data: bool,
+    execute_feedback_index: bool,
+    require_classifier_oracle_state: bool,
+) -> list[StepResult]:
+    """Run post-absorption checks for legacy no.1-sql-assist operations."""
+
+    return [
+        _legacy_classifier_smoke(
+            question=question,
+            require_oracle_state=require_classifier_oracle_state,
+        ),
+        *_legacy_db_profile_smoke(execute_drop=execute_db_profile_drop),
+        *_legacy_agent_smoke(profile_id=profile_id, question=question),
+        _legacy_comments_smoke(execute=execute_comments),
+        _legacy_annotations_smoke(execute=execute_annotations),
+        _legacy_synthetic_data_smoke(
+            allowed_tables=allowed_tables,
+            execute=execute_synthetic_data,
+        ),
+        *_legacy_feedback_vector_smoke(
+            question=question,
+            profile_id=profile_id,
+            execute_index=execute_feedback_index,
+        ),
+    ]
+
+
+def _legacy_classifier_smoke(*, question: str, require_oracle_state: bool) -> StepResult:
+    try:
+        store_mode = str(getattr(nl2sql_service._store, "mode", "memory"))
+        if require_oracle_state and store_mode != "oracle":
+            return StepResult(
+                name="legacy_classifier",
+                ok=False,
+                message=f"Classifier Oracle state is not ready: persistence_mode={store_mode}",
+            )
+        payload = "\n".join(
+            [
+                "CATEGORY,TEXT",
+                "標準業務プロファイル,請求金額が大きい取引先を表示したい",
+                "標準業務プロファイル,売上合計を取引先別に確認したい",
+                "入金管理,未入金の請求を確認したい",
+                "入金管理,入金が遅れている取引先を見たい",
+            ]
+        ).encode("utf-8")
+        imported = nl2sql_service.import_classifier_training_data(
+            filename="training_data.csv",
+            content=payload,
+            replace=True,
+        )
+        trained = nl2sql_service.train_classifier(ClassifierTrainRequest())
+        predicted = nl2sql_service.predict_classifier(
+            ClassifierPredictRequest(question=question, top_k=2)
+        )
+    except Exception as exc:
+        return StepResult(name="legacy_classifier", ok=False, message=str(exc))
+    ok = (
+        imported.imported_count >= 4
+        and trained.ready
+        and predicted.recommendation_source == "classifier"
+    )
+    return StepResult(
+        name="legacy_classifier",
+        ok=ok,
+        message=(
+            f"store={store_mode}; imported={imported.imported_count}; "
+            f"ready={trained.ready}; examples={trained.example_count}; "
+            f"categories={trained.category_count}; source={predicted.recommendation_source}; "
+            f"version={trained.classifier_version or '-'}"
+        ),
+    )
+
+
+def _legacy_db_profile_smoke(*, execute_drop: bool) -> list[StepResult]:
+    try:
+        profiles = nl2sql_service.list_select_ai_db_profiles()
+        list_result = StepResult(
+            name="legacy_db_profile_list",
+            ok=True,
+            message=(
+                f"runtime={profiles.runtime}; profiles={len(profiles.profiles)}; "
+                f"warnings={len(profiles.warnings)}"
+            ),
+        )
+        if not profiles.profiles:
+            drop_result = StepResult(
+                name="legacy_db_profile_drop",
+                ok=True,
+                message=f"skipped; execute={execute_drop}; profiles=0",
+            )
+        else:
+            target = profiles.profiles[0].name
+            dropped = nl2sql_service.drop_select_ai_db_profile(target, execute_drop)
+            drop_result = StepResult(
+                name="legacy_db_profile_drop",
+                ok=dropped.status != "error",
+                message=(
+                    f"profile={target}; execute={execute_drop}; "
+                    f"executed={dropped.executed}; status={dropped.status}; "
+                    f"warning={_one_line(dropped.warning, 180) if dropped.warning else '-'}"
+                ),
+            )
+        return [list_result, drop_result]
+    except Exception as exc:
+        return [StepResult(name="legacy_db_profile_list", ok=False, message=str(exc))]
+
+
+def _legacy_agent_smoke(*, profile_id: str | None, question: str) -> list[StepResult]:
+    results: list[StepResult] = []
+    try:
+        privileges = nl2sql_service.check_select_ai_agent_privileges()
+        results.append(
+            StepResult(
+                name="legacy_agent_privileges",
+                ok=privileges.status != "error",
+                message=(
+                    f"runtime={privileges.runtime}; status={privileges.status}; "
+                    f"checks={len(privileges.checks)}; warnings={len(privileges.warnings)}"
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(StepResult(name="legacy_agent_privileges", ok=False, message=str(exc)))
+    try:
+        run = nl2sql_service.run_select_ai_agent_team(
+            AgentTeamRunRequest(prompt=question, profile_id=profile_id)
+        )
+        results.append(
+            StepResult(
+                name="legacy_agent_run_team",
+                ok=bool(run.generated_sql or run.warnings),
+                message=(
+                    f"runtime={run.runtime}; team={run.team_name}; "
+                    f"conversation={run.conversation_id or '-'}; "
+                    f"sql={_one_line(run.generated_sql, 120)}; warnings={len(run.warnings)}"
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(StepResult(name="legacy_agent_run_team", ok=False, message=str(exc)))
+    try:
+        conversations = nl2sql_service.list_select_ai_agent_conversations(limit=3)
+        results.append(
+            StepResult(
+                name="legacy_agent_conversations",
+                ok=True,
+                message=(
+                    f"runtime={conversations.runtime}; items={len(conversations.items)}; "
+                    f"warnings={len(conversations.warnings)}"
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(
+            StepResult(name="legacy_agent_conversations", ok=False, message=str(exc))
+        )
+    return results
+
+
+def _legacy_comments_smoke(*, execute: bool) -> StepResult:
+    try:
+        suggestions = nl2sql_service.suggest_comments(
+            CommentSuggestionRequest(use_llm=False, max_items=5)
+        )
+        items = [
+            CommentApplyItem(
+                object_name=item.object_name,
+                object_type=item.object_type,
+                comment=item.suggested_comment,
+            )
+            for item in suggestions.suggestions[:1]
+        ]
+        applied = nl2sql_service.apply_comments(
+            CommentApplyRequest(items=items, execute=execute)
+        )
+    except Exception as exc:
+        return StepResult(name="legacy_comments_apply", ok=False, message=str(exc))
+    return StepResult(
+        name="legacy_comments_apply",
+        ok=bool(items) and (applied.executed == execute if execute else not applied.executed),
+        message=(
+            f"execute={execute}; executed={applied.executed}; runtime={applied.runtime}; "
+            f"suggestions={len(suggestions.suggestions)}; statements={len(applied.statements)}; "
+            f"warnings={len(applied.warnings)}"
+        ),
+    )
+
+
+def _legacy_annotations_smoke(*, execute: bool) -> StepResult:
+    try:
+        suggestions = nl2sql_service.suggest_annotations()
+        items = [
+            AnnotationApplyItem(
+                object_name=item.object_name,
+                object_type=item.object_type,
+                annotation_name=item.annotation_name,
+                annotation_value=item.annotation_value,
+            )
+            for item in suggestions.suggestions[:1]
+        ]
+        applied = nl2sql_service.apply_annotations(
+            AnnotationApplyRequest(items=items, execute=execute)
+        )
+    except Exception as exc:
+        return StepResult(name="legacy_annotations_apply", ok=False, message=str(exc))
+    return StepResult(
+        name="legacy_annotations_apply",
+        ok=bool(items) and (applied.executed == execute if execute else not applied.executed),
+        message=(
+            f"execute={execute}; executed={applied.executed}; runtime={applied.runtime}; "
+            f"suggestions={len(suggestions.suggestions)}; statements={len(applied.statements)}; "
+            f"warnings={len(applied.warnings)}"
+        ),
+    )
+
+
+def _legacy_synthetic_data_smoke(*, allowed_tables: list[str], execute: bool) -> StepResult:
+    try:
+        catalog = nl2sql_service.get_catalog()
+        table_name = allowed_tables[0] if allowed_tables else catalog.tables[0].table_name
+        operation = nl2sql_service.generate_synthetic_data(
+            SyntheticDataGenerateRequest(table_name=table_name, row_count=1, execute=execute)
+        )
+        status_summary = "-"
+        if operation.operation_id:
+            status = nl2sql_service.synthetic_data_operation_status(operation.operation_id)
+            status_summary = f"{status.runtime}:{status.status}"
+    except Exception as exc:
+        return StepResult(name="legacy_synthetic_data", ok=False, message=str(exc))
+    return StepResult(
+        name="legacy_synthetic_data",
+        ok=operation.status != "error" and (not execute or operation.executed),
+        message=(
+            f"table={operation.table_name}; execute={execute}; "
+            f"executed={operation.executed}; runtime={operation.runtime}; "
+            f"status={operation.status}; operation={operation.operation_id or '-'}; "
+            f"operation_status={status_summary}; warnings={len(operation.warnings)}"
+        ),
+    )
+
+
+def _legacy_feedback_vector_smoke(
+    *, question: str, profile_id: str | None, execute_index: bool
+) -> list[StepResult]:
+    results: list[StepResult] = []
+    try:
+        seeded = nl2sql_service.seed_demo_learning_data()
+        rebuild = nl2sql_service.rebuild_feedback_index(
+            FeedbackIndexRequest(execute=execute_index, include_bad=False)
+        )
+        results.append(
+            StepResult(
+                name="legacy_feedback_rebuild",
+                ok=rebuild.vector_dimension == 1536 and rebuild.vector_backend == "oracle_26ai",
+                message=(
+                    f"execute={execute_index}; executed={rebuild.executed}; "
+                    f"runtime={rebuild.runtime}; status={rebuild.status}; "
+                    f"seeded_history={seeded.seeded_history_count}; "
+                    f"indexed={rebuild.indexed_count}; warnings={len(rebuild.warnings)}"
+                ),
+            )
+        )
+    except Exception as exc:
+        results.append(StepResult(name="legacy_feedback_rebuild", ok=False, message=str(exc)))
+    try:
+        history = nl2sql_service.similar_history(
+            SimilarHistoryRequest(question=question, profile_id=profile_id, limit=3)
+        )
+        results.append(
+            StepResult(
+                name="legacy_feedback_search",
+                ok=True,
+                message=f"matches={len(history.items)}; profile={profile_id or 'default'}",
+            )
+        )
+    except Exception as exc:
+        results.append(StepResult(name="legacy_feedback_search", ok=False, message=str(exc)))
+    return results
+
+
 def _debug_raw_preview(*, profile_id: str | None, question: str) -> list[StepResult]:
     """Print truncated raw Oracle package responses without exposing env values."""
     results: list[StepResult] = []
@@ -1126,6 +1422,48 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--check-legacy-absorption",
+        action="store_true",
+        help=(
+            "Run no.1-sql-assist legacy absorption smoke checks: classifier, "
+            "Select AI profile list/drop, Agent ops, comments, annotations, "
+            "synthetic DB data, and feedback vector search. Destructive DB "
+            "steps stay dry-run unless their --execute-* flag is passed."
+        ),
+    )
+    parser.add_argument(
+        "--execute-db-profile-drop",
+        action="store_true",
+        help=(
+            "Actually drop the first listed Select AI DB profile during "
+            "--check-legacy-absorption. Mutates Oracle."
+        ),
+    )
+    parser.add_argument(
+        "--execute-comments",
+        action="store_true",
+        help=(
+            "Actually execute COMMENT ON statements during --check-legacy-absorption. "
+            "Mutates Oracle."
+        ),
+    )
+    parser.add_argument(
+        "--execute-annotations",
+        action="store_true",
+        help=(
+            "Actually execute ALTER ... ANNOTATIONS statements during "
+            "--check-legacy-absorption. Mutates Oracle."
+        ),
+    )
+    parser.add_argument(
+        "--execute-synthetic-data",
+        action="store_true",
+        help=(
+            "Actually call DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA during "
+            "--check-legacy-absorption. Mutates Oracle data."
+        ),
+    )
+    parser.add_argument(
         "--compare",
         action="store_true",
         help="Run engine comparison smoke and persist a compare record.",
@@ -1204,6 +1542,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fail if NL2SQL state persistence is not backed by Oracle.",
     )
     parser.add_argument(
+        "--require-classifier-oracle-state",
+        action="store_true",
+        help=(
+            "In --check-legacy-absorption, fail classifier smoke unless the "
+            "classifier artifact state store is Oracle-backed."
+        ),
+    )
+    parser.add_argument(
         "--require-refreshed-assets",
         action="store_true",
         help=(
@@ -1247,6 +1593,7 @@ def main(argv: list[str] | None = None) -> int:
     refresh_assets = args.refresh_assets or args.full_smoke or release_gate
     execute_jobs = args.execute or args.full_smoke or release_gate
     check_supporting = args.check_supporting_features or args.full_smoke or release_gate
+    check_legacy_absorption = args.check_legacy_absorption
     compare_engines = args.compare or args.full_smoke or release_gate
     require_oracle = args.require_oracle or release_gate
     require_oracle_persistence = args.require_oracle_persistence or release_gate
@@ -1365,6 +1712,21 @@ def main(argv: list[str] | None = None) -> int:
                 profile_id=profile_id,
                 engine=args.engines[0],
                 synthetic_limit=max(args.synthetic_limit, 0),
+            )
+        )
+
+    if check_legacy_absorption:
+        results.extend(
+            _legacy_absorption_checks(
+                profile_id=profile_id,
+                question=args.question,
+                allowed_tables=allowed.table_names,
+                execute_db_profile_drop=args.execute_db_profile_drop,
+                execute_comments=args.execute_comments,
+                execute_annotations=args.execute_annotations,
+                execute_synthetic_data=args.execute_synthetic_data,
+                execute_feedback_index=args.execute_feedback_index,
+                require_classifier_oracle_state=args.require_classifier_oracle_state,
             )
         )
 

@@ -69,12 +69,25 @@ export interface ProfileUpsertPayload {
   few_shot_examples: Array<Record<string, string>>;
 }
 
+export interface ProfileLearningMaterialImportData {
+  profile_id: string;
+  profile_name: string;
+  mode: string;
+  imported_terms: number;
+  imported_rules: number;
+  imported_examples: number;
+  skipped_count: number;
+  warnings: string[];
+  profile: Nl2SqlProfile;
+}
+
 export interface ProfileRecommendationCandidate {
   profile_id: string;
   profile_name: string;
   score: number;
   matched_terms: string[];
   allowed_tables: string[];
+  category?: string;
 }
 
 export interface ProfileRecommendationData {
@@ -85,6 +98,66 @@ export interface ProfileRecommendationData {
   rewritten_question: string;
   recommended_allowed_objects: AllowedObjects;
   candidates: ProfileRecommendationCandidate[];
+  recommendation_source?: string;
+  classifier_version?: string;
+  category_scores?: Record<string, number>;
+}
+
+export interface ClassifierTrainingExample {
+  id: string;
+  category: string;
+  text: string;
+  profile_id: string;
+  source: string;
+}
+
+export interface ClassifierImportData {
+  imported_count: number;
+  skipped_count: number;
+  total_examples: number;
+  categories: string[];
+  warnings: string[];
+  examples: ClassifierTrainingExample[];
+}
+
+export interface ClassifierStatusData {
+  ready: boolean;
+  trained: boolean;
+  classifier_version: string;
+  updated_at: string;
+  example_count: number;
+  category_count: number;
+  categories: string[];
+  embedding_model: string;
+  vector_dimension: number;
+  persistence_mode: string;
+  recommendation_source: string;
+  metrics: Record<string, string | number>;
+  warnings: string[];
+}
+
+export interface ClassifierPredictionCandidate {
+  category: string;
+  score: number;
+  profile_id: string;
+  profile_name: string;
+}
+
+export interface ClassifierPredictionData {
+  recommendation_source: string;
+  classifier_version: string;
+  predicted_category: string;
+  confidence: number;
+  candidates: ClassifierPredictionCandidate[];
+  warnings: string[];
+}
+
+export interface RewriteData {
+  original_question: string;
+  rewritten_question: string;
+  source: string;
+  model: string;
+  warnings: string[];
 }
 
 export interface SafetyReport {
@@ -218,6 +291,29 @@ export interface FeedbackIndexData {
   timing: TimingEnvelope;
 }
 
+export interface FeedbackVectorEntry {
+  history_id: string;
+  question: string;
+  generated_sql: string;
+  profile_id: string;
+  profile_name: string;
+  feedback_rating?: FeedbackRating | null;
+  feedback_comment: string;
+  indexed: boolean;
+  created_at: string;
+}
+
+export interface FeedbackEntriesData {
+  items: FeedbackVectorEntry[];
+  total: number;
+  indexed_count: number;
+}
+
+export interface FeedbackSearchConfigData {
+  similarity_threshold: number;
+  match_limit: number;
+}
+
 export interface DemoLearningData {
   seeded_history_count: number;
   seeded_feedback_count: number;
@@ -333,6 +429,9 @@ export interface ReverseSqlData {
   question: string;
   explanation: string;
   referenced_tables: string[];
+  logical_steps?: string[];
+  source?: string;
+  warnings?: string[];
 }
 
 export interface AnalyzeData {
@@ -342,6 +441,14 @@ export interface AnalyzeData {
   executable_sql: string;
   repaired_sql: string;
   optimization_hints: string[];
+  structure_summary?: string;
+  risk_level?: string;
+  operations?: string[];
+  filters?: string[];
+  joins?: string[];
+  aggregations?: string[];
+  llm_enhanced?: boolean;
+  llm_warnings?: string[];
 }
 
 export interface RepairData {
@@ -361,6 +468,8 @@ export interface CommentSuggestion {
 
 export interface CommentSuggestionData {
   suggestions: CommentSuggestion[];
+  source?: string;
+  warnings?: string[];
 }
 
 export interface CommentApplyItem {
@@ -382,6 +491,44 @@ export interface CommentApplyData {
   executed: boolean;
   runtime: string;
   statements: CommentApplyStatement[];
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface AnnotationSuggestion {
+  object_name: string;
+  object_type: string;
+  annotation_name: string;
+  annotation_value: string;
+}
+
+export interface AnnotationSuggestionData {
+  suggestions: AnnotationSuggestion[];
+  source: string;
+  warnings: string[];
+}
+
+export interface AnnotationApplyItem {
+  object_name: string;
+  object_type: string;
+  annotation_name: string;
+  annotation_value: string;
+}
+
+export interface AnnotationApplyStatement {
+  object_name: string;
+  object_type: string;
+  annotation_name: string;
+  annotation_value: string;
+  sql: string;
+  status: string;
+  error_message: string;
+}
+
+export interface AnnotationApplyData {
+  executed: boolean;
+  runtime: string;
+  statements: AnnotationApplyStatement[];
   warnings: string[];
   timing: TimingEnvelope;
 }
@@ -452,6 +599,85 @@ export interface AssetRefreshData {
   warning: string;
   asset_names: Record<string, string>;
   engine_meta: Record<string, unknown>;
+}
+
+export interface AssetCleanupData {
+  engine: Nl2SqlEngine;
+  executed: boolean;
+  status: string;
+  cleaned_at: string;
+  profile_name: string;
+  team_name: string;
+  warning: string;
+  asset_names: Record<string, string>;
+  engine_meta: Record<string, unknown>;
+}
+
+export interface SelectAiDbProfile {
+  name: string;
+  status: string;
+  owner: string;
+  created_at: string;
+  attributes: Record<string, unknown>;
+}
+
+export interface SelectAiDbProfilesData {
+  runtime: string;
+  profiles: SelectAiDbProfile[];
+  warnings: string[];
+}
+
+export interface AgentTeamRunData {
+  team_name: string;
+  prompt: string;
+  generated_sql: string;
+  conversation_id: string;
+  runtime: string;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
+}
+
+export interface AgentConversationItem {
+  conversation_id: string;
+  prompt: string;
+  response: string;
+  created_at: string;
+  team_name: string;
+}
+
+export interface AgentConversationsData {
+  runtime: string;
+  items: AgentConversationItem[];
+  warnings: string[];
+}
+
+export interface AgentPrivilegeCheckData {
+  runtime: string;
+  status: string;
+  checks: DiagnosticCheck[];
+  warnings: string[];
+}
+
+export interface SyntheticDataOperationData {
+  operation_id: string;
+  table_name: string;
+  row_count: number;
+  executed: boolean;
+  runtime: string;
+  status: string;
+  message: string;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
+  timing: TimingEnvelope;
+}
+
+export interface SyntheticDataOperationStatusData {
+  operation_id: string;
+  runtime: string;
+  status: string;
+  message: string;
+  result: Record<string, unknown>;
+  warnings: string[];
 }
 
 export interface CsvImportColumn {

@@ -35,6 +35,7 @@ import type {
   ProfileRecommendationData,
   ProfileRecommendationCandidate,
   QueryResults,
+  RewriteData,
   SchemaCatalog,
   SimilarHistoryData,
   SimilarHistoryItem,
@@ -79,6 +80,11 @@ export function Nl2SqlWorkbench() {
   const [recommendationLoading, setRecommendationLoading] = useState(false);
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
+  const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
+  const [rewriteLoading, setRewriteLoading] = useState(false);
+  const [rewriteUseGlossary, setRewriteUseGlossary] = useState(true);
+  const [rewriteUseSchema, setRewriteUseSchema] = useState(true);
+  const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -275,6 +281,29 @@ export function Nl2SqlWorkbench() {
     }
   };
 
+  const rewriteQuestion = async () => {
+    const trimmed = question.trim();
+    if (!trimmed || active) return;
+    setRewriteLoading(true);
+    setError("");
+    try {
+      const data = await apiPost<RewriteData>("/api/nl2sql/rewrite", {
+        question: trimmed,
+        profile_id: profileId || null,
+        use_glossary: rewriteUseGlossary,
+        use_schema: rewriteUseSchema,
+        extra_prompt: rewriteExtraPrompt,
+      });
+      setRewriteData(data);
+      setQuestion(data.rewritten_question);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("nl2sql.error.rewriteFailed"));
+      setRewriteData(null);
+    } finally {
+      setRewriteLoading(false);
+    }
+  };
+
   const submit = async () => {
     const trimmed = question.trim();
     if (!trimmed || active) return;
@@ -379,6 +408,64 @@ export function Nl2SqlWorkbench() {
                   placeholder={t("nl2sql.question.placeholder")}
                 />
               </label>
+
+              <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="font-semibold text-slate-900">{t("nl2sql.rewrite.title")}</p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    loading={rewriteLoading}
+                    disabled={!question.trim() || active}
+                    onClick={() => void rewriteQuestion()}
+                  >
+                    <Sparkles size={15} aria-hidden="true" />
+                    <span>{t("nl2sql.rewrite.action")}</span>
+                  </Button>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-slate-800">
+                    <input
+                      type="checkbox"
+                      checked={rewriteUseGlossary}
+                      onChange={(event) => setRewriteUseGlossary(event.currentTarget.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                    />
+                    <span>{t("nl2sql.rewrite.useGlossary")}</span>
+                  </label>
+                  <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-slate-800">
+                    <input
+                      type="checkbox"
+                      checked={rewriteUseSchema}
+                      onChange={(event) => setRewriteUseSchema(event.currentTarget.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                    />
+                    <span>{t("nl2sql.rewrite.useSchema")}</span>
+                  </label>
+                </div>
+                <label className="grid gap-1 font-medium text-slate-800">
+                  <span>{t("nl2sql.rewrite.extraPrompt")}</span>
+                  <input
+                    value={rewriteExtraPrompt}
+                    onChange={(event) => setRewriteExtraPrompt(event.currentTarget.value)}
+                    disabled={active}
+                    className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  />
+                </label>
+                {rewriteData && (
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-md bg-white px-2 py-1 text-xs font-medium text-slate-700">
+                      {rewriteData.source}
+                    </span>
+                    {rewriteData.model && (
+                      <span className="rounded-md bg-white px-2 py-1 text-xs font-medium text-slate-700">
+                        {rewriteData.model}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </section>
 
               {(recommendation || recommendationLoading) && (
                 <div className="grid gap-3 rounded-md border border-sky-200 bg-sky-50 p-3 text-sm text-slate-800">
@@ -543,6 +630,7 @@ export function Nl2SqlWorkbench() {
                       setResult(null);
                       setPreviewResult(null);
                       setPreviewExecutionResults(null);
+                      setRewriteData(null);
                       setError("");
                     }}
                   >

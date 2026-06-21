@@ -121,6 +121,20 @@ class ProfileUpsertRequest(BaseModel):
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
 
 
+class ProfileLearningMaterialImportData(BaseModel):
+    """Terms / rules / few-shot learning material import response."""
+
+    profile_id: str
+    profile_name: str
+    mode: str = "merge"
+    imported_terms: int = 0
+    imported_rules: int = 0
+    imported_examples: int = 0
+    skipped_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    profile: Nl2SqlProfile
+
+
 class SafetyReport(BaseModel):
     """SQL safety analysis."""
 
@@ -303,6 +317,48 @@ class FeedbackIndexData(BaseModel):
     timing: TimingEnvelope
 
 
+class FeedbackVectorEntry(BaseModel):
+    """Feedback vector/index management row shown in Learning operations."""
+
+    history_id: str
+    question: str
+    generated_sql: str
+    profile_id: str = ""
+    profile_name: str = ""
+    feedback_rating: FeedbackRating | None = None
+    feedback_comment: str = ""
+    indexed: bool = False
+    created_at: str = ""
+
+
+class FeedbackEntriesData(BaseModel):
+    """Feedback management entries response."""
+
+    items: list[FeedbackVectorEntry] = Field(default_factory=list)
+    total: int = 0
+    indexed_count: int = 0
+
+
+class FeedbackEntriesDeleteRequest(BaseModel):
+    """Delete feedback/history entries from the learning store."""
+
+    history_ids: list[str] = Field(default_factory=list)
+
+
+class FeedbackSearchConfigRequest(BaseModel):
+    """Similarity search defaults used when request does not override them."""
+
+    similarity_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    match_limit: int = Field(default=3, ge=1, le=20)
+
+
+class FeedbackSearchConfigData(BaseModel):
+    """Current feedback learning retrieval config."""
+
+    similarity_threshold: float = 0.0
+    match_limit: int = 3
+
+
 class DemoLearningData(BaseModel):
     """Demo learning data seed response."""
 
@@ -318,7 +374,7 @@ class SimilarHistoryRequest(BaseModel):
 
     question: str = Field(min_length=1)
     profile_id: str | None = None
-    limit: int = Field(default=3, ge=1, le=10)
+    limit: int | None = Field(default=None, ge=1, le=20)
 
 
 class SimilarHistoryItem(BaseModel):
@@ -350,6 +406,7 @@ class ProfileRecommendationCandidate(BaseModel):
     score: float
     matched_terms: list[str] = Field(default_factory=list)
     allowed_tables: list[str] = Field(default_factory=list)
+    category: str = ""
 
 
 class ProfileRecommendationData(BaseModel):
@@ -362,6 +419,101 @@ class ProfileRecommendationData(BaseModel):
     rewritten_question: str
     recommended_allowed_objects: AllowedObjects
     candidates: list[ProfileRecommendationCandidate] = Field(default_factory=list)
+    recommendation_source: str = "deterministic"
+    classifier_version: str = ""
+    category_scores: dict[str, float] = Field(default_factory=dict)
+
+
+class ClassifierTrainingExample(BaseModel):
+    """Imported classifier training example."""
+
+    id: str
+    category: str
+    text: str
+    profile_id: str = ""
+    source: str = ""
+
+
+class ClassifierImportData(BaseModel):
+    """Classifier training data import response."""
+
+    imported_count: int
+    skipped_count: int = 0
+    total_examples: int
+    categories: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    examples: list[ClassifierTrainingExample] = Field(default_factory=list)
+
+
+class ClassifierStatusData(BaseModel):
+    """Classifier training/runtime status."""
+
+    ready: bool = False
+    trained: bool = False
+    classifier_version: str = ""
+    updated_at: str = ""
+    example_count: int = 0
+    category_count: int = 0
+    categories: list[str] = Field(default_factory=list)
+    embedding_model: str = ""
+    vector_dimension: int = 1536
+    persistence_mode: str = "memory"
+    recommendation_source: str = "deterministic"
+    metrics: dict[str, float | int | str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ClassifierTrainRequest(BaseModel):
+    """Train LogisticRegression classifier from imported examples."""
+
+    min_examples_per_category: int = Field(default=1, ge=1, le=100)
+
+
+class ClassifierPredictRequest(BaseModel):
+    """Classifier prediction request."""
+
+    question: str = Field(min_length=1)
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+class ClassifierPredictionCandidate(BaseModel):
+    """Classifier prediction candidate mapped to a profile when possible."""
+
+    category: str
+    score: float
+    profile_id: str = ""
+    profile_name: str = ""
+
+
+class ClassifierPredictionData(BaseModel):
+    """Classifier prediction response."""
+
+    recommendation_source: str
+    classifier_version: str = ""
+    predicted_category: str = ""
+    confidence: float = 0.0
+    candidates: list[ClassifierPredictionCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RewriteRequest(BaseModel):
+    """Question rewrite request."""
+
+    question: str = Field(min_length=1)
+    profile_id: str | None = None
+    use_glossary: bool = True
+    use_schema: bool = True
+    extra_prompt: str = ""
+
+
+class RewriteData(BaseModel):
+    """Question rewrite response."""
+
+    original_question: str
+    rewritten_question: str
+    source: str = "deterministic"
+    model: str = ""
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AnalyzeRequest(BaseModel):
@@ -381,6 +533,14 @@ class AnalyzeData(BaseModel):
     executable_sql: str
     repaired_sql: str = ""
     optimization_hints: list[str] = Field(default_factory=list)
+    structure_summary: str = ""
+    risk_level: str = "low"
+    operations: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    joins: list[str] = Field(default_factory=list)
+    aggregations: list[str] = Field(default_factory=list)
+    llm_enhanced: bool = False
+    llm_warnings: list[str] = Field(default_factory=list)
 
 
 class RepairRequest(BaseModel):
@@ -456,6 +616,78 @@ class AssetCleanupData(BaseModel):
     warning: str = ""
     asset_names: dict[str, str] = Field(default_factory=dict)
     engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssetCleanupRequest(BaseModel):
+    """Select AI / Agent asset cleanup request."""
+
+    profile_id: str | None = None
+    engines: list[Nl2SqlEngine] = Field(
+        default_factory=lambda: [Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI]
+    )
+    execute: bool = False
+
+
+class SelectAiDbProfile(BaseModel):
+    """Oracle DBMS_CLOUD_AI profile metadata."""
+
+    name: str
+    status: str = "unknown"
+    owner: str = ""
+    created_at: str = ""
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectAiDbProfilesData(BaseModel):
+    """Oracle Select AI profile list response."""
+
+    runtime: str = "deterministic"
+    profiles: list[SelectAiDbProfile] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SelectAiDbProfileDropRequest(BaseModel):
+    """Drop an Oracle Select AI profile by exact profile name."""
+
+    execute: bool = False
+
+
+class AgentTeamRunRequest(BaseModel):
+    """Select AI Agent team run request."""
+
+    prompt: str = Field(min_length=1)
+    team_name: str = ""
+    profile_id: str | None = None
+
+
+class AgentTeamRunData(BaseModel):
+    """Select AI Agent team run response."""
+
+    team_name: str
+    prompt: str
+    generated_sql: str = ""
+    conversation_id: str = ""
+    runtime: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentConversationItem(BaseModel):
+    """Select AI Agent conversation prompt item."""
+
+    conversation_id: str
+    prompt: str
+    response: str = ""
+    created_at: str = ""
+    team_name: str = ""
+
+
+class AgentConversationsData(BaseModel):
+    """Select AI Agent conversation history response."""
+
+    runtime: str = "deterministic"
+    items: list[AgentConversationItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class CompareRequest(BaseModel):
@@ -576,6 +808,9 @@ class ReverseSqlData(BaseModel):
     question: str
     explanation: str
     referenced_tables: list[str]
+    logical_steps: list[str] = Field(default_factory=list)
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
 
 
 class CommentSuggestion(BaseModel):
@@ -586,10 +821,19 @@ class CommentSuggestion(BaseModel):
     suggested_comment: str
 
 
+class CommentSuggestionRequest(BaseModel):
+    """Comment generation options."""
+
+    use_llm: bool = False
+    max_items: int = Field(default=120, ge=1, le=500)
+
+
 class CommentSuggestionData(BaseModel):
     """Comment suggestions response."""
 
     suggestions: list[CommentSuggestion]
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
 
 
 class CommentApplyItem(BaseModel):
@@ -628,10 +872,100 @@ class CommentApplyData(BaseModel):
     timing: TimingEnvelope
 
 
+class AnnotationSuggestion(BaseModel):
+    """Oracle 23ai annotation suggestion for a table/view/column."""
+
+    object_name: str
+    object_type: str = "table"
+    annotation_name: str = "Display"
+    annotation_value: str
+
+
+class AnnotationSuggestionData(BaseModel):
+    """Annotation suggestions response."""
+
+    suggestions: list[AnnotationSuggestion] = Field(default_factory=list)
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AnnotationApplyItem(BaseModel):
+    """Annotation apply request item."""
+
+    object_name: str = Field(min_length=1, max_length=260)
+    object_type: str = Field(default="table", min_length=1, max_length=16)
+    annotation_name: str = Field(default="Display", min_length=1, max_length=64)
+    annotation_value: str = Field(min_length=1, max_length=4000)
+
+
+class AnnotationApplyRequest(BaseModel):
+    """Restricted Oracle annotation dry-run / execution request."""
+
+    items: list[AnnotationApplyItem] = Field(default_factory=list)
+    execute: bool = False
+
+
+class AnnotationApplyStatement(BaseModel):
+    """Generated Oracle annotation statement result."""
+
+    object_name: str
+    object_type: str
+    annotation_name: str
+    annotation_value: str
+    sql: str
+    status: str = "dry_run"
+    error_message: str = ""
+
+
+class AnnotationApplyData(BaseModel):
+    """Oracle annotation apply response."""
+
+    executed: bool = False
+    runtime: str = "deterministic"
+    statements: list[AnnotationApplyStatement] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
 class SyntheticCasesData(BaseModel):
     """Synthetic cases response."""
 
     cases: list[SyntheticCase]
+
+
+class SyntheticDataGenerateRequest(BaseModel):
+    """DBMS_CLOUD_AI synthetic table data generation request."""
+
+    table_name: str = Field(min_length=1)
+    row_count: int = Field(default=10, ge=1, le=10000)
+    profile_name: str = ""
+    execute: bool = False
+
+
+class SyntheticDataOperationData(BaseModel):
+    """Synthetic DB data generation operation response."""
+
+    operation_id: str = ""
+    table_name: str
+    row_count: int
+    executed: bool = False
+    runtime: str = "deterministic"
+    status: str = "dry_run"
+    message: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+    timing: TimingEnvelope
+
+
+class SyntheticDataOperationStatusData(BaseModel):
+    """Synthetic DB data generation operation status."""
+
+    operation_id: str
+    runtime: str = "deterministic"
+    status: str = "unknown"
+    message: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class DiagnosticCheck(BaseModel):
@@ -640,6 +974,15 @@ class DiagnosticCheck(BaseModel):
     name: str
     status: str
     message: str
+
+
+class AgentPrivilegeCheckData(BaseModel):
+    """Select AI Agent privilege / dictionary-view readiness check response."""
+
+    runtime: str = "deterministic"
+    status: str = "warning"
+    checks: list[DiagnosticCheck] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class DiagnosticReadiness(BaseModel):

@@ -1,5 +1,5 @@
 import { type ChangeEvent, useEffect, useState } from "react";
-import { Bot, Database, Download, FileJson, Gauge, ListChecks, RefreshCw, ShieldCheck, Upload } from "lucide-react";
+import { Bot, Database, Download, FileJson, Gauge, ListChecks, RefreshCw, ShieldCheck, Trash2, Upload } from "lucide-react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
@@ -8,6 +8,10 @@ import { t } from "@/lib/i18n";
 import { engineLabel } from "../labels";
 import { formatElapsed } from "../useOperationTimer";
 import type {
+  AgentConversationsData,
+  AgentPrivilegeCheckData,
+  AgentTeamRunData,
+  AssetCleanupData,
   AssetRefreshData,
   DiagnosticConfigGuide,
   DiagnosticConfigVar,
@@ -16,6 +20,7 @@ import type {
   DiagnosticsData,
   Nl2SqlEngine,
   Nl2SqlProfile,
+  SelectAiDbProfilesData,
 } from "../types";
 import { AssetStatusPanel } from "./SettingsPages";
 
@@ -24,6 +29,15 @@ export function EngineOperationsPage() {
   const [profileId, setProfileId] = useState("");
   const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
   const [refreshResults, setRefreshResults] = useState<AssetRefreshData[]>([]);
+  const [cleanupResults, setCleanupResults] = useState<AssetCleanupData[]>([]);
+  const [cleanupExecute, setCleanupExecute] = useState(false);
+  const [dbProfiles, setDbProfiles] = useState<SelectAiDbProfilesData | null>(null);
+  const [dbProfileDropExecute, setDbProfileDropExecute] = useState(false);
+  const [dbProfileDropResults, setDbProfileDropResults] = useState<AssetCleanupData[]>([]);
+  const [agentPrompt, setAgentPrompt] = useState("請求金額が大きい取引先を見たい");
+  const [agentRun, setAgentRun] = useState<AgentTeamRunData | null>(null);
+  const [agentConversations, setAgentConversations] = useState<AgentConversationsData | null>(null);
+  const [agentPrivilegeCheck, setAgentPrivilegeCheck] = useState<AgentPrivilegeCheckData | null>(null);
   const [reportInput, setReportInput] = useState("");
   const [parsedReport, setParsedReport] = useState<ManualIntegrationReport | null>(null);
   const [reportMessage, setReportMessage] = useState("");
@@ -34,12 +48,14 @@ export function EngineOperationsPage() {
     setLoading("load");
     setMessage("");
     try {
-      const [profileData, diagnosticsData] = await Promise.all([
+      const [profileData, diagnosticsData, dbProfileData] = await Promise.all([
         apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
         apiGet<DiagnosticsData>("/api/nl2sql/diagnostics"),
+        apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles"),
       ]);
       setProfiles(profileData);
       setDiagnostics(diagnosticsData);
+      setDbProfiles(dbProfileData);
       setProfileId((current) => current || profileData[0]?.id || "default");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("engineOps.error.load"));
@@ -64,6 +80,90 @@ export function EngineOperationsPage() {
       setRefreshResults((current) => [result, ...current.filter((item) => item.engine !== result.engine)]);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("engineOps.error.refresh"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const cleanupAssets = async () => {
+    setLoading("cleanup");
+    setMessage("");
+    try {
+      const result = await apiPost<AssetCleanupData[]>("/api/nl2sql/select-ai/assets/cleanup", {
+        profile_id: profileId || null,
+        engines: ["select_ai_agent", "select_ai"],
+        execute: cleanupExecute,
+      });
+      setCleanupResults(result);
+      setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("engineOps.error.cleanup"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const dropDbProfile = async (profileName: string) => {
+    setLoading(`db-profile-drop-${profileName}`);
+    setMessage("");
+    try {
+      const result = await apiPost<AssetCleanupData>(
+        `/api/nl2sql/select-ai/db-profiles/${encodeURIComponent(profileName)}/drop`,
+        { execute: dbProfileDropExecute }
+      );
+      setDbProfileDropResults((current) => [
+        result,
+        ...current.filter((item) => item.profile_name !== result.profile_name),
+      ]);
+      setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("engineOps.error.dbProfileDrop"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const runAgentTeam = async () => {
+    if (!agentPrompt.trim()) return;
+    setLoading("agent-run");
+    setMessage("");
+    try {
+      setAgentRun(
+        await apiPost<AgentTeamRunData>("/api/nl2sql/select-ai-agent/run-team", {
+          prompt: agentPrompt,
+          profile_id: profileId || null,
+        })
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("engineOps.error.agentRun"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const loadAgentConversations = async () => {
+    setLoading("agent-conversations");
+    setMessage("");
+    try {
+      setAgentConversations(
+        await apiGet<AgentConversationsData>("/api/nl2sql/select-ai-agent/conversations?limit=10")
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("engineOps.error.agentConversations"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const checkAgentPrivileges = async () => {
+    setLoading("agent-privileges");
+    setMessage("");
+    try {
+      setAgentPrivilegeCheck(
+        await apiGet<AgentPrivilegeCheckData>("/api/nl2sql/select-ai-agent/privileges/check")
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("engineOps.error.agentPrivileges"));
     } finally {
       setLoading("");
     }
@@ -162,6 +262,231 @@ export function EngineOperationsPage() {
                 disabled
               />
             </div>
+
+            <section className="grid gap-3 border-t border-slate-200 pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-slate-900">{t("engineOps.cleanup.title")}</p>
+                  <p className="mt-1 text-sm text-slate-600">{t("engineOps.cleanup.subtitle")}</p>
+                </div>
+                <Button
+                  type="button"
+                  variant={cleanupExecute ? "danger" : "secondary"}
+                  size="sm"
+                  loading={loading === "cleanup"}
+                  onClick={() => void cleanupAssets()}
+                >
+                  <Database size={15} aria-hidden="true" />
+                  <span>{cleanupExecute ? t("engineOps.cleanup.execute") : t("engineOps.cleanup.dryRun")}</span>
+                </Button>
+              </div>
+              <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={cleanupExecute}
+                  onChange={(event) => setCleanupExecute(event.currentTarget.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                />
+                <span>{t("engineOps.cleanup.confirm")}</span>
+              </label>
+              <div className="grid gap-2 md:grid-cols-2">
+                {cleanupResults.map((item) => (
+                  <section key={`${item.engine}-${item.profile_name}-${item.team_name}`} className="rounded-md border border-slate-200 p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-slate-900">{engineLabel(item.engine)}</p>
+                      <StatusBadge variant={item.executed ? "success" : item.status === "error" ? "danger" : "neutral"} label={item.status} />
+                    </div>
+                    <p className="mt-2 break-all font-mono text-xs text-slate-600">
+                      {Object.values(item.asset_names).join(" / ") || item.profile_name}
+                    </p>
+                    {item.warning && (
+                      <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                        {item.warning}
+                      </p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </section>
+
+            <section className="grid gap-3 border-t border-slate-200 pt-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+              <div className="grid content-start gap-3">
+                <p className="font-semibold text-slate-900">{t("engineOps.dbProfiles.title")}</p>
+                <div className="flex flex-wrap gap-2">
+                  <StatusBadge variant="neutral" label={dbProfiles?.runtime ?? "deterministic"} />
+                  <StatusBadge variant="neutral" label={`${dbProfiles?.profiles.length ?? 0} profiles`} />
+                </div>
+                <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={dbProfileDropExecute}
+                    onChange={(event) => setDbProfileDropExecute(event.currentTarget.checked)}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
+                  />
+                  <span>{t("engineOps.dbProfiles.dropConfirm")}</span>
+                </label>
+                <div className="grid gap-2">
+                  {(dbProfiles?.profiles ?? []).slice(0, 6).map((profile) => (
+                    <div key={profile.name} className="rounded-md border border-slate-200 p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="break-all font-mono text-xs font-semibold text-slate-900">{profile.name}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusBadge variant="neutral" label={profile.status} />
+                          <Button
+                            type="button"
+                            variant={dbProfileDropExecute ? "danger" : "secondary"}
+                            size="sm"
+                            loading={loading === `db-profile-drop-${profile.name}`}
+                            onClick={() => void dropDbProfile(profile.name)}
+                          >
+                            <Trash2 size={15} aria-hidden="true" />
+                            <span>
+                              {dbProfileDropExecute
+                                ? t("engineOps.dbProfiles.dropExecute")
+                                : t("engineOps.dbProfiles.dropDryRun")}
+                            </span>
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {(dbProfiles?.profiles.length ?? 0) === 0 && (
+                    <div className="grid min-h-20 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-500">
+                      {t("engineOps.dbProfiles.empty")}
+                    </div>
+                  )}
+                </div>
+                {dbProfileDropResults.length > 0 && (
+                  <div className="grid gap-2">
+                    <p className="text-sm font-semibold text-slate-900">{t("engineOps.dbProfiles.dropResult")}</p>
+                    {dbProfileDropResults.map((item) => (
+                      <section
+                        key={`${item.profile_name}-${item.cleaned_at}-${item.status}`}
+                        className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="break-all font-mono text-xs font-semibold text-slate-900">
+                            {item.profile_name}
+                          </p>
+                          <StatusBadge
+                            variant={item.executed ? "success" : item.status === "error" ? "danger" : "neutral"}
+                            label={item.status}
+                          />
+                        </div>
+                        {item.warning && (
+                          <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
+                            {item.warning}
+                          </p>
+                        )}
+                        <p className="mt-2 text-xs leading-5 text-slate-600">
+                          runtime: {String(item.engine_meta.runtime ?? "deterministic")}
+                        </p>
+                      </section>
+                    ))}
+                  </div>
+                )}
+                {dbProfiles?.warnings?.length ? (
+                  <div className="grid gap-2">
+                    {dbProfiles.warnings.map((warning) => (
+                      <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                        {warning}
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className="grid content-start gap-3">
+                <p className="font-semibold text-slate-900">{t("engineOps.agentRun.title")}</p>
+                <label className="grid gap-1 text-sm font-medium text-slate-800">
+                  <span>{t("engineOps.agentRun.prompt")}</span>
+                  <textarea
+                    value={agentPrompt}
+                    onChange={(event) => setAgentPrompt(event.currentTarget.value)}
+                    rows={3}
+                    className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    loading={loading === "agent-run"}
+                    disabled={!agentPrompt.trim()}
+                    onClick={() => void runAgentTeam()}
+                  >
+                    <Bot size={15} aria-hidden="true" />
+                    <span>{t("engineOps.agentRun.action")}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    loading={loading === "agent-conversations"}
+                    onClick={() => void loadAgentConversations()}
+                  >
+                    <ListChecks size={15} aria-hidden="true" />
+                    <span>{t("engineOps.agentRun.conversations")}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    loading={loading === "agent-privileges"}
+                    onClick={() => void checkAgentPrivileges()}
+                  >
+                    <ShieldCheck size={15} aria-hidden="true" />
+                    <span>{t("engineOps.agentRun.privileges")}</span>
+                  </Button>
+                </div>
+                {agentRun && (
+                  <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge variant="neutral" label={agentRun.runtime} />
+                      <StatusBadge variant="info" label={agentRun.team_name} />
+                    </div>
+                    <pre className="max-h-32 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+                      <code>{agentRun.generated_sql || "-"}</code>
+                    </pre>
+                  </div>
+                )}
+                {agentConversations && (
+                  <div className="grid gap-2 rounded-md border border-slate-200 p-3 text-sm">
+                    <StatusBadge variant="neutral" label={agentConversations.runtime} />
+                    {agentConversations.items.slice(0, 3).map((item) => (
+                      <p key={`${item.conversation_id}-${item.created_at}`} className="break-words text-slate-700">
+                        {item.prompt}
+                      </p>
+                    ))}
+                    {agentConversations.items.length === 0 && (
+                      <p className="text-slate-500">{t("engineOps.agentRun.noConversations")}</p>
+                    )}
+                  </div>
+                )}
+                {agentPrivilegeCheck && (
+                  <div className="grid gap-2 rounded-md border border-slate-200 p-3 text-sm">
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge
+                        variant={agentPrivilegeCheck.status === "ok" ? "success" : "warning"}
+                        label={agentPrivilegeCheck.status}
+                      />
+                      <StatusBadge variant="neutral" label={agentPrivilegeCheck.runtime} />
+                    </div>
+                    {agentPrivilegeCheck.checks.map((check) => (
+                      <div key={check.name} className="rounded-md bg-slate-50 p-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="font-mono text-xs text-slate-500">{check.name}</p>
+                          <StatusBadge
+                            variant={check.status === "ok" ? "success" : check.status === "error" ? "danger" : "warning"}
+                            label={check.status}
+                          />
+                        </div>
+                        <p className="mt-1 text-slate-700">{check.message}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
           </CardContent>
         </Card>
 
@@ -245,6 +570,21 @@ export function EngineOperationsPage() {
                 "NL2SQL_PERSISTENCE_MODE",
                 "NL2SQL_SELECT_AI_CREDENTIAL_NAME",
                 "NL2SQL_SELECT_AI_MODEL",
+              ]}
+            />
+            <RequiredSmokeCommand
+              label={t("engineOps.requiredSmoke.legacyAbsorption")}
+              command='uv run python scripts/nl2sql_manual_integration.py --check-legacy-absorption --require-oracle --require-oracle-persistence --require-feedback-embedding --require-classifier-oracle-state --engines select_ai_agent,select_ai --allowed-table YOUR_TABLE --question "YOUR_QUESTION" --json-report reports/nl2sql-legacy-absorption.json'
+              readiness={releaseGateReadiness(diagnostics)}
+              requiredEnvVars={[
+                "ORACLE_USER",
+                "ORACLE_DSN",
+                "NL2SQL_RUNTIME_MODE",
+                "NL2SQL_PERSISTENCE_MODE",
+                "OCI_REGION",
+                "OCI_COMPARTMENT_ID",
+                "OCI_GENAI_ENDPOINT",
+                "OCI_GENAI_EMBED_MODEL_ID",
               ]}
             />
             <RequiredSmokeCommand

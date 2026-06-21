@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+    env_file:
+      - backend/.env.example
+    environment:
+      CORS_ORIGINS: '["http://localhost:3001","http://127.0.0.1:3001"]'
+      NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-deterministic}
+      NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-memory}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: no.1-production-ready-nl2sql/frontend/Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3001:80"

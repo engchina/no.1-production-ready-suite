@@ -7,15 +7,19 @@
 
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
+import importlib
 import io
 import json
 import logging
+import math
 import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,16 +40,35 @@ from .enterprise_ai_client import (
     OciEnterpriseAiDirectClient,
 )
 from .models import (
+    AgentConversationItem,
+    AgentConversationsData,
+    AgentPrivilegeCheckData,
+    AgentTeamRunData,
+    AgentTeamRunRequest,
     AllowedObjects,
     AnalyzeData,
+    AnnotationApplyData,
+    AnnotationApplyItem,
+    AnnotationApplyRequest,
+    AnnotationApplyStatement,
+    AnnotationSuggestion,
+    AnnotationSuggestionData,
     AssetCleanupData,
     AssetRefreshData,
+    ClassifierImportData,
+    ClassifierPredictionCandidate,
+    ClassifierPredictionData,
+    ClassifierPredictRequest,
+    ClassifierStatusData,
+    ClassifierTrainingExample,
+    ClassifierTrainRequest,
     CommentApplyData,
     CommentApplyItem,
     CommentApplyRequest,
     CommentApplyStatement,
     CommentSuggestion,
     CommentSuggestionData,
+    CommentSuggestionRequest,
     CompareData,
     CompareExecutionData,
     CompareHistoryData,
@@ -69,9 +92,13 @@ from .models import (
     EvaluationSetsData,
     EvaluationSetUpsertRequest,
     FeedbackData,
+    FeedbackEntriesData,
     FeedbackIndexData,
     FeedbackIndexRequest,
     FeedbackRating,
+    FeedbackSearchConfigData,
+    FeedbackSearchConfigRequest,
+    FeedbackVectorEntry,
     HistoryData,
     HistoryItem,
     JobCreateData,
@@ -83,6 +110,7 @@ from .models import (
     Nl2SqlResult,
     PreviewData,
     PreviewRequest,
+    ProfileLearningMaterialImportData,
     ProfileRecommendationCandidate,
     ProfileRecommendationData,
     ProfileRecommendationRequest,
@@ -91,16 +119,23 @@ from .models import (
     RepairRequest,
     ReverseSqlData,
     ReverseSqlRequest,
+    RewriteData,
+    RewriteRequest,
     SafetyReport,
     SchemaCatalog,
     SchemaColumn,
     SchemaTable,
+    SelectAiDbProfile,
+    SelectAiDbProfilesData,
     SimilarHistoryData,
     SimilarHistoryItem,
     SimilarHistoryRequest,
     StageTiming,
     SyntheticCase,
     SyntheticCasesData,
+    SyntheticDataGenerateRequest,
+    SyntheticDataOperationData,
+    SyntheticDataOperationStatusData,
     TimingEnvelope,
 )
 from .oracle_adapter import OracleAdapterError, OracleNl2SqlAdapter
@@ -490,6 +525,10 @@ class Nl2SqlService:
         self._evaluation_runs: list[EvaluationRunRecord] = []
         self._feedback: dict[str, FeedbackRating] = {}
         self._feedback_indexed_ids: set[str] = set()
+        self._feedback_similarity_threshold = 0.0
+        self._feedback_match_limit = 3
+        self._classifier_examples: list[ClassifierTrainingExample] = []
+        self._classifier_artifact: dict[str, Any] | None = None
         self._asset_meta: dict[Nl2SqlEngine, AssetRefreshData] = {}
         self._load_snapshot()
         self._persist_state()
@@ -537,6 +576,14 @@ class Nl2SqlService:
                 for engine, data in snapshot.get("asset_meta", {}).items()
             }
             feedback_indexed_ids = {str(item) for item in snapshot.get("feedback_indexed_ids", [])}
+            feedback_config = snapshot.get("feedback_search_config", {})
+            classifier_examples = [
+                ClassifierTrainingExample.model_validate(item)
+                for item in snapshot.get("classifier_examples", [])
+            ]
+            classifier_artifact = snapshot.get("classifier_artifact")
+            if classifier_artifact is not None and not isinstance(classifier_artifact, dict):
+                classifier_artifact = None
         except Exception as exc:
             logger.warning("NL2SQL store snapshot restore failed: %s", exc)
             return
@@ -556,6 +603,12 @@ class Nl2SqlService:
                 if item.feedback_rating is not None
             }
             self._feedback_indexed_ids = feedback_indexed_ids
+            self._feedback_similarity_threshold = float(
+                feedback_config.get("similarity_threshold", 0.0)
+            )
+            self._feedback_match_limit = int(feedback_config.get("match_limit", 3))
+            self._classifier_examples = classifier_examples
+            self._classifier_artifact = classifier_artifact
             self._asset_meta = asset_meta
 
     def _recover_interrupted_jobs(self) -> None:
@@ -587,6 +640,14 @@ class Nl2SqlService:
             "evaluation_sets": [item.model_dump(mode="json") for item in self._evaluation_sets],
             "evaluation_runs": [item.model_dump(mode="json") for item in self._evaluation_runs],
             "feedback_indexed_ids": sorted(self._feedback_indexed_ids),
+            "feedback_search_config": {
+                "similarity_threshold": self._feedback_similarity_threshold,
+                "match_limit": self._feedback_match_limit,
+            },
+            "classifier_examples": [
+                item.model_dump(mode="json") for item in self._classifier_examples
+            ],
+            "classifier_artifact": self._classifier_artifact,
             "asset_meta": {
                 engine.value: data.model_dump(mode="json")
                 for engine, data in self._asset_meta.items()
@@ -653,6 +714,80 @@ class Nl2SqlService:
             self._profiles[profile_id] = updated
         self._persist_state()
         return updated
+
+    def import_profile_learning_material(
+        self,
+        *,
+        profile_id: str,
+        filename: str,
+        content: bytes,
+        mode: str = "merge",
+    ) -> ProfileLearningMaterialImportData:
+        warnings: list[str] = []
+        normalized_mode = mode.strip().lower() or "merge"
+        if normalized_mode not in {"merge", "replace"}:
+            warnings.append(f"{mode}: 未対応の import mode のため merge として扱いました。")
+            normalized_mode = "merge"
+        parsed, skipped = self._parse_profile_learning_material_file(
+            filename,
+            content,
+            warnings,
+        )
+
+        def patch(current: Nl2SqlProfile) -> Nl2SqlProfile:
+            if normalized_mode == "replace":
+                glossary = parsed["terms"]
+                rules = parsed["rules"]
+                examples = parsed["examples"]
+            else:
+                glossary = {**current.glossary, **parsed["terms"]}
+                rules = self._merge_unique_strings(current.sql_rules, parsed["rules"])
+                examples = self._merge_few_shot_examples(
+                    current.few_shot_examples,
+                    parsed["examples"],
+                )
+            return current.model_copy(
+                update={
+                    "glossary": glossary,
+                    "sql_rules": rules,
+                    "few_shot_examples": examples,
+                }
+            )
+
+        updated = self.update_profile(profile_id, patch)
+        return ProfileLearningMaterialImportData(
+            profile_id=updated.id,
+            profile_name=updated.name,
+            mode=normalized_mode,
+            imported_terms=len(parsed["terms"]),
+            imported_rules=len(parsed["rules"]),
+            imported_examples=len(parsed["examples"]),
+            skipped_count=skipped,
+            warnings=warnings,
+            profile=updated,
+        )
+
+    def export_profile_learning_material_xlsx(self, profile_id: str) -> tuple[str, bytes]:
+        profile = self.get_profile(profile_id)
+        openpyxl = importlib.import_module("openpyxl")
+        workbook = openpyxl.Workbook()
+        terms_sheet = workbook.active
+        terms_sheet.title = "terms"
+        terms_sheet.append(["TERM", "DEFINITION"])
+        for term, definition in profile.glossary.items():
+            terms_sheet.append([term, definition])
+        rules_sheet = workbook.create_sheet("rules")
+        rules_sheet.append(["CATEGORY", "RULE"])
+        for rule in profile.sql_rules:
+            rules_sheet.append([profile.name, rule])
+        examples_sheet = workbook.create_sheet("few_shot")
+        examples_sheet.append(["QUESTION", "SQL"])
+        for example in profile.few_shot_examples:
+            examples_sheet.append([example.get("question", ""), example.get("sql", "")])
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        safe_profile = _csv_identifier(profile.id or profile.name, "PROFILE").lower()
+        return f"nl2sql_{safe_profile}_learning_material.xlsx", buffer.getvalue()
 
     def archive_profile(self, profile_id: str) -> Nl2SqlProfile:
         return self.update_profile(profile_id, lambda p: p.model_copy(update={"archived": True}))
@@ -788,6 +923,7 @@ class Nl2SqlService:
             referenced_columns=referenced_columns,
             has_wildcard=has_wildcard,
         )
+        structure = self._sql_structure(sql, referenced)
         return AnalyzeData(
             safety=safety,
             explanation=(
@@ -799,6 +935,12 @@ class Nl2SqlService:
             optimization_hints=self._optimization_hints(
                 safety=safety, sql=sql, row_limit=row_limit
             ),
+            structure_summary=structure["summary"],
+            risk_level="low" if safety.is_safe else "high",
+            operations=structure["operations"],
+            filters=structure["filters"],
+            joins=structure["joins"],
+            aggregations=structure["aggregations"],
         )
 
     def repair_oracle_error(self, request: RepairRequest, row_limit: int) -> RepairData:
@@ -1033,7 +1175,587 @@ class Nl2SqlService:
             profile_id=request.profile_id,
             include_bad=False,
         )
-        return SimilarHistoryData(items=ranked[: request.limit])
+        limit = request.limit or self._feedback_match_limit
+        threshold = self._feedback_similarity_threshold
+        filtered = [item for item in ranked if item.score >= threshold]
+        return SimilarHistoryData(items=filtered[:limit])
+
+    def list_feedback_entries(self) -> FeedbackEntriesData:
+        with self._lock:
+            items = [
+                FeedbackVectorEntry(
+                    history_id=item.id,
+                    question=item.question,
+                    generated_sql=item.generated_sql,
+                    profile_id=item.profile_id,
+                    profile_name=item.profile_name,
+                    feedback_rating=item.feedback_rating,
+                    feedback_comment=item.feedback_comment,
+                    indexed=item.id in self._feedback_indexed_ids,
+                    created_at=item.created_at,
+                )
+                for item in reversed(self._history)
+            ]
+            indexed_count = sum(1 for item in items if item.indexed)
+        return FeedbackEntriesData(items=items, total=len(items), indexed_count=indexed_count)
+
+    def delete_feedback_entries(self, history_ids: list[str]) -> FeedbackEntriesData:
+        ids = {item.strip() for item in history_ids if item.strip()}
+        if not ids:
+            return self.list_feedback_entries()
+        with self._lock:
+            self._history = [item for item in self._history if item.id not in ids]
+            for item_id in ids:
+                self._feedback.pop(item_id, None)
+            self._feedback_indexed_ids.difference_update(ids)
+        self._persist_state()
+        return self.list_feedback_entries()
+
+    def feedback_search_config(self) -> FeedbackSearchConfigData:
+        with self._lock:
+            return FeedbackSearchConfigData(
+                similarity_threshold=self._feedback_similarity_threshold,
+                match_limit=self._feedback_match_limit,
+            )
+
+    def update_feedback_search_config(
+        self, request: FeedbackSearchConfigRequest
+    ) -> FeedbackSearchConfigData:
+        with self._lock:
+            self._feedback_similarity_threshold = request.similarity_threshold
+            self._feedback_match_limit = request.match_limit
+        self._persist_state()
+        return self.feedback_search_config()
+
+    def classifier_status(self) -> ClassifierStatusData:
+        with self._lock:
+            artifact = dict(self._classifier_artifact or {})
+            examples = list(self._classifier_examples)
+        categories = sorted({item.category for item in examples})
+        ready = bool(artifact.get("model_base64") and artifact.get("categories"))
+        warnings: list[str] = []
+        if not examples:
+            warnings.append("分類器の training data が未登録です。")
+        if not ready:
+            warnings.append("LogisticRegression classifier は未学習です。")
+        return ClassifierStatusData(
+            ready=ready,
+            trained=ready,
+            classifier_version=str(artifact.get("version") or ""),
+            updated_at=str(artifact.get("updated_at") or ""),
+            example_count=len(examples),
+            category_count=len(categories),
+            categories=categories,
+            embedding_model=str(
+                artifact.get("embedding_model")
+                or get_settings().oci_genai_embed_model_id
+                or "deterministic-hash-1536"
+            ),
+            vector_dimension=1536,
+            persistence_mode=self._store.mode,
+            recommendation_source="classifier" if ready else "deterministic",
+            metrics=dict(artifact.get("metrics") or {}),
+            warnings=warnings,
+        )
+
+    def import_classifier_training_data(
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        replace: bool = False,
+        profile_id: str | None = None,
+    ) -> ClassifierImportData:
+        warnings: list[str] = []
+        parsed, skipped = self._parse_classifier_training_file(filename, content, warnings)
+        examples = [
+            ClassifierTrainingExample(
+                id=str(uuid.uuid4()),
+                category=category,
+                text=text,
+                profile_id=profile_id or self._profile_id_for_classifier_category(category),
+                source=filename,
+            )
+            for category, text in parsed
+        ]
+        with self._lock:
+            if replace:
+                self._classifier_examples = examples
+                self._classifier_artifact = None
+            else:
+                self._classifier_examples.extend(examples)
+                if examples:
+                    self._classifier_artifact = None
+            total_examples = len(self._classifier_examples)
+            all_categories = sorted({item.category for item in self._classifier_examples})
+        self._persist_state()
+        return ClassifierImportData(
+            imported_count=len(examples),
+            skipped_count=skipped,
+            total_examples=total_examples,
+            categories=all_categories,
+            warnings=warnings,
+            examples=examples[:50],
+        )
+
+    def train_classifier(self, request: ClassifierTrainRequest) -> ClassifierStatusData:
+        with self._lock:
+            examples = list(self._classifier_examples)
+        warnings: list[str] = []
+        if not examples:
+            return ClassifierStatusData(
+                ready=False,
+                trained=False,
+                example_count=0,
+                category_count=0,
+                persistence_mode=self._store.mode,
+                warnings=["分類器の training data が未登録です。"],
+            )
+
+        counts: dict[str, int] = {}
+        for item in examples:
+            counts[item.category] = counts.get(item.category, 0) + 1
+        eligible = [
+            item
+            for item in examples
+            if counts.get(item.category, 0) >= request.min_examples_per_category
+        ]
+        categories = sorted({item.category for item in eligible})
+        if len(categories) < 2:
+            return ClassifierStatusData(
+                ready=False,
+                trained=False,
+                example_count=len(examples),
+                category_count=len(categories),
+                categories=categories,
+                persistence_mode=self._store.mode,
+                warnings=[
+                    "LogisticRegression には 2 category 以上の training data が必要です。"
+                ],
+            )
+
+        try:
+            vectors, embedding_warnings, embedding_model = self._classifier_vectors(
+                [item.text for item in eligible]
+            )
+            warnings.extend(embedding_warnings)
+            linear_model = importlib.import_module("sklearn.linear_model")
+            joblib = importlib.import_module("joblib")
+            model = linear_model.LogisticRegression(max_iter=1000, random_state=42)
+            labels = [item.category for item in eligible]
+            model.fit(vectors, labels)
+            score = float(model.score(vectors, labels))
+            buffer = io.BytesIO()
+            joblib.dump(model, buffer)
+        except Exception as exc:
+            return ClassifierStatusData(
+                ready=False,
+                trained=False,
+                example_count=len(examples),
+                category_count=len(categories),
+                categories=categories,
+                persistence_mode=self._store.mode,
+                warnings=[f"分類器の学習に失敗しました: {exc}"],
+            )
+
+        now = _utc_now()
+        artifact = {
+            "version": str(uuid.uuid4()),
+            "updated_at": now,
+            "model_base64": base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "categories": categories,
+            "embedding_model": embedding_model,
+            "vector_dimension": 1536,
+            "metrics": {
+                "training_examples": len(eligible),
+                "category_count": len(categories),
+                "training_accuracy": round(score, 4),
+            },
+        }
+        with self._lock:
+            self._classifier_artifact = artifact
+        self._persist_state()
+        return self.classifier_status().model_copy(update={"warnings": warnings})
+
+    def predict_classifier(self, request: ClassifierPredictRequest) -> ClassifierPredictionData:
+        prediction, warnings = self._classifier_prediction(request.question, request.top_k)
+        if prediction is None:
+            return ClassifierPredictionData(
+                recommendation_source="deterministic",
+                warnings=warnings or ["LogisticRegression classifier は未学習です。"],
+            )
+        prediction.warnings.extend(warnings)
+        return prediction
+
+    def _classifier_prediction(
+        self, question: str, top_k: int
+    ) -> tuple[ClassifierPredictionData | None, list[str]]:
+        with self._lock:
+            artifact = dict(self._classifier_artifact or {})
+        if not artifact.get("model_base64"):
+            return None, []
+        warnings: list[str] = []
+        try:
+            joblib = importlib.import_module("joblib")
+            raw = base64.b64decode(str(artifact["model_base64"]))
+            model = joblib.load(io.BytesIO(raw))
+            vectors, embedding_warnings, _embedding_model = self._classifier_vectors([question])
+            warnings.extend(embedding_warnings)
+            probabilities = model.predict_proba(vectors)[0]
+            classes = [str(item) for item in model.classes_]
+        except Exception as exc:
+            return None, [f"分類器の予測に失敗しました: {exc}"]
+
+        ranked = sorted(
+            zip(classes, probabilities, strict=False),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        candidates: list[ClassifierPredictionCandidate] = []
+        for category, score in ranked[:top_k]:
+            profile = self._profile_for_classifier_category(category)
+            candidates.append(
+                ClassifierPredictionCandidate(
+                    category=category,
+                    score=round(float(score), 4),
+                    profile_id=profile.id if profile else "",
+                    profile_name=profile.name if profile else "",
+                )
+            )
+        best = candidates[0] if candidates else None
+        return (
+            ClassifierPredictionData(
+                recommendation_source="classifier",
+                classifier_version=str(artifact.get("version") or ""),
+                predicted_category=best.category if best else "",
+                confidence=best.score if best else 0.0,
+                candidates=candidates,
+            ),
+            warnings,
+        )
+
+    def _parse_classifier_training_file(
+        self, filename: str, content: bytes, warnings: list[str]
+    ) -> tuple[list[tuple[str, str]], int]:
+        suffix = Path(filename).suffix.lower()
+        if suffix in {".xlsx", ".xlsm"}:
+            return self._parse_classifier_training_xlsx(content, warnings)
+        if suffix in {".csv", ".txt", ""}:
+            text = content.decode("utf-8-sig", errors="replace")
+            return self._parse_classifier_training_csv(text, warnings)
+        warnings.append(f"{suffix} は未対応の形式です。CSV または XLSX を指定してください。")
+        return [], 0
+
+    def _parse_classifier_training_csv(
+        self, text: str, warnings: list[str]
+    ) -> tuple[list[tuple[str, str]], int]:
+        reader = csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            warnings.append("CSV header が見つかりません。")
+            return [], 0
+        category_key, text_key = self._classifier_header_keys(reader.fieldnames)
+        if not category_key or not text_key:
+            warnings.append("CSV は CATEGORY と TEXT/QUESTION 列が必要です。")
+            return [], 0
+        rows: list[tuple[str, str]] = []
+        skipped = 0
+        for row in reader:
+            category = str(row.get(category_key) or "").strip()
+            value = str(row.get(text_key) or "").strip()
+            if not category or not value:
+                skipped += 1
+                continue
+            rows.append((category, value))
+        return rows, skipped
+
+    def _parse_classifier_training_xlsx(
+        self, content: bytes, warnings: list[str]
+    ) -> tuple[list[tuple[str, str]], int]:
+        try:
+            openpyxl = importlib.import_module("openpyxl")
+            workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        except Exception as exc:
+            warnings.append(f"XLSX の読込に失敗しました: {exc}")
+            return [], 0
+        sheet = workbook.active
+        rows_iter = sheet.iter_rows(values_only=True)
+        headers = [str(value or "").strip() for value in next(rows_iter, [])]
+        category_key, text_key = self._classifier_header_keys(headers)
+        if not category_key or not text_key:
+            warnings.append("XLSX は CATEGORY と TEXT/QUESTION 列が必要です。")
+            return [], 0
+        category_index = headers.index(category_key)
+        text_index = headers.index(text_key)
+        rows: list[tuple[str, str]] = []
+        skipped = 0
+        for raw_row in rows_iter:
+            category = (
+                str(raw_row[category_index] or "").strip()
+                if len(raw_row) > category_index
+                else ""
+            )
+            value = str(raw_row[text_index] or "").strip() if len(raw_row) > text_index else ""
+            if not category or not value:
+                skipped += 1
+                continue
+            rows.append((category, value))
+        return rows, skipped
+
+    def _classifier_header_keys(self, headers: Sequence[str]) -> tuple[str, str]:
+        normalized = {self._normalize_training_header(header): header for header in headers}
+        category = (
+            normalized.get("CATEGORY") or normalized.get("PROFILE") or normalized.get("LABEL")
+        )
+        text = (
+            normalized.get("TEXT")
+            or normalized.get("QUESTION")
+            or normalized.get("PROMPT")
+            or normalized.get("UTTERANCE")
+        )
+        return category or "", text or ""
+
+    def _normalize_training_header(self, value: str) -> str:
+        return re.sub(r"[^A-Z0-9]+", "_", value.strip().upper()).strip("_")
+
+    def _parse_profile_learning_material_file(
+        self,
+        filename: str,
+        content: bytes,
+        warnings: list[str],
+    ) -> tuple[dict[str, Any], int]:
+        suffix = Path(filename).suffix.lower()
+        if suffix in {".xlsx", ".xlsm"}:
+            return self._parse_profile_learning_material_xlsx(content, warnings)
+        if suffix in {".csv", ".tsv", ".txt", ""}:
+            text = content.decode("utf-8-sig", errors="replace")
+            first_line = text.splitlines()[0] if text.splitlines() else ""
+            delimiter = "\t" if suffix == ".tsv" or "\t" in first_line else ","
+            return self._parse_profile_learning_material_csv(
+                text,
+                warnings,
+                kind_hint=self._learning_material_kind_hint(filename),
+                delimiter=delimiter,
+            )
+        warnings.append(f"{suffix} は未対応の形式です。CSV または XLSX を指定してください。")
+        return self._empty_learning_material(), 0
+
+    def _parse_profile_learning_material_csv(
+        self,
+        text: str,
+        warnings: list[str],
+        *,
+        kind_hint: str = "",
+        delimiter: str = ",",
+    ) -> tuple[dict[str, Any], int]:
+        reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+        try:
+            headers = [str(value or "").strip() for value in next(reader)]
+        except StopIteration:
+            warnings.append("CSV header が見つかりません。")
+            return self._empty_learning_material(), 0
+        return self._parse_profile_learning_rows(headers, reader, warnings, kind_hint=kind_hint)
+
+    def _parse_profile_learning_material_xlsx(
+        self,
+        content: bytes,
+        warnings: list[str],
+    ) -> tuple[dict[str, Any], int]:
+        try:
+            openpyxl = importlib.import_module("openpyxl")
+            workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        except Exception as exc:
+            warnings.append(f"XLSX の読込に失敗しました: {exc}")
+            return self._empty_learning_material(), 0
+        merged = self._empty_learning_material()
+        skipped = 0
+        for sheet in workbook.worksheets:
+            rows_iter = sheet.iter_rows(values_only=True)
+            headers = [str(value or "").strip() for value in next(rows_iter, [])]
+            if not any(headers):
+                continue
+            parsed, sheet_skipped = self._parse_profile_learning_rows(
+                headers,
+                rows_iter,
+                warnings,
+                kind_hint=self._learning_material_kind_hint(sheet.title),
+            )
+            merged["terms"].update(parsed["terms"])
+            merged["rules"] = self._merge_unique_strings(merged["rules"], parsed["rules"])
+            merged["examples"] = self._merge_few_shot_examples(
+                merged["examples"],
+                parsed["examples"],
+            )
+            skipped += sheet_skipped
+        return merged, skipped
+
+    def _parse_profile_learning_rows(
+        self,
+        headers: Sequence[str],
+        rows: Iterable[Sequence[Any]],
+        warnings: list[str],
+        *,
+        kind_hint: str = "",
+    ) -> tuple[dict[str, Any], int]:
+        material = self._empty_learning_material()
+        term_index = self._learning_header_index(headers, {"TERM", "KEY", "WORD", "用語"})
+        definition_index = self._learning_header_index(
+            headers,
+            {"DEFINITION", "DESCRIPTION", "VALUE", "REPLACEMENT", "定義", "説明"},
+        )
+        rule_names = {"RULE", "SQL_RULE", "GUIDELINE", "INSTRUCTION", "ルール"}
+        if kind_hint == "rules":
+            rule_names = rule_names | {"TEXT"}
+        rule_index = self._learning_header_index(headers, rule_names)
+        question_index = self._learning_header_index(
+            headers,
+            {"QUESTION", "PROMPT", "UTTERANCE", "質問"},
+        )
+        sql_index = self._learning_header_index(headers, {"SQL", "EXPECTED_SQL"})
+        skipped = 0
+        for raw_row in rows:
+            term = self._row_cell(raw_row, term_index)
+            definition = self._row_cell(raw_row, definition_index)
+            rule = self._row_cell(raw_row, rule_index)
+            question = self._row_cell(raw_row, question_index)
+            sql = self._row_cell(raw_row, sql_index)
+            if term and definition:
+                material["terms"][term] = definition
+                continue
+            if rule:
+                material["rules"] = self._merge_unique_strings(material["rules"], [rule])
+                continue
+            if question and sql:
+                material["examples"] = self._merge_few_shot_examples(
+                    material["examples"],
+                    [{"question": question, "sql": sql}],
+                )
+                continue
+            if any(str(value or "").strip() for value in raw_row):
+                skipped += 1
+        if not material["terms"] and not material["rules"] and not material["examples"]:
+            warnings.append(
+                "取り込み可能な TERM/DEFINITION, RULE, QUESTION/SQL 列が見つかりません。"
+            )
+        return material, skipped
+
+    def _empty_learning_material(self) -> dict[str, Any]:
+        return {"terms": {}, "rules": [], "examples": []}
+
+    def _learning_material_kind_hint(self, value: str) -> str:
+        normalized = value.strip().lower()
+        if any(token in normalized for token in ("term", "glossary", "用語")):
+            return "terms"
+        if any(token in normalized for token in ("rule", "ルール")):
+            return "rules"
+        if any(token in normalized for token in ("few", "example", "training", "sql", "例")):
+            return "examples"
+        return ""
+
+    def _learning_header_index(self, headers: Sequence[str], names: set[str]) -> int | None:
+        normalized_names = {self._normalize_training_header(name) for name in names}
+        raw_names = {name.strip().upper() for name in names}
+        for index, header in enumerate(headers):
+            raw = header.strip()
+            normalized = self._normalize_training_header(raw)
+            if normalized in normalized_names or raw.upper() in raw_names:
+                return index
+        return None
+
+    def _row_cell(self, row: Sequence[Any], index: int | None) -> str:
+        if index is None or len(row) <= index:
+            return ""
+        return str(row[index] or "").strip()
+
+    def _merge_unique_strings(self, current: Sequence[str], incoming: Sequence[str]) -> list[str]:
+        seen: set[str] = set()
+        merged: list[str] = []
+        for item in [*current, *incoming]:
+            value = str(item or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            merged.append(value)
+        return merged
+
+    def _merge_few_shot_examples(
+        self,
+        current: Sequence[dict[str, str]],
+        incoming: Sequence[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        seen: set[tuple[str, str]] = set()
+        merged: list[dict[str, str]] = []
+        for item in [*current, *incoming]:
+            question = str(item.get("question") or "").strip()
+            sql = str(item.get("sql") or item.get("expected_sql") or "").strip()
+            key = (question, sql)
+            if not question or not sql or key in seen:
+                continue
+            seen.add(key)
+            merged.append({"question": question, "sql": sql})
+        return merged
+
+    def _classifier_vectors(self, texts: list[str]) -> tuple[list[list[float]], list[str], str]:
+        settings = get_settings()
+        if self._embedding_client.is_configured():
+            try:
+                return (
+                    self._embedding_client.embed_texts(texts),
+                    [],
+                    settings.oci_genai_embed_model_id,
+                )
+            except EmbeddingClientError as exc:
+                return (
+                    [self._deterministic_embedding(text) for text in texts],
+                    [
+                        "OCI GenAI embedding に失敗したため deterministic fallback "
+                        f"を使いました: {exc}"
+                    ],
+                    "deterministic-hash-1536",
+                )
+        return (
+            [self._deterministic_embedding(text) for text in texts],
+            ["OCI GenAI embedding が未設定のため deterministic fallback を使いました。"],
+            "deterministic-hash-1536",
+        )
+
+    def _deterministic_embedding(self, text: str) -> list[float]:
+        vector = [0.0] * 1536
+        tokens = _similarity_tokens(text)
+        if not tokens:
+            tokens = {text.strip() or "empty"}
+        for token in tokens:
+            digest = hashlib.blake2b(token.encode("utf-8"), digest_size=12).digest()
+            index = int.from_bytes(digest[:4], "big") % len(vector)
+            sign = 1.0 if digest[4] % 2 == 0 else -1.0
+            weight = 1.0 + (digest[5] / 255.0)
+            vector[index] += sign * weight
+        norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+        return [round(value / norm, 8) for value in vector]
+
+    def _profile_id_for_classifier_category(self, category: str) -> str:
+        profile = self._profile_for_classifier_category(category)
+        return profile.id if profile else ""
+
+    def _profile_for_classifier_category(self, category: str) -> Nl2SqlProfile | None:
+        normalized = category.strip().lower()
+        profiles = self.list_profiles()
+        for profile in profiles:
+            if normalized in {profile.id.lower(), profile.name.lower()}:
+                return profile
+        scored = [
+            (
+                len(
+                    _similarity_tokens(category)
+                    & _similarity_tokens(f"{profile.name} {profile.description}")
+                ),
+                profile,
+            )
+            for profile in profiles
+        ]
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if scored and scored[0][0] > 0:
+            return scored[0][1]
+        return profiles[0] if profiles else None
 
     def _feedback_index_data(
         self, *, operation: str, execute: bool, include_bad: bool
@@ -1165,6 +1887,54 @@ class Nl2SqlService:
         )
 
     def recommend_profile(self, request: ProfileRecommendationRequest) -> ProfileRecommendationData:
+        classifier_prediction, classifier_warnings = self._classifier_prediction(
+            request.question, top_k=3
+        )
+        if classifier_prediction and classifier_prediction.candidates:
+            mapped_candidates: list[ProfileRecommendationCandidate] = []
+            for candidate in classifier_prediction.candidates:
+                profile = (
+                    self.get_profile(candidate.profile_id) if candidate.profile_id else None
+                )
+                if profile is None:
+                    continue
+                mapped_candidates.append(
+                    ProfileRecommendationCandidate(
+                        profile_id=profile.id,
+                        profile_name=profile.name,
+                        score=candidate.score,
+                        matched_terms=[candidate.category],
+                        allowed_tables=profile.allowed_tables,
+                        category=candidate.category,
+                    )
+                )
+            if mapped_candidates:
+                best = mapped_candidates[0]
+                profile = self.get_profile(best.profile_id)
+                reason = (
+                    f"LogisticRegression classifier が category "
+                    f"{best.category or classifier_prediction.predicted_category} を予測しました。"
+                )
+                if classifier_warnings:
+                    reason = f"{reason} {' '.join(classifier_warnings)}"
+                return self._recommendation_from_profile(
+                    profile=profile,
+                    question=request.question,
+                    score=best.score,
+                    matched_terms=best.matched_terms,
+                    candidates=mapped_candidates,
+                ).model_copy(
+                    update={
+                        "reason": reason,
+                        "recommendation_source": "classifier",
+                        "classifier_version": classifier_prediction.classifier_version,
+                        "category_scores": {
+                            candidate.category: candidate.score
+                            for candidate in classifier_prediction.candidates
+                        },
+                    }
+                )
+
         profiles = self.list_profiles()
         if not profiles:
             profile = self.get_profile(request.current_profile_id)
@@ -1201,6 +1971,54 @@ class Nl2SqlService:
             matched_terms=best_terms,
             candidates=candidates,
         )
+
+    def rewrite(self, request: RewriteRequest) -> RewriteData:
+        profile = self.get_profile(request.profile_id)
+        warnings: list[str] = []
+        deterministic = self.rewrite_question(request.question, profile)
+        if not self._enterprise_ai_client.is_configured():
+            return RewriteData(
+                original_question=request.question,
+                rewritten_question=deterministic,
+                source="deterministic",
+                warnings=[
+                    "OCI Enterprise AI が未設定のため deterministic rewrite を使用しました。"
+                ],
+            )
+        try:
+            context = self._rewrite_context(
+                profile=profile,
+                use_glossary=request.use_glossary,
+                use_schema=request.use_schema,
+                extra_prompt=request.extra_prompt,
+            )
+            rewritten = self._enterprise_ai_client.generate(
+                prompt=request.question,
+                context=context,
+                system_prompt=(
+                    "あなたは日本語の NL2SQL 入力を業務語彙と Oracle schema に合わせて"
+                    "検索意図が保たれるように書き換えるアシスタントです。"
+                    "SQL は生成せず、書き換え後の自然言語質問だけを返してください。"
+                ),
+            ).strip()
+            rewritten = self._strip_code_fence(rewritten).splitlines()[0].strip()
+            if not rewritten:
+                rewritten = deterministic
+                warnings.append("Enterprise AI rewrite が空だったため fallback しました。")
+            return RewriteData(
+                original_question=request.question,
+                rewritten_question=rewritten,
+                source="oci_enterprise_ai",
+                model=self._enterprise_ai_client.model_id(),
+                warnings=warnings,
+            )
+        except EnterpriseAiDirectError as exc:
+            return RewriteData(
+                original_question=request.question,
+                rewritten_question=deterministic,
+                source="deterministic",
+                warnings=[f"Enterprise AI rewrite に失敗したため fallback しました: {exc}"],
+            )
 
     def evaluate(self, request: EvaluateRequest) -> EvaluateData:
         profile, evaluation_set_id, evaluation_set_name = self._evaluation_context(request)
@@ -1622,13 +2440,174 @@ class Nl2SqlService:
     def reverse_sql(self, request: ReverseSqlRequest) -> ReverseSqlData:
         referenced = _extract_referenced_tables(request.sql)
         table_names = ", ".join(referenced) if referenced else "指定表"
+        structure = self._sql_structure(request.sql, referenced)
         return ReverseSqlData(
             question=f"{table_names} のデータを条件に沿って確認したい",
-            explanation="SELECT 句・FROM/JOIN 句・行数制限をもとに自然言語説明を生成しました。",
+            explanation=(
+                "SELECT 句・FROM/JOIN 句・条件・集計をもとに自然言語説明を生成しました。"
+            ),
             referenced_tables=referenced,
+            logical_steps=[
+                structure["summary"],
+                *[f"条件: {item}" for item in structure["filters"][:3]],
+                *[f"結合: {item}" for item in structure["joins"][:3]],
+                *[f"集計: {item}" for item in structure["aggregations"][:3]],
+            ],
         )
 
-    def suggest_comments(self) -> CommentSuggestionData:
+    def reverse_sql_deep(self, request: ReverseSqlRequest) -> ReverseSqlData:
+        deterministic = self.reverse_sql(request)
+        if not self._enterprise_ai_client.is_configured():
+            return deterministic.model_copy(
+                update={
+                    "warnings": [
+                        "OCI Enterprise AI が未設定のため deterministic reverse を使用しました。"
+                    ]
+                }
+            )
+        try:
+            raw = self._enterprise_ai_client.generate(
+                prompt=request.sql,
+                context=self._enterprise_ai_schema_context(
+                    profile=self.get_profile(None),
+                    allowed=AllowedObjects(),
+                ),
+                system_prompt=(
+                    "Oracle SQL を日本語の業務質問へ逆生成してください。"
+                    "JSON object で question, explanation, logical_steps を返してください。"
+                ),
+            )
+            payload = self._json_object_from_text(raw)
+            question = str(payload.get("question") or deterministic.question).strip()
+            explanation = str(payload.get("explanation") or deterministic.explanation).strip()
+            steps_raw = payload.get("logical_steps")
+            steps = [str(item) for item in steps_raw] if isinstance(steps_raw, list) else []
+            return deterministic.model_copy(
+                update={
+                    "question": question,
+                    "explanation": explanation,
+                    "logical_steps": steps or deterministic.logical_steps,
+                    "source": "oci_enterprise_ai",
+                }
+            )
+        except (EnterpriseAiDirectError, ValueError) as exc:
+            return deterministic.model_copy(
+                update={
+                    "warnings": [f"Enterprise AI reverse に失敗したため fallback しました: {exc}"]
+                }
+            )
+
+    def _sql_structure(self, sql: str, referenced: list[str]) -> dict[str, list[str] | str]:
+        normalized = " ".join(sql.strip().split())
+        operations = []
+        if re.search(r"\bselect\b", sql, re.IGNORECASE):
+            operations.append("SELECT")
+        if re.search(r"\bwith\b", sql, re.IGNORECASE):
+            operations.append("WITH")
+        if re.search(r"\bgroup\s+by\b", sql, re.IGNORECASE):
+            operations.append("GROUP BY")
+        if re.search(r"\border\s+by\b", sql, re.IGNORECASE):
+            operations.append("ORDER BY")
+        filters = self._extract_sql_clauses(normalized, "where", ["group by", "order by", "fetch"])
+        joins = [
+            match.group(0).strip()
+            for match in re.finditer(
+                rf"\b(?:left|right|inner|outer|cross)?\s*join\s+{_SQL_OBJECT_REF}(?:\s+on\s+.*?)(?=\s+(?:left|right|inner|outer|cross)?\s*join\s+|\s+where\s+|\s+group\s+by\s+|\s+order\s+by\s+|$)",
+                normalized,
+                re.IGNORECASE,
+            )
+        ]
+        aggregations = sorted(
+            {
+                match.group(1).upper()
+                for match in re.finditer(r"\b(count|sum|avg|min|max)\s*\(", sql, re.IGNORECASE)
+            }
+        )
+        return {
+            "summary": (
+                f"{', '.join(referenced) if referenced else '指定表'} を参照し、"
+                f"{', '.join(operations) if operations else 'SQL'} 操作を行います。"
+            ),
+            "operations": operations,
+            "filters": filters,
+            "joins": joins[:10],
+            "aggregations": aggregations,
+        }
+
+    def _extract_sql_clauses(
+        self, normalized_sql: str, start_keyword: str, end_keywords: list[str]
+    ) -> list[str]:
+        match = re.search(rf"\b{re.escape(start_keyword)}\b\s+(.*)", normalized_sql, re.IGNORECASE)
+        if not match:
+            return []
+        value = match.group(1)
+        for keyword in end_keywords:
+            end = re.search(rf"\b{re.escape(keyword)}\b", value, re.IGNORECASE)
+            if end:
+                value = value[: end.start()]
+                break
+        return [value.strip()] if value.strip() else []
+
+    def _json_object_from_text(self, raw: str) -> dict[str, Any]:
+        cleaned = self._strip_code_fence(raw)
+        if "{" in cleaned and "}" in cleaned:
+            cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
+        payload = json.loads(cleaned)
+        if not isinstance(payload, dict):
+            raise ValueError("JSON object ではありません。")
+        return payload
+
+    def suggest_comments(
+        self,
+        request: CommentSuggestionRequest | None = None,
+    ) -> CommentSuggestionData:
+        options = request or CommentSuggestionRequest()
+        deterministic = CommentSuggestionData(
+            suggestions=self._deterministic_comment_suggestions(options.max_items)
+        )
+        if not options.use_llm:
+            return deterministic
+        if not self._enterprise_ai_client.is_configured():
+            return deterministic.model_copy(
+                update={
+                    "warnings": [
+                        "OCI Enterprise AI が未設定のため deterministic comment 候補を"
+                        "使用しました。"
+                    ]
+                }
+            )
+        try:
+            raw = self._enterprise_ai_client.generate(
+                prompt="表・列・ビューの COMMENT ON 候補を日本語で生成してください。",
+                context=self._comment_generation_context(options.max_items),
+                system_prompt=(
+                    "Oracle schema metadata を読み、業務利用者が理解しやすい日本語 comment "
+                    "を生成してください。JSON object で suggestions 配列だけを返してください。"
+                    "各要素は object_name, object_type, suggested_comment を持ち、"
+                    "object_type は table/view/column のいずれかです。"
+                ),
+            )
+            payload = self._json_object_from_text(raw)
+            suggestions = self._comment_suggestions_from_payload(
+                payload,
+                max_items=options.max_items,
+            )
+            if not suggestions:
+                raise ValueError("comment 候補が空です。")
+            return CommentSuggestionData(
+                suggestions=suggestions,
+                source="oci_enterprise_ai",
+            )
+        except (EnterpriseAiDirectError, ValueError, TypeError) as exc:
+            return deterministic.model_copy(
+                update={
+                    "warnings": [
+                        f"Enterprise AI comment 生成に失敗したため fallback しました: {exc}"
+                    ]
+                }
+            )
+
+    def _deterministic_comment_suggestions(self, max_items: int) -> list[CommentSuggestion]:
         suggestions: list[CommentSuggestion] = []
         for table in self._catalog.tables:
             suggestions.append(
@@ -1647,7 +2626,90 @@ class Nl2SqlService:
                         or f"{table.logical_name} の {column.logical_name}",
                     )
                 )
-        return CommentSuggestionData(suggestions=suggestions)
+        return suggestions[:max_items]
+
+    def _comment_generation_context(self, max_items: int) -> str:
+        lines = [f"max_items: {max_items}", "schema:"]
+        for table in self._catalog.tables:
+            lines.append(
+                f"- {table.table_type} {table.table_name}: logical={table.logical_name} "
+                f"comment={table.comment} rows={table.row_count}"
+            )
+            if table.constraints:
+                lines.append(f"  constraints: {', '.join(table.constraints)}")
+            for column in table.columns:
+                samples = ", ".join(column.sample_values[:3])
+                lines.append(
+                    "  - column "
+                    f"{column.column_name}: logical={column.logical_name} "
+                    f"type={column.data_type} nullable={column.nullable} "
+                    f"comment={column.comment} samples={samples}"
+                )
+        return "\n".join(lines)
+
+    def _comment_suggestions_from_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        max_items: int,
+    ) -> list[CommentSuggestion]:
+        raw_items = payload.get("suggestions")
+        if not isinstance(raw_items, list):
+            raise ValueError("suggestions 配列がありません。")
+        suggestions: list[CommentSuggestion] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            object_name = str(raw_item.get("object_name") or "").strip()
+            object_type = str(raw_item.get("object_type") or "").strip().lower()
+            comment = str(raw_item.get("suggested_comment") or "").strip()
+            if not object_name or object_type not in {"table", "view", "column"} or not comment:
+                continue
+            try:
+                statement = self._comment_statement(
+                    CommentApplyItem(
+                        object_name=object_name,
+                        object_type=object_type,
+                        comment=comment,
+                    )
+                )
+            except ValueError:
+                continue
+            suggestions.append(
+                CommentSuggestion(
+                    object_name=statement.object_name,
+                    object_type=statement.object_type,
+                    suggested_comment=statement.comment,
+                )
+            )
+            if len(suggestions) >= max_items:
+                break
+        return suggestions
+
+    def suggest_annotations(self) -> AnnotationSuggestionData:
+        suggestions: list[AnnotationSuggestion] = []
+        for table in self._catalog.tables:
+            table_value = table.comment or table.logical_name or table.table_name
+            suggestions.append(
+                AnnotationSuggestion(
+                    object_name=table.table_name,
+                    object_type=table.table_type or "table",
+                    annotation_name="Display",
+                    annotation_value=table_value,
+                )
+            )
+            for column in table.columns:
+                suggestions.append(
+                    AnnotationSuggestion(
+                        object_name=f"{table.table_name}.{column.column_name}",
+                        object_type="column",
+                        annotation_name="Display",
+                        annotation_value=column.comment
+                        or column.logical_name
+                        or column.column_name,
+                    )
+                )
+        return AnnotationSuggestionData(suggestions=suggestions)
 
     def apply_comments(self, request: CommentApplyRequest) -> CommentApplyData:
         started = time.monotonic()
@@ -1750,6 +2812,118 @@ class Nl2SqlService:
             f"{item.object_name}: object_type は table または column のみ指定できます。"
         )
 
+    def apply_annotations(self, request: AnnotationApplyRequest) -> AnnotationApplyData:
+        started = time.monotonic()
+        created_at = _utc_now()
+        warnings: list[str] = []
+        statements: list[AnnotationApplyStatement] = []
+        for item in request.items:
+            try:
+                statements.append(self._annotation_statement(item))
+            except ValueError as exc:
+                warnings.append(str(exc))
+
+        executed = False
+        runtime = "deterministic"
+        if request.execute and statements:
+            if not self._use_oracle_runtime():
+                warnings.append("ANNOTATIONS の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
+                statements = [
+                    statement.model_copy(update={"status": "requires_oracle"})
+                    for statement in statements
+                ]
+            else:
+                runtime = "oracle"
+                try:
+                    self._oracle_adapter.apply_safe_statements(
+                        [statement.sql for statement in statements]
+                    )
+                    executed = True
+                    statements = [
+                        statement.model_copy(update={"status": "applied"})
+                        for statement in statements
+                    ]
+                except OracleAdapterError as exc:
+                    warnings.append(str(exc))
+                    statements = [
+                        statement.model_copy(update={"status": "error", "error_message": str(exc)})
+                        for statement in statements
+                    ]
+        elif request.execute and not statements:
+            warnings.append("適用対象の ANNOTATIONS がありません。")
+
+        if not request.items:
+            warnings.append("ANNOTATIONS 対象が指定されていません。")
+
+        finished_at = _utc_now()
+        return AnnotationApplyData(
+            executed=executed,
+            runtime=runtime,
+            statements=statements,
+            warnings=warnings,
+            timing=TimingEnvelope(
+                created_at=created_at,
+                started_at=created_at,
+                finished_at=finished_at,
+                elapsed_ms=_elapsed_ms(started),
+                stage_timings=[StageTiming(stage="annotations", elapsed_ms=_elapsed_ms(started))],
+            ),
+        )
+
+    def _annotation_statement(self, item: AnnotationApplyItem) -> AnnotationApplyStatement:
+        object_type = item.object_type.strip().lower()
+        annotation_name = self._annotation_name(item.annotation_name)
+        annotation_value = item.annotation_value.strip()
+        if not annotation_value:
+            raise ValueError(f"{item.object_name}: annotation value が空です。")
+        if object_type in {"table", "view"}:
+            table = self._find_catalog_table(item.object_name)
+            if table is None:
+                raise ValueError(f"{item.object_name}: catalog に存在しない object です。")
+            ddl_kind = (
+                "VIEW"
+                if object_type == "view" or table.table_type.lower() == "view"
+                else "TABLE"
+            )
+            return AnnotationApplyStatement(
+                object_name=table.table_name,
+                object_type=object_type,
+                annotation_name=annotation_name,
+                annotation_value=annotation_value,
+                sql=(
+                    f"ALTER {ddl_kind} {_quote_identifier(table.table_name)} "
+                    f"ANNOTATIONS ({annotation_name} {_quote_sql_string(annotation_value)});"
+                ),
+            )
+        if object_type == "column":
+            table_name, column_name = self._split_comment_column_name(item.object_name)
+            table = self._find_catalog_table(table_name)
+            if table is None:
+                raise ValueError(f"{item.object_name}: catalog に存在しない table です。")
+            column = self._find_catalog_column(table, column_name)
+            if column is None:
+                raise ValueError(f"{item.object_name}: catalog に存在しない column です。")
+            return AnnotationApplyStatement(
+                object_name=f"{table.table_name}.{column.column_name}",
+                object_type="column",
+                annotation_name=annotation_name,
+                annotation_value=annotation_value,
+                sql=(
+                    f"ALTER TABLE {_quote_identifier(table.table_name)} "
+                    f"MODIFY {_quote_identifier(column.column_name)} "
+                    f"ANNOTATIONS ({annotation_name} {_quote_sql_string(annotation_value)});"
+                ),
+            )
+        raise ValueError(
+            f"{item.object_name}: object_type は table/view/column のみ指定できます。"
+        )
+
+    def _annotation_name(self, value: str) -> str:
+        normalized = value.strip().replace('"', "").upper()
+        if not _STRICT_IDENTIFIER.fullmatch(normalized):
+            raise ValueError(f"{value}: annotation name が不正です。")
+        return normalized
+
     def _split_comment_column_name(self, object_name: str) -> tuple[str, str]:
         parts = [part.strip() for part in object_name.split(".") if part.strip()]
         if len(parts) != 2:
@@ -1791,6 +2965,95 @@ class Nl2SqlService:
             if len(cases) >= limit:
                 break
         return SyntheticCasesData(cases=cases)
+
+    def generate_synthetic_data(
+        self, request: SyntheticDataGenerateRequest
+    ) -> SyntheticDataOperationData:
+        started = time.monotonic()
+        created_at = _utc_now()
+        warnings: list[str] = []
+        table = self._find_catalog_table(request.table_name)
+        if table is None:
+            warnings.append(f"{request.table_name}: catalog に存在しない table です。")
+            safe_table_name = _normalize_identifier(request.table_name)
+        else:
+            safe_table_name = table.table_name
+        executed = False
+        status = "dry_run"
+        operation_id = ""
+        engine_meta: dict[str, Any] = {"runtime": "deterministic"}
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        message = (
+            f"{safe_table_name} に {request.row_count} 行の synthetic data を生成する plan です。"
+        )
+        if request.execute and table is not None:
+            if not self._use_oracle_runtime():
+                status = "requires_oracle"
+                warnings.append(
+                    "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には "
+                    "NL2SQL_RUNTIME_MODE=oracle が必要です。"
+                )
+            else:
+                try:
+                    engine_meta.update(
+                        self._oracle_adapter.generate_synthetic_data(
+                            table_name=safe_table_name,
+                            row_count=request.row_count,
+                            profile_name=request.profile_name,
+                        )
+                    )
+                    operation_id = str(engine_meta.get("operation_id") or "")
+                    executed = True
+                    status = "submitted" if operation_id else "executed"
+                    message = "DBMS_CLOUD_AI synthetic data generation を開始しました。"
+                except OracleAdapterError as exc:
+                    status = "error"
+                    warnings.append(str(exc))
+        elif request.execute and table is None:
+            status = "error"
+
+        return SyntheticDataOperationData(
+            operation_id=operation_id,
+            table_name=safe_table_name,
+            row_count=request.row_count,
+            executed=executed,
+            runtime=runtime,
+            status=status,
+            message=message,
+            warnings=warnings,
+            engine_meta=engine_meta,
+            timing=self._timing(created_at, started, "synthetic_data"),
+        )
+
+    def synthetic_data_operation_status(
+        self, operation_id: str
+    ) -> SyntheticDataOperationStatusData:
+        if not self._use_oracle_runtime():
+            return SyntheticDataOperationStatusData(
+                operation_id=operation_id,
+                runtime="deterministic",
+                status="requires_oracle",
+                message="operation status の取得には NL2SQL_RUNTIME_MODE=oracle が必要です。",
+            )
+        try:
+            result = self._oracle_adapter.synthetic_data_operation_status(
+                operation_id=operation_id
+            )
+            return SyntheticDataOperationStatusData(
+                operation_id=operation_id,
+                runtime=str(result.get("runtime") or "oracle"),
+                status=str(result.get("status") or "unknown"),
+                message=str(result.get("message") or ""),
+                result=dict(result.get("result") or {}),
+            )
+        except OracleAdapterError as exc:
+            return SyntheticDataOperationStatusData(
+                operation_id=operation_id,
+                runtime="oracle",
+                status="error",
+                message=str(exc),
+                warnings=[str(exc)],
+            )
 
     def diagnostics(self) -> DiagnosticsData:
         env = dotenv_values(Path(".env"))
@@ -2929,6 +4192,172 @@ class Nl2SqlService:
         self._persist_state()
         return cleaned
 
+    def list_select_ai_db_profiles(self) -> SelectAiDbProfilesData:
+        warnings: list[str] = []
+        if self._use_oracle_runtime():
+            try:
+                profiles = [
+                    SelectAiDbProfile.model_validate(item)
+                    for item in self._oracle_adapter.list_select_ai_profiles()
+                ]
+                return SelectAiDbProfilesData(runtime="oracle", profiles=profiles)
+            except OracleAdapterError as exc:
+                warnings.append(str(exc))
+        with self._lock:
+            profiles = [
+                SelectAiDbProfile(
+                    name=data.profile_name,
+                    status=data.status,
+                    attributes=dict(data.engine_meta),
+                    created_at=data.refreshed_at,
+                )
+                for data in self._asset_meta.values()
+                if data.profile_name
+            ]
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        if not self._use_oracle_runtime():
+            warnings.append("Oracle runtime ではないため保存済み asset metadata を表示しています。")
+        return SelectAiDbProfilesData(runtime=runtime, profiles=profiles, warnings=warnings)
+
+    def drop_select_ai_db_profile(self, profile_name: str, execute: bool) -> AssetCleanupData:
+        cleaned_at = _utc_now()
+        status = "dry_run"
+        warning = ""
+        executed = False
+        engine_meta: dict[str, Any] = {"runtime": "deterministic"}
+        if execute:
+            if not self._use_oracle_runtime():
+                status = "error"
+                warning = "DBMS_CLOUD_AI profile drop には NL2SQL_RUNTIME_MODE=oracle が必要です。"
+            else:
+                try:
+                    engine_meta.update(
+                        self._oracle_adapter.drop_select_ai_profile(profile_name=profile_name)
+                    )
+                    status = "cleaned"
+                    executed = True
+                except OracleAdapterError as exc:
+                    status = "error"
+                    warning = str(exc)
+        return AssetCleanupData(
+            engine=Nl2SqlEngine.SELECT_AI,
+            executed=executed,
+            status=status,
+            cleaned_at=cleaned_at,
+            profile_name=profile_name,
+            warning=warning,
+            asset_names={"profile": profile_name},
+            engine_meta=engine_meta,
+        )
+
+    def run_select_ai_agent_team(self, request: AgentTeamRunRequest) -> AgentTeamRunData:
+        profile = self.get_profile(request.profile_id)
+        team_name = request.team_name.strip() or self._select_ai_team_name(profile)
+        warnings: list[str] = []
+        if self._use_oracle_runtime():
+            try:
+                sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(
+                    team_name=team_name,
+                    question=request.prompt,
+                    tool_name=self._select_ai_agent_asset_names(profile)["tool"],
+                )
+                return AgentTeamRunData(
+                    team_name=team_name,
+                    prompt=request.prompt,
+                    generated_sql=sql,
+                    conversation_id=conversation_id,
+                    runtime="oracle",
+                    engine_meta={"package": "DBMS_CLOUD_AI_AGENT"},
+                )
+            except OracleAdapterError as exc:
+                warnings.append(str(exc))
+        generated = self._generate_sql(
+            Nl2SqlEngine.SELECT_AI_AGENT,
+            request.prompt,
+            profile,
+            AllowedObjects(),
+            profile.default_row_limit,
+            warnings,
+        )
+        return AgentTeamRunData(
+            team_name=team_name,
+            prompt=request.prompt,
+            generated_sql=generated.generated_sql,
+            conversation_id=str(generated.engine_meta.get("conversation_id") or ""),
+            runtime="deterministic",
+            warnings=warnings
+            or ["Oracle runtime ではないため deterministic Agent 生成を返しました。"],
+            engine_meta=generated.engine_meta,
+        )
+
+    def list_select_ai_agent_conversations(
+        self, team_name: str | None = None, limit: int = 20
+    ) -> AgentConversationsData:
+        warnings: list[str] = []
+        if self._use_oracle_runtime():
+            try:
+                return AgentConversationsData(
+                    runtime="oracle",
+                    items=[
+                        AgentConversationItem.model_validate(item)
+                        for item in self._oracle_adapter.list_agent_conversations(
+                            team_name=team_name,
+                            limit=limit,
+                        )
+                    ],
+                )
+            except OracleAdapterError as exc:
+                warnings.append(str(exc))
+        return AgentConversationsData(
+            runtime="deterministic",
+            items=[],
+            warnings=warnings
+            or ["Oracle runtime ではないため conversation 履歴は取得していません。"],
+        )
+
+    def check_select_ai_agent_privileges(self) -> AgentPrivilegeCheckData:
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        if not self._use_oracle_runtime():
+            return AgentPrivilegeCheckData(
+                runtime=runtime,
+                status="warning",
+                checks=[
+                    DiagnosticCheck(
+                        name="nl2sql_runtime_mode",
+                        status="warning",
+                        message=(
+                            "NL2SQL_RUNTIME_MODE=oracle ではないため Oracle 権限を"
+                            "確認していません。"
+                        ),
+                    )
+                ],
+                warnings=["Oracle runtime ではないため Select AI Agent 権限は未確認です。"],
+            )
+        try:
+            checks = [
+                DiagnosticCheck.model_validate(item)
+                for item in self._oracle_adapter.check_select_ai_agent_privileges()
+            ]
+            ok = bool(checks) and all(item.status == "ok" for item in checks)
+            return AgentPrivilegeCheckData(
+                runtime=runtime,
+                status="ok" if ok else "warning",
+                checks=checks,
+            )
+        except OracleAdapterError as exc:
+            return AgentPrivilegeCheckData(
+                runtime=runtime,
+                status="error",
+                checks=[
+                    DiagnosticCheck(
+                        name="select_ai_agent_privileges",
+                        status="error",
+                        message=str(exc),
+                    )
+                ],
+                warnings=[str(exc)],
+            )
+
     def _cleanup_select_ai_profile(self, profile_id: str | None, execute: bool) -> AssetCleanupData:
         profile = self._cleanup_profile_target(profile_id)
         profile_name = self._select_ai_profile_name(profile)
@@ -3051,6 +4480,43 @@ class Nl2SqlService:
             if term in rewritten and replacement not in rewritten:
                 rewritten = f"{rewritten}（{term}={replacement}）"
         return rewritten
+
+    def _rewrite_context(
+        self,
+        *,
+        profile: Nl2SqlProfile,
+        use_glossary: bool,
+        use_schema: bool,
+        extra_prompt: str,
+    ) -> str:
+        lines = [f"profile: {profile.name}", f"description: {profile.description}"]
+        if use_glossary and profile.glossary:
+            lines.append("glossary:")
+            for term, replacement in list(profile.glossary.items())[:40]:
+                lines.append(f"- {term}: {replacement}")
+        if profile.sql_rules:
+            lines.append("sql_rules:")
+            for rule in profile.sql_rules[:20]:
+                lines.append(f"- {rule}")
+        if use_schema:
+            allowed = {name.upper() for name in profile.allowed_tables}
+            lines.append("schema:")
+            for table in self._catalog.tables:
+                if allowed and table.table_name not in allowed:
+                    continue
+                columns = ", ".join(column.column_name for column in table.columns[:20])
+                lines.append(f"- {table.table_name} ({table.logical_name}): {columns}")
+        if extra_prompt.strip():
+            lines.append("extra_instruction:")
+            lines.append(extra_prompt.strip())
+        return "\n".join(lines)
+
+    def _strip_code_fence(self, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+        return cleaned.strip().strip('"')
 
     def _learning_examples_for_generation(
         self, *, question: str, profile: Nl2SqlProfile

@@ -18,6 +18,9 @@ dependencies = [
   "production-ready-backend-core",
   "oci>=2.160",
   "oracledb>=3.4",
+  "scikit-learn>=1.7",
+  "joblib>=1.5",
+  "openpyxl>=3.1",
 ]
 
 [dependency-groups]

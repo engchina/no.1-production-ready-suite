@@ -492,6 +492,90 @@ def test_manual_integration_supporting_features_smoke(
     assert "ORACLE_PASSWORD" not in output
 
 
+def test_manual_integration_legacy_absorption_flags_and_report(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    report_path = tmp_path / "legacy-absorption.json"
+
+    def legacy_stub(**kwargs: object) -> list[script.StepResult]:
+        captured.update(kwargs)
+        return [
+            script.StepResult(name="legacy_classifier", ok=True, message="ready=True"),
+            script.StepResult(name="legacy_db_profile_drop", ok=True, message="dry_run"),
+        ]
+
+    monkeypatch.setattr(script, "_legacy_absorption_checks", legacy_stub)
+    monkeypatch.setattr(
+        script,
+        "_feedback_index_smoke",
+        lambda *, execute, include_bad: script.StepResult(
+            name="feedback_index_rebuild",
+            ok=execute and include_bad,
+            message="execute=True; executed=True",
+        ),
+    )
+
+    exit_code = script.main(
+        [
+            "--check-legacy-absorption",
+            "--engines",
+            "enterprise_ai_direct",
+            "--question",
+            "請求金額を確認したい",
+            "--allowed-table",
+            "INVOICES",
+            "--execute-db-profile-drop",
+            "--execute-comments",
+            "--execute-annotations",
+            "--execute-synthetic-data",
+            "--execute-feedback-index",
+            "--require-classifier-oracle-state",
+            "--json-report",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "[ok] legacy_classifier:" in output
+    assert "[ok] legacy_db_profile_drop:" in output
+    assert captured["allowed_tables"] == ["INVOICES"]
+    assert captured["execute_db_profile_drop"] is True
+    assert captured["execute_comments"] is True
+    assert captured["execute_annotations"] is True
+    assert captured["execute_synthetic_data"] is True
+    assert captured["execute_feedback_index"] is True
+    assert captured["require_classifier_oracle_state"] is True
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert {step["name"] for step in report["steps"]} >= {
+        "legacy_classifier",
+        "legacy_db_profile_drop",
+        "feedback_index_rebuild",
+    }
+    assert "ORACLE_PASSWORD" not in output
+
+
+def test_manual_integration_legacy_classifier_requires_oracle_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _MemoryStore:
+        mode = "memory"
+
+    monkeypatch.setattr(cast(Any, script).nl2sql_service, "_store", _MemoryStore())
+
+    result = script._legacy_classifier_smoke(
+        question="請求金額を確認したい",
+        require_oracle_state=True,
+    )
+
+    assert not result.ok
+    assert result.name == "legacy_classifier"
+    assert "persistence_mode=memory" in result.message
+
+
 def test_manual_integration_debug_raw_preview_smoke(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

@@ -94,6 +94,20 @@ export function SqlAnalysisPage() {
     }
   };
 
+  const reverseDeepExplain = async () => {
+    const sql = reverseSql.trim();
+    if (!sql) return;
+    setReverseLoading(true);
+    setMessage("");
+    try {
+      setReverse(await apiPost<ReverseSqlData>("/api/nl2sql/reverse/deep", { sql }));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("sqlAnalysis.error.reverse"));
+    } finally {
+      setReverseLoading(false);
+    }
+  };
+
   return (
     <>
       <PageHeader title={t("nav.sqlAnalysis")} subtitle={t("sqlAnalysis.subtitle")} />
@@ -241,25 +255,42 @@ export function SqlAnalysisPage() {
                   className="min-h-36 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
                 />
               </label>
-              <Button
-                type="button"
-                loading={reverseLoading}
-                disabled={!reverseSql.trim()}
-                onClick={() => void reverseExplain()}
-              >
-                <ArrowRightLeft size={16} aria-hidden="true" />
-                <span>{t("sqlAnalysis.action.reverse")}</span>
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  loading={reverseLoading}
+                  disabled={!reverseSql.trim()}
+                  onClick={() => void reverseExplain()}
+                >
+                  <ArrowRightLeft size={16} aria-hidden="true" />
+                  <span>{t("sqlAnalysis.action.reverse")}</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  loading={reverseLoading}
+                  disabled={!reverseSql.trim()}
+                  onClick={() => void reverseDeepExplain()}
+                >
+                  <ArrowRightLeft size={16} aria-hidden="true" />
+                  <span>{t("sqlAnalysis.action.reverseDeep")}</span>
+                </Button>
+              </div>
             </div>
 
             {reverse && (
               <section className="grid content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                <div className="flex flex-wrap gap-2">
+                  <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />
+                </div>
                 <CompactFact label={t("sqlAnalysis.reverse.question")} value={reverse.question} />
                 <CompactFact label={t("sqlAnalysis.reverse.explanation")} value={reverse.explanation} />
                 <CompactFact
                   label={t("sqlAnalysis.reverse.tables")}
                   value={reverse.referenced_tables.join(", ") || "-"}
                 />
+                <TextList label={t("sqlAnalysis.reverse.steps")} items={reverse.logical_steps ?? []} />
+                <TextList label={t("sqlAnalysis.warnings")} items={reverse.warnings ?? []} />
               </section>
             )}
           </CardContent>
@@ -303,8 +334,15 @@ function AnalysisResult({ analysis }: { analysis: AnalyzeData | null }) {
       <TextList label={t("sqlAnalysis.warnings")} items={analysis.safety.warnings} />
       <SqlSnippet label={t("sqlAnalysis.executableSql")} sql={analysis.executable_sql} />
       {analysis.repaired_sql && <SqlSnippet label={t("sqlAnalysis.repairedSql")} sql={analysis.repaired_sql} />}
+      {analysis.structure_summary && (
+        <CompactFact label={t("sqlAnalysis.structure")} value={analysis.structure_summary} />
+      )}
       <TextList label={t("sqlAnalysis.recommendations")} items={analysis.recommendations} />
       <TextList label={t("sqlAnalysis.optimization")} items={analysis.optimization_hints} />
+      <TextList label={t("sqlAnalysis.operations")} items={analysis.operations ?? []} />
+      <TextList label={t("sqlAnalysis.filters")} items={analysis.filters ?? []} />
+      <TextList label={t("sqlAnalysis.joins")} items={analysis.joins ?? []} />
+      <TextList label={t("sqlAnalysis.aggregations")} items={analysis.aggregations ?? []} />
       <div className="grid gap-3 sm:grid-cols-2">
         <CompactFact
           label={t("sqlAnalysis.referencedTables")}

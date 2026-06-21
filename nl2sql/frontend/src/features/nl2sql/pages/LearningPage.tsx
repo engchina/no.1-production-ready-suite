@@ -1,10 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
-import { DatabaseZap, MessageSquareText, RefreshCw, RotateCcw, Save, Search, Trash2, Wand2 } from "lucide-react";
+import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import {
+  BrainCircuit,
+  DatabaseZap,
+  MessageSquareText,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Search,
+  Trash2,
+  Upload,
+  Wand2,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { engineLabel } from "../labels";
@@ -12,10 +23,16 @@ import { historyRerunUrl } from "../queryPrefillState";
 import type {
   DemoLearningData,
   FeedbackData,
+  FeedbackEntriesData,
   FeedbackIndexData,
   FeedbackRating,
+  FeedbackSearchConfigData,
+  FeedbackVectorEntry,
   HistoryData,
   HistoryItem,
+  ClassifierImportData,
+  ClassifierPredictionData,
+  ClassifierStatusData,
   Nl2SqlProfile,
   ProfileRecommendationData,
   SimilarHistoryData,
@@ -44,7 +61,13 @@ export function LearningPage() {
   const [feedbackFilter, setFeedbackFilter] = useState<"all" | FeedbackRating | "unrated">("all");
   const [feedbackSearch, setFeedbackSearch] = useState("");
   const [feedbackIndex, setFeedbackIndex] = useState<FeedbackIndexData | null>(null);
+  const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntriesData | null>(null);
+  const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [feedbackIndexExecute, setFeedbackIndexExecute] = useState(false);
+  const [classifierStatus, setClassifierStatus] = useState<ClassifierStatusData | null>(null);
+  const [classifierImport, setClassifierImport] = useState<ClassifierImportData | null>(null);
+  const [classifierPrediction, setClassifierPrediction] = useState<ClassifierPredictionData | null>(null);
+  const [classifierReplace, setClassifierReplace] = useState(false);
   const [demoSeed, setDemoSeed] = useState<DemoLearningData | null>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
@@ -80,10 +103,18 @@ export function LearningPage() {
         apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
         apiGet<HistoryData>("/api/nl2sql/history"),
       ]);
-      const indexData = await apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index");
+      const [indexData, classifierData, entriesData, configData] = await Promise.all([
+        apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index"),
+        apiGet<ClassifierStatusData>("/api/nl2sql/classifier"),
+        apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"),
+        apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config"),
+      ]);
       setProfiles(profileData);
       setHistory(historyData.items);
       setFeedbackIndex(indexData);
+      setFeedbackEntries(entriesData);
+      setFeedbackConfig(configData);
+      setClassifierStatus(classifierData);
       setProfileId((current) => current || profileData[0]?.id || "");
       setSelectedFeedbackId((current) => current || historyData.items[0]?.id || "");
     } catch (err) {
@@ -149,6 +180,64 @@ export function LearningPage() {
     }
   };
 
+  const importClassifierTraining = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setLoading("classifier-import");
+    setMessage("");
+    try {
+      const data = await uploadClassifierTrainingFile(file, classifierReplace, profileId || null);
+      setClassifierImport(data);
+      setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
+      setMessageTone("success");
+      setMessage(t("learning.classifier.imported", { count: data.imported_count }));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const trainClassifier = async () => {
+    setLoading("classifier-train");
+    setMessage("");
+    try {
+      const data = await apiPost<ClassifierStatusData>("/api/nl2sql/classifier/train", {
+        min_examples_per_category: 1,
+      });
+      setClassifierStatus(data);
+      setMessageTone(data.ready ? "success" : "error");
+      setMessage(data.ready ? t("learning.classifier.trained") : data.warnings.join(" "));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const predictClassifier = async () => {
+    const text = question.trim();
+    if (!text) return;
+    setLoading("classifier-predict");
+    setMessage("");
+    try {
+      setClassifierPrediction(
+        await apiPost<ClassifierPredictionData>("/api/nl2sql/classifier/predict", {
+          question: text,
+          top_k: 3,
+        })
+      );
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+    } finally {
+      setLoading("");
+    }
+  };
+
   const saveFeedback = async () => {
     if (!selectedFeedbackItem) return;
     setLoading("feedback");
@@ -179,6 +268,7 @@ export function LearningPage() {
           execute: feedbackIndexExecute,
         })
       );
+      setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
     } catch (err) {
       setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("learning.error.feedbackIndex"));
@@ -196,9 +286,48 @@ export function LearningPage() {
           execute: feedbackIndexExecute,
         })
       );
+      setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
     } catch (err) {
       setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("learning.error.feedbackIndex"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const saveFeedbackConfig = async () => {
+    if (!feedbackConfig) return;
+    setLoading("feedback-config");
+    setMessage("");
+    try {
+      setFeedbackConfig(
+        await apiPatch<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", feedbackConfig)
+      );
+      setMessageTone("success");
+      setMessage(t("learning.index.configSaved"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.feedbackConfig"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const deleteFeedbackEntry = async (historyId: string) => {
+    setLoading(`feedback-entry-${historyId}`);
+    setMessage("");
+    try {
+      setFeedbackEntries(
+        await apiPost<FeedbackEntriesData>("/api/nl2sql/feedback-entries/delete", {
+          history_ids: [historyId],
+        })
+      );
+      setHistory((current) => current.filter((item) => item.id !== historyId));
+      setMessageTone("success");
+      setMessage(t("learning.index.entryDeleted"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.feedbackEntries"));
     } finally {
       setLoading("");
     }
@@ -215,6 +344,7 @@ export function LearningPage() {
       ]);
       setHistory(historyData.items);
       setFeedbackIndex(indexData);
+      setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
       setSelectedFeedbackId((current) => current || historyData.items[0]?.id || "");
       setDemoSeed(data);
       setMessageTone("success");
@@ -287,6 +417,129 @@ export function LearningPage() {
             />
           </section>
         )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BrainCircuit size={18} aria-hidden="true" />
+              {t("learning.classifier.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <div className="grid content-start gap-3">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <CompactFact
+                  label={t("learning.classifier.examples")}
+                  value={String(classifierStatus?.example_count ?? 0)}
+                />
+                <CompactFact
+                  label={t("learning.classifier.categories")}
+                  value={String(classifierStatus?.category_count ?? 0)}
+                />
+                <CompactFact
+                  label={t("learning.classifier.dimension")}
+                  value={String(classifierStatus?.vector_dimension ?? 1536)}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge
+                  variant={classifierStatus?.ready ? "success" : "warning"}
+                  label={classifierStatus?.ready ? t("learning.classifier.ready") : t("learning.classifier.notReady")}
+                />
+                <StatusBadge variant="neutral" label={classifierStatus?.persistence_mode ?? "memory"} />
+                <StatusBadge variant="neutral" label={classifierStatus?.recommendation_source ?? "deterministic"} />
+              </div>
+              <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={classifierReplace}
+                  onChange={(event) => setClassifierReplace(event.currentTarget.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                />
+                <span>{t("learning.classifier.replace")}</span>
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-sky-200">
+                  <Upload size={15} aria-hidden="true" />
+                  <span>{t("learning.classifier.import")}</span>
+                  <input
+                    className="sr-only"
+                    type="file"
+                    accept=".csv,.txt,.xlsx,.xlsm"
+                    onChange={(event) => void importClassifierTraining(event)}
+                  />
+                </label>
+                <Button
+                  type="button"
+                  size="sm"
+                  loading={loading === "classifier-train"}
+                  disabled={(classifierStatus?.example_count ?? 0) === 0}
+                  onClick={() => void trainClassifier()}
+                >
+                  <BrainCircuit size={15} aria-hidden="true" />
+                  <span>{t("learning.classifier.train")}</span>
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  loading={loading === "classifier-predict"}
+                  disabled={!question.trim()}
+                  onClick={() => void predictClassifier()}
+                >
+                  <Search size={15} aria-hidden="true" />
+                  <span>{t("learning.classifier.predict")}</span>
+                </Button>
+              </div>
+            </div>
+            <div className="grid content-start gap-3">
+              <CompactFact
+                label={t("learning.classifier.model")}
+                value={classifierStatus?.embedding_model || "-"}
+              />
+              {classifierImport && (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <p className="font-semibold text-slate-900">
+                    {t("learning.classifier.importSummary", {
+                      count: classifierImport.imported_count,
+                      total: classifierImport.total_examples,
+                    })}
+                  </p>
+                  <p className="mt-1 text-slate-600">{classifierImport.categories.join(", ") || "-"}</p>
+                </div>
+              )}
+              {classifierPrediction && (
+                <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <div className="flex flex-wrap gap-2">
+                    <StatusBadge
+                      variant={classifierPrediction.recommendation_source === "classifier" ? "success" : "neutral"}
+                      label={classifierPrediction.recommendation_source}
+                    />
+                    <StatusBadge
+                      variant="info"
+                      label={t("learning.classifier.confidence", {
+                        confidence: Math.round(classifierPrediction.confidence * 100),
+                      })}
+                    />
+                  </div>
+                  {classifierPrediction.candidates.map((candidate) => (
+                    <div key={candidate.category} className="rounded-md bg-white p-2">
+                      <p className="font-semibold text-slate-900">{candidate.category}</p>
+                      <p className="text-xs text-slate-600">
+                        {candidate.profile_name || "-"} / {Math.round(candidate.score * 100)}%
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(classifierStatus?.warnings ?? []).map((warning) => (
+                <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {warning}
+                </p>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -551,7 +804,60 @@ export function LearningPage() {
                 <StatusBadge variant="neutral" label={feedbackIndex?.status ?? "empty"} />
                 <StatusBadge variant="neutral" label={feedbackIndex?.vector_backend ?? "oracle_26ai"} />
                 <StatusBadge variant="neutral" label={feedbackIndex?.runtime ?? "deterministic"} />
+                <StatusBadge
+                  variant="neutral"
+                  label={t("learning.index.entryTotal", { count: feedbackEntries?.total ?? 0 })}
+                />
               </div>
+              <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-semibold text-slate-900">{t("learning.index.configTitle")}</p>
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("learning.index.threshold")}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={feedbackConfig?.similarity_threshold ?? 0}
+                      onChange={(event) =>
+                        setFeedbackConfig((current) => ({
+                          similarity_threshold: Number(event.currentTarget.value) || 0,
+                          match_limit: current?.match_limit ?? 3,
+                        }))
+                      }
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("learning.index.matchLimit")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={feedbackConfig?.match_limit ?? 3}
+                      onChange={(event) =>
+                        setFeedbackConfig((current) => ({
+                          similarity_threshold: current?.similarity_threshold ?? 0,
+                          match_limit: Number(event.currentTarget.value) || 1,
+                        }))
+                      }
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={loading === "feedback-config"}
+                  disabled={!feedbackConfig}
+                  onClick={() => void saveFeedbackConfig()}
+                >
+                  <Save size={15} aria-hidden="true" />
+                  <span>{t("learning.index.saveConfig")}</span>
+                </Button>
+              </section>
               <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
                 <input
                   type="checkbox"
@@ -592,6 +898,28 @@ export function LearningPage() {
                   {warning}
                 </p>
               ))}
+              <section className="grid gap-2 rounded-md border border-slate-200 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-900">{t("learning.index.entries")}</p>
+                  <StatusBadge
+                    variant="neutral"
+                    label={t("learning.index.indexedTotal", {
+                      count: feedbackEntries?.indexed_count ?? 0,
+                    })}
+                  />
+                </div>
+                {(feedbackEntries?.items ?? []).slice(0, 5).map((entry) => (
+                  <FeedbackVectorEntryRow
+                    key={entry.history_id}
+                    entry={entry}
+                    deleting={loading === `feedback-entry-${entry.history_id}`}
+                    onDelete={() => void deleteFeedbackEntry(entry.history_id)}
+                  />
+                ))}
+                {(!feedbackEntries || feedbackEntries.items.length === 0) && (
+                  <EmptyState title={t("learning.index.entriesEmptyTitle")} hint={t("learning.index.entriesEmptyHint")} />
+                )}
+              </section>
               <label className="grid gap-1 text-sm font-medium text-slate-800">
                 <span>{t("learning.index.ddl")}</span>
                 <textarea
@@ -650,6 +978,38 @@ function FeedbackHistoryRow({ item }: { item: HistoryItem }) {
   );
 }
 
+function FeedbackVectorEntryRow({
+  entry,
+  deleting,
+  onDelete,
+}: {
+  entry: FeedbackVectorEntry;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <section className="grid gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="break-words font-medium text-slate-900">{entry.question}</p>
+          <p className="mt-1 break-all font-mono text-xs text-slate-500">{entry.generated_sql}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <StatusBadge variant={entry.indexed ? "success" : "neutral"} label={entry.indexed ? "indexed" : "pending"} />
+          <StatusBadge variant={entry.feedback_rating ? "info" : "neutral"} label={entry.feedback_rating ?? "unrated"} />
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs text-slate-500">{entry.profile_name || entry.profile_id || "-"}</span>
+        <Button type="button" variant="danger" size="sm" loading={deleting} onClick={onDelete}>
+          <Trash2 size={15} aria-hidden="true" />
+          <span>{t("learning.index.deleteEntry")}</span>
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function CompactFact({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-md border border-slate-200 bg-white p-3">
@@ -657,4 +1017,29 @@ function CompactFact({ label, value }: { label: string; value: string }) {
       <p className="mt-1 break-words text-sm font-semibold text-slate-900">{value}</p>
     </div>
   );
+}
+
+async function uploadClassifierTrainingFile(
+  file: File,
+  replace: boolean,
+  profileId: string | null
+): Promise<ClassifierImportData> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("replace", replace ? "true" : "false");
+  if (profileId) form.append("profile_id", profileId);
+  const response = await fetch("/api/nl2sql/classifier/training-data/import", {
+    method: "POST",
+    body: form,
+    headers: { Accept: "application/json" },
+  });
+  const payload = (await response.json()) as {
+    data?: ClassifierImportData;
+    error?: string;
+    detail?: string;
+  };
+  if (!response.ok || !payload.data) {
+    throw new Error(payload.error || payload.detail || t("learning.error.classifier"));
+  }
+  return payload.data;
 }

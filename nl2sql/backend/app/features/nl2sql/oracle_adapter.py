@@ -382,6 +382,314 @@ class OracleNl2SqlAdapter:
             "statement_count": len(statements),
         }
 
+    def apply_safe_statements(self, statements: list[str]) -> dict[str, Any]:
+        """Execute generated catalog-validated metadata statements."""
+        with self.connection() as conn, conn.cursor() as cursor:
+            for statement in statements:
+                self._execute_plsql_like(cursor, statement.strip().rstrip(";"), {})
+            conn.commit()
+        return {
+            "runtime": "oracle",
+            "statement_count": len(statements),
+        }
+
+    def list_select_ai_profiles(self) -> list[dict[str, Any]]:
+        """List DBMS_CLOUD_AI profiles from the Oracle data dictionary when available."""
+        candidates = [
+            """
+            SELECT PROFILE_NAME, NVL(STATUS, 'UNKNOWN'), OWNER, CREATED
+            FROM USER_CLOUD_AI_PROFILES
+            ORDER BY PROFILE_NAME
+            """,
+            """
+            SELECT PROFILE_NAME, 'UNKNOWN', USER, NULL
+            FROM USER_CLOUD_AI_PROFILES
+            ORDER BY PROFILE_NAME
+            """,
+        ]
+        errors: list[str] = []
+        with self.connection() as conn, conn.cursor() as cursor:
+            for sql in candidates:
+                try:
+                    cursor.execute(sql)
+                    rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
+                    return [
+                        {
+                            "name": str(row[0] or ""),
+                            "status": str(row[1] or "unknown").lower(),
+                            "owner": str(row[2] or ""),
+                            "created_at": _coerce_text(row[3]) if len(row) > 3 else "",
+                        }
+                        for row in rows
+                    ]
+                except Exception as exc:
+                    errors.append(str(exc))
+                    continue
+        raise OracleAdapterError(
+            "Oracle Select AI profile 一覧を取得できませんでした: " + "; ".join(errors)
+        )
+
+    def list_agent_conversations(
+        self, *, team_name: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Fetch recent Select AI Agent conversation prompts when dictionary view exists."""
+        filters = []
+        binds: dict[str, Any] = {"limit": max(limit, 1)}
+        if team_name:
+            filters.append("UPPER(TEAM_NAME) = UPPER(:team_name)")
+            binds["team_name"] = team_name
+        where_clause = ("WHERE " + " AND ".join(filters)) if filters else ""
+        candidates = [
+            (
+                f"""
+                SELECT CONVERSATION_ID, PROMPT, RESPONSE, CREATED, TEAM_NAME
+                FROM USER_CLOUD_AI_CONVERSATION_PROMPTS
+                {where_clause}
+                ORDER BY CREATED DESC
+                FETCH FIRST :limit ROWS ONLY
+                """,
+                binds,
+            ),
+            (
+                f"""
+                SELECT CONVERSATION_ID, PROMPT, NULL, CREATED, NULL
+                FROM USER_CLOUD_AI_CONVERSATION_PROMPTS
+                {where_clause}
+                ORDER BY CREATED DESC
+                FETCH FIRST :limit ROWS ONLY
+                """,
+                binds,
+            ),
+        ]
+        errors: list[str] = []
+        with self.connection() as conn, conn.cursor() as cursor:
+            for sql, params in candidates:
+                try:
+                    cursor.execute(sql, params)
+                    rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
+                    return [
+                        {
+                            "conversation_id": str(row[0] or ""),
+                            "prompt": _coerce_text(row[1]),
+                            "response": _coerce_text(row[2]) if len(row) > 2 else "",
+                            "created_at": _coerce_text(row[3]) if len(row) > 3 else "",
+                            "team_name": str(row[4] or "") if len(row) > 4 else "",
+                        }
+                        for row in rows
+                    ]
+                except Exception as exc:
+                    errors.append(str(exc))
+                    continue
+        raise OracleAdapterError(
+            "Select AI Agent conversation 履歴を取得できませんでした: " + "; ".join(errors)
+        )
+
+    def check_select_ai_agent_privileges(self) -> list[dict[str, str]]:
+        """Run side-effect-free Select AI Agent privilege checks."""
+
+        def check_count(
+            cursor: Any,
+            *,
+            name: str,
+            sql: str,
+            params: dict[str, Any] | None = None,
+            ok_message: str,
+            warning_message: str,
+        ) -> dict[str, str]:
+            try:
+                cursor.execute(sql, params or {})
+                row = cursor.fetchone()
+                count = int(row[0] or 0) if row else 0
+                return {
+                    "name": name,
+                    "status": "ok" if count > 0 else "warning",
+                    "message": ok_message if count > 0 else warning_message,
+                }
+            except Exception as exc:
+                return {
+                    "name": name,
+                    "status": "warning",
+                    "message": f"{warning_message}: {exc}",
+                }
+
+        def check_access(
+            cursor: Any,
+            *,
+            name: str,
+            sql: str,
+            ok_message: str,
+            warning_message: str,
+        ) -> dict[str, str]:
+            try:
+                cursor.execute(sql)
+                cursor.fetchone()
+                return {"name": name, "status": "ok", "message": ok_message}
+            except Exception as exc:
+                return {
+                    "name": name,
+                    "status": "warning",
+                    "message": f"{warning_message}: {exc}",
+                }
+
+        with self.connection() as conn, conn.cursor() as cursor:
+            checks: list[dict[str, str]] = []
+            try:
+                cursor.execute("SELECT 1 FROM DUAL")
+                checks.append(
+                    {
+                        "name": "oracle_connection",
+                        "status": "ok",
+                        "message": "Oracle へ接続できます。",
+                    }
+                )
+            except Exception as exc:
+                raise OracleAdapterError(f"Oracle 接続確認に失敗しました: {exc}") from exc
+            checks.append(
+                check_count(
+                    cursor,
+                    name="dbms_cloud_ai_package",
+                    sql="""
+                    SELECT COUNT(*)
+                    FROM ALL_PROCEDURES
+                    WHERE OBJECT_NAME = 'DBMS_CLOUD_AI'
+                    """,
+                    ok_message="DBMS_CLOUD_AI package が参照可能です。",
+                    warning_message="DBMS_CLOUD_AI package を参照できません。",
+                )
+            )
+            checks.append(
+                check_count(
+                    cursor,
+                    name="dbms_cloud_ai_agent_package",
+                    sql="""
+                    SELECT COUNT(*)
+                    FROM ALL_PROCEDURES
+                    WHERE OBJECT_NAME = 'DBMS_CLOUD_AI_AGENT'
+                    """,
+                    ok_message="DBMS_CLOUD_AI_AGENT package が参照可能です。",
+                    warning_message="DBMS_CLOUD_AI_AGENT package を参照できません。",
+                )
+            )
+            checks.append(
+                check_access(
+                    cursor,
+                    name="user_cloud_ai_profiles",
+                    sql="SELECT PROFILE_NAME FROM USER_CLOUD_AI_PROFILES WHERE 1 = 0",
+                    ok_message="USER_CLOUD_AI_PROFILES を参照できます。",
+                    warning_message="USER_CLOUD_AI_PROFILES を参照できません。",
+                )
+            )
+            checks.append(
+                check_access(
+                    cursor,
+                    name="user_cloud_ai_conversation_prompts",
+                    sql=(
+                        "SELECT CONVERSATION_ID "
+                        "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS WHERE 1 = 0"
+                    ),
+                    ok_message="USER_CLOUD_AI_CONVERSATION_PROMPTS を参照できます。",
+                    warning_message="USER_CLOUD_AI_CONVERSATION_PROMPTS を参照できません。",
+                )
+            )
+            return checks
+
+    def generate_synthetic_data(
+        self, *, table_name: str, row_count: int, profile_name: str = ""
+    ) -> dict[str, Any]:
+        """Call DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA for a validated table."""
+        safe_table = _strict_sql_name(table_name)
+        candidates = [
+            (
+                """
+                SELECT DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
+                    table_name => :table_name,
+                    row_count => :row_count,
+                    profile_name => :profile_name
+                )
+                FROM DUAL
+                """,
+                {
+                    "table_name": safe_table,
+                    "row_count": int(row_count),
+                    "profile_name": profile_name or None,
+                },
+            ),
+            (
+                """
+                SELECT DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
+                    table_name => :table_name,
+                    row_count => :row_count
+                )
+                FROM DUAL
+                """,
+                {"table_name": safe_table, "row_count": int(row_count)},
+            ),
+        ]
+        errors: list[str] = []
+        with self.connection() as conn, conn.cursor() as cursor:
+            for sql, params in candidates:
+                try:
+                    cursor.execute(sql, params)
+                    row = cursor.fetchone()
+                    conn.commit()
+                    operation_id = _coerce_text(row[0] if row else "").strip()
+                    return {
+                        "runtime": "oracle",
+                        "package": "DBMS_CLOUD_AI",
+                        "operation_id": operation_id,
+                        "table_name": safe_table,
+                        "row_count": int(row_count),
+                    }
+                except Exception as exc:
+                    message = str(exc)
+                    if self._looks_like_signature_error(message):
+                        errors.append(message)
+                        continue
+                    raise OracleAdapterError(
+                        f"DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA に失敗しました: {message}"
+                    ) from exc
+        raise OracleAdapterError(
+            "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の対応 signature が見つかりません: "
+            + "; ".join(errors)
+        )
+
+    def synthetic_data_operation_status(self, *, operation_id: str) -> dict[str, Any]:
+        safe_operation_id = operation_id.strip()
+        if not safe_operation_id:
+            raise OracleAdapterError("operation_id が空です。")
+        candidates = [
+            """
+            SELECT STATUS, ERROR_MESSAGE, RESULT
+            FROM USER_CLOUD_AI_OPERATIONS
+            WHERE OPERATION_ID = :operation_id
+            """,
+            """
+            SELECT STATUS, NULL, NULL
+            FROM USER_CLOUD_AI_OPERATIONS
+            WHERE OPERATION_ID = :operation_id
+            """,
+        ]
+        errors: list[str] = []
+        with self.connection() as conn, conn.cursor() as cursor:
+            for sql in candidates:
+                try:
+                    cursor.execute(sql, {"operation_id": safe_operation_id})
+                    row = cursor.fetchone()
+                    if not row:
+                        return {"runtime": "oracle", "status": "not_found", "message": ""}
+                    return {
+                        "runtime": "oracle",
+                        "status": str(row[0] or "unknown").lower(),
+                        "message": _coerce_text(row[1]) if len(row) > 1 else "",
+                        "result": {"raw": _coerce_text(row[2])} if len(row) > 2 and row[2] else {},
+                    }
+                except Exception as exc:
+                    errors.append(str(exc))
+                    continue
+        raise OracleAdapterError(
+            "synthetic data operation status を取得できませんでした: " + "; ".join(errors)
+        )
+
     def rebuild_feedback_vector_index(
         self,
         *,

@@ -5,7 +5,7 @@ import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, PageHeade
 
 import { apiGet, apiPatch } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import type { Nl2SqlProfile, ProfileUpsertPayload } from "../types";
+import type { Nl2SqlProfile, ProfileLearningMaterialImportData, ProfileUpsertPayload } from "../types";
 
 interface GlossaryFormState {
   glossaryText: string;
@@ -110,6 +110,10 @@ function rowsToObjects(text: string) {
 
 function downloadText(filename: string, text: string) {
   const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+  downloadBlob(filename, blob);
+}
+
+function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -151,6 +155,8 @@ export function GlossaryRulesPage() {
   const [form, setForm] = useState<GlossaryFormState>(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [materialBusy, setMaterialBusy] = useState(false);
+  const [materialMode, setMaterialMode] = useState<"merge" | "replace">("merge");
   const [message, setMessage] = useState("");
 
   const selectedProfile = useMemo(
@@ -273,6 +279,50 @@ export function GlossaryRulesPage() {
     }
   };
 
+  const importLearningMaterial = async (file: File | undefined) => {
+    if (!file || !selectedProfile) return;
+    setMaterialBusy(true);
+    setMessage("");
+    try {
+      const data = await uploadProfileLearningMaterialFile(selectedProfile.id, file, materialMode);
+      setProfiles((current) => current.map((profile) => (profile.id === data.profile.id ? data.profile : profile)));
+      setSelectedId(data.profile.id);
+      setForm(profileToForm(data.profile));
+      setMessage(
+        t("glossary.message.materialImported", {
+          terms: data.imported_terms,
+          rules: data.imported_rules,
+          examples: data.imported_examples,
+        })
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("glossary.error.importMaterial"));
+    } finally {
+      setMaterialBusy(false);
+    }
+  };
+
+  const exportLearningMaterial = async () => {
+    if (!selectedProfile) return;
+    setMaterialBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(
+        `/api/nl2sql/profiles/${encodeURIComponent(selectedProfile.id)}/learning-material/export.xlsx`,
+        { headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } }
+      );
+      if (!response.ok) {
+        throw new Error(t("glossary.error.exportMaterial"));
+      }
+      const blob = await response.blob();
+      downloadBlob(`nl2sql_${selectedProfile.id}_learning_material.xlsx`, blob);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("glossary.error.exportMaterial"));
+    } finally {
+      setMaterialBusy(false);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -349,6 +399,49 @@ export function GlossaryRulesPage() {
                 {message}
               </div>
             )}
+            <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 md:grid-cols-[minmax(0,1fr)_auto]">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">{t("glossary.material.title")}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-600">{t("glossary.material.hint")}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex min-h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={materialMode === "replace"}
+                    onChange={(event) => setMaterialMode(event.currentTarget.checked ? "replace" : "merge")}
+                    className="h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                  />
+                  <span>{t("glossary.material.replace")}</span>
+                </label>
+                <label className="relative inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 hover:bg-slate-100 focus-within:ring-2 focus-within:ring-sky-200">
+                  <Upload size={15} aria-hidden="true" />
+                  <span>{t("glossary.action.importWorkbook")}</span>
+                  <input
+                    type="file"
+                    accept=".csv,.tsv,.txt,.xlsx,.xlsm"
+                    className="absolute inset-0 cursor-pointer opacity-0"
+                    aria-label={t("glossary.action.importWorkbook")}
+                    disabled={!selectedProfile || materialBusy}
+                    onChange={(event) => {
+                      void importLearningMaterial(event.currentTarget.files?.[0]);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={materialBusy}
+                  disabled={!selectedProfile}
+                  onClick={() => void exportLearningMaterial()}
+                >
+                  <Download size={15} aria-hidden="true" />
+                  <span>{t("glossary.action.exportWorkbook")}</span>
+                </Button>
+              </div>
+            </section>
             <div className="grid gap-4 xl:grid-cols-3">
               <section className="grid gap-1 text-sm font-medium text-slate-800">
                 <FieldToolbar
@@ -400,6 +493,33 @@ export function GlossaryRulesPage() {
       </main>
     </>
   );
+}
+
+async function uploadProfileLearningMaterialFile(
+  profileId: string,
+  file: File,
+  mode: "merge" | "replace"
+): Promise<ProfileLearningMaterialImportData> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("mode", mode);
+  const response = await fetch(
+    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/learning-material/import`,
+    {
+      method: "POST",
+      body: form,
+      headers: { Accept: "application/json" },
+    }
+  );
+  const payload = (await response.json()) as {
+    data?: ProfileLearningMaterialImportData;
+    error?: string;
+    detail?: string;
+  };
+  if (!response.ok || !payload.data) {
+    throw new Error(payload.error || payload.detail || t("glossary.error.importMaterial"));
+  }
+  return payload.data;
 }
 
 function FieldToolbar({
