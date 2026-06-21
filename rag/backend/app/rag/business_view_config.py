@@ -27,9 +27,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import Settings
 from app.rag.kb_adapter_config import (
-    KnowledgeBaseAdapterConfig,
     KnowledgeBaseQueryConfig,
-    apply_adapter_config_or_global,
+    compose_query_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,17 +89,20 @@ def dump_business_view_config(config: BusinessViewConfig) -> dict[str, object]:
 def resolve_business_view_settings(
     global_settings: Settings,
     config: BusinessViewConfig,
+    kb_query: KnowledgeBaseQueryConfig | None = None,
 ) -> tuple[Settings, bool]:
-    """グローバル設定へ業務アシスタントの query 上書き + persona を重ねた Settings を返す。
+    """グローバルへ (任意の KB query 下層 →) 業務アシスタント query → persona を重ねた Settings。
 
-    戻り値 2 番目は上書きが実際に効いたかどうか。query 設定が矛盾する場合は KB と同様に
-    グローバルへ安全縮退する。
+    ``kb_query`` を渡すと **per-field merge** で「KB 既定 < 業務アシスタント」の層になり、
+    業務アシスタントが触れない query 項目は KB 既定が残る(検索対象が単一 KB に解決した
+    ときに使う。複数 KB のときは一意な KB 既定が無いので呼び出し側が None を渡す)。
+    戻り値 2 番目は上書きが実際に効いたかどうか。
     """
-    merged, query_applied = apply_adapter_config_or_global(
-        global_settings,
-        KnowledgeBaseAdapterConfig(query=config.query),
-        scope="query",
-    )
+    overlays: list[KnowledgeBaseQueryConfig] = []
+    if kb_query is not None:
+        overlays.append(kb_query)  # 低優先(KB 既定)
+    overlays.append(config.query)  # 高優先(業務アシスタント)
+    merged, query_applied = compose_query_settings(global_settings, overlays)
     persona = config.resolved_system_prompt()
     if persona is None:
         return merged, query_applied
