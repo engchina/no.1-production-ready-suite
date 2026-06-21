@@ -7,17 +7,20 @@
 from __future__ import annotations
 
 import base64
+import configparser
 import hashlib
 import hmac
 import json
+import re
 from asyncio import sleep, wait_for
 from collections.abc import Iterable, Mapping
 from csv import DictWriter
 from datetime import UTC, datetime
 from importlib import import_module
 from io import StringIO
+from pathlib import Path
 from time import monotonic
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 from fastapi import (
@@ -31,7 +34,7 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import (
@@ -88,6 +91,20 @@ from app.settings import get_settings
 
 router = APIRouter(tags=["agent-runtime"])
 
+OCI_CONFIG_MAX_BYTES = 64 * 1024
+OCI_PRIVATE_KEY_FILE = "~/.oci/oci_api_key.pem"
+OCI_CONFIG_KEYS = ("user", "fingerprint", "tenancy", "region", "key_file")
+ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
+ModelSettingsTestStatus = Literal["success", "failed"]
+ModelSettingsTestTargetType = Literal[
+    "enterprise_text",
+    "enterprise_vision",
+    "embedding",
+    "rerank",
+]
+UploadStorageBackend = Literal["local", "oci"]
+OciConfigTestStatus = Literal["success", "failed"]
+OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 _WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS = 300.0
 _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
 _websocket_command_dedupe: dict[tuple[str, str], tuple[str, float]] = {}
@@ -182,33 +199,80 @@ class PlannerSettingsPatch(BaseModel):
 
 
 class EnterpriseAiConfiguredModel(BaseModel):
-    model_id: str
-    display_name: str
+    model_id: str = Field(default="", max_length=256)
+    display_name: str = Field(default="", max_length=256)
     vision_enabled: bool = False
+
+    @field_validator("model_id", "display_name")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
 
 
 class EnterpriseAiModelSettings(BaseModel):
-    endpoint: str = ""
-    project_ocid: str = ""
-    api_key: str = ""
+    endpoint: str = Field(default="", max_length=2048)
+    project_ocid: str = Field(default="", max_length=512)
+    api_key: str = Field(default="", max_length=4096)
     has_api_key: bool = False
     clear_api_key: bool = False
-    models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
-    default_model_id: str = ""
-    api_path: str = "/responses"
+    models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
+    default_model_id: str = Field(default="", max_length=256)
+    api_path: str = Field(default="/responses", max_length=512)
     vlm_input_mode: str = "auto"
-    text_payload_template: str = ""
-    vision_payload_template: str = ""
-    text_response_path: str = "output_text"
-    vision_response_path: str = "output_text"
-    timeout_seconds: int = 60
-    max_retries: int = 3
+    text_payload_template: str = Field(default="", max_length=20000)
+    vision_payload_template: str = Field(default="", max_length=20000)
+    text_response_path: str = Field(default="", max_length=1024)
+    vision_response_path: str = Field(default="", max_length=1024)
+    timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
+    max_retries: int = Field(default=3, ge=0, le=5)
+    llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
+    vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
+
+    @field_validator(
+        "endpoint",
+        "project_ocid",
+        "api_key",
+        "default_model_id",
+        "api_path",
+        "text_payload_template",
+        "vision_payload_template",
+        "text_response_path",
+        "vision_response_path",
+    )
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("text_payload_template", "vision_payload_template")
+    @classmethod
+    def validate_payload_template(cls, value: str) -> str:
+        if not value:
+            return value
+        try:
+            parsed = json.loads(value)
+        except ValueError as exc:
+            raise ValueError("payload template は JSON object で入力してください。") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("payload template は JSON object で入力してください。")
+        return value
+
+    @field_validator("text_response_path", "vision_response_path")
+    @classmethod
+    def validate_response_path(cls, value: str) -> str:
+        if value and not value.startswith("/"):
+            raise ValueError("response path は / で始まる JSON Pointer で入力してください。")
+        return value
 
 
 class GenerativeAiModelSettings(BaseModel):
-    embedding_model: str = "cohere.embed-v4.0"
-    embedding_dim: int = 1536
-    rerank_model: str = "cohere.rerank-v4.0-fast"
+    embedding_model: str = Field(default="cohere.embed-v4.0", max_length=256)
+    embedding_dim: int = Field(default=1536, ge=1536, le=1536)
+    rerank_model: str = Field(default="cohere.rerank-v4.0-fast", max_length=256)
+
+    @field_validator("embedding_model", "rerank_model")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
 
 
 class ModelSettingsPayload(BaseModel):
@@ -218,21 +282,26 @@ class ModelSettingsPayload(BaseModel):
 
 class ModelSettingsData(BaseModel):
     settings: ModelSettingsPayload
-    checks: dict[str, str]
-    model_settings_file: str = "runtime"
-    source: str = "runtime"
+    checks: dict[str, ModelSettingsCheckStatus]
+    model_settings_file: str
+    source: Literal["runtime"]
 
 
 class ModelSettingsTestRequest(BaseModel):
     settings: ModelSettingsPayload
-    target_type: str
-    model_id: str
+    target_type: ModelSettingsTestTargetType
+    model_id: str = Field(default="", max_length=256)
     vision_enabled: bool = False
+
+    @field_validator("model_id")
+    @classmethod
+    def strip_model_id(cls, value: str) -> str:
+        return value.strip()
 
 
 class ModelSettingsTestResult(BaseModel):
-    status: str
-    target_type: str
+    status: ModelSettingsTestStatus
+    target_type: ModelSettingsTestTargetType
     model_id: str
     message: str
     troubleshooting: list[str] = Field(default_factory=list)
@@ -260,13 +329,18 @@ class DatabaseSettingsData(BaseModel):
 
 
 class DatabaseSettingsUpdate(BaseModel):
-    user: str = ""
-    dsn: str = ""
-    wallet_dir: str = ""
-    password: str | None = None
-    wallet_password: str | None = None
+    user: str = Field(default="", max_length=256)
+    dsn: str = Field(default="", max_length=1024)
+    wallet_dir: str = Field(default="", max_length=1024)
+    password: str | None = Field(default=None, max_length=4096)
+    wallet_password: str | None = Field(default=None, max_length=4096)
     clear_password: bool = False
     clear_wallet_password: bool = False
+
+    @field_validator("user", "dsn", "wallet_dir")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
 
 
 class DatabaseConnectionTestResult(BaseModel):
@@ -293,12 +367,17 @@ class AdbInfoData(BaseModel):
 
 
 class AdbSettingsUpdate(BaseModel):
-    adb_ocid: str = ""
-    region: str = ""
+    adb_ocid: str = Field(default="", max_length=512)
+    region: str = Field(default="", max_length=128)
+
+    @field_validator("adb_ocid", "region")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
 
 
 class UploadStorageSettingsData(BaseModel):
-    backend: str = "local"
+    backend: UploadStorageBackend = "local"
     local_storage_dir: str = "/u01/production-ready-rag"
     object_storage_region: str = "ap-osaka-1"
     object_storage_namespace: str = ""
@@ -309,15 +388,54 @@ class UploadStorageSettingsData(BaseModel):
 
 
 class UploadStorageSettingsUpdate(BaseModel):
-    backend: str = "local"
-    local_storage_dir: str = ""
-    object_storage_namespace: str | None = None
-    object_storage_bucket: str = ""
+    backend: UploadStorageBackend = "local"
+    local_storage_dir: str = Field(default="", max_length=1024)
+    object_storage_namespace: str | None = Field(default=None, max_length=256)
+    object_storage_bucket: str = Field(default="", max_length=256)
+
+    @field_validator("local_storage_dir", "object_storage_bucket")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("object_storage_namespace")
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("object_storage_namespace", "object_storage_bucket")
+    @classmethod
+    def validate_object_storage_name(cls, value: str | None) -> str | None:
+        if value and not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            raise ValueError(
+                "Object Storage の値は英数字、ハイフン、アンダースコア、ドットで入力してください。"
+            )
+        return value
 
 
 class OciConfigReadRequest(BaseModel):
-    config_file: str = "~/.oci/config"
-    profile: str = "DEFAULT"
+    config_file: str = Field(default="~/.oci/config", max_length=1024)
+    profile: str = Field(default="DEFAULT", max_length=128)
+
+    @field_validator("config_file", "profile")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("config_file")
+    @classmethod
+    def require_config_file(cls, value: str) -> str:
+        if not value:
+            raise ValueError("OCI config ファイルの path を入力してください。")
+        return value
+
+    @field_validator("profile")
+    @classmethod
+    def validate_profile(cls, value: str) -> str:
+        profile = value or "DEFAULT"
+        if any(char in profile for char in "[]\r\n"):
+            raise ValueError("プロファイル名に [ ] や改行は使用できません。")
+        return profile
 
 
 class OciConfigReadData(BaseModel):
@@ -327,14 +445,47 @@ class OciConfigReadData(BaseModel):
     tenancy: str = ""
     region: str = ""
     key_file: str = "~/.oci/oci_api_key.pem"
-    applied_fields: list[str] = Field(default_factory=list)
+    applied_fields: list[OciConfigField] = Field(default_factory=list)
 
 
 class OciSettingsUpdate(BaseModel):
-    user: str = ""
-    fingerprint: str = ""
-    tenancy: str = ""
-    region: str = ""
+    user: str = Field(default="", max_length=512)
+    fingerprint: str = Field(default="", max_length=128)
+    tenancy: str = Field(default="", max_length=512)
+    region: str = Field(default="", max_length=128)
+
+    @field_validator("user", "fingerprint", "tenancy", "region")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("user")
+    @classmethod
+    def validate_user_ocid(cls, value: str) -> str:
+        if value and not value.startswith("ocid1.user."):
+            raise ValueError("ユーザー OCID は ocid1.user. で始めてください。")
+        return value
+
+    @field_validator("fingerprint")
+    @classmethod
+    def validate_fingerprint(cls, value: str) -> str:
+        if value and not re.fullmatch(r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2})+", value):
+            raise ValueError("fingerprint は 16 進数をコロン区切りで入力してください。")
+        return value
+
+    @field_validator("tenancy")
+    @classmethod
+    def validate_tenancy_ocid(cls, value: str) -> str:
+        if value and not value.startswith("ocid1.tenancy."):
+            raise ValueError("テナンシ OCID は ocid1.tenancy. で始めてください。")
+        return value
+
+    @field_validator("region")
+    @classmethod
+    def validate_region(cls, value: str) -> str:
+        if value and not re.fullmatch(r"[a-z0-9-]+", value):
+            raise ValueError("リージョンは英小文字、数字、ハイフンで入力してください。")
+        return value
 
 
 class OciSettingsData(BaseModel):
@@ -351,12 +502,33 @@ class OciSettingsData(BaseModel):
 
 
 class OciObjectStorageSettingsUpdate(BaseModel):
-    object_storage_region: str = "ap-osaka-1"
-    object_storage_namespace: str = ""
+    object_storage_region: str = Field(default="ap-osaka-1", max_length=128)
+    object_storage_namespace: str = Field(default="", max_length=256)
+
+    @field_validator("object_storage_region", "object_storage_namespace")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("object_storage_region")
+    @classmethod
+    def validate_region(cls, value: str) -> str:
+        if value and not re.fullmatch(r"[a-z0-9-]+", value):
+            raise ValueError("リージョンは英小文字、数字、ハイフンで入力してください。")
+        return value
+
+    @field_validator("object_storage_namespace")
+    @classmethod
+    def validate_namespace(cls, value: str) -> str:
+        if value and not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            raise ValueError(
+                "Object Storage の値は英数字、ハイフン、アンダースコア、ドットで入力してください。"
+            )
+        return value
 
 
 class OciConfigTestResult(BaseModel):
-    status: str
+    status: OciConfigTestStatus
     profile: str = "DEFAULT"
     config_file: str = "~/.oci/config"
     key_file: str = "~/.oci/oci_api_key.pem"
@@ -373,9 +545,36 @@ class OciConfigTestResult(BaseModel):
 
 
 class OciObjectStorageNamespaceRequest(BaseModel):
-    config_file: str = "~/.oci/config"
-    profile: str = "DEFAULT"
-    region: str = "ap-osaka-1"
+    config_file: str = Field(default="~/.oci/config", max_length=1024)
+    profile: str = Field(default="DEFAULT", max_length=128)
+    region: str = Field(default="ap-osaka-1", max_length=128)
+
+    @field_validator("config_file", "profile", "region")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("config_file")
+    @classmethod
+    def require_config_file(cls, value: str) -> str:
+        if not value:
+            raise ValueError("OCI config ファイルの path を入力してください。")
+        return value
+
+    @field_validator("profile")
+    @classmethod
+    def validate_profile(cls, value: str) -> str:
+        profile = value or "DEFAULT"
+        if any(char in profile for char in "[]\r\n"):
+            raise ValueError("プロファイル名に [ ] や改行は使用できません。")
+        return profile
+
+    @field_validator("region")
+    @classmethod
+    def require_region(cls, value: str) -> str:
+        if not value:
+            raise ValueError("Object Storage リージョンを入力してください。")
+        return value
 
 
 class OciObjectStorageNamespaceData(BaseModel):
@@ -483,8 +682,32 @@ def _settings_attr(name: str, default: object) -> object:
     return getattr(get_settings(), name, default)
 
 
-def _settings_int(name: str, default: int) -> int:
-    value = _settings_attr(name, default)
+def _settings_str_from(settings: object, name: str, default: str = "") -> str:
+    value = getattr(settings, name, default)
+    return str(default if value is None else value)
+
+
+def _settings_str(name: str, default: str = "") -> str:
+    return _settings_str_from(get_settings(), name, default)
+
+
+def _settings_first_from(settings: object, names: tuple[str, ...], default: object = "") -> object:
+    for name in names:
+        value = getattr(settings, name, None)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value:
+            continue
+        return value
+    return default
+
+
+def _settings_int_from(settings: object, name: str, default: int) -> int:
+    value = getattr(settings, name, default)
+    return _coerce_int(value, default)
+
+
+def _coerce_int(value: object, default: int) -> int:
     if isinstance(value, int):
         return value
     if isinstance(value, float | str):
@@ -495,157 +718,437 @@ def _settings_int(name: str, default: int) -> int:
     return default
 
 
+def _settings_int(name: str, default: int) -> int:
+    return _settings_int_from(get_settings(), name, default)
+
+
+def _settings_float_from(settings: object, name: str, default: float) -> float:
+    value = getattr(settings, name, default)
+    return _coerce_float(value, default)
+
+
+def _coerce_float(value: object, default: float) -> float:
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _settings_float(name: str, default: float) -> float:
+    return _settings_float_from(get_settings(), name, default)
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _secret_value(*, current: str, update: str | None, clear: bool) -> str:
+    if clear:
+        return ""
+    if update is not None and update != "":
+        return update
+    return current
+
+
+def _is_present(value: str) -> bool:
+    return bool(value.strip())
+
+
+def _secret_is_available(settings: EnterpriseAiModelSettings) -> bool:
+    if settings.clear_api_key:
+        return False
+    return _is_present(settings.api_key) or settings.has_api_key
+
+
+def _json_pointer_or_empty(value: str) -> str:
+    normalized = value.strip()
+    return normalized if not normalized or normalized.startswith("/") else ""
 
 
 def _get_model_settings_state() -> ModelSettingsPayload:
     global _model_settings_state
     if _model_settings_state is None:
+        settings = get_settings()
         model_id = str(
-            _settings_attr("enterprise_ai_default_model_id", "")
-            or _settings_attr("agent_planner_oci_responses_model", "")
+            _settings_first_from(
+                settings,
+                (
+                    "oci_enterprise_ai_default_model",
+                    "enterprise_ai_default_model_id",
+                    "agent_planner_oci_responses_model",
+                ),
+            )
             or "enterprise-llm"
         )
         api_key = str(
-            _settings_attr("enterprise_ai_api_key", "")
-            or _settings_attr("agent_planner_oci_responses_api_key", "")
-            or ""
+            _settings_first_from(
+                settings,
+                (
+                    "oci_enterprise_ai_api_key",
+                    "enterprise_ai_api_key",
+                    "agent_planner_oci_responses_api_key",
+                ),
+            )
         )
         _model_settings_state = ModelSettingsPayload(
             enterprise_ai=EnterpriseAiModelSettings(
                 endpoint=str(
-                    _settings_attr("enterprise_ai_endpoint", "")
-                    or _settings_attr("agent_planner_oci_responses_base_url", "")
-                    or ""
+                    _settings_first_from(
+                        settings,
+                        (
+                            "oci_enterprise_ai_endpoint",
+                            "enterprise_ai_endpoint",
+                            "agent_planner_oci_responses_base_url",
+                        ),
+                    )
                 ),
                 project_ocid=str(
-                    _settings_attr("enterprise_ai_project_ocid", "")
-                    or _settings_attr("agent_planner_oci_responses_project", "")
-                    or ""
+                    _settings_first_from(
+                        settings,
+                        (
+                            "oci_enterprise_ai_project_ocid",
+                            "enterprise_ai_project_ocid",
+                            "agent_planner_oci_responses_project",
+                        ),
+                    )
                 ),
                 api_key="",
                 has_api_key=bool(api_key),
-                models=[
-                    EnterpriseAiConfiguredModel(
-                        model_id=model_id,
-                        display_name="業務 RAG 標準",
-                        vision_enabled=True,
-                    )
-                ],
+                models=_enterprise_model_catalog(settings, model_id),
                 default_model_id=model_id,
-                api_path=str(_settings_attr("enterprise_ai_api_path", "/responses")),
-                vlm_input_mode=str(_settings_attr("enterprise_ai_vlm_input_mode", "auto")),
-                text_response_path=str(
-                    _settings_attr("enterprise_ai_text_response_path", "output_text")
+                api_path=str(
+                    _settings_first_from(
+                        settings,
+                        ("oci_enterprise_ai_llm_path", "enterprise_ai_api_path"),
+                        "/responses",
+                    )
                 ),
-                vision_response_path=str(
-                    _settings_attr("enterprise_ai_vision_response_path", "output_text")
+                vlm_input_mode=str(
+                    _settings_first_from(
+                        settings,
+                        ("oci_enterprise_ai_vlm_input_mode", "enterprise_ai_vlm_input_mode"),
+                        "auto",
+                    )
                 ),
-                timeout_seconds=_settings_int("enterprise_ai_timeout_seconds", 60),
-                max_retries=_settings_int("enterprise_ai_max_retries", 3),
+                text_payload_template=str(
+                    _settings_first_from(
+                        settings,
+                        (
+                            "oci_enterprise_ai_llm_payload_template",
+                            "enterprise_ai_text_payload_template",
+                        ),
+                    )
+                ),
+                vision_payload_template=str(
+                    _settings_first_from(
+                        settings,
+                        (
+                            "oci_enterprise_ai_vlm_payload_template",
+                            "enterprise_ai_vision_payload_template",
+                        ),
+                    )
+                ),
+                text_response_path=_json_pointer_or_empty(
+                    str(
+                        _settings_first_from(
+                            settings,
+                            (
+                                "oci_enterprise_ai_llm_response_path",
+                                "enterprise_ai_text_response_path",
+                            ),
+                        )
+                    )
+                ),
+                vision_response_path=_json_pointer_or_empty(
+                    str(
+                        _settings_first_from(
+                            settings,
+                            (
+                                "oci_enterprise_ai_vlm_response_path",
+                                "enterprise_ai_vision_response_path",
+                            ),
+                        )
+                    )
+                ),
+                timeout_seconds=_coerce_float(
+                    _settings_first_from(
+                        settings,
+                        ("oci_enterprise_ai_timeout_seconds", "enterprise_ai_timeout_seconds"),
+                        600.0,
+                    ),
+                    600.0,
+                ),
+                max_retries=_coerce_int(
+                    _settings_first_from(
+                        settings,
+                        ("oci_enterprise_ai_max_retries", "enterprise_ai_max_retries"),
+                        3,
+                    ),
+                    3,
+                ),
+                llm_max_output_tokens=_coerce_int(
+                    _settings_first_from(
+                        settings,
+                        (
+                            "oci_enterprise_ai_llm_max_output_tokens",
+                            "enterprise_ai_llm_max_output_tokens",
+                        ),
+                        1200,
+                    ),
+                    1200,
+                ),
+                vlm_max_output_tokens=_coerce_int(
+                    _settings_first_from(
+                        settings,
+                        (
+                            "oci_enterprise_ai_vlm_max_output_tokens",
+                            "enterprise_ai_vlm_max_output_tokens",
+                        ),
+                        65536,
+                    ),
+                    65536,
+                ),
             ),
             generative_ai=GenerativeAiModelSettings(
-                embedding_model=str(_settings_attr("embedding_model", "cohere.embed-v4.0")),
-                embedding_dim=_settings_int("embedding_dim", 1536),
-                rerank_model=str(_settings_attr("rerank_model", "cohere.rerank-v4.0-fast")),
+                embedding_model=str(
+                    _settings_first_from(
+                        settings,
+                        ("oci_genai_embedding_model", "embedding_model"),
+                        "cohere.embed-v4.0",
+                    )
+                ),
+                embedding_dim=_coerce_int(
+                    _settings_first_from(
+                        settings,
+                        ("oci_genai_embedding_dim", "embedding_dim"),
+                        1536,
+                    ),
+                    1536,
+                ),
+                rerank_model=str(
+                    _settings_first_from(
+                        settings,
+                        ("oci_genai_rerank_model", "rerank_model"),
+                        "cohere.rerank-v4.0-fast",
+                    )
+                ),
             ),
         )
     return _model_settings_state.model_copy(deep=True)
+
+
+def _enterprise_model_catalog(
+    settings: object,
+    fallback_model_id: str,
+) -> list[EnterpriseAiConfiguredModel]:
+    raw_models = _settings_first_from(settings, ("oci_enterprise_ai_models",), [])
+    models: list[EnterpriseAiConfiguredModel] = []
+    if isinstance(raw_models, list):
+        for item in raw_models:
+            try:
+                if isinstance(item, EnterpriseAiConfiguredModel):
+                    model = item
+                elif isinstance(item, Mapping):
+                    model = EnterpriseAiConfiguredModel.model_validate(item)
+                else:
+                    continue
+            except ValueError:
+                continue
+            if model.model_id:
+                models.append(model)
+    if models:
+        return models
+    if not fallback_model_id:
+        return []
+    return [
+        EnterpriseAiConfiguredModel(
+            model_id=fallback_model_id,
+            display_name="業務 RAG 標準",
+            vision_enabled=True,
+        )
+    ]
 
 
 def _set_model_settings_state(payload: ModelSettingsPayload) -> ModelSettingsPayload:
     global _model_settings_state
     current = _get_model_settings_state()
     stored = payload.model_copy(deep=True)
-    if stored.enterprise_ai.clear_api_key:
-        stored.enterprise_ai.has_api_key = False
-    elif stored.enterprise_ai.api_key:
-        stored.enterprise_ai.has_api_key = True
-    else:
-        stored.enterprise_ai.has_api_key = current.enterprise_ai.has_api_key
+    resolved_api_key = _secret_value(
+        current="__saved__" if current.enterprise_ai.has_api_key else "",
+        update=stored.enterprise_ai.api_key,
+        clear=stored.enterprise_ai.clear_api_key,
+    )
+    stored.enterprise_ai.has_api_key = bool(resolved_api_key.strip())
     stored.enterprise_ai.api_key = ""
     stored.enterprise_ai.clear_api_key = False
     _model_settings_state = stored
     return stored.model_copy(deep=True)
 
 
-def _model_settings_checks(payload: ModelSettingsPayload) -> dict[str, str]:
-    enterprise = payload.enterprise_ai
-    genai = payload.generative_ai
-    has_default_model = bool(
-        enterprise.default_model_id
-        and any(model.model_id == enterprise.default_model_id for model in enterprise.models)
-    )
-    enterprise_ok = bool(
-        enterprise.endpoint
-        and enterprise.project_ocid
-        and enterprise.has_api_key
-        and enterprise.models
-        and has_default_model
-    )
-    genai_ok = bool(genai.embedding_model and genai.rerank_model)
+def _model_settings_checks(payload: ModelSettingsPayload) -> dict[str, ModelSettingsCheckStatus]:
     return {
-        "enterprise_ai": "ok" if enterprise_ok else "missing",
-        "generative_ai": "ok" if genai_ok else "missing",
-        "embedding_dim": "ok" if genai.embedding_dim == 1536 else "invalid",
+        "enterprise_ai": _enterprise_ai_status(payload.enterprise_ai),
+        "generative_ai": _generative_ai_status(payload.generative_ai),
+        "embedding_dim": _embedding_dim_status(payload.generative_ai),
     }
 
 
-def _model_settings_data(payload: ModelSettingsPayload | None = None) -> ModelSettingsData:
+def _enterprise_ai_status(settings: EnterpriseAiModelSettings) -> ModelSettingsCheckStatus:
+    required = (settings.endpoint, settings.project_ocid, settings.api_path)
+    if not all(_is_present(value) for value in required):
+        return "missing"
+    if not settings.endpoint.startswith(("http://", "https://")):
+        return "invalid"
+    if not settings.project_ocid.startswith("ocid1.generativeaiproject."):
+        return "invalid"
+    if not settings.api_path.startswith(("/", "http://", "https://")):
+        return "invalid"
+    if not _secret_is_available(settings):
+        return "missing"
+    model_ids = [model.model_id for model in settings.models if _is_present(model.model_id)]
+    if len(model_ids) != len(settings.models):
+        return "missing"
+    if len(model_ids) != len(set(model_ids)):
+        return "invalid"
+    if not model_ids or not _is_present(settings.default_model_id):
+        return "missing"
+    if settings.default_model_id not in model_ids:
+        return "invalid"
+    if not any(model.vision_enabled for model in settings.models if _is_present(model.model_id)):
+        return "missing"
+    return "ok"
+
+
+def _generative_ai_status(settings: GenerativeAiModelSettings) -> ModelSettingsCheckStatus:
+    if _embedding_dim_status(settings) == "invalid":
+        return "invalid"
+    required = (settings.embedding_model, settings.rerank_model)
+    return "ok" if all(_is_present(value) for value in required) else "missing"
+
+
+def _embedding_dim_status(settings: GenerativeAiModelSettings) -> ModelSettingsCheckStatus:
+    return "ok" if settings.embedding_dim == 1536 else "invalid"
+
+
+def _model_settings_data(
+    payload: ModelSettingsPayload | None = None,
+    settings: object | None = None,
+) -> ModelSettingsData:
     settings_payload = payload or _get_model_settings_state()
-    public_payload = settings_payload.model_copy(deep=True)
-    public_payload.enterprise_ai.api_key = ""
-    public_payload.enterprise_ai.clear_api_key = False
+    runtime_settings = settings or get_settings()
     return ModelSettingsData(
-        settings=public_payload,
-        checks=_model_settings_checks(public_payload),
+        settings=_public_model_settings_payload(settings_payload),
+        checks=_model_settings_checks(settings_payload),
+        model_settings_file=_settings_str_from(
+            runtime_settings,
+            "model_settings_file",
+            "model-settings.json",
+        ),
+        source="runtime",
+    )
+
+
+def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettingsPayload:
+    enterprise_ai = payload.enterprise_ai.model_copy(
+        update={
+            "api_key": "",
+            "has_api_key": (
+                not payload.enterprise_ai.clear_api_key
+                and (
+                    payload.enterprise_ai.has_api_key
+                    or _is_present(payload.enterprise_ai.api_key)
+                )
+            ),
+            "clear_api_key": False,
+        }
+    )
+    return ModelSettingsPayload(
+        enterprise_ai=enterprise_ai,
+        generative_ai=payload.generative_ai,
     )
 
 
 def _get_database_settings_state() -> DatabaseSettingsData:
     global _database_settings_state
     if _database_settings_state is None:
-        settings = get_settings()
-        dsn = str(_settings_attr("oracle_dsn", "") or settings.agent_runtime_oracle_dsn or "")
-        user = str(_settings_attr("oracle_user", "") or settings.agent_runtime_oracle_user or "")
-        wallet_dir = str(_settings_attr("oracle_wallet_dir", "") or "")
-        has_password = bool(
-            _settings_attr("oracle_password", "") or settings.agent_runtime_oracle_password
-        )
-        _database_settings_state = DatabaseSettingsData(
-            user=user,
-            dsn=dsn,
-            wallet_dir=wallet_dir,
-            wallet_uploaded=bool(_settings_attr("oracle_wallet_uploaded", False)),
-            available_services=[dsn] if dsn else [],
-            has_password=has_password,
-            has_wallet_password=bool(_settings_attr("oracle_wallet_password", "")),
-            adb_ocid=str(_settings_attr("adb_ocid", "")),
-            region=str(_settings_attr("oci_region", "") or _settings_attr("oracle_region", "")),
-        )
-        _database_settings_state.readiness = _database_readiness(_database_settings_state)
+        _database_settings_state = _database_settings_data(get_settings())
     return _database_settings_state.model_copy(deep=True)
 
 
 def _set_database_settings_state(patch: DatabaseSettingsUpdate) -> DatabaseSettingsData:
     global _database_settings_state
-    current = _get_database_settings_state()
-    current.user = patch.user.strip()
-    current.dsn = patch.dsn.strip()
-    current.wallet_dir = patch.wallet_dir.strip()
-    current.available_services = [current.dsn] if current.dsn else []
-    if patch.clear_password:
-        current.has_password = False
-    elif patch.password:
-        current.has_password = True
-    if patch.clear_wallet_password:
-        current.has_wallet_password = False
-    elif patch.wallet_password:
-        current.has_wallet_password = True
-    current.readiness = _database_readiness(current)
-    _database_settings_state = current
-    return current.model_copy(deep=True)
+    candidate = _database_settings_candidate(_get_database_settings_state(), patch)
+    _database_settings_state = candidate
+    return candidate.model_copy(deep=True)
+
+
+def _database_settings_data(settings: object) -> DatabaseSettingsData:
+    dsn = str(_settings_first_from(settings, ("oracle_dsn", "agent_runtime_oracle_dsn")))
+    user = str(_settings_first_from(settings, ("oracle_user", "agent_runtime_oracle_user")))
+    wallet_dir = _settings_str_from(settings, "oracle_wallet_dir")
+    wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
+    wallet_uploaded = bool(_settings_first_from(settings, ("oracle_wallet_uploaded",), False))
+    if wallet_path is not None and wallet_path.is_dir():
+        wallet_uploaded = True
+    has_password = bool(
+        _settings_first_from(settings, ("oracle_password", "agent_runtime_oracle_password"))
+    )
+    embedding_dim = _coerce_int(
+        _settings_first_from(settings, ("oci_genai_embedding_dim", "embedding_dim"), 1536),
+        1536,
+    )
+    data = DatabaseSettingsData(
+        user=user,
+        dsn=dsn,
+        wallet_dir=wallet_dir,
+        wallet_uploaded=wallet_uploaded,
+        available_services=[dsn] if dsn else [],
+        has_password=has_password,
+        has_wallet_password=bool(_settings_str_from(settings, "oracle_wallet_password")),
+        embedding_dimension=embedding_dim,
+        vector_column=f"VECTOR({embedding_dim}, FLOAT32)",
+        adb_ocid=_settings_str_from(settings, "oracle_adb_ocid")
+        or _settings_str_from(settings, "adb_ocid"),
+        region=_settings_str_from(settings, "oci_region")
+        or _settings_str_from(settings, "oracle_region"),
+        config_source="runtime",
+    )
+    data.readiness = _database_readiness(data)
+    return data
+
+
+def _database_settings_candidate(
+    base: DatabaseSettingsData,
+    payload: DatabaseSettingsUpdate,
+) -> DatabaseSettingsData:
+    candidate = base.model_copy(
+        update={
+            "user": payload.user,
+            "dsn": payload.dsn,
+            "wallet_dir": payload.wallet_dir,
+            "available_services": [payload.dsn] if payload.dsn else [],
+            "has_password": bool(
+                _secret_value(
+                    current="__saved__" if base.has_password else "",
+                    update=payload.password,
+                    clear=payload.clear_password,
+                )
+            ),
+            "has_wallet_password": bool(
+                _secret_value(
+                    current="__saved__" if base.has_wallet_password else "",
+                    update=payload.wallet_password,
+                    clear=payload.clear_wallet_password,
+                )
+            ),
+        }
+    )
+    candidate.readiness = _database_readiness(candidate)
+    return candidate
 
 
 def _database_readiness(data: DatabaseSettingsData) -> str:
@@ -656,20 +1159,32 @@ def _database_readiness(data: DatabaseSettingsData) -> str:
     return "ok"
 
 
+def _upload_storage_settings_data(settings: object) -> UploadStorageSettingsData:
+    data = UploadStorageSettingsData(
+        backend=_settings_str_from(settings, "upload_storage_backend", "local"),
+        local_storage_dir=_settings_str_from(
+            settings,
+            "local_storage_dir",
+            "/u01/production-ready-rag",
+        ),
+        object_storage_region=_settings_str_from(
+            settings,
+            "object_storage_region",
+            "ap-osaka-1",
+        ),
+        object_storage_namespace=_settings_str_from(settings, "object_storage_namespace"),
+        object_storage_bucket=_settings_str_from(settings, "object_storage_bucket"),
+        max_upload_bytes=_settings_int_from(settings, "max_upload_bytes", 100 * 1024 * 1024),
+        config_source="runtime",
+    )
+    data.readiness = _upload_storage_readiness(data)
+    return data
+
+
 def _get_upload_storage_settings_state() -> UploadStorageSettingsData:
     global _upload_storage_settings_state
     if _upload_storage_settings_state is None:
-        _upload_storage_settings_state = UploadStorageSettingsData(
-            backend=str(_settings_attr("upload_storage_backend", "local")),
-            local_storage_dir=str(_settings_attr("local_storage_dir", "/u01/production-ready-rag")),
-            object_storage_region=str(_settings_attr("object_storage_region", "ap-osaka-1")),
-            object_storage_namespace=str(_settings_attr("object_storage_namespace", "")),
-            object_storage_bucket=str(_settings_attr("object_storage_bucket", "")),
-            max_upload_bytes=_settings_int("max_upload_bytes", 100 * 1024 * 1024),
-        )
-        _upload_storage_settings_state.readiness = _upload_storage_readiness(
-            _upload_storage_settings_state
-        )
+        _upload_storage_settings_state = _upload_storage_settings_data(get_settings())
     return _upload_storage_settings_state.model_copy(deep=True)
 
 
@@ -677,15 +1192,29 @@ def _set_upload_storage_settings_state(
     patch: UploadStorageSettingsUpdate,
 ) -> UploadStorageSettingsData:
     global _upload_storage_settings_state
-    current = _get_upload_storage_settings_state()
-    current.backend = patch.backend
-    current.local_storage_dir = patch.local_storage_dir.strip()
-    if patch.object_storage_namespace is not None:
-        current.object_storage_namespace = patch.object_storage_namespace.strip()
-    current.object_storage_bucket = patch.object_storage_bucket.strip()
-    current.readiness = _upload_storage_readiness(current)
-    _upload_storage_settings_state = current
-    return current.model_copy(deep=True)
+    candidate = _upload_storage_settings_candidate(_get_upload_storage_settings_state(), patch)
+    _upload_storage_settings_state = candidate
+    return candidate.model_copy(deep=True)
+
+
+def _upload_storage_settings_candidate(
+    base: UploadStorageSettingsData,
+    payload: UploadStorageSettingsUpdate,
+) -> UploadStorageSettingsData:
+    candidate = base.model_copy(
+        update={
+            "backend": payload.backend,
+            "local_storage_dir": payload.local_storage_dir,
+            "object_storage_namespace": (
+                payload.object_storage_namespace
+                if payload.object_storage_namespace is not None
+                else base.object_storage_namespace
+            ),
+            "object_storage_bucket": payload.object_storage_bucket,
+        }
+    )
+    candidate.readiness = _upload_storage_readiness(candidate)
+    return candidate
 
 
 def _upload_storage_readiness(data: UploadStorageSettingsData) -> str:
@@ -696,20 +1225,45 @@ def _upload_storage_readiness(data: UploadStorageSettingsData) -> str:
     return "ok" if data.local_storage_dir else "missing"
 
 
+def _oci_settings_data(settings: object) -> OciSettingsData:
+    parsed = _read_runtime_oci_config(settings)
+    config_file = _settings_str_from(settings, "oci_config_file", "~/.oci/config")
+    profile = _settings_str_from(settings, "oci_config_profile", "DEFAULT")
+    region = _settings_str_from(settings, "oci_region", "ap-osaka-1")
+    config_path = Path(config_file).expanduser()
+    key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+
+    return OciSettingsData(
+        config_file=config_file,
+        profile=profile,
+        user=parsed.user if parsed is not None else "",
+        fingerprint=parsed.fingerprint if parsed is not None else "",
+        tenancy=parsed.tenancy if parsed is not None else "",
+        region=region.strip() or (parsed.region if parsed is not None else ""),
+        key_file=OCI_PRIVATE_KEY_FILE,
+        key_file_exists=key_path.is_file(),
+        config_file_exists=config_path.is_file(),
+        config_source="runtime",
+    )
+
+
+def _read_runtime_oci_config(settings: object) -> OciConfigReadData | None:
+    try:
+        content = _read_oci_config_text(
+            _settings_str_from(settings, "oci_config_file", "~/.oci/config")
+        )
+        return _parse_oci_config(
+            content,
+            _settings_str_from(settings, "oci_config_profile", "DEFAULT"),
+        )
+    except HTTPException:
+        return None
+
+
 def _get_oci_settings_state() -> OciSettingsData:
     global _oci_settings_state
     if _oci_settings_state is None:
-        _oci_settings_state = OciSettingsData(
-            config_file=str(_settings_attr("oci_config_file", "~/.oci/config")),
-            profile=str(_settings_attr("oci_config_profile", "DEFAULT")),
-            user=str(_settings_attr("oci_user_ocid", "")),
-            fingerprint=str(_settings_attr("oci_fingerprint", "")),
-            tenancy=str(_settings_attr("oci_tenancy_ocid", "")),
-            region=str(_settings_attr("oci_region", "us-chicago-1")),
-            key_file=str(_settings_attr("oci_key_file", "~/.oci/oci_api_key.pem")),
-            key_file_exists=bool(_settings_attr("oci_key_file_exists", False)),
-            config_file_exists=bool(_settings_attr("oci_config_file_exists", False)),
-        )
+        _oci_settings_state = _oci_settings_data(get_settings())
     return _oci_settings_state.model_copy(deep=True)
 
 
@@ -725,6 +1279,77 @@ def _set_oci_settings_state(patch: OciSettingsUpdate) -> OciSettingsData:
     )
     _oci_settings_state = current
     return current.model_copy(deep=True)
+
+
+def _read_oci_config_text(config_file: str) -> str:
+    path = Path(config_file).expanduser()
+    try:
+        if not path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "OCI config ファイルを読み取れません。"
+                    "バックエンドから参照できる path を指定してください。"
+                ),
+            )
+        if path.stat().st_size > OCI_CONFIG_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="OCI config ファイルが大きすぎます。")
+        return path.read_text(encoding="utf-8")
+    except HTTPException:
+        raise
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイルは UTF-8 テキストとして読み取れる必要があります。",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "OCI config ファイルを読み取れません。"
+                "バックエンドから参照できる path を指定してください。"
+            ),
+        ) from exc
+
+
+def _parse_oci_config(content: str, profile: str) -> OciConfigReadData:
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(content)
+    except configparser.Error as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイルの形式を確認してください。",
+        ) from exc
+
+    selected_profile = profile.strip() or "DEFAULT"
+    if selected_profile.upper() == "DEFAULT":
+        entries = parser.defaults()
+    elif parser.has_section(selected_profile):
+        entries = parser[selected_profile]
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail="指定した OCI config profile が見つかりません。",
+        )
+
+    values = {key: str(entries.get(key, "")).strip() for key in OCI_CONFIG_KEYS}
+    applied_fields = [key for key in OCI_CONFIG_KEYS if values[key]]
+    if not applied_fields:
+        raise HTTPException(
+            status_code=422,
+            detail="指定した profile から OCI config 項目を読み取れませんでした。",
+        )
+
+    return OciConfigReadData(
+        profile=selected_profile,
+        user=values["user"],
+        fingerprint=values["fingerprint"],
+        tenancy=values["tenancy"],
+        region=values["region"],
+        key_file=values["key_file"],
+        applied_fields=applied_fields,
+    )
 
 
 def _get_adb_info_state() -> AdbInfoData:
@@ -875,14 +1500,7 @@ async def upload_database_wallet(
 async def test_database_settings(
     patch: DatabaseSettingsUpdate,
 ) -> ApiResponse[DatabaseConnectionTestResult]:
-    data = _get_database_settings_state()
-    data.user = patch.user.strip()
-    data.dsn = patch.dsn.strip()
-    data.wallet_dir = patch.wallet_dir.strip()
-    if patch.password:
-        data.has_password = True
-    if patch.wallet_password:
-        data.has_wallet_password = True
+    data = _database_settings_candidate(_get_database_settings_state(), patch)
     readiness = _database_readiness(data)
     ok = readiness == "ok"
     return ApiResponse(
@@ -993,30 +1611,9 @@ async def patch_oci_object_storage_settings(
 
 
 @router.post("/settings/oci/config/read", response_model=ApiResponse[OciConfigReadData])
-async def read_oci_config(_: OciConfigReadRequest) -> ApiResponse[OciConfigReadData]:
-    data = _get_oci_settings_state()
-    applied = [
-        field
-        for field, value in {
-            "user": data.user,
-            "fingerprint": data.fingerprint,
-            "tenancy": data.tenancy,
-            "region": data.region,
-            "key_file": data.key_file if data.key_file_exists else "",
-        }.items()
-        if value
-    ]
-    return ApiResponse(
-        data=OciConfigReadData(
-            profile=data.profile,
-            user=data.user,
-            fingerprint=data.fingerprint,
-            tenancy=data.tenancy,
-            region=data.region,
-            key_file=data.key_file,
-            applied_fields=applied,
-        )
-    )
+async def read_oci_config(payload: OciConfigReadRequest) -> ApiResponse[OciConfigReadData]:
+    content = _read_oci_config_text(payload.config_file)
+    return ApiResponse(data=_parse_oci_config(content, payload.profile))
 
 
 @router.post("/settings/oci/config/test", response_model=ApiResponse[OciConfigTestResult])

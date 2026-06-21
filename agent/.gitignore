@@ -8,6 +8,10 @@ frontend/playwright-report/
 # --- backend (Python/uv) ---
 backend/.venv/
 backend/.env
+backend/model-settings.json
+backend/.model-settings.json.tmp-*
+backend/.oci/
+**/oci_api_key.pem
 backend/validation-evidence.*.json
 backend/validation-evidence.*.md
 backend/validation-runner-readiness.*.json

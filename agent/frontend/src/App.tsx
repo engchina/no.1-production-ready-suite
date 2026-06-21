@@ -1,7 +1,5 @@
 import { Route, Routes } from "react-router-dom";
 
-import { AppShell } from "@engchina/production-ready-ui";
-
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
@@ -28,32 +26,39 @@ import {
 
 export function App() {
   return (
-    <AppShell sidebar={<AppSidebar />}>
-      <Routes>
-        <Route path={APP_ROUTES.dashboard} element={<DashboardPage />} />
-        <Route path={APP_ROUTES.agents} element={<AgentsPage />} />
-        <Route path={APP_ROUTES.runs} element={<RunsPage />} />
-        <Route path={APP_ROUTES.approvals} element={<ApprovalsPage />} />
-        <Route path={APP_ROUTES.audit} element={<AuditPage />} />
-        <Route path={APP_ROUTES.tools} element={<ToolsPage />} />
-        <Route path={APP_ROUTES.memory} element={<MemoryPage />} />
-        <Route
-          path={APP_ROUTES.settingsConnection}
-          element={<PlaceholderPage title={t("nav.settingsConnection")} subtitle={t("page.settings.subtitle")} />}
-        />
-        <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
-        <Route path={APP_ROUTES.settingsUploadStorage} element={<SettingsUploadStorageRoute />} />
-        <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
-        <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
-        <Route path={APP_ROUTES.settingsExternalRag} element={<ExternalSettingsPage kind="rag" />} />
-        <Route path={APP_ROUTES.settingsExternalNl2Sql} element={<ExternalSettingsPage kind="nl2sql" />} />
-        <Route path={APP_ROUTES.settingsExternalMcp} element={<ExternalSettingsPage kind="mcp" />} />
-        <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
-        <Route path={APP_ROUTES.settingsCommandPolicy} element={<CommandPolicySettingsPage />} />
-        <Route path={APP_ROUTES.settingsRuntimeSafety} element={<RuntimeSafetySettingsPage />} />
-        <Route path={APP_ROUTES.settingsRuntimeSnapshot} element={<RuntimeSnapshotSettingsPage />} />
-      </Routes>
-    </AppShell>
+    <div className="flex">
+      <AppSidebar />
+      <main
+        className="h-screen min-w-0 flex-1 overflow-y-auto [contain:layout] focus:outline-none"
+        aria-label="メイン領域"
+        tabIndex={-1}
+      >
+        <Routes>
+          <Route path={APP_ROUTES.dashboard} element={<DashboardPage />} />
+          <Route path={APP_ROUTES.agents} element={<AgentsPage />} />
+          <Route path={APP_ROUTES.runs} element={<RunsPage />} />
+          <Route path={APP_ROUTES.approvals} element={<ApprovalsPage />} />
+          <Route path={APP_ROUTES.audit} element={<AuditPage />} />
+          <Route path={APP_ROUTES.tools} element={<ToolsPage />} />
+          <Route path={APP_ROUTES.memory} element={<MemoryPage />} />
+          <Route
+            path={APP_ROUTES.settingsConnection}
+            element={<PlaceholderPage title={t("nav.settingsConnection")} subtitle={t("page.settings.subtitle")} />}
+          />
+          <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
+          <Route path={APP_ROUTES.settingsUploadStorage} element={<SettingsUploadStorageRoute />} />
+          <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
+          <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
+          <Route path={APP_ROUTES.settingsExternalRag} element={<ExternalSettingsPage kind="rag" />} />
+          <Route path={APP_ROUTES.settingsExternalNl2Sql} element={<ExternalSettingsPage kind="nl2sql" />} />
+          <Route path={APP_ROUTES.settingsExternalMcp} element={<ExternalSettingsPage kind="mcp" />} />
+          <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
+          <Route path={APP_ROUTES.settingsCommandPolicy} element={<CommandPolicySettingsPage />} />
+          <Route path={APP_ROUTES.settingsRuntimeSafety} element={<RuntimeSafetySettingsPage />} />
+          <Route path={APP_ROUTES.settingsRuntimeSnapshot} element={<RuntimeSnapshotSettingsPage />} />
+        </Routes>
+      </main>
+    </div>
   );
 }
 

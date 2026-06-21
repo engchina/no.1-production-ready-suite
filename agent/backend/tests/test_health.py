@@ -11,7 +11,7 @@ import sys
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 os.environ["CORS_ORIGINS"] = '["http://localhost:3002"]'
@@ -21,6 +21,7 @@ import httpx
 from pytest import MonkeyPatch, importorskip
 from starlette.websockets import WebSocket
 
+import app.features.agent.router as agent_router
 from app.features.agent.config import runtime_config_store
 from app.features.agent.router import stream_run_events_websocket
 from app.features.agent.runtime import (
@@ -778,6 +779,96 @@ def test_ready() -> None:
     resp = client.get("/api/ready")
     assert resp.status_code == 200
     assert resp.json()["data"]["status"] == "ok"
+
+
+def test_oci_settings_defaults_match_rag_when_credentials_missing(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_file = str(tmp_path / "missing_oci_config")
+    key_file = str(tmp_path / "missing_oci_api_key.pem")
+    monkeypatch.setattr(agent_router, "_oci_settings_state", None)
+    monkeypatch.setattr(agent_router, "_upload_storage_settings_state", None)
+    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", key_file)
+    monkeypatch.setattr(
+        agent_router,
+        "get_settings",
+        lambda: SimpleNamespace(
+            upload_storage_backend=None,
+            local_storage_dir=None,
+            object_storage_region=None,
+            object_storage_namespace=None,
+            object_storage_bucket=None,
+            max_upload_bytes=100 * 1024 * 1024,
+            oci_config_file=config_file,
+            oci_config_profile=None,
+            oci_user_ocid=None,
+            oci_fingerprint=None,
+            oci_tenancy_ocid=None,
+            oci_region=None,
+            oci_key_file=None,
+            oci_key_file_exists=False,
+            oci_config_file_exists=False,
+        ),
+    )
+
+    oci_resp = client.get("/api/settings/oci")
+    assert oci_resp.status_code == 200
+    assert oci_resp.json()["data"] == {
+        "config_file": config_file,
+        "profile": "DEFAULT",
+        "user": "",
+        "fingerprint": "",
+        "tenancy": "",
+        "region": "ap-osaka-1",
+        "key_file": key_file,
+        "key_file_exists": False,
+        "config_file_exists": False,
+        "config_source": "runtime",
+    }
+
+    storage_resp = client.get("/api/settings/upload-storage")
+    assert storage_resp.status_code == 200
+    storage = storage_resp.json()["data"]
+    assert storage["backend"] == "local"
+    assert storage["local_storage_dir"] == "/u01/production-ready-rag"
+    assert storage["object_storage_region"] == "ap-osaka-1"
+    assert storage["object_storage_namespace"] == ""
+    assert storage["object_storage_bucket"] == ""
+
+
+def test_oci_config_read_parses_default_profile_like_rag(tmp_path: Path) -> None:
+    config = tmp_path / "config"
+    config.write_text(
+        "\n".join(
+            [
+                "[DEFAULT]",
+                "user=ocid1.user.oc1..aaaaaaaa",
+                "fingerprint=12:34:56:78:90:ab:cd:ef",
+                "tenancy=ocid1.tenancy.oc1..aaaaaaaa",
+                "region=ap-osaka-1",
+                "key_file=~/.oci/oci_api_key.pem",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    resp = client.post(
+        "/api/settings/oci/config/read",
+        json={"config_file": str(config), "profile": "DEFAULT"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"] == {
+        "profile": "DEFAULT",
+        "user": "ocid1.user.oc1..aaaaaaaa",
+        "fingerprint": "12:34:56:78:90:ab:cd:ef",
+        "tenancy": "ocid1.tenancy.oc1..aaaaaaaa",
+        "region": "ap-osaka-1",
+        "key_file": "~/.oci/oci_api_key.pem",
+        "applied_fields": ["user", "fingerprint", "tenancy", "region", "key_file"],
+    }
 
 
 def test_list_tools_v2_includes_external_tools() -> None:

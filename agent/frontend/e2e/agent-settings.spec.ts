@@ -7,10 +7,84 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(hasNoOverflow).toBe(true);
 }
 
+async function expectDocumentScrollLocked(page: Page) {
+  await page.evaluate(() => window.scrollTo(0, 1000));
+  const metrics = await page.evaluate(() => ({
+    windowScrollY: window.scrollY,
+    documentClientHeight: document.documentElement.clientHeight,
+    documentScrollHeight: document.documentElement.scrollHeight,
+    rootClientHeight: document.getElementById("root")?.clientHeight ?? 0,
+    rootScrollHeight: document.getElementById("root")?.scrollHeight ?? 0,
+  }));
+
+  expect(metrics.windowScrollY).toBe(0);
+  expect(metrics.documentScrollHeight).toBeLessThanOrEqual(metrics.documentClientHeight + 1);
+  expect(metrics.rootScrollHeight).toBeLessThanOrEqual(metrics.rootClientHeight + 1);
+}
+
+async function mockMissingOciRuntimeSettings(page: Page) {
+  await page.route("**/api/settings/oci", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          config_file: "~/.oci/config",
+          profile: "DEFAULT",
+          user: "",
+          fingerprint: "",
+          tenancy: "",
+          region: "ap-osaka-1",
+          key_file: "~/.oci/oci_api_key.pem",
+          key_file_exists: false,
+          config_file_exists: false,
+          config_source: "runtime",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/settings/upload-storage", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          backend: "local",
+          local_storage_dir: "/u01/production-ready-rag",
+          object_storage_region: "ap-osaka-1",
+          object_storage_namespace: "",
+          object_storage_bucket: "",
+          readiness: "ok",
+          max_upload_bytes: 104857600,
+          config_source: "runtime",
+        },
+      }),
+    });
+  });
+}
+
 test.describe("Agent Runtime settings", () => {
   test("RAG 由来のシステム設定 4 画面を表示・保存できる", async ({ page }) => {
+    await mockMissingOciRuntimeSettings(page);
     await page.goto("/settings/oci");
     await expect(page.getByRole("heading", { name: "OCI 認証設定", level: 1 })).toBeVisible();
+    await expectDocumentScrollLocked(page);
+    await expect(page.getByLabel("ユーザー OCID")).toHaveValue("");
+    await expect(page.getByLabel("テナンシ OCID")).toHaveValue("");
+    await expect(page.getByLabel("フィンガープリント")).toHaveValue("");
+    await expect(page.getByRole("combobox", { name: "リージョン", exact: true })).toContainText("ap-osaka-1");
+    await expect(page.getByText("OCI_REGION=ap-osaka-1")).toBeVisible();
+    await expect(page.getByText(/=None/)).toHaveCount(0);
+    await page.locator("main").evaluate((main) => {
+      main.scrollTop = main.scrollHeight;
+    });
+    await expectDocumentScrollLocked(page);
     await page.getByLabel("ユーザー OCID").fill("ocid1.user.oc1..aaaaaaaa");
     await page.getByLabel("テナンシ OCID").fill("ocid1.tenancy.oc1..aaaaaaaa");
     await page.getByLabel("フィンガープリント").fill("12:34:56:78:90:ab:cd:ef");
