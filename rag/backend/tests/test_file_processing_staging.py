@@ -3437,8 +3437,9 @@ class FakeIngestion:
         *,
         content_type: str = "application/octet-stream",
         source_profile: SourceProfile | None = None,
+        chunk_set_id: str | None = None,
     ) -> DocumentDetail:
-        del image_bytes, prompt, source_profile
+        del image_bytes, prompt, source_profile, chunk_set_id
         document = self.oracle.documents[document_id]
         if document.file_name == "broken.xlsx":
             self.oracle.set_error_segments(document_id)

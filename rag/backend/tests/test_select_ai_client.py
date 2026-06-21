@@ -1,11 +1,11 @@
 """Select AI 実クライアントの決定論テスト(fake pool/connection、実 DB 非依存)。"""
 
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
-from app.clients.oracle import SelectAiUnavailableError
+from app.clients.oracle import OraclePoolProtocol, SelectAiUnavailableError
 from app.clients.select_ai import (
     SelectAiAgentResult,
     SelectAiClient,
@@ -13,7 +13,7 @@ from app.clients.select_ai import (
 )
 from app.config import Settings
 from app.select_ai import build_provisioning_plan
-from app.select_ai.provisioning import SelectAiProvisioningSpec
+from app.select_ai.provisioning import ProvisioningPlan, SelectAiProvisioningSpec
 
 # responder: (sql, binds) -> スカラ値 / Exception / None
 Responder = Callable[[str, Mapping[str, object]], object]
@@ -100,7 +100,9 @@ async def _inline_runner(operation: Callable[[], Any]) -> Any:
 
 def _client(responder: Responder) -> tuple[SelectAiClient, _FakeConnection]:
     conn = _FakeConnection(responder)
-    client = SelectAiClient(Settings(), pool=_FakePool(conn), db_call_runner=_inline_runner)
+    client = SelectAiClient(
+        Settings(), pool=cast(OraclePoolProtocol, _FakePool(conn)), db_call_runner=_inline_runner
+    )
     return client, conn
 
 
@@ -227,7 +229,7 @@ async def test_check_privileges_detects_missing_execute() -> None:
     assert result.ok is False
 
 
-def _plan():
+def _plan() -> ProvisioningPlan:
     spec = SelectAiProvisioningSpec(
         config_fingerprint="hr:tokyo",
         model="meta.llama",

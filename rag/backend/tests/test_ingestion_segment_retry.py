@@ -397,7 +397,9 @@ class _FakeSegmentRetryOracle:
         extraction: StructuredExtraction,
         chunks: list[Any],
         vectors: list[list[float]],
+        chunk_set_id: str | None = None,
     ) -> None:
+        _ = chunk_set_id
         assert document_id == self.document.id
         self.saved_extraction = extraction
         self.saved_chunk_count = len(chunks)

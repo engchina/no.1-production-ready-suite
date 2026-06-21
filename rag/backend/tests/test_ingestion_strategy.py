@@ -98,8 +98,9 @@ class FakeOracle:
         extraction: StructuredExtraction,
         chunks: list[Any],
         vectors: list[list[float]],
+        chunk_set_id: str | None = None,
     ) -> None:
-        _ = document_id, vectors
+        _ = document_id, vectors, chunk_set_id
         self.atomic_index_save_count += 1
         self.saved_extraction = extraction
         self.saved_chunk_count = len(chunks)

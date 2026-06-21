@@ -1,8 +1,11 @@
 """NL2SQL Cache アダプター(意味キャッシュ)のテスト。"""
 
+from typing import Any
+
 from app.config import Settings
 from app.nl2sql.cache import (
     CACHE_POLICY_ORDER,
+    CacheAdapterParams,
     SemanticCache,
     cache_adapter_runtime_settings,
     cosine_similarity,
@@ -12,7 +15,7 @@ from app.nl2sql.cache import (
 )
 
 
-def _params(policy: str = "off", **overrides: object):
+def _params(policy: str = "off", **overrides: Any) -> CacheAdapterParams:
     return resolve_cache_adapter(Settings(nl2sql_cache_policy=policy, **overrides))
 
 

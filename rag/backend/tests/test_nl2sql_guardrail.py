@@ -1,8 +1,11 @@
 """NL2SQL Guardrail アダプター(SQL 安全判定)のテスト。"""
 
+from typing import Any
+
 from app.config import Settings
 from app.nl2sql.guardrail import (
     GUARDRAIL_POLICY_ORDER,
+    GuardrailAdapterParams,
     classify_statement,
     enforce,
     guardrail_adapter_runtime_settings,
@@ -13,7 +16,7 @@ from app.nl2sql.guardrail import (
 )
 
 
-def _params(policy: str = "read_only", **overrides: object):
+def _params(policy: str = "read_only", **overrides: Any) -> GuardrailAdapterParams:
     return resolve_guardrail_adapter(Settings(nl2sql_guardrail_policy=policy, **overrides))
 
 
