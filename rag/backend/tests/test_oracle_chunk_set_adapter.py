@@ -8,6 +8,7 @@ import pytest
 
 from app.clients.oracle import OracleClient
 from app.rag.chunking import Chunk
+from app.rag.ingestion import _coerce_extraction_payload, _validate_structured_extraction_payload
 from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
 
@@ -174,6 +175,10 @@ async def test_document_extraction_upsert_get_list_and_gc() -> None:
     assert got["status"] == "EXTRACTED"
     assert got["document_id"] == document_id
     assert got["extraction_json"]  # 抽出 payload が保存されている
+    # #6 P1c の index 読み経路(get → coerce → validate)が実 Oracle JSON 列を往復できる。
+    payload = _coerce_extraction_payload(got["extraction_json"])
+    assert payload is not None
+    assert _validate_structured_extraction_payload(payload).raw_text == "抽出本文の一文目です。"
 
     assert set(await client.list_document_extraction_ids(document_id)) == {ex_a, ex_b}
 

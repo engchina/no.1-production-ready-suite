@@ -685,6 +685,32 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
+    async def update_document_extractions_payload(
+        self, *, document_id: str, extraction: StructuredExtraction
+    ) -> None:
+        """文書の全 extraction の extraction_json を差し替える(レビュー編集の反映)。
+
+        単一 materialization 前提(現状 1 文書 1 抽出)。無ければ 0 件更新(legacy へ縮退)。
+        P3 の複数抽出編集では per-extraction 化する。
+        """
+        binds = {
+            "document_id": document_id,
+            "extraction_json": _json_dumps(extraction.to_document_payload()),
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_document_extractions
+                SET extraction_json = :extraction_json, updated_at = SYSTIMESTAMP
+                WHERE document_id = :document_id
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
     async def delete_document_extractions_except(
         self, *, document_id: str, keep_extraction_ids: Sequence[str]
     ) -> list[str]:

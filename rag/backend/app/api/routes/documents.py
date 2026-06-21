@@ -919,6 +919,8 @@ async def _apply_review_text_edits(
     # 正規化(raw_text/element の整合補完)を再実行してから保存する。
     normalized = StructuredExtraction.model_validate(extraction.model_dump())
     await oracle.save_extraction(document_id, normalized)
+    # extraction 層(正本)もレビュー編集に追従させる(無ければ 0 件更新で legacy へ縮退)。
+    await oracle.update_document_extractions_payload(document_id=document_id, extraction=normalized)
 
 
 def _apply_table_cell_edits(

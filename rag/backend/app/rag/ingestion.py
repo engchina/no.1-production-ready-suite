@@ -72,6 +72,7 @@ from app.rag.parsers import (
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import resolve_preprocess_profile
+from app.rag.variant_keys import compute_extraction_id
 from app.schemas.document import DocumentDetail, FileStatus, IngestionSegment, SourceProfile
 from app.schemas.extraction import (
     DocumentElement,
@@ -391,6 +392,8 @@ class IngestionPipeline:
             text = _text_for_chunking(extraction)
             if not text:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
+            # extraction 層(rag_document_extractions)へ正本として書く(両ゲート共通)。
+            await self._persist_extraction_layer(document_id, source_profile, extraction)
             if self._settings.rag_review_gate_enabled:
                 # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 index で再利用する。
                 await self._oracle.save_extraction(document_id, extraction)
@@ -444,6 +447,62 @@ class IngestionPipeline:
             )
             raise
 
+    async def _persist_extraction_layer(
+        self,
+        document_id: str,
+        source_profile: SourceProfile | None,
+        extraction: StructuredExtraction,
+    ) -> None:
+        """抽出を extraction 層(rag_document_extractions)へ正本として upsert する。
+
+        extraction_id = hash(source_sha256, preprocess, parser)。chunk_set の親キーで、
+        index 時は同じキーで読み戻す(単一 materialization では owning 抽出と一致)。
+        書込失敗は取込を止めない(best-effort、legacy 列にも別途保存される)。
+        """
+        source_sha256 = source_profile.content_sha256 if source_profile is not None else None
+        if not source_sha256:
+            return
+        try:
+            extraction_id = compute_extraction_id(source_sha256, self._settings)
+            recipe = {
+                "rag_preprocess_profile": self._settings.rag_preprocess_profile,
+                "rag_parser_adapter_backend": self._settings.rag_parser_adapter_backend,
+            }
+            await self._oracle.upsert_document_extraction(
+                extraction_id=extraction_id,
+                document_id=document_id,
+                extraction=extraction,
+                recipe_subset=recipe,
+                status="EXTRACTED",
+            )
+        except Exception:  # noqa: BLE001 — 取込継続のため握り潰し、警告のみ。
+            logger.warning(
+                "extraction 層への書込に失敗(取込は継続)。document_id=%s",
+                document_id,
+                exc_info=True,
+            )
+
+    async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
+        """承認済み文書の抽出を extraction 層(正本)から読む。無ければ legacy 列へ縮退。
+
+        index 時の設定から extraction_id を再計算して新表を引く。単一 materialization では
+        extract 時の owning 抽出と一致。読み失敗・未登録は detail.extraction(legacy)へ縮退。
+        """
+        source_sha256 = detail.content_sha256
+        if source_sha256:
+            try:
+                extraction_id = compute_extraction_id(source_sha256, self._settings)
+                row = await self._oracle.get_document_extraction(extraction_id)
+            except Exception:  # noqa: BLE001 — 縮退して legacy 列から読む。
+                logger.warning("extraction 層の読込に失敗、legacy へ縮退。", exc_info=True)
+                row = None
+            payload = _coerce_extraction_payload(row.get("extraction_json")) if row else None
+            if payload:
+                return _validate_structured_extraction_payload(payload)
+        if not detail.extraction:
+            raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+        return _validate_structured_extraction_payload(detail.extraction)
+
     async def index_reviewed(
         self,
         document_id: str,
@@ -462,9 +521,7 @@ class IngestionPipeline:
         detail = await self._oracle.get_document(document_id)
         if detail is None:
             raise IngestionUserError("ドキュメントが見つかりません。")
-        if not detail.extraction:
-            raise IngestionUserError("索引対象の抽出結果が見つかりません。")
-        extraction = _validate_structured_extraction_payload(detail.extraction)
+        extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
         await self._oracle.update_document_status(document_id, FileStatus.INDEXING)
         checkpoint_segments = await self._safe_list_ingestion_segments(document_id)
@@ -1883,6 +1940,22 @@ def _safe_segment_error_message(error: Exception | None) -> str:
     if getattr(error, "safe_for_user", False):
         return str(error)
     return INGESTION_INTERNAL_ERROR_MESSAGE
+
+
+def _coerce_extraction_payload(value: object) -> Mapping[str, object] | None:
+    """extraction 層の extraction_json(JSON 列)を Mapping へ正規化する。
+
+    Oracle JSON 列はドライバ設定によって dict / str いずれでも返りうるため両対応する。
+    """
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return decoded if isinstance(decoded, Mapping) else None
+    return None
 
 
 def _validate_structured_extraction_payload(payload: Mapping[str, object]) -> StructuredExtraction:

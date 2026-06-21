@@ -55,7 +55,9 @@ def test_extraction_id_invariant_to_chunk_axis_but_chunk_set_differs() -> None:
 def test_extraction_id_changes_with_parser_axis() -> None:
     """Parser 軸が違えば別抽出(これが現状 1 抽出共有で潰れていた差分)。"""
     base = get_settings()
-    other = base.model_copy(update={"rag_parser_adapter_backend": "unstructured"})
+    # 現行設定と必ず異なる parser を選ぶ(.env 等で既定が変わっても成立させる)。
+    other_parser = "docling" if base.rag_parser_adapter_backend != "docling" else "unstructured"
+    other = base.model_copy(update={"rag_parser_adapter_backend": other_parser})
     assert compute_extraction_id(SRC, base) != compute_extraction_id(SRC, other)
     # 親が違うので chunk_set も当然別。
     assert compute_chunk_set_id(SRC, base) != compute_chunk_set_id(SRC, other)
