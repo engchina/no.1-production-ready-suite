@@ -282,6 +282,14 @@ def test_gate_off_parser_axis_materializes_separate_extractions() -> None:
     assert chunk_set is not None
     assert chunk_set["extraction_id"] == ex_docling
 
+    # variant 表示 API は chunk_set ごとに親 extraction_id と parser を返す(P5 の 2 階層 UI 用)。
+    listed = {
+        cs["chunk_set_id"]: cs for cs in asyncio.run(oracle.list_document_chunk_sets(document_id))
+    }
+    docling_cs = listed[compute_chunk_set_id(content_sha256, docling)]
+    assert docling_cs["extraction_id"] == ex_docling
+    assert docling_cs["parser"] == "docling"
+
 
 def test_gate_on_parser_axis_extracts_non_owning_after_approve(monkeypatch: MonkeyPatch) -> None:
     """gate-ON で owning のみレビュー、承認後に他 parser グループを自動抽出する(#6 P4 案 A)。

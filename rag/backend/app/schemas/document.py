@@ -178,6 +178,9 @@ class DocumentChunkSet(BaseModel):
     status: str
     chunk_count: int = 0
     vector_count: int = 0
+    extraction_id: str | None = None
+    parser: str | None = None
+    preprocess: str | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
     serving_knowledge_base_ids: list[str] = Field(default_factory=list)
 

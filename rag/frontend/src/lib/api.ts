@@ -458,6 +458,12 @@ export interface DocumentChunkSet {
   status: string;
   chunk_count: number;
   vector_count: number;
+  /** 親抽出(extraction)の ID。parser×preprocess ごとに分かれる 2 階層の上位キー。 */
+  extraction_id: string | null;
+  /** 親抽出の parser backend(2 階層表示のラベル)。 */
+  parser: string | null;
+  /** 親抽出の前処理プロファイル(2 階層表示のラベル)。 */
+  preprocess: string | null;
   knowledge_base_ids: string[];
   serving_knowledge_base_ids: string[];
 }
