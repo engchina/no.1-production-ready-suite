@@ -894,9 +894,12 @@ class OracleClient:
                    cs.status AS status,
                    cs.chunk_count AS chunk_count,
                    cs.vector_count AS vector_count,
+                   cs.extraction_id AS extraction_id,
+                   ex.recipe_subset AS extraction_recipe,
                    b.knowledge_base_id AS knowledge_base_id,
                    b.is_serving AS is_serving
             FROM rag_chunk_sets cs
+            LEFT JOIN rag_document_extractions ex ON ex.extraction_id = cs.extraction_id
             LEFT JOIN rag_kb_chunk_set_bindings b ON b.chunk_set_id = cs.chunk_set_id
             WHERE cs.document_id = :document_id
             ORDER BY cs.created_at, cs.chunk_set_id, b.knowledge_base_id
@@ -911,11 +914,16 @@ class OracleClient:
             norm = {str(key).lower(): value for key, value in row.items()}
             chunk_set_id = str(norm["chunk_set_id"])
             if chunk_set_id not in by_id:
+                recipe = _json_loads(norm.get("extraction_recipe"))
+                extraction_id = norm.get("extraction_id")
                 by_id[chunk_set_id] = {
                     "chunk_set_id": chunk_set_id,
                     "status": str(norm["status"]),
                     "chunk_count": int(str(norm["chunk_count"] or 0)),
                     "vector_count": int(str(norm["vector_count"] or 0)),
+                    "extraction_id": str(extraction_id) if extraction_id is not None else None,
+                    "parser": recipe.get("rag_parser_adapter_backend"),
+                    "preprocess": recipe.get("rag_preprocess_profile"),
                 }
                 members[chunk_set_id] = []
                 serving[chunk_set_id] = []

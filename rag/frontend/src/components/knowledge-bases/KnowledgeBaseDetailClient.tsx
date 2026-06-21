@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, FilePlus2, Files, Trash2 } from "lucide-react";
+import { ChevronRight, FilePlus2, Files, Layers, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -10,7 +10,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormStatus } from "@/components/ui/form-status";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { ApiError, type DocumentSummary, type KnowledgeBaseDetail } from "@/lib/api";
+import {
+  ApiError,
+  type DocumentChunkSet,
+  type DocumentSummary,
+  type KnowledgeBaseDetail,
+} from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
@@ -254,7 +259,43 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
   );
 }
 
-/** 所属文書 1 行。展開で variant(chunk_set)を遅延取得して比較表示する。 */
+/** 抽出(parser×前処理)ごとに chunk_set をまとめた 2 階層の variant グループ。 */
+export interface ChunkSetExtractionGroup {
+  extractionId: string | null;
+  parser: string | null;
+  preprocess: string | null;
+  chunkSets: DocumentChunkSet[];
+}
+
+/**
+ * chunk_set 群を親抽出(extraction_id)でグルーピングする。
+ *
+ * parser×前処理 が同じ chunk_set は 1 抽出を共有する(extract 1 回・chunking 違いで分裂)。
+ * extraction_id を持たない旧 chunk_set は各々単独グループにして表示を欠落させない。
+ * backend の created_at 昇順(挿入順)を保つ。
+ */
+export function groupChunkSetsByExtraction(
+  chunkSets: DocumentChunkSet[]
+): ChunkSetExtractionGroup[] {
+  const groups = new Map<string, ChunkSetExtractionGroup>();
+  for (const chunkSet of chunkSets) {
+    const key = chunkSet.extraction_id ?? `__cs__${chunkSet.chunk_set_id}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        extractionId: chunkSet.extraction_id,
+        parser: chunkSet.parser,
+        preprocess: chunkSet.preprocess,
+        chunkSets: [],
+      };
+      groups.set(key, group);
+    }
+    group.chunkSets.push(chunkSet);
+  }
+  return [...groups.values()];
+}
+
+/** 所属文書 1 行。展開で variant(extraction▸chunk_set の 2 階層)を遅延取得して比較表示する。 */
 function KnowledgeBaseDocumentRow({
   document,
   onRemove,
@@ -310,26 +351,59 @@ function KnowledgeBaseDocumentRow({
           ) : chunkSets.isError ? (
             <p className="text-xs text-danger">{t("knowledgeBases.variant.error")}</p>
           ) : chunkSets.data && chunkSets.data.length > 0 ? (
-            <ul className="space-y-1.5" aria-label={t("knowledgeBases.variant.title")}>
-              {chunkSets.data.map((chunkSet) => (
+            <ul className="space-y-2" aria-label={t("knowledgeBases.variant.extractionTitle")}>
+              {groupChunkSetsByExtraction(chunkSets.data).map((group) => (
                 <li
-                  key={chunkSet.chunk_set_id}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+                  key={group.extractionId ?? group.chunkSets[0].chunk_set_id}
+                  className="overflow-hidden rounded-md border border-border bg-background"
                 >
-                  <span className="font-mono text-muted" title={chunkSet.chunk_set_id}>
-                    {chunkSet.chunk_set_id.slice(0, 10)}
-                  </span>
-                  <span className="rounded-sm bg-muted/10 px-1.5 py-0.5 text-muted">
-                    {chunkSet.status}
-                  </span>
-                  <span className="tnum text-muted">
-                    {t("knowledgeBases.variant.chunkCount", { count: chunkSet.chunk_count })}
-                  </span>
-                  <span className="tnum text-muted">
-                    {t("knowledgeBases.variant.servingCount", {
-                      count: chunkSet.serving_knowledge_base_ids.length,
-                    })}
-                  </span>
+                  {/* 上位: 抽出(parser×前処理)= extract 1 回の単位 */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/60 bg-muted/5 px-2.5 py-1.5 text-xs">
+                    <Layers size={13} className="shrink-0 text-muted" aria-hidden />
+                    <span className="font-medium text-foreground">
+                      {t("knowledgeBases.variant.parser")}:{" "}
+                      {group.parser ?? t("knowledgeBases.variant.unknownRecipe")}
+                    </span>
+                    {group.preprocess ? (
+                      <span className="text-muted">
+                        {t("knowledgeBases.variant.preprocess")}: {group.preprocess}
+                      </span>
+                    ) : null}
+                    {group.extractionId ? (
+                      <span className="font-mono text-muted" title={group.extractionId}>
+                        {group.extractionId.slice(0, 10)}
+                      </span>
+                    ) : null}
+                    <span className="tnum ml-auto text-muted">
+                      {t("knowledgeBases.variant.chunkSetCount", {
+                        count: group.chunkSets.length,
+                      })}
+                    </span>
+                  </div>
+                  {/* 下位: chunk_set(chunking 違い)= 抽出を共有する変種 */}
+                  <ul className="space-y-1 p-1.5">
+                    {group.chunkSets.map((chunkSet) => (
+                      <li
+                        key={chunkSet.chunk_set_id}
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-sm bg-muted/5 px-2 py-1 text-xs"
+                      >
+                        <span className="font-mono text-muted" title={chunkSet.chunk_set_id}>
+                          {chunkSet.chunk_set_id.slice(0, 10)}
+                        </span>
+                        <span className="rounded-sm bg-muted/10 px-1.5 py-0.5 text-muted">
+                          {chunkSet.status}
+                        </span>
+                        <span className="tnum text-muted">
+                          {t("knowledgeBases.variant.chunkCount", { count: chunkSet.chunk_count })}
+                        </span>
+                        <span className="tnum text-muted">
+                          {t("knowledgeBases.variant.servingCount", {
+                            count: chunkSet.serving_knowledge_base_ids.length,
+                          })}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </li>
               ))}
             </ul>
