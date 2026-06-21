@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import {
@@ -18,6 +18,7 @@ import { NAV_SECTIONS } from "./nav-config";
 export function AppSidebar() {
   const { pathname } = useLocation();
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
+  const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
   const toggleSidebarCollapsed = useUiStore((state) => state.toggleSidebarCollapsed);
   const collapsedSections = useUiStore((state) => state.collapsedSections);
   const toggleSection = useUiStore((state) => state.toggleSection);
@@ -48,6 +49,23 @@ export function AppSidebar() {
     sectionToggleExpand: (section) => `${section} を展開`,
     sectionToggleCollapse: (section) => `${section} を折りたたむ`,
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(max-width: 640px)");
+    const collapseForMobile = () => {
+      if (mediaQuery.matches) {
+        setSidebarCollapsed(true);
+      }
+    };
+
+    collapseForMobile();
+    mediaQuery.addEventListener("change", collapseForMobile);
+    return () => mediaQuery.removeEventListener("change", collapseForMobile);
+  }, [setSidebarCollapsed]);
 
   return (
     <UiSidebar

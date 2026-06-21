@@ -7,7 +7,9 @@
     "dev": "vite --host 0.0.0.0 --port 3002",
     "build": "tsc --noEmit && vite build",
     "start": "vite preview --host 0.0.0.0 --port 3002",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "npm run build && npm run test:e2e",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@engchina/production-ready-ui": "file:../../no.1-production-ready-platform/packages/ui",
@@ -19,6 +21,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",

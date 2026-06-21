@@ -1,0 +1,516 @@
+name: Production Validation Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment label.
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      runner:
+        description: Runner label with access to Oracle, IdP, MCP gateway, and container runtime.
+        required: true
+        default: self-hosted
+        type: string
+      rotation_interval_seconds:
+        description: Seconds to wait between JWKS rotation fetches.
+        required: true
+        default: "300"
+        type: string
+      oracle_runs:
+        description: Oracle validation run count.
+        required: true
+        default: "1000"
+        type: string
+      oracle_audit_iterations:
+        description: Oracle audit query iterations.
+        required: true
+        default: "20"
+        type: string
+      container_runtime:
+        description: Container runtime command.
+        required: true
+        default: docker
+        type: string
+      container_image:
+        description: Small image for sandbox smoke test.
+        required: true
+        default: busybox:latest
+        type: string
+      container_userns:
+        description: User namespace mode for sandbox smoke test.
+        required: true
+        default: private
+        type: string
+      container_user:
+        description: Non-root user for sandbox smoke test.
+        required: true
+        default: "65532:65532"
+        type: string
+      review_json_path:
+        description: Optional review JSON path. Relative paths are resolved from the repository root.
+        required: false
+        default: ""
+        type: string
+      bundle_json_path:
+        description: Optional bundle JSON output path. Relative paths are resolved from the repository root.
+        required: false
+        default: ""
+        type: string
+      retention_days:
+        description: Long-term release record retention days recorded in the bundle.
+        required: true
+        default: "365"
+        type: string
+      archive_location:
+        description: Long-term archive target recorded in the release bundle.
+        required: true
+        default: release-record/evidence-bundle
+        type: string
+      archive_owner:
+        description: "Optional archive owner. Blank defaults to github-actions:<actor>."
+        required: false
+        default: ""
+        type: string
+      archive_root:
+        description: Optional filesystem archive root on the runner for verified bundle staging.
+        required: false
+        default: ""
+        type: string
+      upload_bucket_name:
+        description: Optional OCI Object Storage bucket for release archive upload manifest.
+        required: false
+        default: ""
+        type: string
+      upload_namespace:
+        description: Optional OCI Object Storage namespace. Blank lets OCI SDK resolve it.
+        required: false
+        default: ""
+        type: string
+      upload_object_prefix:
+        description: OCI Object Storage object prefix for archive uploads.
+        required: true
+        default: agent-runtime/release-archives
+        type: string
+      execute_upload:
+        description: Execute OCI upload instead of generating only an upload manifest.
+        required: true
+        default: false
+        type: boolean
+      retention_confirmed:
+        description: Confirm the upload bucket has immutable retention configured before executing OCI upload.
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: production-validation-${{ github.ref }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    name: Collect Live Evidence
+    runs-on: ${{ inputs.runner }}
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: no.1-production-ready-agent
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: no.1-production-ready-agent
+
+      - name: Checkout shared platform packages
+        uses: actions/checkout@v4
+        with:
+          repository: engchina/no.1-production-ready-platform
+          ref: main
+          path: no.1-production-ready-platform
+          token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: no.1-production-ready-agent/backend/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: no.1-production-ready-agent/backend
+        run: uv sync --locked --dev
+
+      - name: Runner release readiness
+        working-directory: no.1-production-ready-agent/backend
+        env:
+          AGENT_RUNTIME_ORACLE_DSN: ${{ secrets.AGENT_RUNTIME_ORACLE_DSN }}
+          AGENT_RUNTIME_ORACLE_USER: ${{ secrets.AGENT_RUNTIME_ORACLE_USER }}
+          AGENT_RUNTIME_ORACLE_PASSWORD: ${{ secrets.AGENT_RUNTIME_ORACLE_PASSWORD }}
+          AGENT_RUNTIME_BASE_URL: ${{ secrets.AGENT_RUNTIME_BASE_URL }}
+          AGENT_RBAC_JWT_JWKS_URL: ${{ secrets.AGENT_RBAC_JWT_JWKS_URL }}
+          AGENT_RBAC_JWT_SAMPLE_TOKEN: ${{ secrets.AGENT_RBAC_JWT_SAMPLE_TOKEN }}
+          AGENT_RBAC_POLICY_URL: ${{ secrets.AGENT_RBAC_POLICY_URL }}
+          AGENT_RBAC_POLICY_API_KEY: ${{ secrets.AGENT_RBAC_POLICY_API_KEY }}
+          AGENT_EXTERNAL_MCP_BASE_URL: ${{ secrets.AGENT_EXTERNAL_MCP_BASE_URL }}
+          AGENT_EXTERNAL_MCP_API_KEY: ${{ secrets.AGENT_EXTERNAL_MCP_API_KEY }}
+          AGENT_EXTERNAL_MCP_SESSION_ID: ${{ secrets.AGENT_EXTERNAL_MCP_SESSION_ID }}
+          AGENT_EXTERNAL_MCP_OAUTH_TOKEN_URL: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_TOKEN_URL }}
+          AGENT_EXTERNAL_MCP_OAUTH_CLIENT_ID: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_CLIENT_ID }}
+          AGENT_EXTERNAL_MCP_OAUTH_CLIENT_SECRET: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_CLIENT_SECRET }}
+          AGENT_EXTERNAL_MCP_OAUTH_SCOPE: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_SCOPE }}
+          ARCHIVE_ROOT: ${{ inputs.archive_root }}
+          UPLOAD_BUCKET_NAME: ${{ inputs.upload_bucket_name }}
+          UPLOAD_NAMESPACE: ${{ inputs.upload_namespace }}
+          UPLOAD_OBJECT_PREFIX: ${{ inputs.upload_object_prefix }}
+          EXECUTE_UPLOAD: ${{ inputs.execute_upload }}
+          RETENTION_CONFIRMED: ${{ inputs.retention_confirmed }}
+        run: |
+          readiness_args=(
+            scripts/agent_runtime_runner_readiness_check.py
+            --environment "${{ inputs.environment }}"
+            --container-runtime "${{ inputs.container_runtime }}"
+            --archive-root "${ARCHIVE_ROOT}"
+            --upload-bucket-name "${UPLOAD_BUCKET_NAME}"
+            --upload-namespace "${UPLOAD_NAMESPACE}"
+            --upload-object-prefix "${UPLOAD_OBJECT_PREFIX}"
+            --manifest "../docs/agent-runtime-production-validation.manifest.json"
+            --output "validation-runner-readiness.${{ inputs.environment }}.json"
+            --summary-markdown "validation-runner-readiness.${{ inputs.environment }}.md"
+            --generated-by "github-actions:${{ github.actor }}"
+          )
+          if [ "${EXECUTE_UPLOAD}" = "true" ]; then
+            readiness_args+=(--execute-upload)
+          fi
+          if [ "${RETENTION_CONFIRMED}" = "true" ]; then
+            readiness_args+=(--retention-confirmed)
+          fi
+          uv run python "${readiness_args[@]}"
+
+      - name: Preflight validation configuration
+        working-directory: no.1-production-ready-agent/backend
+        env:
+          AGENT_RUNTIME_ORACLE_DSN: ${{ secrets.AGENT_RUNTIME_ORACLE_DSN }}
+          AGENT_RUNTIME_ORACLE_USER: ${{ secrets.AGENT_RUNTIME_ORACLE_USER }}
+          AGENT_RUNTIME_ORACLE_PASSWORD: ${{ secrets.AGENT_RUNTIME_ORACLE_PASSWORD }}
+          AGENT_RUNTIME_BASE_URL: ${{ secrets.AGENT_RUNTIME_BASE_URL }}
+          AGENT_RBAC_JWT_JWKS_URL: ${{ secrets.AGENT_RBAC_JWT_JWKS_URL }}
+          AGENT_RBAC_JWT_SAMPLE_TOKEN: ${{ secrets.AGENT_RBAC_JWT_SAMPLE_TOKEN }}
+          AGENT_RBAC_POLICY_URL: ${{ secrets.AGENT_RBAC_POLICY_URL }}
+          AGENT_RBAC_POLICY_API_KEY: ${{ secrets.AGENT_RBAC_POLICY_API_KEY }}
+          AGENT_EXTERNAL_MCP_BASE_URL: ${{ secrets.AGENT_EXTERNAL_MCP_BASE_URL }}
+          AGENT_EXTERNAL_MCP_API_KEY: ${{ secrets.AGENT_EXTERNAL_MCP_API_KEY }}
+          AGENT_EXTERNAL_MCP_SESSION_ID: ${{ secrets.AGENT_EXTERNAL_MCP_SESSION_ID }}
+          AGENT_EXTERNAL_MCP_OAUTH_TOKEN_URL: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_TOKEN_URL }}
+          AGENT_EXTERNAL_MCP_OAUTH_CLIENT_ID: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_CLIENT_ID }}
+          AGENT_EXTERNAL_MCP_OAUTH_CLIENT_SECRET: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_CLIENT_SECRET }}
+          AGENT_EXTERNAL_MCP_OAUTH_SCOPE: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_SCOPE }}
+        run: |
+          set -o pipefail
+          uv run python scripts/agent_runtime_validation_preflight.py \
+            --environment "${{ inputs.environment }}" \
+            --container-runtime "${{ inputs.container_runtime }}" \
+            --summary-markdown "validation-preflight.${{ inputs.environment }}.md" \
+            | tee "validation-preflight.${{ inputs.environment }}.json"
+
+      - name: Collect validation evidence
+        id: collect
+        continue-on-error: true
+        working-directory: no.1-production-ready-agent/backend
+        env:
+          AGENT_RUNTIME_ORACLE_DSN: ${{ secrets.AGENT_RUNTIME_ORACLE_DSN }}
+          AGENT_RUNTIME_ORACLE_USER: ${{ secrets.AGENT_RUNTIME_ORACLE_USER }}
+          AGENT_RUNTIME_ORACLE_PASSWORD: ${{ secrets.AGENT_RUNTIME_ORACLE_PASSWORD }}
+          AGENT_RUNTIME_BASE_URL: ${{ secrets.AGENT_RUNTIME_BASE_URL }}
+          AGENT_RBAC_JWT_JWKS_URL: ${{ secrets.AGENT_RBAC_JWT_JWKS_URL }}
+          AGENT_RBAC_JWT_SAMPLE_TOKEN: ${{ secrets.AGENT_RBAC_JWT_SAMPLE_TOKEN }}
+          AGENT_RBAC_POLICY_URL: ${{ secrets.AGENT_RBAC_POLICY_URL }}
+          AGENT_RBAC_POLICY_API_KEY: ${{ secrets.AGENT_RBAC_POLICY_API_KEY }}
+          AGENT_EXTERNAL_MCP_BASE_URL: ${{ secrets.AGENT_EXTERNAL_MCP_BASE_URL }}
+          AGENT_EXTERNAL_MCP_API_KEY: ${{ secrets.AGENT_EXTERNAL_MCP_API_KEY }}
+          AGENT_EXTERNAL_MCP_SESSION_ID: ${{ secrets.AGENT_EXTERNAL_MCP_SESSION_ID }}
+          AGENT_EXTERNAL_MCP_OAUTH_TOKEN_URL: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_TOKEN_URL }}
+          AGENT_EXTERNAL_MCP_OAUTH_CLIENT_ID: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_CLIENT_ID }}
+          AGENT_EXTERNAL_MCP_OAUTH_CLIENT_SECRET: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_CLIENT_SECRET }}
+          AGENT_EXTERNAL_MCP_OAUTH_SCOPE: ${{ secrets.AGENT_EXTERNAL_MCP_OAUTH_SCOPE }}
+        run: |
+          uv run python scripts/agent_runtime_collect_validation_evidence.py \
+            --mode live \
+            --environment "${{ inputs.environment }}" \
+            --validator "github-actions:${{ github.actor }}" \
+            --rotation-interval-seconds "${{ inputs.rotation_interval_seconds }}" \
+            --oracle-runs "${{ inputs.oracle_runs }}" \
+            --oracle-audit-iterations "${{ inputs.oracle_audit_iterations }}" \
+            --container-runtime "${{ inputs.container_runtime }}" \
+            --container-image "${{ inputs.container_image }}" \
+            --container-userns "${{ inputs.container_userns }}" \
+            --container-user "${{ inputs.container_user }}" \
+            --output "validation-evidence.${{ inputs.environment }}.json" \
+            --summary-markdown "validation-evidence.${{ inputs.environment }}.md"
+
+      - name: Validate live evidence
+        working-directory: no.1-production-ready-agent/backend
+        run: |
+          uv run python scripts/agent_runtime_validate_evidence.py \
+            "validation-evidence.${{ inputs.environment }}.json" \
+            --manifest "../docs/agent-runtime-production-validation.manifest.json"
+
+      - name: Build release bundle
+        if: ${{ inputs.review_json_path != '' }}
+        working-directory: no.1-production-ready-agent/backend
+        env:
+          REVIEW_JSON_PATH: ${{ inputs.review_json_path }}
+          BUNDLE_JSON_PATH: ${{ inputs.bundle_json_path }}
+          RETENTION_DAYS: ${{ inputs.retention_days }}
+          ARCHIVE_LOCATION: ${{ inputs.archive_location }}
+          ARCHIVE_OWNER: ${{ inputs.archive_owner }}
+          ARCHIVE_ROOT: ${{ inputs.archive_root }}
+          UPLOAD_BUCKET_NAME: ${{ inputs.upload_bucket_name }}
+          UPLOAD_NAMESPACE: ${{ inputs.upload_namespace }}
+          UPLOAD_OBJECT_PREFIX: ${{ inputs.upload_object_prefix }}
+          EXECUTE_UPLOAD: ${{ inputs.execute_upload }}
+          RETENTION_CONFIRMED: ${{ inputs.retention_confirmed }}
+        run: |
+          case "${REVIEW_JSON_PATH}" in
+            /*) review_json="${REVIEW_JSON_PATH}" ;;
+            *) review_json="../${REVIEW_JSON_PATH}" ;;
+          esac
+          if [ -n "${BUNDLE_JSON_PATH}" ]; then
+            case "${BUNDLE_JSON_PATH}" in
+              /*) bundle_json="${BUNDLE_JSON_PATH}" ;;
+              *) bundle_json="../${BUNDLE_JSON_PATH}" ;;
+            esac
+          else
+            bundle_json="validation-bundle.${{ inputs.environment }}.json"
+          fi
+          archive_owner="${ARCHIVE_OWNER}"
+          if [ -z "${archive_owner}" ]; then
+            archive_owner="github-actions:${{ github.actor }}"
+          fi
+          uv run python scripts/agent_runtime_release_gate_check.py \
+            "validation-evidence.${{ inputs.environment }}.json" \
+            "${review_json}" \
+            --manifest "../docs/agent-runtime-production-validation.manifest.json" \
+            --environment "${{ inputs.environment }}"
+          uv run python scripts/agent_runtime_build_release_bundle.py \
+            "validation-evidence.${{ inputs.environment }}.json" \
+            "${review_json}" \
+            --runner-readiness "validation-runner-readiness.${{ inputs.environment }}.json" \
+            --preflight "validation-preflight.${{ inputs.environment }}.json" \
+            --summary-markdown "validation-evidence.${{ inputs.environment }}.md" \
+            --manifest "../docs/agent-runtime-production-validation.manifest.json" \
+            --environment "${{ inputs.environment }}" \
+            --output "${bundle_json}" \
+            --bundle-summary-markdown "validation-bundle.${{ inputs.environment }}.md" \
+            --retention-days "${RETENTION_DAYS}" \
+            --archive-location "${ARCHIVE_LOCATION}" \
+            --archive-owner "${archive_owner}" \
+            --generated-by "github-actions:${{ github.actor }}"
+          if [ -n "${ARCHIVE_ROOT}" ]; then
+            uv run python scripts/agent_runtime_archive_release_bundle.py \
+              "${bundle_json}" \
+              --bundle-summary-markdown "validation-bundle.${{ inputs.environment }}.md" \
+              --archive-root "${ARCHIVE_ROOT}" \
+              --output "validation-archive.${{ inputs.environment }}.json" \
+              --archive-summary-markdown "validation-archive.${{ inputs.environment }}.md" \
+              --generated-by "github-actions:${{ github.actor }}"
+            uv run python scripts/agent_runtime_verify_release_archive_dir.py \
+              "validation-archive.${{ inputs.environment }}.json" \
+              --environment "${{ inputs.environment }}" \
+              --output "validation-archive-dir.${{ inputs.environment }}.json" \
+              --summary-markdown "validation-archive-dir.${{ inputs.environment }}.md" \
+              --generated-by "github-actions:${{ github.actor }}"
+            if [ -n "${UPLOAD_BUCKET_NAME}" ]; then
+              upload_args=(
+                scripts/agent_runtime_upload_release_archive.py
+                "validation-archive.${{ inputs.environment }}.json"
+                --bucket-name "${UPLOAD_BUCKET_NAME}"
+                --namespace "${UPLOAD_NAMESPACE}"
+                --object-prefix "${UPLOAD_OBJECT_PREFIX}"
+                --output "validation-upload.${{ inputs.environment }}.json"
+                --upload-summary-markdown "validation-upload.${{ inputs.environment }}.md"
+                --generated-by "github-actions:${{ github.actor }}"
+              )
+              if [ "${EXECUTE_UPLOAD}" = "true" ]; then
+                upload_args+=(--execute-upload)
+              fi
+              if [ "${RETENTION_CONFIRMED}" = "true" ]; then
+                upload_args+=(--retention-confirmed)
+              fi
+              uv run python "${upload_args[@]}"
+            fi
+          fi
+          chain_args=(
+            scripts/agent_runtime_verify_release_chain.py
+            --environment "${{ inputs.environment }}"
+            --runner-readiness "validation-runner-readiness.${{ inputs.environment }}.json"
+            --preflight "validation-preflight.${{ inputs.environment }}.json"
+            --evidence "validation-evidence.${{ inputs.environment }}.json"
+            --evidence-summary "validation-evidence.${{ inputs.environment }}.md"
+            --review "${review_json}"
+            --bundle "${bundle_json}"
+            --bundle-summary "validation-bundle.${{ inputs.environment }}.md"
+            --manifest "../docs/agent-runtime-production-validation.manifest.json"
+            --output "validation-chain.${{ inputs.environment }}.json"
+            --summary-markdown "validation-chain.${{ inputs.environment }}.md"
+            --generated-by "github-actions:${{ github.actor }}"
+          )
+          if [ -n "${ARCHIVE_ROOT}" ]; then
+            chain_args+=(--archive-record "validation-archive.${{ inputs.environment }}.json" --require-archive)
+            chain_args+=(
+              --archive-dir-verification "validation-archive-dir.${{ inputs.environment }}.json"
+              --require-archive-dir-verification
+            )
+          fi
+          if [ -n "${UPLOAD_BUCKET_NAME}" ]; then
+            chain_args+=(--upload-manifest "validation-upload.${{ inputs.environment }}.json" --require-upload)
+            if [ "${EXECUTE_UPLOAD}" = "true" ]; then
+              chain_args+=(--require-upload-executed)
+            fi
+          fi
+          uv run python "${chain_args[@]}"
+
+      - name: Write evidence summary
+        if: always()
+        working-directory: no.1-production-ready-agent/backend
+        run: |
+          if [ -f "validation-runner-readiness.${{ inputs.environment }}.md" ]; then
+            cat "validation-runner-readiness.${{ inputs.environment }}.md" >> "${GITHUB_STEP_SUMMARY}"
+          elif [ -f "validation-runner-readiness.${{ inputs.environment }}.json" ]; then
+            {
+              echo "## Runner Readiness"
+              echo ""
+              echo '```json'
+              cat "validation-runner-readiness.${{ inputs.environment }}.json"
+              echo '```'
+              echo ""
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          if [ -f "validation-preflight.${{ inputs.environment }}.md" ]; then
+            cat "validation-preflight.${{ inputs.environment }}.md" >> "${GITHUB_STEP_SUMMARY}"
+          elif [ -f "validation-preflight.${{ inputs.environment }}.json" ]; then
+            {
+              echo "## Validation Preflight"
+              echo ""
+              echo '```json'
+              cat "validation-preflight.${{ inputs.environment }}.json"
+              echo '```'
+              echo ""
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          if [ -f "validation-evidence.${{ inputs.environment }}.md" ]; then
+            cat "validation-evidence.${{ inputs.environment }}.md" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          if [ -f "validation-bundle.${{ inputs.environment }}.md" ]; then
+            {
+              echo ""
+              cat "validation-bundle.${{ inputs.environment }}.md"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          elif [ -f "validation-bundle.${{ inputs.environment }}.json" ]; then
+            {
+              echo ""
+              echo "## Release Bundle"
+              echo ""
+              echo '```json'
+              cat "validation-bundle.${{ inputs.environment }}.json"
+              echo '```'
+              echo ""
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          if [ -f "validation-archive.${{ inputs.environment }}.md" ]; then
+            {
+              echo ""
+              cat "validation-archive.${{ inputs.environment }}.md"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          elif [ -f "validation-archive.${{ inputs.environment }}.json" ]; then
+            {
+              echo ""
+              echo "## Release Archive"
+              echo ""
+              echo '```json'
+              cat "validation-archive.${{ inputs.environment }}.json"
+              echo '```'
+              echo ""
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          if [ -f "validation-archive-dir.${{ inputs.environment }}.md" ]; then
+            {
+              echo ""
+              cat "validation-archive-dir.${{ inputs.environment }}.md"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          elif [ -f "validation-archive-dir.${{ inputs.environment }}.json" ]; then
+            {
+              echo ""
+              echo "## Release Archive Directory Verification"
+              echo ""
+              echo '```json'
+              cat "validation-archive-dir.${{ inputs.environment }}.json"
+              echo '```'
+              echo ""
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          if [ -f "validation-upload.${{ inputs.environment }}.md" ]; then
+            {
+              echo ""
+              cat "validation-upload.${{ inputs.environment }}.md"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          elif [ -f "validation-upload.${{ inputs.environment }}.json" ]; then
+            {
+              echo ""
+              echo "## Release Archive Upload"
+              echo ""
+              echo '```json'
+              cat "validation-upload.${{ inputs.environment }}.json"
+              echo '```'
+              echo ""
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          if [ -f "validation-chain.${{ inputs.environment }}.md" ]; then
+            {
+              echo ""
+              cat "validation-chain.${{ inputs.environment }}.md"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          elif [ -f "validation-chain.${{ inputs.environment }}.json" ]; then
+            {
+              echo ""
+              echo "## Release Chain Verification"
+              echo ""
+              echo '```json'
+              cat "validation-chain.${{ inputs.environment }}.json"
+              echo '```'
+              echo ""
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-runtime-validation-${{ inputs.environment }}
+          retention-days: 14
+          path: |
+            no.1-production-ready-agent/backend/validation-runner-readiness.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-runner-readiness.${{ inputs.environment }}.md
+            no.1-production-ready-agent/backend/validation-preflight.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-preflight.${{ inputs.environment }}.md
+            no.1-production-ready-agent/backend/validation-evidence.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-evidence.${{ inputs.environment }}.md
+            no.1-production-ready-agent/backend/validation-review.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-bundle.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-bundle.${{ inputs.environment }}.md
+            no.1-production-ready-agent/backend/validation-archive.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-archive.${{ inputs.environment }}.md
+            no.1-production-ready-agent/backend/validation-archive-dir.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-archive-dir.${{ inputs.environment }}.md
+            no.1-production-ready-agent/backend/validation-upload.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-upload.${{ inputs.environment }}.md
+            no.1-production-ready-agent/backend/validation-chain.${{ inputs.environment }}.json
+            no.1-production-ready-agent/backend/validation-chain.${{ inputs.environment }}.md
+            no.1-production-ready-agent/docs/agent-runtime-production-validation.manifest.json

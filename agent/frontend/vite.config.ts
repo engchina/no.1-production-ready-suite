@@ -17,7 +17,7 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 3002,
     proxy: {
-      "/api": { target: backendUrl, changeOrigin: true },
+      "/api": { target: backendUrl, changeOrigin: true, ws: true },
     },
   },
   preview: {
