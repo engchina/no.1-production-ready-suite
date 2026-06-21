@@ -1,4 +1,4 @@
-import { FileText, LocateFixed, ThumbsDown, ThumbsUp } from "lucide-react";
+import { FileText, Layers, LocateFixed, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -34,6 +34,7 @@ export function CitationCard({
 }) {
   const score = chunk.rerank_score ?? chunk.score;
   const chips = citationMetadataChips(chunk.metadata);
+  const variantId = variantIdFromChunkId(chunk.chunk_id);
   const previewUrl = citationPreviewUrl(chunk);
   const [pendingRating, setPendingRating] = useState<CitationFeedbackRating | null>(null);
   const [submittedRating, setSubmittedRating] = useState<CitationFeedbackRating | null>(null);
@@ -88,6 +89,15 @@ export function CitationCard({
             <MetadataChip key={chip.id} chip={chip} />
           ))}
         </dl>
+      ) : null}
+      {variantId ? (
+        <span
+          className="mt-2 mr-2 inline-flex items-center gap-1 rounded-full bg-muted/10 px-2 py-0.5 text-xs text-muted"
+          title={t("search.citation.variantTitle", { id: variantId })}
+        >
+          <Layers size={11} aria-hidden />
+          {t("search.citation.variant", { id: variantId.slice(0, 8) })}
+        </span>
       ) : null}
       {chunk.category_name ? (
         <span className="mt-2 inline-block rounded-full bg-info-bg px-2 py-0.5 text-xs text-info">
@@ -178,6 +188,12 @@ export function citationPreviewUrl(chunk: RetrievedChunk): string {
     if (col != null) params.set("cell_col", String(col));
   }
   return `${APP_ROUTES.documents}/${encodeURIComponent(chunk.document_id)}?${params.toString()}`;
+}
+
+/** chunk_id(document:chunk_set:index)から chunk_set(variant)id を取り出す。無ければ null。 */
+export function variantIdFromChunkId(chunkId: string): string | null {
+  const parts = chunkId.split(":");
+  return parts.length === 3 ? parts[1] : null;
 }
 
 function compactNumber(value: number): string {

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import type { RetrievedChunk } from "@/lib/api";
-import { citationPreviewUrl } from "./CitationCard";
+import { citationPreviewUrl, variantIdFromChunkId } from "./CitationCard";
+
+describe("variantIdFromChunkId", () => {
+  it("document:chunk_set:index 形式から chunk_set(variant)id を取り出す", () => {
+    expect(variantIdFromChunkId("doc-1:cs_abc123:0")).toBe("cs_abc123");
+  });
+
+  it("chunk_set タグの無い document:index は variant 無し(null)", () => {
+    expect(variantIdFromChunkId("doc-1:7")).toBeNull();
+  });
+});
 
 describe("citationPreviewUrl", () => {
   it("引用位置 deep link に page/bbox/table cell lineage を含める", () => {
