@@ -758,15 +758,20 @@ class OracleClient:
         chunk_set_id: str,
         document_id: str,
         recipe_subset: Mapping[str, object] | None = None,
+        extraction_id: str | None = None,
         status: str = "INGESTING",
     ) -> None:
-        """chunk_set(chunk text/embedding 層)を冪等に作成する。既存なら updated_at のみ更新。"""
+        """chunk_set(chunk text/embedding 層)を冪等に作成する。既存なら updated_at のみ更新。
+
+        ``extraction_id`` を渡すと親抽出への所属を記録する(NULL なら既存値を保持)。
+        """
         tenant = current_audit_request_context().tenant_id_hash
         binds = {
             "chunk_set_id": chunk_set_id,
             "document_id": document_id,
             "tenant_id_hash": tenant,
             "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
+            "extraction_id": extraction_id,
             "status": status,
         }
 
@@ -777,10 +782,14 @@ class OracleClient:
                 MERGE INTO rag_chunk_sets t
                 USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
                 ON (t.chunk_set_id = s.chunk_set_id)
-                WHEN MATCHED THEN UPDATE SET t.updated_at = SYSTIMESTAMP
+                WHEN MATCHED THEN UPDATE SET
+                    t.extraction_id = NVL(:extraction_id, t.extraction_id),
+                    t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
-                    (chunk_set_id, document_id, tenant_id_hash, recipe_subset, status)
-                    VALUES (:chunk_set_id, :document_id, :tenant_id_hash, :recipe_subset, :status)
+                    (chunk_set_id, document_id, tenant_id_hash, recipe_subset,
+                     extraction_id, status)
+                    VALUES (:chunk_set_id, :document_id, :tenant_id_hash, :recipe_subset,
+                            :extraction_id, :status)
                 """,
                 binds,
             )
@@ -821,10 +830,10 @@ class OracleClient:
         await self._run_transaction(operation)
 
     async def get_chunk_set(self, chunk_set_id: str) -> dict[str, object] | None:
-        """chunk_set の状態(status/件数)を返す。キーは小文字へ正規化。"""
+        """chunk_set の状態(status/件数/親 extraction_id)を返す。キーは小文字へ正規化。"""
         row = await self._fetch_one(
             """
-            SELECT chunk_set_id, document_id, status, chunk_count, vector_count
+            SELECT chunk_set_id, document_id, extraction_id, status, chunk_count, vector_count
             FROM rag_chunk_sets WHERE chunk_set_id = :chunk_set_id
             """,
             {"chunk_set_id": chunk_set_id},

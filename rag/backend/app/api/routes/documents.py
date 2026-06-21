@@ -1055,34 +1055,44 @@ async def _ingest_existing_document(
         )
         await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
         return result
+    # plan 2 段実体化: 抽出グループ(parser×preprocess)ごとに extract 1 回 → 各 chunking で index。
     result = detail
-    chunk_set_ids = sorted(plan.chunk_sets)
-    for index, chunk_set_id in enumerate(chunk_set_ids):
-        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
-        recipe_settings, _applied = apply_adapter_config_or_global(
-            global_settings, configs[representative_kb_id], scope="ingestion"
-        )
-        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
-        # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
-        record_outcome = index == len(chunk_set_ids) - 1
-        if index == 0:
-            result = await pipeline.ingest(
-                document_id=document_id,
-                image_bytes=data,
-                prompt=ingest_prompt,
-                content_type=ingest_content_type,
-                source_profile=source_profile,
-                chunk_set_id=chunk_set_id,
-                record_outcome=record_outcome,
-                cancel_checker=cancel_checker,
+    groups = plan.extraction_groups()
+    total_chunk_sets = len(plan.chunk_sets)
+    done = 0
+    for extraction_id in sorted(groups):
+        for position, chunk_set_id in enumerate(sorted(groups[extraction_id])):
+            representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
+            recipe_settings, _applied = apply_adapter_config_or_global(
+                global_settings, configs[representative_kb_id], scope="ingestion"
             )
-        else:
-            result = await pipeline.index_reviewed(
-                document_id,
-                chunk_set_id=chunk_set_id,
-                record_outcome=record_outcome,
-                cancel_checker=cancel_checker,
-            )
+            pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+            done += 1
+            # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
+            record_outcome = done == total_chunk_sets
+            if position == 0:
+                # 抽出グループの先頭: この parser/前処理 で extract(+ index)。
+                result = await pipeline.ingest(
+                    document_id=document_id,
+                    image_bytes=data,
+                    prompt=ingest_prompt,
+                    content_type=ingest_content_type,
+                    source_profile=source_profile,
+                    chunk_set_id=chunk_set_id,
+                    record_outcome=record_outcome,
+                    cancel_checker=cancel_checker,
+                )
+                if result.status == FileStatus.REVIEW:
+                    # REVIEW ゲート ON: 抽出は REVIEW で停止。残りは承認後に index する。
+                    return result
+            else:
+                # 同抽出(同 parser/前処理)の chunking 変種: 抽出を再利用して re-chunk。
+                result = await pipeline.index_reviewed(
+                    document_id,
+                    chunk_set_id=chunk_set_id,
+                    record_outcome=record_outcome,
+                    cancel_checker=cancel_checker,
+                )
     await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
     return result
 
@@ -1154,7 +1164,11 @@ async def _reconcile_plan_chunk_sets(
     try:
         for chunk_set_id, knowledge_base_ids in plan.chunk_sets.items():
             chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
-            await oracle.upsert_chunk_set(chunk_set_id=chunk_set_id, document_id=document_id)
+            await oracle.upsert_chunk_set(
+                chunk_set_id=chunk_set_id,
+                document_id=document_id,
+                extraction_id=plan.chunk_set_parents.get(chunk_set_id),
+            )
             await oracle.mark_chunk_set_indexed(
                 chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
             )
@@ -1167,6 +1181,16 @@ async def _reconcile_plan_chunk_sets(
         await oracle.delete_document_chunk_sets_except(
             document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
         )
+        # chunk_set GC 後に、参照されない抽出を GC(計画の抽出だけ残す)。
+        await oracle.delete_document_extractions_except(
+            document_id=document_id, keep_extraction_ids=list(plan.extractions)
+        )
+        if plan.truncated_extractions:
+            logger.warning(
+                "抽出数が上限を超え %d 件を打ち切りました(document_id=%s)。",
+                len(plan.truncated_extractions),
+                document_id,
+            )
     except Exception:  # noqa: BLE001 - reconcile は bookkeeping。失敗しても取込は止めない。
         logger.warning(
             "chunk_set plan reconcile に失敗しました（取込は完了済み）。document_id=%s",
