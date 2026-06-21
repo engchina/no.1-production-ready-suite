@@ -7,6 +7,7 @@
 from app.config import get_settings
 from app.rag.variant_keys import (
     compute_chunk_set_id,
+    compute_extraction_id,
     compute_graph_layer_id,
     compute_layer_ids,
     compute_metadata_layer_id,
@@ -28,6 +29,46 @@ def test_chunk_set_id_changes_with_chunk_axis() -> None:
     base = get_settings()
     other = base.model_copy(update={"rag_chunk_size": base.rag_chunk_size + 256})
     assert compute_chunk_set_id(SRC, base) != compute_chunk_set_id(SRC, other)
+
+
+def test_extraction_id_is_deterministic() -> None:
+    """同一原本 + 同一設定なら extraction_id は安定。prefix は ex_。"""
+    settings = get_settings()
+    extraction_id = compute_extraction_id(SRC, settings)
+    assert extraction_id == compute_extraction_id(SRC, settings)
+    assert extraction_id.startswith("ex_")
+
+
+def test_extraction_id_invariant_to_chunk_axis_but_chunk_set_differs() -> None:
+    """chunking 軸が違っても抽出は共有(extraction_id 同一)、chunk_set だけ別。
+
+    #6 の核心: parser グループごとに extract 1 回、chunking 変種はその抽出を再利用する。
+    """
+    base = get_settings()
+    other = base.model_copy(update={"rag_chunk_size": base.rag_chunk_size + 256})
+    # 前処理/Parser 不変 → 抽出は同じ。
+    assert compute_extraction_id(SRC, base) == compute_extraction_id(SRC, other)
+    # でも chunk 集合は別。
+    assert compute_chunk_set_id(SRC, base) != compute_chunk_set_id(SRC, other)
+
+
+def test_extraction_id_changes_with_parser_axis() -> None:
+    """Parser 軸が違えば別抽出(これが現状 1 抽出共有で潰れていた差分)。"""
+    base = get_settings()
+    # 現行設定と必ず異なる parser を選ぶ(.env 等で既定が変わっても成立させる)。
+    other_parser = "docling" if base.rag_parser_adapter_backend != "docling" else "unstructured"
+    other = base.model_copy(update={"rag_parser_adapter_backend": other_parser})
+    assert compute_extraction_id(SRC, base) != compute_extraction_id(SRC, other)
+    # 親が違うので chunk_set も当然別。
+    assert compute_chunk_set_id(SRC, base) != compute_chunk_set_id(SRC, other)
+
+
+def test_extraction_id_changes_with_preprocess_axis_and_source() -> None:
+    """前処理軸・原本が違えば別抽出。"""
+    base = get_settings()
+    pre = base.model_copy(update={"rag_preprocess_profile": "office_to_pdf"})
+    assert compute_extraction_id(SRC, base) != compute_extraction_id(SRC, pre)
+    assert compute_extraction_id(SRC, base) != compute_extraction_id(SRC2, base)
 
 
 def test_chunk_set_id_changes_with_source() -> None:
