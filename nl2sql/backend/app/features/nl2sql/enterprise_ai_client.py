@@ -10,12 +10,13 @@ from __future__ import annotations
 import json
 import re
 import time
+from base64 import b64encode
 from collections.abc import Mapping
 from typing import Any, Protocol, cast
 
 import httpx
 
-from app.settings import Settings
+from app.settings import Settings, enterprise_ai_default_model_id, enterprise_ai_vision_model_id
 
 
 class EnterpriseAiDirectError(RuntimeError):
@@ -53,7 +54,8 @@ class OciEnterpriseAiDirectClient:
 
     def model_id(self) -> str:
         return (
-            self.settings.oci_enterprise_ai_default_model.strip()
+            enterprise_ai_default_model_id(self.settings)
+            or self.settings.oci_enterprise_ai_default_model.strip()
             or self.settings.oci_enterprise_ai_llm_model.strip()
         )
 
@@ -67,16 +69,48 @@ class OciEnterpriseAiDirectClient:
             context=context,
             system_prompt=system_prompt,
         )
-        response = self._post_json(payload)
+        response = self._post_json(payload, path=self.settings.oci_enterprise_ai_llm_path)
         return _parse_generated_text(
             response,
             response_path=self.settings.oci_enterprise_ai_llm_response_path,
         )
 
-    def _post_json(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    def vision_model_id(self) -> str:
+        return enterprise_ai_vision_model_id(self.settings) or self.model_id()
+
+    def generate_from_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = "image/jpeg",
+    ) -> str:
+        if not self.is_configured():
+            raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
+        model_id = self.vision_model_id()
+        if not model_id:
+            raise EnterpriseAiDirectError("OCI Enterprise AI Vision model が未設定です。")
+        payload = _build_image_payload(
+            settings=self.settings,
+            model_id=model_id,
+            image_bytes=image_bytes,
+            prompt=prompt,
+            mime_type=mime_type,
+        )
+        response = self._post_json(
+            payload,
+            path=getattr(self.settings, "oci_enterprise_ai_vlm_path", "")
+            or self.settings.oci_enterprise_ai_llm_path,
+        )
+        return _parse_generated_text(
+            response,
+            response_path=self.settings.oci_enterprise_ai_vlm_response_path,
+        )
+
+    def _post_json(self, payload: Mapping[str, Any], *, path: str) -> Mapping[str, Any]:
         url = _join_endpoint_path(
             self.settings.oci_enterprise_ai_endpoint,
-            self.settings.oci_enterprise_ai_llm_path,
+            path,
         )
         headers = {
             "accept": "application/json",
@@ -154,6 +188,45 @@ def _build_payload(
         "model": model_id,
         "instructions": system_prompt,
         "input": [{"role": "user", "content": values["user_message"]}],
+        "temperature": values["temperature"],
+        "max_output_tokens": values["max_output_tokens"],
+    }
+
+
+def _build_image_payload(
+    *,
+    settings: Settings,
+    model_id: str,
+    image_bytes: bytes,
+    prompt: str,
+    mime_type: str,
+) -> Mapping[str, Any]:
+    image_base64 = b64encode(image_bytes).decode("ascii")
+    data_url = f"data:{mime_type};base64,{image_base64}"
+    values: dict[str, Any] = {
+        "model": model_id,
+        "prompt": prompt,
+        "image_base64": image_base64,
+        "image_data_url": data_url,
+        "mime_type": mime_type,
+        "max_output_tokens": int(
+            getattr(settings, "oci_enterprise_ai_vlm_max_output_tokens", 65536)
+        ),
+        "temperature": 0,
+    }
+    if settings.oci_enterprise_ai_vlm_payload_template.strip():
+        return _render_payload_template(settings.oci_enterprise_ai_vlm_payload_template, values)
+    return {
+        "model": model_id,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_image", "image_url": data_url},
+                ],
+            }
+        ],
         "temperature": values["temperature"],
         "max_output_tokens": values["max_output_tokens"],
     }

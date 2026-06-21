@@ -10,9 +10,11 @@ from zipfile import ZipFile
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
+from app.clients.oci_database import AutonomousDatabaseInfo
+from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
 from app.features.settings import router as settings_router
 from app.main import app
-from app.settings import get_settings
+from app.settings import Settings, get_settings, load_persisted_model_settings
 
 client = TestClient(app)
 
@@ -324,6 +326,11 @@ def test_update_model_settings_persists_json_with_resolved_secret(
                         "model_id": "cohere.command-r-plus",
                         "display_name": "回答生成",
                         "vision_enabled": False,
+                    },
+                    {
+                        "model_id": "mistral.vision-model",
+                        "display_name": "画像解析",
+                        "vision_enabled": True,
                     }
                 ],
                 "default_model_id": "cohere.command-r-plus",
@@ -346,10 +353,244 @@ def test_update_model_settings_persists_json_with_resolved_secret(
 
     assert resp.status_code == 200
     assert resp.json()["data"]["settings"]["enterprise_ai"]["api_key"] == ""
+    models = resp.json()["data"]["settings"]["enterprise_ai"]["models"]
+    assert [model["model_id"] for model in models] == [
+        "cohere.command-r-plus",
+        "mistral.vision-model",
+    ]
+    assert models[1]["vision_enabled"] is True
     document = model_settings_file.read_text(encoding="utf-8")
     assert '"api_key": "saved-secret"' in document
+    assert '"model_id": "mistral.vision-model"' in document
     assert '"embedding_dim": 1536' in document
     assert stat.S_IMODE(model_settings_file.stat().st_mode) == 0o600
+
+
+def test_load_persisted_model_settings_applies_runtime_fields(tmp_path: Path) -> None:
+    model_settings_file = tmp_path / "model-settings.json"
+    model_settings_file.write_text(
+        """
+        {
+          "version": 1,
+          "enterprise_ai": {
+            "endpoint": "https://enterprise-ai.example.com",
+            "project_ocid": "ocid1.project.oc1..example",
+            "api_key": "persisted-secret",
+            "models": [
+              {
+                "model_id": "cohere.command-r-plus",
+                "display_name": "回答生成",
+                "vision_enabled": false
+              },
+              {
+                "model_id": "mistral.vision-model",
+                "display_name": "画像解析",
+                "vision_enabled": true
+              }
+            ],
+            "default_model_id": "cohere.command-r-plus",
+            "api_path": "/responses",
+            "vlm_input_mode": "inline_image",
+            "timeout_seconds": 120,
+            "max_retries": 4
+          },
+          "generative_ai": {
+            "embedding_model": "cohere.embed-v4.0",
+            "embedding_dim": 1536,
+            "rerank_model": "cohere.rerank-v4.0-fast"
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    settings = Settings(model_settings_file=str(model_settings_file))
+
+    load_persisted_model_settings(settings)
+
+    assert settings.oci_enterprise_ai_endpoint == "https://enterprise-ai.example.com"
+    assert settings.oci_enterprise_ai_api_key == "persisted-secret"
+    assert settings.oci_enterprise_ai_default_model == "cohere.command-r-plus"
+    assert settings.oci_enterprise_ai_vlm_model == "mistral.vision-model"
+    assert [model.model_id for model in settings.oci_enterprise_ai_models] == [
+        "cohere.command-r-plus",
+        "mistral.vision-model",
+    ]
+    assert settings.oci_enterprise_ai_vlm_input_mode == "inline_image"
+    assert settings.oci_enterprise_ai_max_retries == 4
+    assert settings.oci_genai_embed_model_id == "cohere.embed-v4.0"
+    assert settings.oci_genai_rerank_model_id == "cohere.rerank-v4.0-fast"
+
+
+def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeEnterpriseClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+            captured["prompt"] = prompt
+            captured["context"] = context
+            captured["system_prompt"] = system_prompt
+            captured["endpoint"] = self.settings.oci_enterprise_ai_endpoint
+            captured["model_id"] = self.settings.oci_enterprise_ai_llm_model
+            captured["api_key"] = self.settings.oci_enterprise_ai_api_key
+            return "テスト応答"
+
+    monkeypatch.setattr(settings_router, "OciEnterpriseAiDirectClient", FakeEnterpriseClient)
+
+    resp = client.post(
+        "/api/settings/model/test",
+        json={
+            "target_type": "enterprise_text",
+            "model_id": "cohere.command-r-plus",
+            "settings": {
+                "enterprise_ai": {
+                    "endpoint": "https://enterprise-ai.example.com",
+                    "project_ocid": "ocid1.project.oc1..example",
+                    "api_key": "request-secret",
+                    "models": [
+                        {
+                            "model_id": "cohere.command-r-plus",
+                            "display_name": "回答生成",
+                            "vision_enabled": False,
+                        }
+                    ],
+                    "default_model_id": "cohere.command-r-plus",
+                    "api_path": "/responses",
+                    "vlm_input_mode": "auto",
+                    "timeout_seconds": 10,
+                    "max_retries": 0,
+                },
+                "generative_ai": {
+                    "embedding_model": "cohere.embed-v4.0",
+                    "embedding_dim": 1536,
+                    "rerank_model": "cohere.rerank-v4.0-fast",
+                },
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "success"
+    assert data["details"]["network_call"] is True
+    assert data["details"]["response_chars"] == 5
+    assert captured["endpoint"] == "https://enterprise-ai.example.com"
+    assert captured["model_id"] == "cohere.command-r-plus"
+    assert captured["api_key"] == "request-secret"
+
+
+def test_adb_start_uses_oci_database_client(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "oracle_adb_ocid", "ocid1.autonomousdatabase.oc1..example")
+    monkeypatch.setattr(settings, "oci_region", "ap-osaka-1")
+    calls: list[tuple[str, str]] = []
+
+    class FakeDatabaseClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            calls.append(("get", adb_ocid))
+            return AutonomousDatabaseInfo(
+                id=adb_ocid,
+                display_name="NL2SQLADB",
+                lifecycle_state="STOPPED",
+                db_name="NL2SQL",
+                cpu_core_count=1,
+                data_storage_size_in_tbs=1,
+            )
+
+        async def start_autonomous_database(self, adb_ocid: str) -> None:
+            calls.append(("start", adb_ocid))
+
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+
+    resp = client.post("/api/settings/database/adb/start")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "accepted"
+    assert data["lifecycle_state"] == "STARTING"
+    assert data["region"] == "ap-osaka-1"
+    assert calls == [
+        ("get", "ocid1.autonomousdatabase.oc1..example"),
+        ("start", "ocid1.autonomousdatabase.oc1..example"),
+    ]
+
+
+def test_oracle_adapter_wallet_only_connection_uses_wallet_kwargs(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text(
+        "mydb_high = "
+        "(DESCRIPTION=(retry_count=20)(retry_delay=3)"
+        "(ADDRESS=(PROTOCOL=tcps)(HOST=db.example.com)(PORT=1522))"
+        "(CONNECT_DATA=(SERVICE_NAME=mydb_high)))\n",
+        encoding="utf-8",
+    )
+    (wallet_dir / "cwallet.sso").write_text("dummy", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    class FakeOracleCursor:
+        def __enter__(self) -> FakeOracleCursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, sql: str) -> None:
+            captured["sql"] = sql
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class FakeOracleConnection:
+        def cursor(self) -> FakeOracleCursor:
+            return FakeOracleCursor()
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    class FakeOracleDbModule:
+        def connect(self, **kwargs: object) -> FakeOracleConnection:
+            captured["connect_kwargs"] = kwargs
+            return FakeOracleConnection()
+
+    def fake_import_module(name: str) -> object:
+        if name == "oracledb":
+            return FakeOracleDbModule()
+        raise AssertionError(f"unexpected module import: {name}")
+
+    monkeypatch.setattr(
+        "app.features.nl2sql.oracle_adapter.importlib.import_module",
+        fake_import_module,
+    )
+    settings = Settings(
+        oracle_user="ADMIN",
+        oracle_password="",
+        oracle_dsn="mydb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir=str(wallet_dir),
+        nl2sql_oracle_connect_timeout_seconds=3,
+    )
+
+    ok, message = OracleNl2SqlAdapter(settings).test_connection()
+
+    assert ok is True, message
+    kwargs = captured["connect_kwargs"]
+    assert kwargs["user"] == "ADMIN"
+    assert "password" not in kwargs
+    assert kwargs["config_dir"] == str(wallet_dir)
+    assert kwargs["wallet_location"] == str(wallet_dir)
+    assert kwargs["tcp_connect_timeout"] == 3
+    assert "retry_count" not in str(kwargs["dsn"]).lower()
+    assert captured["sql"] == "SELECT 1 FROM DUAL"
+    assert captured["closed"] is True
 
 
 def _wallet_zip_bytes() -> bytes:

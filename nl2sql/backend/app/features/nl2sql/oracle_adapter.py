@@ -12,6 +12,7 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.settings import Settings
@@ -21,6 +22,12 @@ from .models import CsvImportColumn, QueryResults, SchemaCatalog, SchemaColumn, 
 
 class OracleAdapterError(RuntimeError):
     """Oracle adapter の実行時エラー。"""
+
+
+WALLET_PASSWORD_REQUIRED_ERROR = (
+    "Oracle Wallet がパスワードを必要としています。"
+    "ORACLE_WALLET_PASSWORD または ORACLE_PASSWORD を設定してください。"
+)
 
 
 def _coerce_text(value: Any) -> str:
@@ -81,6 +88,125 @@ def _strict_sql_name(value: str) -> str:
     return normalized
 
 
+def _oracle_connect_kwargs(settings: Settings) -> dict[str, object]:
+    """python-oracledb connect に渡す共通 kwargs を作る。"""
+    kwargs: dict[str, object] = {
+        "user": settings.oracle_user,
+        "dsn": _oracle_connection_test_dsn(settings),
+        "tcp_connect_timeout": settings.nl2sql_oracle_connect_timeout_seconds,
+    }
+    if settings.oracle_password.strip():
+        kwargs["password"] = settings.oracle_password
+    _add_wallet_kwargs(settings, kwargs)
+    return kwargs
+
+
+def _oracle_connection_test_dsn(settings: Settings) -> str:
+    """Wallet alias の descriptor が取れれば、長い retry 設定を外して接続テストする。"""
+    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
+    if not wallet_dir:
+        return settings.oracle_dsn
+    descriptor = _tns_alias_descriptor(Path(wallet_dir).expanduser(), settings.oracle_dsn)
+    if not descriptor:
+        return settings.oracle_dsn
+    return _strip_tns_retry_settings(descriptor)
+
+
+def _tns_alias_descriptor(wallet_path: Path, alias: str) -> str | None:
+    """tnsnames.ora から指定 alias の connect descriptor を抜き出す。"""
+    tnsnames = wallet_path / "tnsnames.ora"
+    if not alias.strip() or not tnsnames.is_file():
+        return None
+    try:
+        content = tnsnames.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    for match in re.finditer(r"(?im)^\s*([A-Za-z0-9_.-]+)\s*=\s*", content):
+        if match.group(1).lower() != alias.lower():
+            continue
+        descriptor_start = content.find("(", match.end())
+        if descriptor_start < 0:
+            return None
+        return _balanced_parenthesized_text(content, descriptor_start)
+    return None
+
+
+def _balanced_parenthesized_text(content: str, start: int) -> str | None:
+    """start 位置から始まる括弧式を top-level まで読み取る。"""
+    depth = 0
+    for index in range(start, len(content)):
+        char = content[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return content[start : index + 1]
+        if depth < 0:
+            return None
+    return None
+
+
+def _strip_tns_retry_settings(descriptor: str) -> str:
+    """ADB Wallet の長い retry 設定を接続テスト用に取り除く。"""
+    without_retry_count = re.sub(r"\(\s*retry_count\s*=\s*\d+\s*\)", "", descriptor, flags=re.I)
+    return re.sub(r"\(\s*retry_delay\s*=\s*\d+\s*\)", "", without_retry_count, flags=re.I)
+
+
+def _add_wallet_kwargs(settings: Settings, kwargs: dict[str, object]) -> None:
+    """Wallet 設定を kwargs に追加する。"""
+    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
+    if not wallet_dir:
+        return
+
+    wallet_path = Path(wallet_dir).expanduser()
+    if not wallet_path.is_dir():
+        return
+
+    wallet_password = settings.oracle_wallet_password.strip() or settings.oracle_password.strip()
+    if not wallet_password and _wallet_requires_password(wallet_path):
+        raise OracleAdapterError(WALLET_PASSWORD_REQUIRED_ERROR)
+
+    resolved_wallet_path = str(wallet_path)
+    kwargs["config_dir"] = resolved_wallet_path
+    kwargs["wallet_location"] = resolved_wallet_path
+    if wallet_password:
+        kwargs["wallet_password"] = wallet_password
+
+
+def _wallet_dir_exists(settings: Settings) -> bool:
+    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
+    return bool(wallet_dir and Path(wallet_dir).expanduser().is_dir())
+
+
+def _wallet_requires_password(wallet_path: Path) -> bool:
+    """自動ログイン Wallet がなく、秘密鍵が暗号化されていればパスワード必須。"""
+    try:
+        files = [path for path in wallet_path.iterdir() if path.is_file()]
+    except OSError:
+        return False
+    names = {path.name.lower() for path in files}
+    if "ewallet.p12" in names:
+        return True
+    encrypted_pem_exists = any(
+        path.suffix.lower() == ".pem" and _pem_file_is_encrypted(path) for path in files
+    )
+    if encrypted_pem_exists:
+        return True
+    return "cwallet.sso" not in names
+
+
+def _pem_file_is_encrypted(path: Path) -> bool:
+    """暗号化 PEM の代表的な marker だけを少量読み取って判定する。"""
+    try:
+        head = path.read_bytes()[:4096]
+    except OSError:
+        return False
+    text = head.decode("utf-8", errors="ignore").upper()
+    return "BEGIN ENCRYPTED PRIVATE KEY" in text or "PROC-TYPE: 4,ENCRYPTED" in text
+
+
 class OracleNl2SqlAdapter:
     """Thin python-oracledb wrapper.
 
@@ -94,13 +220,9 @@ class OracleNl2SqlAdapter:
         self._client_initialized = False
 
     def is_configured(self) -> bool:
-        return all(
-            [
-                self.settings.oracle_user,
-                self.settings.oracle_password,
-                self.settings.oracle_dsn,
-            ]
-        )
+        if not self.settings.oracle_user.strip() or not self.settings.oracle_dsn.strip():
+            return False
+        return bool(self.settings.oracle_password.strip() or _wallet_dir_exists(self.settings))
 
     def module_available(self) -> bool:
         try:
@@ -126,12 +248,7 @@ class OracleNl2SqlAdapter:
         self._init_client(oracledb)
         if not self.is_configured():
             raise OracleAdapterError("Oracle 接続情報が不足しています。")
-        conn = oracledb.connect(
-            user=self.settings.oracle_user,
-            password=self.settings.oracle_password,
-            dsn=self.settings.oracle_dsn,
-            tcp_connect_timeout=self.settings.nl2sql_oracle_connect_timeout_seconds,
-        )
+        conn = oracledb.connect(**_oracle_connect_kwargs(self.settings))
         try:
             yield conn
         finally:
