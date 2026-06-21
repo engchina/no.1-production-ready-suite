@@ -283,6 +283,65 @@ def test_gate_off_parser_axis_materializes_separate_extractions() -> None:
     assert chunk_set["extraction_id"] == ex_docling
 
 
+def test_gate_on_parser_axis_extracts_non_owning_after_approve(monkeypatch: MonkeyPatch) -> None:
+    """gate-ON で owning のみレビュー、承認後に他 parser グループを自動抽出する(#6 P4 案 A)。
+
+    REVIEW 時点では owning(既定 parser)抽出のみ存在し、承認後に非 owning parser グループが
+    原本を再取得して自動抽出・materialize される(派生自動)。
+    """
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    detail = _get_document(document_id)
+    content_sha256 = cast(str, detail["content_sha256"])
+
+    settings = get_settings()
+    # 既定(owning)parser と必ず異なる parser を 2 つ目の KB に与える。
+    other_parser = "marker" if settings.rag_parser_adapter_backend != "marker" else "docling"
+    kb_resp = client.post(
+        "/api/knowledge-bases",
+        json={
+            "name": "他parser-KB",
+            "adapter_config": {"ingestion": {"parser_adapter_backend": other_parser}},
+        },
+    )
+    assert kb_resp.status_code == 200
+    kb_id = kb_resp.json()["data"]["id"]
+    assign_resp = client.post(
+        f"/api/knowledge-bases/{kb_id}/documents", json={"document_ids": [document_id]}
+    )
+    assert assign_resp.status_code == 200
+
+    owning_ex = compute_extraction_id(content_sha256, settings)
+    other = settings.model_copy(update={"rag_parser_adapter_backend": other_parser})
+    other_ex = compute_extraction_id(content_sha256, other)
+    assert owning_ex != other_ex
+
+    # EXTRACT → REVIEW: owning(既定 parser)だけ抽出されレビュー待ちになる。
+    _extract_to_review(document_id)
+    assert _get_document(document_id)["status"] == "REVIEW"
+
+    oracle = OracleClient()
+    review_extractions = asyncio.run(oracle.list_document_extraction_ids(document_id))
+    assert owning_ex in review_extractions
+    # 案 A の核心: 非 owning parser はレビュー時点ではまだ抽出されていない。
+    assert other_ex not in review_extractions
+
+    # 承認 → 非 owning グループが原本再取得で自動抽出され materialize される。
+    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    assert approve_resp.status_code == 200
+    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+    assert _get_document(document_id)["status"] == "INDEXED"
+
+    indexed_extractions = asyncio.run(oracle.list_document_extraction_ids(document_id))
+    assert owning_ex in indexed_extractions
+    assert other_ex in indexed_extractions  # 承認後に派生自動抽出された
+
+    # 非 owning chunk_set がその親抽出に紐づく(reconcile が extraction_id をセット)。
+    chunk_set = asyncio.run(oracle.get_chunk_set(compute_chunk_set_id(content_sha256, other)))
+    assert chunk_set is not None
+    assert chunk_set["extraction_id"] == other_ex
+
+
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
     """却下すると UPLOADED へ戻り、検索対象に入らない。"""
     _enable_review_gate(monkeypatch)
