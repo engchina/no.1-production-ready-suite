@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.main import app
 from app.rag import ingestion as ingestion_module
 from app.rag.audit import record_rag_ingestion_audit
+from app.rag.variant_keys import compute_chunk_set_id, compute_extraction_id
 from app.rag.variant_planner import plan_document_materializations
 from tests.support import AsgiTestClient
 
@@ -230,6 +231,56 @@ def test_multiple_kb_configs_materialize_separate_chunk_sets(monkeypatch: Monkey
     # 各 chunk_set はちょうど 1 KB に bind(materialization が KB ごとに分裂)。
     for chunk_set_id in materialized:
         assert asyncio.run(oracle.chunk_set_refcount(chunk_set_id)) == 1
+
+
+def test_gate_off_parser_axis_materializes_separate_extractions() -> None:
+    """gate-off で parser 軸が違う 2 KB は別 extraction を materialize する(#6 P3 の核心)。
+
+    parser グループごとに extract 1 回 → 各 chunk_set がその親抽出を指す。外部 parser 未導入でも
+    parser registry が fallback するため抽出は produce され、extraction_id は parser config で別。
+    """
+    document_id = _upload_sample()
+    detail = _get_document(document_id)
+    content_sha256 = cast(str, detail["content_sha256"])
+
+    # parser を docling / marker に上書きした 2 KB を作り、文書を両方へ所属させる。
+    for kb_name, parser in (("docling-KB", "docling"), ("marker-KB", "marker")):
+        kb_resp = client.post(
+            "/api/knowledge-bases",
+            json={
+                "name": kb_name,
+                "adapter_config": {"ingestion": {"parser_adapter_backend": parser}},
+            },
+        )
+        assert kb_resp.status_code == 200
+        kb_id = kb_resp.json()["data"]["id"]
+        assign_resp = client.post(
+            f"/api/knowledge-bases/{kb_id}/documents", json={"document_ids": [document_id]}
+        )
+        assert assign_resp.status_code == 200
+
+    # gate-off(既定): extract+index を 1 ジョブで実行(抽出グループごとに extract)。
+    job = _enqueue_extract(document_id)
+    _run_job(cast(str, job["id"]))
+    assert _get_document(document_id)["status"] == "INDEXED"
+
+    settings = get_settings()
+    docling = settings.model_copy(update={"rag_parser_adapter_backend": "docling"})
+    marker = settings.model_copy(update={"rag_parser_adapter_backend": "marker"})
+    ex_docling = compute_extraction_id(content_sha256, docling)
+    ex_marker = compute_extraction_id(content_sha256, marker)
+
+    oracle = OracleClient()
+    extraction_ids = asyncio.run(oracle.list_document_extraction_ids(document_id))
+    # parser ごとに別抽出が materialize されている(これが #6 で潰れていた parser 軸)。
+    assert ex_docling != ex_marker
+    assert ex_docling in extraction_ids
+    assert ex_marker in extraction_ids
+
+    # chunk_set はその親抽出に紐づく(reconcile が chunk_set.extraction_id をセット)。
+    chunk_set = asyncio.run(oracle.get_chunk_set(compute_chunk_set_id(content_sha256, docling)))
+    assert chunk_set is not None
+    assert chunk_set["extraction_id"] == ex_docling
 
 
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
