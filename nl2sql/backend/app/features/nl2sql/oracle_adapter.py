@@ -25,7 +25,7 @@ class OracleAdapterError(RuntimeError):
 
 
 WALLET_PASSWORD_REQUIRED_ERROR = (
-    "Oracle Wallet がパスワードを必要としています。"
+    "Oracle Wallet がパスワードを必要としています。"  # nosec B105
     "ORACLE_WALLET_PASSWORD または ORACLE_PASSWORD を設定してください。"
 )
 
@@ -439,27 +439,23 @@ class OracleNl2SqlAdapter:
             filters.append("UPPER(TEAM_NAME) = UPPER(:team_name)")
             binds["team_name"] = team_name
         where_clause = ("WHERE " + " AND ".join(filters)) if filters else ""
+        conversation_sql = (
+            "SELECT CONVERSATION_ID, PROMPT, RESPONSE, CREATED, TEAM_NAME "  # nosec B608
+            "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS "
+            f"{where_clause} "
+            "ORDER BY CREATED DESC "
+            "FETCH FIRST :limit ROWS ONLY"
+        )
+        prompt_sql = (
+            "SELECT CONVERSATION_ID, PROMPT, NULL, CREATED, NULL "  # nosec B608
+            "FROM USER_CLOUD_AI_CONVERSATION_PROMPTS "
+            f"{where_clause} "
+            "ORDER BY CREATED DESC "
+            "FETCH FIRST :limit ROWS ONLY"
+        )
         candidates = [
-            (
-                f"""
-                SELECT CONVERSATION_ID, PROMPT, RESPONSE, CREATED, TEAM_NAME
-                FROM USER_CLOUD_AI_CONVERSATION_PROMPTS
-                {where_clause}
-                ORDER BY CREATED DESC
-                FETCH FIRST :limit ROWS ONLY
-                """,
-                binds,
-            ),
-            (
-                f"""
-                SELECT CONVERSATION_ID, PROMPT, NULL, CREATED, NULL
-                FROM USER_CLOUD_AI_CONVERSATION_PROMPTS
-                {where_clause}
-                ORDER BY CREATED DESC
-                FETCH FIRST :limit ROWS ONLY
-                """,
-                binds,
-            ),
+            (conversation_sql, binds),
+            (prompt_sql, binds),
         ]
         errors: list[str] = []
         with self.connection() as conn, conn.cursor() as cursor:
