@@ -10,7 +10,7 @@ import importlib
 import json
 import re
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -367,6 +367,235 @@ class OracleNl2SqlAdapter:
                 )
         return QueryResults(columns=columns, rows=rows, total=len(rows))
 
+    def list_db_admin_objects(self, object_type: str) -> list[dict[str, Any]]:
+        """List user tables or views for the DB admin console."""
+        normalized_type = "view" if object_type.lower() == "view" else "table"
+        if normalized_type == "view":
+            sql = """
+                SELECT v.view_name, USER, NULL, NVL(c.comments, ' ')
+                FROM user_views v
+                LEFT JOIN user_tab_comments c ON c.table_name = v.view_name
+                WHERE v.view_name NOT LIKE '%$%'
+                ORDER BY v.view_name
+            """
+        else:
+            sql = """
+                SELECT t.table_name, USER, t.num_rows, NVL(c.comments, ' ')
+                FROM user_tables t
+                LEFT JOIN user_tab_comments c ON c.table_name = t.table_name
+                WHERE t.table_name NOT LIKE '%$%'
+                ORDER BY t.table_name
+            """
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(sql)
+            rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
+        return [
+            {
+                "name": str(row[0] or ""),
+                "owner": str(row[1] or ""),
+                "object_type": normalized_type,
+                "row_count": int(row[2]) if row[2] is not None else None,
+                "comment": _coerce_text(row[3]) if len(row) > 3 else "",
+            }
+            for row in rows
+        ]
+
+    def get_db_admin_object_detail(self, *, object_name: str, object_type: str) -> dict[str, Any]:
+        """Return columns and DBMS_METADATA DDL for a table/view."""
+        safe_name = _strict_sql_name(object_name)
+        normalized_type = "VIEW" if object_type.lower() == "view" else "TABLE"
+        columns: list[SchemaColumn] = []
+        warnings: list[str] = []
+        comment = ""
+        row_count: int | None = None
+        ddl = ""
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT c.column_name,
+                       c.data_type ||
+                       CASE
+                         WHEN c.data_type IN ('VARCHAR2','CHAR','NVARCHAR2','NCHAR')
+                         THEN '(' || c.data_length || ')'
+                         WHEN c.data_type = 'NUMBER' AND c.data_precision IS NOT NULL
+                         THEN '(' || c.data_precision ||
+                              CASE WHEN c.data_scale > 0 THEN ',' || c.data_scale ELSE '' END || ')'
+                         ELSE ''
+                       END AS data_type,
+                       c.nullable,
+                       NVL(cc.comments, ' ')
+                FROM user_tab_columns c
+                LEFT JOIN user_col_comments cc
+                  ON cc.table_name = c.table_name AND cc.column_name = c.column_name
+                WHERE c.table_name = :object_name
+                ORDER BY c.column_id
+                """,
+                {"object_name": safe_name},
+            )
+            for column_name, data_type, nullable, column_comment in cursor:
+                columns.append(
+                    SchemaColumn(
+                        column_name=str(column_name or ""),
+                        logical_name=_coerce_text(column_comment) or str(column_name or ""),
+                        data_type=str(data_type or ""),
+                        nullable=str(nullable or "Y").upper() == "Y",
+                        comment=_coerce_text(column_comment),
+                    )
+                )
+            cursor.execute(
+                "SELECT comments FROM user_tab_comments WHERE table_name = :object_name",
+                {"object_name": safe_name},
+            )
+            row = cursor.fetchone()
+            comment = _coerce_text(row[0]) if row and row[0] else ""
+            if normalized_type == "TABLE":
+                try:
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM {_quote_identifier(safe_name)}"  # nosec B608
+                    )
+                    row = cursor.fetchone()
+                    row_count = int(row[0] or 0) if row else None
+                except Exception as exc:
+                    warnings.append(f"row count の取得に失敗しました: {exc}")
+            try:
+                cursor.execute(
+                    "SELECT DBMS_METADATA.GET_DDL(:object_type, :object_name) FROM DUAL",
+                    {"object_type": normalized_type, "object_name": safe_name},
+                )
+                row = cursor.fetchone()
+                ddl = _coerce_text(row[0]) if row and row[0] else ""
+            except Exception as exc:
+                warnings.append(f"DBMS_METADATA.GET_DDL に失敗しました: {exc}")
+        if ddl:
+            ddl = ddl.rstrip()
+            if not ddl.endswith(";"):
+                ddl += ";"
+            if comment:
+                escaped_comment = comment.replace("'", "''")
+                ddl += (
+                    f"\nCOMMENT ON {normalized_type} {_quote_identifier(safe_name)} "
+                    f"IS '{escaped_comment}';"
+                )
+            for column in columns:
+                if column.comment:
+                    escaped_column_comment = column.comment.replace("'", "''")
+                    ddl += (
+                        f"\nCOMMENT ON COLUMN {_quote_identifier(safe_name)}."
+                        f"{_quote_identifier(column.column_name)} "
+                        f"IS '{escaped_column_comment}';"
+                    )
+        return {
+            "name": safe_name,
+            "owner": self.settings.oracle_user.strip().upper(),
+            "object_type": normalized_type.lower(),
+            "row_count": row_count,
+            "comment": comment,
+            "columns": [column.model_dump(mode="json") for column in columns],
+            "ddl": ddl,
+            "warnings": warnings,
+        }
+
+    def execute_admin_statements(self, statements: list[str]) -> list[dict[str, Any]]:
+        """Execute non-SELECT admin SQL statements with all-or-nothing transaction."""
+        results: list[dict[str, Any]] = []
+        ok = True
+        with self.connection() as conn, conn.cursor() as cursor:
+            with suppress(Exception):
+                cursor.callproc("dbms_output.enable")
+            for index, statement in enumerate(statements, start=1):
+                started = datetime.now(UTC)
+                statement_type = self._admin_statement_type(statement)
+                normalized = self._normalize_admin_statement(statement)
+                try:
+                    cursor.execute(normalized)
+                    row_count = getattr(cursor, "rowcount", None)
+                    message = self._fetch_dbms_output(cursor) or self._admin_success_message(
+                        statement_type,
+                        row_count,
+                    )
+                    elapsed_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+                    results.append(
+                        {
+                            "index": index,
+                            "statement_type": statement_type,
+                            "status": "success",
+                            "sql": normalized,
+                            "row_count": row_count if isinstance(row_count, int) else None,
+                            "message": message,
+                            "elapsed_ms": elapsed_ms,
+                        }
+                    )
+                except Exception as exc:
+                    ok = False
+                    elapsed_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+                    results.append(
+                        {
+                            "index": index,
+                            "statement_type": statement_type,
+                            "status": "error",
+                            "sql": normalized,
+                            "row_count": None,
+                            "message": "",
+                            "elapsed_ms": elapsed_ms,
+                            "error_message": str(exc),
+                        }
+                    )
+            if ok:
+                conn.commit()
+            else:
+                conn.rollback()
+        return results
+
+    def import_tabular_table(
+        self,
+        *,
+        table_name: str,
+        columns: list[CsvImportColumn],
+        rows: list[dict[str, str | None]],
+        mode: str,
+    ) -> dict[str, Any]:
+        """Import parsed tabular rows into Oracle using create/replace/append/truncate mode."""
+        safe_table = _strict_sql_name(table_name)
+        quoted_table = _quote_identifier(safe_table)
+        column_defs = ", ".join(
+            f"{_quote_identifier(column.column_name)} {column.data_type}" for column in columns
+        )
+        ddl = f"CREATE TABLE {quoted_table} ({column_defs})"
+        bind_names = [f"c{index}" for index, _column in enumerate(columns)]
+        insert_sql = (
+            f"INSERT INTO {quoted_table} "  # nosec B608
+            f"({', '.join(_quote_identifier(column.column_name) for column in columns)}) "
+            f"VALUES ({', '.join(':' + name for name in bind_names)})"
+        )
+        bind_rows = [
+            {
+                bind_names[index]: self._coerce_csv_value(row.get(column.column_name), column)
+                for index, column in enumerate(columns)
+            }
+            for row in rows
+        ]
+        normalized_mode = mode.strip().lower()
+        with self.connection() as conn, conn.cursor() as cursor:
+            if normalized_mode in {"replace", "create"}:
+                if normalized_mode == "replace":
+                    self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
+                self._execute_plsql_like(cursor, ddl, {})
+            elif normalized_mode == "truncate":
+                self._execute_plsql_like(cursor, f"TRUNCATE TABLE {quoted_table}", {})
+            elif normalized_mode != "append":
+                raise OracleAdapterError(f"未対応 import mode です: {mode}")
+            if bind_rows:
+                cursor.executemany(insert_sql, bind_rows)
+            conn.commit()
+        return {
+            "runtime": "oracle",
+            "table_name": safe_table,
+            "row_count": len(bind_rows),
+            "mode": normalized_mode,
+            "ddl": ddl,
+            "insert_sql": insert_sql,
+        }
+
     def apply_comment_statements(self, statements: list[str]) -> dict[str, Any]:
         """Execute generated COMMENT ON statements.
 
@@ -428,6 +657,117 @@ class OracleNl2SqlAdapter:
         raise OracleAdapterError(
             "Oracle Select AI profile 一覧を取得できませんでした: " + "; ".join(errors)
         )
+
+    def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
+        """Fetch one DBMS_CLOUD_AI profile detail with best-effort attribute decoding."""
+        safe_name = profile_name.strip()
+        if not safe_name:
+            raise OracleAdapterError("profile_name が空です。")
+        candidates = [
+            """
+            SELECT PROFILE_NAME, NVL(STATUS, 'UNKNOWN'), OWNER, CREATED, ATTRIBUTES, DESCRIPTION
+            FROM USER_CLOUD_AI_PROFILES
+            WHERE UPPER(PROFILE_NAME) = UPPER(:profile_name)
+            """,
+            """
+            SELECT PROFILE_NAME, 'UNKNOWN', USER, NULL, ATTRIBUTES, NULL
+            FROM USER_CLOUD_AI_PROFILES
+            WHERE UPPER(PROFILE_NAME) = UPPER(:profile_name)
+            """,
+            """
+            SELECT PROFILE_NAME, 'UNKNOWN', USER, NULL, NULL, NULL
+            FROM USER_CLOUD_AI_PROFILES
+            WHERE UPPER(PROFILE_NAME) = UPPER(:profile_name)
+            """,
+        ]
+        errors: list[str] = []
+        with self.connection() as conn, conn.cursor() as cursor:
+            for sql in candidates:
+                try:
+                    cursor.execute(sql, {"profile_name": safe_name})
+                    row = cursor.fetchone()
+                    if not row:
+                        raise OracleAdapterError(f"{profile_name}: profile が見つかりません。")
+                    attributes_text = _coerce_text(row[4]) if len(row) > 4 else ""
+                    try:
+                        attributes = json.loads(attributes_text) if attributes_text else {}
+                    except json.JSONDecodeError:
+                        attributes = {"raw": attributes_text}
+                    object_list = attributes.get("object_list")
+                    if not isinstance(object_list, list):
+                        object_list = []
+                    return {
+                        "name": str(row[0] or safe_name),
+                        "status": str(row[1] or "unknown").lower(),
+                        "owner": str(row[2] or ""),
+                        "created_at": _coerce_text(row[3]) if len(row) > 3 else "",
+                        "attributes": attributes,
+                        "description": _coerce_text(row[5]) if len(row) > 5 else "",
+                        "object_list": object_list,
+                    }
+                except OracleAdapterError:
+                    raise
+                except Exception as exc:
+                    errors.append(str(exc))
+                    continue
+        raise OracleAdapterError(
+            "Oracle Select AI profile 詳細を取得できませんでした: " + "; ".join(errors)
+        )
+
+    def upsert_select_ai_profile_low_level(
+        self,
+        *,
+        profile_name: str,
+        attributes: dict[str, Any],
+        description: str = "",
+        original_name: str = "",
+    ) -> dict[str, Any]:
+        """Create or replace DBMS_CLOUD_AI profile from raw attributes JSON."""
+        safe_name = profile_name.strip()
+        if not safe_name:
+            raise OracleAdapterError("profile_name が空です。")
+        attrs = json.dumps(attributes or {}, ensure_ascii=False)
+        desc = description or ""
+        with self.connection() as conn, conn.cursor() as cursor:
+            if original_name.strip() and original_name.strip().upper() != safe_name.upper():
+                self._drop_cloud_ai_profile_best_effort(cursor, original_name.strip())
+            self._drop_cloud_ai_profile_best_effort(cursor, safe_name)
+            self._execute_first_supported_plsql(
+                cursor,
+                [
+                    (
+                        """
+                        BEGIN
+                            DBMS_CLOUD_AI.CREATE_PROFILE(
+                                profile_name => :name,
+                                attributes => :attrs,
+                                description => :description
+                            );
+                        END;
+                        """,
+                        {"name": safe_name, "attrs": attrs, "description": desc},
+                    ),
+                    (
+                        """
+                        BEGIN
+                            DBMS_CLOUD_AI.CREATE_PROFILE(
+                                profile_name => :name,
+                                attributes => :attrs
+                            );
+                        END;
+                        """,
+                        {"name": safe_name, "attrs": attrs},
+                    ),
+                ],
+            )
+            conn.commit()
+        return {
+            "runtime": "oracle",
+            "package": "DBMS_CLOUD_AI",
+            "profile_name": safe_name,
+            "attributes": attributes,
+            "description": desc,
+        }
 
     def list_agent_conversations(
         self, *, team_name: str | None = None, limit: int = 20
@@ -590,10 +930,28 @@ class OracleNl2SqlAdapter:
             return checks
 
     def generate_synthetic_data(
-        self, *, table_name: str, row_count: int, profile_name: str = ""
+        self,
+        *,
+        table_name: str,
+        row_count: int,
+        profile_name: str = "",
+        object_list: list[str] | None = None,
+        user_prompt: str = "",
+        sample_rows: int = 0,
+        use_comments: bool = True,
     ) -> dict[str, Any]:
         """Call DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA for a validated table."""
-        safe_table = _strict_sql_name(table_name)
+        safe_table = _strict_sql_name(table_name) if table_name.strip() else ""
+        safe_objects = [_strict_sql_name(item) for item in object_list or [] if item.strip()]
+        if not safe_table and not safe_objects:
+            raise OracleAdapterError("synthetic data 対象 table/object_list が空です。")
+        params_json = json.dumps(
+            {
+                "comments": bool(use_comments),
+                "sample_rows": max(int(sample_rows), 0),
+            },
+            ensure_ascii=False,
+        )
         candidates = [
             (
                 """
@@ -605,7 +963,7 @@ class OracleNl2SqlAdapter:
                 FROM DUAL
                 """,
                 {
-                    "table_name": safe_table,
+                    "table_name": safe_table or safe_objects[0],
                     "row_count": int(row_count),
                     "profile_name": profile_name or None,
                 },
@@ -618,35 +976,65 @@ class OracleNl2SqlAdapter:
                 )
                 FROM DUAL
                 """,
-                {"table_name": safe_table, "row_count": int(row_count)},
+                {"table_name": safe_table or safe_objects[0], "row_count": int(row_count)},
             ),
         ]
         procedure_candidates: list[tuple[str, dict[str, Any]]] = []
         if profile_name.strip():
-            procedure_candidates.append(
-                (
-                    """
-                    BEGIN
-                        DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
-                            profile_name => :profile_name,
-                            object_name => :object_name,
-                            owner_name => :owner_name,
-                            record_count => :row_count,
-                            user_prompt => :user_prompt,
-                            params => :params
-                        );
-                    END;
-                    """,
-                    {
-                        "profile_name": profile_name,
-                        "object_name": safe_table,
-                        "owner_name": self.settings.oracle_user.strip().upper(),
-                        "row_count": int(row_count),
-                        "user_prompt": None,
-                        "params": "{}",
-                    },
+            if safe_objects and not safe_table:
+                procedure_candidates.append(
+                    (
+                        """
+                        BEGIN
+                            DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
+                                profile_name => :profile_name,
+                                object_list => :object_list,
+                                params => :params
+                            );
+                        END;
+                        """,
+                        {
+                            "profile_name": profile_name,
+                            "object_list": json.dumps(
+                                [
+                                    {
+                                        "owner": self.settings.oracle_user.strip().upper(),
+                                        "name": object_name,
+                                        "record_count": int(row_count),
+                                    }
+                                    for object_name in safe_objects
+                                ],
+                                ensure_ascii=False,
+                            ),
+                            "params": params_json,
+                        },
+                    )
                 )
-            )
+            else:
+                procedure_candidates.append(
+                    (
+                        """
+                        BEGIN
+                            DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
+                                profile_name => :profile_name,
+                                object_name => :object_name,
+                                owner_name => :owner_name,
+                                record_count => :row_count,
+                                user_prompt => :user_prompt,
+                                params => :params
+                            );
+                        END;
+                        """,
+                        {
+                            "profile_name": profile_name,
+                            "object_name": safe_table or safe_objects[0],
+                            "owner_name": self.settings.oracle_user.strip().upper(),
+                            "row_count": int(row_count),
+                            "user_prompt": user_prompt or None,
+                            "params": params_json,
+                        },
+                    )
+                )
         errors: list[str] = []
         with self.connection() as conn, conn.cursor() as cursor:
             for sql, params in candidates:
@@ -659,7 +1047,8 @@ class OracleNl2SqlAdapter:
                         "runtime": "oracle",
                         "package": "DBMS_CLOUD_AI",
                         "operation_id": operation_id,
-                        "table_name": safe_table,
+                        "table_name": safe_table or (safe_objects[0] if safe_objects else ""),
+                        "object_list": safe_objects,
                         "row_count": int(row_count),
                     }
                 except Exception as exc:
@@ -679,7 +1068,8 @@ class OracleNl2SqlAdapter:
                         "package": "DBMS_CLOUD_AI",
                         "mode": "procedure",
                         "operation_id": "",
-                        "table_name": safe_table,
+                        "table_name": safe_table or (safe_objects[0] if safe_objects else ""),
+                        "object_list": safe_objects,
                         "row_count": int(row_count),
                     }
                 except Exception as exc:
@@ -1473,6 +1863,67 @@ class OracleNl2SqlAdapter:
         if team_name.endswith("_TEAM"):
             return f"{team_name[: -len('_TEAM')]}_TOOL"
         return f"{team_name}_TOOL"
+
+    def _admin_statement_type(self, statement: str) -> str:
+        stripped = str(statement or "").strip()
+        while stripped.startswith("--") or stripped.startswith("/*"):
+            if stripped.startswith("--"):
+                newline = stripped.find("\n")
+                stripped = "" if newline < 0 else stripped[newline + 1 :].lstrip()
+            else:
+                end = stripped.find("*/")
+                stripped = "" if end < 0 else stripped[end + 2 :].lstrip()
+        if re.match(r"^comment\s+on\b", stripped, flags=re.IGNORECASE):
+            return "COMMENT"
+        if re.match(r"^(select|with)\b", stripped, flags=re.IGNORECASE):
+            return "SELECT"
+        if re.match(r"^(begin|declare|exec|execute)\b", stripped, flags=re.IGNORECASE):
+            return "PLSQL"
+        for keyword in (
+            "insert",
+            "update",
+            "delete",
+            "merge",
+            "create",
+            "drop",
+            "alter",
+            "truncate",
+            "grant",
+            "revoke",
+        ):
+            if re.match(rf"^{keyword}\b", stripped, flags=re.IGNORECASE):
+                return keyword.upper()
+        return "UNKNOWN"
+
+    def _normalize_admin_statement(self, statement: str) -> str:
+        stripped = str(statement or "").strip()
+        if re.match(r"^(exec|execute)\b", stripped, flags=re.IGNORECASE):
+            body = re.sub(r"^(exec|execute)\s+", "", stripped, flags=re.IGNORECASE).strip()
+            return f"BEGIN {body.rstrip(';')}; END;"
+        return stripped
+
+    def _fetch_dbms_output(self, cursor: Any, batch: int = 1000) -> str:
+        lines: list[str] = []
+        try:
+            line_var = cursor.var(str)
+            status_var = cursor.var(int)
+            for _ in range(batch):
+                cursor.callproc("dbms_output.get_line", (line_var, status_var))
+                if int(status_var.getvalue() or 0) != 0:
+                    break
+                lines.append(str(line_var.getvalue() or ""))
+        except Exception:
+            return ""
+        return "\n".join(line for line in lines if line)
+
+    def _admin_success_message(self, statement_type: str, row_count: int | None) -> str:
+        if statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
+            return f"RowsAffected={row_count if row_count is not None else 0}"
+        if statement_type == "PLSQL":
+            return "PL/SQL executed"
+        if statement_type == "COMMENT":
+            return "Comment applied"
+        return "OK"
 
     def _load_oracledb(self) -> Any:
         if self._oracledb is not None:

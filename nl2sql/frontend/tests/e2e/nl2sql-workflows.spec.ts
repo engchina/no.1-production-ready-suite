@@ -179,6 +179,28 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       timing,
     })
   );
+  await page.route("**/api/nl2sql/db-admin/tables", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      items: [
+        {
+          name: "INVOICES",
+          owner: "APP",
+          object_type: "table",
+          row_count: 2,
+          comment: "請求情報",
+        },
+      ],
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/db-admin/views", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      items: [],
+      warnings: [],
+    })
+  );
   await page.route("**/api/nl2sql/profiles", (route) => fulfillJson(route, profiles));
   await page.route("**/api/nl2sql/profiles/default", (route) => {
     if (route.request().method() === "PATCH") {
@@ -328,6 +350,24 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       recommendation_source: "classifier",
       metrics: { training_accuracy: 1 },
       warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/classifier/models", (route) =>
+    fulfillJson(route, {
+      active_version: "classifier-001",
+      models: [
+        {
+          version: "classifier-001",
+          active: true,
+          updated_at: "2026-06-21T10:00:00.000Z",
+          category_count: 2,
+          categories: ["既定プロファイル", "入金管理"],
+          embedding_model: "deterministic-hash-1536",
+          vector_dimension: 1536,
+          metrics: { training_accuracy: 1 },
+          source: "oracle_state",
+        },
+      ],
     })
   );
   await page.route("**/api/nl2sql/classifier/train", (route) =>
@@ -594,6 +634,24 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           status: "ready",
           owner: "APP",
           created_at: "2026-06-21T10:00:00.000Z",
+          attributes: {},
+        },
+      ],
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/select-ai-agent/assets", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      items: [
+        {
+          profile_id: "default",
+          profile_name: "NL2SQL_DEFAULT_PROFILE",
+          tool_name: "NL2SQL_DEFAULT_TOOL",
+          agent_name: "NL2SQL_DEFAULT_AGENT",
+          task_name: "NL2SQL_DEFAULT_TASK",
+          team_name: "NL2SQL_DEFAULT_TEAM",
+          source: "derived",
           attributes: {},
         },
       ],

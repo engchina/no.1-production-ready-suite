@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Database, Download, FileSpreadsheet, Play, RefreshCw, Wand2 } from "lucide-react";
+import { Code2, Database, Download, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Trash2, Wand2 } from "lucide-react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
@@ -14,11 +14,17 @@ import type {
   CommentApplyItem,
   CommentSuggestionData,
   CsvImportData,
+  DbAdminExecuteData,
+  DbAdminImportTabularData,
+  DbAdminObjectDetail,
+  DbAdminObjectsData,
   Nl2SqlProfile,
+  QueryResults,
   SchemaCatalog,
   SyntheticCasesData,
   SyntheticDataOperationData,
   SyntheticDataOperationStatusData,
+  SyntheticDataResultsData,
 } from "../types";
 import { CsvImportResult } from "./SettingsPages";
 
@@ -28,18 +34,42 @@ export function DataToolsPage() {
   const [profileId, setProfileId] = useState("");
   const [csvForm, setCsvForm] = useState<CsvImportFormState>(() => defaultCsvImportForm());
   const [csvResult, setCsvResult] = useState<CsvImportData | null>(null);
+  const [dbAdminTables, setDbAdminTables] = useState<DbAdminObjectsData | null>(null);
+  const [dbAdminViews, setDbAdminViews] = useState<DbAdminObjectsData | null>(null);
+  const [dbAdminDetail, setDbAdminDetail] = useState<DbAdminObjectDetail | null>(null);
+  const [dbAdminSql, setDbAdminSql] = useState("SELECT * FROM DENPYO_REGISTRATIONS FETCH FIRST 20 ROWS ONLY");
+  const [dbAdminExecute, setDbAdminExecute] = useState(false);
+  const [dbAdminConfirmation, setDbAdminConfirmation] = useState("");
+  const [dbAdminResult, setDbAdminResult] = useState<DbAdminExecuteData | null>(null);
+  const [dbAdminImportTable, setDbAdminImportTable] = useState("");
+  const [dbAdminImportFilename, setDbAdminImportFilename] = useState("");
+  const [dbAdminImportBase64, setDbAdminImportBase64] = useState("");
+  const [dbAdminImportSheet, setDbAdminImportSheet] = useState("");
+  const [dbAdminImportMode, setDbAdminImportMode] = useState("create");
+  const [dbAdminImportExecute, setDbAdminImportExecute] = useState(false);
+  const [dbAdminImportConfirmation, setDbAdminImportConfirmation] = useState("");
+  const [dbAdminImportResult, setDbAdminImportResult] = useState<DbAdminImportTabularData | null>(null);
+  const [dbAdminDropExecute, setDbAdminDropExecute] = useState(false);
+  const [dbAdminDropConfirmation, setDbAdminDropConfirmation] = useState("");
   const [comments, setComments] = useState<CommentSuggestionData | null>(null);
   const [commentApply, setCommentApply] = useState<CommentApplyData | null>(null);
   const [commentExecute, setCommentExecute] = useState(false);
+  const [commentConfirmation, setCommentConfirmation] = useState("");
   const [commentUseLlm, setCommentUseLlm] = useState(false);
   const [annotations, setAnnotations] = useState<AnnotationSuggestionData | null>(null);
   const [annotationApply, setAnnotationApply] = useState<AnnotationApplyData | null>(null);
   const [annotationExecute, setAnnotationExecute] = useState(false);
+  const [annotationConfirmation, setAnnotationConfirmation] = useState("");
   const [synthetic, setSynthetic] = useState<SyntheticCasesData | null>(null);
   const [syntheticData, setSyntheticData] = useState<SyntheticDataOperationData | null>(null);
   const [syntheticDataStatus, setSyntheticDataStatus] =
     useState<SyntheticDataOperationStatusData | null>(null);
+  const [syntheticDataResults, setSyntheticDataResults] = useState<SyntheticDataResultsData | null>(null);
   const [syntheticTable, setSyntheticTable] = useState("");
+  const [syntheticObjects, setSyntheticObjects] = useState("");
+  const [syntheticProfileName, setSyntheticProfileName] = useState("");
+  const [syntheticPrompt, setSyntheticPrompt] = useState("");
+  const [syntheticConfirmation, setSyntheticConfirmation] = useState("");
   const [syntheticRows, setSyntheticRows] = useState(10);
   const [syntheticExecute, setSyntheticExecute] = useState(false);
   const [loading, setLoading] = useState("");
@@ -54,14 +84,19 @@ export function DataToolsPage() {
     setLoading("load");
     setMessage("");
     try {
-      const [catalogData, profileData] = await Promise.all([
+      const [catalogData, profileData, adminTables, adminViews] = await Promise.all([
         apiGet<SchemaCatalog>("/api/schema/catalog"),
         apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
+        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"),
+        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
       ]);
       setCatalog(catalogData);
       setProfiles(profileData);
+      setDbAdminTables(adminTables);
+      setDbAdminViews(adminViews);
       setProfileId((current) => current || profileData[0]?.id || "");
-      setSyntheticTable((current) => current || catalogData.tables[0]?.table_name || "");
+      setSyntheticTable((current) => current || adminTables.items[0]?.name || catalogData.tables[0]?.table_name || "");
+      setDbAdminImportTable((current) => current || `NL2SQL_IMPORT_${Date.now()}`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.load"));
     } finally {
@@ -89,6 +124,98 @@ export function DataToolsPage() {
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.csv"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const loadDbAdminObject = async (name: string, objectType: "tables" | "views") => {
+    setLoading(`db-admin-detail-${name}`);
+    setMessage("");
+    try {
+      setDbAdminDetail(
+        await apiGet<DbAdminObjectDetail>(
+          `/api/nl2sql/db-admin/${objectType}/${encodeURIComponent(name)}`
+        )
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("dataTools.error.dbAdmin"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const runDbAdminSql = async () => {
+    if (!dbAdminSql.trim()) return;
+    setLoading("db-admin-sql");
+    setMessage("");
+    try {
+      setDbAdminResult(
+        await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/execute", {
+          sql: dbAdminSql,
+          execute: dbAdminExecute,
+          confirmation: dbAdminExecute ? dbAdminConfirmation : "",
+          reason: "ui-db-admin",
+        })
+      );
+      if (dbAdminExecute) {
+        setDbAdminTables(await apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"));
+      }
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("dataTools.error.dbAdmin"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const dropDbAdminTable = async (tableName: string) => {
+    setLoading(`db-admin-drop-${tableName}`);
+    setMessage("");
+    try {
+      setDbAdminResult(
+        await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/drop-table", {
+          table_name: tableName,
+          execute: dbAdminDropExecute,
+          confirmation: dbAdminDropExecute ? dbAdminDropConfirmation : "",
+          reason: "ui-db-admin-drop",
+        })
+      );
+      setDbAdminTables(await apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("dataTools.error.dbAdmin"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const importDbAdminFile = async (file: File | undefined) => {
+    if (!file) return;
+    setDbAdminImportFilename(file.name);
+    setDbAdminImportBase64(await fileToBase64(file));
+  };
+
+  const importDbAdminTabular = async () => {
+    if (!dbAdminImportTable.trim() || !dbAdminImportBase64) return;
+    setLoading("db-admin-import");
+    setMessage("");
+    try {
+      setDbAdminImportResult(
+        await apiPost<DbAdminImportTabularData>("/api/nl2sql/db-admin/import-tabular", {
+          table_name: dbAdminImportTable,
+          filename: dbAdminImportFilename || "upload.csv",
+          content_base64: dbAdminImportBase64,
+          sheet_name: dbAdminImportSheet,
+          mode: dbAdminImportMode,
+          execute: dbAdminImportExecute,
+          confirmation: dbAdminImportExecute ? dbAdminImportConfirmation : "",
+          reason: "ui-db-admin-import",
+        })
+      );
+      if (dbAdminImportExecute) {
+        setDbAdminTables(await apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/tables"));
+      }
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("dataTools.error.dbAdminImport"));
     } finally {
       setLoading("");
     }
@@ -139,6 +266,8 @@ export function DataToolsPage() {
       const result = await apiPost<CommentApplyData>("/api/nl2sql/comments/apply", {
         items: buildCommentItems(catalog, comments),
         execute: commentExecute,
+        confirmation: commentExecute ? commentConfirmation : "",
+        reason: "ui-comment-apply",
       });
       setCommentApply(result);
       if (result.executed) {
@@ -172,6 +301,8 @@ export function DataToolsPage() {
         await apiPost<AnnotationApplyData>("/api/nl2sql/annotations/apply", {
           items: buildAnnotationItems(annotations),
           execute: annotationExecute,
+          confirmation: annotationExecute ? annotationConfirmation : "",
+          reason: "ui-annotation-apply",
         })
       );
     } catch (err) {
@@ -189,8 +320,14 @@ export function DataToolsPage() {
       setSyntheticData(
         await apiPost<SyntheticDataOperationData>("/api/nl2sql/synthetic-data/generate", {
           table_name: syntheticTable,
+          object_list: splitObjectList(syntheticObjects),
           row_count: syntheticRows,
+          rows_per_table: syntheticRows,
+          profile_name: syntheticProfileName,
+          user_prompt: syntheticPrompt,
           execute: syntheticExecute,
+          confirmation: syntheticExecute ? syntheticConfirmation : "",
+          reason: "ui-synthetic-data",
         })
       );
     } catch (err) {
@@ -213,6 +350,24 @@ export function DataToolsPage() {
       );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.syntheticStatus"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const loadSyntheticDataResults = async () => {
+    const tableName = syntheticTable.trim();
+    if (!tableName) return;
+    setLoading("synthetic-results");
+    setMessage("");
+    try {
+      setSyntheticDataResults(
+        await apiGet<SyntheticDataResultsData>(
+          `/api/nl2sql/synthetic-data/results?table_name=${encodeURIComponent(tableName)}&limit=20`
+        )
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("dataTools.error.syntheticResults"));
     } finally {
       setLoading("");
     }
@@ -245,6 +400,251 @@ export function DataToolsPage() {
           />
           <Metric label={t("dataTools.metric.profiles")} value={String(profiles.length)} />
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Table2 size={18} aria-hidden="true" />
+              {t("dataTools.dbAdmin.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <section className="grid content-start gap-3">
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge variant="neutral" label={dbAdminTables?.runtime ?? "deterministic"} />
+                <StatusBadge variant="neutral" label={`${dbAdminTables?.items.length ?? 0} tables`} />
+                <StatusBadge variant="neutral" label={`${dbAdminViews?.items.length ?? 0} views`} />
+              </div>
+              <label className="grid gap-1 text-sm font-medium text-slate-800">
+                <span>{t("dataTools.dbAdmin.dropConfirmation")}</span>
+                <input
+                  value={dbAdminDropConfirmation}
+                  onChange={(event) => setDbAdminDropConfirmation(event.currentTarget.value)}
+                  className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  placeholder="TABLE_NAME / ADMIN_EXECUTE"
+                />
+              </label>
+              <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={dbAdminDropExecute}
+                  onChange={(event) => setDbAdminDropExecute(event.currentTarget.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
+                />
+                <span>{t("dataTools.dbAdmin.dropExecute")}</span>
+              </label>
+              <div className="grid max-h-96 gap-2 overflow-auto pr-1">
+                {(dbAdminTables?.items ?? []).slice(0, 30).map((item) => (
+                  <section key={item.name} className="rounded-md border border-slate-200 p-3 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        className="break-all text-left font-mono text-xs font-semibold text-sky-800 underline-offset-2 hover:underline"
+                        onClick={() => void loadDbAdminObject(item.name, "tables")}
+                      >
+                        {item.name}
+                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          loading={loading === `db-admin-detail-${item.name}`}
+                          onClick={() => void loadDbAdminObject(item.name, "tables")}
+                        >
+                          <Eye size={15} aria-hidden="true" />
+                          <span>{t("dataTools.dbAdmin.detail")}</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => window.open(`/api/nl2sql/db-admin/tables/${encodeURIComponent(item.name)}/export.xlsx`, "_blank", "noopener,noreferrer")}
+                        >
+                          <Download size={15} aria-hidden="true" />
+                          <span>{t("dataTools.dbAdmin.export")}</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={dbAdminDropExecute ? "danger" : "secondary"}
+                          size="sm"
+                          loading={loading === `db-admin-drop-${item.name}`}
+                          onClick={() => void dropDbAdminTable(item.name)}
+                        >
+                          <Trash2 size={15} aria-hidden="true" />
+                          <span>{dbAdminDropExecute ? t("dataTools.dbAdmin.drop") : t("dataTools.dbAdmin.dropDryRun")}</span>
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">
+                      {item.comment || "-"} / rows: {item.row_count ?? "-"}
+                    </p>
+                  </section>
+                ))}
+                {(dbAdminViews?.items ?? []).slice(0, 12).map((item) => (
+                  <button
+                    key={item.name}
+                    type="button"
+                    className="rounded-md border border-slate-200 bg-slate-50 p-3 text-left text-sm"
+                    onClick={() => void loadDbAdminObject(item.name, "views")}
+                  >
+                    <span className="break-all font-mono text-xs font-semibold text-slate-800">{item.name}</span>
+                    <span className="ml-2 text-xs text-slate-500">VIEW</span>
+                  </button>
+                ))}
+              </div>
+              {dbAdminDetail && (
+                <section className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="break-all font-mono text-xs font-semibold text-slate-900">{dbAdminDetail.name}</p>
+                    <StatusBadge variant="neutral" label={dbAdminDetail.object_type} />
+                  </div>
+                  <p className="text-slate-700">{dbAdminDetail.comment || "-"}</p>
+                  <pre className="max-h-52 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-xs leading-5 text-slate-50">
+                    <code>{dbAdminDetail.ddl || "-"}</code>
+                  </pre>
+                </section>
+              )}
+            </section>
+
+            <section className="grid content-start gap-4">
+              <div className="grid gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="font-semibold text-slate-900">{t("dataTools.dbAdmin.sqlTitle")}</p>
+                  <Button
+                    type="button"
+                    variant={dbAdminExecute ? "danger" : "secondary"}
+                    size="sm"
+                    loading={loading === "db-admin-sql"}
+                    disabled={!dbAdminSql.trim()}
+                    onClick={() => void runDbAdminSql()}
+                  >
+                    <Code2 size={15} aria-hidden="true" />
+                    <span>{dbAdminExecute ? t("dataTools.dbAdmin.execute") : t("dataTools.dbAdmin.dryRun")}</span>
+                  </Button>
+                </div>
+                <textarea
+                  value={dbAdminSql}
+                  onChange={(event) => setDbAdminSql(event.currentTarget.value)}
+                  rows={7}
+                  className="min-h-44 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+                    <input
+                      type="checkbox"
+                      checked={dbAdminExecute}
+                      onChange={(event) => setDbAdminExecute(event.currentTarget.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
+                    />
+                    <span>{t("dataTools.dbAdmin.sqlExecute")}</span>
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.dbAdmin.confirmation")}</span>
+                    <input
+                      value={dbAdminConfirmation}
+                      onChange={(event) => setDbAdminConfirmation(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                      placeholder="ADMIN_EXECUTE"
+                    />
+                  </label>
+                </div>
+                {dbAdminResult && <DbAdminExecutionResult result={dbAdminResult} />}
+              </div>
+
+              <div className="grid gap-3 border-t border-slate-200 pt-4">
+                <p className="font-semibold text-slate-900">{t("dataTools.dbAdmin.importTitle")}</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("settings.database.import.tableName")}</span>
+                    <input
+                      value={dbAdminImportTable}
+                      onChange={(event) => setDbAdminImportTable(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.dbAdmin.mode")}</span>
+                    <select
+                      value={dbAdminImportMode}
+                      onChange={(event) => setDbAdminImportMode(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    >
+                      {["create", "append", "replace", "truncate"].map((mode) => (
+                        <option key={mode} value={mode}>{mode}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.dbAdmin.sheet")}</span>
+                    <input
+                      value={dbAdminImportSheet}
+                      onChange={(event) => setDbAdminImportSheet(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.dbAdmin.confirmation")}</span>
+                    <input
+                      value={dbAdminImportConfirmation}
+                      onChange={(event) => setDbAdminImportConfirmation(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                      placeholder="TABLE_NAME / ADMIN_EXECUTE"
+                    />
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-sky-200">
+                    <FileSpreadsheet size={15} aria-hidden="true" />
+                    <span>{dbAdminImportFilename || t("dataTools.dbAdmin.file")}</span>
+                    <input
+                      className="sr-only"
+                      type="file"
+                      accept=".csv,.txt,.xlsx,.xlsm"
+                      onChange={(event) => void importDbAdminFile(event.currentTarget.files?.[0])}
+                    />
+                  </label>
+                  <label className="flex min-h-9 items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-800">
+                    <input
+                      type="checkbox"
+                      checked={dbAdminImportExecute}
+                      onChange={(event) => setDbAdminImportExecute(event.currentTarget.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
+                    />
+                    <span>{t("dataTools.dbAdmin.importExecute")}</span>
+                  </label>
+                  <Button
+                    type="button"
+                    variant={dbAdminImportExecute ? "danger" : "secondary"}
+                    size="sm"
+                    loading={loading === "db-admin-import"}
+                    disabled={!dbAdminImportBase64 || !dbAdminImportTable.trim()}
+                    onClick={() => void importDbAdminTabular()}
+                  >
+                    <FileSpreadsheet size={15} aria-hidden="true" />
+                    <span>{dbAdminImportExecute ? t("dataTools.dbAdmin.import") : t("dataTools.dbAdmin.importDryRun")}</span>
+                  </Button>
+                </div>
+                {dbAdminImportResult && (
+                  <CsvImportResult
+                    result={{
+                      table_name: dbAdminImportResult.table_name,
+                      columns: dbAdminImportResult.columns,
+                      row_count: dbAdminImportResult.row_count,
+                      dry_run: dbAdminImportResult.dry_run,
+                      executed: dbAdminImportResult.executed,
+                      ddl: dbAdminImportResult.ddl,
+                      insert_sql: dbAdminImportResult.insert_sql,
+                      warnings: dbAdminImportResult.warnings,
+                      sample_rows: dbAdminImportResult.sample_rows,
+                      timing: dbAdminImportResult.timing,
+                    }}
+                  />
+                )}
+              </div>
+            </section>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -393,6 +793,17 @@ export function DataToolsPage() {
                 />
                 <span>{t("dataTools.comments.execute")}</span>
               </label>
+              {commentExecute && (
+                <label className="grid gap-1 text-sm font-medium text-slate-800">
+                  <span>{t("dataTools.confirmation")}</span>
+                  <input
+                    value={commentConfirmation}
+                    onChange={(event) => setCommentConfirmation(event.currentTarget.value)}
+                    className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    placeholder="ADMIN_EXECUTE"
+                  />
+                </label>
+              )}
               {comments && comments.suggestions.length > 0 ? (
                 comments.suggestions.slice(0, 12).map((item) => (
                   <section
@@ -504,6 +915,17 @@ export function DataToolsPage() {
                   />
                   <span>{t("dataTools.annotations.execute")}</span>
                 </label>
+                {annotationExecute && (
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.confirmation")}</span>
+                    <input
+                      value={annotationConfirmation}
+                      onChange={(event) => setAnnotationConfirmation(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                      placeholder="ADMIN_EXECUTE"
+                    />
+                  </label>
+                )}
                 <textarea
                   readOnly
                   value={annotationDdl || t("dataTools.annotations.empty")}
@@ -616,6 +1038,43 @@ export function DataToolsPage() {
                     />
                   </label>
                 </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.syntheticData.objects")}</span>
+                    <textarea
+                      value={syntheticObjects}
+                      onChange={(event) => setSyntheticObjects(event.currentTarget.value)}
+                      rows={3}
+                      className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.syntheticData.prompt")}</span>
+                    <textarea
+                      value={syntheticPrompt}
+                      onChange={(event) => setSyntheticPrompt(event.currentTarget.value)}
+                      rows={3}
+                      className="min-h-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.syntheticData.profileName")}</span>
+                    <input
+                      value={syntheticProfileName}
+                      onChange={(event) => setSyntheticProfileName(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("dataTools.confirmation")}</span>
+                    <input
+                      value={syntheticConfirmation}
+                      onChange={(event) => setSyntheticConfirmation(event.currentTarget.value)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                      placeholder="TABLE_NAME / ADMIN_EXECUTE"
+                    />
+                  </label>
+                </div>
                 <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
                   <input
                     type="checkbox"
@@ -652,6 +1111,17 @@ export function DataToolsPage() {
                     <RefreshCw size={15} aria-hidden="true" />
                     <span>{t("dataTools.syntheticData.status")}</span>
                   </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    loading={loading === "synthetic-results"}
+                    disabled={!syntheticTable}
+                    onClick={() => void loadSyntheticDataResults()}
+                  >
+                    <Eye size={15} aria-hidden="true" />
+                    <span>{t("dataTools.syntheticData.results")}</span>
+                  </Button>
                 </div>
                 {syntheticData && (
                   <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
@@ -673,6 +1143,9 @@ export function DataToolsPage() {
                     <p className="font-semibold text-slate-900">{syntheticDataStatus.status}</p>
                     <p className="mt-1 text-slate-700">{syntheticDataStatus.message || "-"}</p>
                   </div>
+                )}
+                {syntheticDataResults && (
+                  <QueryResultsTable results={syntheticDataResults.results} />
                 )}
               </section>
             </CardContent>
@@ -759,6 +1232,98 @@ function buildAnnotationItems(annotations: AnnotationSuggestionData): Annotation
     annotation_name: item.annotation_name,
     annotation_value: item.annotation_value,
   }));
+}
+
+function splitObjectList(value: string) {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function fileToBase64(file: File) {
+  const buffer = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return btoa(binary);
+}
+
+function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData }) {
+  return (
+    <section className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "dry-run"} />
+        <StatusBadge variant="neutral" label={result.runtime} />
+        {result.committed && <StatusBadge variant="success" label="committed" />}
+        {result.rolled_back && <StatusBadge variant="danger" label="rolled back" />}
+      </div>
+      {result.warnings.map((warning) => (
+        <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
+          {warning}
+        </p>
+      ))}
+      {result.select_result && <QueryResultsTable results={result.select_result} />}
+      <div className="grid gap-2">
+        {result.statements.map((statement) => (
+          <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-white p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge variant="neutral" label={statement.statement_type} />
+                <StatusBadge
+                  variant={statement.status === "success" || statement.status === "executed" ? "success" : statement.status === "error" ? "danger" : "neutral"}
+                  label={statement.status}
+                />
+              </div>
+              <span className="text-xs text-slate-500">{statement.elapsed_ms}ms</span>
+            </div>
+            <code className="mt-2 block break-words text-xs text-slate-700">{statement.sql}</code>
+            {statement.error_message && (
+              <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
+                {statement.error_message}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function QueryResultsTable({ results }: { results: QueryResults }) {
+  return (
+    <div className="overflow-auto rounded-md border border-slate-200 bg-white">
+      <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+        <thead className="bg-slate-50 text-slate-600">
+          <tr>
+            {results.columns.map((column) => (
+              <th key={column} className="px-3 py-2 font-semibold">{column}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 text-slate-800">
+          {results.rows.slice(0, 20).map((row, index) => (
+            <tr key={index}>
+              {results.columns.map((column) => (
+                <td key={column} className="max-w-56 break-words px-3 py-2">
+                  {String(row[column] ?? "")}
+                </td>
+              ))}
+            </tr>
+          ))}
+          {results.rows.length === 0 && (
+            <tr>
+              <td className="px-3 py-4 text-slate-500" colSpan={Math.max(results.columns.length, 1)}>
+                0 rows
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function downloadText(filename: string, text: string) {

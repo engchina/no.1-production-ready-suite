@@ -856,8 +856,28 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
         assert execute_apply_resp.status_code == 200
         execute_apply_data = execute_apply_resp.json()["data"]
         assert execute_apply_data["executed"] is False
-        assert execute_apply_data["statements"][0]["status"] == "requires_oracle"
-        assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(execute_apply_data["warnings"])
+        assert execute_apply_data["statements"][0]["status"] == "confirmation_required"
+        assert "confirmation" in " ".join(execute_apply_data["warnings"]).lower()
+
+        confirmed_apply_resp = await client.post(
+            "/api/nl2sql/comments/apply",
+            json={
+                "items": [
+                    {
+                        "object_name": "INVOICES.TOTAL_AMOUNT",
+                        "object_type": "column",
+                        "comment": "税込請求金額",
+                    }
+                ],
+                "execute": True,
+                "confirmation": "ADMIN_EXECUTE",
+            },
+        )
+        assert confirmed_apply_resp.status_code == 200
+        confirmed_apply_data = confirmed_apply_resp.json()["data"]
+        assert confirmed_apply_data["executed"] is False
+        assert confirmed_apply_data["statements"][0]["status"] == "requires_oracle"
+        assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(confirmed_apply_data["warnings"])
 
         synthetic_resp = await client.post("/api/nl2sql/synthetic-cases")
         assert synthetic_resp.status_code == 200
@@ -1575,6 +1595,7 @@ def test_service_cleanup_assets_executes_oracle_drops_when_confirmed() -> None:
         profile_id=None,
         engines=[Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT],
         execute=True,
+        confirmation="ADMIN_EXECUTE",
     )
 
     assert [item.status for item in cleanup] == ["cleaned", "cleaned"]

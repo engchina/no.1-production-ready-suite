@@ -14,11 +14,13 @@ from app.features.nl2sql.models import (
     ClassifierPredictRequest,
     ClassifierTrainRequest,
     CommentSuggestionRequest,
+    DbAdminExecuteRequest,
     Nl2SqlEngine,
     Nl2SqlProfile,
     ProfileRecommendationRequest,
     ReverseSqlRequest,
     RewriteRequest,
+    SelectAiDbProfileUpsertRequest,
     SyntheticDataGenerateRequest,
 )
 from app.features.nl2sql.service import Nl2SqlService
@@ -97,6 +99,69 @@ def test_classifier_training_predicts_and_drives_profile_recommendation() -> Non
     assert recommendation.recommendation_source == "classifier"
     assert recommendation.classifier_version
     assert recommendation.category_scores
+
+    models = service.list_classifier_models()
+    assert models.active_version == status.classifier_version
+    assert models.models
+
+    activated = service.activate_classifier_model(status.classifier_version)
+    assert activated.active_version == status.classifier_version
+
+    deleted = service.delete_classifier_model(status.classifier_version)
+    assert deleted.active_version == ""
+
+
+def test_db_admin_executor_requires_confirmation_for_non_select() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    selected = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=3)
+    )
+    assert selected.executed is True
+    assert selected.select_result is not None
+    assert selected.statements[0].statement_type == "SELECT"
+
+    dry_run = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(sql="COMMENT ON TABLE \"INVOICES\" IS '請求';")
+    )
+    assert dry_run.executed is False
+    assert dry_run.statements[0].status == "dry_run"
+
+    blocked = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="COMMENT ON TABLE \"INVOICES\" IS '請求';",
+            execute=True,
+        )
+    )
+    assert blocked.executed is False
+    assert blocked.statements[0].status == "confirmation_required"
+
+
+def test_select_ai_profile_json_and_synthetic_object_list_dry_run() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    profile = service.upsert_select_ai_db_profile(
+        SelectAiDbProfileUpsertRequest(
+            profile_name="LOW_LEVEL_PROFILE",
+            attributes={"object_list": [{"owner": "APP", "name": "INVOICES"}]},
+            description="low level",
+            category="test",
+        )
+    )
+    assert profile.status == "dry_run"
+    assert profile.profile is not None
+    assert profile.profile.attributes["object_list"][0]["name"] == "INVOICES"
+
+    synthetic = service.generate_synthetic_data(
+        SyntheticDataGenerateRequest(
+            object_list=["INVOICES", "CUSTOMERS"],
+            rows_per_table=5,
+            profile_name="LOW_LEVEL_PROFILE",
+        )
+    )
+    assert synthetic.executed is False
+    assert synthetic.object_list == ["INVOICES", "CUSTOMERS"]
+    assert synthetic.row_count == 5
 
 
 def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> None:
@@ -259,9 +324,16 @@ def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
 
     captured: dict[str, object] = {}
 
-    def fake_drop(profile_name: str, execute: bool) -> AssetCleanupData:
+    def fake_drop(
+        profile_name: str,
+        execute: bool,
+        confirmation: str = "",
+        reason: str = "",
+    ) -> AssetCleanupData:
         captured["profile_name"] = profile_name
         captured["execute"] = execute
+        captured["confirmation"] = confirmation
+        captured["reason"] = reason
         return AssetCleanupData(
             engine=Nl2SqlEngine.SELECT_AI,
             executed=execute,
@@ -278,12 +350,21 @@ def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
     )
     executed = client.post(
         "/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE/drop",
-        json={"execute": True},
+        json={
+            "execute": True,
+            "confirmation": "NL2SQL_DEFAULT_PROFILE",
+            "reason": "test",
+        },
     )
 
     assert executed.status_code == 200
     assert executed.json()["data"]["status"] == "cleaned"
-    assert captured == {"profile_name": "NL2SQL_DEFAULT_PROFILE", "execute": True}
+    assert captured == {
+        "profile_name": "NL2SQL_DEFAULT_PROFILE",
+        "execute": True,
+        "confirmation": "NL2SQL_DEFAULT_PROFILE",
+        "reason": "test",
+    }
 
 
 def test_comment_llm_and_agent_privilege_checks_fallback_without_oracle() -> None:

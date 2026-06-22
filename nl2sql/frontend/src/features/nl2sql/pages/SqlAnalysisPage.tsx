@@ -12,6 +12,7 @@ import type { AnalyzeData, QueryResults, RepairData, ReverseSqlData } from "../t
 export function SqlAnalysisPage() {
   const [analysisSql, setAnalysisSql] = useState(DEFAULT_ANALYZE_SQL);
   const [analysisRowLimit, setAnalysisRowLimit] = useState(100);
+  const [analysisUseLlm, setAnalysisUseLlm] = useState(false);
   const [analysis, setAnalysis] = useState<AnalyzeData | null>(null);
   const [execution, setExecution] = useState<QueryResults | null>(null);
   const [repairSql, setRepairSql] = useState("SELECT BAD_COLUMN FROM INVOICES");
@@ -32,7 +33,12 @@ export function SqlAnalysisPage() {
     setMessage("");
     setExecution(null);
     try {
-      setAnalysis(await apiPost<AnalyzeData>("/api/nl2sql/analyze", sqlAnalyzePayload(sql, analysisRowLimit)));
+      setAnalysis(
+        await apiPost<AnalyzeData>("/api/nl2sql/analyze", {
+          ...sqlAnalyzePayload(sql, analysisRowLimit),
+          use_llm: analysisUseLlm,
+        })
+      );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("sqlAnalysis.error.analyze"));
     } finally {
@@ -149,6 +155,15 @@ export function SqlAnalysisPage() {
                   />
                 </label>
                 <div className="flex flex-wrap gap-2">
+                  <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-800">
+                    <input
+                      type="checkbox"
+                      checked={analysisUseLlm}
+                      onChange={(event) => setAnalysisUseLlm(event.currentTarget.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+                    />
+                    <span>{t("sqlAnalysis.useLlm")}</span>
+                  </label>
                   <Button
                     type="button"
                     loading={analysisLoading}
@@ -324,6 +339,8 @@ function AnalysisResult({ analysis }: { analysis: AnalyzeData | null }) {
           variant="neutral"
           label={t("sqlAnalysis.rowLimit", { count: analysis.safety.row_limit_applied })}
         />
+        <StatusBadge variant={analysis.llm_enhanced ? "success" : "neutral"} label={analysis.llm_enhanced ? "OCI Enterprise AI" : "deterministic"} />
+        {analysis.risk_level && <StatusBadge variant={analysis.risk_level === "high" ? "danger" : analysis.risk_level === "medium" ? "warning" : "success"} label={analysis.risk_level} />}
       </div>
       <p className="text-slate-700">{analysis.explanation}</p>
       {analysis.safety.blocked_reason && (
@@ -339,20 +356,29 @@ function AnalysisResult({ analysis }: { analysis: AnalyzeData | null }) {
       )}
       <TextList label={t("sqlAnalysis.recommendations")} items={analysis.recommendations} />
       <TextList label={t("sqlAnalysis.optimization")} items={analysis.optimization_hints} />
+      <TextList label={t("sqlAnalysis.riskFindings")} items={analysis.risk_findings ?? []} />
+      <TextList label={t("sqlAnalysis.repairCandidates")} items={analysis.repair_candidates ?? []} />
       <TextList label={t("sqlAnalysis.operations")} items={analysis.operations ?? []} />
-      <TextList label={t("sqlAnalysis.filters")} items={analysis.filters ?? []} />
+      <TextList label={t("sqlAnalysis.filters")} items={analysis.conditions ?? analysis.filters ?? []} />
+      <TextList label={t("sqlAnalysis.groupBy")} items={analysis.group_by ?? []} />
+      <TextList label={t("sqlAnalysis.orderBy")} items={analysis.order_by ?? []} />
       <TextList label={t("sqlAnalysis.joins")} items={analysis.joins ?? []} />
       <TextList label={t("sqlAnalysis.aggregations")} items={analysis.aggregations ?? []} />
       <div className="grid gap-3 sm:grid-cols-2">
         <CompactFact
+          label={t("sqlAnalysis.statementType")}
+          value={analysis.statement_type || "-"}
+        />
+        <CompactFact
           label={t("sqlAnalysis.referencedTables")}
-          value={analysis.safety.referenced_tables.join(", ") || "-"}
+          value={(analysis.object_names ?? analysis.safety.referenced_tables).join(", ") || "-"}
         />
         <CompactFact
           label={t("sqlAnalysis.referencedColumns")}
-          value={analysis.safety.referenced_columns.join(", ") || "-"}
+          value={(analysis.column_names ?? analysis.safety.referenced_columns).join(", ") || "-"}
         />
       </div>
+      <TextList label={t("sqlAnalysis.warnings")} items={analysis.llm_warnings ?? []} />
     </section>
   );
 }

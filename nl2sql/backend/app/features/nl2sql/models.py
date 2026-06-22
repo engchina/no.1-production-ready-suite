@@ -155,6 +155,99 @@ class QueryResults(BaseModel):
     total: int
 
 
+class AdminExecutionConfirmation(BaseModel):
+    """Common confirmation fields for admin/destructive operations."""
+
+    execute: bool = False
+    confirmation: str = ""
+    reason: str = ""
+
+
+class DbAdminObjectSummary(BaseModel):
+    """Database admin table/view summary."""
+
+    name: str
+    owner: str = ""
+    object_type: str = "table"
+    row_count: int | None = None
+    comment: str = ""
+
+
+class DbAdminObjectDetail(BaseModel):
+    """Database admin table/view detail with columns and DDL."""
+
+    name: str
+    owner: str = ""
+    object_type: str = "table"
+    row_count: int | None = None
+    comment: str = ""
+    columns: list[SchemaColumn] = Field(default_factory=list)
+    ddl: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminObjectsData(BaseModel):
+    """Database admin object list response."""
+
+    runtime: str = "deterministic"
+    items: list[DbAdminObjectSummary] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminDropTableRequest(AdminExecutionConfirmation):
+    """Drop table dry-run / execution request."""
+
+    table_name: str = Field(min_length=1)
+    purge: bool = True
+
+
+class DbAdminStatementResult(BaseModel):
+    """One admin SQL statement execution result."""
+
+    index: int
+    statement_type: str
+    status: str
+    sql: str = ""
+    row_count: int | None = None
+    message: str = ""
+    elapsed_ms: int = 0
+    error_message: str = ""
+
+
+class DbAdminExecuteRequest(AdminExecutionConfirmation):
+    """Admin SQL executor request.
+
+    This intentionally lives outside the normal SELECT-only NL2SQL query path.
+    """
+
+    sql: str = Field(min_length=1)
+    row_limit: int = Field(default=100, ge=1, le=5000)
+
+
+class DbAdminExecuteData(BaseModel):
+    """Admin SQL executor response."""
+
+    executed: bool = False
+    runtime: str = "deterministic"
+    select_result: QueryResults | None = None
+    statements: list[DbAdminStatementResult] = Field(default_factory=list)
+    committed: bool = False
+    rolled_back: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class DbAdminImportTabularRequest(AdminExecutionConfirmation):
+    """CSV/XLSX tabular import dry-run / execution request."""
+
+    table_name: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1)
+    filename: str = "upload.csv"
+    sheet_name: str = ""
+    mode: str = "create"
+    max_rows: int | None = Field(default=None, ge=1, le=50000)
+
+
 class Nl2SqlResult(BaseModel):
     """NL2SQL job result."""
 
@@ -463,6 +556,44 @@ class ClassifierStatusData(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ClassifierModelInfo(BaseModel):
+    """Persisted classifier model version metadata."""
+
+    version: str
+    active: bool = False
+    updated_at: str = ""
+    category_count: int = 0
+    categories: list[str] = Field(default_factory=list)
+    embedding_model: str = ""
+    vector_dimension: int = 1536
+    metrics: dict[str, float | int | str] = Field(default_factory=dict)
+    source: str = "oracle_state"
+
+
+class ClassifierModelsData(BaseModel):
+    """Classifier model registry response."""
+
+    active_version: str = ""
+    models: list[ClassifierModelInfo] = Field(default_factory=list)
+
+
+class ClassifierModelImportData(BaseModel):
+    """Legacy joblib/meta classifier artifact import response."""
+
+    imported: bool = False
+    active_version: str = ""
+    model: ClassifierModelInfo | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ClassifierModelActivateData(BaseModel):
+    """Classifier model activation response."""
+
+    active_version: str = ""
+    model: ClassifierModelInfo | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ClassifierTrainRequest(BaseModel):
     """Train LogisticRegression classifier from imported examples."""
 
@@ -522,6 +653,7 @@ class AnalyzeRequest(BaseModel):
     sql: str = Field(min_length=1)
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
+    use_llm: bool = False
 
 
 class AnalyzeData(BaseModel):
@@ -535,6 +667,14 @@ class AnalyzeData(BaseModel):
     optimization_hints: list[str] = Field(default_factory=list)
     structure_summary: str = ""
     risk_level: str = "low"
+    statement_type: str = "SELECT"
+    object_names: list[str] = Field(default_factory=list)
+    column_names: list[str] = Field(default_factory=list)
+    conditions: list[str] = Field(default_factory=list)
+    group_by: list[str] = Field(default_factory=list)
+    order_by: list[str] = Field(default_factory=list)
+    risk_findings: list[str] = Field(default_factory=list)
+    repair_candidates: list[str] = Field(default_factory=list)
     operations: list[str] = Field(default_factory=list)
     filters: list[str] = Field(default_factory=list)
     joins: list[str] = Field(default_factory=list)
@@ -626,6 +766,8 @@ class AssetCleanupRequest(BaseModel):
         default_factory=lambda: [Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI]
     )
     execute: bool = False
+    confirmation: str = ""
+    reason: str = ""
 
 
 class SelectAiDbProfile(BaseModel):
@@ -635,6 +777,11 @@ class SelectAiDbProfile(BaseModel):
     status: str = "unknown"
     owner: str = ""
     created_at: str = ""
+    description: str = ""
+    category: str = ""
+    object_list: list[dict[str, Any]] = Field(default_factory=list)
+    schema_text: str = ""
+    context_ddl: str = ""
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -650,6 +797,54 @@ class SelectAiDbProfileDropRequest(BaseModel):
     """Drop an Oracle Select AI profile by exact profile name."""
 
     execute: bool = False
+    confirmation: str = ""
+    reason: str = ""
+
+
+class SelectAiDbProfileDetailData(BaseModel):
+    """Oracle Select AI profile detail response."""
+
+    runtime: str = "deterministic"
+    profile: SelectAiDbProfile
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SelectAiDbProfileUpsertRequest(AdminExecutionConfirmation):
+    """Create/update an Oracle Select AI profile from low-level attributes JSON."""
+
+    profile_name: str = Field(min_length=1)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    description: str = ""
+    category: str = ""
+    original_name: str = ""
+
+
+class SelectAiDbProfileMutationData(BaseModel):
+    """Oracle Select AI profile create/update/import/export mutation response."""
+
+    runtime: str = "deterministic"
+    executed: bool = False
+    status: str = "dry_run"
+    profile_name: str = ""
+    original_name: str = ""
+    ddl: list[str] = Field(default_factory=list)
+    profile: SelectAiDbProfile | None = None
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectAiProfilesExportData(BaseModel):
+    """Select AI profiles JSON export response."""
+
+    profiles: list[SelectAiDbProfile] = Field(default_factory=list)
+    exported_at: str = ""
+
+
+class SelectAiProfilesImportRequest(AdminExecutionConfirmation):
+    """Import Select AI profile JSON definitions."""
+
+    profiles: list[SelectAiDbProfile] = Field(default_factory=list)
+    replace_existing: bool = False
 
 
 class AgentTeamRunRequest(BaseModel):
@@ -658,6 +853,8 @@ class AgentTeamRunRequest(BaseModel):
     prompt: str = Field(min_length=1)
     team_name: str = ""
     profile_id: str | None = None
+    conversation_id: str = ""
+    tool_name: str = ""
 
 
 class AgentTeamRunData(BaseModel):
@@ -670,6 +867,50 @@ class AgentTeamRunData(BaseModel):
     runtime: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
     engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectAiAgentAsset(BaseModel):
+    """Select AI Agent asset names and attributes."""
+
+    profile_id: str = ""
+    profile_name: str = ""
+    tool_name: str = ""
+    agent_name: str = ""
+    task_name: str = ""
+    team_name: str = ""
+    source: str = "state"
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectAiAgentAssetsData(BaseModel):
+    """Select AI Agent assets response."""
+
+    runtime: str = "deterministic"
+    items: list[SelectAiAgentAsset] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AgentToolRunRequest(BaseModel):
+    """Select AI Agent tool run request."""
+
+    prompt: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    conversation_id: str = ""
+
+
+class AgentConversationCreateRequest(BaseModel):
+    """Create Select AI Agent conversation request."""
+
+    profile_id: str | None = None
+    team_name: str = ""
+
+
+class AgentConversationCreateData(BaseModel):
+    """Create Select AI Agent conversation response."""
+
+    conversation_id: str = ""
+    runtime: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AgentConversationItem(BaseModel):
@@ -849,6 +1090,8 @@ class CommentApplyRequest(BaseModel):
 
     items: list[CommentApplyItem] = Field(default_factory=list)
     execute: bool = False
+    confirmation: str = ""
+    reason: str = ""
 
 
 class CommentApplyStatement(BaseModel):
@@ -903,6 +1146,8 @@ class AnnotationApplyRequest(BaseModel):
 
     items: list[AnnotationApplyItem] = Field(default_factory=list)
     execute: bool = False
+    confirmation: str = ""
+    reason: str = ""
 
 
 class AnnotationApplyStatement(BaseModel):
@@ -936,10 +1181,19 @@ class SyntheticCasesData(BaseModel):
 class SyntheticDataGenerateRequest(BaseModel):
     """DBMS_CLOUD_AI synthetic table data generation request."""
 
-    table_name: str = Field(min_length=1)
+    table_name: str = ""
+    object_list: list[str] = Field(default_factory=list)
     row_count: int = Field(default=10, ge=1, le=10000)
+    rows_per_table: int | None = Field(default=None, ge=1, le=10000)
+    profile_id: str | None = None
     profile_name: str = ""
+    user_prompt: str = ""
+    extra_prompt: str = ""
+    sample_rows: int = Field(default=0, ge=0, le=100)
+    use_comments: bool = True
     execute: bool = False
+    confirmation: str = ""
+    reason: str = ""
 
 
 class SyntheticDataOperationData(BaseModel):
@@ -947,6 +1201,7 @@ class SyntheticDataOperationData(BaseModel):
 
     operation_id: str = ""
     table_name: str
+    object_list: list[str] = Field(default_factory=list)
     row_count: int
     executed: bool = False
     runtime: str = "deterministic"
@@ -965,6 +1220,15 @@ class SyntheticDataOperationStatusData(BaseModel):
     status: str = "unknown"
     message: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SyntheticDataResultsData(BaseModel):
+    """Synthetic DB data result preview from a generated table."""
+
+    table_name: str
+    runtime: str = "deterministic"
+    results: QueryResults
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -1072,6 +1336,24 @@ class CsvImportData(BaseModel):
     """CSV import dry-run / execution response."""
 
     table_name: str
+    columns: list[CsvImportColumn]
+    row_count: int
+    dry_run: bool
+    executed: bool
+    ddl: str
+    insert_sql: str
+    warnings: list[str] = Field(default_factory=list)
+    sample_rows: list[dict[str, str | None]] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class DbAdminImportTabularData(BaseModel):
+    """Tabular import preview / execution response."""
+
+    table_name: str
+    filename: str = ""
+    sheet_name: str = ""
+    mode: str = "create"
     columns: list[CsvImportColumn]
     row_count: int
     dry_run: bool

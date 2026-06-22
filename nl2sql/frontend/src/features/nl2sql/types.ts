@@ -136,6 +136,36 @@ export interface ClassifierStatusData {
   warnings: string[];
 }
 
+export interface ClassifierModelInfo {
+  version: string;
+  active: boolean;
+  updated_at: string;
+  category_count: number;
+  categories: string[];
+  embedding_model: string;
+  vector_dimension: number;
+  metrics: Record<string, string | number>;
+  source: string;
+}
+
+export interface ClassifierModelsData {
+  active_version: string;
+  models: ClassifierModelInfo[];
+}
+
+export interface ClassifierModelImportData {
+  imported: boolean;
+  active_version: string;
+  model?: ClassifierModelInfo | null;
+  warnings: string[];
+}
+
+export interface ClassifierModelActivateData {
+  active_version: string;
+  model?: ClassifierModelInfo | null;
+  warnings: string[];
+}
+
 export interface ClassifierPredictionCandidate {
   category: string;
   score: number;
@@ -443,6 +473,14 @@ export interface AnalyzeData {
   optimization_hints: string[];
   structure_summary?: string;
   risk_level?: string;
+  statement_type?: string;
+  object_names?: string[];
+  column_names?: string[];
+  conditions?: string[];
+  group_by?: string[];
+  order_by?: string[];
+  risk_findings?: string[];
+  repair_candidates?: string[];
   operations?: string[];
   filters?: string[];
   joins?: string[];
@@ -613,11 +651,74 @@ export interface AssetCleanupData {
   engine_meta: Record<string, unknown>;
 }
 
+export interface DbAdminObjectSummary {
+  name: string;
+  owner: string;
+  object_type: string;
+  row_count?: number | null;
+  comment: string;
+}
+
+export interface DbAdminObjectDetail extends DbAdminObjectSummary {
+  columns: SchemaColumn[];
+  ddl: string;
+  warnings: string[];
+}
+
+export interface DbAdminObjectsData {
+  runtime: string;
+  items: DbAdminObjectSummary[];
+  warnings: string[];
+}
+
+export interface DbAdminStatementResult {
+  index: number;
+  statement_type: string;
+  status: string;
+  sql: string;
+  row_count?: number | null;
+  message: string;
+  elapsed_ms: number;
+  error_message: string;
+}
+
+export interface DbAdminExecuteData {
+  executed: boolean;
+  runtime: string;
+  select_result?: QueryResults | null;
+  statements: DbAdminStatementResult[];
+  committed: boolean;
+  rolled_back: boolean;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface DbAdminImportTabularData {
+  table_name: string;
+  filename: string;
+  sheet_name: string;
+  mode: string;
+  columns: CsvImportColumn[];
+  row_count: number;
+  dry_run: boolean;
+  executed: boolean;
+  ddl: string;
+  insert_sql: string;
+  warnings: string[];
+  sample_rows: Array<Record<string, string | null>>;
+  timing: TimingEnvelope;
+}
+
 export interface SelectAiDbProfile {
   name: string;
   status: string;
   owner: string;
   created_at: string;
+  description?: string;
+  category?: string;
+  object_list?: Array<Record<string, unknown>>;
+  schema_text?: string;
+  context_ddl?: string;
   attributes: Record<string, unknown>;
 }
 
@@ -625,6 +726,29 @@ export interface SelectAiDbProfilesData {
   runtime: string;
   profiles: SelectAiDbProfile[];
   warnings: string[];
+}
+
+export interface SelectAiDbProfileDetailData {
+  runtime: string;
+  profile: SelectAiDbProfile;
+  warnings: string[];
+}
+
+export interface SelectAiDbProfileMutationData {
+  runtime: string;
+  executed: boolean;
+  status: string;
+  profile_name: string;
+  original_name: string;
+  ddl: string[];
+  profile?: SelectAiDbProfile | null;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
+}
+
+export interface SelectAiProfilesExportData {
+  profiles: SelectAiDbProfile[];
+  exported_at: string;
 }
 
 export interface AgentTeamRunData {
@@ -635,6 +759,29 @@ export interface AgentTeamRunData {
   runtime: string;
   warnings: string[];
   engine_meta: Record<string, unknown>;
+}
+
+export interface SelectAiAgentAsset {
+  profile_id: string;
+  profile_name: string;
+  tool_name: string;
+  agent_name: string;
+  task_name: string;
+  team_name: string;
+  source: string;
+  attributes: Record<string, unknown>;
+}
+
+export interface SelectAiAgentAssetsData {
+  runtime: string;
+  items: SelectAiAgentAsset[];
+  warnings: string[];
+}
+
+export interface AgentConversationCreateData {
+  conversation_id: string;
+  runtime: string;
+  warnings: string[];
 }
 
 export interface AgentConversationItem {
@@ -661,6 +808,7 @@ export interface AgentPrivilegeCheckData {
 export interface SyntheticDataOperationData {
   operation_id: string;
   table_name: string;
+  object_list?: string[];
   row_count: number;
   executed: boolean;
   runtime: string;
@@ -677,6 +825,13 @@ export interface SyntheticDataOperationStatusData {
   status: string;
   message: string;
   result: Record<string, unknown>;
+  warnings: string[];
+}
+
+export interface SyntheticDataResultsData {
+  table_name: string;
+  runtime: string;
+  results: QueryResults;
   warnings: string[];
 }
 

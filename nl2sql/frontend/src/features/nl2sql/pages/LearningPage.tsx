@@ -2,6 +2,7 @@ import { type ChangeEvent, useEffect, useMemo, useState } from "react";
 import {
   BrainCircuit,
   DatabaseZap,
+  Download,
   MessageSquareText,
   RefreshCw,
   RotateCcw,
@@ -31,6 +32,8 @@ import type {
   HistoryData,
   HistoryItem,
   ClassifierImportData,
+  ClassifierModelImportData,
+  ClassifierModelsData,
   ClassifierPredictionData,
   ClassifierStatusData,
   Nl2SqlProfile,
@@ -65,6 +68,8 @@ export function LearningPage() {
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [feedbackIndexExecute, setFeedbackIndexExecute] = useState(false);
   const [classifierStatus, setClassifierStatus] = useState<ClassifierStatusData | null>(null);
+  const [classifierModels, setClassifierModels] = useState<ClassifierModelsData | null>(null);
+  const [classifierModelImport, setClassifierModelImport] = useState<ClassifierModelImportData | null>(null);
   const [classifierImport, setClassifierImport] = useState<ClassifierImportData | null>(null);
   const [classifierPrediction, setClassifierPrediction] = useState<ClassifierPredictionData | null>(null);
   const [classifierReplace, setClassifierReplace] = useState(false);
@@ -103,9 +108,10 @@ export function LearningPage() {
         apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
         apiGet<HistoryData>("/api/nl2sql/history"),
       ]);
-      const [indexData, classifierData, entriesData, configData] = await Promise.all([
+      const [indexData, classifierData, classifierModelData, entriesData, configData] = await Promise.all([
         apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index"),
         apiGet<ClassifierStatusData>("/api/nl2sql/classifier"),
+        apiGet<ClassifierModelsData>("/api/nl2sql/classifier/models"),
         apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"),
         apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config"),
       ]);
@@ -115,6 +121,7 @@ export function LearningPage() {
       setFeedbackEntries(entriesData);
       setFeedbackConfig(configData);
       setClassifierStatus(classifierData);
+      setClassifierModels(classifierModelData);
       setProfileId((current) => current || profileData[0]?.id || "");
       setSelectedFeedbackId((current) => current || historyData.items[0]?.id || "");
     } catch (err) {
@@ -190,6 +197,7 @@ export function LearningPage() {
       const data = await uploadClassifierTrainingFile(file, classifierReplace, profileId || null);
       setClassifierImport(data);
       setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
+      setClassifierModels(await apiGet<ClassifierModelsData>("/api/nl2sql/classifier/models"));
       setMessageTone("success");
       setMessage(t("learning.classifier.imported", { count: data.imported_count }));
     } catch (err) {
@@ -208,8 +216,70 @@ export function LearningPage() {
         min_examples_per_category: 1,
       });
       setClassifierStatus(data);
+      setClassifierModels(await apiGet<ClassifierModelsData>("/api/nl2sql/classifier/models"));
       setMessageTone(data.ready ? "success" : "error");
       setMessage(data.ready ? t("learning.classifier.trained") : data.warnings.join(" "));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const importClassifierModelArtifact = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setLoading("classifier-model-import");
+    setMessage("");
+    try {
+      const data = await uploadClassifierModelArtifact(file);
+      setClassifierModelImport(data);
+      setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
+      setClassifierModels(await apiGet<ClassifierModelsData>("/api/nl2sql/classifier/models"));
+      setMessageTone(data.imported ? "success" : "error");
+      setMessage(data.imported ? t("learning.classifier.modelImported") : data.warnings.join(" "));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const activateClassifierModel = async (version: string) => {
+    setLoading(`classifier-model-activate-${version}`);
+    setMessage("");
+    try {
+      await apiPost(`/api/nl2sql/classifier/models/${encodeURIComponent(version)}/activate`, {});
+      setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
+      setClassifierModels(await apiGet<ClassifierModelsData>("/api/nl2sql/classifier/models"));
+      setMessageTone("success");
+      setMessage(t("learning.classifier.modelActivated"));
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const deleteClassifierModel = async (version: string) => {
+    setLoading(`classifier-model-delete-${version}`);
+    setMessage("");
+    try {
+      const response = await fetch(`/api/nl2sql/classifier/models/${encodeURIComponent(version)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = (await response.json()) as { data?: ClassifierModelsData };
+      setClassifierModels(payload.data ?? (await apiGet<ClassifierModelsData>("/api/nl2sql/classifier/models")));
+      setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
+      setMessageTone("success");
+      setMessage(t("learning.classifier.modelDeleted"));
     } catch (err) {
       setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
@@ -491,12 +561,86 @@ export function LearningPage() {
                   <span>{t("learning.classifier.predict")}</span>
                 </Button>
               </div>
+              <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-3">
+                <a
+                  className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+                  href="/api/nl2sql/classifier/training-data/export.xlsx"
+                >
+                  <Download size={15} aria-hidden="true" />
+                  <span>{t("learning.classifier.exportXlsx")}</span>
+                </a>
+                <a
+                  className="inline-flex min-h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+                  href="/api/nl2sql/classifier/training-data/export.jsonl"
+                >
+                  <Download size={15} aria-hidden="true" />
+                  <span>{t("learning.classifier.exportJsonl")}</span>
+                </a>
+                <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-sky-200">
+                  <Upload size={15} aria-hidden="true" />
+                  <span>{t("learning.classifier.importModel")}</span>
+                  <input
+                    className="sr-only"
+                    type="file"
+                    accept=".joblib,.json"
+                    onChange={(event) => void importClassifierModelArtifact(event)}
+                  />
+                </label>
+              </div>
             </div>
             <div className="grid content-start gap-3">
               <CompactFact
                 label={t("learning.classifier.model")}
                 value={classifierStatus?.embedding_model || "-"}
               />
+              <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold text-slate-900">{t("learning.classifier.modelRegistry")}</p>
+                  <StatusBadge variant="neutral" label={classifierModels?.active_version || "-"} />
+                </div>
+                {(classifierModels?.models ?? []).slice(0, 6).map((model) => (
+                  <div key={model.version} className="rounded-md border border-slate-200 bg-white p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="break-all font-mono text-xs font-semibold text-slate-900">{model.version}</p>
+                        <p className="mt-1 text-xs text-slate-600">{model.categories.join(", ") || "-"}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <StatusBadge variant={model.active ? "success" : "neutral"} label={model.active ? "active" : model.source} />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          loading={loading === `classifier-model-activate-${model.version}`}
+                          disabled={model.active}
+                          onClick={() => void activateClassifierModel(model.version)}
+                        >
+                          <Save size={15} aria-hidden="true" />
+                          <span>{t("learning.classifier.activateModel")}</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="danger"
+                          size="sm"
+                          loading={loading === `classifier-model-delete-${model.version}`}
+                          onClick={() => void deleteClassifierModel(model.version)}
+                        >
+                          <Trash2 size={15} aria-hidden="true" />
+                          <span>{t("learning.classifier.deleteModel")}</span>
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {(classifierModels?.models.length ?? 0) === 0 && (
+                  <p className="text-sm text-slate-500">{t("learning.classifier.noModels")}</p>
+                )}
+                {classifierModelImport?.warnings.map((warning) => (
+                  <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                    {warning}
+                  </p>
+                ))}
+              </div>
               {classifierImport && (
                 <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
                   <p className="font-semibold text-slate-900">
@@ -1035,6 +1179,26 @@ async function uploadClassifierTrainingFile(
   });
   const payload = (await response.json()) as {
     data?: ClassifierImportData;
+    error?: string;
+    detail?: string;
+  };
+  if (!response.ok || !payload.data) {
+    throw new Error(payload.error || payload.detail || t("learning.error.classifier"));
+  }
+  return payload.data;
+}
+
+async function uploadClassifierModelArtifact(file: File): Promise<ClassifierModelImportData> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("activate", "true");
+  const response = await fetch("/api/nl2sql/classifier/models/import", {
+    method: "POST",
+    body: form,
+    headers: { Accept: "application/json" },
+  });
+  const payload = (await response.json()) as {
+    data?: ClassifierModelImportData;
     error?: string;
     detail?: string;
   };
