@@ -19,6 +19,13 @@ from app.settings import Settings, get_settings, load_persisted_model_settings
 client = TestClient(app)
 
 
+def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
+    data = settings_router.MODEL_TEST_IMAGE_BYTES
+
+    assert data.startswith(b"\xff\xd8")
+    assert len(data) > 1024
+
+
 def test_read_object_storage_namespace_uses_oci_sdk(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -288,7 +295,7 @@ def test_update_upload_storage_persists_env_and_keeps_namespace(
         "/api/settings/upload-storage",
         json={
             "backend": "oci",
-            "local_storage_dir": "/u01/production-ready-rag",
+            "local_storage_dir": "/u01/production-ready-nl2sql",
             "object_storage_bucket": "rag-uploads",
         },
     )
@@ -298,9 +305,20 @@ def test_update_upload_storage_persists_env_and_keeps_namespace(
     assert data["object_storage_namespace"] == "existingnamespace"
     env_text = env_file.read_text(encoding="utf-8")
     assert "UPLOAD_STORAGE_BACKEND=oci" in env_text
+    assert "LOCAL_STORAGE_DIR=/u01/production-ready-nl2sql" in env_text
     assert "OBJECT_STORAGE_REGION=ap-osaka-1" in env_text
     assert "OBJECT_STORAGE_NAMESPACE=existingnamespace" in env_text
     assert "OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
+
+
+def test_upload_storage_defaults_use_nl2sql_names(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.delenv("LOCAL_STORAGE_DIR", raising=False)
+    monkeypatch.delenv("OBJECT_STORAGE_BUCKET", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.local_storage_dir == "/u01/production-ready-nl2sql"
+    assert settings.object_storage_bucket == "nl2sql-originals"
 
 
 def test_update_model_settings_persists_json_with_resolved_secret(
@@ -477,6 +495,75 @@ def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -
     assert captured["endpoint"] == "https://enterprise-ai.example.com"
     assert captured["model_id"] == "cohere.command-r-plus"
     assert captured["api_key"] == "request-secret"
+
+
+def test_model_settings_test_enterprise_vision_uses_smoke_image_payload(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    observed: list[tuple[Settings, bytes, str, str]] = []
+
+    class FakeEnterpriseClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def generate_from_image(
+            self,
+            image_bytes: bytes,
+            prompt: str,
+            *,
+            mime_type: str,
+        ) -> str:
+            observed.append((self.settings, image_bytes, prompt, mime_type))
+            return "画像を確認しました。"
+
+    monkeypatch.setattr(settings_router, "OciEnterpriseAiClient", FakeEnterpriseClient)
+
+    resp = client.post(
+        "/api/settings/model/test",
+        json={
+            "target_type": "enterprise_vision",
+            "model_id": "google.gemini-2.5-flash",
+            "settings": {
+                "enterprise_ai": {
+                    "endpoint": "https://enterprise-ai.example.com",
+                    "project_ocid": "ocid1.project.oc1..example",
+                    "api_key": "request-secret",
+                    "models": [
+                        {
+                            "model_id": "cohere.command-r-plus",
+                            "display_name": "回答生成",
+                            "vision_enabled": False,
+                        },
+                        {
+                            "model_id": "google.gemini-2.5-flash",
+                            "display_name": "Vision",
+                            "vision_enabled": True,
+                        },
+                    ],
+                    "default_model_id": "cohere.command-r-plus",
+                    "api_path": "/responses",
+                    "vlm_input_mode": "auto",
+                    "timeout_seconds": 10,
+                    "max_retries": 0,
+                },
+                "generative_ai": {
+                    "embedding_model": "cohere.embed-v4.0",
+                    "embedding_dim": 1536,
+                    "rerank_model": "cohere.rerank-v4.0-fast",
+                },
+            },
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["status"] == "success"
+    assert data["details"]["surface"] == "vision"
+    assert data["details"]["response_chars"] == len("画像を確認しました。")
+    assert observed[0][0].oci_enterprise_ai_vlm_model == "google.gemini-2.5-flash"
+    assert observed[0][1] == settings_router.MODEL_TEST_IMAGE_BYTES
+    assert observed[0][2]
+    assert observed[0][3] == "image/jpeg"
 
 
 def test_adb_start_uses_oci_database_client(monkeypatch: MonkeyPatch) -> None:

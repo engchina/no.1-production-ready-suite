@@ -104,10 +104,10 @@ class Settings(BaseServiceSettings):
     oci_enterprise_ai_vlm_max_output_tokens: int = 65536
     model_settings_file: str = DEFAULT_MODEL_SETTINGS_FILE
     upload_storage_backend: str = "local"
-    local_storage_dir: str = "/u01/production-ready-rag"
+    local_storage_dir: str = "/u01/production-ready-nl2sql"
     object_storage_region: str = ""
     object_storage_namespace: str = ""
-    object_storage_bucket: str = ""
+    object_storage_bucket: str = "nl2sql-originals"
     max_upload_bytes: int = 200 * 1024 * 1024
     # NL2SQL 安全境界（既定: SELECT のみ許可）。DDL/DML/PLSQL は禁止する方針。
     nl2sql_allow_select_only: bool = True

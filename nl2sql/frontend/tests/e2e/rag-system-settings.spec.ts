@@ -32,10 +32,10 @@ async function mockRagSettingsApi(page: Page) {
 
   const uploadStorage = {
     backend: "local",
-    local_storage_dir: "/u01/production-ready-rag",
+    local_storage_dir: "/u01/production-ready-nl2sql",
     object_storage_region: "ap-osaka-1",
     object_storage_namespace: "exampletenancy",
-    object_storage_bucket: "rag-originals",
+    object_storage_bucket: "nl2sql-originals",
     readiness: "ok",
     max_upload_bytes: 104857600,
     config_source: "runtime",
@@ -69,7 +69,7 @@ async function mockRagSettingsApi(page: Page) {
         text_response_path: "",
         vision_response_path: "",
         timeout_seconds: 120,
-        max_retries: 2,
+        max_retries: 3,
       },
       generative_ai: {
         embedding_model: "cohere.embed-v4.0",
@@ -288,6 +288,11 @@ test("RAG 由来の 4 つのシステム設定画面を表示できる", async (
   await page.goto("/settings/upload-storage");
   await expect(page.getByRole("heading", { name: "アップロード保存先" }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "保存先", exact: true })).toBeVisible();
+  await expect(page.getByLabel("ローカル保存ディレクトリ")).toHaveValue(
+    "/u01/production-ready-nl2sql"
+  );
+  await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
+  await expect(page.getByLabel("Object Storage バケット")).toHaveValue("nl2sql-originals");
   await expectNoHorizontalOverflow(page);
 
   await page.goto("/settings/model");

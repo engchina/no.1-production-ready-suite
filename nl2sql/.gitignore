@@ -20,9 +20,13 @@ backend/.env.*
 !backend/.env.example
 
 # --- test artifacts ---
+backend/reports/
 frontend/test-results/
 frontend/playwright-report/
 playwright-report/
+
+# --- local runtime settings ---
+backend/model-settings.json
 
 *.log
 .DS_Store

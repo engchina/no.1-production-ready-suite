@@ -51,7 +51,8 @@ const EMPTY_FORM: UploadStorageForm = {
   objectStorageBucket: "",
 };
 
-const DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag";
+const DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-nl2sql";
+const DEFAULT_OBJECT_STORAGE_BUCKET = "nl2sql-originals";
 const OBJECT_STORAGE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /** ドキュメントアップロード原本の保存先設定。 */
@@ -207,7 +208,7 @@ export function UploadStorageSettingsClient() {
                     value={form.objectStorageBucket}
                     onChange={(value) => updateForm({ objectStorageBucket: value })}
                     helper={t("settings.uploadStorage.helper.objectStorageBucket")}
-                    placeholder="rag-originals"
+                    placeholder={DEFAULT_OBJECT_STORAGE_BUCKET}
                     error={errors.objectStorageBucket}
                   />
                   <FieldError

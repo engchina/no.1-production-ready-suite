@@ -45,8 +45,8 @@ export function AppSidebar() {
     collapse: t("nav.sidebar.collapse"),
     commandOpen: t("nav.command.open"),
     sectionContainsActive: t("nav.section.containsActive"),
-    sectionToggleExpand: (section) => `${section} を展開`,
-    sectionToggleCollapse: (section) => `${section} を折りたたむ`,
+    sectionToggleExpand: (section) => t("nav.section.toggle.expand", { section }),
+    sectionToggleCollapse: (section) => t("nav.section.toggle.collapse", { section }),
   };
 
   return (

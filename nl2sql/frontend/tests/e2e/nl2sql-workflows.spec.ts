@@ -1251,11 +1251,17 @@ test("dashboard and sidebar expose absorbed SQL Assist feature surfaces", async 
 
   await page.goto("/");
 
-  await expect(page.getByRole("link", { name: /CSV \/ サンプルデータ/ }).first()).toBeVisible();
+  await expect(page.getByText("データ準備", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("AI 活用", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("改善・運用", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /データ投入/ }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /業務プロファイル/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /用語・ルール/ }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: /SQL 分析 \/ 逆生成/ }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /SQL 生成/ }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /SQL 確認・修復/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /フィードバック学習/ }).first()).toBeVisible();
   await expect(page.getByRole("link", { name: /エンジン運用/ }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /NL2SQL 接続診断/ }).first()).toBeVisible();
   await expect(page.getByText("No.1-SQL-Assist 吸収マップ")).toBeVisible();
   await expect(page.getByRole("link", { name: /Select AI \/ Agent \/ Direct/ })).toBeVisible();
   await expect(page.getByRole("link", { name: /denpyo Schema 操作/ })).toBeVisible();

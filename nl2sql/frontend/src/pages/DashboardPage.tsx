@@ -6,10 +6,13 @@ import {
   FileSpreadsheet,
   FlaskConical,
   History,
+  KeyRound,
   MessageSquareText,
+  Settings,
   ShieldCheck,
   Sparkles,
   Table2,
+  UserCog,
 } from "lucide-react";
 
 import { PageHeader, Card, CardHeader, CardTitle, CardDescription, CardContent, StatusBadge } from "@engchina/production-ready-ui";
@@ -19,28 +22,31 @@ import { APP_ROUTES } from "@/lib/routes";
 
 const featureGroups = [
   {
-    titleKey: "dashboard.group.core",
+    titleKey: "dashboard.group.use",
     items: [
       { labelKey: "nav.query", href: APP_ROUTES.query, icon: Sparkles },
-      { labelKey: "nav.schema", href: APP_ROUTES.schema, icon: Table2 },
-      { labelKey: "nav.profiles", href: APP_ROUTES.profiles, icon: Database },
-    ],
-  },
-  {
-    titleKey: "dashboard.group.learning",
-    items: [
-      { labelKey: "nav.glossaryRules", href: APP_ROUTES.glossaryRules, icon: BookOpen },
-      { labelKey: "nav.learning", href: APP_ROUTES.learning, icon: MessageSquareText },
       { labelKey: "nav.sqlAnalysis", href: APP_ROUTES.sqlAnalysis, icon: ShieldCheck },
+      { labelKey: "nav.history", href: APP_ROUTES.history, icon: History },
     ],
   },
   {
-    titleKey: "dashboard.group.ops",
+    titleKey: "dashboard.group.prepare",
     items: [
+      { labelKey: "nav.schema", href: APP_ROUTES.schema, icon: Table2 },
       { labelKey: "nav.dataTools", href: APP_ROUTES.dataTools, icon: FileSpreadsheet },
+      { labelKey: "nav.profiles", href: APP_ROUTES.profiles, icon: UserCog },
+      { labelKey: "nav.glossaryRules", href: APP_ROUTES.glossaryRules, icon: BookOpen },
+    ],
+  },
+  {
+    titleKey: "dashboard.group.improve",
+    items: [
+      { labelKey: "nav.learning", href: APP_ROUTES.learning, icon: MessageSquareText },
       { labelKey: "nav.evaluation", href: APP_ROUTES.evaluation, icon: FlaskConical },
       { labelKey: "nav.engineOperations", href: APP_ROUTES.engineOperations, icon: Bot },
-      { labelKey: "nav.history", href: APP_ROUTES.history, icon: History },
+      { labelKey: "nav.nl2sqlSettingsConnection", href: APP_ROUTES.nl2sqlSettingsConnection, icon: KeyRound },
+      { labelKey: "nav.nl2sqlSettingsModel", href: APP_ROUTES.nl2sqlSettingsModel, icon: Settings },
+      { labelKey: "nav.nl2sqlSettingsDatabase", href: APP_ROUTES.nl2sqlSettingsDatabase, icon: Database },
     ],
   },
 ] as const;
