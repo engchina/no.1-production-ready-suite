@@ -22,6 +22,15 @@ async function expectDocumentScrollLocked(page: Page) {
   expect(metrics.rootScrollHeight).toBeLessThanOrEqual(metrics.rootClientHeight + 1);
 }
 
+async function expectElementAbove(page: Page, upperSelector: string, lowerSelector: string) {
+  const upperBox = await page.locator(upperSelector).boundingBox();
+  const lowerBox = await page.locator(lowerSelector).boundingBox();
+
+  expect(upperBox).not.toBeNull();
+  expect(lowerBox).not.toBeNull();
+  expect(upperBox!.y).toBeLessThan(lowerBox!.y);
+}
+
 async function fillOrSelectDsn(page: Page, value: string) {
   const dsnControl = page.getByLabel("サービス名 / DSN");
   const tagName = await dsnControl.evaluate((element) => element.tagName.toLowerCase());
@@ -148,6 +157,8 @@ test.describe("Agent Runtime settings", () => {
     await page.goto("/settings/oci");
     await expect(page.getByRole("heading", { name: "OCI 認証設定", level: 1 })).toBeVisible();
     await expectDocumentScrollLocked(page);
+    await expectElementAbove(page, "#oci-config-file", "#oci-user-ocid");
+    await expectElementAbove(page, "#oci-config-profile", "#oci-tenancy-ocid");
     await expect(page.getByLabel("ユーザー OCID")).toHaveValue("");
     await expect(page.getByLabel("テナンシ OCID")).toHaveValue("");
     await expect(page.getByLabel("フィンガープリント")).toHaveValue("");
