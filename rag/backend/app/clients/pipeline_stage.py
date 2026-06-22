@@ -1,9 +1,9 @@
 """pipeline ステージマイクロサービスへの HTTP 委譲クライアント。
 
 各 pipeline ステージ(まずは chunking)を独立サービスとして呼ぶ。``RAG_<STAGE>_SERVICE_URL``
-が設定され ``RAG_<STAGE>_SERVICE_ENABLED`` が真のとき ``POST /run`` へ委譲する。未設定・無効・
-未達・timeout・不正応答時は **warning を付けて in-process(同一ロジック)へ安全縮退**する
-(parser/preprocess サービスと同じ安全網。常時 remote でも 1 サービス停止で全体が止まらない)。
+が設定され ``RAG_<STAGE>_SERVICE_ENABLED`` が真のとき ``POST /run`` へ委譲する。未設定・無効の
+ときだけ in-process 実行に任せ、サービスが有効なのに未達・timeout・不正応答の場合は
+利用者向けエラーとして止める。
 
 確定スタックは不変。ロジックは backend と共有パッケージ ``rag_pipeline_core`` で同一。
 """
@@ -34,6 +34,7 @@ from rag_pipeline_core.stage import (
     VectorIndexStageResponse,
 )
 
+from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
 from app.rag.chunking import Chunk
 
@@ -65,11 +66,12 @@ _STAGE_ENABLED_FIELDS: dict[str, str] = {
 
 
 class PipelineStageClient:
-    """pipeline ステージを HTTP で実行する(未達は呼び出し側の in-process 縮退に委ねる)。"""
+    """pipeline ステージを HTTP で実行する。"""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._timeout = float(getattr(settings, "rag_pipeline_stage_timeout_seconds", 120.0))
+        self._retry = retry_config_from_settings(settings)
 
     def _service_url(self, stage: str) -> str | None:
         field = _STAGE_URL_FIELDS.get(stage)
@@ -85,32 +87,41 @@ class PipelineStageClient:
         return enabled and self._service_url(stage) is not None
 
     def _post_run(self, stage: str, request_json: str) -> dict[str, object] | None:
-        """``POST /run`` を呼び JSON を返す。委譲不可/失敗時は None(呼び出し側で縮退)。"""
+        """``POST /run`` を呼び JSON を返す。委譲不可なら None、失敗時は例外。"""
         if not self.is_enabled(stage):
             return None
         url = self._service_url(stage)
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(f"{url}/run", content=request_json, headers=_JSON_HEADERS)
+                response = request_with_retry(
+                    client,
+                    "POST",
+                    f"{url}/run",
+                    retry=self._retry,
+                    logger=logger,
+                    log_extra={"stage": stage, "service_url": url or ""},
+                    content=request_json,
+                    headers=_JSON_HEADERS,
+                )
                 response.raise_for_status()
                 payload: dict[str, object] = response.json()
                 return payload
         except (httpx.HTTPError, ValueError) as exc:
             logger.warning(
-                "pipeline stage service call failed; falling back to in-process",
+                "pipeline stage service call failed",
                 extra={"stage": stage, "service_url": url, "error": str(exc)},
             )
-            return None
+            raise PipelineStageServiceError(stage, "unreachable", service_url=url) from exc
 
     def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk] | None:
-        """chunking ステージを remote 実行する。委譲不可/失敗時は None(呼び出し側で縮退)。"""
+        """chunking ステージを remote 実行する。委譲不可なら None。"""
         payload = self._post_run("chunking", request.model_dump_json())
         if payload is None:
             return None
         try:
             parsed = ChunkingStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("chunking", "invalid_response") from exc
         return [
             Chunk(
                 text=item.text,
@@ -129,8 +140,8 @@ class PipelineStageClient:
             return None
         try:
             return VectorIndexStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("vector_index", "invalid_response") from exc
 
     def run_graph(self, request: GraphStageRequest) -> GraphStageResponse | None:
         """graphrag ステージを remote 実行する。委譲不可/失敗時は None。"""
@@ -139,8 +150,8 @@ class PipelineStageClient:
             return None
         try:
             return GraphStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("graphrag", "invalid_response") from exc
 
     def run_generation(self, request: GenerationStageRequest) -> GenerationStageResponse | None:
         """generation ステージ(静的 prompt 解決)を remote 実行する。委譲不可/失敗時は None。"""
@@ -149,8 +160,8 @@ class PipelineStageClient:
             return None
         try:
             return GenerationStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("generation", "invalid_response") from exc
 
     def run_guardrail(self, request: GuardrailStageRequest) -> GuardrailStageResponse | None:
         """guardrail ステージ(静的 policy 解決)を remote 実行する。委譲不可/失敗時は None。"""
@@ -159,8 +170,8 @@ class PipelineStageClient:
             return None
         try:
             return GuardrailStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("guardrail", "invalid_response") from exc
 
     def run_agentic(self, request: AgenticStageRequest) -> AgenticStageResponse | None:
         """agentic ステージ(静的 profile 解決)を remote 実行する。委譲不可/失敗時は None。"""
@@ -169,8 +180,8 @@ class PipelineStageClient:
             return None
         try:
             return AgenticStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("agentic", "invalid_response") from exc
 
     def run_grounding(self, request: GroundingStageRequest) -> GroundingStageResponse | None:
         """grounding ステージ(preset 解決)を remote 実行する。委譲不可/失敗時は None。"""
@@ -179,8 +190,8 @@ class PipelineStageClient:
             return None
         try:
             return GroundingStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("grounding", "invalid_response") from exc
 
     def run_evaluation(self, request: EvaluationStageRequest) -> EvaluationStageResponse | None:
         """evaluation ステージ(suite→閾値解決)を remote 実行する。委譲不可/失敗時は None。"""
@@ -189,8 +200,8 @@ class PipelineStageClient:
             return None
         try:
             return EvaluationStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("evaluation", "invalid_response") from exc
 
     def run_retrieval(self, request: RetrievalStageRequest) -> RetrievalStageResponse | None:
         """retrieval ステージ(strategy 解決)を remote 実行する。委譲不可/失敗時は None。"""
@@ -199,8 +210,45 @@ class PipelineStageClient:
             return None
         try:
             return RetrievalStageResponse.model_validate(payload)
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise PipelineStageServiceError("retrieval", "invalid_response") from exc
 
 
 _JSON_HEADERS = {"content-type": "application/json"}
+
+
+class PipelineStageServiceError(RuntimeError):
+    """有効化された pipeline stage サービスを実行できないため処理を止めるエラー。"""
+
+    safe_for_user = True
+
+    def __init__(
+        self,
+        stage: str,
+        reason: str,
+        *,
+        service_url: str | None = None,
+    ) -> None:
+        self.stage = stage
+        self.reason = reason
+        self.service_url = service_url
+        super().__init__(_stage_error_message(stage, reason, service_url=service_url))
+
+
+def _stage_error_message(stage: str, reason: str, *, service_url: str | None = None) -> str:
+    label = stage.replace("_", " ")
+    service_id = f"pipeline-{stage.replace('_', '-')}"
+    suffix = f" 接続先: {service_url}" if service_url else ""
+    if reason == "invalid_response":
+        return (
+            f"有効化された処理ステージ（{label}）から不正な応答を受信しました。"
+            f"別経路には切り替えずに処理を停止しました。サービス管理画面で {service_id} "
+            "のログを確認してから再実行してください。"
+            f"{suffix}"
+        )
+    return (
+        f"有効化された処理ステージ（{label}）サービスに接続できないか、処理に失敗しました。"
+        f"別経路には切り替えずに処理を停止しました。サービス管理画面で {service_id} "
+        "の状態とログを確認してから再実行してください。"
+        f"{suffix}"
+    )

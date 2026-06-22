@@ -4,6 +4,7 @@
 での起動/停止(POST)を提供する。制御はカタログ allowlist + feature flag で二重に保護する。
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, status
@@ -11,12 +12,16 @@ from fastapi import APIRouter, HTTPException, status
 from app.config import Settings, get_settings
 from app.schemas.common import ApiResponse
 from app.schemas.service_management import (
+    DeploymentMode,
+    ServiceCatalogData,
+    ServiceCatalogItemData,
     ServiceControlResultData,
     ServiceListData,
     ServiceStatusData,
 )
 from app.services.catalog import (
     SERVICE_CATALOG,
+    ServiceCatalogEntry,
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
@@ -26,7 +31,7 @@ from app.services.control import (
     ServiceControlClient,
     ServiceControlError,
 )
-from app.services.status import probe_service_status, probe_service_statuses
+from app.services.status import blocked_dependencies, probe_service_status, probe_service_statuses
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -37,6 +42,22 @@ _control_client = ServiceControlClient()
 def _control_enabled(settings: Settings) -> bool:
     """制御の実効可否。dev(uv)は自動有効化し、prod は明示フラグを要する。"""
     return is_dev_mode(settings) or bool(settings.rag_service_control_enabled)
+
+
+def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCatalogItemData:
+    """稼働状態を問い合わせず、カタログ情報だけを返す。"""
+    return ServiceCatalogItemData(
+        service_id=entry.service_id,
+        category=entry.category,
+        profile=entry.profile,
+        label_key=entry.label_key,
+        depends_on=list(entry.depends_on),
+        configured=bool(service_health_url(settings, entry)),
+    )
+
+
+def _deployment_mode(settings: Settings) -> DeploymentMode:
+    return "dev" if is_dev_mode(settings) else "prod"
 
 
 @router.get("", response_model=ApiResponse[ServiceListData])
@@ -51,6 +72,8 @@ async def list_services() -> ApiResponse[ServiceListData]:
             profile=entry.profile,
             label_key=entry.label_key,
             status=statuses[entry.service_id],
+            depends_on=list(entry.depends_on),
+            blocked_by=list(blocked_dependencies(statuses, entry)),
             configured=bool(service_health_url(settings, entry)),
         )
         for entry in SERVICE_CATALOG
@@ -58,8 +81,57 @@ async def list_services() -> ApiResponse[ServiceListData]:
     return ApiResponse(
         data=ServiceListData(
             control_enabled=_control_enabled(settings),
-            deployment_mode="dev" if is_dev_mode(settings) else "prod",
+            deployment_mode=_deployment_mode(settings),
             services=services,
+        )
+    )
+
+
+@router.get("/catalog", response_model=ApiResponse[ServiceCatalogData])
+async def list_service_catalog() -> ApiResponse[ServiceCatalogData]:
+    """稼働プローブを行わず、サービス一覧と制御可否だけを返す。"""
+    settings = get_settings()
+    return ApiResponse(
+        data=ServiceCatalogData(
+            control_enabled=_control_enabled(settings),
+            deployment_mode=_deployment_mode(settings),
+            services=[_catalog_item(settings, entry) for entry in SERVICE_CATALOG],
+        )
+    )
+
+
+@router.get("/{service_id}/status", response_model=ApiResponse[ServiceStatusData])
+async def get_service_status(service_id: str) -> ApiResponse[ServiceStatusData]:
+    """1 サービスの稼働状態を返す。依存サービスがある場合のみ併せて確認する。"""
+    settings = get_settings()
+    entry = get_catalog_entry(service_id)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="指定したサービスが見つかりません。",
+        )
+    related_entries = [entry]
+    for dependency_id in entry.depends_on:
+        dependency_entry = get_catalog_entry(dependency_id)
+        if dependency_entry is not None:
+            related_entries.append(dependency_entry)
+    results = await asyncio.gather(
+        *(probe_service_status(settings, related_entry) for related_entry in related_entries)
+    )
+    statuses = {
+        related_entry.service_id: result
+        for related_entry, result in zip(related_entries, results, strict=True)
+    }
+    blocked_by = blocked_dependencies(statuses, entry)
+    service_status = statuses[entry.service_id]
+    if blocked_by and service_status in {"running", "degraded"}:
+        service_status = "dependency_stopped"
+        statuses[entry.service_id] = service_status
+    return ApiResponse(
+        data=ServiceStatusData(
+            **_catalog_item(settings, entry).model_dump(),
+            status=service_status,
+            blocked_by=list(blocked_by),
         )
     )
 
@@ -93,8 +165,12 @@ async def _control(service_id: str, action: ServiceAction) -> ApiResponse[Servic
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=exc.result.detail or "サービスの操作に失敗しました。",
         ) from exc
-    # 操作対象 1 件のみ再プローブする(全件叩く必要はない)。
-    new_status = await probe_service_status(settings, entry)
+    # 通常は操作対象 1 件のみ再プローブする。依存を持つサービスは全体ステータスを見直し、
+    # 依存未起動なら dependency_stopped として返す。
+    if entry.depends_on:
+        new_status = (await probe_service_statuses(settings))[entry.service_id]
+    else:
+        new_status = await probe_service_status(settings, entry)
     return ApiResponse(
         data=ServiceControlResultData(
             service_id=service_id,

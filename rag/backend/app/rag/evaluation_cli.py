@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import logging
 import os
 import sys
 from collections.abc import Mapping, Sequence
@@ -13,6 +14,7 @@ from typing import Any, Literal
 import httpx
 from pydantic import ValidationError
 
+from app.clients.http_retry import HttpRetryConfig, request_with_retry
 from app.schemas.evaluation import (
     EvaluationCompareRequest,
     EvaluationCompareResponse,
@@ -25,6 +27,7 @@ DEFAULT_EVALUATION_COMPARE_API_URL = "http://localhost:8000/api/evaluation/compa
 DEFAULT_EVALUATION_API_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT_SECONDS = 300.0
 EvaluationRequestKind = Literal["run", "compare"]
+logger = logging.getLogger(__name__)
 
 
 class EvaluationGateError(RuntimeError):
@@ -201,7 +204,16 @@ def _post_evaluation_request(
     request_headers = {"Accept": "application/json", **headers}
     try:
         with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-            response = client.post(api_url, json=payload, headers=request_headers)
+            response = request_with_retry(
+                client,
+                "POST",
+                api_url,
+                retry=HttpRetryConfig(),
+                logger=logger,
+                log_extra={"api_url": api_url},
+                json=payload,
+                headers=request_headers,
+            )
             response.raise_for_status()
             return _decode_json_response(response.content)
     except httpx.InvalidURL as exc:

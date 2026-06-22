@@ -78,6 +78,37 @@ def test_health_reports_backend_and_version(client: TestClient) -> None:
     assert payload["package_version"] is not None
 
 
+def test_health_reports_ok_when_runtime_health_is_ready() -> None:
+    app = create_parse_app(
+        backend="dots_ocr",
+        import_name="pydantic",
+        distribution_names=("pydantic",),
+        runtime_health=lambda: True,
+    )
+    payload = TestClient(app).get("/health").json()
+
+    assert payload["status"] == "ok"
+    assert payload["backend"] == "dots_ocr"
+    assert payload["package_version"] is not None
+
+
+def test_health_reports_degraded_when_runtime_health_fails() -> None:
+    def fail_runtime() -> bool:
+        raise ConnectionError("vllm refused")
+
+    app = create_parse_app(
+        backend="glm_ocr",
+        import_name="pydantic",
+        distribution_names=("pydantic",),
+        runtime_health=fail_runtime,
+    )
+    payload = TestClient(app).get("/health").json()
+
+    assert payload["status"] == "degraded"
+    assert payload["backend"] == "glm_ocr"
+    assert payload["package_version"] is not None
+
+
 def test_parse_roundtrips_structured_extraction(client: TestClient) -> None:
     profile = SourceProfile(
         original_file_name="a.pdf",

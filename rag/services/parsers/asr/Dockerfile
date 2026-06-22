@@ -30,6 +30,6 @@ COPY --chown=appuser:appuser services/parsers/asr/app ./app
 EXPOSE 8000
 USER appuser
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
+    CMD python3.12 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"
 # 転写は長尺で遅いため timeout を長めに。GPU 1 枚なら workers=1。
 CMD ["sh", "-c", "exec uv run --no-sync gunicorn app.main:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000} --workers ${WEB_CONCURRENCY:-1} --timeout ${GUNICORN_TIMEOUT:-900} --graceful-timeout 30 --access-logfile - --error-logfile -"]

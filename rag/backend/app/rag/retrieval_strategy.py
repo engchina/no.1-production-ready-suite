@@ -6,32 +6,7 @@ from app.config import Settings
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.schemas.search import SearchMode, SearchRequest, SearchStrategy
 
-GLOBAL_QUERY_HINTS = (
-    "全体",
-    "全社",
-    "横断",
-    "傾向",
-    "テーマ",
-    "要約",
-    "まとめ",
-    "関係",
-    "関連性",
-    "across",
-    "overall",
-    "summarize",
-    "summary",
-    "theme",
-    "relationship",
-)
-GRAPH_LOCAL_HINTS = (
-    "関係",
-    "関連",
-    "つながり",
-    "影響",
-    "entity",
-    "relationship",
-    "related",
-)
+
 @dataclass(frozen=True)
 class ResolvedRetrievalStrategy:
     """実行する検索経路と fallback の非機密理由。"""
@@ -50,37 +25,25 @@ def resolve_retrieval_strategy(
     query: str,
 ) -> ResolvedRetrievalStrategy:
     """SearchRequest.strategy を現行 retrieval 実装へ解決する。"""
+    _ = query
     requested = request.strategy
     if requested == SearchStrategy.HYBRID:
         return ResolvedRetrievalStrategy(
             strategy=SearchStrategy.HYBRID,
-            mode=SearchMode.HYBRID,
-            route_reason="explicit_hybrid",
+            mode=request.mode,
+            route_reason="configured_hybrid",
         )
     if requested in (SearchStrategy.GRAPH_LOCAL, SearchStrategy.GRAPH_GLOBAL):
         return _resolve_graph_strategy(
-            requested, settings=settings, route_reason=f"explicit_{requested.value}"
-        )
-
-    normalized_query = query.casefold()
-    if _contains_any(normalized_query, GLOBAL_QUERY_HINTS):
-        return _resolve_graph_strategy(
-            SearchStrategy.GRAPH_GLOBAL,
+            requested,
             settings=settings,
-            route_reason="auto_graph_global_candidate",
-            fallback_mode=request.mode,
-        )
-    if _contains_any(normalized_query, GRAPH_LOCAL_HINTS):
-        return _resolve_graph_strategy(
-            SearchStrategy.GRAPH_LOCAL,
-            settings=settings,
-            route_reason="auto_graph_local_candidate",
+            route_reason=f"explicit_{requested.value}",
             fallback_mode=request.mode,
         )
     return ResolvedRetrievalStrategy(
         strategy=SearchStrategy.HYBRID,
         mode=request.mode,
-        route_reason="auto_baseline_hybrid",
+        route_reason="configured_hybrid",
     )
 
 
@@ -104,7 +67,3 @@ def _resolve_graph_strategy(
         mode=fallback_mode,
         route_reason=route_reason,
     )
-
-
-def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
-    return any(hint.casefold() in text for hint in hints)

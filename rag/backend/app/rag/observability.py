@@ -14,6 +14,7 @@ import httpx
 from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, Field
 
+from app.clients.http_retry import HttpRetryConfig, request_with_retry, retry_config_from_settings
 from app.config import Settings
 from app.rag.guardrails import GuardrailFinding
 
@@ -78,12 +79,14 @@ class HttpTraceExporter:
         bearer_token: str = "",
         timeout_seconds: float = 2.0,
         queue_size: int = 1024,
+        retry: HttpRetryConfig | None = None,
     ) -> None:
         self._endpoint = endpoint
         self._headers = {"content-type": "application/json", "accept": "application/json"}
         if bearer_token.strip():
             self._headers["authorization"] = f"Bearer {bearer_token.strip()}"
         self._timeout_seconds = timeout_seconds
+        self._retry = retry or HttpRetryConfig()
         self._queue: Queue[TraceSpanEvent | None] = Queue(maxsize=queue_size)
         self._closed = Event()
         self._worker = Thread(
@@ -130,8 +133,13 @@ class HttpTraceExporter:
                 try:
                     if event is None:
                         return
-                    response = client.post(
+                    response = request_with_retry(
+                        client,
+                        "POST",
                         self._endpoint,
+                        retry=self._retry,
+                        logger=trace_logger,
+                        log_extra={"trace_endpoint": self._endpoint},
                         json=event.model_dump(mode="json"),
                         headers=self._headers,
                     )
@@ -361,6 +369,7 @@ def configure_trace_exporter(settings: Settings) -> None:
             bearer_token=settings.trace_export_http_bearer_token,
             timeout_seconds=settings.trace_export_timeout_seconds,
             queue_size=settings.trace_export_queue_size,
+            retry=retry_config_from_settings(settings),
         )
         if endpoint
         else NoopTraceExporter()

@@ -49,7 +49,7 @@ def oci_service_env(settings: Settings) -> dict[str, str]:
             settings.oci_enterprise_ai_vlm_payload_template
         ),
         "OCI_ENTERPRISE_AI_VLM_INPUT_MODE": str(
-            getattr(settings, "oci_enterprise_ai_vlm_input_mode", "auto")
+            getattr(settings, "oci_enterprise_ai_vlm_input_mode", "files_api")
         ),
         "OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS": str(
             getattr(settings, "oci_enterprise_ai_vlm_max_output_tokens", 65536)

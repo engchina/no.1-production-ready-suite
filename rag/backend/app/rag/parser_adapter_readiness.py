@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import ParserAdapterBackend, Settings
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,6 @@ ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
 )
 ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "local",
-    "auto",
     "docling",
     "marker",
     "unstructured",
@@ -149,9 +149,7 @@ def _effective_adapter_order(
 ) -> tuple[ParserAdapterName, ...]:
     if adapter_backend in ADAPTER_PACKAGES:
         return (adapter_backend,) if _adapter_flag(settings, adapter_backend) else ()
-    if adapter_backend != "auto":
-        return ()
-    return tuple(backend for backend in ADAPTER_ORDER if _adapter_flag(settings, backend))
+    return ()
 
 
 def _adapter_status(
@@ -250,7 +248,14 @@ def _probe_service_health(
         import httpx
 
         with httpx.Client(timeout=float(settings.rag_parser_readiness_probe_timeout_seconds)) as c:
-            response = c.get(f"{url}/health")
+            response = request_with_retry(
+                c,
+                "GET",
+                f"{url}/health",
+                retry=retry_config_from_settings(settings),
+                logger=logger,
+                log_extra={"parser_backend": backend, "service_url": url},
+            )
             response.raise_for_status()
             payload = response.json()
     except Exception as exc:  # noqa: BLE001 - readiness は到達不可でも安全に missing 表示する

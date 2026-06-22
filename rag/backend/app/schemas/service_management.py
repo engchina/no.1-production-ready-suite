@@ -12,17 +12,42 @@ from app.services.status import ServiceRuntimeStatus
 DeploymentMode = Literal["dev", "prod"]
 
 
-class ServiceStatusData(BaseModel):
-    """1 マイクロサービスの非機密ステータス。"""
+class ServiceCatalogItemData(BaseModel):
+    """1 マイクロサービスの非機密カタログ情報(稼働プローブなし)。"""
 
     service_id: str
     category: ServiceCategory
     profile: ServiceProfile
     label_key: str
-    status: ServiceRuntimeStatus
+    depends_on: list[str] = Field(
+        default_factory=list,
+        description="このサービスの稼働に必要な依存サービス ID。",
+    )
     configured: bool = Field(
         description="base URL が設定済みか(未設定なら status=unconfigured)。",
     )
+
+
+class ServiceStatusData(ServiceCatalogItemData):
+    """1 マイクロサービスの非機密ステータス。"""
+
+    status: ServiceRuntimeStatus
+    blocked_by: list[str] = Field(
+        default_factory=list,
+        description="未稼働のためこのサービスをブロックしている依存サービス ID。",
+    )
+
+
+class ServiceCatalogData(BaseModel):
+    """サービス一覧の静的メタデータ + 制御可否 + 配備モード。"""
+
+    control_enabled: bool = Field(
+        description="起動/停止制御が有効か。False なら可視化のみ。dev は自動的に有効。",
+    )
+    deployment_mode: DeploymentMode = Field(
+        description="dev は uv プロセス起動、prod は docker compose 制御。ENVIRONMENT 由来。",
+    )
+    services: list[ServiceCatalogItemData] = Field(default_factory=list)
 
 
 class ServiceListData(BaseModel):

@@ -17,7 +17,7 @@ export const ja = {
   "dbGate.checking": "データベースの状態を確認しています…",
   "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
   "dbGate.notConfigured.message":
-    "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
+    "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面を利用できます。",
   "dbGate.unreachable.title": "データベースを起動してください",
   "dbGate.unreachable.message":
     "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
@@ -146,9 +146,7 @@ export const ja = {
     "Docling / Marker / Unstructured は任意依存として扱い、本プロジェクトの StructuredExtraction へ再マップします。",
   "settings.parserAdapters.backend": "使用エンジン",
   "settings.parserAdapters.backend.local": "Local",
-  "settings.parserAdapters.backend.auto": "Auto",
   "settings.parserAdapters.backend.local.description": "標準解析のみ",
-  "settings.parserAdapters.backend.auto.description": "有効な解析方式を順に試行",
   "settings.parserAdapters.backend.docling.description": "Docling を優先",
   "settings.parserAdapters.backend.marker.description": "Marker を優先",
   "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
@@ -303,7 +301,6 @@ export const ja = {
   "settings.parserAdapters.reason.audio_transcription_not_configured":
     "承認済み音声転写が未設定",
   "settings.parserAdapters.reason.local_backend_selected": "Local エンジン選択中",
-  "settings.parserAdapters.reason.source_aware_auto_order": "原本種別に応じた自動順を適用",
   "settings.parserAdapters.reason.selected_adapter_supported_for_source":
     "選択した解析方式が対応",
   "settings.parserAdapters.reason.selected_adapter_unsupported_for_source":
@@ -445,7 +442,17 @@ export const ja = {
   "settings.services.status.running": "稼働中",
   "settings.services.status.degraded": "縮退",
   "settings.services.status.stopped": "停止",
+  "settings.services.status.dependency_stopped": "推論サーバー未起動",
   "settings.services.status.unconfigured": "未設定",
+  "settings.services.status.loading": "確認中",
+  "settings.services.status.error": "取得失敗",
+  "settings.services.statusLoadingHint": "状態確認中です。",
+  "settings.services.statusLoadErrorHint": "状態を取得できませんでした。更新してください。",
+  "settings.services.inferenceServers": "使用する推論サーバー",
+  "settings.services.inferenceServerRequired":
+    "{service} を使用するには {servers} を起動してください",
+  "settings.services.dependencies": "使用する推論サーバー",
+  "settings.services.blockedBy": "先に起動してください: {services}",
   "settings.services.action.start": "起動",
   "settings.services.action.stop": "停止",
   "settings.services.action.starting": "起動中",
@@ -470,7 +477,9 @@ export const ja = {
   "settings.services.item.parserUnstructured": "Unstructured",
   "settings.services.item.parserMineru": "MinerU",
   "settings.services.item.parserDotsOcr": "Dots.OCR",
+  "settings.services.item.parserDotsOcrVllm": "Dots.OCR vLLM",
   "settings.services.item.parserGlmOcr": "GLM-OCR",
+  "settings.services.item.parserGlmOcrVllm": "GLM-OCR vLLM",
   "settings.services.item.parserAsr": "ASR(音声文字起こし)",
   "settings.services.item.parserOciGenaiVision": "OCI Generative AI (Vision)",
   "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
@@ -1004,9 +1013,6 @@ export const ja = {
   "settings.model.enterprise.vlmInputMode": "VLM 入力方式",
   "settings.model.enterprise.vlmInputModeHelp":
     "文書を Enterprise AI Vision/OCR へ渡す搬送方式です。文書解析方式が先に解析した文書には使われません。",
-  "settings.model.enterprise.vlmInputMode.auto": "Auto",
-  "settings.model.enterprise.vlmInputMode.auto.description":
-    "画像は inline、PDF など非画像は Files API",
   "settings.model.enterprise.vlmInputMode.filesApi": "Files API",
   "settings.model.enterprise.vlmInputMode.filesApi.description":
     "VLM 入力を明示的に /files へアップロード",
@@ -1636,15 +1642,15 @@ export const ja = {
   "upload.knowledgeBases.manage": "知識ベース管理",
   "upload.knowledgeBases.selected": "{count} 件の知識ベースへ登録します。",
   "upload.knowledgeBases.defaultHint": "未選択の場合は既定知識ベースへ登録します。",
-  "upload.autoIngest.label": "アップロード後に自動取込",
-  "upload.autoIngest.enabled":
-    "保存後に OCR・構造化抽出・チャンク化・索引作成を開始します。",
-  "upload.autoIngest.disabled": "保存だけ行い、文書画面または一覧から取込を開始します。",
-  "upload.autoIngest.running": "自動取込を開始しています。完了までこの画面で状態を更新します。",
+  "upload.ingestion.watch": "取込ジョブの状態を更新しています。",
 
   "sourceProfile.title": "原本の処理情報",
-  "sourceProfile.parser": "処理方針",
-  "sourceProfile.parserBackend": "解析エンジン",
+  "sourceProfile.documentWorkspaceTitle": "原本と取込の処理情報",
+  "sourceProfile.parser": "原本判定",
+  "sourceProfile.parserBackend": "取込解析エンジン",
+  "sourceProfile.initialParserBackend": "アップロード時の初期判定",
+  "sourceProfile.ingestionParser.pending": "確認中",
+  "sourceProfile.ingestionParser.unavailable": "未取込",
   "sourceProfile.parserVersion": "解析器 version",
   "sourceProfile.previewKind": "プレビュー",
   "sourceProfile.contentType": "MIME type",
@@ -1690,7 +1696,7 @@ export const ja = {
   "sourceProfile.warning.contentTypeMismatch":
     "MIME type と拡張子の推定が一致していません。",
   "sourceProfile.warning.largeFile": "大きなファイルのため、取込に時間がかかる可能性があります。",
-  "sourceProfile.warning.unknown": "原本種別を自動判定できませんでした。",
+  "sourceProfile.warning.unknown": "原本種別を判定できませんでした。",
   "sourceProfile.warning.unsupportedAudio": "音声ファイルは現在の取込対象外です。",
   "sourceProfile.warning.unsupportedOutlookMsg":
     "Outlook MSG は現在のメール parser では取込対象外です。",

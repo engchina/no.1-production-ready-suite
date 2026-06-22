@@ -53,7 +53,7 @@ type ParserAdapterForm = {
 };
 
 // parser バックエンドはサービスとして起動できる parser microservice のみを並べる
-// (local/auto は廃止)。CPU/GPU adapter + OCI クラウド backend の計 8 種。
+// CPU/GPU adapter + OCI クラウド backend の計 8 種。
 const BACKEND_OPTIONS: ParserAdapterBackend[] = [
   "docling",
   "marker",
@@ -296,7 +296,7 @@ function OverviewCard({
               );
             })}
           </div>
-          {form.adapter_backend === "local" || form.adapter_backend === "auto" ? (
+          {form.adapter_backend === "local" ? (
             <p className="text-xs leading-relaxed text-warning">
               {t("settings.parserAdapters.legacyBackendNotice")}
             </p>
@@ -1056,7 +1056,6 @@ function adapterLabel(adapter: ParserAdapterBackendName) {
 
 function backendLabel(backend: ParserAdapterBackend) {
   if (backend === "local") return t("settings.parserAdapters.backend.local");
-  if (backend === "auto") return t("settings.parserAdapters.backend.auto");
   if (backend === "mineru") return "MinerU";
   if (backend === "dots_ocr") return "Dots.OCR";
   if (backend === "glm_ocr") return "GLM-OCR";
@@ -1139,7 +1138,6 @@ function routeReasonLabel(code: string) {
     "local_parser_preferred_for_source",
     "audio_transcription_not_configured",
     "local_backend_selected",
-    "source_aware_auto_order",
     "selected_adapter_supported_for_source",
     "selected_adapter_unsupported_for_source",
     "active_adapter_available_for_source",

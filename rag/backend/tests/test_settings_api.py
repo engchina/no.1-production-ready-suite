@@ -42,6 +42,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
 ) -> None:
     """adapter readiness は flag と Python package 有無を非機密に返す。"""
     settings = get_settings()
+    # 旧 runtime 値 auto は利用者向けには返さず、明示値 local へ寄せる。
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "auto")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_marker_enabled", True)
@@ -63,24 +64,24 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["adapter_backend"] == "auto"
-    assert body["effective_order"] == ["docling", "marker"]
+    assert body["adapter_backend"] == "local"
+    assert body["effective_order"] == []
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
-    assert by_backend["docling"]["status"] == "active"
+    assert by_backend["docling"]["status"] == "ignored"
     assert by_backend["docling"]["import_name"] == "docling"
     assert by_backend["docling"]["distribution_name"] == "docling"
     assert by_backend["docling"]["install_package"] == "docling==2.103.0"
     assert by_backend["docling"]["version"] == "1.2.3"
-    assert by_backend["marker"]["status"] == "missing"
+    assert by_backend["marker"]["status"] == "ignored"
     assert by_backend["marker"]["install_package"] == "marker-pdf[full]==1.10.2"
-    assert by_backend["marker"]["warning_code"] == "adapter_package_missing"
+    assert by_backend["marker"]["warning_code"] == "adapter_flag_ignored_by_backend"
     assert by_backend["unstructured"]["install_package"] == "unstructured[all-docs]==0.23.1"
     assert by_backend["unstructured"]["status"] == "disabled"
-    assert body["scorecard"]["selected_backend"] == "auto"
-    assert body["scorecard"]["recommended_backend"] == "docling"
+    assert body["scorecard"]["selected_backend"] == "local"
+    assert body["scorecard"]["recommended_backend"] == "local"
     score_by_backend = {entry["backend"]: entry for entry in body["scorecard"]["entries"]}
-    assert score_by_backend["docling"]["recommended"] is True
-    assert score_by_backend["marker"]["warning_codes"] == ["adapter_package_missing"]
+    assert score_by_backend["local"]["recommended"] is True
+    assert score_by_backend["marker"]["warning_codes"] == ["adapter_flag_ignored_by_backend"]
     route_by_kind = {route["source_kind"]: route for route in body["source_routes"]}
     assert route_by_kind["pdf"]["candidate_order"] == [
         "docling",
@@ -89,12 +90,13 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
         "mineru",
         "glm_ocr",
     ]
-    assert route_by_kind["pdf"]["selected_backend"] == "docling"
+    assert route_by_kind["pdf"]["attempted_order"] == []
+    assert route_by_kind["pdf"]["selected_backend"] == "local"
     assert route_by_kind["email"]["selected_backend"] == "local"
     assert "unstructured_adapter_feature_flag_disabled" in route_by_kind["email"]["warning_codes"]
     matrix = body["backend_source_kind_matrix"]
     assert matrix["evidence_source"] == "runtime_routes"
-    assert "pdf" in matrix["backend_source_kinds"]["docling"]
+    assert "pdf" in matrix["backend_source_kinds"]["local"]
     assert "email" in matrix["backend_source_kinds"]["local"]
     assert "audio" in matrix["backend_source_kinds"]["local"]
     assert matrix["missing_source_kinds"] == []
@@ -310,19 +312,15 @@ def test_update_parser_adapter_settings_persists_env_and_mutates_runtime(
         },
     )
 
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["adapter_backend"] == "auto"
-    assert body["effective_order"] == ["docling", "unstructured"]
-    assert settings.rag_parser_adapter_backend == "auto"
-    assert settings.rag_parser_docling_enabled is True
+    assert resp.status_code == 422
+    assert settings.rag_parser_adapter_backend == "local"
+    assert settings.rag_parser_docling_enabled is False
     assert settings.rag_parser_marker_enabled is False
-    assert settings.rag_parser_unstructured_enabled is True
+    assert settings.rag_parser_unstructured_enabled is False
     persisted = env_file.read_text(encoding="utf-8")
-    assert "RAG_PARSER_ADAPTER_BACKEND=auto" in persisted
-    assert "RAG_PARSER_DOCLING_ENABLED=true" in persisted
-    assert "RAG_PARSER_MARKER_ENABLED=false" in persisted
-    assert "RAG_PARSER_UNSTRUCTURED_ENABLED=true" in persisted
+    assert "RAG_PARSER_ADAPTER_BACKEND=local" in persisted
+    assert "RAG_PARSER_DOCLING_ENABLED=false" in persisted
+    assert "RAG_PARSER_UNSTRUCTURED_ENABLED=true" not in persisted
 
 
 def test_update_parser_adapter_settings_does_not_mutate_runtime_when_env_write_fails(
@@ -947,7 +945,7 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
     ]
     assert body["settings"]["enterprise_ai"]["default_model_id"] == "enterprise-llm"
     assert body["settings"]["enterprise_ai"]["api_path"] == "/responses"
-    assert body["settings"]["enterprise_ai"]["vlm_input_mode"] == "auto"
+    assert body["settings"]["enterprise_ai"]["vlm_input_mode"] == "files_api"
     assert body["settings"]["enterprise_ai"]["text_payload_template"] == LLM_TEMPLATE
     assert body["settings"]["enterprise_ai"]["vision_payload_template"] == VLM_TEMPLATE
     assert body["settings"]["enterprise_ai"]["text_response_path"] == "/data/text"
@@ -1348,7 +1346,7 @@ def test_model_settings_requires_enterprise_ai_model_catalog() -> None:
 def test_enterprise_ai_model_settings_defaults_max_retries_to_three() -> None:
     """設定 API スキーマの最大リトライ回数既定値は 3。"""
     assert EnterpriseAiModelSettings().max_retries == 3
-    assert EnterpriseAiModelSettings().vlm_input_mode == "auto"
+    assert EnterpriseAiModelSettings().vlm_input_mode == "files_api"
     assert EnterpriseAiModelSettings().llm_max_output_tokens == 1200
     assert EnterpriseAiModelSettings().vlm_max_output_tokens == 65536
 

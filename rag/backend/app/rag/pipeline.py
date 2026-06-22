@@ -1603,12 +1603,12 @@ def _apply_retrieval_adapter_request(
 ) -> SearchRequest:
     """Retrieval アダプターの mode/strategy bias を request 既定値にだけ適用する。
 
-    per-request で明示された mode(HYBRID 以外)/ strategy(AUTO 以外)は上書きしない。
+    per-request で明示された mode(HYBRID 以外)は上書きしない。
     """
     updates: dict[str, object] = {}
     if params.mode_override is not None and request.mode == SearchMode.HYBRID:
         updates["mode"] = params.mode_override
-    if params.strategy_bias is not None and request.strategy == SearchStrategy.AUTO:
+    if params.strategy_bias is not None and request.strategy == SearchStrategy.HYBRID:
         updates["strategy"] = params.strategy_bias
     return request.model_copy(update=updates) if updates else request
 

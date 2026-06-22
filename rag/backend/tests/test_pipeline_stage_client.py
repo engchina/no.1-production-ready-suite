@@ -1,15 +1,16 @@
-"""PipelineStageClient(chunking 委譲 + 安全縮退)のテスト。"""
+"""PipelineStageClient(chunking 委譲)のテスト。"""
 
 from __future__ import annotations
 
 from typing import Any
 
 import httpx
+import pytest
 from pytest import MonkeyPatch
 from rag_parser_core.extraction import StructuredExtraction
 from rag_pipeline_core.stage import ChunkingStageRequest, ChunkingStageResponse, ChunkModel
 
-from app.clients.pipeline_stage import PipelineStageClient
+from app.clients.pipeline_stage import PipelineStageClient, PipelineStageServiceError
 from app.config import Settings
 
 
@@ -37,6 +38,8 @@ def test_remote_success_returns_chunks(monkeypatch: MonkeyPatch) -> None:
     ).model_dump()
 
     class _FakeResponse:
+        status_code = 200
+
         def raise_for_status(self) -> None:
             return None
 
@@ -56,6 +59,10 @@ def test_remote_success_returns_chunks(monkeypatch: MonkeyPatch) -> None:
         def post(self, *a: Any, **k: Any) -> _FakeResponse:
             return _FakeResponse()
 
+        def request(self, method: str, *a: Any, **k: Any) -> _FakeResponse:
+            assert method == "POST"
+            return self.post(*a, **k)
+
     monkeypatch.setattr(httpx, "Client", _FakeClient)
     client = PipelineStageClient(
         Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
@@ -66,7 +73,7 @@ def test_remote_success_returns_chunks(monkeypatch: MonkeyPatch) -> None:
     assert chunks[0].metadata["k"] == "v"
 
 
-def test_remote_failure_degrades_to_none(monkeypatch: MonkeyPatch) -> None:
+def test_remote_failure_raises_when_enabled(monkeypatch: MonkeyPatch) -> None:
     class _BoomClient:
         def __init__(self, *a: Any, **k: Any) -> None:
             pass
@@ -80,12 +87,16 @@ def test_remote_failure_degrades_to_none(monkeypatch: MonkeyPatch) -> None:
         def post(self, *a: Any, **k: Any) -> Any:
             raise httpx.ConnectError("refused")
 
+        def request(self, method: str, *a: Any, **k: Any) -> Any:
+            assert method == "POST"
+            return self.post(*a, **k)
+
     monkeypatch.setattr(httpx, "Client", _BoomClient)
     client = PipelineStageClient(
         Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
     )
-    # 未達は None(呼び出し側で in-process 縮退)。例外を投げない。
-    assert client.run_chunking(_request()) is None
+    with pytest.raises(PipelineStageServiceError, match="chunking"):
+        client.run_chunking(_request())
 
 
 # --- vector_index / graphrag 委譲 -------------------------------------------
@@ -93,6 +104,8 @@ def test_remote_failure_degrades_to_none(monkeypatch: MonkeyPatch) -> None:
 
 def _fake_post(monkeypatch: MonkeyPatch, payload: dict[str, Any]) -> None:
     class _Resp:
+        status_code = 200
+
         def raise_for_status(self) -> None:
             return None
 
@@ -111,6 +124,10 @@ def _fake_post(monkeypatch: MonkeyPatch, payload: dict[str, Any]) -> None:
 
         def post(self, *a: Any, **k: Any) -> _Resp:
             return _Resp()
+
+        def request(self, method: str, *a: Any, **k: Any) -> _Resp:
+            assert method == "POST"
+            return self.post(*a, **k)
 
     monkeypatch.setattr(httpx, "Client", _Client)
 

@@ -46,6 +46,8 @@ import {
 } from "@/lib/api";
 import { parseStructuredExtraction, type SourceDerivationView } from "@/lib/extraction";
 import {
+  documentWorkspaceShouldRefresh,
+  ingestionJobIsActive,
   useDocument,
   useDocumentChunks,
   useDocumentExtractionExport,
@@ -87,6 +89,14 @@ import {
   type TableCellFocusTarget,
 } from "@/lib/table-cell-focus";
 import { cn } from "@/lib/utils";
+
+const DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS = 2000;
+
+type IngestionParserDisplay = {
+  backend: string | null;
+  profile: string | null;
+  source: "segment" | "extraction" | "pending" | "unavailable";
+};
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -147,6 +157,52 @@ function findTableCellByKey(
   return null;
 }
 
+export function resolveIngestionParserDisplay({
+  segments,
+  extractionBackend,
+  extractionProfile,
+  loading,
+}: {
+  segments: Pick<IngestionSegment, "status" | "parser_backend" | "parser_profile">[];
+  extractionBackend?: string | null;
+  extractionProfile?: string | null;
+  loading?: boolean;
+}): IngestionParserDisplay {
+  const segment = selectDisplaySegment(segments);
+  if (segment) {
+    return {
+      backend: segment.parser_backend,
+      profile: segment.parser_profile,
+      source: "segment",
+    };
+  }
+  if (extractionBackend || extractionProfile) {
+    return {
+      backend: extractionBackend ?? null,
+      profile: extractionProfile ?? null,
+      source: "extraction",
+    };
+  }
+  return {
+    backend: null,
+    profile: null,
+    source: loading ? "pending" : "unavailable",
+  };
+}
+
+function selectDisplaySegment(
+  segments: Pick<IngestionSegment, "status" | "parser_backend" | "parser_profile">[]
+): Pick<IngestionSegment, "status" | "parser_backend" | "parser_profile"> | null {
+  return (
+    segments.find((segment) => segment.status === "RUNNING") ??
+    segments.find((segment) => segment.status === "QUEUED") ??
+    segments.find((segment) => segment.status === "FAILED") ??
+    segments.find((segment) => segment.status === "SUCCEEDED") ??
+    segments[0] ??
+    null
+  );
+}
+
 type WorkspaceFocusRequest = {
   key: string;
   target: "chunk" | "element" | "table_cell";
@@ -184,6 +240,7 @@ export function DocumentWorkspace({
   const confirm = useConfirm();
   const retryFailedSegments = useRetryFailedDocumentIngestionSegments();
   const queuedJob = useIngestionJob(enqueueIngestion.data?.id ?? null);
+  const approvedJob = useIngestionJob(approveDocument.data?.id ?? null);
   const retriedSegmentJob = useIngestionJob(retryFailedSegments.data?.id ?? null);
   const [localWatchProcessing, setLocalWatchProcessing] = useState(false);
   const [editingReview, setEditingReview] = useState(false);
@@ -242,6 +299,25 @@ export function DocumentWorkspace({
     searchParams,
   ]);
   const status = query.data?.status;
+  const queuedIngestionJobStatus = queuedJob.data?.status ?? enqueueIngestion.data?.status;
+  const approvedIngestionJobStatus = approvedJob.data?.status ?? approveDocument.data?.status;
+  const retriedSegmentJobStatus = retriedSegmentJob.data?.status ?? retryFailedSegments.data?.status;
+  const activeSubmittedJob = [
+    queuedIngestionJobStatus,
+    approvedIngestionJobStatus,
+    retriedSegmentJobStatus,
+  ].some(ingestionJobIsActive);
+  const autoRefreshActive = documentWorkspaceShouldRefresh({
+    documentStatus: status,
+    watchProcessing,
+    localWatchProcessing,
+    jobStatuses: [
+      queuedIngestionJobStatus,
+      approvedIngestionJobStatus,
+      retriedSegmentJobStatus,
+    ],
+    segmentStatuses: segmentsQuery.data?.map((segment) => segment.status) ?? [],
+  });
   const approveErrorText = approveDocument.isError
     ? errorMessage(approveDocument.error, t("flow.approveFailed"))
     : "";
@@ -251,6 +327,10 @@ export function DocumentWorkspace({
     () => parseStructuredExtraction(query.data?.extraction ?? {}),
     [query.data?.extraction]
   );
+  const refetchDocument = query.refetch;
+  const refetchChunks = chunksQuery.refetch;
+  const refetchSegments = segmentsQuery.refetch;
+  const refetchExtractionExport = extractionExportQuery.refetch;
   const selectedChunk = useMemo(
     () => chunksQuery.data?.find((chunk) => chunk.chunk_id === selectedChunkId) ?? null,
     [chunksQuery.data, selectedChunkId]
@@ -383,25 +463,30 @@ export function DocumentWorkspace({
   }
 
   useEffect(() => {
-    // REVIEW(確認待ち)は人手の操作待ちなので polling を止める。
-    const isWatchTerminal =
-      status === "INDEXED" || status === "ERROR" || status === "REVIEW";
-    const shouldPoll =
-      status === "INGESTING" ||
-      status === "INDEXING" ||
-      ((watchProcessing || localWatchProcessing) && !isWatchTerminal);
-    if (!shouldPoll) return;
+    if (!autoRefreshActive) return;
     const timer = window.setInterval(() => {
-      void query.refetch();
-    }, 2000);
+      void refetchDocument();
+      void refetchSegments();
+      void refetchChunks();
+      void refetchExtractionExport();
+    }, DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [localWatchProcessing, query, status, watchProcessing]);
+  }, [
+    autoRefreshActive,
+    refetchChunks,
+    refetchDocument,
+    refetchExtractionExport,
+    refetchSegments,
+  ]);
 
   useEffect(() => {
-    if (status === "INDEXED" || status === "ERROR" || status === "REVIEW") {
+    if (
+      !activeSubmittedJob &&
+      (status === "INDEXED" || status === "ERROR" || status === "REVIEW")
+    ) {
       setLocalWatchProcessing(false);
     }
-  }, [status]);
+  }, [activeSubmittedJob, status]);
 
   useEffect(() => {
     const chunks = chunksQuery.data ?? [];
@@ -555,6 +640,12 @@ export function DocumentWorkspace({
 
   const doc = query.data;
   const sourceProfile = doc.source_profile ?? initialSourceProfile;
+  const ingestionParser = resolveIngestionParserDisplay({
+    segments: segmentsQuery.data ?? [],
+    extractionBackend: extractionExportQuery.data?.parser_backend,
+    extractionProfile: extractionExportQuery.data?.parser_profile,
+    loading: segmentsQuery.isPending || extractionExportQuery.isPending,
+  });
 
   return (
     <Card>
@@ -576,7 +667,7 @@ export function DocumentWorkspace({
 
         <FlowStepper status={doc.status} />
         {watchProcessing && doc.status !== "INDEXED" && doc.status !== "ERROR" ? (
-          <Banner severity="info">{t("upload.autoIngest.running")}</Banner>
+          <Banner severity="info">{t("upload.ingestion.watch")}</Banner>
         ) : null}
         <IngestionConfigDriftBanner documentId={documentId} />
 
@@ -601,7 +692,9 @@ export function DocumentWorkspace({
           </div>
         </dl>
 
-        {sourceProfile ? <SourceProfilePanel profile={sourceProfile} /> : null}
+        {sourceProfile ? (
+          <SourceProfilePanel profile={sourceProfile} ingestionParser={ingestionParser} />
+        ) : null}
 
         {parsedExtraction.sourceDerivation ? (
           <SourceDerivationPanel
@@ -1245,14 +1338,30 @@ function SourceDerivationPanel({
   );
 }
 
-function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
+function SourceProfilePanel({
+  profile,
+  ingestionParser,
+}: {
+  profile: SourceProfile;
+  ingestionParser: IngestionParserDisplay;
+}) {
   const warnings = profile.quality_warnings ?? [];
+  const ingestionBackend = ingestionParser.backend
+    ? parserBackendLabel(ingestionParser.backend)
+    : ingestionParser.source === "pending"
+      ? t("sourceProfile.ingestionParser.pending")
+      : t("sourceProfile.ingestionParser.unavailable");
+  const ingestionProfile =
+    ingestionParser.profile && ingestionParser.profile !== ingestionParser.backend
+      ? ingestionParser.profile
+      : null;
+  const initialParser = `${parserBackendLabel(profile.parser_backend)} / ${profile.parser_version}`;
   return (
     <section className="rounded-md border border-border bg-background p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <FileSearch size={16} className="text-primary" aria-hidden />
-          {t("sourceProfile.title")}
+          {t("sourceProfile.documentWorkspaceTitle")}
         </h3>
         <span className="rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground">
           {t(sourceModalityKey(profile.modality))}
@@ -1260,15 +1369,18 @@ function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
       </div>
       <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 xl:grid-cols-6">
         <div>
+          <dt className="text-xs text-muted">{t("sourceProfile.parserBackend")}</dt>
+          <dd className="mt-0.5 font-medium text-foreground">
+            {ingestionBackend}
+          </dd>
+          {ingestionProfile ? (
+            <dd className="mt-0.5 break-all text-xs text-muted">{ingestionProfile}</dd>
+          ) : null}
+        </div>
+        <div>
           <dt className="text-xs text-muted">{t("sourceProfile.parser")}</dt>
           <dd className="mt-0.5 font-medium text-foreground">
             {t(parserProfileKey(profile.parser_profile))}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted">{t("sourceProfile.parserBackend")}</dt>
-          <dd className="mt-0.5 break-all font-medium text-foreground">
-            {profile.parser_backend}
           </dd>
         </div>
         <div>
@@ -1308,6 +1420,9 @@ function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
           {unsupportedReasonLabel(profile.unsupported_reason)}
         </p>
       ) : null}
+      <p className="mt-3 text-xs text-muted">
+        {t("sourceProfile.initialParserBackend")}: {initialParser}
+      </p>
       {warnings.length > 0 ? (
         <ul className="mt-3 space-y-1 text-xs text-warning">
           {warnings.map((warning) => (
@@ -1319,6 +1434,35 @@ function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
       )}
     </section>
   );
+}
+
+function parserBackendLabel(backend: string): string {
+  switch (backend) {
+    case "docling":
+      return "Docling";
+    case "marker":
+      return "Marker";
+    case "unstructured":
+      return "Unstructured";
+    case "mineru":
+      return "MinerU";
+    case "dots_ocr":
+      return "Dots.OCR";
+    case "glm_ocr":
+      return "GLM-OCR";
+    case "oci_genai_vision":
+    case "enterprise_ai_vlm":
+      return "OCI Generative AI Vision";
+    case "oci_document_understanding":
+      return "OCI Document Understanding";
+    case "enterprise_ai":
+      return "OCI Enterprise AI";
+    case "local":
+    case "local_partition":
+      return "ローカル解析";
+    default:
+      return backend;
+  }
 }
 
 function segmentStatusLabel(status: string): string {

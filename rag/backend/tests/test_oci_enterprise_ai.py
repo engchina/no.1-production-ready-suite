@@ -140,6 +140,8 @@ async def test_oci_vlm_decodes_gb18030_text_documents() -> None:
 
 async def test_oci_vlm_posts_image_data_url_without_files_api() -> None:
     """画像入力は OpenAI Responses の base64 data URL として送る。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_vlm_input_mode = "inline_image"
     transport = FakeEnterpriseAiTransport(
         {
             "data": {
@@ -150,7 +152,7 @@ async def test_oci_vlm_posts_image_data_url_without_files_api() -> None:
             }
         }
     )
-    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
     await client.extract_with_vlm(b"png-bytes", "OCR", mime_type="image/png")
 
@@ -243,8 +245,10 @@ async def test_oci_vlm_omits_json_schema_for_gemini_provider() -> None:
 
 async def test_oci_vision_smoke_test_uses_minimal_openai_image_payload() -> None:
     """Vision 接続確認は JSON schema なしの最小 OpenAI image payload を使う。"""
+    settings = _oci_settings()
+    settings.oci_enterprise_ai_vlm_input_mode = "files_api"
     transport = FakeEnterpriseAiTransport({"output_text": "画像を確認しました。"})
-    client = OciEnterpriseAiClient(settings=_oci_settings(), http_transport=transport)
+    client = OciEnterpriseAiClient(settings=settings, http_transport=transport)
 
     result = await client.generate_from_image(b"png-bytes", "画像を確認", mime_type="image/png")
 

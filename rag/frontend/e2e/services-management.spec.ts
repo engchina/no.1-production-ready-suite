@@ -12,7 +12,12 @@ const authStatus = {
   warning_messages: [],
 };
 
-type ServiceStatus = "running" | "degraded" | "stopped" | "unconfigured";
+type ServiceStatus =
+  | "running"
+  | "degraded"
+  | "stopped"
+  | "dependency_stopped"
+  | "unconfigured";
 
 interface ServiceRow {
   service_id: string;
@@ -32,6 +37,8 @@ interface ServiceRow {
   label_key: string;
   status: ServiceStatus;
   configured: boolean;
+  depends_on: string[];
+  blocked_by: string[];
 }
 
 function defaultServices(): ServiceRow[] {
@@ -43,6 +50,8 @@ function defaultServices(): ServiceRow[] {
       label_key: "settings.services.item.preprocessOfficeToPdf",
       status: "running",
       configured: true,
+      depends_on: [],
+      blocked_by: [],
     },
     {
       service_id: "parser-docling",
@@ -51,6 +60,8 @@ function defaultServices(): ServiceRow[] {
       label_key: "settings.services.item.parserDocling",
       status: "stopped",
       configured: true,
+      depends_on: [],
+      blocked_by: [],
     },
     {
       service_id: "parser-mineru",
@@ -59,6 +70,48 @@ function defaultServices(): ServiceRow[] {
       label_key: "settings.services.item.parserMineru",
       status: "stopped",
       configured: true,
+      depends_on: [],
+      blocked_by: [],
+    },
+    {
+      service_id: "parser-dots-ocr",
+      category: "parser",
+      profile: "gpu",
+      label_key: "settings.services.item.parserDotsOcr",
+      status: "dependency_stopped",
+      configured: true,
+      depends_on: ["parser-dots-ocr-vllm"],
+      blocked_by: ["parser-dots-ocr-vllm"],
+    },
+    {
+      service_id: "parser-dots-ocr-vllm",
+      category: "parser",
+      profile: "gpu",
+      label_key: "settings.services.item.parserDotsOcrVllm",
+      status: "stopped",
+      configured: true,
+      depends_on: [],
+      blocked_by: [],
+    },
+    {
+      service_id: "parser-glm-ocr",
+      category: "parser",
+      profile: "gpu",
+      label_key: "settings.services.item.parserGlmOcr",
+      status: "dependency_stopped",
+      configured: true,
+      depends_on: ["parser-glm-ocr-vllm"],
+      blocked_by: ["parser-glm-ocr-vllm"],
+    },
+    {
+      service_id: "parser-glm-ocr-vllm",
+      category: "parser",
+      profile: "gpu",
+      label_key: "settings.services.item.parserGlmOcrVllm",
+      status: "stopped",
+      configured: true,
+      depends_on: [],
+      blocked_by: [],
     },
     {
       service_id: "parser-oci-genai-vision",
@@ -67,6 +120,8 @@ function defaultServices(): ServiceRow[] {
       label_key: "settings.services.item.parserOciGenaiVision",
       status: "stopped",
       configured: false,
+      depends_on: [],
+      blocked_by: [],
     },
     {
       service_id: "parser-oci-document-understanding",
@@ -75,6 +130,8 @@ function defaultServices(): ServiceRow[] {
       label_key: "settings.services.item.parserOciDocumentUnderstanding",
       status: "unconfigured",
       configured: false,
+      depends_on: [],
+      blocked_by: [],
     },
     {
       service_id: "pipeline-chunking",
@@ -83,6 +140,8 @@ function defaultServices(): ServiceRow[] {
       label_key: "settings.services.item.pipelineChunking",
       status: "stopped",
       configured: true,
+      depends_on: [],
+      blocked_by: [],
     },
     {
       service_id: "pipeline-retrieval",
@@ -91,6 +150,8 @@ function defaultServices(): ServiceRow[] {
       label_key: "settings.services.item.pipelineRetrieval",
       status: "stopped",
       configured: true,
+      depends_on: [],
+      blocked_by: [],
     },
   ];
 }
@@ -108,6 +169,35 @@ async function mockServices(
     deployment_mode: options.deploymentMode ?? "prod",
     services: options.services ?? defaultServices(),
   };
+  await page.route("**/api/services/catalog", async (route) => {
+    const catalogServices = state.services.map((service) => ({
+      service_id: service.service_id,
+      category: service.category,
+      profile: service.profile,
+      label_key: service.label_key,
+      configured: service.configured,
+      depends_on: service.depends_on,
+    }));
+    await route.fulfill({
+      json: {
+        data: { ...state, services: catalogServices },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/services/*/status", async (route) => {
+    const id = route.request().url().match(/services\/([^/]+)\/status/)?.[1] ?? "";
+    const target = state.services.find((s) => s.service_id === decodeURIComponent(id));
+    await route.fulfill({
+      status: target ? 200 : 404,
+      json: {
+        data: target ?? null,
+        error_messages: target ? [] : ["指定したサービスが見つかりません。"],
+        warning_messages: [],
+      },
+    });
+  });
   await page.route("**/api/services", async (route) => {
     await route.fulfill({
       json: { data: state, error_messages: [], warning_messages: [] },
@@ -186,6 +276,25 @@ for (const viewport of [
     // 稼働状態バッジ。
     await expect(page.getByText("稼働中").first()).toBeVisible();
     await expect(page.getByText("停止").first()).toBeVisible();
+    await expect(page.getByText("推論サーバー未起動").first()).toBeVisible();
+    await expect(
+      page.getByText("使用する推論サーバー: Dots.OCR vLLM(停止)")
+    ).toBeVisible();
+    await expect(
+      page.getByText("Dots.OCR を使用するには Dots.OCR vLLM を起動してください")
+    ).toBeVisible();
+    await expect(
+      page.getByText("使用する推論サーバー: GLM-OCR vLLM(停止)")
+    ).toBeVisible();
+    await expect(
+      page.getByText("GLM-OCR を使用するには GLM-OCR vLLM を起動してください")
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Dots.OCR 起動" })
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "GLM-OCR 起動" })
+    ).toBeDisabled();
     await expectNoHorizontalOverflow(page);
   });
 }
@@ -223,6 +332,9 @@ test("dev モードは uv バッジと有効化された制御を表示する", 
   await expect(
     page.getByRole("button", { name: "Docling 起動" })
   ).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Dots.OCR 起動" })
+  ).toBeDisabled();
 });
 
 test("制御有効時は確認ダイアログを経て停止できる", async ({ page }) => {
@@ -250,7 +362,7 @@ test("制御有効時は確認なしで起動できる", async ({ page }) => {
 
 test("取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await page.route("**/api/services", async (route) => {
+  await page.route("**/api/services/catalog", async (route) => {
     await route.fulfill({
       status: 503,
       json: {

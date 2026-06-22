@@ -5,7 +5,10 @@ import {
   DOCUMENT_ACTIVE_STATUSES,
   adbIsTransitioning,
   dashboardHasActiveWork,
+  documentWorkspaceShouldRefresh,
   documentsHaveActiveWork,
+  ingestionJobIsActive,
+  ingestionSegmentHasActiveWork,
 } from "./queries";
 import type { DashboardActivity, DocumentSummary, FileStatus } from "./api";
 
@@ -74,5 +77,69 @@ describe("dashboardHasActiveWork", () => {
 
   it("安定状態のみなら false", () => {
     expect(dashboardHasActiveWork([activity("UPLOADED"), activity("INDEXED")])).toBe(false);
+  });
+});
+
+describe("ingestionJobIsActive", () => {
+  it("QUEUED/RUNNING のみ true", () => {
+    expect(ingestionJobIsActive("QUEUED")).toBe(true);
+    expect(ingestionJobIsActive("RUNNING")).toBe(true);
+    expect(ingestionJobIsActive("SUCCEEDED")).toBe(false);
+    expect(ingestionJobIsActive("FAILED")).toBe(false);
+    expect(ingestionJobIsActive(undefined)).toBe(false);
+  });
+});
+
+describe("ingestionSegmentHasActiveWork", () => {
+  it("QUEUED/RUNNING segment があれば true", () => {
+    expect(ingestionSegmentHasActiveWork([{ status: "SUCCEEDED" }])).toBe(false);
+    expect(ingestionSegmentHasActiveWork([{ status: "QUEUED" }])).toBe(true);
+    expect(ingestionSegmentHasActiveWork([{ status: "RUNNING" }])).toBe(true);
+  });
+});
+
+describe("documentWorkspaceShouldRefresh", () => {
+  it("取込/索引中の文書では true", () => {
+    expect(documentWorkspaceShouldRefresh({ documentStatus: "INGESTING" })).toBe(true);
+    expect(documentWorkspaceShouldRefresh({ documentStatus: "INDEXING" })).toBe(true);
+  });
+
+  it("ERROR/REVIEW の画面でも投入済み job が動いていれば true", () => {
+    expect(
+      documentWorkspaceShouldRefresh({
+        documentStatus: "ERROR",
+        jobStatuses: ["QUEUED"],
+      })
+    ).toBe(true);
+    expect(
+      documentWorkspaceShouldRefresh({
+        documentStatus: "REVIEW",
+        jobStatuses: ["RUNNING"],
+      })
+    ).toBe(true);
+  });
+
+  it("投入直後の watch 窓では安定状態に入るまで true", () => {
+    expect(
+      documentWorkspaceShouldRefresh({
+        documentStatus: "UPLOADED",
+        localWatchProcessing: true,
+      })
+    ).toBe(true);
+    expect(
+      documentWorkspaceShouldRefresh({
+        documentStatus: "REVIEW",
+        localWatchProcessing: true,
+      })
+    ).toBe(false);
+  });
+
+  it("segment が進行中なら true", () => {
+    expect(
+      documentWorkspaceShouldRefresh({
+        documentStatus: "UPLOADED",
+        segmentStatuses: ["RUNNING"],
+      })
+    ).toBe(true);
   });
 });

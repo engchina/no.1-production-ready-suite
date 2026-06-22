@@ -36,7 +36,7 @@ class RetrievalSpec:
     corrective_retrieval: bool = False
     business_fit_weighting: bool = False
     # 実行が GPU/専用索引/LLM を要し、未配線のうちは hybrid 検索へ安全縮退する戦略
-    # (strategy_bias=None のため resolve_retrieval_strategy が自動的に HYBRID へ落とす)。
+    # (strategy_bias=None のため resolve_retrieval_strategy は HYBRID を使う)。
     pending_execution: bool = False
 
 

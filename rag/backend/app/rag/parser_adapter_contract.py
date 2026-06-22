@@ -199,10 +199,10 @@ def run_parser_adapter_compatibility_matrix(
 
 
 def strict_parser_adapter_settings(settings: Settings) -> Settings:
-    """staging smoke 用に外部 parser adapter を auto backend として全選択する。"""
+    """staging smoke 用に代表 parser adapter を明示選択し、adapter flag を有効化する。"""
     return settings.model_copy(
         update={
-            "rag_parser_adapter_backend": "auto",
+            "rag_parser_adapter_backend": "docling",
             "rag_parser_docling_enabled": True,
             "rag_parser_marker_enabled": True,
             "rag_parser_unstructured_enabled": True,

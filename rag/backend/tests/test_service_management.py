@@ -53,7 +53,20 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
     # preprocess / parser に加え、pipeline ステージのプラグイン(chunking 等)を含む。
     assert {"preprocess", "parser", "chunking"} <= categories
     gpu_ids = {entry.service_id for entry in SERVICE_CATALOG if entry.profile == "gpu"}
-    assert gpu_ids == {"parser-mineru", "parser-dots-ocr", "parser-glm-ocr", "parser-asr"}
+    assert gpu_ids == {
+        "parser-mineru",
+        "parser-dots-ocr",
+        "parser-dots-ocr-vllm",
+        "parser-glm-ocr",
+        "parser-glm-ocr-vllm",
+        "parser-asr",
+    }
+    dots = get_catalog_entry("parser-dots-ocr")
+    glm = get_catalog_entry("parser-glm-ocr")
+    assert dots is not None
+    assert glm is not None
+    assert dots.depends_on == ("parser-dots-ocr-vllm",)
+    assert glm.depends_on == ("parser-glm-ocr-vllm",)
 
 
 def test_get_catalog_entry_allowlist() -> None:
@@ -69,6 +82,7 @@ class _FakeResponse:
     def __init__(self, payload: dict[str, Any], raise_error: bool = False) -> None:
         self._payload = payload
         self._raise = raise_error
+        self.status_code = 500 if raise_error else 200
 
     def raise_for_status(self) -> None:
         if self._raise:
@@ -98,6 +112,10 @@ class _FakeAsyncClient:
         if base in self.raise_on_connect:
             raise ConnectionError("connection refused")
         return self.routes.get(base, _FakeResponse({"status": "ok"}))
+
+    async def request(self, method: str, url: str, **_kwargs: Any) -> _FakeResponse:
+        assert method == "GET"
+        return await self.get(url)
 
 
 def _patch_probe_httpx(monkeypatch: MonkeyPatch) -> None:
@@ -140,6 +158,30 @@ def test_probe_unconfigured_when_url_blank(monkeypatch: MonkeyPatch) -> None:
     assert statuses["parser-docling"] == "unconfigured"
 
 
+def test_probe_marks_wrapper_dependency_stopped(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    _patch_probe_httpx(monkeypatch)
+
+    dots_entry = get_catalog_entry("parser-dots-ocr")
+    dots_vllm_entry = get_catalog_entry("parser-dots-ocr-vllm")
+    assert dots_entry is not None
+    assert dots_vllm_entry is not None
+    dots = service_health_url(settings, dots_entry)
+    dots_vllm = service_health_url(settings, dots_vllm_entry)
+    _FakeAsyncClient.routes = {
+        dots: _FakeResponse({"status": "ok"}),
+    }
+    _FakeAsyncClient.raise_on_connect = {dots_vllm}
+    try:
+        statuses = asyncio.run(probe_service_statuses(settings))
+    finally:
+        _FakeAsyncClient.routes = {}
+        _FakeAsyncClient.raise_on_connect = set()
+
+    assert statuses["parser-dots-ocr-vllm"] == "stopped"
+    assert statuses["parser-dots-ocr"] == "dependency_stopped"
+
+
 # --- 制御層 -----------------------------------------------------------------
 
 
@@ -175,6 +217,21 @@ def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
         "gpu",
         "restart",
         "parser-mineru",
+    ]
+
+    dots_vllm = get_catalog_entry("parser-dots-ocr-vllm")
+    assert dots_vllm is not None
+    assert _compose_args(settings, dots_vllm, "start") == [
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "--profile",
+        "gpu-vllm",
+        "up",
+        "-d",
+        "--no-build",
+        "parser-dots-ocr-vllm",
     ]
 
 
@@ -329,6 +386,9 @@ def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     assert data["deployment_mode"] == "prod"
     assert len(data["services"]) == len(SERVICE_CATALOG)
     assert {s["service_id"] for s in data["services"]} == {e.service_id for e in SERVICE_CATALOG}
+    dots = next(s for s in data["services"] if s["service_id"] == "parser-dots-ocr")
+    assert dots["depends_on"] == ["parser-dots-ocr-vllm"]
+    assert dots["blocked_by"] == ["parser-dots-ocr-vllm"]
 
 
 def test_list_services_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> None:
@@ -344,6 +404,49 @@ def test_list_services_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> Non
     # dev は flag OFF でも制御を自動有効化。
     assert data["control_enabled"] is True
     assert data["deployment_mode"] == "dev"
+
+
+def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    monkeypatch.setattr(settings, "rag_service_control_enabled", False)
+
+    async def fail_probe(_settings: Any) -> dict[str, str]:
+        raise AssertionError("catalog endpoint must not probe service health")
+
+    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fail_probe)
+    resp = client.get("/api/services/catalog")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["control_enabled"] is False
+    assert data["deployment_mode"] == "prod"
+    assert len(data["services"]) == len(SERVICE_CATALOG)
+    assert "status" not in data["services"][0]
+    dots = next(s for s in data["services"] if s["service_id"] == "parser-dots-ocr")
+    assert dots["depends_on"] == ["parser-dots-ocr-vllm"]
+
+
+def test_get_service_status_checks_only_service_and_dependencies(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    async def fake_probe(_settings: Any, entry: ServiceCatalogEntry) -> str:
+        seen.append(entry.service_id)
+        if entry.service_id == "parser-dots-ocr":
+            return "running"
+        if entry.service_id == "parser-dots-ocr-vllm":
+            return "stopped"
+        raise AssertionError(f"unexpected probe: {entry.service_id}")
+
+    monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
+    resp = client.get("/api/services/parser-dots-ocr/status")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["service_id"] == "parser-dots-ocr"
+    assert data["status"] == "dependency_stopped"
+    assert data["blocked_by"] == ["parser-dots-ocr-vllm"]
+    assert seen == ["parser-dots-ocr", "parser-dots-ocr-vllm"]
 
 
 def test_control_rejected_when_disabled_in_prod(monkeypatch: MonkeyPatch) -> None:

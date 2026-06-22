@@ -6,20 +6,16 @@ requires-python = ">=3.12"
 dependencies = [
     "rag-parser-core[service]",
     "dots-ocr",
+    # Dots.OCR の HF 実行(qwen_vl_utils)は torchvision を import する。
+    # RTX 50xx(sm_120) 対応のため CUDA 13 系 wheel を解決できる版を下限にする。
+    "torch>=2.12.1",
+    "torchvision>=0.27.1",
 ]
 
 [tool.uv.sources]
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
 # Dots.OCR は PyPI 配布が無く GitHub からの install が公式手順。
 dots-ocr = { git = "https://github.com/rednote-hilab/dots.ocr.git" }
-# GPU 版 torch を PyTorch CUDA index から取得する。
-torch = [{ index = "pytorch-cu124" }]
-torchvision = [{ index = "pytorch-cu124" }]
-
-[[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
-explicit = true
 
 [build-system]
 requires = ["hatchling"]

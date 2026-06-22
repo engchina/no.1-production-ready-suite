@@ -222,8 +222,6 @@ def _entry_for_backend(
         if selected:
             score += 8.0
             reason_codes.append("selected_backend")
-        if runtime.adapter_backend == "auto":
-            reason_codes.append("auto_fallback_candidate")
         warning_codes: list[str] = []
         executable = True
         enabled = True
@@ -325,9 +323,6 @@ def _attempted_source_order(
         return ()
     if runtime.adapter_backend in {"docling", "marker", "unstructured"}:
         return (runtime.adapter_backend,) if runtime.adapter_backend in candidate_order else ()
-    if runtime.adapter_backend == "auto":
-        enabled = {adapter.backend for adapter in runtime.adapters if adapter.enabled}
-        return tuple(backend for backend in candidate_order if backend in enabled)
     return ()
 
 
@@ -348,8 +343,6 @@ def _source_route_reason_codes(
         )
     if runtime.adapter_backend == "local":
         reason_codes.append("local_backend_selected")
-    elif runtime.adapter_backend == "auto":
-        reason_codes.append("source_aware_auto_order")
     elif attempted_order:
         reason_codes.append("selected_adapter_supported_for_source")
     else:
@@ -474,13 +467,6 @@ def _infer_metrics_backend(
         return "marker"
     if runtime.adapter_backend == "unstructured":
         return "unstructured"
-    if runtime.adapter_backend == "auto":
-        active_by_backend = {
-            adapter.backend: adapter.status == "active" for adapter in runtime.adapters
-        }
-        for backend in runtime.effective_order:
-            if active_by_backend.get(backend, False):
-                return backend
     return "local"
 
 

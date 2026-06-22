@@ -37,14 +37,14 @@ export type FileStatus =
   | "INDEXED"
   | "ERROR";
 export type SearchMode = "hybrid" | "vector" | "keyword";
-export type SearchStrategy = "auto" | "hybrid" | "graph_local" | "graph_global";
+export type SearchStrategy = "hybrid" | "graph_local" | "graph_global";
 export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
 export type CitationFeedbackRating = "helpful" | "not_helpful";
 export type CitationFeedbackReason =
   | "missing_evidence"
   | "not_relevant"
   | "answer_untrusted";
-export type UploadIngestionMode = "manual" | "auto";
+export type UploadIngestionMode = "manual";
 export type SourceModality =
   | "pdf"
   | "image"
@@ -107,7 +107,6 @@ export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
 export type OciConfigTestStatus = "success" | "failed";
 export type ParserAdapterBackend =
   | "local"
-  | "auto"
   | "docling"
   | "marker"
   | "unstructured"
@@ -940,7 +939,7 @@ export interface EnterpriseAiConfiguredModel {
   vision_enabled: boolean;
 }
 
-export type EnterpriseAiVlmInputMode = "auto" | "files_api" | "inline_image";
+export type EnterpriseAiVlmInputMode = "files_api" | "inline_image";
 
 export interface EnterpriseAiModelSettings {
   endpoint: string;
@@ -1278,21 +1277,48 @@ export interface PreprocessSettingsUpdate {
 }
 
 // --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
-export type ServiceCategory = "preprocess" | "parser";
+export type ServiceCategory =
+  | "preprocess"
+  | "parser"
+  | "chunking"
+  | "vector_index"
+  | "retrieval"
+  | "grounding"
+  | "generation"
+  | "guardrail"
+  | "evaluation"
+  | "graphrag"
+  | "agentic";
 export type ServiceProfile = "cpu" | "gpu" | "oci";
-export type ServiceRuntimeStatus = "running" | "degraded" | "stopped" | "unconfigured";
+export type ServiceRuntimeStatus =
+  | "running"
+  | "degraded"
+  | "stopped"
+  | "dependency_stopped"
+  | "unconfigured";
 export type ServiceAction = "start" | "stop" | "restart";
 
-export interface ServiceStatusData {
+export interface ServiceCatalogItemData {
   service_id: string;
   category: ServiceCategory;
   profile: ServiceProfile;
   label_key: string;
-  status: ServiceRuntimeStatus;
+  depends_on: string[];
   configured: boolean;
 }
 
+export interface ServiceStatusData extends ServiceCatalogItemData {
+  status: ServiceRuntimeStatus;
+  blocked_by: string[];
+}
+
 export type DeploymentMode = "dev" | "prod";
+
+export interface ServiceCatalogData {
+  control_enabled: boolean;
+  deployment_mode: DeploymentMode;
+  services: ServiceCatalogItemData[];
+}
 
 export interface ServiceListData {
   control_enabled: boolean;
@@ -2092,6 +2118,9 @@ export const api = {
     }),
 
   // サービス管理: 前処理 / Parser マイクロサービスの稼働可視化・起動/停止
+  getServiceCatalog: () => request<ServiceCatalogData>("/api/services/catalog"),
+  getServiceStatus: (serviceId: string) =>
+    request<ServiceStatusData>(`/api/services/${encodeURIComponent(serviceId)}/status`),
   getServices: () => request<ServiceListData>("/api/services"),
   controlService: (serviceId: string, action: ServiceAction) =>
     request<ServiceControlResultData>(

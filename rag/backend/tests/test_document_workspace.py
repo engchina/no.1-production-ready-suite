@@ -8,6 +8,7 @@ import pytest
 
 from app.api.routes import documents as documents_route
 from app.clients.object_storage import ObjectStorageClient
+from app.config import Settings
 from app.main import app
 from app.schemas.document import (
     DocumentChunkView,
@@ -179,6 +180,27 @@ class FakeWorkspaceOracle:
             }
         )
         self.documents[document_id] = updated
+        return updated
+
+    async def reset_document_ingestion_outputs(
+        self,
+        document_id: str,
+        *,
+        status: FileStatus = FileStatus.UPLOADED,
+        error_message: str | None = None,
+    ) -> DocumentDetail:
+        detail = self.documents[document_id]
+        updated = detail.model_copy(
+            update={
+                "status": status,
+                "extraction": {},
+                "error_message": error_message,
+                "indexed_at": None,
+            }
+        )
+        self.documents[document_id] = updated
+        self.chunks.pop(document_id, None)
+        self.ingestion_segments.pop(document_id, None)
         return updated
 
     async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
@@ -401,11 +423,11 @@ def test_document_upload_accepts_tsv_as_local_text_table_source() -> None:
     assert profile["unsupported_reason"] is None
 
 
-def test_document_upload_auto_ingestion_starts_background_pipeline() -> None:
-    """auto 指定時は upload 後に取込 job をキュー投入する。"""
+def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None:
+    """upload 後は保存だけ行い、明示操作で取込 job をキュー投入する。"""
     resp = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "auto"},
+        data={"ingestion_mode": "manual"},
         files={
             "file": (
                 "policy.txt",
@@ -417,36 +439,52 @@ def test_document_upload_auto_ingestion_starts_background_pipeline() -> None:
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["ingestion_started"] is True
-    assert body["ingestion_job"]["status"] == "QUEUED"
-    assert body["ingestion_job"]["parser_profile"] == "local_text_structure"
+    assert body["ingestion_started"] is False
+    assert body["ingestion_job"] is None
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "UPLOADED"
 
-    job_detail = client.get(f"/api/documents/ingestion-jobs/{body['ingestion_job']['id']}")
+    enqueue = client.post(f"/api/documents/{body['id']}/ingestion-jobs")
+    assert enqueue.status_code == 200
+    job = enqueue.json()["data"]
+    assert job["status"] == "QUEUED"
+    assert job["parser_profile"] == "local_text_structure"
+
+    job_detail = client.get(f"/api/documents/ingestion-jobs/{job['id']}")
     assert job_detail.status_code == 200
     assert job_detail.json()["data"]["status"] == "QUEUED"
 
-    anyio.run(documents_route._run_ingestion_job, body["ingestion_job"]["id"])
+    anyio.run(documents_route._run_ingestion_job, job["id"])
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
     indexed = detail.json()["data"]
     assert indexed["status"] == "INDEXED"
     assert "部門長が承認" in indexed["extraction"]["raw_text"]
 
-    job_detail = client.get(f"/api/documents/ingestion-jobs/{body['ingestion_job']['id']}")
+    job_detail = client.get(f"/api/documents/ingestion-jobs/{job['id']}")
     assert job_detail.status_code == 200
     assert job_detail.json()["data"]["status"] == "SUCCEEDED"
     assert job_detail.json()["data"]["attempt_count"] == 1
 
 
-def test_document_upload_auto_ingestion_skips_unsupported_audio() -> None:
-    """未対応 audio は auto 指定でも取込 pipeline を開始せず skipped にする。"""
+def test_document_upload_rejects_deprecated_immediate_ingestion_mode() -> None:
+    """廃止済みの upload 即時取込指定は受け付けない。"""
     resp = client.post(
         "/api/documents/upload",
         data={"ingestion_mode": "auto"},
+        files={"file": ("policy.txt", b"body", "text/plain")},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["error_messages"] == ["body.ingestion_mode: Input should be 'manual'"]
+
+
+def test_document_upload_audio_profile_is_reported_without_enqueue() -> None:
+    """未対応 audio は upload 時に source profile を返し、job は作らない。"""
+    resp = client.post(
+        "/api/documents/upload",
         files={"file": ("voice.mp3", b"ID3", "audio/mpeg")},
     )
 
@@ -457,19 +495,23 @@ def test_document_upload_auto_ingestion_skips_unsupported_audio() -> None:
     assert body["source_profile"]["parser_profile"] == "unsupported_audio"
     assert body["source_profile"]["unsupported_reason"] == "audio_transcription_not_configured"
     assert "unsupported_audio" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"]["status"] == "SKIPPED"
-    assert body["ingestion_job"]["skip_reason"] == "audio_transcription_not_configured"
+    assert body["ingestion_job"] is None
+
+    enqueue = client.post(f"/api/documents/{body['id']}/ingestion-jobs")
+    assert enqueue.status_code == 200
+    job = enqueue.json()["data"]
+    assert job["status"] == "SKIPPED"
+    assert job["skip_reason"] == "audio_transcription_not_configured"
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
-def test_document_upload_auto_ingestion_skips_common_audio_mime_variant() -> None:
+def test_document_upload_reports_common_audio_mime_variant_without_enqueue() -> None:
     """M4A などの一般的な音声 MIME も 415 ではなく skipped reason を返す。"""
     resp = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "auto"},
         files={"file": ("meeting.m4a", b"m4a bytes", "audio/mp4")},
     )
 
@@ -480,15 +522,13 @@ def test_document_upload_auto_ingestion_skips_common_audio_mime_variant() -> Non
     assert body["source_profile"]["parser_profile"] == "unsupported_audio"
     assert body["source_profile"]["unsupported_reason"] == "audio_transcription_not_configured"
     assert "unsupported_audio" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"]["status"] == "SKIPPED"
-    assert body["ingestion_job"]["skip_reason"] == "audio_transcription_not_configured"
+    assert body["ingestion_job"] is None
 
 
 def test_document_upload_rejects_unknown_octet_stream_before_storage() -> None:
     """application/octet-stream でも拡張子から未知の binary は保存前に 415 にする。"""
     resp = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "auto"},
         files={"file": ("payload.bin", b"\x00\x01\x02", "application/octet-stream")},
     )
 
@@ -500,7 +540,6 @@ def test_document_upload_accepts_recognized_octet_stream_for_explicit_skip() -> 
     """MIME が欠落した M4A は audio と判定し、明示的な skipped reason を返す。"""
     resp = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "auto"},
         files={"file": ("meeting.m4a", b"m4a bytes", "application/octet-stream")},
     )
 
@@ -508,15 +547,13 @@ def test_document_upload_accepts_recognized_octet_stream_for_explicit_skip() -> 
     body = resp.json()["data"]
     assert body["source_profile"]["modality"] == "audio"
     assert body["source_profile"]["parser_profile"] == "unsupported_audio"
-    assert body["ingestion_job"]["status"] == "SKIPPED"
-    assert body["ingestion_job"]["skip_reason"] == "audio_transcription_not_configured"
+    assert body["ingestion_job"] is None
 
 
-def test_document_upload_auto_ingestion_skips_unsupported_outlook_msg() -> None:
-    """Outlook MSG は未対応 email として auto 取込を開始しない。"""
+def test_document_upload_reports_unsupported_outlook_msg_without_enqueue() -> None:
+    """Outlook MSG は未対応 email として source profile を返す。"""
     resp = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "auto"},
         files={
             "file": (
                 "approval.msg",
@@ -535,19 +572,17 @@ def test_document_upload_auto_ingestion_skips_unsupported_outlook_msg() -> None:
     assert body["source_profile"]["preview_kind"] == "unsupported"
     assert body["source_profile"]["unsupported_reason"] == "outlook_msg_not_supported"
     assert "unsupported_outlook_msg" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"]["status"] == "SKIPPED"
-    assert body["ingestion_job"]["skip_reason"] == "outlook_msg_not_supported"
+    assert body["ingestion_job"] is None
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
-def test_document_upload_auto_ingestion_skips_unsupported_tiff_image() -> None:
-    """TIFF 画像は auto 指定でも VLM に送らず skipped にする。"""
+def test_document_upload_reports_unsupported_tiff_image_without_enqueue() -> None:
+    """TIFF 画像は upload 時に VLM へ送らず source profile を返す。"""
     resp = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "auto"},
         files={"file": ("scan.tiff", b"II*\x00tiff", "image/tiff")},
     )
 
@@ -560,19 +595,17 @@ def test_document_upload_auto_ingestion_skips_unsupported_tiff_image() -> None:
     assert body["source_profile"]["preview_kind"] == "unsupported"
     assert body["source_profile"]["unsupported_reason"] == "tiff_image_not_supported"
     assert "unsupported_tiff_image" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"]["status"] == "SKIPPED"
-    assert body["ingestion_job"]["skip_reason"] == "tiff_image_not_supported"
+    assert body["ingestion_job"] is None
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
-def test_document_upload_auto_ingestion_skips_unsupported_legacy_office() -> None:
-    """旧バイナリ Office は auto 指定でも VLM に送らず skipped にする。"""
+def test_document_upload_reports_unsupported_legacy_office_without_enqueue() -> None:
+    """旧バイナリ Office は upload 時に VLM へ送らず source profile を返す。"""
     resp = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "auto"},
         files={"file": ("legacy.doc", b"legacy office", "application/msword")},
     )
 
@@ -585,16 +618,15 @@ def test_document_upload_auto_ingestion_skips_unsupported_legacy_office() -> Non
     assert body["source_profile"]["preview_kind"] == "unsupported"
     assert body["source_profile"]["unsupported_reason"] == "legacy_office_binary_not_supported"
     assert "unsupported_legacy_office_binary" in body["source_profile"]["quality_warnings"]
-    assert body["ingestion_job"]["status"] == "SKIPPED"
-    assert body["ingestion_job"]["skip_reason"] == "legacy_office_binary_not_supported"
+    assert body["ingestion_job"] is None
 
     detail = client.get(f"/api/documents/{body['id']}")
     assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
-def test_document_upload_auto_ingestion_skips_duplicate_source() -> None:
-    """重複原本は auto 指定でも重複索引を作らず、手動確認に残す。"""
+def test_document_upload_duplicate_source_does_not_enqueue() -> None:
+    """重複原本は upload 時に job を作らず、手動確認に残す。"""
     body = "同じ本文".encode()
     original = client.post(
         "/api/documents/upload",
@@ -604,28 +636,32 @@ def test_document_upload_auto_ingestion_skips_duplicate_source() -> None:
 
     duplicate = client.post(
         "/api/documents/upload",
-        data={"ingestion_mode": "auto"},
         files={"file": ("duplicate.txt", body, "text/plain")},
     )
 
     assert duplicate.status_code == 200
     payload = duplicate.json()["data"]
     assert payload["ingestion_started"] is False
-    assert payload["ingestion_job"]["status"] == "SKIPPED"
-    assert payload["ingestion_job"]["skip_reason"] == "duplicate_content"
+    assert payload["ingestion_job"] is None
     assert payload["duplicate_of_document_id"] == original.json()["data"]["id"]
     assert "duplicate_content" in payload["source_profile"]["quality_warnings"]
+
+    enqueue = client.post(f"/api/documents/{payload['id']}/ingestion-jobs")
+    assert enqueue.status_code == 200
+    job = enqueue.json()["data"]
+    assert job["status"] == "SKIPPED"
+    assert job["skip_reason"] == "duplicate_content"
 
     detail = client.get(f"/api/documents/{payload['id']}")
     assert detail.status_code == 200
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
-def test_batch_upload_auto_queues_ingestion_jobs() -> None:
-    """batch-upload は複数ファイルを保存し、それぞれの取込 job を作る。"""
+def test_batch_upload_saves_documents_without_ingestion_jobs() -> None:
+    """batch-upload は複数ファイルを保存し、取込 job は明示操作まで作らない。"""
     resp = client.post(
         "/api/documents/batch-upload",
-        data={"ingestion_mode": "auto", "knowledge_base_ids": "kb-1"},
+        data={"ingestion_mode": "manual", "knowledge_base_ids": "kb-1"},
         files=[
             ("files", ("policy-a.txt", "A 規程".encode(), "text/plain")),
             ("files", ("policy-b.txt", "B 規程".encode(), "text/plain")),
@@ -636,29 +672,21 @@ def test_batch_upload_auto_queues_ingestion_jobs() -> None:
     data = resp.json()["data"]
     assert data["total_count"] == 2
     assert data["uploaded_count"] == 2
-    assert data["queued_count"] == 2
+    assert data["queued_count"] == 0
     assert data["skipped_count"] == 0
     assert [item["file_name"] for item in data["items"]] == ["policy-a.txt", "policy-b.txt"]
-    assert all(item["ingestion_started"] is True for item in data["items"])
-    assert all(item["ingestion_job"]["status"] == "QUEUED" for item in data["items"])
+    assert all(item["ingestion_started"] is False for item in data["items"])
+    assert all(item["ingestion_job"] is None for item in data["items"])
 
     jobs = client.get("/api/documents/ingestion-jobs")
     assert jobs.status_code == 200
     listed = jobs.json()["data"]["items"]
-    assert len(listed) == 2
-    assert {job["status"] for job in listed} == {"QUEUED"}
-    assert {job["parser_profile"] for job in listed} == {"local_text_structure"}
+    assert listed == []
 
     for item in data["items"]:
         detail = client.get(f"/api/documents/{item['id']}")
         assert detail.status_code == 200
         assert detail.json()["data"]["status"] == "UPLOADED"
-
-    for item in data["items"]:
-        anyio.run(documents_route._run_ingestion_job, item["ingestion_job"]["id"])
-        detail = client.get(f"/api/documents/{item['id']}")
-        assert detail.status_code == 200
-        assert detail.json()["data"]["status"] == "INDEXED"
 
 
 def test_batch_upload_failed_item_includes_source_profile() -> None:
@@ -766,6 +794,72 @@ def test_document_ingestion_job_endpoint_skips_indexed_without_force() -> None:
     job = second.json()["data"]
     assert job["status"] == "SKIPPED"
     assert job["skip_reason"] == "already_indexed"
+
+
+def test_document_ingestion_job_endpoint_clears_previous_outputs_on_force_reingest(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """force 再取込は旧 extraction/chunk/checkpoint を入隊時点で消す。"""
+    document_id = _upload(
+        "reingest-policy.pdf",
+        b"%PDF-1.4\nold processing state",
+        "application/pdf",
+    )
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": {
+                "raw_text": "前回の抽出本文",
+                "quality_report": {
+                    "parser_backend": "enterprise_ai",
+                    "parser_profile": "enterprise_ai_pdf_layout",
+                },
+            },
+            "indexed_at": datetime.now(UTC),
+            "error_message": "前回の状態",
+        }
+    )
+    fake_document_dependencies.chunks[document_id] = [
+        DocumentChunkView(
+            document_id=document_id,
+            chunk_id=f"{document_id}:old",
+            chunk_index=0,
+            text="前回の chunk",
+        )
+    ]
+    fake_document_dependencies.ingestion_segments[document_id] = [
+        IngestionSegment(
+            segment_id=f"{document_id}:old-p1-3",
+            document_id=document_id,
+            status="SUCCEEDED",
+            parser_backend="enterprise_ai",
+            parser_profile="enterprise_ai_pdf_layout",
+            page_start=1,
+            page_end=3,
+        )
+    ]
+
+    resp = client.post(
+        f"/api/documents/{document_id}/ingestion-jobs",
+        params={"force": "true"},
+    )
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["status"] == "QUEUED"
+    cleared = fake_document_dependencies.documents[document_id]
+    assert cleared.status == FileStatus.UPLOADED
+    assert cleared.extraction == {}
+    assert cleared.indexed_at is None
+    assert cleared.error_message is None
+    assert fake_document_dependencies.chunks.get(document_id) is None
+    assert fake_document_dependencies.ingestion_segments.get(document_id) is None
+
+    segments = client.get(f"/api/documents/{document_id}/ingestion-segments")
+    assert segments.status_code == 200
+    assert [item["segment_id"] for item in segments.json()["data"]] == [f"{document_id}:source"]
+    assert segments.json()["data"][0]["status"] == "QUEUED"
 
 
 def test_document_ingestion_job_endpoint_skips_unsupported_audio() -> None:
@@ -1349,6 +1443,40 @@ def test_ingestion_segments_fallback_uses_table_and_asset_pages(
     assert segments[0]["page_end"] == 5
     assert segments[0]["parser_backend"] == "docling"
     assert segments[0]["artifact_path"] == artifact_path
+
+
+def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """checkpoint 作成前の取込中表示は upload 時 profile ではなく現行 parser 設定を使う。"""
+    monkeypatch.setattr(
+        documents_route,
+        "get_settings",
+        lambda: Settings(
+            rag_parser_adapter_backend="mineru",
+            rag_parser_mineru_enabled=True,
+        ),
+    )
+    document_id = _upload("scan.pdf", b"%PDF-1.7\nsample", "application/pdf")
+    job = IngestionJob(
+        id="job-mineru",
+        document_id=document_id,
+        status=IngestionJobStatus.RUNNING,
+        parser_profile="enterprise_ai_pdf_layout",
+        queued_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[job.id] = job
+
+    resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
+
+    assert resp.status_code == 200
+    segments = resp.json()["data"]
+    assert len(segments) == 1
+    assert segments[0]["status"] == "RUNNING"
+    assert segments[0]["parser_backend"] == "mineru"
+    assert segments[0]["parser_profile"] == "mineru"
 
 
 def test_delete_document_removes_record_and_original_file(

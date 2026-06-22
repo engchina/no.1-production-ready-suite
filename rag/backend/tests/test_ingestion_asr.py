@@ -1,15 +1,16 @@
-"""音声取込(ASR)の OCI→ローカル fallback 配線テスト。"""
+"""音声取込(ASR)の no-fallback 配線テスト。"""
 
 from __future__ import annotations
 
 import asyncio
 from typing import Any, cast
 
+import pytest
 from rag_parser_core.asr import TranscriptSegment, build_transcript_extraction
 from rag_parser_core.registry import ParserRegistryResult
 
 from app.config import Settings
-from app.rag.ingestion import IngestionPipeline
+from app.rag.ingestion import IngestionPipeline, IngestionUserError
 
 
 class _FakeSpeech:
@@ -80,22 +81,22 @@ def test_audio_uses_oci_speech_first() -> None:
     assert parser_service.called is False
 
 
-def test_audio_falls_back_to_local_whisper() -> None:
+def test_audio_does_not_fallback_to_local_whisper() -> None:
     local = build_transcript_extraction(
         segments=[TranscriptSegment("ローカル", 0.0, 1.0)], language="ja", backend="asr"
     )
     pipeline, speech, parser_service = _pipeline(speech_payload=None, local_extraction=local)
-    extraction = _transcribe(pipeline)
-    assert extraction is not None
-    assert "ローカル" in extraction.raw_text
+    with pytest.raises(IngestionUserError, match="音声文字起こしに失敗"):
+        _transcribe(pipeline)
     assert speech.called is True
-    assert parser_service.called is True
+    assert parser_service.called is False
 
 
-def test_audio_returns_none_when_all_unavailable() -> None:
+def test_audio_raises_when_transcription_unavailable() -> None:
     pipeline, _speech, parser_service = _pipeline(speech_payload=None, local_extraction=None)
-    assert _transcribe(pipeline) is None
-    assert parser_service.called is True
+    with pytest.raises(IngestionUserError, match="音声文字起こしに失敗"):
+        _transcribe(pipeline)
+    assert parser_service.called is False
 
 
 def test_audio_disabled_skips_transcription() -> None:

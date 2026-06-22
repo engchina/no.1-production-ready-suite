@@ -10,7 +10,9 @@ x-parser-service-urls: &parser-service-urls
   RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000
   RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
   RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
+  RAG_PARSER_DOTS_OCR_VLLM_SERVICE_URL: http://parser-dots-ocr-vllm:8000
   RAG_PARSER_GLM_OCR_SERVICE_URL: http://parser-glm-ocr:8000
+  RAG_PARSER_GLM_OCR_VLLM_SERVICE_URL: http://parser-glm-ocr-vllm:8080
   # OCI クラウド parser(薄いプロキシ・`--profile oci` で opt-in)。
   RAG_PARSER_OCI_GENAI_VISION_SERVICE_URL: http://parser-oci-genai-vision:8000
   RAG_PARSER_OCI_DOCUMENT_UNDERSTANDING_SERVICE_URL: http://parser-oci-document-understanding:8000
@@ -181,7 +183,42 @@ services:
     build:
       context: .
       dockerfile: services/parsers/dots_ocr/Dockerfile
+    environment:
+      DOTS_OCR_RUNTIME: ${DOTS_OCR_RUNTIME:-vllm}
+      DOTS_OCR_PROTOCOL: http
+      DOTS_OCR_IP: parser-dots-ocr-vllm
+      DOTS_OCR_PORT: "8000"
+      DOTS_OCR_MODEL_NAME: model
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  # Dots.mOCR 公式推奨の vLLM server。必要時だけ
+  # `docker compose --profile gpu --profile gpu-vllm up parser-dots-ocr-vllm parser-dots-ocr`
+  # で起動する。
+  parser-dots-ocr-vllm:
+    profiles: ["gpu-vllm"]
+    image: vllm/vllm-openai:latest
+    ipc: host
+    command:
+      - --model
+      - rednote-hilab/dots.mocr
+      - --served-model-name
+      - model
+      - --trust-remote-code
+      - --chat-template-content-format
+      - string
+      - --tensor-parallel-size
+      - "1"
+      - --gpu-memory-utilization
+      - ${DOTS_OCR_GPU_MEMORY_UTILIZATION:-0.90}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -195,7 +232,39 @@ services:
     build:
       context: .
       dockerfile: services/parsers/glm_ocr/Dockerfile
+    environment:
+      GLM_OCR_RUNTIME: ${GLM_OCR_RUNTIME:-vllm}
+      GLM_OCR_VLLM_BASE_URL: http://parser-glm-ocr-vllm:8080/v1
+      GLM_OCR_VLLM_MODEL: glm-ocr
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  # GLM-OCR 公式 self-host(vLLM OpenAI-compatible) endpoint。
+  # Dots と同時常駐させると 16GB GPU では重いため、必要時だけ `gpu-vllm` profile で起動する。
+  parser-glm-ocr-vllm:
+    profiles: ["gpu-vllm"]
+    image: vllm/vllm-openai:latest
+    ipc: host
+    command:
+      - --model
+      - zai-org/GLM-OCR
+      - --served-model-name
+      - glm-ocr
+      - --trust-remote-code
+      - --port
+      - "8080"
+      - --tensor-parallel-size
+      - "1"
+      - --gpu-memory-utilization
+      - ${GLM_OCR_GPU_MEMORY_UTILIZATION:-0.90}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -316,3 +385,4 @@ services:
 
 volumes:
   backend-local-storage:
+  hf-cache:

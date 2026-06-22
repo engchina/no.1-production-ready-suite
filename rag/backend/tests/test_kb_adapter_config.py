@@ -67,25 +67,31 @@ def test_settings_overrides_uses_allowlist_only() -> None:
     overrides = config.settings_overrides("ingestion")
     assert overrides == {
         "rag_parser_adapter_backend": "docling",
-        # backend 選択時は対応 feature flag も自動有効化する。
+        # backend 選択時は対応 feature flag も有効化する。
         "rag_parser_docling_enabled": True,
         "rag_chunk_overlap": 60,
     }
     assert config.settings_overrides("query") == {}
 
 
-def test_external_parser_backend_auto_enables_feature_flag() -> None:
-    """外部 parser backend を選ぶと対応 feature flag が自動で有効になる。"""
-    # グローバル既定が無効でも backend 選択で有効化されることを確かめる。
-    settings = get_settings().model_copy(update={"rag_parser_unstructured_enabled": False})
-    config = _config(ingestion={"parser_adapter_backend": "unstructured"})
+def test_external_parser_backend_enables_feature_flag() -> None:
+    """外部 parser backend を選ぶと対応 feature flag が有効になる。"""
+    for backend, flag_field in (
+        ("unstructured", "rag_parser_unstructured_enabled"),
+        ("mineru", "rag_parser_mineru_enabled"),
+        ("dots_ocr", "rag_parser_dots_ocr_enabled"),
+        ("glm_ocr", "rag_parser_glm_ocr_enabled"),
+    ):
+        # グローバル既定が無効でも backend 選択で有効化されることを確かめる。
+        settings = get_settings().model_copy(update={flag_field: False})
+        config = _config(ingestion={"parser_adapter_backend": backend})
 
-    overrides = config.settings_overrides("ingestion")
-    assert overrides["rag_parser_unstructured_enabled"] is True
+        overrides = config.settings_overrides("ingestion")
+        assert overrides[flag_field] is True
 
-    effective = resolve_effective_settings(settings, config, scope="ingestion")
-    assert effective.rag_parser_adapter_backend == "unstructured"
-    assert effective.rag_parser_unstructured_enabled is True
+        effective = resolve_effective_settings(settings, config, scope="ingestion")
+        assert effective.rag_parser_adapter_backend == backend
+        assert getattr(effective, flag_field) is True
 
 
 def test_explicit_false_flag_is_not_overridden_by_backend_selection() -> None:
@@ -100,14 +106,13 @@ def test_explicit_false_flag_is_not_overridden_by_backend_selection() -> None:
     assert overrides["rag_parser_unstructured_enabled"] is False
 
 
-def test_local_and_auto_backends_do_not_auto_enable_flags() -> None:
-    """local / auto は特定 adapter flag を自動有効化しない。"""
-    for backend in ("local", "auto"):
-        config = _config(ingestion={"parser_adapter_backend": backend})
-        overrides = config.settings_overrides("ingestion")
-        assert "rag_parser_docling_enabled" not in overrides
-        assert "rag_parser_marker_enabled" not in overrides
-        assert "rag_parser_unstructured_enabled" not in overrides
+def test_local_backend_does_not_enable_adapter_flags() -> None:
+    """local は特定 adapter flag を有効化しない。"""
+    config = _config(ingestion={"parser_adapter_backend": "local"})
+    overrides = config.settings_overrides("ingestion")
+    assert "rag_parser_docling_enabled" not in overrides
+    assert "rag_parser_marker_enabled" not in overrides
+    assert "rag_parser_unstructured_enabled" not in overrides
 
 
 def test_resolve_raises_on_chunk_inconsistency() -> None:

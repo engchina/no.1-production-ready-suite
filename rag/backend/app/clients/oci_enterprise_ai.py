@@ -66,7 +66,7 @@ def config_from_settings(settings: Settings) -> OciEnterpriseAiConfig:
         oci_enterprise_ai_llm_payload_template=settings.oci_enterprise_ai_llm_payload_template,
         oci_enterprise_ai_vlm_payload_template=settings.oci_enterprise_ai_vlm_payload_template,
         oci_enterprise_ai_vlm_input_mode=getattr(
-            settings, "oci_enterprise_ai_vlm_input_mode", "auto"
+            settings, "oci_enterprise_ai_vlm_input_mode", "files_api"
         ),
         oci_enterprise_ai_timeout_seconds=float(settings.oci_enterprise_ai_timeout_seconds),
         oci_enterprise_ai_max_retries=int(settings.oci_enterprise_ai_max_retries),

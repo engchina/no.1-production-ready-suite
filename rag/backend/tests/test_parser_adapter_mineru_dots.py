@@ -7,7 +7,12 @@
 
 from __future__ import annotations
 
-from rag_parser_core.registry import EXTERNAL_ADAPTER_PACKAGES, _external_adapter_result
+from rag_parser_core.registry import (
+    EXTERNAL_ADAPTER_PACKAGES,
+    ParserRegistryResult,
+    _external_adapter_result,
+    parse_with_registry,
+)
 
 from app.config import Settings
 from app.rag.parser_adapter_readiness import (
@@ -16,6 +21,20 @@ from app.rag.parser_adapter_readiness import (
     parser_adapter_runtime_settings,
 )
 from app.rag.parser_adapter_routing import adapter_order_for_source_kind
+from app.schemas.document import SourceModality, SourceProfile
+from app.schemas.extraction import StructuredExtraction
+
+
+def _pdf_profile() -> SourceProfile:
+    return SourceProfile(
+        original_file_name="scan.pdf",
+        sanitized_file_name="scan.pdf",
+        content_type="application/pdf",
+        file_size_bytes=16,
+        content_sha256="0" * 64,
+        modality=SourceModality.PDF,
+        parser_profile="enterprise_ai_pdf_layout",
+    )
 
 
 def test_mineru_and_dots_ocr_are_registered_candidates() -> None:
@@ -41,7 +60,7 @@ def test_routing_adds_ocr_engines_for_pdf_and_image() -> None:
 def test_readiness_reports_missing_when_package_absent() -> None:
     snapshot = parser_adapter_runtime_settings(
         Settings.model_construct(
-            rag_parser_adapter_backend="auto",
+            rag_parser_adapter_backend="mineru",
             rag_parser_docling_enabled=False,
             rag_parser_marker_enabled=False,
             rag_parser_unstructured_enabled=False,
@@ -67,3 +86,40 @@ def test_uninstalled_adapter_falls_back_safely() -> None:
     assert result.extraction is None
     assert result.fallback_used is True
     assert "mineru_adapter_package_missing" in result.warnings
+
+
+def test_parse_with_registry_routes_enabled_mineru_pdf_to_runner() -> None:
+    """MinerU が選択・有効化されていれば PDF を外部 runner へ渡す。"""
+    calls: list[str] = []
+
+    def runner(
+        backend: str,
+        source_bytes: bytes,
+        source_profile: SourceProfile | None,
+        content_type: str,
+    ) -> ParserRegistryResult:
+        calls.append(backend)
+        assert source_bytes == b"%PDF-1.4 scanned"
+        assert source_profile is not None
+        assert content_type == "application/pdf"
+        return ParserRegistryResult(
+            extraction=StructuredExtraction(raw_text="MinerU OCR 本文"),
+            parser_backend=backend,
+            parser_version="mineru:test",
+            template="structure_aware",
+        )
+
+    result = parse_with_registry(
+        b"%PDF-1.4 scanned",
+        source_profile=_pdf_profile(),
+        content_type="application/pdf",
+        adapter_backend="mineru",
+        mineru_enabled=True,
+        external_adapter_runner=runner,
+    )
+
+    assert calls == ["mineru"]
+    assert result.parser_backend == "mineru"
+    assert result.extraction is not None
+    assert result.extraction.raw_text == "MinerU OCR 本文"
+    assert "mineru_adapter_feature_flag_disabled" not in result.warnings

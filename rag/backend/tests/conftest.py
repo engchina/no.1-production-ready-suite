@@ -135,5 +135,5 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.rag_agentic_profile = "off"
     settings.rag_agentic_max_subqueries = 3
     settings.rag_pdf_segmentation_enabled = True
-    settings.rag_pdf_max_pages_per_segment = 3
+    settings.rag_pdf_max_pages_per_segment = 10
     settings.rag_pdf_max_segments = 300

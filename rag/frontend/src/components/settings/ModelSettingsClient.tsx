@@ -84,11 +84,6 @@ const CHECK_KEYS: CheckKey[] = ["enterprise_ai", "generative_ai", "embedding_dim
 const DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json";
 const VLM_INPUT_MODE_OPTIONS = [
   {
-    value: "auto",
-    label: t("settings.model.enterprise.vlmInputMode.auto"),
-    description: t("settings.model.enterprise.vlmInputMode.auto.description"),
-  },
-  {
     value: "files_api",
     label: t("settings.model.enterprise.vlmInputMode.filesApi"),
     description: t("settings.model.enterprise.vlmInputMode.filesApi.description"),
@@ -1286,7 +1281,7 @@ function cloneSettings(settings: ModelSettingsPayload): ModelSettingsPayload {
   return {
     enterprise_ai: {
       ...settings.enterprise_ai,
-      vlm_input_mode: settings.enterprise_ai.vlm_input_mode ?? "auto",
+      vlm_input_mode: settings.enterprise_ai.vlm_input_mode ?? "files_api",
       models: settings.enterprise_ai.models.map((model) => ({ ...model })),
     },
     generative_ai: { ...settings.generative_ai },

@@ -98,7 +98,6 @@ class UploadIngestionMode(StrEnum):
     """アップロード後の取込開始方針。"""
 
     MANUAL = "manual"
-    AUTO = "auto"
 
 
 @router.post("/upload", response_model=ApiResponse[UploadResult])
@@ -111,7 +110,7 @@ async def upload_document(
     """ドキュメントファイルをアップロードし、Object Storage へ保管する。"""
     enforce_rate_limit("upload", http_request)
     result = await _store_uploaded_document(file, knowledge_base_ids)
-    result = await _attach_ingestion_job(result, ingestion_mode)
+    _ = ingestion_mode
     return ApiResponse(data=result)
 
 
@@ -122,7 +121,7 @@ async def batch_upload_documents(
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
     ingestion_mode: Annotated[UploadIngestionMode, Form()] = UploadIngestionMode.MANUAL,
 ) -> ApiResponse[BatchUploadResult]:
-    """複数ドキュメントをまとめてアップロードし、必要に応じて取込 job を作る。"""
+    """複数ドキュメントをまとめてアップロードし、Object Storage へ保管する。"""
     enforce_rate_limit("upload", http_request)
     if not files:
         raise HTTPException(status_code=400, detail="アップロード対象ファイルを選択してください。")
@@ -131,7 +130,8 @@ async def batch_upload_documents(
     for file in files:
         try:
             result = await _store_uploaded_document(file, knowledge_base_ids)
-            items.append(await _attach_ingestion_job(result, ingestion_mode))
+            _ = ingestion_mode
+            items.append(result)
         except HTTPException as exc:
             source_profile = await _failed_upload_source_profile(file)
             failed_items.append(
@@ -903,8 +903,9 @@ async def list_document_ingestion_segments(
         persisted_segments = []
     if persisted_segments:
         return ApiResponse(data=persisted_segments)
+    effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
     jobs = await oracle.list_document_ingestion_jobs(document_id)
-    return ApiResponse(data=_document_ingestion_segments(detail, jobs))
+    return ApiResponse(data=_document_ingestion_segments(detail, jobs, effective_settings))
 
 
 @router.get("/{document_id}", response_model=ApiResponse[DocumentDetail])
@@ -1726,24 +1727,6 @@ def _dispatch_ingestion_job(
     request_ingestion_worker_wakeup()
 
 
-async def _attach_ingestion_job(
-    result: UploadResult,
-    ingestion_mode: UploadIngestionMode,
-) -> UploadResult:
-    """auto 指定時に取込 job を作り、upload result に添付する。"""
-    if ingestion_mode != UploadIngestionMode.AUTO:
-        return result
-    job = await _create_ingestion_job(result)
-    if job.status == IngestionJobStatus.QUEUED:
-        _dispatch_ingestion_job(job.id)
-    return result.model_copy(
-        update={
-            "ingestion_started": job.status == IngestionJobStatus.QUEUED,
-            "ingestion_job": job,
-        }
-    )
-
-
 async def _enqueue_ingestion_job_for_document(
     document_id: str,
     *,
@@ -1786,6 +1769,7 @@ async def _enqueue_ingestion_job_for_document(
             skip_reason="already_indexed",
         )
 
+    await _reset_document_outputs_for_extract(oracle, document_id)
     job = await _create_ingestion_job_record(
         oracle=oracle,
         document_id=document_id,
@@ -1897,6 +1881,18 @@ async def _create_ingestion_job_record(
     return await oracle.create_ingestion_job(job)
 
 
+async def _reset_document_outputs_for_extract(
+    oracle: OracleClient,
+    document_id: str,
+) -> None:
+    """EXTRACT 再投入前に旧抽出・checkpoint・派生結果を初期化する。"""
+    reset_outputs = getattr(oracle, "reset_document_ingestion_outputs", None)
+    if callable(reset_outputs):
+        await reset_outputs(document_id, status=FileStatus.UPLOADED)
+        return
+    await oracle.update_document_status(document_id, FileStatus.UPLOADED)
+
+
 def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
     """保存済み DocumentDetail から parser profile を復元する。"""
     if detail.source_profile is not None:
@@ -1915,6 +1911,7 @@ def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
 def _document_ingestion_segments(
     detail: DocumentDetail,
     jobs: list[IngestionJob],
+    effective_settings: Settings | None = None,
 ) -> list[IngestionSegment]:
     """保存済み extraction/job から segment view を推定する。"""
     source_profile = _source_profile_for_detail(detail)
@@ -1923,13 +1920,23 @@ def _document_ingestion_segments(
     attempt_count = latest_job.attempt_count if latest_job is not None else 0
     status = _segment_status_from_detail(detail, latest_job)
     error_message = detail.error_message or (latest_job.error_message if latest_job else None)
+    parser_backend = _parser_backend_from_extraction(detail.extraction, source_profile)
+    parser_profile = _parser_profile_from_extraction(detail.extraction, source_profile)
+    planned_parser = _planned_parser_backend_for_pending_extract(
+        detail.extraction,
+        latest_job,
+        effective_settings,
+    )
+    if planned_parser is not None:
+        parser_backend = planned_parser
+        parser_profile = planned_parser
     return [
         IngestionSegment(
             segment_id=f"{detail.id}:source",
             document_id=detail.id,
             status=status,
-            parser_backend=_parser_backend_from_extraction(detail.extraction, source_profile),
-            parser_profile=source_profile.parser_profile,
+            parser_backend=parser_backend,
+            parser_profile=parser_profile,
             page_start=page_start,
             page_end=page_end,
             attempt_count=attempt_count,
@@ -1940,6 +1947,41 @@ def _document_ingestion_segments(
             error_message=error_message,
         )
     ]
+
+
+def _planned_parser_backend_for_pending_extract(
+    extraction: Mapping[str, object],
+    latest_job: IngestionJob | None,
+    effective_settings: Settings | None,
+) -> str | None:
+    """checkpoint 未作成の EXTRACT job では計画中 parser を表示に使う。"""
+    if latest_job is None or latest_job.phase != IngestionJobPhase.EXTRACT:
+        return None
+    if latest_job.status not in {
+        IngestionJobStatus.QUEUED,
+        IngestionJobStatus.RUNNING,
+        IngestionJobStatus.FAILED,
+    }:
+        return None
+    if _extraction_has_parser_context(extraction) or effective_settings is None:
+        return None
+    planned = str(getattr(effective_settings, "rag_parser_adapter_backend", "local")).strip()
+    if not planned or planned == "local":
+        return None
+    return planned[:80]
+
+
+def _extraction_has_parser_context(extraction: Mapping[str, object]) -> bool:
+    """保存済み extraction に実 parser 情報があるか判定する。"""
+    for container_name in ("quality_report", "parser_artifacts"):
+        container = extraction.get(container_name)
+        if not isinstance(container, Mapping):
+            continue
+        for key in ("parser_backend", "parser_profile", "source_parser", "external_adapter"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+    return False
 
 
 def _document_page_range(extraction: Mapping[str, object]) -> tuple[int | None, int | None]:
@@ -1994,6 +2036,26 @@ def _parser_backend_from_extraction(
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return source_profile.parser_backend
+
+
+def _parser_profile_from_extraction(
+    extraction: Mapping[str, object],
+    source_profile: SourceProfile,
+) -> str:
+    """extraction quality/parser artifacts から parser profile を読む。"""
+    for container_name in ("quality_report", "parser_artifacts"):
+        container = extraction.get(container_name)
+        if isinstance(container, Mapping):
+            value = container.get("parser_profile")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            source_parser = container.get("source_parser")
+            if isinstance(source_parser, str) and source_parser.strip():
+                return source_parser.strip()
+            external_adapter = container.get("external_adapter")
+            if isinstance(external_adapter, str) and external_adapter.strip():
+                return external_adapter.strip()
+    return source_profile.parser_profile
 
 
 def _extraction_artifact_path(extraction: Mapping[str, object]) -> str | None:
@@ -2434,6 +2496,7 @@ async def _run_ingestion_job(
                 cancel_checker=is_cancelled,
             )
         else:
+            await _reset_document_outputs_for_extract(oracle, job.document_id)
             await _ingest_existing_document(
                 job.document_id,
                 force=True,

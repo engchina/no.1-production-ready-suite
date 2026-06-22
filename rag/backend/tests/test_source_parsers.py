@@ -1198,10 +1198,10 @@ def test_parser_registry_adapter_fallback_warning_affects_quality_report(
     assert "docling_adapter_package_missing" in quality.quality_warnings
 
 
-def test_parser_registry_auto_continues_after_missing_adapter(
+def test_parser_registry_uses_explicit_marker_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """auto adapter は前段 adapter 不在時も次の有効 adapter へ進み warning を残す。"""
+    """明示選択された Marker adapter を利用する。"""
     marker_module = ModuleType("marker")
     marker_module.__dict__["__version__"] = "4.5.6"
     converters_module = ModuleType("marker.converters")
@@ -1248,24 +1248,24 @@ def test_parser_registry_auto_continues_after_missing_adapter(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="auto",
-        docling_enabled=True,
+        adapter_backend="marker",
+        docling_enabled=False,
         marker_enabled=True,
     )
 
     assert result.parser_backend == "marker"
     assert result.parser_version == "4.5.6"
-    assert result.fallback_used is True
-    assert result.warnings == ("docling_adapter_package_missing",)
+    assert result.fallback_used is False
+    assert result.warnings == ()
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["external_adapter"] == "marker"
     assert "Marker Fallback" in result.extraction.raw_text
 
 
-def test_parser_registry_auto_skips_external_adapters_for_simple_text(
+def test_parser_registry_unsupported_explicit_adapter_skips_simple_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """auto でも単純 text/markdown は外部 adapter を試さず local parser を使う。"""
+    """未対応の明示 adapter は単純 text/markdown では呼ばず local parser を使う。"""
 
     def fail_if_checked(name: str) -> bool:
         raise AssertionError(f"text source should not probe external adapter: {name}")
@@ -1285,23 +1285,23 @@ def test_parser_registry_auto_skips_external_adapters_for_simple_text(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="auto",
+        adapter_backend="marker",
         docling_enabled=True,
         marker_enabled=True,
         unstructured_enabled=True,
     )
 
     assert result.parser_backend == "local_partition"
-    assert result.fallback_used is False
-    assert result.warnings == ()
+    assert result.fallback_used is True
+    assert result.warnings == ("marker_adapter_source_unsupported",)
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["chunk_template"] == "markdown_by_heading"
 
 
-def test_parser_registry_auto_routes_email_to_unstructured(
+def test_parser_registry_explicit_unstructured_routes_email(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """email は Docling/Marker ではなく Unstructured partition を優先する。"""
+    """email は明示選択された Unstructured partition で解析する。"""
     unstructured_module = ModuleType("unstructured")
     unstructured_module.__dict__["__version__"] = "9.9.0"
     partition_package = ModuleType("unstructured.partition")
@@ -1338,9 +1338,9 @@ def test_parser_registry_auto_routes_email_to_unstructured(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="auto",
-        docling_enabled=True,
-        marker_enabled=True,
+        adapter_backend="unstructured",
+        docling_enabled=False,
+        marker_enabled=False,
         unstructured_enabled=True,
     )
 
@@ -1357,10 +1357,10 @@ def test_parser_registry_auto_routes_email_to_unstructured(
     assert result.extraction.parser_artifacts["email_lineage_normalized"] is True
 
 
-def test_parser_registry_auto_routes_office_to_docling_before_marker(
+def test_parser_registry_explicit_docling_routes_office(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Office は現行 Marker PdfConverter ではなく Docling/Unstructured 系に回す。"""
+    """Office は明示選択された Docling adapter で解析する。"""
     docling_module = ModuleType("docling")
     docling_module.__dict__["__version__"] = "3.0.0"
     converter_module = ModuleType("docling.document_converter")
@@ -1394,10 +1394,10 @@ def test_parser_registry_auto_routes_office_to_docling_before_marker(
         data,
         source_profile=profile,
         content_type=profile.content_type,
-        adapter_backend="auto",
+        adapter_backend="docling",
         docling_enabled=True,
-        marker_enabled=True,
-        unstructured_enabled=True,
+        marker_enabled=False,
+        unstructured_enabled=False,
     )
 
     assert result.parser_backend == "docling"
@@ -3288,7 +3288,7 @@ def test_parser_registry_blocks_audio_content_type_without_source_profile(
         b"audio",
         source_profile=None,
         content_type="audio/mpeg",
-        adapter_backend="auto",
+        adapter_backend="unstructured",
         docling_enabled=True,
         marker_enabled=True,
         unstructured_enabled=True,

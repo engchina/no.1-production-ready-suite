@@ -165,6 +165,28 @@ def test_enterprise_ai_max_retries_defaults_to_three_and_is_bounded() -> None:
         Settings(oci_enterprise_ai_max_retries=6)
 
 
+def test_http_service_retry_defaults_to_five_attempts_and_is_bounded() -> None:
+    """HTTP マイクロサービス共通 retry は既定 5 試行、1-10 に制限する。"""
+    settings = Settings()
+
+    assert settings.rag_http_service_retry_attempts == 5
+    assert Settings(rag_http_service_retry_attempts=1).rag_http_service_retry_attempts == 1
+    assert Settings(rag_http_service_retry_attempts=10).rag_http_service_retry_attempts == 10
+
+    with pytest.raises(ValidationError):
+        Settings(rag_http_service_retry_attempts=0)
+    with pytest.raises(ValidationError):
+        Settings(rag_http_service_retry_attempts=11)
+
+
+def test_vllm_sidecar_service_url_defaults() -> None:
+    """Dots/GLM 公式 vLLM sidecar の URL は Settings で管理する。"""
+    settings = Settings()
+
+    assert settings.rag_parser_dots_ocr_vllm_service_url == "http://parser-dots-ocr-vllm:8000"
+    assert settings.rag_parser_glm_ocr_vllm_service_url == "http://parser-glm-ocr-vllm:8080"
+
+
 def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:
     """PDF/VLM 取込は 60 秒を超えることがあるため既定 timeout を長めにする。"""
     assert Settings().oci_enterprise_ai_timeout_seconds == 600.0
@@ -191,7 +213,7 @@ def test_pdf_segmentation_defaults_are_bounded() -> None:
     settings = Settings()
 
     assert settings.rag_pdf_segmentation_enabled is True
-    assert settings.rag_pdf_max_pages_per_segment == 3
+    assert settings.rag_pdf_max_pages_per_segment == 10
     assert settings.rag_pdf_max_segments == 300
 
     with pytest.raises(ValidationError):
@@ -232,7 +254,7 @@ def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.Monk
     assert settings.rag_parser_docling_enabled is False
     assert settings.rag_parser_marker_enabled is False
     assert settings.rag_parser_unstructured_enabled is False
-    assert Settings(rag_parser_adapter_backend="auto").rag_parser_adapter_backend == "auto"
+    assert Settings(rag_parser_adapter_backend="auto").rag_parser_adapter_backend == "local"
     assert Settings(rag_parser_adapter_backend="docling").rag_parser_adapter_backend == "docling"
     assert Settings(rag_parser_docling_enabled=True).rag_parser_docling_enabled is True
 
@@ -314,8 +336,8 @@ def test_common_audio_content_types_are_allowed_for_explicit_skip_by_default() -
     } <= allowed
 
 
-def test_enterprise_ai_response_paths_default_to_auto_detection() -> None:
-    """Enterprise AI response path は既定で空にし、既知 envelope 自動判定を使う。"""
+def test_enterprise_ai_response_paths_default_to_known_envelope_detection() -> None:
+    """Enterprise AI response path は既定で空にし、既知 envelope を順番に照合する。"""
     settings = Settings()
 
     assert settings.oci_enterprise_ai_llm_response_path == ""

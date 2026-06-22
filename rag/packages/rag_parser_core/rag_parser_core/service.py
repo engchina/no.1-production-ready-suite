@@ -11,7 +11,9 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import json
+import os
 from collections.abc import Awaitable, Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, UploadFile
@@ -28,6 +30,11 @@ from rag_parser_core.source import SourceProfile
 ServiceParseHandler = Callable[
     [bytes, str, "SourceProfile | None", str, str], Awaitable[ParseResponse]
 ]
+
+_RUNTIME_HEALTH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="parser-runtime-health",
+)
 
 
 def _detect_version(
@@ -56,25 +63,42 @@ def _parse_source_profile(raw: str | None) -> SourceProfile | None:
         return None
 
 
+def _runtime_health_ready(runtime_health: Callable[[], bool]) -> bool:
+    timeout = float(os.environ.get("RAG_PARSER_RUNTIME_HEALTH_TIMEOUT_SECONDS", "2"))
+    future = _RUNTIME_HEALTH_EXECUTOR.submit(runtime_health)
+    try:
+        return bool(future.result(timeout=timeout))
+    except TimeoutError:
+        future.cancel()
+        return False
+    except Exception:  # noqa: BLE001 - readiness 境界では degraded へ正規化する
+        return False
+
+
 def create_parse_app(
     *,
     backend: str,
     import_name: str,
     distribution_names: Sequence[str] = (),
+    runtime_health: Callable[[], bool] | None = None,
     title: str | None = None,
 ) -> FastAPI:
     """1 parser サービス用の FastAPI app を生成する。
 
     backend: adapter 名(docling/marker/unstructured/mineru/dots_ocr)。
     import_name / distribution_names: readiness 表示の version 検出に使う。
+    runtime_health: package 導入以外に必要な外部 runtime(vLLM 等)の疎通確認。
     """
     app = FastAPI(title=title or f"parser-{backend}")
 
     @app.get("/health", response_model=ParseHealth)
     def health() -> ParseHealth:
         installed, version = _detect_version(import_name, distribution_names)
+        runtime_ready = True
+        if installed and runtime_health is not None:
+            runtime_ready = _runtime_health_ready(runtime_health)
         return ParseHealth(
-            status="ok" if installed else "degraded",
+            status="ok" if installed and runtime_ready else "degraded",
             backend=backend,
             package_name=import_name,
             package_version=version,

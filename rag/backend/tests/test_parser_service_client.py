@@ -12,7 +12,7 @@ from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import ParserRegistryResult
 from rag_parser_core.result import ParseResponse
 
-from app.clients.parser_service import ParserServiceClient
+from app.clients.parser_service import ParserServiceClient, ParserServiceUnavailableError
 from app.config import Settings
 from app.schemas.document import SourceModality, SourceProfile
 
@@ -89,7 +89,10 @@ def test_runner_falls_back_when_service_unreachable(monkeypatch: pytest.MonkeyPa
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
     client = ParserServiceClient(
-        Settings(rag_parser_marker_service_url="http://parser-marker:8000")
+        Settings(
+            rag_parser_marker_service_url="http://parser-marker:8000",
+            rag_http_service_retry_attempts=1,
+        )
     )
     result = client.runner("marker", b"abc", _profile(), "application/pdf")
 
@@ -98,17 +101,188 @@ def test_runner_falls_back_when_service_unreachable(monkeypatch: pytest.MonkeyPa
     assert "marker_adapter_service_unreachable" in result.warnings
 
 
+def test_runner_fail_fast_raises_when_service_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(
+            rag_parser_unstructured_service_url="http://parser-unstructured:8000",
+            rag_http_service_retry_attempts=1,
+        )
+    )
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner(
+            "unstructured",
+            b"abc",
+            _profile(),
+            "application/pdf",
+            fail_fast=True,
+        )
+
+    assert exc_info.value.backend == "unstructured"
+    assert exc_info.value.reason == "unreachable"
+    assert "選択した文書解析サービス（Unstructured）に接続できません" in str(exc_info.value)
+
+
+def test_runner_fail_fast_raises_when_service_returns_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = ParseResponse(
+        extraction=None,
+        parser_backend="mineru",
+        parser_version="service_unavailable",
+        fallback_used=True,
+        warnings=["mineru_adapter_failed"],
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/parse"
+        return httpx.Response(200, json=response.model_dump(mode="json"))
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(rag_parser_mineru_service_url="http://parser-mineru:8000")
+    )
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner(
+            "mineru",
+            b"%PDF",
+            _profile(),
+            "application/pdf",
+            fail_fast=True,
+        )
+
+    assert exc_info.value.backend == "mineru"
+    assert exc_info.value.reason == "adapter_failed"
+    assert exc_info.value.warning_code == "mineru_adapter_failed"
+    assert "選択した文書解析サービス（MinerU）で解析処理が失敗しました" in str(
+        exc_info.value
+    )
+
+
+def test_runner_retries_retryable_status_then_returns_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extraction = StructuredExtraction(raw_text="retry success", document_type="PDF", confidence=1.0)
+    response = ParseResponse(
+        extraction=extraction,
+        parser_backend="unstructured",
+        parser_version="unstructured:0.23.1",
+    )
+    calls = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            return httpx.Response(503, text="starting")
+        return httpx.Response(200, json=response.model_dump(mode="json"))
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(
+            rag_parser_unstructured_service_url="http://parser-unstructured:8000",
+            rag_http_service_retry_attempts=3,
+            rag_http_service_retry_initial_delay_seconds=0,
+        )
+    )
+
+    result = client.runner("unstructured", b"abc", _profile(), "application/pdf")
+
+    assert calls == 3
+    assert result.fallback_used is False
+    assert result.extraction is not None
+    assert result.extraction.raw_text == "retry success"
+
+
+def test_runner_does_not_retry_non_retryable_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, text="bad request")
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(
+            rag_parser_unstructured_service_url="http://parser-unstructured:8000",
+            rag_http_service_retry_attempts=3,
+            rag_http_service_retry_initial_delay_seconds=0,
+        )
+    )
+
+    result = client.runner("unstructured", b"abc", _profile(), "application/pdf")
+
+    assert calls == 1
+    assert result.fallback_used is True
+    assert result.extraction is None
+
+
+def test_runner_fail_fast_reports_http_status_after_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503, text="starting")
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(
+            rag_parser_unstructured_service_url="http://parser-unstructured:8000",
+            rag_http_service_retry_attempts=2,
+            rag_http_service_retry_initial_delay_seconds=0,
+        )
+    )
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner(
+            "unstructured",
+            b"abc",
+            _profile(),
+            "application/pdf",
+            fail_fast=True,
+        )
+
+    assert calls == 2
+    assert exc_info.value.reason == "http_error"
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.attempts == 2
+    assert "/parse が HTTP 503 を返しました" in str(exc_info.value)
+
+
 def test_runner_falls_back_on_5xx(monkeypatch: pytest.MonkeyPatch) -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, text="unavailable")
 
     _install_transport(monkeypatch, httpx.MockTransport(handle))
-    client = ParserServiceClient(Settings())
+    client = ParserServiceClient(Settings(rag_http_service_retry_attempts=1))
     result = client.runner("unstructured", b"abc", _profile(), "application/pdf")
 
     assert result.extraction is None
     assert result.fallback_used is True
     assert "unstructured_adapter_service_unreachable" in result.warnings
+
+
+def test_runner_fail_fast_raises_when_url_unconfigured() -> None:
+    client = ParserServiceClient(Settings(rag_parser_docling_service_url=""))
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner("docling", b"abc", _profile(), "application/pdf", fail_fast=True)
+
+    assert exc_info.value.reason == "unconfigured"
+    assert "接続先 URL が未設定です" in str(exc_info.value)
 
 
 def test_runner_falls_back_when_url_unconfigured() -> None:

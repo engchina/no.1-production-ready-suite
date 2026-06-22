@@ -56,6 +56,9 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "parser_docling_enabled": "rag_parser_docling_enabled",
     "parser_marker_enabled": "rag_parser_marker_enabled",
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
+    "parser_mineru_enabled": "rag_parser_mineru_enabled",
+    "parser_dots_ocr_enabled": "rag_parser_dots_ocr_enabled",
+    "parser_glm_ocr_enabled": "rag_parser_glm_ocr_enabled",
     "chunking_strategy": "rag_chunking_strategy",
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
@@ -85,6 +88,9 @@ _EXTERNAL_PARSER_BACKEND_FLAGS: dict[str, str] = {
     "docling": "rag_parser_docling_enabled",
     "marker": "rag_parser_marker_enabled",
     "unstructured": "rag_parser_unstructured_enabled",
+    "mineru": "rag_parser_mineru_enabled",
+    "dots_ocr": "rag_parser_dots_ocr_enabled",
+    "glm_ocr": "rag_parser_glm_ocr_enabled",
 }
 
 
@@ -102,6 +108,9 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     parser_docling_enabled: bool | None = None
     parser_marker_enabled: bool | None = None
     parser_unstructured_enabled: bool | None = None
+    parser_mineru_enabled: bool | None = None
+    parser_dots_ocr_enabled: bool | None = None
+    parser_glm_ocr_enabled: bool | None = None
     chunking_strategy: ChunkingStrategy | None = None
     chunk_size: int | None = Field(default=None, ge=200, le=4000)
     chunk_overlap: int | None = Field(default=None, ge=0, le=1000)

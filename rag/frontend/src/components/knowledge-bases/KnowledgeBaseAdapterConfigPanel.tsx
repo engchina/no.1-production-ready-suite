@@ -30,7 +30,7 @@ const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = [
   { value: "csv_to_json", label: t("settings.preprocess.profile.csv_to_json") },
   { value: "excel_to_json", label: t("settings.preprocess.profile.excel_to_json") },
 ];
-// 文書解析はサービスとして起動できる解析エンジンのみを並べる(local/auto は廃止)。
+// 文書解析はサービスとして起動できる解析エンジンのみを並べる。
 const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = [
   { value: "docling", label: "Docling" },
   { value: "marker", label: "Marker" },

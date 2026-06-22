@@ -48,6 +48,7 @@ class ServiceCatalogEntry:
     - ``working_dir``: リポジトリ root からの相対パス(dev の ``uv run --directory`` 起動先)。
     - ``dev_port``: dev で localhost に bind / 公開するポート(uv プロセス、または docker の公開先)。
     - ``dev_runner``: dev での起動方式(``uv``=ホストプロセス / ``docker``=コンテナ)。
+    - ``depends_on``: 稼働に必要な別サービス。未起動なら画面/API でブロック状態として見せる。
     """
 
     service_id: str
@@ -58,6 +59,7 @@ class ServiceCatalogEntry:
     working_dir: str
     dev_port: int
     dev_runner: DevRunner
+    depends_on: tuple[str, ...] = ()
 
 
 # パイプライン順に並べる(前処理 → Parser CPU → Parser GPU)。
@@ -181,6 +183,17 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/parsers/dots_ocr",
         dev_port=8024,
         dev_runner="docker",
+        depends_on=("parser-dots-ocr-vllm",),
+    ),
+    ServiceCatalogEntry(
+        service_id="parser-dots-ocr-vllm",
+        category="parser",
+        profile="gpu",
+        url_field="rag_parser_dots_ocr_vllm_service_url",
+        label_key="settings.services.item.parserDotsOcrVllm",
+        working_dir="services/parsers/dots_ocr",
+        dev_port=8124,
+        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-glm-ocr",
@@ -190,6 +203,17 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserGlmOcr",
         working_dir="services/parsers/glm_ocr",
         dev_port=8025,
+        dev_runner="docker",
+        depends_on=("parser-glm-ocr-vllm",),
+    ),
+    ServiceCatalogEntry(
+        service_id="parser-glm-ocr-vllm",
+        category="parser",
+        profile="gpu",
+        url_field="rag_parser_glm_ocr_vllm_service_url",
+        label_key="settings.services.item.parserGlmOcrVllm",
+        working_dir="services/parsers/glm_ocr",
+        dev_port=8125,
         dev_runner="docker",
     ),
     ServiceCatalogEntry(

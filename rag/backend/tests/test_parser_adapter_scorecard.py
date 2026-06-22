@@ -167,13 +167,13 @@ def test_scorecard_requires_adapter_contract_coverage_for_external_adapter(
     assert "adapter_metric_evidence_incomplete" in docling.warning_codes
 
 
-def test_scorecard_infers_auto_metrics_from_first_active_adapter(
+def test_scorecard_applies_metrics_to_selected_active_adapter(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """auto では実行順のうち最初に active な adapter へ staging 指標を帰属させる。"""
+    """明示選択された active adapter へ staging 指標を帰属させる。"""
     settings = Settings(
-        rag_parser_adapter_backend="auto",
-        rag_parser_docling_enabled=True,
+        rag_parser_adapter_backend="marker",
+        rag_parser_docling_enabled=False,
         rag_parser_marker_enabled=True,
     )
 
@@ -217,15 +217,15 @@ def test_scorecard_infers_auto_metrics_from_first_active_adapter(
         "source_kind_coverage": 1.0,
         "table_qa_accuracy": 1.0,
     }
-    assert _entry(scorecard, "docling").warning_codes == ("adapter_package_missing",)
+    assert _entry(scorecard, "docling").warning_codes == ()
 
 
-def test_source_routes_are_source_aware_for_auto_runtime(
+def test_source_routes_follow_selected_adapter_support(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """auto backend は source kind ごとに異なる adapter route evidence を返す。"""
+    """明示選択 backend は対応 source kind だけで adapter を試行する。"""
     settings = Settings(
-        rag_parser_adapter_backend="auto",
+        rag_parser_adapter_backend="unstructured",
         rag_parser_docling_enabled=True,
         rag_parser_marker_enabled=True,
         rag_parser_unstructured_enabled=True,
@@ -251,7 +251,8 @@ def test_source_routes_are_source_aware_for_auto_runtime(
         "mineru",
         "glm_ocr",
     )
-    assert by_kind["pdf"].selected_backend == "docling"
+    assert by_kind["pdf"].attempted_order == ("unstructured",)
+    assert by_kind["pdf"].selected_backend == "unstructured"
     assert by_kind["image"].candidate_order == (
         "unstructured",
         "marker",
@@ -260,10 +261,16 @@ def test_source_routes_are_source_aware_for_auto_runtime(
         "mineru",
         "glm_ocr",
     )
+    assert by_kind["image"].attempted_order == ("unstructured",)
     assert by_kind["image"].selected_backend == "unstructured"
     assert by_kind["office"].candidate_order == ("docling", "unstructured", "mineru")
+    assert by_kind["office"].attempted_order == ("unstructured",)
+    assert by_kind["office"].selected_backend == "unstructured"
     assert by_kind["html"].candidate_order == ("docling", "unstructured")
+    assert by_kind["html"].attempted_order == ("unstructured",)
+    assert by_kind["html"].selected_backend == "unstructured"
     assert by_kind["email"].candidate_order == ("unstructured",)
+    assert by_kind["email"].attempted_order == ("unstructured",)
     assert by_kind["email"].selected_backend == "unstructured"
     assert by_kind["audio"].candidate_order == ()
     assert by_kind["audio"].attempted_order == ()

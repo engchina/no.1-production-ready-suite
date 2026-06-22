@@ -8,14 +8,20 @@ Docling / Marker / Unstructured 系の「ファイルタイプ別 partition -> �
 
 from __future__ import annotations
 
+import base64
 import csv
 import html
 import importlib
 import importlib.util
 import inspect
+import json
+import os
 import re
+import subprocess
 import sys
 import tempfile
+import types
+import urllib.request
 import zipfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -39,7 +45,6 @@ from rag_parser_core.extraction import (
     ExtractionTableCell,
     StructuredExtraction,
 )
-from rag_parser_core.routing import adapter_order_for_source_kind
 from rag_parser_core.source import SourceModality, SourceProfile
 
 LOCAL_PARSER_VERSION = "local_partition_v1"
@@ -628,6 +633,9 @@ def parse_with_registry(
     docling_enabled: bool = False,
     marker_enabled: bool = False,
     unstructured_enabled: bool = False,
+    mineru_enabled: bool = False,
+    dots_ocr_enabled: bool = False,
+    glm_ocr_enabled: bool = False,
     external_adapter_runner: ExternalAdapterRunner | None = None,
 ) -> ParserRegistryResult:
     """source profile に基づき、ローカル parser で処理できる場合は抽出する。
@@ -689,6 +697,9 @@ def parse_with_registry(
         docling_enabled=docling_enabled,
         marker_enabled=marker_enabled,
         unstructured_enabled=unstructured_enabled,
+        mineru_enabled=mineru_enabled,
+        dots_ocr_enabled=dots_ocr_enabled,
+        glm_ocr_enabled=glm_ocr_enabled,
     )
     adapter_fallback_used = bool(adapter_warnings)
     for backend in _requested_external_adapters(
@@ -698,6 +709,9 @@ def parse_with_registry(
         docling_enabled=docling_enabled,
         marker_enabled=marker_enabled,
         unstructured_enabled=unstructured_enabled,
+        mineru_enabled=mineru_enabled,
+        dots_ocr_enabled=dots_ocr_enabled,
+        glm_ocr_enabled=glm_ocr_enabled,
     ):
         runner = external_adapter_runner or _default_external_adapter_runner
         adapter_result = runner(
@@ -773,6 +787,9 @@ def _requested_external_adapters(
     docling_enabled: bool,
     marker_enabled: bool,
     unstructured_enabled: bool,
+    mineru_enabled: bool,
+    dots_ocr_enabled: bool,
+    glm_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
     if normalized in EXTERNAL_ADAPTER_PACKAGES:
@@ -781,6 +798,9 @@ def _requested_external_adapters(
             docling_enabled=docling_enabled,
             marker_enabled=marker_enabled,
             unstructured_enabled=unstructured_enabled,
+            mineru_enabled=mineru_enabled,
+            dots_ocr_enabled=dots_ocr_enabled,
+            glm_ocr_enabled=glm_ocr_enabled,
         ) and _external_adapter_supports_source(
             normalized,
             source_profile=source_profile,
@@ -788,18 +808,7 @@ def _requested_external_adapters(
         ):
             return (normalized,)
         return ()
-    if normalized != "auto":
-        return ()
-    requested: list[str] = []
-    for backend in _auto_adapter_order_for_source(source_profile, content_type):
-        if _external_adapter_flag_enabled(
-            backend,
-            docling_enabled=docling_enabled,
-            marker_enabled=marker_enabled,
-            unstructured_enabled=unstructured_enabled,
-        ):
-            requested.append(backend)
-    return tuple(requested)
+    return ()
 
 
 def _external_adapter_disabled_warnings(
@@ -810,6 +819,9 @@ def _external_adapter_disabled_warnings(
     docling_enabled: bool,
     marker_enabled: bool,
     unstructured_enabled: bool,
+    mineru_enabled: bool,
+    dots_ocr_enabled: bool,
+    glm_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
     if normalized not in EXTERNAL_ADAPTER_PACKAGES:
@@ -819,6 +831,9 @@ def _external_adapter_disabled_warnings(
         docling_enabled=docling_enabled,
         marker_enabled=marker_enabled,
         unstructured_enabled=unstructured_enabled,
+        mineru_enabled=mineru_enabled,
+        dots_ocr_enabled=dots_ocr_enabled,
+        glm_ocr_enabled=glm_ocr_enabled,
     ):
         if _external_adapter_supports_source(
             normalized,
@@ -828,19 +843,6 @@ def _external_adapter_disabled_warnings(
             return ()
         return (f"{normalized}_adapter_source_unsupported",)
     return (f"{normalized}_adapter_feature_flag_disabled",)
-
-
-def _auto_adapter_order_for_source(
-    source_profile: SourceProfile | None,
-    content_type: str,
-) -> tuple[str, ...]:
-    """auto backend の adapter 優先順を source profile に応じて返す。
-
-    ここでは外部 parser の一般的な対応形式ではなく、この repo に実装済みの
-    adapter call path を基準にする。たとえば Marker 自体は Office/HTML も扱えるが、
-    現在の adapter は PdfConverter のみを呼ぶため PDF/画像に限定する。
-    """
-    return adapter_order_for_source_kind(_source_route_kind(source_profile, content_type))
 
 
 def _external_adapter_supports_source(
@@ -915,6 +917,43 @@ def _external_adapter_supports_source(
             SourceModality.OFFICE,
             SourceModality.UNKNOWN,
         }
+    if backend == "mineru":
+        return (
+            modality in {SourceModality.PDF, SourceModality.IMAGE, SourceModality.OFFICE}
+            or normalized_content_type == "application/pdf"
+            or normalized_content_type.startswith("image/")
+            or normalized_content_type
+            in {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }
+            or extension
+            in {
+                ".pdf",
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".webp",
+                ".bmp",
+                ".docx",
+                ".pptx",
+                ".xlsx",
+            }
+        )
+    if backend == "dots_ocr":
+        return (
+            modality == SourceModality.IMAGE
+            or normalized_content_type.startswith("image/")
+            or extension in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        )
+    if backend == "glm_ocr":
+        return (
+            modality in {SourceModality.PDF, SourceModality.IMAGE}
+            or normalized_content_type == "application/pdf"
+            or normalized_content_type.startswith("image/")
+            or extension in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        )
     return False
 
 
@@ -968,11 +1007,17 @@ def _external_adapter_flag_enabled(
     docling_enabled: bool,
     marker_enabled: bool,
     unstructured_enabled: bool,
+    mineru_enabled: bool,
+    dots_ocr_enabled: bool,
+    glm_ocr_enabled: bool,
 ) -> bool:
     return {
         "docling": docling_enabled,
         "marker": marker_enabled,
         "unstructured": unstructured_enabled,
+        "mineru": mineru_enabled,
+        "dots_ocr": dots_ocr_enabled,
+        "glm_ocr": glm_ocr_enabled,
     }.get(backend, False)
 
 
@@ -1020,8 +1065,7 @@ def _external_adapter_result(
     content_type: str,
 ) -> ParserRegistryResult:
     """任意 parser adapter を呼び出し、失敗時は fallback 用 warning だけ返す。"""
-    package = EXTERNAL_ADAPTER_PACKAGES[backend]
-    if not _module_available(package):
+    if not _external_adapter_package_available(backend):
         return _adapter_fallback_result(backend, f"{backend}_adapter_package_missing")
     try:
         if backend == "docling":
@@ -1063,6 +1107,21 @@ def _external_adapter_result(
     except Exception:
         return _adapter_fallback_result(backend, f"{backend}_adapter_failed")
     return _adapter_fallback_result(backend, f"{backend}_adapter_unsupported")
+
+
+def _external_adapter_package_available(backend: str) -> bool:
+    """adapter の実行に必要な import があるか確認する。
+
+    GLM-OCR は専用 pip package が無く、`glm_ocr` wrapper が無い場合は transformers
+    fallback で実行するため、`transformers` があれば利用可能とみなす。
+    """
+    package = EXTERNAL_ADAPTER_PACKAGES[backend]
+    if _module_available(package):
+        return True
+    if backend == "glm_ocr":
+        return _module_available("transformers")
+    return False
+
 
 def _module_available(name: str) -> bool:
     """テスト用 fake module と通常インストールの両方を安全に検出する。"""
@@ -1280,14 +1339,56 @@ def _run_mineru(path: Path) -> object:
     """MinerU(GPU)で 1 ファイルを解析して document/markdown を得る(GPU 統合シーム)。
 
     mineru の高レベル API は version で揺れがあるため、既知のエントリポイントを順に試す。
-    どれも無ければ呼び出し元が `mineru_adapter_failed` で fallback する。
+    どれも無ければ MinerU 公式 CLI を実行し、生成 markdown を読み取る。
     """
     module = importlib.import_module("mineru")
     for attr in ("parse_document", "parse", "to_markdown", "convert", "run"):
         candidate = getattr(module, attr, None)
         if callable(candidate):
             return candidate(str(path))
-    raise RuntimeError("mineru: no supported entry point")
+    return _run_mineru_cli(path)
+
+
+def _run_mineru_cli(path: Path) -> str:
+    """MinerU CLI で解析して生成 markdown を返す。
+
+    MinerU 3.x は top-level package に Python API を公開していないため、安定した CLI を使う。
+    """
+    mineru_bin = Path(sys.executable).parent / "mineru"
+    if not mineru_bin.exists():
+        raise RuntimeError("mineru: CLI executable not found")
+    backend = os.environ.get("MINERU_CLI_BACKEND", "").strip()
+    method = os.environ.get("MINERU_CLI_METHOD", "").strip()
+    timeout = int(os.environ.get("MINERU_CLI_TIMEOUT_SECONDS", "900"))
+    with tempfile.TemporaryDirectory(prefix="mineru-output-") as output_dir:
+        command = [
+            str(mineru_bin),
+            "-p",
+            str(path),
+            "-o",
+            output_dir,
+        ]
+        if backend:
+            command.extend(("-b", backend))
+        if method:
+            command.extend(("-m", method))
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip().splitlines()[-5:]
+            raise RuntimeError(f"mineru CLI failed: {' | '.join(detail)}")
+        markdown_files = sorted(Path(output_dir).rglob("*.md"))
+        if not markdown_files:
+            raise RuntimeError("mineru CLI did not produce markdown")
+        return "\n\n".join(
+            markdown_file.read_text(encoding="utf-8", errors="replace")
+            for markdown_file in markdown_files
+        )
 
 
 def _run_dots_ocr(path: Path) -> object:
@@ -1297,16 +1398,260 @@ def _run_dots_ocr(path: Path) -> object:
         candidate = getattr(module, attr, None)
         if callable(candidate):
             return candidate(str(path))
-    raise RuntimeError("dots_ocr: no supported entry point")
+    return _run_dots_ocr_parser(path)
+
+
+def _run_dots_ocr_parser(path: Path) -> str:
+    """Dots.OCR 公式 parser を実行し、生成 markdown を返す。"""
+    runtime = os.environ.get("DOTS_OCR_RUNTIME", "vllm").strip().lower() or "vllm"
+    if runtime in {"vllm", "official_vllm"}:
+        parser = _load_dots_ocr_vllm_parser()
+    elif runtime in {"hf", "hf_explicit_cuda"}:
+        parser = _load_dots_ocr_hf_parser()
+    else:
+        raise RuntimeError(
+            "dots_ocr_invalid_runtime: set DOTS_OCR_RUNTIME to vllm or hf_explicit_cuda"
+        )
+    prompt_mode = os.environ.get("DOTS_OCR_PROMPT_MODE", "prompt_layout_all_en").strip()
+    if not prompt_mode:
+        prompt_mode = "prompt_layout_all_en"
+    fitz_preprocess = _env_enabled("DOTS_OCR_FITZ_PREPROCESS", default=True)
+    with tempfile.TemporaryDirectory(prefix="dots-ocr-output-") as output_dir:
+        result = parser.parse_file(
+            str(path),
+            output_dir=output_dir,
+            prompt_mode=prompt_mode,
+            fitz_preprocess=fitz_preprocess,
+        )
+        markdown_files = _dots_ocr_markdown_files(result, Path(output_dir))
+        if not markdown_files:
+            raise RuntimeError("dots_ocr: parser did not produce markdown")
+        return "\n\n".join(
+            markdown_file.read_text(encoding="utf-8", errors="replace")
+            for markdown_file in markdown_files
+        )
+
+
+_DOTS_OCR_VLLM_PARSER_CACHE: dict[str, object] = {}
+_DOTS_OCR_PARSER_CACHE: dict[str, object] = {}
+
+
+def _load_dots_ocr_vllm_parser() -> object:
+    """Dots.OCR 公式推奨の vLLM server 向け parser を遅延ロードする。"""
+    protocol = os.environ.get("DOTS_OCR_PROTOCOL", "http").strip() or "http"
+    ip = os.environ.get("DOTS_OCR_IP", "parser-dots-ocr-vllm").strip()
+    if not ip:
+        ip = "parser-dots-ocr-vllm"
+    port = int(os.environ.get("DOTS_OCR_PORT", "8000"))
+    model_name = os.environ.get("DOTS_OCR_MODEL_NAME", "model").strip() or "model"
+    cache_key = "|".join((protocol, ip, str(port), model_name))
+    cached = _DOTS_OCR_VLLM_PARSER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    parser_module = importlib.import_module("dots_ocr.parser")
+    parser = parser_module.DotsOCRParser(
+        protocol=protocol,
+        ip=ip,
+        port=port,
+        model_name=model_name,
+        temperature=float(os.environ.get("DOTS_OCR_TEMPERATURE", "0.1")),
+        top_p=float(os.environ.get("DOTS_OCR_TOP_P", "1.0")),
+        max_completion_tokens=int(os.environ.get("DOTS_OCR_MAX_COMPLETION_TOKENS", "16384")),
+        num_thread=int(os.environ.get("DOTS_OCR_NUM_THREAD", "1")),
+        dpi=int(os.environ.get("DOTS_OCR_DPI", "200")),
+        output_dir=os.environ.get("DOTS_OCR_OUTPUT_DIR", "/tmp/dots-ocr-output"),
+        min_pixels=_optional_int_env("DOTS_OCR_MIN_PIXELS"),
+        max_pixels=_optional_int_env("DOTS_OCR_MAX_PIXELS"),
+        use_hf=False,
+    )
+    _DOTS_OCR_VLLM_PARSER_CACHE[cache_key] = parser
+    return parser
+
+
+def _load_dots_ocr_hf_parser() -> object:
+    """Dots.OCR HF parser を明示 CUDA mode で遅延ロードする(公式 vLLM 不可時の退避経路)。"""
+    model_id = (
+        os.environ.get("DOTS_OCR_MODEL_ID", "rednote-hilab/dots.mocr").strip()
+        or "rednote-hilab/dots.mocr"
+    )
+    dtype_name = os.environ.get("DOTS_OCR_TORCH_DTYPE", "bfloat16").strip() or "bfloat16"
+    device_name = os.environ.get("DOTS_OCR_DEVICE", "cuda:0").strip() or "cuda:0"
+    attention_impl = (
+        os.environ.get("DOTS_OCR_ATTENTION_IMPLEMENTATION", "sdpa").strip() or "sdpa"
+    )
+    cache_key = "|".join((model_id, dtype_name, device_name, attention_impl))
+    cached = _DOTS_OCR_PARSER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    parser_module = importlib.import_module("dots_ocr.parser")
+    base_parser = parser_module.DotsOCRParser
+
+    class ExplicitCudaDotsOCRParser(base_parser):  # type: ignore[misc, valid-type]
+        def _load_hf_model(self) -> None:
+            torch = importlib.import_module("torch")
+            if not torch.cuda.is_available():
+                raise RuntimeError("dots_ocr_cuda_unavailable: Dots.OCR requires a CUDA GPU")
+            transformers = importlib.import_module("transformers")
+            qwen_vl_utils = importlib.import_module("qwen_vl_utils")
+            model_ref = _resolve_dots_ocr_model_ref(model_id)
+            dtype = _torch_dtype(
+                torch,
+                dtype_name,
+                error_prefix="dots_ocr",
+            )
+            device = torch.device(device_name)
+            config = transformers.AutoConfig.from_pretrained(model_ref, trust_remote_code=True)
+            vision_config = getattr(config, "vision_config", None)
+            if isinstance(vision_config, dict):
+                vision_config["attn_implementation"] = attention_impl
+            elif vision_config is not None:
+                vision_config.attn_implementation = attention_impl
+            _ensure_flash_attn_importable_for_dots(attention_impl)
+            self.processor = transformers.AutoProcessor.from_pretrained(
+                model_ref,
+                trust_remote_code=True,
+                use_fast=True,
+            )
+            model = transformers.AutoModelForCausalLM.from_pretrained(
+                model_ref,
+                config=config,
+                trust_remote_code=True,
+                dtype=dtype,
+            )
+            model.to(device)
+            model.eval()
+            self.model = model
+            self.process_vision_info = qwen_vl_utils.process_vision_info
+            self._rag_cuda_device = device
+
+        def _inference_with_hf(self, image: object, prompt: str) -> str:
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+            text = self.processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            image_inputs, video_inputs = self.process_vision_info(messages)
+            inputs = self.processor(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt",
+            )
+            inputs = inputs.to(self._rag_cuda_device)
+            max_new_tokens = int(os.environ.get("DOTS_OCR_MAX_NEW_TOKENS", "24000"))
+            generated_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens)
+            generated_ids_trimmed = [
+                out_ids[len(in_ids) :]
+                for in_ids, out_ids in zip(inputs.input_ids, generated_ids, strict=False)
+            ]
+            decoded = self.processor.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            return decoded[0] if decoded else ""
+
+    parser = ExplicitCudaDotsOCRParser(
+        num_thread=1,
+        dpi=int(os.environ.get("DOTS_OCR_DPI", "200")),
+        output_dir=os.environ.get("DOTS_OCR_OUTPUT_DIR", "/tmp/dots-ocr-output"),
+        min_pixels=_optional_int_env("DOTS_OCR_MIN_PIXELS"),
+        max_pixels=_optional_int_env("DOTS_OCR_MAX_PIXELS"),
+        use_hf=True,
+    )
+    _DOTS_OCR_PARSER_CACHE[cache_key] = parser
+    return parser
+
+
+def _resolve_dots_ocr_model_ref(model_id: str) -> str:
+    """HF repo id を local snapshot path へ解決し、remote code の相対 import を安定させる。"""
+    local_path = Path(model_id).expanduser()
+    if local_path.exists():
+        return str(local_path)
+    huggingface_hub = importlib.import_module("huggingface_hub")
+    return str(huggingface_hub.snapshot_download(model_id))
+
+
+def _ensure_flash_attn_importable_for_dots(attention_impl: str) -> None:
+    """Dots.OCR remote code の無条件 import を sdpa/eager 利用時だけ安全に満たす。"""
+    if attention_impl == "flash_attention_2":
+        return
+    if "flash_attn" in sys.modules:
+        return
+    try:
+        if importlib.util.find_spec("flash_attn") is not None:
+            return
+    except (ImportError, ValueError):
+        pass
+
+    fake_flash_attn = types.ModuleType("flash_attn")
+    fake_flash_attn.__spec__ = importlib.machinery.ModuleSpec("flash_attn", loader=None)
+    fake_flash_attn.__version__ = "0.0.0"
+
+    def _flash_attn_varlen_func(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError(
+            "dots_ocr_flash_attention_unavailable: set "
+            "DOTS_OCR_ATTENTION_IMPLEMENTATION=sdpa or install flash_attn"
+        )
+
+    fake_flash_attn.flash_attn_varlen_func = _flash_attn_varlen_func
+    sys.modules["flash_attn"] = fake_flash_attn
+
+
+def _dots_ocr_markdown_files(result: object, output_dir: Path) -> list[Path]:
+    """Dots.OCR parse_file の戻り値と出力 directory から markdown path を収集する。"""
+    markdown_files: list[Path] = []
+    if isinstance(result, Sequence) and not isinstance(result, str | bytes | bytearray):
+        for item in result:
+            if isinstance(item, Mapping):
+                for key in ("md_content_path", "md_content_nohf_path"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value:
+                        markdown_files.append(Path(value))
+    if not markdown_files:
+        markdown_files = sorted(output_dir.rglob("*.md"))
+    seen: set[Path] = set()
+    existing: list[Path] = []
+    for markdown_file in markdown_files:
+        resolved = markdown_file.resolve()
+        if resolved in seen or not markdown_file.exists():
+            continue
+        seen.add(resolved)
+        existing.append(markdown_file)
+    return existing
+
+
+def _env_enabled(name: str, *, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _optional_int_env(name: str) -> int | None:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    return int(value)
 
 
 def _run_glm_ocr(path: Path) -> object:
     """GLM-OCR(GPU)で 1 ファイルを OCR して markdown を得る(GPU 統合シーム)。
 
-    GLM-OCR は専用 pip package を持たず HuggingFace 配布のため、
-    1) ラッパー module `glm_ocr` があればそのエントリポイントを使い(テストの fake もこれ)、
-    2) 無ければ transformers で `GLM_OCR_MODEL_ID`(既定 zai-org/GLM-OCR)を HF からロードして
-       OCR する。重い依存は実行時 import のみで core 本体の依存は増やさない。
+    GLM-OCR は公式 self-host では vLLM/SGLang の OpenAI-compatible endpoint を使う。
+    テスト用 wrapper module があればそれを優先し、通常は vLLM endpoint を呼ぶ。
+    `GLM_OCR_RUNTIME=transformers` の場合だけローカル transformers 直ロードへ退避する。
     """
     if _module_available("glm_ocr"):
         module = importlib.import_module("glm_ocr")
@@ -1314,6 +1659,96 @@ def _run_glm_ocr(path: Path) -> object:
             candidate = getattr(module, attr, None)
             if callable(candidate):
                 return candidate(str(path))
+    runtime = os.environ.get("GLM_OCR_RUNTIME", "vllm").strip().lower() or "vllm"
+    if runtime in {"vllm", "official_vllm"}:
+        return _run_glm_ocr_vllm(path)
+    if runtime in {"transformers", "hf", "local_transformers"}:
+        return _run_glm_ocr_transformers(path)
+    raise RuntimeError("glm_ocr_invalid_runtime: set GLM_OCR_RUNTIME to vllm or transformers")
+
+
+def _run_glm_ocr_vllm(path: Path) -> object:
+    """公式 self-host(vLLM OpenAI-compatible)で GLM-OCR を実行する。"""
+    base_url = os.environ.get(
+        "GLM_OCR_VLLM_BASE_URL", "http://parser-glm-ocr-vllm:8080/v1"
+    ).rstrip("/")
+    model_name = os.environ.get("GLM_OCR_VLLM_MODEL", "glm-ocr").strip() or "glm-ocr"
+    prompt = os.environ.get("GLM_OCR_PROMPT", "Text Recognition:").strip()
+    if not prompt:
+        prompt = "Text Recognition:"
+    content_type = _content_type_for_path(path)
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{content_type};base64,{encoded}"},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "max_tokens": int(os.environ.get("GLM_OCR_MAX_NEW_TOKENS", "8192")),
+        "temperature": float(os.environ.get("GLM_OCR_TEMPERATURE", "0")),
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_glm_ocr_vllm_headers(),
+        method="POST",
+    )
+    timeout = float(os.environ.get("GLM_OCR_VLLM_TIMEOUT_SECONDS", "900"))
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    return _chat_completion_text(body)
+
+
+def _glm_ocr_vllm_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    api_key = os.environ.get("GLM_OCR_VLLM_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _chat_completion_text(body: Mapping[str, object]) -> str:
+    choices = body.get("choices")
+    if not isinstance(choices, Sequence) or not choices:
+        raise RuntimeError("glm_ocr_vllm_empty_choices")
+    first = choices[0]
+    if not isinstance(first, Mapping):
+        raise RuntimeError("glm_ocr_vllm_invalid_choice")
+    message = first.get("message")
+    if not isinstance(message, Mapping):
+        raise RuntimeError("glm_ocr_vllm_invalid_message")
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, Sequence):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, Mapping):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+    raise RuntimeError("glm_ocr_vllm_invalid_content")
+
+
+def _content_type_for_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    return {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+    }.get(suffix, "application/octet-stream")
     return _run_glm_ocr_transformers(path)
 
 
@@ -1364,17 +1799,50 @@ def _load_glm_ocr_pipeline(model_id: str) -> tuple[object, object]:
     cached = _GLM_OCR_PIPELINE_CACHE.get(model_id)
     if cached is not None:
         return cached
+    import os
+
+    torch = importlib.import_module("torch")
+    if not torch.cuda.is_available():
+        raise RuntimeError("glm_ocr_cuda_unavailable: GLM-OCR requires a CUDA GPU")
+    dtype = _torch_dtype(
+        torch,
+        os.environ.get("GLM_OCR_TORCH_DTYPE", "bfloat16"),
+        error_prefix="glm_ocr",
+    )
+    device = torch.device("cuda:0")
     transformers = importlib.import_module("transformers")
     processor = transformers.AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-    model = transformers.AutoModelForCausalLM.from_pretrained(
+    model = transformers.AutoModelForImageTextToText.from_pretrained(
         model_id,
         trust_remote_code=True,
-        torch_dtype="auto",
-        device_map="auto",
+        dtype=dtype,
     )
+    model.to(device)
     model.eval()
     _GLM_OCR_PIPELINE_CACHE[model_id] = (processor, model)
     return processor, model
+
+
+def _torch_dtype(torch: Any, dtype_name: str | None, *, error_prefix: str) -> object:
+    """GPU OCR parser の dtype を明示的に解決する。未知値は実行時に誤設定として落とす。"""
+    normalized = (dtype_name or "bfloat16").strip().lower()
+    bfloat16 = torch.bfloat16
+    float16 = torch.float16
+    float32 = torch.float32
+    dtype_by_name = {
+        "bfloat16": bfloat16,
+        "float16": float16,
+        "fp16": float16,
+        "float32": float32,
+        "fp32": float32,
+    }
+    try:
+        return dtype_by_name[normalized]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"{error_prefix}_invalid_torch_dtype: set {error_prefix.upper()}_TORCH_DTYPE to "
+            "bfloat16, float16, or float32"
+        ) from exc
 
 
 def _ocr_engine_adapter_result(

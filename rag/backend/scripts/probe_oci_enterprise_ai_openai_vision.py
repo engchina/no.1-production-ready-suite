@@ -86,7 +86,7 @@ def main() -> int:
         api_key=api_key,
         project=project_ocid,
         timeout=60.0,
-        max_retries=2,
+        max_retries=3,
     )
     request_input: Any = [
         {

@@ -50,7 +50,7 @@ class OciEnterpriseAiConfig:
     oci_enterprise_ai_vlm_response_path: str = ""
     oci_enterprise_ai_llm_payload_template: str = ""
     oci_enterprise_ai_vlm_payload_template: str = ""
-    oci_enterprise_ai_vlm_input_mode: str = "auto"
+    oci_enterprise_ai_vlm_input_mode: str = "files_api"
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
     oci_enterprise_ai_llm_max_output_tokens: int = 1200
@@ -87,7 +87,9 @@ class OciEnterpriseAiConfig:
             oci_enterprise_ai_vlm_payload_template=_get(
                 "OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE"
             ),
-            oci_enterprise_ai_vlm_input_mode=_get("OCI_ENTERPRISE_AI_VLM_INPUT_MODE", "auto"),
+            oci_enterprise_ai_vlm_input_mode=_get(
+                "OCI_ENTERPRISE_AI_VLM_INPUT_MODE", "files_api"
+            ),
             oci_enterprise_ai_timeout_seconds=_float(
                 _get("OCI_ENTERPRISE_AI_TIMEOUT_SECONDS"), 600.0
             ),
@@ -416,7 +418,13 @@ class OciEnterpriseAiClient:
     ) -> str:
         """Vision smoke test 用に OpenAI Responses 形式で画像から text を生成する。"""
         uploaded_file_id = ""
-        if _should_upload_vlm_input(self._config, mime_type=mime_type):
+        # 設定画面の接続確認や asset 要約は小さな画像を直接渡す軽量 probe。
+        # Files API 設定時でも画像は NL2SQL direct client と同じ inline data URL を使い、
+        # file_id 入力非対応の provider/gateway で不要な 500 を避ける。
+        if (
+            _normalized_mime_type(mime_type) not in IMAGE_MIME_TYPES
+            and _should_upload_vlm_input(self._config, mime_type=mime_type)
+        ):
             uploaded_file_id = await self._upload_vlm_input_file(image_bytes, mime_type=mime_type)
         try:
             payload = await asyncio.to_thread(
@@ -496,7 +504,7 @@ class OciEnterpriseAiClient:
                 "Enterprise AI VLM 入力方式が inline_image のため、"
                 "この MIME type は送信できません。"
                 "PDF や Office fallback を読む場合は、モデル設定の VLM 入力方式を Files API"
-                " または Auto に変更してください。"
+                " に変更してください。"
             )
         if _should_upload_vlm_input(self._config, mime_type=mime_type):
             uploaded_file_id = await self._upload_vlm_input_file(image_bytes, mime_type=mime_type)
@@ -1231,20 +1239,22 @@ def _normalized_mime_type(value: str) -> str:
 
 def _vlm_input_mode(config: OciEnterpriseAiConfig) -> str:
     """設定値を VLM 入力搬送方式として正規化する。"""
-    mode = str(getattr(config, "oci_enterprise_ai_vlm_input_mode", "auto")).strip().casefold()
-    if mode in {"auto", "files_api", "inline_image"}:
+    mode = str(getattr(config, "oci_enterprise_ai_vlm_input_mode", "files_api")).strip().casefold()
+    if mode == "auto":
+        return "files_api"
+    if mode in {"files_api", "inline_image"}:
         return mode
-    return "auto"
+    return "files_api"
 
 
 def _should_upload_vlm_input(config: OciEnterpriseAiConfig, *, mime_type: str) -> bool:
     """VLM 入力を Files API へアップロードするかを設定から決める。"""
+    if config.oci_enterprise_ai_vlm_payload_template.strip():
+        return False
     mode = _vlm_input_mode(config)
     if mode == "files_api":
         return True
     if mode == "inline_image":
-        return False
-    if config.oci_enterprise_ai_vlm_payload_template.strip():
         return False
     return _normalized_mime_type(mime_type) not in IMAGE_MIME_TYPES
 

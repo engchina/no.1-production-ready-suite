@@ -15,6 +15,7 @@ from app.clients.oci_enterprise_ai import (
     OciEnterpriseAiClient,
 )
 from app.clients.oci_genai import OciGenAiClient
+from app.clients.parser_service import ParserServiceUnavailableError
 from app.config import Settings
 from app.rag import ingestion as ingestion_module
 from app.rag.graph_index import GraphIndex
@@ -54,6 +55,7 @@ class FakeOracle:
         self.saved_graph_index: GraphIndex | None = None
         self.graph_document_id: str | None = None
         self.statuses: list[FileStatus] = []
+        self.error_messages: list[str | None] = []
         self.segments: dict[str, IngestionSegment] = {}
 
     async def update_document_status(
@@ -63,6 +65,7 @@ class FakeOracle:
         error_message: str | None = None,
     ) -> DocumentDetail:
         self.statuses.append(status)
+        self.error_messages.append(error_message)
         return DocumentDetail(
             id=document_id,
             file_name="layout.pdf",
@@ -449,6 +452,7 @@ async def test_ingestion_pipeline_applies_parser_profile_strategy() -> None:
         vlm=vlm,
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
     source_profile = SourceProfile(
         original_file_name="layout.pdf",
@@ -490,6 +494,7 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
 
     detail = await pipeline.ingest(
@@ -534,6 +539,7 @@ async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys() -> None:
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
         settings=Settings(
+            rag_parser_adapter_backend="local",
             rag_extraction_artifact_prefix=("../unsafe//prefix with space\\nested/./../final"),
         ),
     )
@@ -568,6 +574,7 @@ async def test_ingestion_pipeline_reports_extraction_artifact_cache_failure() ->
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
 
     detail = await pipeline.ingest(
@@ -601,6 +608,7 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
         genai=FailingEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
 
     with pytest.raises(RuntimeError, match="embedding failure"):
@@ -625,6 +633,7 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
 
     detail = await second_pipeline.ingest(
@@ -683,6 +692,7 @@ async def test_ingestion_pipeline_creates_openxml_office_segment_checkpoints(
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
 
     detail = await pipeline.ingest(
@@ -794,10 +804,130 @@ async def test_ingestion_pipeline_keeps_successful_external_adapter_for_office(
     assert oracle.saved_extraction.parser_artifacts["parser_backend"] == "docling"
     assert oracle.saved_extraction.quality_report is not None
     assert oracle.saved_extraction.quality_report.parser_backend == "docling"
+    assert oracle.saved_extraction.quality_report.parser_profile == "docling_adapter"
     assert all(segment.parser_backend == "docling" for segment in oracle.segments.values())
+    assert all(segment.parser_profile == "docling_adapter" for segment in oracle.segments.values())
     full_artifact_path = oracle.saved_extraction.parser_artifacts["extraction_artifact_path"]
     assert all(segment.artifact_path == full_artifact_path for segment in oracle.segments.values())
     assert [key for key, _data, _content_type in storage.puts if "/segments/" in key] == []
+
+
+def test_ingestion_external_adapter_runner_fail_fast_only_for_selected_backend() -> None:
+    """明示選択 adapter だけ fail-fast にし、別 backend には適用しない。"""
+    pipeline = object.__new__(IngestionPipeline)
+    pipeline._settings = Settings(
+        rag_parser_adapter_backend="mineru",
+        rag_parser_mineru_enabled=True,
+    )
+    captured: list[dict[str, object]] = []
+
+    class FakeParserService:
+        def runner(
+            self,
+            backend: str,
+            source_bytes: bytes,
+            source_profile: SourceProfile | None,
+            content_type: str,
+            *,
+            fail_fast: bool = False,
+        ) -> ParserRegistryResult:
+            _ = source_bytes, source_profile, content_type
+            captured.append({"backend": backend, "fail_fast": fail_fast})
+            if fail_fast:
+                raise ParserServiceUnavailableError(
+                    backend,
+                    "unreachable",
+                    service_url="http://127.0.0.1:8022",
+                )
+            return ParserRegistryResult(
+                extraction=None,
+                parser_backend=backend,
+                fallback_used=True,
+                warnings=(f"{backend}_adapter_service_unreachable",),
+            )
+
+    pipeline._parser_service = FakeParserService()
+
+    with pytest.raises(ParserServiceUnavailableError, match="MinerU"):
+        pipeline._external_adapter_runner(
+            "mineru",
+            b"pdf",
+            _pdf_source_profile(file_size_bytes=3),
+            "application/pdf",
+        )
+
+    pipeline._settings = Settings(rag_parser_adapter_backend="marker")
+    result = pipeline._external_adapter_runner(
+        "mineru",
+        b"pdf",
+        _pdf_source_profile(file_size_bytes=3),
+        "application/pdf",
+    )
+
+    assert result.fallback_used is True
+    assert captured == [
+        {"backend": "mineru", "fail_fast": True},
+        {"backend": "mineru", "fail_fast": False},
+    ]
+
+
+def test_ingestion_selected_external_parser_fallback_stops_ingestion() -> None:
+    """明示選択 parser が fallback 結果なら Enterprise AI へ進めず止める。"""
+    pipeline = object.__new__(IngestionPipeline)
+    pipeline._settings = Settings(
+        rag_parser_adapter_backend="mineru",
+        rag_parser_mineru_enabled=True,
+    )
+    result = ParserRegistryResult(
+        extraction=None,
+        parser_backend="mineru",
+        parser_version="service_unavailable",
+        fallback_used=True,
+        warnings=("mineru_adapter_failed",),
+    )
+
+    with pytest.raises(IngestionUserError, match="MinerU"):
+        pipeline._raise_if_selected_parser_was_not_used(result)
+
+
+async def test_ingestion_selected_external_parser_failure_does_not_call_vlm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MinerU が失敗したら VLM/索引へ進まず文書を ERROR にする。"""
+    oracle = FakeOracle()
+    pipeline = IngestionPipeline(
+        vlm=FailingIfCalledVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        settings=Settings(
+            rag_parser_adapter_backend="mineru",
+            rag_parser_mineru_enabled=True,
+        ),
+    )
+
+    def fake_parse_with_registry(*_args: object, **_kwargs: object) -> ParserRegistryResult:
+        return ParserRegistryResult(
+            extraction=None,
+            parser_backend="mineru",
+            parser_version="service_unavailable",
+            fallback_used=True,
+            warnings=("mineru_adapter_failed",),
+        )
+
+    monkeypatch.setattr(ingestion_module, "parse_with_registry", fake_parse_with_registry)
+
+    with pytest.raises(IngestionUserError, match="MinerU"):
+        await pipeline.ingest(
+            "doc-mineru-failed",
+            b"%PDF",
+            "本文を抽出してください。",
+            content_type="application/pdf",
+            source_profile=_pdf_source_profile(file_size_bytes=4),
+        )
+
+    assert oracle.statuses == [FileStatus.INGESTING, FileStatus.ERROR]
+    assert oracle.saved_extraction is None
+    assert oracle.saved_chunk_count == 0
 
 
 async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index() -> None:
@@ -807,6 +937,7 @@ async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index() 
         vlm=CapturingVlm(),
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
     checks = 0
 
@@ -835,6 +966,7 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
     """RAG_GRAPH_ENABLED 時は取込結果から GraphRAG-lite index を保存する。"""
     oracle = FakeOracle()
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_graph_enabled=True,
         rag_chunk_size=800,
         rag_chunk_overlap=120,
@@ -873,6 +1005,7 @@ async def test_ingestion_pipeline_splits_pdf_into_page_segments() -> None:
     oracle = FakeOracle()
     vlm = SegmentCapturingVlm()
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_pdf_segmentation_enabled=True,
         rag_pdf_max_pages_per_segment=2,
         rag_pdf_max_segments=10,
@@ -911,6 +1044,7 @@ async def test_ingestion_pipeline_retries_truncated_pdf_segment_per_page() -> No
     oracle = FakeOracle()
     vlm = SegmentCapturingVlm(fail_multi_page_once=True)
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_pdf_segmentation_enabled=True,
         rag_pdf_max_pages_per_segment=2,
         rag_pdf_max_segments=10,
@@ -959,6 +1093,7 @@ async def test_ingestion_pipeline_retries_only_failed_checkpoint_segment() -> No
     vlm = SegmentCapturingVlm()
     storage = FakeObjectStorage()
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_pdf_segmentation_enabled=True,
         rag_pdf_max_pages_per_segment=2,
         rag_pdf_max_segments=10,
@@ -1001,6 +1136,7 @@ async def test_ingestion_pipeline_preserves_succeeded_segment_on_later_failure()
     vlm = SegmentFailingVlm(fail_on_call=2)
     storage = FakeObjectStorage()
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_pdf_segmentation_enabled=True,
         rag_pdf_max_pages_per_segment=2,
         rag_pdf_max_segments=10,
@@ -1044,6 +1180,7 @@ async def test_ingestion_pipeline_records_schema_validation_detail_on_failed_seg
     """VLM schema 不整合は segment checkpoint に原因が分かる形で保存する。"""
     oracle = FakeOracle()
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_pdf_segmentation_enabled=True,
         rag_pdf_max_pages_per_segment=1,
         rag_pdf_max_segments=10,
@@ -1126,6 +1263,7 @@ async def test_ingestion_pipeline_merges_cached_succeeded_segments_on_failed_ret
     _seed_segment(storage, oracle, "doc-cached:p5-5", "cached 5")
     vlm = SegmentCapturingVlm()
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_pdf_segmentation_enabled=True,
         rag_pdf_max_pages_per_segment=2,
         rag_pdf_max_segments=10,
@@ -1200,6 +1338,7 @@ async def test_ingestion_pipeline_reuses_all_succeeded_segment_artifacts() -> No
     _seed_segment(storage, oracle, "doc-reuse:p5-5", "cached 5")
     vlm = SegmentCapturingVlm()
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_pdf_segmentation_enabled=True,
         rag_pdf_max_pages_per_segment=2,
         rag_pdf_max_segments=10,
@@ -1279,6 +1418,7 @@ async def test_ingestion_pipeline_merges_segment_structure_with_unique_lineage()
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
         settings=Settings.model_construct(
+            rag_parser_adapter_backend="local",
             rag_pdf_segmentation_enabled=True,
             rag_pdf_max_pages_per_segment=2,
             rag_pdf_max_segments=10,
@@ -1360,6 +1500,7 @@ async def test_ingestion_pipeline_reextracts_missing_succeeded_segment_artifact(
     _seed_segment(storage, oracle, "doc-cache-miss:p3-4", "cached 3")
     vlm = SegmentCapturingVlm()
     settings = Settings.model_construct(
+        rag_parser_adapter_backend="local",
         rag_pdf_segmentation_enabled=True,
         rag_pdf_max_pages_per_segment=2,
         rag_pdf_max_segments=10,
@@ -1419,6 +1560,7 @@ async def test_ingestion_pipeline_preserves_openxml_office_success_on_parse_fail
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
     source_profile = _office_source_profile(
         file_name="broken.xlsx",
@@ -1484,6 +1626,7 @@ async def test_ingestion_pipeline_retries_failed_openxml_office_segment_from_cac
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
+        settings=Settings(rag_parser_adapter_backend="local"),
     )
     source_profile = _office_source_profile(
         file_name="book.xlsx",
@@ -1692,4 +1835,32 @@ def _office_source_profile(*, file_name: str, content_type: str) -> SourceProfil
         modality=SourceModality.OFFICE,
         parser_profile="local_office_structure",
         parser_backend="local_partition",
+    )
+
+
+def test_checkpoint_parser_profile_prefers_external_adapter_lineage() -> None:
+    """外部 parser 成功時の checkpoint 表示は Enterprise AI profile へ戻さない。"""
+    extraction = StructuredExtraction.model_validate(
+        {
+            "raw_text": "Unstructured が抽出した本文",
+            "document_type": "reference",
+            "confidence": 0.9,
+            "parser_artifacts": {
+                "source_parser": "unstructured_adapter",
+                "external_adapter": "unstructured",
+            },
+        }
+    )
+    result = ParserRegistryResult(
+        extraction=extraction,
+        parser_backend="unstructured",
+        parser_version="unstructured:1.0.0",
+    )
+
+    assert (
+        ingestion_module._checkpoint_parser_profile(
+            result,
+            fallback="enterprise_ai_pdf_layout",
+        )
+        == "unstructured_adapter"
     )

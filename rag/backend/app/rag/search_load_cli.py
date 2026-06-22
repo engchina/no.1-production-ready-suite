@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 import sys
@@ -23,11 +24,13 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from app.clients.http_retry import HttpRetryConfig, async_request_with_retry
 from app.schemas.search import SearchMode, SearchRequest, SearchStrategy
 
 DEFAULT_SEARCH_LOAD_API_URL = "http://localhost:8000/api/search"
 DEFAULT_SEARCH_LOAD_API_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT_SECONDS = 60.0
+logger = logging.getLogger(__name__)
 
 
 class SearchLoadCliError(RuntimeError):
@@ -76,7 +79,7 @@ class SearchLoadCase(BaseModel):
     top_k: int = Field(default=20, ge=1, le=100)
     rerank_top_n: int = Field(default=5, ge=1, le=50)
     mode: SearchMode = SearchMode.HYBRID
-    strategy: SearchStrategy = SearchStrategy.AUTO
+    strategy: SearchStrategy = SearchStrategy.HYBRID
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
 
@@ -298,7 +301,16 @@ async def _post_search_request(
 ) -> dict[str, Any]:
     request_headers = {"Accept": "application/json", **headers}
     try:
-        response = await client.post(api_url, json=payload, headers=request_headers)
+        response = await async_request_with_retry(
+            client,
+            "POST",
+            api_url,
+            retry=HttpRetryConfig(),
+            logger=logger,
+            log_extra={"api_url": api_url},
+            json=payload,
+            headers=request_headers,
+        )
     except httpx.InvalidURL as exc:
         raise SearchLoadRunError(type(exc).__name__) from exc
     except httpx.TimeoutException as exc:

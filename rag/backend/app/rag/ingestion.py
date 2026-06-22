@@ -28,7 +28,7 @@ from app.clients.oci_enterprise_ai import (
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oci_speech import OciSpeechClient
 from app.clients.oracle import OracleClient
-from app.clients.parser_service import ParserServiceClient
+from app.clients.parser_service import ParserServiceClient, ParserServiceUnavailableError
 from app.clients.pipeline_stage import PipelineStageClient
 from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import Settings, enterprise_ai_vision_model_id, get_settings
@@ -62,6 +62,7 @@ from app.rag.observability import (
     record_trace_span,
 )
 from app.rag.parsers import (
+    EXTERNAL_ADAPTER_PACKAGES,
     SERVICE_ADAPTER_BACKENDS,
     OfficeSegmentExtraction,
     OfficeSegmentFailure,
@@ -179,7 +180,7 @@ class IngestionPipeline:
         self._object_storage = object_storage or ObjectStorageClient(settings=self._settings)
         # 外部 adapter は同一プロセスで import せず parser マイクロサービスへ HTTP 委譲する。
         self._parser_service = ParserServiceClient(settings=self._settings)
-        # pipeline ステージ(chunking 等)のプラグイン委譲。未達は in-process へ縮退する。
+        # pipeline ステージ(chunking 等)のプラグイン委譲。有効化済みサービスの失敗は止める。
         self._pipeline_stage = PipelineStageClient(self._settings)
         # 前処理(parse 前の原本変換)。軽量正規化は in-process、重い変換はサービスへ委譲。
         self._preprocess = PreprocessServiceClient(self._settings)
@@ -187,8 +188,53 @@ class IngestionPipeline:
         self._document_understanding = document_understanding or OciDocumentUnderstandingClient(
             settings=self._settings
         )
-        # 音声/動画の文字起こし(OCI AI Speech 優先、未設定/失敗は parser-asr へ縮退)。
+        # 音声/動画の文字起こし。失敗時は別経路へ切り替えず取込を止める。
         self._speech = speech or OciSpeechClient(settings=self._settings)
+
+    def _external_adapter_runner(
+        self,
+        backend: str,
+        source_bytes: bytes,
+        source_profile: SourceProfile | None,
+        content_type: str,
+    ) -> ParserRegistryResult:
+        """明示選択された外部 parser adapter は未達時に取込を止める。"""
+        selected_backend = (
+            str(getattr(self._settings, "rag_parser_adapter_backend", "local")).strip().casefold()
+        )
+        fail_fast = selected_backend == backend and backend in {
+            "docling",
+            "marker",
+            "unstructured",
+            "mineru",
+            "dots_ocr",
+            "glm_ocr",
+        }
+        return self._parser_service.runner(
+            backend,
+            source_bytes,
+            source_profile,
+            content_type,
+            fail_fast=fail_fast,
+        )
+
+    def _raise_if_selected_parser_was_not_used(
+        self,
+        parser_result: ParserRegistryResult,
+    ) -> None:
+        """明示選択された外部 parser が抽出に失敗した場合は別経路へ進めない。"""
+        selected_backend = (
+            str(getattr(self._settings, "rag_parser_adapter_backend", "local")).strip().casefold()
+        )
+        if selected_backend not in EXTERNAL_ADAPTER_PACKAGES:
+            return
+        if (
+            parser_result.parser_backend == selected_backend
+            and parser_result.extraction is not None
+            and not parser_result.fallback_used
+        ):
+            return
+        raise IngestionUserError(_selected_parser_failure_message(selected_backend, parser_result))
 
     async def ingest(
         self,
@@ -223,46 +269,66 @@ class IngestionPipeline:
                 source_profile=source_profile,
             )
             await _raise_if_cancelled(cancel_checker)
-            parser_result = await _observe_cpu_ingestion_stage(
-                trace_id,
-                "source_partition",
-                lambda: parse_with_registry(
-                    parse_bytes,
-                    source_profile=source_profile,
-                    content_type=parse_content_type,
-                    adapter_backend=getattr(
-                        self._settings,
-                        "rag_parser_adapter_backend",
-                        "local",
+            try:
+                parser_result = await _observe_cpu_ingestion_stage(
+                    trace_id,
+                    "source_partition",
+                    lambda: parse_with_registry(
+                        parse_bytes,
+                        source_profile=source_profile,
+                        content_type=parse_content_type,
+                        adapter_backend=getattr(
+                            self._settings,
+                            "rag_parser_adapter_backend",
+                            "local",
+                        ),
+                        docling_enabled=getattr(
+                            self._settings,
+                            "rag_parser_docling_enabled",
+                            False,
+                        ),
+                        marker_enabled=getattr(
+                            self._settings,
+                            "rag_parser_marker_enabled",
+                            False,
+                        ),
+                        unstructured_enabled=getattr(
+                            self._settings,
+                            "rag_parser_unstructured_enabled",
+                            False,
+                        ),
+                        mineru_enabled=getattr(
+                            self._settings,
+                            "rag_parser_mineru_enabled",
+                            False,
+                        ),
+                        dots_ocr_enabled=getattr(
+                            self._settings,
+                            "rag_parser_dots_ocr_enabled",
+                            False,
+                        ),
+                        glm_ocr_enabled=getattr(
+                            self._settings,
+                            "rag_parser_glm_ocr_enabled",
+                            False,
+                        ),
+                        external_adapter_runner=self._external_adapter_runner,
                     ),
-                    docling_enabled=getattr(
-                        self._settings,
-                        "rag_parser_docling_enabled",
-                        False,
-                    ),
-                    marker_enabled=getattr(
-                        self._settings,
-                        "rag_parser_marker_enabled",
-                        False,
-                    ),
-                    unstructured_enabled=getattr(
-                        self._settings,
-                        "rag_parser_unstructured_enabled",
-                        False,
-                    ),
-                    external_adapter_runner=self._parser_service.runner,
-                ),
-                attributes={
-                    "content_type": _observability_content_type(parse_content_type),
-                    "source_modality": (
-                        source_profile.modality.value if source_profile is not None else "unknown"
-                    ),
-                    "parser_profile": strategy.parser_profile,
-                    "preprocess_profile": source_derivation.preprocess_profile,
-                    "preprocess_converted": source_derivation.converted,
-                },
-                result_attributes=_parser_result_attributes,
-            )
+                    attributes={
+                        "content_type": _observability_content_type(parse_content_type),
+                        "source_modality": (
+                            source_profile.modality.value
+                            if source_profile is not None
+                            else "unknown"
+                        ),
+                        "parser_profile": strategy.parser_profile,
+                        "preprocess_profile": source_derivation.preprocess_profile,
+                        "preprocess_converted": source_derivation.converted,
+                    },
+                    result_attributes=_parser_result_attributes,
+                )
+            except ParserServiceUnavailableError as exc:
+                raise IngestionUserError(str(exc)) from exc
             audio_extraction: StructuredExtraction | None = None
             if parser_result.unsupported_reason == "audio_transcription_not_configured":
                 # 音声/動画は OCI AI Speech → ローカル faster-whisper の順で文字起こしする。
@@ -278,13 +344,18 @@ class IngestionPipeline:
                     raise IngestionUserError(_unsupported_parser_message(parser_result))
             elif parser_result.unsupported_reason:
                 raise IngestionUserError(_unsupported_parser_message(parser_result))
+            self._raise_if_selected_parser_was_not_used(parser_result)
+            effective_parser_profile = _checkpoint_parser_profile(
+                parser_result,
+                fallback=strategy.parser_profile,
+            )
             checkpoint_segments = await self._prepare_segment_checkpoints(
                 document_id=document_id,
                 source_bytes=parse_bytes,
                 content_type=parse_content_type,
                 source_profile=source_profile,
                 parser_backend=_checkpoint_parser_backend(parser_result, source_profile),
-                parser_profile=strategy.parser_profile,
+                parser_profile=effective_parser_profile,
             )
             await _raise_if_cancelled(cancel_checker)
             # 音声文字起こしが成功していれば以降の parser/VLM 経路は短絡する。
@@ -294,7 +365,6 @@ class IngestionPipeline:
                 if service_backend is not None:
                     # 明示選択された service backend(OCI Enterprise AI VLM /
                     # Document Understanding)はローカル/外部 adapter を飛ばして直接呼ぶ。
-                    # DU が利用不可/失敗のときは None を返し、下の標準フローへ安全に縮退する。
                     extraction = await self._extract_with_service_backend(
                         service_backend,
                         trace_id=trace_id,
@@ -354,14 +424,14 @@ class IngestionPipeline:
                 extraction,
                 parser_result=parser_result,
                 fallback_template=template_for_source_profile(source_profile),
-                source_parser=strategy.parser_profile,
+                source_parser=effective_parser_profile,
             )
             # 派生系譜(溯源)を抽出 metadata へ刻む。artifact cache / document payload 経由で永続。
             extraction = _extraction_with_source_derivation(extraction, source_derivation)
             quality_report = build_ingestion_quality_report(
                 extraction,
                 source_profile=source_profile,
-                parser_profile=strategy.parser_profile,
+                parser_profile=effective_parser_profile,
                 parser_backend=parser_result.parser_backend,
                 parser_version=parser_result.parser_version,
                 fallback_used=parser_result.fallback_used,
@@ -376,7 +446,7 @@ class IngestionPipeline:
             quality_report = build_ingestion_quality_report(
                 extraction,
                 source_profile=source_profile,
-                parser_profile=strategy.parser_profile,
+                parser_profile=effective_parser_profile,
                 parser_backend=parser_result.parser_backend,
                 parser_version=parser_result.parser_version,
                 fallback_used=parser_result.fallback_used,
@@ -722,7 +792,7 @@ class IngestionPipeline:
         passthrough(既定)は変換せず原本をそのまま返す(現行挙動と一致)。それ以外は
         in-process(text_normalize)または前処理マイクロサービスへ委譲し、変換物を
         Object Storage へ保存して派生系譜(SourceDerivation)に object path / sha を残す。
-        失敗・未対応は passthrough へ安全に縮退する。
+        選択済みの前処理マイクロサービスが失敗した場合は別経路へ切り替えない。
         """
         profile = resolve_preprocess_profile(self._settings)
         source_sha = hashlib.sha256(source_bytes).hexdigest()
@@ -880,7 +950,7 @@ class IngestionPipeline:
         """`rag_field_extraction_enabled` が真なら field schema に従い named field を抽出する。
 
         定義済み field を OCI Enterprise AI の structured output で抽出し、`ExtractionField`
-        へ Pydantic 検証して保存する（best-effort、既定 OFF）。
+        へ Pydantic 検証して保存する（既定 OFF）。
         """
         if not getattr(self._settings, "rag_field_extraction_enabled", False):
             return extraction
@@ -900,9 +970,13 @@ class IngestionPipeline:
 
         try:
             return await extract_fields_from_extraction(extraction, schema.fields, _extract)
-        except Exception:  # noqa: BLE001 - field 抽出失敗は取込を妨げない（best-effort）
+        except Exception as exc:
             logger.warning("field_extraction_failed", extra={"trace_id": trace_id})
-            return extraction
+            raise IngestionUserError(
+                "項目抽出に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "項目抽出設定、field schema、Enterprise AI の応答形式を確認してから"
+                "再実行してください。"
+            ) from exc
 
     async def _attach_asset_summaries(
         self,
@@ -912,8 +986,7 @@ class IngestionPipeline:
         """`rag_asset_summary_enabled` が真なら図・表・chart を要約して紐付ける。
 
         object_path がある asset は Object Storage から画像を取得し OCI Enterprise AI VLM で、
-        画像が取得できない asset は alt_text を OCI Enterprise AI LLM で要約する（best-effort）。
-        既定 OFF。
+        画像がない asset は alt_text を OCI Enterprise AI LLM で要約する。既定 OFF。
         """
         if not getattr(self._settings, "rag_asset_summary_enabled", False):
             return extraction
@@ -928,8 +1001,12 @@ class IngestionPipeline:
             if asset.object_path:
                 try:
                     image_bytes = await self._object_storage.get(asset.object_path)
-                except Exception:
-                    image_bytes = None
+                except Exception as exc:
+                    raise IngestionUserError(
+                        "図表要約に必要な画像 artifact を取得できませんでした。"
+                        "別経路には切り替えずに取込を停止しました。Object Storage の保存先、"
+                        "権限、artifact path を確認してから再実行してください。"
+                    ) from exc
                 if image_bytes:
                     return await self._vlm.generate_from_image(image_bytes, prompt)
             caption = (asset.alt_text or "").strip()
@@ -943,9 +1020,15 @@ class IngestionPipeline:
                 _summarize,
                 max_assets=getattr(self._settings, "rag_asset_summary_max_assets", 24),
             )
-        except Exception:  # noqa: BLE001 - 要約失敗は取込を妨げない（best-effort）
+        except IngestionUserError:
+            raise
+        except Exception as exc:
             logger.warning("asset_summary_failed", extra={"trace_id": trace_id})
-            return extraction
+            raise IngestionUserError(
+                "図表要約に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "図表要約設定、Object Storage、Enterprise AI の応答を確認してから"
+                "再実行してください。"
+            ) from exc
 
     async def _attach_navigation_tree(
         self,
@@ -976,8 +1059,13 @@ class IngestionPipeline:
                     _summarize,
                     max_nodes=getattr(self._settings, "rag_navigation_summary_max_nodes", 24),
                 )
-            except Exception:  # noqa: BLE001 - 要約失敗は tree 構築を妨げない（best-effort）
+            except Exception as exc:
                 logger.warning("navigation_summary_failed", extra={"trace_id": trace_id})
+                raise IngestionUserError(
+                    "ナビゲーション要約に失敗しました。別経路には切り替えずに取込を停止しました。"
+                    "ナビゲーション要約設定と Enterprise AI の応答を確認してから"
+                    "再実行してください。"
+                ) from exc
         # summary がある node は検索可能な section_summary element にして、
         # Knowhere の Navigate / progressive disclosure を hybrid retrieval へつなぐ。
         next_order = max((element.order for element in extraction.elements), default=0) + 1
@@ -1490,9 +1578,7 @@ class IngestionPipeline:
         """明示選択された service backend で抽出する。
 
         まず再開用の cached 抽出を再利用し、無ければ各 OCI クラウドサービスを直接呼ぶ。
-        `oci_document_understanding` が利用不可/失敗のときは None を返し、呼び出し側で
-        既存のローカル/VLM フローへ安全に縮退させる。`oci_genai_vision`(旧称
-        enterprise_ai_vlm)は明示選択なので常に VLM 抽出まで実行する。
+        選択した service backend が抽出できない場合は別経路へ切り替えず取込を止める。
         """
         cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
         if cached_extraction is not None:
@@ -1509,22 +1595,11 @@ class IngestionPipeline:
             )
             if service_result.extraction is not None:
                 return service_result.extraction
-            # microservice 未到達/未設定/失敗 → 既存 in-process DU へ安全縮退する。
-            extracted = await self._extract_with_document_understanding(
-                trace_id=trace_id,
-                document_id=document_id,
-                source_bytes=source_bytes,
-                content_type=content_type,
-                parser_profile=parser_profile,
-                checkpoint_segments=checkpoint_segments,
-                cancel_checker=cancel_checker,
+            raise IngestionUserError(
+                _selected_parser_failure_message("oci_document_understanding", service_result)
             )
-            if extracted is None:
-                return None
-            return _validate_structured_extraction_payload(extracted)
         # oci_genai_vision(旧 enterprise_ai_vlm): まず parser microservice へ HTTP 委譲
-        # (単一 VLM 呼び出し)。未到達/未設定/失敗(大規模 PDF の token 超過等を含む)時は、
-        # PDF 分割込みの in-process VLM へ安全縮退する(分割/checkpoint は backend に残す)。
+        # (単一 VLM 呼び出し)。未到達/未設定/失敗時は別経路へ切り替えない。
         await _raise_if_cancelled(cancel_checker)
         service_result = await asyncio.to_thread(
             self._parser_service.run_service_backend,
@@ -1536,17 +1611,9 @@ class IngestionPipeline:
         )
         if service_result.extraction is not None:
             return service_result.extraction
-        extracted = await self._extract_with_vlm(
-            trace_id=trace_id,
-            document_id=document_id,
-            source_bytes=source_bytes,
-            prompt=prompt,
-            content_type=content_type,
-            parser_profile=parser_profile,
-            checkpoint_segments=checkpoint_segments,
-            cancel_checker=cancel_checker,
+        raise IngestionUserError(
+            _selected_parser_failure_message("oci_genai_vision", service_result)
         )
-        return _validate_structured_extraction_payload(extracted)
 
     async def _augment_with_raptor(
         self,
@@ -1556,8 +1623,7 @@ class IngestionPipeline:
     ) -> list[Chunk]:
         """RAPTOR 再帰要約索引(opt-in)。leaf に summary node を加えて返す。
 
-        要約は OCI Enterprise AI で行い、失敗/未設定の cluster は skip(最低でも leaf を残す)。
-        OFF(既定)のときは leaf chunk をそのまま返す。
+        要約は OCI Enterprise AI で行う。OFF(既定)のときは leaf chunk をそのまま返す。
         """
         if not getattr(self._settings, "rag_raptor_enabled", False):
             return chunks
@@ -1570,8 +1636,11 @@ class IngestionPipeline:
                     text,
                     system_prompt="あなたは文書を階層的に要約するアシスタントです。",
                 )
-            except Exception:  # noqa: BLE001 - 要約失敗は当該 cluster を skip(leaf は残る)
-                return None
+            except Exception as exc:
+                raise IngestionUserError(
+                    "RAPTOR 要約に失敗しました。別経路には切り替えずに取込を停止しました。"
+                    "RAPTOR 設定と Enterprise AI の応答を確認してから再実行してください。"
+                ) from exc
 
         augmented = await build_raptor_summaries(
             chunks,
@@ -1591,31 +1660,29 @@ class IngestionPipeline:
         source_profile: SourceProfile | None,
         cancel_checker: Callable[[], Awaitable[bool]] | None,
     ) -> StructuredExtraction | None:
-        """音声/動画を文字起こしする。OCI AI Speech 優先、未設定/失敗は parser-asr へ縮退。
-
-        いずれも利用不可なら None を返し、呼び出し側で「未対応」として扱う。
-        """
+        """音声/動画を文字起こしする。失敗時は別経路へ切り替えない。"""
         _ = trace_id
         if not getattr(self._settings, "rag_parser_asr_enabled", True):
             return None
         await _raise_if_cancelled(cancel_checker)
-        # 1) OCI AI Speech(設定済みのとき優先)。
         payload = await self._speech.transcribe(
             source_bytes, content_type=content_type, document_id=document_id
         )
         if payload is not None:
             try:
                 return _validate_structured_extraction_payload(payload)
-            except Exception:  # noqa: BLE001 - schema 不一致はローカル経路へ縮退する
-                logger.warning("OCI Speech 結果の検証に失敗。ローカル ASR へ縮退します。")
-        # 2) ローカル faster-whisper(parser-asr マイクロサービス)。
-        await _raise_if_cancelled(cancel_checker)
-        result = await asyncio.to_thread(
-            self._parser_service.runner, "asr", source_bytes, source_profile, content_type
+            except Exception as exc:
+                logger.warning("OCI Speech 結果の検証に失敗。", exc_info=True)
+                raise IngestionUserError(
+                    "音声文字起こし結果の形式が保存用 schema と一致しません。"
+                    "別経路には切り替えずに取込を停止しました。OCI Speech の出力と"
+                    "変換設定を確認してから再実行してください。"
+                ) from exc
+        _ = source_profile
+        raise IngestionUserError(
+            "音声文字起こしに失敗しました。別経路には切り替えずに取込を停止しました。"
+            "OCI Speech の設定、Object Storage、対象ファイル形式を確認してから再実行してください。"
         )
-        if result.extraction is not None:
-            return result.extraction
-        return None
 
     async def _extract_with_document_understanding(
         self,
@@ -1892,9 +1959,13 @@ class IngestionPipeline:
             )
         except Exception as exc:
             logger.info(
-                "graph_indexing_skipped",
+                "graph_indexing_failed",
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
+            raise IngestionUserError(
+                "GraphRAG 索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "GraphRAG 設定、抽出結果、データベース保存先を確認してから再実行してください。"
+            ) from exc
 
     async def _save_graph_index(
         self,
@@ -2021,6 +2092,74 @@ def _unsupported_parser_message(result: ParserRegistryResult) -> str:
     return "このファイル形式は取込に対応していません。"
 
 
+def _selected_parser_failure_message(
+    selected_backend: str,
+    result: ParserRegistryResult,
+) -> str:
+    """明示選択 parser が使えなかった理由を利用者向け文言へ寄せる。"""
+    label = _parser_backend_label(selected_backend)
+    warning = result.warnings[0] if result.warnings else None
+    warning_suffix = f" エラーコード: {warning}" if warning else ""
+    if warning and warning.endswith("_adapter_package_missing"):
+        return (
+            f"選択した文書解析エンジン（{label}）の実行に必要なパッケージが"
+            "parser サービス内に見つかりません。別の解析エンジンには切り替えずに"
+            f"取込を停止しました。サービス管理画面で parser-{selected_backend.replace('_', '-')} "
+            f"のイメージと依存関係を確認してから再実行してください。{warning_suffix}"
+        )
+    if warning and warning.endswith("_adapter_feature_flag_disabled"):
+        return (
+            f"選択した文書解析エンジン（{label}）が無効になっています。"
+            "ナレッジベースまたはシステム設定でこの解析エンジンを有効にしてから"
+            f"再実行してください。{warning_suffix}"
+        )
+    if warning and warning.endswith("_adapter_source_unsupported"):
+        return (
+            f"選択した文書解析エンジン（{label}）はこのファイル形式を処理できません。"
+            "別の解析エンジンには切り替えずに取込を停止しました。対応形式に変換するか、"
+            f"設定を変更してから再実行してください。{warning_suffix}"
+        )
+    if warning and (
+        warning.endswith("_adapter_service_unconfigured")
+        or warning.endswith("_adapter_service_unreachable")
+        or warning.endswith("_adapter_service_invalid_response")
+    ):
+        return (
+            f"選択した文書解析エンジン（{label}）の parser サービスを実行できません。"
+            "Enterprise AI など別経路には切り替えずに取込を停止しました。"
+            f"サービス管理画面で parser-{selected_backend.replace('_', '-')} の状態とログを"
+            f"確認してから再実行してください。{warning_suffix}"
+        )
+    if result.parser_backend != selected_backend:
+        return (
+            f"選択した文書解析エンジン（{label}）ではなく "
+            f"{_parser_backend_label(result.parser_backend)} の結果になったため、"
+            "別経路には切り替えずに取込を停止しました。"
+            f"{warning_suffix}"
+        )
+    return (
+        f"選択した文書解析エンジン（{label}）で解析結果を作成できませんでした。"
+        "Enterprise AI など別経路には切り替えずに取込を停止しました。"
+        f"サービス管理画面で parser-{selected_backend.replace('_', '-')} のログを確認し、"
+        f"原因を修正してから再実行してください。{warning_suffix}"
+    )
+
+
+def _parser_backend_label(backend: str) -> str:
+    labels = {
+        "docling": "Docling",
+        "marker": "Marker",
+        "unstructured": "Unstructured",
+        "mineru": "MinerU",
+        "dots_ocr": "Dots.OCR",
+        "glm_ocr": "GLM-OCR",
+        "oci_genai_vision": "OCI Generative AI Vision",
+        "oci_document_understanding": "OCI Document Understanding",
+        "enterprise_ai_vlm": "OCI Generative AI Vision",
+    }
+    return labels.get(backend, backend)
+
+
 def _parser_result_attributes(result: ParserRegistryResult) -> Mapping[str, object]:
     """parser registry 結果から非機密な trace attribute を作る。"""
     extraction = result.extraction
@@ -2049,6 +2188,30 @@ def _checkpoint_parser_backend(
     return parser_result.parser_backend
 
 
+def _checkpoint_parser_profile(
+    parser_result: ParserRegistryResult,
+    *,
+    fallback: str,
+) -> str:
+    """checkpoint/quality には user が選んだ実 parser を優先して残す。"""
+    extraction = parser_result.extraction
+    if extraction is not None and extraction.quality_report is not None:
+        report_profile = extraction.quality_report.parser_profile
+        if report_profile.strip():
+            return report_profile.strip()[:80]
+    if extraction is not None:
+        for key in ("parser_profile", "source_parser", "external_adapter"):
+            artifact_value = extraction.parser_artifacts.get(key)
+            if isinstance(artifact_value, str) and artifact_value.strip():
+                return artifact_value.strip()[:80]
+    if _uses_external_adapter_extraction(parser_result):
+        return parser_result.parser_backend[:80]
+    service_backend = _service_parser_backend(parser_result.parser_backend)
+    if service_backend is not None:
+        return service_backend[:80]
+    return fallback[:80]
+
+
 def _uses_external_adapter_extraction(parser_result: ParserRegistryResult) -> bool:
     """任意 external adapter が実際に extraction を返したかを判定する。"""
     return parser_result.extraction is not None and _is_external_adapter_backend(
@@ -2057,7 +2220,7 @@ def _uses_external_adapter_extraction(parser_result: ParserRegistryResult) -> bo
 
 
 def _is_external_adapter_backend(parser_backend: str) -> bool:
-    return parser_backend in {"docling", "marker", "unstructured"}
+    return parser_backend in {"docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"}
 
 
 def _service_parser_backend(parser_backend: str) -> str | None:
@@ -2192,6 +2355,8 @@ def _source_parser_name(
     value = extraction.parser_artifacts.get("source_parser")
     if isinstance(value, str) and value.strip():
         return value.strip()[:80]
+    if _uses_external_adapter_extraction(parser_result):
+        return parser_result.parser_backend[:80]
     if parser_result.parser_backend == "local_partition":
         return parser_result.template[:80]
     return fallback[:80]

@@ -149,7 +149,7 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.uploadDocument(new File(["test"], "policy.txt"), ["kb-1", "kb-2"], "auto");
+    await api.uploadDocument(new File(["test"], "policy.txt"), ["kb-1", "kb-2"], "manual");
 
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/upload");
@@ -157,7 +157,7 @@ describe("api.request envelope", () => {
     expect(init.body).toBeInstanceOf(FormData);
     const form = init.body as FormData;
     expect(form.getAll("knowledge_base_ids")).toEqual(["kb-1", "kb-2"]);
-    expect(form.get("ingestion_mode")).toBe("auto");
+    expect(form.get("ingestion_mode")).toBe("manual");
   });
 
   it("knowledge base API は CRUD endpoint を呼び分ける", async () => {
@@ -401,7 +401,7 @@ describe("api.request envelope", () => {
           ],
           default_model_id: "enterprise-llm",
           api_path: "/responses",
-          vlm_input_mode: "auto" as const,
+          vlm_input_mode: "files_api" as const,
           text_payload_template: "",
           vision_payload_template: "",
           text_response_path: "",
@@ -524,8 +524,8 @@ describe("api.request envelope", () => {
 
   it("getParserAdapterSettings は adapter readiness API を読む", async () => {
     const payload = {
-      adapter_backend: "auto",
-      effective_order: ["docling", "marker"],
+      adapter_backend: "docling",
+      effective_order: ["docling"],
       adapters: [
         {
           backend: "docling",
@@ -547,11 +547,11 @@ describe("api.request envelope", () => {
           distribution_name: null,
           install_package: "marker-pdf[full]==1.10.2",
           enabled: true,
-          selected: true,
+          selected: false,
           installed: false,
-          status: "missing",
+          status: "ignored",
           version: null,
-          warning_code: "adapter_package_missing",
+          warning_code: "adapter_flag_ignored_by_backend",
         },
         {
           backend: "unstructured",
@@ -580,9 +580,9 @@ describe("api.request envelope", () => {
 
     const result = await api.getParserAdapterSettings();
 
-    expect(result.adapter_backend).toBe("auto");
-    expect(result.effective_order).toEqual(["docling", "marker"]);
-    expect(result.adapters[1].warning_code).toBe("adapter_package_missing");
+    expect(result.adapter_backend).toBe("docling");
+    expect(result.effective_order).toEqual(["docling"]);
+    expect(result.adapters[1].warning_code).toBe("adapter_flag_ignored_by_backend");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/parser-adapters",
       expect.objectContaining({
@@ -684,14 +684,14 @@ describe("api.request envelope", () => {
 
   it("updateParserAdapterSettings は adapter backend と feature flags を保存する", async () => {
     const requestPayload = {
-      adapter_backend: "auto" as const,
+      adapter_backend: "docling" as const,
       docling_enabled: true,
       marker_enabled: false,
       unstructured_enabled: true,
     };
     const responsePayload = {
-      adapter_backend: "auto",
-      effective_order: ["docling", "unstructured"],
+      adapter_backend: "docling",
+      effective_order: ["docling"],
       adapters: [
         {
           backend: "docling",
@@ -726,11 +726,11 @@ describe("api.request envelope", () => {
           distribution_name: null,
           install_package: "unstructured[all-docs]==0.23.1",
           enabled: true,
-          selected: true,
+          selected: false,
           installed: false,
-          status: "missing",
+          status: "ignored",
           version: null,
-          warning_code: "adapter_package_missing",
+          warning_code: "adapter_flag_ignored_by_backend",
         },
       ],
       config_source: "runtime",
@@ -746,7 +746,7 @@ describe("api.request envelope", () => {
 
     const result = await api.updateParserAdapterSettings(requestPayload);
 
-    expect(result.effective_order).toEqual(["docling", "unstructured"]);
+    expect(result.effective_order).toEqual(["docling"]);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/parser-adapters",
       expect.objectContaining({
@@ -1011,6 +1011,64 @@ describe("api.request envelope", () => {
 });
 
 describe("api.services", () => {
+  it("getServiceCatalog は /api/services/catalog からプローブなし一覧を取り出す", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          control_enabled: true,
+          deployment_mode: "dev",
+          services: [
+            {
+              service_id: "parser-docling",
+              category: "parser",
+              profile: "cpu",
+              label_key: "settings.services.item.parserDocling",
+              depends_on: [],
+              configured: true,
+            },
+          ],
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.getServiceCatalog();
+
+    expect(result.deployment_mode).toBe("dev");
+    expect(result.services[0].service_id).toBe("parser-docling");
+    expect(fetchMock).toHaveBeenCalledWith("/api/services/catalog", expect.anything());
+  });
+
+  it("getServiceStatus は service_id を URL エンコードして状態を取り出す", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          service_id: "parser-dots-ocr",
+          category: "parser",
+          profile: "gpu",
+          label_key: "settings.services.item.parserDotsOcr",
+          status: "dependency_stopped",
+          depends_on: ["parser-dots-ocr-vllm"],
+          blocked_by: ["parser-dots-ocr-vllm"],
+          configured: true,
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.getServiceStatus("parser-dots-ocr");
+
+    expect(result.status).toBe("dependency_stopped");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/services/parser-dots-ocr/status",
+      expect.anything()
+    );
+  });
+
   it("getServices は /api/services から一覧を取り出す", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({

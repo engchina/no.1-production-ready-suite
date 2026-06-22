@@ -1609,6 +1609,20 @@ class OracleClient:
             error_message=error_message,
         )
 
+    async def reset_document_ingestion_outputs(
+        self,
+        document_id: str,
+        *,
+        status: FileStatus = FileStatus.UPLOADED,
+        error_message: str | None = None,
+    ) -> DocumentDetail:
+        """再取込前に旧抽出・索引・checkpoint と派生状態を破棄する。"""
+        return await self._reset_document_ingestion_outputs_with_oracle(
+            document_id=document_id,
+            status=status,
+            error_message=error_message,
+        )
+
     async def save_extraction(
         self, document_id: str, extraction: StructuredExtraction
     ) -> DocumentDetail:
@@ -4657,6 +4671,156 @@ class OracleClient:
                         }
                     ),
                 )
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
+
+        return await self._run_transaction(operation)
+
+    async def _reset_document_ingestion_outputs_with_oracle(
+        self,
+        *,
+        document_id: str,
+        status: FileStatus,
+        error_message: str | None,
+    ) -> DocumentDetail:
+        """同一文書の再取込開始時に、旧実体化結果を transaction 内で初期化する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            existing = _select_document(connection, document_id)
+            if existing is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+
+            graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
+            _delete_graph_rows_for_document(
+                connection,
+                document_id=document_id,
+                entity_ids=graph_entity_ids,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_ingestion_segments
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_ingestion_segments.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_artifact_layers
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_artifact_layers.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_kb_chunk_set_bindings
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_kb_chunk_set_bindings.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunks
+                WHERE document_id = :document_id
+                """,
+                {"document_id": document_id},
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_chunk_sets
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_chunk_sets.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_document_extractions
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1
+                      FROM rag_documents d
+                      WHERE d.document_id = rag_document_extractions.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET
+                    status = :status,
+                    error_message = :error_message,
+                    extraction = NULL,
+                    indexed_at = NULL
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "status": status.value,
+                        "error_message": error_message,
+                    }
+                ),
+            )
             document = _select_document(connection, document_id)
             if document is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")

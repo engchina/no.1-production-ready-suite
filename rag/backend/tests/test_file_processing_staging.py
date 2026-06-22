@@ -1548,7 +1548,7 @@ def test_parser_adapter_contract_failure_blocks_promotion() -> None:
     ]
 
 
-def test_report_payload_strict_contract_uses_auto_adapter_settings(
+def test_report_payload_strict_contract_uses_explicit_adapter_settings(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -1641,13 +1641,13 @@ def test_report_payload_strict_contract_uses_auto_adapter_settings(
     )
 
     assert captured_settings == {
-        "backend": "auto",
+        "backend": "docling",
         "docling_enabled": True,
         "marker_enabled": True,
         "unstructured_enabled": True,
     }
     assert payload["parser_adapter_contract_mode"] == "strict"
-    assert payload["parser_adapters"]["adapter_backend"] == "auto"
+    assert payload["parser_adapters"]["adapter_backend"] == "docling"
     assert captured_contract_args["fixture_root"] == fixture_root
     assert captured_contract_args["require_backend_evidence"] is True
     fixture_specs = cast(
@@ -1806,7 +1806,7 @@ def test_report_payload_source_routes_are_contract_aware(
         _promotion_ready_staging_report("contract-aware-route"),
         manifest=manifest,
         settings=Settings(
-            rag_parser_adapter_backend="auto",
+            rag_parser_adapter_backend="marker",
             rag_parser_docling_enabled=True,
             rag_parser_marker_enabled=True,
             rag_parser_unstructured_enabled=True,
@@ -1824,12 +1824,10 @@ def test_report_payload_source_routes_are_contract_aware(
         "glm_ocr",
     )
     assert route_by_kind["pdf"]["selected_backend"] == "marker"
-    assert "contract_aware_source_route" in route_by_kind["pdf"]["reason_codes"]
-    assert "contract_verified_alternative_selected" in route_by_kind["pdf"]["reason_codes"]
-    assert "docling_adapter_contract_unverified_for_source" in route_by_kind["pdf"]["warning_codes"]
-    assert route_by_kind["office"]["selected_backend"] == "docling"
-    assert route_by_kind["email"]["selected_backend"] == "unstructured"
-    assert payload["adapter_golden_gate"]["source_route_contract_gap_source_kinds"] == ["pdf"]
+    assert "selected_adapter_supported_for_source" in route_by_kind["pdf"]["reason_codes"]
+    assert route_by_kind["office"]["selected_backend"] == "local"
+    assert route_by_kind["email"]["selected_backend"] == "local"
+    assert payload["adapter_golden_gate"]["source_route_contract_gap_source_kinds"] == ["image"]
     assert (
         "adapter_golden_gate_source_route_contract_missing"
         in payload["adapter_golden_gate"]["blocker_codes"]
@@ -1839,14 +1837,14 @@ def test_report_payload_source_routes_are_contract_aware(
         for item in payload["promotion_blockers"]
         if item["code"] == "adapter_golden_gate_failed"
     )
-    assert blocker["source_route_contract_gap_source_kinds"] == ["pdf"]
+    assert blocker["source_route_contract_gap_source_kinds"] == ["image"]
 
 
-def test_file_processing_staging_cli_strict_preflight_requires_external_adapters(
+def test_file_processing_staging_cli_strict_preflight_requires_selected_adapter(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """strict staging preflight は local runtime でも外部 adapter package 不足を止める。"""
+    """strict staging preflight は local runtime でも選択 adapter package 不足を止める。"""
     manifest_path = REPO_ROOT / "docs/evaluation/file-processing-golden-set.json"
     output_path = tmp_path / "file-processing-staging-strict-preflight.json"
     monkeypatch.setattr(
@@ -1880,12 +1878,8 @@ def test_file_processing_staging_cli_strict_preflight_requires_external_adapters
     assert exit_code == 1
     assert payload["passed"] is False
     assert payload["parser_adapter_contract_mode"] == "strict"
-    assert payload["parser_adapters"]["adapter_backend"] == "auto"
-    assert {failure["backend"] for failure in failures} == {
-        "docling",
-        "marker",
-        "unstructured",
-    }
+    assert payload["parser_adapters"]["adapter_backend"] == "docling"
+    assert {failure["backend"] for failure in failures} == {"docling"}
     assert {failure["status"] for failure in failures} == {"missing"}
     assert payload["parser_adapter_contract"]["passed"] is False
 
@@ -1985,7 +1979,7 @@ def test_preflight_payload_strict_runs_manifest_adapter_contract(
     assert str(fixture_root) not in contract_text
     assert "scanned-contract-ja.pdf" not in contract_text
     assert "manual.html" not in contract_text
-    assert captured_contract_args["backend"] == "auto"
+    assert captured_contract_args["backend"] == "docling"
     assert captured_contract_args["docling_enabled"] is True
     assert captured_contract_args["marker_enabled"] is True
     assert captured_contract_args["unstructured_enabled"] is True
@@ -2043,7 +2037,7 @@ def test_preflight_payload_strict_blocks_schema_remap_failure(
     payload = file_processing_staging_cli._preflight_payload(
         SmokePreflightResult(ok=True, checks={}, message="ok"),
         Settings(
-            rag_parser_adapter_backend="auto",
+            rag_parser_adapter_backend="docling",
             rag_parser_docling_enabled=True,
             rag_parser_marker_enabled=True,
             rag_parser_unstructured_enabled=True,

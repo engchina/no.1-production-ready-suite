@@ -79,7 +79,7 @@ def _compose_args(
         if is_dev_mode(settings)
         else []
     )
-    profile_args = ["--profile", "gpu"] if entry.profile == "gpu" else []
+    profile_args = _compose_profile_args(entry)
     if action == "start":
         # --no-build: 数 GB のイメージ build を制御 HTTP リクエスト内で走らせない。
         # 未ビルドなら compose が即エラーを返し、ユーザに事前 build を促す(timeout 回避)。
@@ -92,10 +92,22 @@ def _compose_args(
     return [*base, *file_args, *profile_args, "restart", entry.service_id]
 
 
+def _compose_profile_args(entry: ServiceCatalogEntry) -> list[str]:
+    """compose profile 引数を service catalog から組み立てる。"""
+    profiles: list[str] = []
+    if entry.profile == "gpu":
+        profiles.append("gpu")
+    if entry.service_id.endswith("-vllm"):
+        profiles.append("gpu-vllm")
+    return [arg for profile in profiles for arg in ("--profile", profile)]
+
+
 def _build_command_hint(settings: Settings, entry: ServiceCatalogEntry) -> str:
     """未ビルド時にユーザへ案内する build コマンド(dev は override・GPU は profile 付き)。"""
     files = "-f docker-compose.yml -f docker-compose.dev.yml " if is_dev_mode(settings) else ""
-    profile = "--profile gpu " if entry.profile == "gpu" else ""
+    profile = " ".join(_compose_profile_args(entry))
+    if profile:
+        profile = f"{profile} "
     return f"docker compose {files}{profile}build {entry.service_id}"
 
 

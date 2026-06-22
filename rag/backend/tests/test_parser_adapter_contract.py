@@ -1008,7 +1008,7 @@ def test_parser_adapter_contract_cli_strict_manifest_uses_real_fixtures(
     )
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert exit_code == 0
-    assert captured["backend"] == "auto"
+    assert captured["backend"] == "docling"
     assert captured["docling_enabled"] is True
     assert captured["marker_enabled"] is True
     assert captured["unstructured_enabled"] is True

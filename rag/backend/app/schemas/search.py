@@ -75,7 +75,6 @@ class SearchMode(StrEnum):
 class SearchStrategy(StrEnum):
     """検索ルーティング戦略。既存 mode は baseline retrieval mode として維持する。"""
 
-    AUTO = "auto"
     HYBRID = "hybrid"
     GRAPH_LOCAL = "graph_local"
     GRAPH_GLOBAL = "graph_global"
@@ -88,7 +87,7 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=20, ge=1, le=100)
     rerank_top_n: int = Field(default=5, ge=1, le=50)
     mode: SearchMode = SearchMode.HYBRID
-    strategy: SearchStrategy = SearchStrategy.AUTO
+    strategy: SearchStrategy = SearchStrategy.HYBRID
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     business_view_id: str | None = Field(

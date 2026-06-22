@@ -83,7 +83,7 @@ class EnterpriseAiModelSettings(BaseModel):
     models: list[EnterpriseAiModelEntrySettings] = Field(default_factory=list, max_length=20)
     default_model_id: str = Field(default="", max_length=256)
     api_path: str = Field(default="/responses", max_length=512)
-    vlm_input_mode: EnterpriseAiVlmInputMode = "auto"
+    vlm_input_mode: EnterpriseAiVlmInputMode = "files_api"
     text_payload_template: str = Field(default="", max_length=20000)
     vision_payload_template: str = Field(default="", max_length=20000)
     text_response_path: str = Field(default="", max_length=1024)
@@ -519,6 +519,15 @@ class ParserAdapterSettingsUpdate(BaseModel):
     docling_enabled: bool = False
     marker_enabled: bool = False
     unstructured_enabled: bool = False
+
+    @field_validator("adapter_backend", mode="before")
+    @classmethod
+    def reject_auto_backend(cls, value: object) -> object:
+        if str(value).strip().casefold() == "auto":
+            raise ValueError(
+                "parser adapter の旧既定値は廃止されました。明示的な解析方式を選択してください。"
+            )
+        return value
 
 
 ChunkingStrategyName = ChunkingStrategy

@@ -307,8 +307,8 @@ test("文書解析設定は使用エンジンと有効化設定を保存でき�
 
   await page.goto("/settings/parser-adapters");
 
-  // local/auto は廃止。microservice エンジン(MinerU)を選択する。MinerU は有効化設定
-  // を自動 ON しないため、下の docling/unstructured トグル assert と干渉しない。
+  // local は廃止。microservice エンジン(MinerU)を選択する。MinerU は有効化設定
+  // を直接変えないため、下の docling/unstructured トグル assert と干渉しない。
   const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
   await mineruBackend.focus();
   await expect(mineruBackend).toBeFocused();
@@ -336,8 +336,8 @@ async function mockParserAdapters(page: Page) {
   await page.route("**/api/settings/parser-adapters", async (route) => {
     await route.fulfill({
       json: parserAdapterEnvelope({
-          adapter_backend: "auto",
-          effective_order: ["docling", "marker"],
+          adapter_backend: "docling",
+          effective_order: ["docling"],
           config_source: "runtime",
           adapters: [
             {
@@ -360,11 +360,11 @@ async function mockParserAdapters(page: Page) {
               distribution_name: null,
               install_package: "marker-pdf[full]==1.10.2",
               enabled: true,
-              selected: true,
+              selected: false,
               installed: false,
-              status: "missing",
+              status: "ignored",
               version: null,
-              warning_code: "adapter_package_missing",
+              warning_code: "adapter_flag_ignored_by_backend",
             },
             {
               backend: "unstructured",
@@ -410,8 +410,7 @@ function parserAdapterEnvelope(data: object) {
         covered_source_kinds: ["pdf", "image", "office", "html", "email", "audio", "text", "unknown"],
         missing_source_kinds: [],
         backend_source_kinds: {
-          docling: ["pdf", "office", "html"],
-          unstructured: ["image", "email"],
+          docling: ["pdf", "image", "office", "html"],
           local: ["audio", "text", "unknown"],
         },
         route_evidence: sourceRoutes,
@@ -431,26 +430,26 @@ function defaultSourceRoutes() {
       attempted_order: ["docling", "marker"],
       active_order: ["docling"],
       selected_backend: "docling",
-      reason_codes: ["source_aware_auto_order", "active_adapter_available_for_source"],
+      reason_codes: ["selected_adapter_supported_for_source", "active_adapter_available_for_source"],
       warning_codes: ["marker_adapter_package_missing"],
     },
     {
       source_kind: "image",
       candidate_order: ["unstructured", "marker", "docling"],
-      attempted_order: ["unstructured", "marker", "docling"],
-      active_order: ["unstructured"],
-      selected_backend: "unstructured",
-      reason_codes: ["source_aware_auto_order", "active_adapter_available_for_source"],
+      attempted_order: ["docling"],
+      active_order: ["docling"],
+      selected_backend: "docling",
+      reason_codes: ["selected_adapter_supported_for_source", "active_adapter_available_for_source"],
       warning_codes: [],
     },
     {
       source_kind: "email",
       candidate_order: ["unstructured"],
-      attempted_order: ["unstructured"],
-      active_order: ["unstructured"],
-      selected_backend: "unstructured",
-      reason_codes: ["source_aware_auto_order", "active_adapter_available_for_source"],
-      warning_codes: [],
+      attempted_order: [],
+      active_order: [],
+      selected_backend: "local",
+      reason_codes: ["selected_adapter_unsupported_for_source"],
+      warning_codes: ["docling_adapter_source_unsupported"],
     },
     {
       source_kind: "audio",
@@ -458,7 +457,7 @@ function defaultSourceRoutes() {
       attempted_order: [],
       active_order: [],
       selected_backend: "local",
-      reason_codes: ["audio_transcription_not_configured", "source_aware_auto_order"],
+      reason_codes: ["audio_transcription_not_configured", "selected_adapter_unsupported_for_source"],
       warning_codes: ["unsupported_audio", "audio_transcription_not_configured"],
     },
     {
@@ -467,7 +466,7 @@ function defaultSourceRoutes() {
       attempted_order: [],
       active_order: [],
       selected_backend: "local",
-      reason_codes: ["local_parser_preferred_for_source", "source_aware_auto_order"],
+      reason_codes: ["local_parser_preferred_for_source", "selected_adapter_unsupported_for_source"],
       warning_codes: [],
     },
   ];

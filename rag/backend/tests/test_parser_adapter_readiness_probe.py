@@ -29,6 +29,7 @@ def _settings() -> Settings:
         rag_parser_readiness_probe_enabled=True,
         rag_parser_adapter_backend="docling",
         rag_parser_docling_enabled=True,
+        rag_http_service_retry_attempts=1,
     )
 
 

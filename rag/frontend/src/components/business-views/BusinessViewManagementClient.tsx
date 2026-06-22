@@ -96,7 +96,7 @@ const EVALUATION_OPTIONS: SelectFieldOption<EvaluationSuiteName>[] = [
 const SERVING_MODE_OPTIONS: SelectFieldOption<ServingMode>[] = [
   { value: "single", label: "単一(既定)" },
   { value: "fused", label: "融合(複数の知識範囲を統合)" },
-  { value: "routed", label: "自動選択(質問ごとに切替)" },
+  { value: "routed", label: "ルール分岐(質問ごとに切替)" },
 ];
 
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {

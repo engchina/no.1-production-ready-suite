@@ -16,7 +16,6 @@ UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
 ParserAdapterBackend = Literal[
     "local",
-    "auto",
     "docling",
     "marker",
     "unstructured",
@@ -121,7 +120,7 @@ AgenticProfile = Literal[
     "decompose",
     "multi_hop",
 ]
-EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
+EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
@@ -150,7 +149,7 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
     default_model_id: str = Field(default="", max_length=256)
     api_path: str = Field(default="/responses", max_length=512)
-    vlm_input_mode: EnterpriseAiVlmInputMode = "auto"
+    vlm_input_mode: EnterpriseAiVlmInputMode = "files_api"
     text_payload_template: str = Field(default="", max_length=20000)
     vision_payload_template: str = Field(default="", max_length=20000)
     text_response_path: str = Field(default="", max_length=1024)
@@ -175,6 +174,14 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     def strip_text(cls, value: str) -> str:
         """前後空白を設定値へ混入させない。"""
         return value.strip()
+
+    @field_validator("vlm_input_mode", mode="before")
+    @classmethod
+    def normalize_legacy_vlm_input_mode(cls, value: object) -> object:
+        """廃止済み旧値は明示的な Files API へ寄せる。"""
+        if str(value).strip().casefold() == "auto":
+            return "files_api"
+        return value
 
     @model_validator(mode="after")
     def validate_model_catalog(self) -> "_PersistedEnterpriseAiSettings":
@@ -259,10 +266,10 @@ class Settings(BaseSettings):
     oci_enterprise_ai_llm_path: str = Field(default="/responses")
     oci_enterprise_ai_vlm_path: str = Field(default="/responses")
     oci_enterprise_ai_vlm_input_mode: EnterpriseAiVlmInputMode = Field(
-        default="auto",
+        default="files_api",
         description=(
-            "Enterprise AI VLM への入力搬送方式。auto は画像を inline、非画像を Files API。"
-            "files_api は VLM 入力を明示的に /files 経由へ送る。inline_image は画像のみ inline。"
+            "Enterprise AI VLM への入力搬送方式。files_api は VLM 入力を明示的に /files "
+            "経由へ送る。inline_image は画像のみ inline。"
         ),
     )
     oci_enterprise_ai_llm_payload_template: str = Field(
@@ -281,14 +288,14 @@ class Settings(BaseSettings):
         default="",
         description=(
             "Enterprise AI LLM response から回答候補を取り出す JSON Pointer。"
-            "空なら既知 envelope を自動判定する。"
+            "空なら既知 envelope を順番に照合する。"
         ),
     )
     oci_enterprise_ai_vlm_response_path: str = Field(
         default="",
         description=(
             "Enterprise AI VLM response から StructuredExtraction 候補を取り出す JSON Pointer。"
-            "空なら既知 envelope を自動判定する。"
+            "空なら既知 envelope を順番に照合する。"
         ),
     )
     oci_enterprise_ai_timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
@@ -706,7 +713,7 @@ class Settings(BaseSettings):
         default=True,
         description="PDF を VLM へ送る前にページ単位の小さな PDF segment へ分割する。",
     )
-    rag_pdf_max_pages_per_segment: int = Field(default=3, ge=1, le=50)
+    rag_pdf_max_pages_per_segment: int = Field(default=10, ge=1, le=50)
     rag_pdf_max_segments: int = Field(default=300, ge=1, le=2000)
     rag_retrieval_strategy: RetrievalStrategy = Field(
         default="hybrid_rrf",
@@ -886,8 +893,8 @@ class Settings(BaseSettings):
     rag_parser_adapter_backend: ParserAdapterBackend = Field(
         default="local",
         description=(
-            "Docling/Marker/Unstructured 互換 adapter の選択。"
-            "local は標準 parser のみ、auto は有効化 flag の adapter を順に試す。"
+            "文書解析 backend の明示選択。local は標準 parser のみ、"
+            "Docling/Marker/Unstructured 等は対応 parser サービスを直接指定する。"
         ),
     )
     rag_parser_docling_enabled: bool = Field(
@@ -947,9 +954,17 @@ class Settings(BaseSettings):
         default="http://parser-dots-ocr:8000",
         description="Dots.OCR(GPU)parser マイクロサービスの base URL。",
     )
+    rag_parser_dots_ocr_vllm_service_url: str = Field(
+        default="http://parser-dots-ocr-vllm:8000",
+        description="Dots.OCR 公式 vLLM sidecar の base URL。",
+    )
     rag_parser_glm_ocr_service_url: str = Field(
         default="http://parser-glm-ocr:8000",
         description="GLM-OCR(GPU)parser マイクロサービスの base URL。",
+    )
+    rag_parser_glm_ocr_vllm_service_url: str = Field(
+        default="http://parser-glm-ocr-vllm:8080",
+        description="GLM-OCR 公式 vLLM sidecar の base URL。",
     )
     rag_parser_asr_enabled: bool = Field(
         default=True,
@@ -984,6 +999,24 @@ class Settings(BaseSettings):
             "parser マイクロサービス呼び出しの HTTP timeout(秒)。"
             "超過・接続失敗時は warning を付けて local/Enterprise AI fallback へ縮退する。"
         ),
+    )
+    rag_http_service_retry_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="HTTP マイクロサービス呼び出しの最大試行回数。",
+    )
+    rag_http_service_retry_initial_delay_seconds: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=60.0,
+        description="HTTP マイクロサービス retry の初期待機秒数。",
+    )
+    rag_http_service_retry_max_delay_seconds: float = Field(
+        default=4.0,
+        ge=0.0,
+        le=300.0,
+        description="HTTP マイクロサービス retry の最大待機秒数。",
     )
     # --- pipeline ステージのプラグイン(マイクロサービス)化 ---
     # 各 pipeline ステージ(chunking 等)を独立サービスとして remote 委譲する。未達/timeout/無効時は
@@ -1323,6 +1356,22 @@ class Settings(BaseSettings):
     def normalize_model_settings_file(cls, value: str) -> str:
         """空指定は backend/.env と同じ階層の既定ファイルへ戻す。"""
         return value.strip() or DEFAULT_MODEL_SETTINGS_FILE
+
+    @field_validator("rag_parser_adapter_backend", mode="before")
+    @classmethod
+    def normalize_legacy_parser_adapter_backend(cls, value: object) -> object:
+        """廃止済み旧値は起動互換のため local へ寄せる。"""
+        if str(value).strip().casefold() == "auto":
+            return "local"
+        return value
+
+    @field_validator("oci_enterprise_ai_vlm_input_mode", mode="before")
+    @classmethod
+    def normalize_legacy_settings_vlm_input_mode(cls, value: object) -> object:
+        """廃止済み旧値は起動互換のため files_api へ寄せる。"""
+        if str(value).strip().casefold() == "auto":
+            return "files_api"
+        return value
 
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:

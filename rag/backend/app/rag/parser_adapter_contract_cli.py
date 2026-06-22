@@ -54,7 +54,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--strict",
         action="store_true",
         help=(
-            "外部 adapter を auto backend としてすべて有効化し、package / schema remap "
+            "代表外部 adapter を明示選択し、package / schema remap "
             "failure を gate 失敗にします。staging 昇格 smoke 用。"
         ),
     )

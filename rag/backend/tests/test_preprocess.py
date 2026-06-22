@@ -1,5 +1,6 @@
 """前処理(Preprocess)アダプター + 固定長 chunking + 派生系譜のテスト。"""
 
+import pytest
 from rag_parser_core.preprocess import (
     ConvertOutcome,
     ConvertResponse,
@@ -7,7 +8,11 @@ from rag_parser_core.preprocess import (
     normalize_preprocess_profile,
 )
 
-from app.clients.preprocess_service import PreprocessServiceClient, normalize_text_bytes
+from app.clients.preprocess_service import (
+    PreprocessServiceClient,
+    PreprocessServiceError,
+    normalize_text_bytes,
+)
 from app.config import Settings
 from app.rag.chunking import CHUNKING_STRATEGIES, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import (
@@ -149,88 +154,86 @@ def test_client_passthrough_for_binary_text_normalize() -> None:
     assert outcome.converted is False
 
 
-def test_client_office_profile_degrades_without_service() -> None:
+def test_client_office_profile_raises_without_service() -> None:
     client = PreprocessServiceClient(Settings(rag_preprocess_enabled=False))
-    outcome = client.convert(
-        b"PK\x03\x04",
-        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        source_profile=None,
-        profile="office_to_pdf",
-    )
-    assert outcome.converted is False
-    assert "preprocess_service_disabled" in outcome.warnings
+    with pytest.raises(PreprocessServiceError, match="前処理サービスが無効"):
+        client.convert(
+            b"PK\x03\x04",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            source_profile=None,
+            profile="office_to_pdf",
+        )
 
 
-def test_client_service_unreachable_degrades_to_passthrough() -> None:
-    # 到達不能 URL を指定 → HTTP 失敗 → passthrough へ安全に縮退する。
+def test_client_service_unreachable_raises() -> None:
+    # 到達不能 URL を指定 → HTTP 失敗 → 取込停止用エラー。
     client = PreprocessServiceClient(
         Settings(
             rag_preprocess_enabled=True,
             rag_preprocess_office_to_pdf_service_url="http://127.0.0.1:9/",
             rag_preprocess_service_timeout_seconds=0.2,
+            rag_http_service_retry_attempts=1,
         )
     )
-    outcome = client.convert(
-        b"PK\x03\x04",
-        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        source_profile=None,
-        profile="office_to_pdf",
-    )
-    assert outcome.converted is False
-    assert "preprocess_service_unreachable" in outcome.warnings
+    with pytest.raises(PreprocessServiceError, match="office to pdf"):
+        client.convert(
+            b"PK\x03\x04",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            source_profile=None,
+            profile="office_to_pdf",
+        )
 
 
 def test_csv_to_json_profile_routes_to_dedicated_service() -> None:
-    # csv_to_json は専用サービス URL へルーティングされ、未達時は passthrough へ縮退する。
+    # csv_to_json は専用サービス URL へルーティングされ、未達時は取込停止用エラー。
     client = PreprocessServiceClient(
         Settings(
             rag_preprocess_enabled=True,
             rag_preprocess_csv_to_json_service_url="http://127.0.0.1:9/",
             rag_preprocess_service_timeout_seconds=0.2,
+            rag_http_service_retry_attempts=1,
         )
     )
-    outcome = client.convert(
-        b"a,b\n1,2\n",
-        content_type="text/csv",
-        source_profile=None,
-        profile="csv_to_json",
-    )
-    assert outcome.converted is False
-    assert "preprocess_service_unreachable" in outcome.warnings
+    with pytest.raises(PreprocessServiceError, match="csv to json"):
+        client.convert(
+            b"a,b\n1,2\n",
+            content_type="text/csv",
+            source_profile=None,
+            profile="csv_to_json",
+        )
 
 
-def test_csv_to_json_profile_unconfigured_degrades() -> None:
-    # サービス URL が空 → 未設定として安全に passthrough。
+def test_csv_to_json_profile_unconfigured_raises() -> None:
+    # サービス URL が空 → 未設定として取込停止用エラー。
     client = PreprocessServiceClient(
         Settings(rag_preprocess_enabled=True, rag_preprocess_csv_to_json_service_url="")
     )
-    outcome = client.convert(
-        b"a,b\n1,2\n",
-        content_type="text/csv",
-        source_profile=None,
-        profile="csv_to_json",
-    )
-    assert outcome.converted is False
-    assert "preprocess_service_unconfigured" in outcome.warnings
+    with pytest.raises(PreprocessServiceError, match="接続先 URL が未設定"):
+        client.convert(
+            b"a,b\n1,2\n",
+            content_type="text/csv",
+            source_profile=None,
+            profile="csv_to_json",
+        )
 
 
 def test_excel_to_json_profile_routes_to_dedicated_service() -> None:
-    # excel_to_json は専用サービス URL へルーティングされ、未達時は passthrough へ縮退する。
+    # excel_to_json は専用サービス URL へルーティングされ、未達時は取込停止用エラー。
     client = PreprocessServiceClient(
         Settings(
             rag_preprocess_enabled=True,
             rag_preprocess_excel_to_json_service_url="http://127.0.0.1:9/",
             rag_preprocess_service_timeout_seconds=0.2,
+            rag_http_service_retry_attempts=1,
         )
     )
-    outcome = client.convert(
-        b"PK\x03\x04",
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        source_profile=None,
-        profile="excel_to_json",
-    )
-    assert outcome.converted is False
-    assert "preprocess_service_unreachable" in outcome.warnings
+    with pytest.raises(PreprocessServiceError, match="excel to json"):
+        client.convert(
+            b"PK\x03\x04",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            source_profile=None,
+            profile="excel_to_json",
+        )
 
 
 # --- 固定長 chunking + KB 上書き ---

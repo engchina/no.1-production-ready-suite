@@ -15,7 +15,6 @@ import {
   RefreshCw,
   RotateCcw,
   Settings,
-  Sparkles,
   XCircle,
 } from "lucide-react";
 import { useState } from "react";
@@ -33,7 +32,6 @@ import {
   ApiError,
   type BatchUploadFailedItem,
   type IngestionJob,
-  type UploadIngestionMode,
   type UploadResult,
   type UploadStorageSettingsData,
 } from "@/lib/api";
@@ -64,7 +62,6 @@ export function UploadWorkspace() {
   const [batchItems, setBatchItems] = useState<UploadResult[]>([]);
   const [batchFailedItems, setBatchFailedItems] = useState<BatchUploadFailedItem[]>([]);
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
-  const [ingestionMode, setIngestionMode] = useState<UploadIngestionMode>("manual");
   const upload = useUploadDocument();
   const batchUpload = useBatchUploadDocuments();
   const isBusy = upload.isPending || batchUpload.isPending;
@@ -87,7 +84,7 @@ export function UploadWorkspace() {
     batchUpload.reset();
     if (files.length === 1) {
       upload.mutate(
-        { file: files[0], knowledgeBaseIds, ingestionMode },
+        { file: files[0], knowledgeBaseIds },
         {
           onSuccess: (result) => {
             setBatchItems([result]);
@@ -99,7 +96,7 @@ export function UploadWorkspace() {
       return;
     }
     batchUpload.mutate(
-      { files, knowledgeBaseIds, ingestionMode },
+      { files, knowledgeBaseIds },
       {
         onSuccess: (result) => {
           setBatchItems(result.items);
@@ -120,11 +117,6 @@ export function UploadWorkspace() {
             <UploadKnowledgeBasePicker
               selectedIds={knowledgeBaseIds}
               onChange={setKnowledgeBaseIds}
-              disabled={isBusy}
-            />
-            <UploadIngestionOptions
-              ingestionMode={ingestionMode}
-              onChange={setIngestionMode}
               disabled={isBusy}
             />
             <Dropzone onFiles={handleFiles} disabled={isBusy} />
@@ -545,42 +537,6 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
     default:
       return "upload.job.status.QUEUED";
   }
-}
-
-function UploadIngestionOptions({
-  ingestionMode,
-  onChange,
-  disabled,
-}: {
-  ingestionMode: UploadIngestionMode;
-  onChange: (mode: UploadIngestionMode) => void;
-  disabled: boolean;
-}) {
-  const auto = ingestionMode === "auto";
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <label className="flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            checked={auto}
-            onChange={(event) => onChange(event.target.checked ? "auto" : "manual")}
-            disabled={disabled}
-            className="mt-1 cursor-pointer accent-[var(--primary)] disabled:cursor-not-allowed"
-          />
-          <span className="min-w-0">
-            <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <Sparkles size={15} className="text-primary" aria-hidden />
-              {t("upload.autoIngest.label")}
-            </span>
-            <span className="mt-1 block text-xs text-muted">
-              {auto ? t("upload.autoIngest.enabled") : t("upload.autoIngest.disabled")}
-            </span>
-          </span>
-        </label>
-      </CardContent>
-    </Card>
-  );
 }
 
 function UploadKnowledgeBasePicker({

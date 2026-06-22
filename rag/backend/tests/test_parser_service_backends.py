@@ -1,7 +1,7 @@
 """service 系 parser backend(enterprise_ai_vlm / oci_document_understanding)の契約テスト。
 
 - registry: 明示選択時に core が sentinel(extraction=None)を返すこと
-- ingestion routing: enterprise_ai_vlm は直接 VLM、DU は None で安全縮退・成功時は remap
+- ingestion routing: service backend は microservice 成功時のみ採用し、失敗時は縮退しない
 - OCI Document Understanding client: 注入 fake SDK で非同期 job フローと remap を検証
 """
 
@@ -22,7 +22,7 @@ from app.clients.oci_document_understanding import (
     document_understanding_result_to_payload,
 )
 from app.config import Settings
-from app.rag.ingestion import IngestionPipeline
+from app.rag.ingestion import IngestionPipeline, IngestionUserError
 from app.schemas.document import SourceModality, SourceProfile
 from app.schemas.extraction import StructuredExtraction
 
@@ -265,10 +265,10 @@ def _service_success_result(backend: str, extraction: StructuredExtraction) -> P
     )
 
 
-async def test_service_backend_enterprise_ai_vlm_calls_vlm(
+async def test_service_backend_enterprise_ai_vlm_stops_when_microservice_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """microservice 未到達時、enterprise_ai_vlm 明示は in-process VLM(分割込み)へ縮退する。"""
+    """microservice 未到達時、enterprise_ai_vlm 明示は in-process VLM へ縮退しない。"""
     pipeline = _routing_pipeline()
     calls: dict[str, bool] = {}
 
@@ -288,21 +288,20 @@ async def test_service_backend_enterprise_ai_vlm_calls_vlm(
         lambda *a, **k: _service_unreachable_result("oci_genai_vision"),
     )
 
-    result = await pipeline._extract_with_service_backend(
-        "enterprise_ai_vlm",
-        trace_id="t",
-        document_id="doc",
-        source_bytes=b"x",
-        prompt="p",
-        content_type="text/plain",
-        parser_profile="local_text_structure",
-        checkpoint_segments=(),
-        cancel_checker=None,
-    )
-    assert calls.get("vlm") is True
+    with pytest.raises(IngestionUserError, match="OCI Generative AI Vision"):
+        await pipeline._extract_with_service_backend(
+            "enterprise_ai_vlm",
+            trace_id="t",
+            document_id="doc",
+            source_bytes=b"x",
+            prompt="p",
+            content_type="text/plain",
+            parser_profile="local_text_structure",
+            checkpoint_segments=(),
+            cancel_checker=None,
+        )
+    assert "vlm" not in calls
     assert "du" not in calls
-    assert isinstance(result, StructuredExtraction)
-    assert result.raw_text == "vlm extracted"
 
 
 async def test_service_backend_vlm_uses_microservice_when_available(
@@ -340,10 +339,10 @@ async def test_service_backend_vlm_uses_microservice_when_available(
     assert "vlm" not in calls  # in-process VLM は呼ばれない
 
 
-async def test_service_backend_du_falls_back_when_none(
+async def test_service_backend_du_stops_when_microservice_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """microservice 未到達かつ in-process DU も None なら縮退用に None を返す(VLM は呼ばない)。"""
+    """microservice 未到達時、DU 明示は in-process DU/VLM へ縮退しない。"""
     pipeline = _routing_pipeline()
     calls: dict[str, bool] = {}
 
@@ -357,33 +356,32 @@ async def test_service_backend_du_falls_back_when_none(
 
     monkeypatch.setattr(pipeline, "_extract_with_vlm", _fake_vlm)
     monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
-    # microservice は未到達(fallback)→ in-process DU へ縮退する経路を検証する。
     monkeypatch.setattr(
         pipeline._parser_service,
         "run_service_backend",
         lambda *a, **k: _service_unreachable_result("oci_document_understanding"),
     )
 
-    result = await pipeline._extract_with_service_backend(
-        "oci_document_understanding",
-        trace_id="t",
-        document_id="doc",
-        source_bytes=b"x",
-        prompt="p",
-        content_type="application/pdf",
-        parser_profile="enterprise_ai_pdf_layout",
-        checkpoint_segments=(),
-        cancel_checker=None,
-    )
-    assert calls.get("du") is True
+    with pytest.raises(IngestionUserError, match="OCI Document Understanding"):
+        await pipeline._extract_with_service_backend(
+            "oci_document_understanding",
+            trace_id="t",
+            document_id="doc",
+            source_bytes=b"x",
+            prompt="p",
+            content_type="application/pdf",
+            parser_profile="enterprise_ai_pdf_layout",
+            checkpoint_segments=(),
+            cancel_checker=None,
+        )
+    assert "du" not in calls
     assert "vlm" not in calls
-    assert result is None
 
 
-async def test_service_backend_du_success_returns_extraction(
+async def test_service_backend_du_does_not_use_in_process_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """microservice 未到達でも in-process DU 成功なら remap 済み StructuredExtraction を返す。"""
+    """microservice 未到達なら in-process DU が成功可能でも縮退しない。"""
     pipeline = _routing_pipeline()
 
     async def _fake_du(**kwargs: Any) -> dict[str, object] | None:
@@ -396,19 +394,18 @@ async def test_service_backend_du_success_returns_extraction(
         lambda *a, **k: _service_unreachable_result("oci_document_understanding"),
     )
 
-    result = await pipeline._extract_with_service_backend(
-        "oci_document_understanding",
-        trace_id="t",
-        document_id="doc",
-        source_bytes=b"x",
-        prompt="p",
-        content_type="application/pdf",
-        parser_profile="enterprise_ai_pdf_layout",
-        checkpoint_segments=(),
-        cancel_checker=None,
-    )
-    assert isinstance(result, StructuredExtraction)
-    assert "請求書" in result.raw_text
+    with pytest.raises(IngestionUserError, match="OCI Document Understanding"):
+        await pipeline._extract_with_service_backend(
+            "oci_document_understanding",
+            trace_id="t",
+            document_id="doc",
+            source_bytes=b"x",
+            prompt="p",
+            content_type="application/pdf",
+            parser_profile="enterprise_ai_pdf_layout",
+            checkpoint_segments=(),
+            cancel_checker=None,
+        )
 
 
 async def test_service_backend_du_uses_microservice_when_available(

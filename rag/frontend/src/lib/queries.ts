@@ -2,7 +2,14 @@
  * TanStack Query フック。query key を一元管理する。
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import {
   api,
@@ -10,6 +17,7 @@ import {
   type DashboardActivity,
   type DatabaseSettingsUpdate,
   type DocumentApproveRequest,
+  type DocumentDetail,
   type DocumentSummary,
   type DocumentKnowledgeBaseReplaceRequest,
   type DocumentExtractionExportFormat,
@@ -33,8 +41,10 @@ import {
   type PreprocessSettingsData,
   type PreprocessSettingsUpdate,
   type ServiceAction,
+  type ServiceCatalogData,
   type ServiceControlResultData,
   type ServiceListData,
+  type ServiceStatusData,
   type RetrievalSettingsData,
   type RetrievalSettingsUpdate,
   type GroundingSettingsData,
@@ -111,7 +121,47 @@ export const queryKeys = {
   graphSettings: ["settings", "graph"] as const,
   agenticSettings: ["settings", "agentic"] as const,
   services: ["services"] as const,
+  serviceCatalog: ["services", "catalog"] as const,
+  serviceStatus: (serviceId: string) => ["services", "status", serviceId] as const,
 };
+
+const DOCUMENT_EXTRACTION_EXPORT_FORMATS: DocumentExtractionExportFormat[] = [
+  "markdown",
+  "html",
+  "json",
+  "chunks",
+];
+
+function clearDocumentProcessingCache(qc: QueryClient, documentId: string) {
+  qc.setQueryData<DocumentDetail | undefined>(queryKeys.document(documentId), (current) =>
+    current
+      ? {
+          ...current,
+          status: "UPLOADED",
+          extraction: {},
+          error_message: null,
+          indexed_at: null,
+        }
+      : current
+  );
+  qc.setQueryData(queryKeys.documentChunks(documentId), []);
+  qc.setQueryData(queryKeys.documentIngestionSegments(documentId), []);
+  qc.removeQueries({ queryKey: queryKeys.documentChunkSets(documentId) });
+  for (const format of DOCUMENT_EXTRACTION_EXPORT_FORMATS) {
+    qc.removeQueries({ queryKey: queryKeys.documentExtractionExport(documentId, format) });
+  }
+}
+
+function invalidateDocumentProcessingQueries(qc: QueryClient, documentId: string) {
+  qc.invalidateQueries({ queryKey: ["documents"] });
+  qc.invalidateQueries({ queryKey: queryKeys.document(documentId) });
+  qc.invalidateQueries({ queryKey: queryKeys.documentChunks(documentId) });
+  qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(documentId) });
+  qc.invalidateQueries({ queryKey: ["documents", documentId, "extraction-export"] });
+  qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(documentId) });
+  qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
+  qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+}
 
 /**
  * 自動更新(条件付きポーリング)の遷移状態判定。
@@ -160,6 +210,46 @@ export function dashboardHasActiveWork(
   activities: ReadonlyArray<Pick<DashboardActivity, "status">> | undefined
 ): boolean {
   return Boolean(activities?.some((activity) => DOCUMENT_ACTIVE_STATUSES.has(activity.status)));
+}
+
+/** 取込 job がまだキュー待ち/実行中か。 */
+export function ingestionJobIsActive(
+  status: IngestionJobStatus | null | undefined
+): boolean {
+  return status === "QUEUED" || status === "RUNNING";
+}
+
+/** 取込 segment がまだキュー待ち/実行中か。 */
+export function ingestionSegmentHasActiveWork(
+  segments: ReadonlyArray<{ status: string }> | undefined
+): boolean {
+  return Boolean(
+    segments?.some((segment) => segment.status === "QUEUED" || segment.status === "RUNNING")
+  );
+}
+
+export function documentWorkspaceShouldRefresh({
+  documentStatus,
+  watchProcessing = false,
+  localWatchProcessing = false,
+  jobStatuses = [],
+  segmentStatuses = [],
+}: {
+  documentStatus: FileStatus | null | undefined;
+  watchProcessing?: boolean;
+  localWatchProcessing?: boolean;
+  jobStatuses?: ReadonlyArray<IngestionJobStatus | null | undefined>;
+  segmentStatuses?: ReadonlyArray<string | null | undefined>;
+}): boolean {
+  if (jobStatuses.some(ingestionJobIsActive)) return true;
+  if (segmentStatuses.some((status) => status === "QUEUED" || status === "RUNNING")) return true;
+  if (documentStatus != null && DOCUMENT_ACTIVE_STATUSES.has(documentStatus)) return true;
+
+  // REVIEW / INDEXED / ERROR は通常は安定状態。ただし job 投入直後の引き継ぎ窓では
+  // mutation 側の job status が上の判定に入るため、ここでは止めてよい。
+  const terminal =
+    documentStatus === "INDEXED" || documentStatus === "ERROR" || documentStatus === "REVIEW";
+  return Boolean((watchProcessing || localWatchProcessing) && !terminal);
 }
 
 /** データベース利用可否(DB ゲート用)。設定ページ以外を開く前に参照する。 */
@@ -273,12 +363,8 @@ export function useDocumentIngestionSegments(id: string | null) {
     queryFn: () => api.listDocumentIngestionSegments(id as string),
     enabled: id != null,
     retry: false,
-    refetchInterval: (query) => {
-      const hasActive = query.state.data?.some(
-        (segment) => segment.status === "QUEUED" || segment.status === "RUNNING"
-      );
-      return hasActive ? 2000 : false;
-    },
+    refetchInterval: (query) =>
+      ingestionSegmentHasActiveWork(query.state.data) ? 2000 : false,
   });
 }
 
@@ -417,10 +503,7 @@ export function useIngestionJob(id: string | null) {
     queryKey: ["documents", "ingestion-jobs", id] as const,
     queryFn: () => api.getIngestionJob(id as string),
     enabled: id != null,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === "QUEUED" || status === "RUNNING" ? 2000 : false;
-    },
+    refetchInterval: (query) => (ingestionJobIsActive(query.state.data?.status) ? 2000 : false),
   });
 }
 
@@ -571,12 +654,10 @@ export function useIngestDocument() {
     mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
       api.enqueueDocumentIngestionJob(id, force),
     onSuccess: (job) => {
-      qc.invalidateQueries({ queryKey: ["documents"] });
-      qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
-      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+      if (job.phase === "EXTRACT" && job.status === "QUEUED") {
+        clearDocumentProcessingCache(qc, job.document_id);
+      }
+      invalidateDocumentProcessingQueries(qc, job.document_id);
     },
   });
 }
@@ -588,12 +669,10 @@ export function useEnqueueDocumentIngestionJob() {
     mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
       api.enqueueDocumentIngestionJob(id, force),
     onSuccess: (job) => {
-      qc.invalidateQueries({ queryKey: ["documents"] });
-      qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
-      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+      if (job.phase === "EXTRACT" && job.status === "QUEUED") {
+        clearDocumentProcessingCache(qc, job.document_id);
+      }
+      invalidateDocumentProcessingQueries(qc, job.document_id);
     },
   });
 }
@@ -1016,6 +1095,31 @@ export function usePreprocessSettings() {
     queryFn: api.getPreprocessSettings,
     retry: false,
   });
+}
+
+/** マイクロサービス一覧の静的メタデータ。稼働プローブは行わず、画面初期表示を軽くする。 */
+export function useServiceCatalog(options: { refetchInterval?: number | false } = {}) {
+  return useQuery<ServiceCatalogData>({
+    queryKey: queryKeys.serviceCatalog,
+    queryFn: api.getServiceCatalog,
+    retry: false,
+    refetchInterval: options.refetchInterval ?? false,
+  });
+}
+
+/** マイクロサービスの稼働状態をサービス単位で取得する。 */
+export function useServiceStatusQueries(
+  serviceIds: string[],
+  options: { refetchInterval?: number | false } = {}
+): UseQueryResult<ServiceStatusData>[] {
+  return useQueries({
+    queries: serviceIds.map((serviceId) => ({
+      queryKey: queryKeys.serviceStatus(serviceId),
+      queryFn: () => api.getServiceStatus(serviceId),
+      retry: false,
+      refetchInterval: options.refetchInterval ?? 5000,
+    })),
+  }) as UseQueryResult<ServiceStatusData>[];
 }
 
 /** マイクロサービスの稼働状態一覧。既定 5s でポーリングして稼働状況をライブ表示する。 */
