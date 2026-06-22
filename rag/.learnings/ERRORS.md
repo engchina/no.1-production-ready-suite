@@ -32,6 +32,66 @@ document status=INGESTING error_message=None  # 固着
 
 ---
 
+## [ERR-20260623-001] uv_cache_sandbox_readonly_workspace_cache
+
+**Logged**: 2026-06-23T08:15:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+`uv run pytest` again failed in the managed filesystem sandbox because `/root/.cache/uv` is read-only; using the repo-local `.uv-cache` avoided escalation.
+
+### Error
+```text
+error: Could not acquire lock
+  Caused by: Could not create temporary file
+  Caused by: Read-only file system (os error 30) at path "/root/.cache/uv/.tmp..."
+```
+
+### Context
+- Command attempted: `uv run pytest tests/test_service_management.py tests/test_ingestion_strategy.py -q`
+- Follow-up command succeeded for targeted tests with `uv --cache-dir ../.uv-cache run ...`.
+
+### Suggested Fix
+Prefer `uv --cache-dir ../.uv-cache run ...` for backend test/lint/type commands in this workspace when running under the managed sandbox.
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pyproject.toml
+- See Also: ERR-20260615-001
+
+---
+
+## [ERR-20260623-001] oracle_test_schema_lock
+
+**Logged**: 2026-06-23T08:04:21+09:00
+**Priority**: medium
+**Status**: pending
+**Area**: tests
+
+### Summary
+Targeted backend pytest failed during the session autouse Oracle schema setup because the real Oracle test database held a DML/table lock.
+
+### Error
+```text
+oracledb.exceptions.DatabaseError: ORA-00054: Failed to acquire a lock (Type: "TM", Name: "DML", Description: "Synchronizes accesses to an object") because it is currently held by another session.
+```
+
+### Context
+- Command attempted: `uv run pytest tests/test_document_ingestion_config.py tests/test_document_workspace.py -q`
+- The command reached pytest only after sandbox escalation for uv cache writes.
+- All selected tests errored before running assertions in `tests/conftest.py::_oracle_db_session` while `tests/_oracle_test_db.py::ensure_schema()` executed DDL/schema setup.
+
+### Suggested Fix
+Retry after the competing Oracle session releases the lock, or run the targeted tests with the real Oracle test DB disabled when the test path uses fakes and does not need schema setup.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: backend/tests/conftest.py, backend/tests/_oracle_test_db.py
+
+---
+
 ## [ERR-20260614-001] uv_cache_readonly
 
 **Logged**: 2026-06-14T02:31:00+09:00
@@ -59,12 +119,13 @@ Use a writable cache directory for verification commands, for example `uv --cach
 ### Metadata
 - Reproducible: yes
 - Related Files: backend/pyproject.toml
-- Recurrence-Count: 3
-- Last-Seen: 2026-06-18T04:26:58+09:00
+- Recurrence-Count: 4
+- Last-Seen: 2026-06-22T17:00:00+09:00
 
 ### Recurrence Notes
 - 2026-06-16T20:36:23+09:00: `uv run ruff check ...` and `uv run pytest ...` failed in the managed sandbox for the same `/root/.cache/uv` write issue. Reran successfully with `UV_CACHE_DIR=/tmp/uv-cache`.
 - 2026-06-18T04:26:58+09:00: `uv lock --offline` failed for the same `/root/.cache/uv` write issue. Use a writable cache path such as `UV_CACHE_DIR=/tmp/uv-cache`.
+- 2026-06-22T17:00:00+09:00: `uv run pytest tests/test_oci_enterprise_ai.py tests/test_settings_api.py -q` failed in the sandbox for the same `/root/.cache/uv` write issue. Reran successfully with approved escalation.
 
 ---
 

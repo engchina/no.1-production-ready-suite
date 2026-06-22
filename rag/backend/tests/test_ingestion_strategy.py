@@ -837,7 +837,7 @@ def test_ingestion_external_adapter_runner_fail_fast_only_for_selected_backend()
                 raise ParserServiceUnavailableError(
                     backend,
                     "unreachable",
-                    service_url="http://127.0.0.1:8022",
+                    service_url="http://127.0.0.1:18022",
                 )
             return ParserRegistryResult(
                 extraction=None,

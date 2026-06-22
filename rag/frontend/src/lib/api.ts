@@ -667,6 +667,8 @@ export interface DocumentIngestionConfigData {
   effective_parser_adapter_backend: string;
   observed_chunking_strategy: string | null;
   observed_parser_backend: string | null;
+  chunking_drift: boolean;
+  parser_drift: boolean;
   config_drift: boolean;
 }
 

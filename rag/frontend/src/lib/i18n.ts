@@ -1561,7 +1561,9 @@ export const ja = {
   "knowledgeBases.detail.loading": "ナレッジベース詳細を読み込み中",
   "ingestionDrift.title": "取込設定が更新されています",
   "ingestionDrift.description":
-    "この文書は「{strategy}」で取り込まれていますが、所属知識ベースの現在の文書分割方式は「{effective}」です。再取込すると現在の設定で作り直されます。",
+    "この文書は所属知識ベースの現在の構築設定と異なる設定で取り込まれています。再取込すると現在の設定で作り直されます。",
+  "ingestionDrift.chunking": "文書分割: {observed} → {effective}",
+  "ingestionDrift.parser": "文書解析: {observed} → {effective}",
   "ingestionDrift.action": "現在の設定で再取込",
   "ingestionDrift.toast.queued": "再取込を開始しました。",
   "ingestionDrift.error": "再取込の開始に失敗しました。状態を確認して再試行してください。",

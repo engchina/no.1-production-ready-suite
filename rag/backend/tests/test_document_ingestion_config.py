@@ -104,7 +104,13 @@ def test_ingestion_config_reports_no_drift_when_matching(
     fake_oracle.add_document(
         "doc-1", status=FileStatus.INDEXED, chunk_strategy="page_level", source_parser="docling"
     )
-    fake_oracle.set_owning("doc-1", _config(chunking_strategy="page_level"))
+    fake_oracle.set_owning(
+        "doc-1",
+        _config(
+            chunking_strategy="page_level",
+            parser_adapter_backend="docling",
+        ),
+    )
 
     data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
 
@@ -126,6 +132,35 @@ def test_ingestion_config_detects_drift(
 
     assert data["effective_chunking_strategy"] == "page_level"
     assert data["observed_chunking_strategy"] == "structure_aware"
+    assert data["chunking_drift"] is True
+    assert data["parser_drift"] is False
+    assert data["config_drift"] is True
+
+
+def test_ingestion_config_detects_parser_drift(
+    fake_oracle: FakeIngestionConfigOracle,
+) -> None:
+    """owning KB の parser が変わったら、chunking が同じでも再取込対象として扱う。"""
+    fake_oracle.add_document(
+        "doc-1",
+        status=FileStatus.INDEXED,
+        chunk_strategy="structure_aware",
+        source_parser="enterprise_ai_pdf_layout",
+    )
+    fake_oracle.set_owning(
+        "doc-1",
+        _config(
+            chunking_strategy="structure_aware",
+            parser_adapter_backend="mineru",
+        ),
+    )
+
+    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+
+    assert data["effective_parser_adapter_backend"] == "mineru"
+    assert data["observed_parser_backend"] == "enterprise_ai_pdf_layout"
+    assert data["chunking_drift"] is False
+    assert data["parser_drift"] is True
     assert data["config_drift"] is True
 
 

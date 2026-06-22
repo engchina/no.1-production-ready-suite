@@ -7,42 +7,42 @@
 # サービス管理画面(dev)は内部で次を実行する:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d <service_id>
 # GPU(mineru/dots_ocr)は base 側の profiles:["gpu"] を継承するため --profile gpu が併用される。
-# vLLM sidecar は catalog の dev_port(8124/8125)へ公開し、ホスト backend から /health を見る。
+# vLLM sidecar は catalog の dev_port(18124/18125)へ公開し、ホスト backend から /health を見る。
 #
 # 軽量な前処理(preprocess-*)は dev ではホストの uv プロセスで起動するため、ここでは公開しない。
 services:
   parser-docling:
     ports:
-      - "127.0.0.1:8020:8000"
+      - "127.0.0.1:18020:8000"
 
   parser-marker:
     ports:
-      - "127.0.0.1:8021:8000"
+      - "127.0.0.1:18021:8000"
 
   parser-unstructured:
     ports:
-      - "127.0.0.1:8022:8000"
+      - "127.0.0.1:18022:8000"
 
   parser-mineru:
     ports:
-      - "127.0.0.1:8023:8000"
+      - "127.0.0.1:18023:8000"
 
   parser-dots-ocr:
     ports:
-      - "127.0.0.1:8024:8000"
+      - "127.0.0.1:18024:8000"
 
   parser-dots-ocr-vllm:
     ports:
-      - "127.0.0.1:8124:8000"
+      - "127.0.0.1:18124:8000"
 
   parser-glm-ocr:
     ports:
-      - "127.0.0.1:8025:8000"
+      - "127.0.0.1:18025:8000"
 
   parser-glm-ocr-vllm:
     ports:
-      - "127.0.0.1:8125:8080"
+      - "127.0.0.1:18125:8080"
 
   parser-asr:
     ports:
-      - "127.0.0.1:8026:8000"
+      - "127.0.0.1:18026:8000"

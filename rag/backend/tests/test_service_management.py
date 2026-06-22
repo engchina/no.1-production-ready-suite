@@ -75,6 +75,13 @@ def test_get_catalog_entry_allowlist() -> None:
     assert get_catalog_entry("../etc/passwd") is None
 
 
+def test_catalog_dev_ports_avoid_app_backend_range() -> None:
+    """dev parser/preprocess ports は sibling app の backend port と衝突しない高番台に寄せる。"""
+    ports = [entry.dev_port for entry in SERVICE_CATALOG]
+    assert len(ports) == len(set(ports)), "dev_port は一意であること"
+    assert all(port >= 18000 for port in ports)
+
+
 # --- 稼働プローブ -----------------------------------------------------------
 
 
@@ -555,11 +562,11 @@ def test_resolve_service_base_url_dev_rewrites_docker_default(monkeypatch: Monke
     )
     assert (
         resolve_service_base_url(settings, "rag_parser_docling_service_url")
-        == "http://127.0.0.1:8020"
+        == "http://127.0.0.1:18020"
     )
     assert (
         resolve_service_base_url(settings, "rag_preprocess_csv_to_json_service_url")
-        == "http://127.0.0.1:8012"
+        == "http://127.0.0.1:18012"
     )
 
 
@@ -599,8 +606,8 @@ def test_parser_client_service_url_dev_resolves_localhost(monkeypatch: MonkeyPat
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
     monkeypatch.setattr(settings, "rag_parser_mineru_service_url", "http://parser-mineru:8000")
     client = ParserServiceClient(settings)
-    assert client.service_url("docling") == "http://127.0.0.1:8020"
-    assert client.service_url("mineru") == "http://127.0.0.1:8023"
+    assert client.service_url("docling") == "http://127.0.0.1:18020"
+    assert client.service_url("mineru") == "http://127.0.0.1:18023"
 
 
 def test_preprocess_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch) -> None:
@@ -614,8 +621,8 @@ def test_preprocess_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch)
     monkeypatch.setattr(
         settings, "rag_preprocess_office_to_pdf_service_url", "http://preprocess-office-to-pdf:8000"
     )
-    assert preprocess_service_url(settings, "csv_to_json") == "http://127.0.0.1:8012"
-    assert preprocess_service_url(settings, "office_to_pdf") == "http://127.0.0.1:8010"
+    assert preprocess_service_url(settings, "csv_to_json") == "http://127.0.0.1:18012"
+    assert preprocess_service_url(settings, "office_to_pdf") == "http://127.0.0.1:18010"
 
 
 def test_service_health_url_prod_uses_url_field(monkeypatch: MonkeyPatch) -> None:

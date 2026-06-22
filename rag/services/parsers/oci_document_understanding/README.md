@@ -24,5 +24,5 @@ OCI Document Understanding を呼ぶ parser マイクロサービス(OCI クラ�
 
 ```bash
 uv run --directory services/parsers/oci_document_understanding \
-  uvicorn app.main:app --port 8028
+  uvicorn app.main:app --port 18028
 ```

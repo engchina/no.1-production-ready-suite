@@ -10,6 +10,7 @@ from app.api.routes import documents as documents_route
 from app.clients.object_storage import ObjectStorageClient
 from app.config import Settings
 from app.main import app
+from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -21,7 +22,7 @@ from app.schemas.document import (
     IngestionSegment,
 )
 from app.schemas.extraction import ExtractionTable, ExtractionTableCell
-from app.schemas.knowledge_base import KnowledgeBaseRef
+from app.schemas.knowledge_base import KnowledgeBaseDetail, KnowledgeBaseRef, KnowledgeBaseStatus
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -1475,6 +1476,41 @@ def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job
     segments = resp.json()["data"]
     assert len(segments) == 1
     assert segments[0]["status"] == "RUNNING"
+    assert segments[0]["parser_backend"] == "mineru"
+    assert segments[0]["parser_profile"] == "mineru"
+
+
+def test_ingestion_segments_fallback_uses_owning_kb_parser_before_ingest(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未取込表示は upload 時 profile ではなく owning KB の現行 parser 設定を使う。"""
+    document_id = _upload("scan-before-ingest.pdf", b"%PDF-1.7\nsample", "application/pdf")
+
+    async def get_owning_knowledge_base(_document_id: str) -> KnowledgeBaseDetail:
+        return KnowledgeBaseDetail(
+            id="kb-mineru",
+            name="MinerU KB",
+            status=KnowledgeBaseStatus.ACTIVE,
+            adapter_config=KnowledgeBaseAdapterConfig.model_validate(
+                {"ingestion": {"parser_adapter_backend": "mineru"}}
+            ),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+
+    monkeypatch.setattr(
+        fake_document_dependencies,
+        "get_owning_knowledge_base",
+        get_owning_knowledge_base,
+    )
+
+    resp = client.get(f"/api/documents/{document_id}/ingestion-segments")
+
+    assert resp.status_code == 200
+    segments = resp.json()["data"]
+    assert len(segments) == 1
+    assert segments[0]["status"] == "UPLOADED"
     assert segments[0]["parser_backend"] == "mineru"
     assert segments[0]["parser_profile"] == "mineru"
 

@@ -28,7 +28,7 @@ function ok(json: unknown) {
   return { data: json, error_messages: [], warning_messages: [] };
 }
 
-async function mockWorkspace(page: Page, drift: boolean) {
+async function mockWorkspace(page: Page, drift: boolean, parserDrift = false) {
   await page.route("**/api/knowledge-bases**", (route) =>
     route.fulfill({
       json: ok({ items: [{ id: "kb-1", name: "社内規程" }], total: 1, limit: 100, offset: 0, has_next: false }),
@@ -41,10 +41,12 @@ async function mockWorkspace(page: Page, drift: boolean) {
         is_indexed: true,
         owning_knowledge_base: { id: "kb-1", name: "社内規程" },
         effective_chunking_strategy: "page_level",
-        effective_parser_adapter_backend: "docling",
+        effective_parser_adapter_backend: parserDrift ? "mineru" : "docling",
         observed_chunking_strategy: drift ? "structure_aware" : "page_level",
-        observed_parser_backend: "local",
-        config_drift: drift,
+        observed_parser_backend: parserDrift ? "enterprise_ai_pdf_layout" : "local",
+        chunking_drift: drift,
+        parser_drift: parserDrift,
+        config_drift: drift || parserDrift,
       }),
     })
   );
@@ -122,6 +124,18 @@ test("取込設定ドリフト時にバナーを表示し、再取込を実行�
   await banner.getByRole("button", { name: "現在の設定で再取込" }).click();
   await expect(page.getByText("再取込を開始しました。")).toBeVisible();
   expect(wasEnqueued()).toBe(true);
+});
+
+test("文書解析ドリフト時に MinerU への差分を表示する", async ({ page }) => {
+  await mockWorkspace(page, false, true);
+
+  await page.goto("/documents/doc-1");
+
+  const banner = page.getByRole("status").filter({ hasText: "取込設定が更新されています" });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("文書解析");
+  await expect(banner).toContainText("PDF レイアウト解析");
+  await expect(banner).toContainText("MinerU");
 });
 
 test("ドリフトが無ければバナーを表示しない", async ({ page }) => {

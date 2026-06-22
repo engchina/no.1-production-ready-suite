@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, X } from "lucide-react";
+import { Check, ChevronDown, Search, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -177,11 +177,11 @@ export function KnowledgeBasePickerGrid({
     open && filtered[activeIndex] ? `${listId}-opt-${filtered[activeIndex].id}` : undefined;
 
   return (
-    <div ref={rootRef} className="space-y-1.5">
+    <div ref={rootRef} className="space-y-2">
       {/* トリガー: 選択済みチップ + 検索入力 */}
       <div
         className={cn(
-          "flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 transition-colors focus-within:border-primary focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring",
+          "group flex min-h-11 w-full flex-wrap items-center gap-1.5 rounded-lg border border-border/80 bg-card px-2 py-2 shadow-sm transition-[background-color,border-color,box-shadow] duration-150 focus-within:border-primary/70 focus-within:bg-background focus-within:ring-2 focus-within:ring-primary/15",
           disabled && "cursor-not-allowed opacity-60"
         )}
         onClick={() => {
@@ -191,10 +191,16 @@ export function KnowledgeBasePickerGrid({
           }
         }}
       >
+        <span
+          className="flex size-8 shrink-0 items-center justify-center rounded-md bg-info-bg text-primary transition-colors group-focus-within:bg-primary group-focus-within:text-white"
+          aria-hidden
+        >
+          <Search size={16} />
+        </span>
         {chips.map((kb) => (
           <span
             key={kb.id}
-            className="inline-flex max-w-[12rem] items-center gap-1 rounded-md bg-info-bg px-2 py-0.5 text-xs font-medium text-foreground"
+            className="inline-flex h-7 max-w-[14rem] items-center gap-1.5 rounded-md border border-primary/15 bg-info-bg px-2 text-xs font-medium text-foreground"
           >
             <span className="truncate">{kb.name}</span>
             <button
@@ -205,7 +211,7 @@ export function KnowledgeBasePickerGrid({
               }}
               disabled={disabled}
               aria-label={t("knowledgeBasePicker.removeChip", { name: kb.name })}
-              className="relative shrink-0 rounded-sm p-0.5 text-muted transition-colors before:absolute before:-inset-2 before:content-[''] hover:text-foreground disabled:cursor-not-allowed"
+              className="relative flex size-5 shrink-0 items-center justify-center rounded-sm text-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed"
             >
               <X size={12} aria-hidden />
             </button>
@@ -230,7 +236,7 @@ export function KnowledgeBasePickerGrid({
           onKeyDown={onInputKeyDown}
           placeholder={chips.length === 0 ? t("knowledgeBasePicker.addPlaceholder") : ""}
           disabled={disabled}
-          className="h-6 min-w-[8rem] flex-1 bg-transparent px-1 text-sm text-foreground outline-none placeholder:text-muted/70 disabled:cursor-not-allowed"
+          className="h-8 min-w-[7.5rem] flex-1 appearance-none border-0 bg-transparent px-1 text-sm leading-8 text-foreground shadow-none outline-none placeholder:text-muted/70 focus:outline-none focus:ring-0 focus-visible:border-transparent! focus-visible:shadow-none! disabled:cursor-not-allowed sm:min-w-[12rem]"
         />
         <button
           type="button"
@@ -242,7 +248,7 @@ export function KnowledgeBasePickerGrid({
           }}
           disabled={disabled}
           aria-label={t("knowledgeBasePicker.toggleListAria")}
-          className="relative shrink-0 rounded-sm p-1 text-muted transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground disabled:cursor-not-allowed"
+          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-md text-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-info-bg hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed"
         >
           <ChevronDown
             size={16}
@@ -345,13 +351,13 @@ export function KnowledgeBasePickerGrid({
           )}
 
           {/* フッター: 非表示件数 + 一括操作 */}
-          <div className="flex items-center justify-between border-t border-border bg-card px-3 py-1.5">
+          <div className="flex flex-col gap-1.5 border-t border-border bg-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:py-1.5">
             <span className="tnum text-xs text-muted">
               {hiddenEmptyCount > 0
                 ? t("knowledgeBasePicker.hiddenEmptyCount", { count: hiddenEmptyCount })
                 : t("knowledgeBasePicker.selectedCount", { count: selectedIds.length })}
             </span>
-            <span className="flex items-center gap-3">
+            <span className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-start sm:gap-3">
               <button
                 type="button"
                 onClick={selectAllVisible}

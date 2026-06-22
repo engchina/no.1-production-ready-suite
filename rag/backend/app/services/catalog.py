@@ -71,7 +71,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_preprocess_office_to_pdf_service_url",
         label_key="settings.services.item.preprocessOfficeToPdf",
         working_dir="services/preprocess/office_to_pdf",
-        dev_port=8010,
+        dev_port=18010,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -81,7 +81,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_preprocess_pdf_to_page_images_service_url",
         label_key="settings.services.item.preprocessPdfToPageImages",
         working_dir="services/preprocess/pdf_to_page_images",
-        dev_port=8011,
+        dev_port=18011,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -91,7 +91,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_preprocess_csv_to_json_service_url",
         label_key="settings.services.item.preprocessCsvToJson",
         working_dir="services/preprocess/csv_to_json",
-        dev_port=8012,
+        dev_port=18012,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -101,7 +101,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_preprocess_excel_to_json_service_url",
         label_key="settings.services.item.preprocessExcelToJson",
         working_dir="services/preprocess/excel_to_json",
-        dev_port=8013,
+        dev_port=18013,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -111,7 +111,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_preprocess_url_to_markdown_service_url",
         label_key="settings.services.item.preprocessUrlToMarkdown",
         working_dir="services/preprocess/url_to_markdown",
-        dev_port=8014,
+        dev_port=18014,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -121,7 +121,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_preprocess_image_enhance_service_url",
         label_key="settings.services.item.preprocessImageEnhance",
         working_dir="services/preprocess/image_enhance",
-        dev_port=8015,
+        dev_port=18015,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -131,7 +131,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_preprocess_pii_redact_service_url",
         label_key="settings.services.item.preprocessPiiRedact",
         working_dir="services/preprocess/pii_redact",
-        dev_port=8016,
+        dev_port=18016,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -141,7 +141,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_docling_service_url",
         label_key="settings.services.item.parserDocling",
         working_dir="services/parsers/docling",
-        dev_port=8020,
+        dev_port=18020,
         dev_runner="docker",
     ),
     ServiceCatalogEntry(
@@ -151,7 +151,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_marker_service_url",
         label_key="settings.services.item.parserMarker",
         working_dir="services/parsers/marker",
-        dev_port=8021,
+        dev_port=18021,
         dev_runner="docker",
     ),
     ServiceCatalogEntry(
@@ -161,7 +161,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_unstructured_service_url",
         label_key="settings.services.item.parserUnstructured",
         working_dir="services/parsers/unstructured",
-        dev_port=8022,
+        dev_port=18022,
         dev_runner="docker",
     ),
     ServiceCatalogEntry(
@@ -171,7 +171,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_mineru_service_url",
         label_key="settings.services.item.parserMineru",
         working_dir="services/parsers/mineru",
-        dev_port=8023,
+        dev_port=18023,
         dev_runner="docker",
     ),
     ServiceCatalogEntry(
@@ -181,7 +181,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_dots_ocr_service_url",
         label_key="settings.services.item.parserDotsOcr",
         working_dir="services/parsers/dots_ocr",
-        dev_port=8024,
+        dev_port=18024,
         dev_runner="docker",
         depends_on=("parser-dots-ocr-vllm",),
     ),
@@ -192,7 +192,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_dots_ocr_vllm_service_url",
         label_key="settings.services.item.parserDotsOcrVllm",
         working_dir="services/parsers/dots_ocr",
-        dev_port=8124,
+        dev_port=18124,
         dev_runner="docker",
     ),
     ServiceCatalogEntry(
@@ -202,7 +202,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_glm_ocr_service_url",
         label_key="settings.services.item.parserGlmOcr",
         working_dir="services/parsers/glm_ocr",
-        dev_port=8025,
+        dev_port=18025,
         dev_runner="docker",
         depends_on=("parser-glm-ocr-vllm",),
     ),
@@ -213,7 +213,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_glm_ocr_vllm_service_url",
         label_key="settings.services.item.parserGlmOcrVllm",
         working_dir="services/parsers/glm_ocr",
-        dev_port=8125,
+        dev_port=18125,
         dev_runner="docker",
     ),
     ServiceCatalogEntry(
@@ -223,7 +223,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_asr_service_url",
         label_key="settings.services.item.parserAsr",
         working_dir="services/parsers/asr",
-        dev_port=8026,
+        dev_port=18026,
         dev_runner="docker",
     ),
     # ---- parser マイクロサービス(OCI クラウド・OCI 認証はメイン設定を継承)----
@@ -235,7 +235,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_oci_genai_vision_service_url",
         label_key="settings.services.item.parserOciGenaiVision",
         working_dir="services/parsers/oci_genai_vision",
-        dev_port=8027,
+        dev_port=18027,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -245,7 +245,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_parser_oci_document_understanding_service_url",
         label_key="settings.services.item.parserOciDocumentUnderstanding",
         working_dir="services/parsers/oci_document_understanding",
-        dev_port=8028,
+        dev_port=18028,
         dev_runner="uv",
     ),
     # ---- pipeline ステージのプラグイン(マイクロサービス)----
@@ -256,7 +256,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_chunking_service_url",
         label_key="settings.services.item.pipelineChunking",
         working_dir="services/pipeline/chunking",
-        dev_port=8030,
+        dev_port=18030,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -266,7 +266,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_vector_index_service_url",
         label_key="settings.services.item.pipelineVectorIndex",
         working_dir="services/pipeline/vector_index",
-        dev_port=8031,
+        dev_port=18031,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -276,7 +276,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_graph_service_url",
         label_key="settings.services.item.pipelineGraphrag",
         working_dir="services/pipeline/graphrag",
-        dev_port=8032,
+        dev_port=18032,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -286,7 +286,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_generation_service_url",
         label_key="settings.services.item.pipelineGeneration",
         working_dir="services/pipeline/generation",
-        dev_port=8033,
+        dev_port=18033,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -296,7 +296,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_guardrail_service_url",
         label_key="settings.services.item.pipelineGuardrail",
         working_dir="services/pipeline/guardrail",
-        dev_port=8034,
+        dev_port=18034,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -306,7 +306,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_agentic_service_url",
         label_key="settings.services.item.pipelineAgentic",
         working_dir="services/pipeline/agentic",
-        dev_port=8035,
+        dev_port=18035,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -316,7 +316,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_grounding_service_url",
         label_key="settings.services.item.pipelineGrounding",
         working_dir="services/pipeline/grounding",
-        dev_port=8036,
+        dev_port=18036,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -326,7 +326,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_evaluation_service_url",
         label_key="settings.services.item.pipelineEvaluation",
         working_dir="services/pipeline/evaluation",
-        dev_port=8037,
+        dev_port=18037,
         dev_runner="uv",
     ),
     ServiceCatalogEntry(
@@ -336,7 +336,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         url_field="rag_retrieval_service_url",
         label_key="settings.services.item.pipelineRetrieval",
         working_dir="services/pipeline/retrieval",
-        dev_port=8038,
+        dev_port=18038,
         dev_runner="uv",
     ),
 )

@@ -11,7 +11,7 @@ audio/video を **ローカル faster-whisper(GPU)** で転写し、共有 contr
 | 実行 | **GPU**(CUDA、`docker compose --profile gpu`) |
 | 主依存 | faster-whisper(CTranslate2)+ ffmpeg |
 | 既定 URL | `http://parser-asr:8000` |
-| dev port | 8026 |
+| dev port | 18026 |
 
 ## 契約
 

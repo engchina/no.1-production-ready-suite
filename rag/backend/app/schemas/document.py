@@ -123,6 +123,8 @@ class DocumentIngestionConfigData(BaseModel):
     # 実際に取込時へ刻まれた値(INDEXED 済みのときのみ観測できる)。
     observed_chunking_strategy: str | None = None
     observed_parser_backend: str | None = None
+    chunking_drift: bool = False
+    parser_drift: bool = False
     config_drift: bool = False
 
 

@@ -744,6 +744,25 @@ def _layer_requested(layer: str, settings: Settings) -> bool:
     return False
 
 
+def _parser_backend_drifted(observed_parser: str, effective_backend: str) -> bool:
+    """取込済み parser と現在の明示 parser 設定がずれているか判定する。
+
+    ``local`` は外部 parser 未選択を表す umbrella で、PDF などは source profile の
+    ``enterprise_ai_*`` 方針名を持つ。そのため local は parser drift の比較対象にしない。
+    """
+    effective = effective_backend.strip().casefold()
+    if not effective or effective == "local":
+        return False
+    observed = observed_parser.strip().casefold()
+    if not observed:
+        return False
+    aliases = {
+        "oci_genai_vision": {"oci_genai_vision", "enterprise_ai_vlm"},
+        "enterprise_ai_vlm": {"oci_genai_vision", "enterprise_ai_vlm"},
+    }
+    return observed not in aliases.get(effective, {effective})
+
+
 @router.get(
     "/{document_id}/ingestion-config",
     response_model=ApiResponse[DocumentIngestionConfigData],
@@ -774,12 +793,22 @@ async def get_document_ingestion_config(
                 else None
             )
 
-    # ドリフト判定は取込済みで観測値があるときのみ。chunking strategy 差が主シグナル。
-    config_drift = bool(
+    # ドリフト判定は取込済みで観測値があるときのみ。文書解析 / 文書分割はいずれも
+    # 取込時にしか効かないため、差分があれば現在設定での再取込対象になる。
+    chunking_drift = bool(
         is_indexed
         and observed_strategy is not None
         and observed_strategy != effective_settings.rag_chunking_strategy
     )
+    parser_drift = bool(
+        is_indexed
+        and observed_parser is not None
+        and _parser_backend_drifted(
+            observed_parser,
+            effective_settings.rag_parser_adapter_backend,
+        )
+    )
+    config_drift = chunking_drift or parser_drift
 
     return ApiResponse(
         data=DocumentIngestionConfigData(
@@ -792,6 +821,8 @@ async def get_document_ingestion_config(
             effective_parser_adapter_backend=effective_settings.rag_parser_adapter_backend,
             observed_chunking_strategy=observed_strategy,
             observed_parser_backend=observed_parser,
+            chunking_drift=chunking_drift,
+            parser_drift=parser_drift,
             config_drift=config_drift,
         )
     )
@@ -1579,6 +1610,10 @@ def _extraction_recipe_subset(settings: Settings) -> dict[str, object]:
         "parser_unstructured_enabled": bool(
             getattr(settings, "rag_parser_unstructured_enabled", False)
         ),
+        "parser_mineru_enabled": bool(getattr(settings, "rag_parser_mineru_enabled", False)),
+        "parser_dots_ocr_enabled": bool(getattr(settings, "rag_parser_dots_ocr_enabled", False)),
+        "parser_glm_ocr_enabled": bool(getattr(settings, "rag_parser_glm_ocr_enabled", False)),
+        "parser_asr_enabled": bool(getattr(settings, "rag_parser_asr_enabled", False)),
     }
 
 
@@ -1922,8 +1957,8 @@ def _document_ingestion_segments(
     error_message = detail.error_message or (latest_job.error_message if latest_job else None)
     parser_backend = _parser_backend_from_extraction(detail.extraction, source_profile)
     parser_profile = _parser_profile_from_extraction(detail.extraction, source_profile)
-    planned_parser = _planned_parser_backend_for_pending_extract(
-        detail.extraction,
+    planned_parser = _planned_parser_backend_for_unmaterialized_extract(
+        detail,
         latest_job,
         effective_settings,
     )
@@ -1949,26 +1984,39 @@ def _document_ingestion_segments(
     ]
 
 
-def _planned_parser_backend_for_pending_extract(
-    extraction: Mapping[str, object],
+def _planned_parser_backend_for_unmaterialized_extract(
+    detail: DocumentDetail,
     latest_job: IngestionJob | None,
     effective_settings: Settings | None,
 ) -> str | None:
-    """checkpoint 未作成の EXTRACT job では計画中 parser を表示に使う。"""
-    if latest_job is None or latest_job.phase != IngestionJobPhase.EXTRACT:
+    """未実体化の抽出では upload 時判定ではなく現在の明示 parser を表示に使う。"""
+    if effective_settings is None or _extraction_has_parser_context(detail.extraction):
         return None
-    if latest_job.status not in {
-        IngestionJobStatus.QUEUED,
-        IngestionJobStatus.RUNNING,
-        IngestionJobStatus.FAILED,
-    }:
+    planned = _selected_parser_backend(effective_settings)
+    if planned is None:
         return None
-    if _extraction_has_parser_context(extraction) or effective_settings is None:
+    if (
+        latest_job is not None
+        and latest_job.phase == IngestionJobPhase.EXTRACT
+        and latest_job.status
+        in {
+            IngestionJobStatus.QUEUED,
+            IngestionJobStatus.RUNNING,
+            IngestionJobStatus.FAILED,
+        }
+    ):
+        return planned
+    if detail.status in {FileStatus.UPLOADED, FileStatus.INGESTING, FileStatus.ERROR}:
+        return planned
+    return None
+
+
+def _selected_parser_backend(settings: Settings) -> str | None:
+    """Settings の明示 parser backend を表示用に返す。local は未選択として扱う。"""
+    selected = str(getattr(settings, "rag_parser_adapter_backend", "local")).strip()
+    if not selected or selected == "local":
         return None
-    planned = str(getattr(effective_settings, "rag_parser_adapter_backend", "local")).strip()
-    if not planned or planned == "local":
-        return None
-    return planned[:80]
+    return selected[:80]
 
 
 def _extraction_has_parser_context(extraction: Mapping[str, object]) -> bool:

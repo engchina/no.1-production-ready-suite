@@ -1196,7 +1196,7 @@ class Settings(BaseSettings):
         description="サービス起動/停止 subprocess の timeout(秒)。超過は失敗として構造化返却する。",
     )
     rag_service_status_probe_timeout_seconds: float = Field(
-        default=2.0,
+        default=5.0,
         gt=0,
         description=(
             "サービス管理画面が各マイクロサービスの /health を問い合わせる timeout(秒)。"
