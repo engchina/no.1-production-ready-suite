@@ -16,10 +16,6 @@ from app.config import (
     GraphProfile,
     GuardrailBackend,
     GuardrailPolicyName,
-    Nl2SqlCachePolicy,
-    Nl2SqlGenerationBackend,
-    Nl2SqlGuardrailPolicy,
-    Nl2SqlRouterProfile,
     ParserAdapterBackend,
     PostRetrievalPipeline,
     PreprocessProfile,
@@ -541,7 +537,7 @@ class PreprocessProfileStatusData(BaseModel):
 
 
 class PreprocessSettingsData(BaseModel):
-    """前処理アダプター設定の非機密 runtime snapshot。"""
+    """ファイル準備設定の非機密 runtime snapshot。"""
 
     profile: PreprocessProfile
     service_enabled: bool
@@ -552,7 +548,7 @@ class PreprocessSettingsData(BaseModel):
 
 
 class PreprocessSettingsUpdate(BaseModel):
-    """前処理アダプター設定の更新 payload。"""
+    """ファイル準備設定の更新 payload。"""
 
     profile: PreprocessProfile
 
@@ -569,7 +565,7 @@ class ChunkingStrategyStatusData(BaseModel):
 
 
 class ChunkingSettingsData(BaseModel):
-    """Chunking アダプター設定の非機密 runtime snapshot。"""
+    """文書分割設定の非機密 runtime snapshot。"""
 
     strategy: ChunkingStrategyName
     chunk_size: int
@@ -582,7 +578,7 @@ class ChunkingSettingsData(BaseModel):
 
 
 class ChunkingSettingsUpdate(BaseModel):
-    """Chunking アダプター設定の更新 payload。"""
+    """文書分割設定の更新 payload。"""
 
     strategy: ChunkingStrategyName
     chunk_size: int = Field(default=800, ge=200, le=4000)
@@ -621,7 +617,7 @@ class RetrievalStrategyStatusData(BaseModel):
 
 
 class RetrievalSettingsData(BaseModel):
-    """Retrieval アダプター設定の非機密 runtime snapshot。"""
+    """検索方法設定の非機密 runtime snapshot。"""
 
     strategy: RetrievalStrategyName
     query_expansion: bool
@@ -633,7 +629,7 @@ class RetrievalSettingsData(BaseModel):
 
 
 class RetrievalSettingsUpdate(BaseModel):
-    """Retrieval アダプター設定の更新 payload。"""
+    """検索方法設定の更新 payload。"""
 
     strategy: RetrievalStrategyName
 
@@ -652,7 +648,7 @@ class GroundingPipelineStatusData(BaseModel):
 
 
 class GroundingSettingsData(BaseModel):
-    """Grounding アダプター設定の非機密 runtime snapshot。"""
+    """根拠確認設定の非機密 runtime snapshot。"""
 
     pipeline: PostRetrievalPipelineName
     dependency_promotion_enabled: bool
@@ -664,7 +660,7 @@ class GroundingSettingsData(BaseModel):
 
 
 class GroundingSettingsUpdate(BaseModel):
-    """Grounding アダプター設定の更新 payload。"""
+    """根拠確認設定の更新 payload。"""
 
     pipeline: PostRetrievalPipelineName
 
@@ -685,7 +681,7 @@ class GenerationProfileStatusData(BaseModel):
 
 
 class GenerationSettingsData(BaseModel):
-    """Generation アダプター設定の非機密 runtime snapshot。"""
+    """回答スタイル設定の非機密 runtime snapshot。"""
 
     profile: GenerationProfileName
     structured_output: bool
@@ -694,7 +690,7 @@ class GenerationSettingsData(BaseModel):
 
 
 class GenerationSettingsUpdate(BaseModel):
-    """Generation アダプター設定の更新 payload。"""
+    """回答スタイル設定の更新 payload。"""
 
     profile: GenerationProfileName
 
@@ -777,7 +773,7 @@ class GuardrailPolicyStatusData(BaseModel):
 
 
 class GuardrailSettingsData(BaseModel):
-    """Guardrail アダプター設定の非機密 runtime snapshot。"""
+    """安全チェック設定の非機密 runtime snapshot。"""
 
     policy: GuardrailPolicyNameSchema
     block_prompt_injection: bool
@@ -794,7 +790,7 @@ class GuardrailSettingsData(BaseModel):
 
 
 class GuardrailSettingsUpdate(BaseModel):
-    """Guardrail アダプター設定の更新 payload。"""
+    """安全チェック設定の更新 payload。"""
 
     policy: GuardrailPolicyNameSchema
     backend: GuardrailBackendName | None = None
@@ -817,7 +813,7 @@ class VectorIndexProfileStatusData(BaseModel):
 
 
 class VectorIndexSettingsData(BaseModel):
-    """Vector Index アダプター設定の非機密 runtime snapshot。"""
+    """検索インデックス設定の非機密 runtime snapshot。"""
 
     profile: VectorIndexProfileName
     target_accuracy: int
@@ -830,148 +826,9 @@ class VectorIndexSettingsData(BaseModel):
 
 
 class VectorIndexSettingsUpdate(BaseModel):
-    """Vector Index アダプター設定の更新 payload。"""
+    """検索インデックス設定の更新 payload。"""
 
     profile: VectorIndexProfileName
-
-
-# --- NL2SQL Router アダプター ---
-Nl2SqlRouterProfileName = Nl2SqlRouterProfile
-Nl2SqlGenerationBackendName = Nl2SqlGenerationBackend
-
-
-class RouterProfileStatusData(BaseModel):
-    """1 ルーティングプロファイルの選択状態。"""
-
-    name: Nl2SqlRouterProfileName
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    selected: bool
-
-
-class RouterSettingsData(BaseModel):
-    """NL2SQL Router アダプター設定の非機密 runtime snapshot。"""
-
-    profile: Nl2SqlRouterProfileName
-    default_generation_backend: Nl2SqlGenerationBackendName
-    complexity_threshold: int
-    profiles: list[RouterProfileStatusData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
-
-
-class RouterSettingsUpdate(BaseModel):
-    """NL2SQL Router アダプター設定の更新 payload。"""
-
-    profile: Nl2SqlRouterProfileName
-    complexity_threshold: int | None = Field(default=None, ge=1, le=6)
-
-
-# --- NL2SQL Guardrail アダプター ---
-Nl2SqlGuardrailPolicyName = Nl2SqlGuardrailPolicy
-
-
-class Nl2SqlGuardrailPolicyStatusData(BaseModel):
-    """1 SQL 安全ポリシーの選択状態と効果。"""
-
-    name: Nl2SqlGuardrailPolicyName
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    selected: bool
-    enforce_read_only: bool
-    require_object_allowlist: bool
-    semantic_verify: bool
-
-
-class Nl2SqlGuardrailSettingsData(BaseModel):
-    """NL2SQL Guardrail アダプター設定の非機密 runtime snapshot。"""
-
-    policy: Nl2SqlGuardrailPolicyName
-    enforce_read_only: bool
-    max_rows: int
-    require_object_allowlist: bool
-    semantic_verify: bool
-    run_role: str
-    policies: list[Nl2SqlGuardrailPolicyStatusData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
-
-
-class Nl2SqlGuardrailSettingsUpdate(BaseModel):
-    """NL2SQL Guardrail アダプター設定の更新 payload。"""
-
-    policy: Nl2SqlGuardrailPolicyName
-    max_rows: int | None = Field(default=None, ge=1, le=1_000_000)
-    run_role: str | None = None
-
-
-# --- NL2SQL Cache アダプター ---
-Nl2SqlCachePolicyName = Nl2SqlCachePolicy
-
-
-class CachePolicyStatusData(BaseModel):
-    """1 キャッシュポリシーの選択状態と効果。"""
-
-    name: Nl2SqlCachePolicyName
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    selected: bool
-    cache_nl_to_sql: bool
-    cache_nl_to_result: bool
-    cache_sql_to_result: bool
-
-
-class CacheSettingsData(BaseModel):
-    """NL2SQL Cache アダプター設定の非機密 runtime snapshot。"""
-
-    policy: Nl2SqlCachePolicyName
-    cache_nl_to_sql: bool
-    cache_nl_to_result: bool
-    cache_sql_to_result: bool
-    similarity_threshold: float
-    ttl_seconds: int
-    policies: list[CachePolicyStatusData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
-
-
-class CacheSettingsUpdate(BaseModel):
-    """NL2SQL Cache アダプター設定の更新 payload。"""
-
-    policy: Nl2SqlCachePolicyName
-    similarity_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
-    ttl_seconds: int | None = Field(default=None, ge=0, le=86_400)
-
-
-# --- NL2SQL パイプライン preset アダプター(schema_source 〜 evaluation)---
-class PipelineAdapterOptionData(BaseModel):
-    """1 preset 選択肢の選択状態。"""
-
-    name: str
-    origin: str
-    recommended_for: list[str] = Field(default_factory=list)
-    summary: str
-    selected: bool
-
-
-class PipelineAdapterData(BaseModel):
-    """1 パイプラインアダプターの選択と選択肢群。"""
-
-    key: str
-    settings_field: str
-    label: str
-    selected: str
-    options: list[PipelineAdapterOptionData] = Field(default_factory=list)
-
-
-class Nl2SqlPipelineSettingsData(BaseModel):
-    """NL2SQL パイプライン preset 群の runtime snapshot。"""
-
-    adapters: list[PipelineAdapterData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
-
-
-class PipelinePresetUpdate(BaseModel):
-    """1 アダプターの選択更新 payload。"""
-
-    selection: str = Field(..., min_length=1, max_length=64)
 
 
 EvaluationSuiteName = EvaluationSuite
@@ -989,7 +846,7 @@ class EvaluationSuiteStatusData(BaseModel):
 
 
 class EvaluationSettingsData(BaseModel):
-    """Evaluation アダプター設定の非機密 runtime snapshot。"""
+    """品質評価設定の非機密 runtime snapshot。"""
 
     suite: EvaluationSuiteName
     thresholds: dict[str, float] = Field(default_factory=dict)
@@ -999,7 +856,7 @@ class EvaluationSettingsData(BaseModel):
 
 
 class EvaluationSettingsUpdate(BaseModel):
-    """Evaluation アダプター設定の更新 payload。"""
+    """品質評価設定の更新 payload。"""
 
     suite: EvaluationSuiteName
 
@@ -1021,7 +878,7 @@ class GraphProfileStatusData(BaseModel):
 
 
 class GraphSettingsData(BaseModel):
-    """GraphRAG アダプター設定の非機密 runtime snapshot。"""
+    """関係情報設定の非機密 runtime snapshot。"""
 
     profile: GraphProfileName
     enabled: bool
@@ -1032,7 +889,7 @@ class GraphSettingsData(BaseModel):
 
 
 class GraphSettingsUpdate(BaseModel):
-    """GraphRAG アダプター設定の更新 payload。"""
+    """関係情報設定の更新 payload。"""
 
     profile: GraphProfileName
 
@@ -1051,7 +908,7 @@ class AgenticProfileStatusData(BaseModel):
 
 
 class AgenticSettingsData(BaseModel):
-    """Agentic アダプター設定の非機密 runtime snapshot。"""
+    """高度な検索設定の非機密 runtime snapshot。"""
 
     profile: AgenticProfileName
     enabled: bool
@@ -1064,7 +921,7 @@ class AgenticSettingsData(BaseModel):
 
 
 class AgenticSettingsUpdate(BaseModel):
-    """Agentic アダプター設定の更新 payload。"""
+    """高度な検索設定の更新 payload。"""
 
     profile: AgenticProfileName
 

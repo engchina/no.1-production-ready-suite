@@ -31,19 +31,14 @@ async def _resolve_evaluation_suite_name(
     request_suite: str | None,
     knowledge_base_ids: Sequence[str],
 ) -> str:
-    """評価スイート名を解決順 request > KB 設定 > グローバル既定で決める。
+    """評価スイート名を request > グローバル既定で決める。
 
-    検索系と異なり評価は ``rag_overrides`` で RAG 構成を明示制御するため、KB の query
-    上書きのうち評価固有の ``evaluation_suite`` だけを反映する。単一 KB 指定時のみ有効。
+    KB はナレッジ構築設定だけを持つため、KB に残る legacy query 設定は評価にも反映しない。
+    ``knowledge_base_ids`` は signature 互換のため受け取る。
     """
+    _ = knowledge_base_ids
     if request_suite:
         return normalize_evaluation_suite(request_suite)
-    if len(knowledge_base_ids) == 1:
-        knowledge_base = await OracleClient().get_knowledge_base(knowledge_base_ids[0])
-        if knowledge_base is not None:
-            kb_suite = knowledge_base.adapter_config.query.evaluation_suite
-            if kb_suite is not None:
-                return normalize_evaluation_suite(kb_suite)
     return normalize_evaluation_suite(get_settings().rag_evaluation_suite)
 
 

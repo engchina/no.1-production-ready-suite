@@ -32,23 +32,6 @@ GRAPH_LOCAL_HINTS = (
     "relationship",
     "related",
 )
-SELECT_AI_HINTS = (
-    "件数",
-    "合計",
-    "平均",
-    "最大",
-    "最小",
-    "集計",
-    "ランキング",
-    "count",
-    "sum",
-    "average",
-    "avg",
-    "max",
-    "min",
-)
-
-
 @dataclass(frozen=True)
 class ResolvedRetrievalStrategy:
     """実行する検索経路と fallback の非機密理由。"""
@@ -74,26 +57,12 @@ def resolve_retrieval_strategy(
             mode=SearchMode.HYBRID,
             route_reason="explicit_hybrid",
         )
-    if requested == SearchStrategy.SELECT_AI:
-        return ResolvedRetrievalStrategy(
-            strategy=SearchStrategy.HYBRID,
-            mode=SearchMode.HYBRID,
-            route_reason="explicit_select_ai",
-            fallback_reason="select_ai_uses_dedicated_endpoint",
-        )
     if requested in (SearchStrategy.GRAPH_LOCAL, SearchStrategy.GRAPH_GLOBAL):
         return _resolve_graph_strategy(
             requested, settings=settings, route_reason=f"explicit_{requested.value}"
         )
 
     normalized_query = query.casefold()
-    if _contains_any(normalized_query, SELECT_AI_HINTS):
-        return ResolvedRetrievalStrategy(
-            strategy=SearchStrategy.HYBRID,
-            mode=request.mode,
-            route_reason="auto_select_ai_candidate",
-            fallback_reason="select_ai_uses_dedicated_endpoint",
-        )
     if _contains_any(normalized_query, GLOBAL_QUERY_HINTS):
         return _resolve_graph_strategy(
             SearchStrategy.GRAPH_GLOBAL,

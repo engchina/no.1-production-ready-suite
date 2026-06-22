@@ -76,12 +76,10 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - vector / keyword / hybrid の同点は document id、chunk index、chunk id で安定順にし、評価の再現性を保つ。
    - citation metadata には章節 metadata に加えて `retrieval_mode`、vector/keyword の rank/score、`rrf_k`、RRF score を含め、hybrid 召回の由来を query 本文なしで追跡できるようにする。
 
-7. Oracle Select AI
-   - API: `POST /api/search/select-ai`
-   - `ORACLE_SELECT_AI_PROFILE` が設定されている場合だけ有効化する。未設定時は 503 を返す。
-   - 既定 action は `showsql` で、自然言語から生成 SQL を返すだけにする。`runsql` は明示指定時のみ許可し、データ変更意図を含む query は guardrail で拒否する。
-   - `DBMS_CLOUD_AI.GENERATE` 呼び出しでは prompt、profile、action をすべて bind し、自然言語 query や profile 名を SQL 文字列へ連結しない。
-   - Vector/keyword RAG とは独立した構造化問い合わせ境界として扱い、Select AI profile 作成・権限・対象 schema 制御は Oracle 側の運用手順で管理する。
+7. 構造化・関係検索境界
+   - RAG repo では SQL 生成 endpoint を公開しない。SQL 専用の自然言語問い合わせは sibling repo `../no.1-production-ready-nl2sql` の責務とする。
+   - 集計・関係・横断要約のような query は、GraphRAG-lite と Oracle 26ai hybrid retrieval の範囲で扱う。
+   - GraphRAG/navigation/metadata layer が未 materialize の場合は diagnostics と KB 詳細で `planned_only` / `needs_reingest` を表示し、構築済みと見せない。
 
 8. リランク
    - 本番は OCI Generative AI Cohere Rerank v4 fast。
@@ -98,7 +96,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
 9. AIDB Memory Engineering
    - 検索 request ごとに `BusinessContextPack` を作る。tenant/user/role は raw 値を保存せず hash の有無だけを診断し、document/category/knowledge base scope、`source_acl`、`document_version` を非機密 metadata として固定する。
    - `Memory Router / Plan Builder` は `RetrievalPlan` を作り、`evidence -> similar -> structure -> history` の `memory_sequence`、Oracle backend、scope key、evidence rule、termination criteria、gap handling を `SearchDiagnostics` と監査へ残す。Agent は plan 外の自由検索をしない。
-   - `AIDB Retrieval` は既存の Oracle 26ai Hybrid Vector Search / Oracle Text / GraphRAG-lite / Select AI 境界へ再マップする。`structure` は Select AI 専用 endpoint または GraphRAG-lite、`history` は Oracle 26ai の `rag_agent_memories` を使う Agent Memory Search として扱い、外部 memory store は導入しない。
+   - `AIDB Retrieval` は既存の Oracle 26ai Hybrid Vector Search / Oracle Text / GraphRAG-lite 境界へ再マップする。`structure` は GraphRAG-lite、`history` は Oracle 26ai の `rag_agent_memories` を使う Agent Memory Search として扱い、外部 memory store は導入しない。
    - GraphRAG-lite の構築深度は **GraphRAG アダプター(`rag_graph_profile`)** で手動選択する。`app/rag/graph_adapter.py` が取込側 profile を解決し、`off`(既定・KG 非構築=現行挙動)/ `entities`(entities+relationships のみ)/ `full`(claims + community summary まで)で `build_graph_index` の `build_claims` / `build_community_summaries` を切り替える(entities は軽量)。ingest の graph gate は `resolve_graph_adapter(...).enabled`、legacy `RAG_GRAPH_ENABLED=true` は `full` 相当として後方互換を保つ。検索側 routing は Retrieval アダプターの `graph_augmented`(query-time)が担い、両者は合成する。`SearchDiagnostics.graph_profile` に残し、設定 API `GET/PATCH /api/settings/graph` と専用設定画面で切替する。profile 変更は次回以降の取込に適用され、既存文書への反映には再取込が必要。外部グラフ DB は導入しない。
    - Agent Memory は `X-User-ID` / `X-RAG-Role-ID` / `X-RAG-Agent-ID` / `X-RAG-Thread-ID` を hash 化した scope がある request でのみ検索・保存する。`memory_text` は `VECTOR(1536, FLOAT32)` に保存し、HNSW + Oracle Text index を持つ。
    - 回答後の Memory Loop は、guardrail 通過済み回答について query 原文ではなく「回答要約 + 根拠 ID」を `rag_agent_memories` へ writeback する。helpful / not helpful は `usefulness_score` の移動平均として評価できる。

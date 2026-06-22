@@ -171,10 +171,46 @@ class DocumentChunkView(BaseModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class DocumentLayerStatusName(StrEnum):
+    """文書 chunk_set の派生情報レイヤー状態。"""
+
+    NOT_REQUESTED = "not_requested"
+    PLANNED_ONLY = "planned_only"
+    MATERIALIZED = "materialized"
+    NEEDS_REINGEST = "needs_reingest"
+    ERROR = "error"
+
+
+class DocumentMaterializationLayerStatus(BaseModel):
+    """chunk_set に紐づく派生情報レイヤーの現在状態。"""
+
+    layer_id: str | None = None
+    requested: bool = False
+    status: DocumentLayerStatusName = DocumentLayerStatusName.NOT_REQUESTED
+    reason: str | None = None
+
+
+class DocumentChunkSetLayerStatuses(BaseModel):
+    """chunk_set から派生する情報レイヤーの状態一覧。"""
+
+    metadata: DocumentMaterializationLayerStatus = Field(
+        default_factory=DocumentMaterializationLayerStatus
+    )
+    graph: DocumentMaterializationLayerStatus = Field(
+        default_factory=DocumentMaterializationLayerStatus
+    )
+    navigation: DocumentMaterializationLayerStatus = Field(
+        default_factory=DocumentMaterializationLayerStatus
+    )
+
+
 class DocumentChunkSet(BaseModel):
     """文書の chunk_set(variant = 1 レシピのチャンク集合)1 件分の状態・件数・所属/配信 KB。"""
 
     chunk_set_id: str
+    extraction_recipe_id: str | None = None
+    extraction_status: DocumentLayerStatusName = DocumentLayerStatusName.NOT_REQUESTED
+    extraction_reason: str | None = None
     status: str
     chunk_count: int = 0
     vector_count: int = 0
@@ -183,6 +219,9 @@ class DocumentChunkSet(BaseModel):
     preprocess: str | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
     serving_knowledge_base_ids: list[str] = Field(default_factory=list)
+    layer_statuses: DocumentChunkSetLayerStatuses = Field(
+        default_factory=DocumentChunkSetLayerStatuses
+    )
 
 
 class DocumentExtractionExportFormat(StrEnum):

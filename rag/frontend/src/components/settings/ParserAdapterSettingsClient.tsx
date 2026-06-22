@@ -308,13 +308,16 @@ function OverviewCard({
         <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <RuntimeFact
             label={t("settings.parserAdapters.backend")}
-            value={settings.adapter_backend}
+            value={backendLabel(settings.adapter_backend)}
           />
           <RuntimeFact
             label={t("settings.parserAdapters.effectiveOrder")}
             value={formatEffectiveOrder(settings.effective_order)}
           />
-          <RuntimeFact label={t("settings.parserAdapters.source")} value={settings.config_source} />
+          <RuntimeFact
+            label={t("settings.parserAdapters.source")}
+            value={configSourceLabel(settings.config_source)}
+          />
         </dl>
         <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
           <div className="min-h-6">
@@ -1065,6 +1068,10 @@ function backendLabel(backend: ParserAdapterBackend) {
   if (backend === "oci_document_understanding")
     return t("settings.parserAdapters.backend.oci_document_understanding");
   return adapterLabel(backend);
+}
+
+function configSourceLabel(source: string) {
+  return source === "runtime" ? t("settings.common.currentConfig") : source;
 }
 
 function backendDescriptionKey(backend: ParserAdapterBackend): I18nKey {

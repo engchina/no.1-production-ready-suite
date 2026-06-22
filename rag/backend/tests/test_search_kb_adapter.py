@@ -1,4 +1,4 @@
-"""検索 API の KB 単位 query 上書き(クエリ時 overlay)テスト。"""
+"""検索 API で KB legacy query 上書きが無視されることのテスト。"""
 
 from datetime import UTC, datetime
 
@@ -81,8 +81,8 @@ def _install(monkeypatch: MonkeyPatch, configs: dict[str, KnowledgeBaseAdapterCo
     monkeypatch.setattr(search_route, "OracleClient", lambda: FakeSearchOracle(configs))
 
 
-def test_single_kb_query_overrides_apply_to_pipeline(monkeypatch: MonkeyPatch) -> None:
-    """単一 KB 指定時、その KB の query 上書きが pipeline と diagnostics に効く。"""
+def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) -> None:
+    """単一 KB 指定でも、その KB の legacy query 上書きは pipeline に効かない。"""
     config = KnowledgeBaseAdapterConfig.model_validate(
         {"query": {"generation_profile": "detailed_cited", "vector_index_profile": "accurate"}}
     )
@@ -95,12 +95,12 @@ def test_single_kb_query_overrides_apply_to_pipeline(monkeypatch: MonkeyPatch) -
 
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["generation_profile"] == "detailed_cited"
-    assert diagnostics["vector_index_profile"] == "accurate"
-    assert diagnostics["kb_adapter_config_applied"] == "kb-1"
-    # pipeline へ overlay 済み settings が渡っている。
+    assert diagnostics["generation_profile"] == "grounded_concise"
+    assert diagnostics["vector_index_profile"] == "balanced"
+    assert diagnostics["kb_adapter_config_applied"] is None
+    # pipeline へはグローバル settings が渡っている。
     assert RecordingPipeline.captured_settings is not None
-    assert RecordingPipeline.captured_settings.rag_generation_profile == "detailed_cited"
+    assert RecordingPipeline.captured_settings.rag_generation_profile == "grounded_concise"
 
 
 def test_multiple_kb_ids_use_global_defaults(monkeypatch: MonkeyPatch) -> None:

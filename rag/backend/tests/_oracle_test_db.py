@@ -102,6 +102,12 @@ def ensure_schema() -> None:
                 # 既存 schema では新列を migration で補うため、当該索引だけ先に失敗し得る。
                 if code == 904 and "RESULT_SHA256" in sql.upper():
                     continue
+                if code == 904 and "RAG_CHUNK_SETS_EXTRACTION_IDX" in sql.upper():
+                    continue
+                if code == 904 and "RAG_DOC_EXT_STATUS_IDX" in sql.upper():
+                    continue
+                if code == 904 and "RAG_ARTIFACT_LAYERS_PARENT_IDX" in sql.upper():
+                    continue
                 if code == 904 and "RAG_INGESTION_AUDIT_PARSER_CREATED_IDX" in sql.upper():
                     continue
                 if (

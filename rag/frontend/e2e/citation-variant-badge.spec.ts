@@ -9,7 +9,7 @@ const auth = {
 
 const businessView = {
   id: "bv-1",
-  name: "経理アシスタント",
+  name: "経理ビュー",
   description: null,
   status: "ACTIVE",
   knowledge_base_count: 1,
@@ -64,13 +64,13 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page })
   );
 
   await page.goto("/search");
-  await page.getByRole("combobox", { name: /対象の業務アシスタント/ }).click();
+  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
   await page
-    .getByRole("listbox", { name: /対象の業務アシスタント/ })
-    .getByRole("option", { name: "経理アシスタント" })
+    .getByRole("listbox", { name: /対象の業務ビュー/ })
+    .getByRole("option", { name: "経理ビュー" })
     .click();
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
-  await page.getByRole("button", { name: "検索" }).click();
+  await page.getByRole("button", { name: "検索", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: /引用/ })).toBeVisible();
   // variant バッジ(短縮 chunk_set id)が引用カードに表示される。

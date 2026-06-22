@@ -27,7 +27,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`評価ページは Evaluation アダプターの既定スイートを表示する (${viewport.name})`, async ({
+  test(`評価ページは品質評価の既定スイートを表示する (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -35,7 +35,7 @@ for (const viewport of [
     await page.goto("/evaluation");
 
     await expect(
-      page.getByRole("heading", { name: "評価スイート(Evaluation アダプター)" })
+      page.getByRole("heading", { name: "品質評価", level: 1 })
     ).toBeVisible();
     // 既定は「設定の既定に従う」で、現在のグローバル既定(バランス)を表示する。
     await expect(page.getByText("設定の既定に従う(現在: バランス)")).toBeVisible();
@@ -85,9 +85,9 @@ test("スイートを選ぶと閾値プレビューを更新し suite を送る"
 
   await page.goto("/evaluation");
 
-  await page.getByRole("combobox", { name: "評価スイート" }).click();
+  await page.getByRole("combobox", { name: "品質評価" }).click();
   await page
-    .getByRole("listbox", { name: "評価スイート" })
+    .getByRole("listbox", { name: "品質評価" })
     .getByRole("option", { name: /厳格 CI/ })
     .click();
 

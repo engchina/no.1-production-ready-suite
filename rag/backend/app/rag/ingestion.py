@@ -72,7 +72,7 @@ from app.rag.parsers import (
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import resolve_preprocess_profile
-from app.rag.variant_keys import compute_extraction_id
+from app.rag.variant_keys import compute_extraction_recipe_id
 from app.schemas.document import DocumentDetail, FileStatus, IngestionSegment, SourceProfile
 from app.schemas.extraction import (
     DocumentElement,
@@ -455,7 +455,7 @@ class IngestionPipeline:
     ) -> None:
         """抽出を extraction 層(rag_document_extractions)へ正本として upsert する。
 
-        extraction_id = hash(source_sha256, preprocess, parser)。chunk_set の親キーで、
+        extraction_recipe_id = hash(source_sha256, preprocess, parser)。chunk_set の親キーで、
         index 時は同じキーで読み戻す(単一 materialization では owning 抽出と一致)。
         書込失敗は取込を止めない(best-effort、legacy 列にも別途保存される)。
         """
@@ -463,17 +463,18 @@ class IngestionPipeline:
         if not source_sha256:
             return
         try:
-            extraction_id = compute_extraction_id(source_sha256, self._settings)
+            extraction_recipe_id = compute_extraction_recipe_id(source_sha256, self._settings)
             recipe = {
                 "rag_preprocess_profile": self._settings.rag_preprocess_profile,
                 "rag_parser_adapter_backend": self._settings.rag_parser_adapter_backend,
             }
-            await self._oracle.upsert_document_extraction(
-                extraction_id=extraction_id,
+            await self._oracle.upsert_document_extraction_artifact(
                 document_id=document_id,
-                extraction=extraction,
+                extraction_recipe_id=extraction_recipe_id,
+                source_sha256=source_sha256,
                 recipe_subset=recipe,
-                status="EXTRACTED",
+                extraction=extraction.to_document_payload(),
+                status="materialized",
             )
         except Exception:  # noqa: BLE001 — 取込継続のため握り潰し、警告のみ。
             logger.warning(
@@ -485,18 +486,23 @@ class IngestionPipeline:
     async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
         """承認済み文書の抽出を extraction 層(正本)から読む。無ければ legacy 列へ縮退。
 
-        index 時の設定から extraction_id を再計算して新表を引く。単一 materialization では
+        index 時の設定から extraction_recipe_id を再計算して新表を引く。単一 materialization では
         extract 時の owning 抽出と一致。読み失敗・未登録は detail.extraction(legacy)へ縮退。
         """
         source_sha256 = detail.content_sha256
         if source_sha256:
             try:
-                extraction_id = compute_extraction_id(source_sha256, self._settings)
-                row = await self._oracle.get_document_extraction(extraction_id)
+                extraction_recipe_id = compute_extraction_recipe_id(source_sha256, self._settings)
+                row = await self._oracle.get_document_extraction_artifact(
+                    document_id=detail.id,
+                    extraction_recipe_id=extraction_recipe_id,
+                )
             except Exception:  # noqa: BLE001 — 縮退して legacy 列から読む。
                 logger.warning("extraction 層の読込に失敗、legacy へ縮退。", exc_info=True)
                 row = None
-            payload = _coerce_extraction_payload(row.get("extraction_json")) if row else None
+            payload = (
+                _coerce_extraction_payload(row.get("extraction_json")) if row else None
+            ) or _coerce_extraction_payload(detail.extraction)
             if payload:
                 return _validate_structured_extraction_payload(payload)
         if not detail.extraction:

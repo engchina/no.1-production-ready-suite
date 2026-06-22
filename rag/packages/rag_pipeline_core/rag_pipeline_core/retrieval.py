@@ -16,7 +16,6 @@ RETRIEVAL_STRATEGIES: tuple[str, ...] = (
     "vector",
     "keyword",
     "graph_augmented",
-    "select_ai_structured",
     "business_context_strict",
     "corrective_multi_query",
     "reasoning_tree_search",
@@ -31,7 +30,7 @@ class RetrievalSpec:
     origin: str
     recommended_for: tuple[str, ...]
     mode_override: str | None = None  # SearchMode の値("vector"/"keyword")
-    strategy_bias: str | None = None  # SearchStrategy の値("graph_global"/"select_ai")
+    strategy_bias: str | None = None  # SearchStrategy の値("graph_global" など)
     query_expansion: bool | None = None  # None は settings 既定に従う
     gap_stop: bool = False
     corrective_retrieval: bool = False
@@ -64,12 +63,6 @@ RETRIEVAL_SPECS: dict[str, RetrievalSpec] = {
         "graphrag_lite",
         ("relationship", "cross_document"),
         strategy_bias="graph_global",
-    ),
-    "select_ai_structured": RetrievalSpec(
-        "select_ai_structured",
-        "oracle_select_ai",
-        ("aggregate", "structured"),
-        strategy_bias="select_ai",
     ),
     "business_context_strict": RetrievalSpec(
         "business_context_strict",

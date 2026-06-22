@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: GraphProfileName[] = ["off", "entities", "full"];
 
-/** GraphRAG アダプター(取込時の知識グラフ構築深度)の runtime 設定を管理する設定画面。 */
+/** 関係情報構築の現在設定を管理する設定画面。 */
 export function GraphSettingsClient() {
   const query = useGraphSettings();
   const save = useUpdateGraphSettings();

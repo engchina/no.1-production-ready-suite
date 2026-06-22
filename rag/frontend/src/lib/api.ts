@@ -37,9 +37,8 @@ export type FileStatus =
   | "INDEXED"
   | "ERROR";
 export type SearchMode = "hybrid" | "vector" | "keyword";
-export type SearchStrategy = "auto" | "hybrid" | "graph_local" | "graph_global" | "select_ai";
+export type SearchStrategy = "auto" | "hybrid" | "graph_local" | "graph_global";
 export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
-export type SelectAiAction = "showsql" | "runsql";
 export type CitationFeedbackRating = "helpful" | "not_helpful";
 export type CitationFeedbackReason =
   | "missing_evidence"
@@ -453,8 +452,31 @@ export interface DocumentChunkView {
 }
 
 /** 文書の chunk_set(variant = 1 レシピのチャンク集合)1 件分。 */
+export type DocumentLayerStatusName =
+  | "not_requested"
+  | "planned_only"
+  | "materialized"
+  | "needs_reingest"
+  | "error";
+
+export interface DocumentMaterializationLayerStatus {
+  layer_id: string | null;
+  requested: boolean;
+  status: DocumentLayerStatusName;
+  reason: string | null;
+}
+
+export interface DocumentChunkSetLayerStatuses {
+  metadata: DocumentMaterializationLayerStatus;
+  graph: DocumentMaterializationLayerStatus;
+  navigation: DocumentMaterializationLayerStatus;
+}
+
 export interface DocumentChunkSet {
   chunk_set_id: string;
+  extraction_recipe_id: string | null;
+  extraction_status: DocumentLayerStatusName;
+  extraction_reason: string | null;
   status: string;
   chunk_count: number;
   vector_count: number;
@@ -466,6 +488,7 @@ export interface DocumentChunkSet {
   preprocess: string | null;
   knowledge_base_ids: string[];
   serving_knowledge_base_ids: string[];
+  layer_statuses: DocumentChunkSetLayerStatuses;
 }
 
 export type DocumentExtractionExportFormat = "json" | "markdown" | "html" | "chunks";
@@ -548,7 +571,7 @@ export interface KnowledgeBaseIngestionConfig {
   navigation_summary_enabled: boolean | null;
 }
 
-/** KB 単位のクエリ時上書き(Retrieval 以降)。null はグローバル継承。 */
+/** 検索・回答設定。Business View の query 設定として使う。 */
 export interface KnowledgeBaseQueryConfig {
   retrieval_strategy: RetrievalStrategyName | null;
   post_retrieval_pipeline: PostRetrievalPipelineName | null;
@@ -558,7 +581,7 @@ export interface KnowledgeBaseQueryConfig {
   evaluation_suite: EvaluationSuiteName | null;
 }
 
-/** KB 単位のアダプター上書き設定一式。 */
+/** KB 単位の構築設定。query は legacy 互換として読めるが KB runtime では使わない。 */
 export interface KnowledgeBaseAdapterConfig {
   version: number;
   ingestion: KnowledgeBaseIngestionConfig;
@@ -568,8 +591,10 @@ export interface KnowledgeBaseAdapterConfig {
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   retrieval_config: Record<string, unknown>;
   adapter_config: KnowledgeBaseAdapterConfig;
-  /** KB 上書きをグローバル既定で埋めた解決済み設定(表示専用)。継承行の実効値表示に使う。 */
+  /** KB 構築設定をグローバル既定で埋めた解決済み設定(表示専用)。 */
   effective_adapter_config?: KnowledgeBaseAdapterConfig | null;
+  /** 既存 retrieval_config に legacy query 設定が残っており、現在は無視されている。 */
+  legacy_query_config_ignored?: boolean;
 }
 
 export interface KnowledgeBaseCreateRequest {
@@ -598,7 +623,7 @@ export interface BusinessViewRef {
 /** 配信モード。1 文書が複数 chunk_set を持つときの検索時配信方法。 */
 export type ServingMode = "single" | "fused" | "routed";
 
-/** 業務アシスタント(Business View)の設定一式。query は KB の query 上書きを再利用。 */
+/** Business View の設定一式。query は検索・回答設定。 */
 export interface BusinessViewConfig {
   version: number;
   knowledge_base_ids: string[];
@@ -716,22 +741,6 @@ export interface SearchResponse {
   guardrail_warnings: string[];
   elapsed_ms: number;
   diagnostics: SearchDiagnostics;
-}
-
-export interface SelectAiRequestBody {
-  query: string;
-  action?: SelectAiAction;
-  profile_name?: string | null;
-  max_result_chars?: number | null;
-}
-
-export interface SelectAiResponse {
-  action: SelectAiAction;
-  result_text: string;
-  generated_sql: string | null;
-  profile_name: string | null;
-  query_chars: number;
-  guardrail_warnings: string[];
 }
 
 export interface CitationFeedbackRequestBody {
@@ -1332,7 +1341,6 @@ export type RetrievalStrategyName =
   | "vector"
   | "keyword"
   | "graph_augmented"
-  | "select_ai_structured"
   | "business_context_strict"
   | "corrective_multi_query";
 
@@ -1676,79 +1684,6 @@ function timeoutMessage(timeoutMs: number): string {
   return t("common.api.timeout", { seconds: Math.ceil(timeoutMs / 1000) });
 }
 
-// --- NL2SQL クエリ(生成 → 人手確認 → 実行 の 2 段ゲート)---
-export interface Nl2SqlRouterSummary {
-  profile_selected: string | null;
-  generation_backend: string;
-  complexity_score: number;
-  matched_signals: string[];
-  reason: string;
-}
-export interface Nl2SqlGuardrailVerdict {
-  allowed: boolean;
-  policy: string;
-  statement_type: string;
-  violations: string[];
-  semantic_verify_required: boolean;
-  max_rows: number | null;
-  run_role: string | null;
-}
-export interface Nl2SqlGenerateRequestBody {
-  question: string;
-  profile_name?: string | null;
-  team_name?: string | null;
-  allowed_objects?: string[];
-}
-export interface Nl2SqlGenerateResponse {
-  question: string;
-  profile_name: string;
-  generation_backend: string;
-  router: Nl2SqlRouterSummary;
-  generated_sql: string;
-  narration: string | null;
-  guardrail: Nl2SqlGuardrailVerdict;
-}
-export interface Nl2SqlExecuteRequestBody {
-  sql: string;
-  allowed_objects?: string[];
-}
-export interface Nl2SqlSqlResult {
-  columns: string[];
-  rows: JsonValue[][];
-  row_count: number;
-  truncated: boolean;
-}
-export interface Nl2SqlExecuteResponse {
-  sql: string;
-  executed: boolean;
-  blocked_reason: string | null;
-  guardrail: Nl2SqlGuardrailVerdict;
-  result: Nl2SqlSqlResult | null;
-}
-
-// --- NL2SQL パイプライン preset アダプター(schema_source 〜 evaluation)---
-export interface PipelineAdapterOptionData {
-  name: string;
-  origin: string;
-  recommended_for: string[];
-  summary: string;
-  selected: boolean;
-}
-export interface PipelineAdapterData {
-  key: string;
-  settings_field: string;
-  label: string;
-  selected: string;
-  options: PipelineAdapterOptionData[];
-}
-export interface Nl2SqlPipelineSettingsData {
-  adapters: PipelineAdapterData[];
-  config_source: "runtime";
-}
-export interface PipelinePresetUpdate {
-  selection: string;
-}
-
 async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
   try {
     return (await res.json()) as ApiResponse<T>;
@@ -2054,7 +1989,7 @@ export const api = {
       { method: "DELETE" }
     ),
 
-  // 業務アシスタント(Business View)
+  // 業務ビュー(Business View)
   listBusinessViews: (params: {
     status?: BusinessViewStatus;
     q?: string;
@@ -2088,27 +2023,8 @@ export const api = {
 
   // 検索
   search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
-  selectAi: (body: SelectAiRequestBody) =>
-    request<SelectAiResponse>("/api/search/select-ai", jsonBody(body)),
   submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
     request<CitationFeedbackResponse>("/api/search/citation-feedback", jsonBody(body)),
-
-  // NL2SQL(2 段ゲート)
-  generateNl2Sql: (body: Nl2SqlGenerateRequestBody) =>
-    request<Nl2SqlGenerateResponse>("/api/nl2sql/generate", jsonBody(body)),
-  executeNl2Sql: (body: Nl2SqlExecuteRequestBody) =>
-    request<Nl2SqlExecuteResponse>("/api/nl2sql/execute", jsonBody(body)),
-  getNl2SqlPipelineSettings: () =>
-    request<Nl2SqlPipelineSettingsData>("/api/settings/nl2sql/pipeline"),
-  updateNl2SqlPipelineSetting: (adapterKey: string, body: PipelinePresetUpdate) =>
-    request<Nl2SqlPipelineSettingsData>(
-      `/api/settings/nl2sql/pipeline/${encodeURIComponent(adapterKey)}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }
-    ),
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>

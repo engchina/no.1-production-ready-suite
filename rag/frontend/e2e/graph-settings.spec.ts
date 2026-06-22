@@ -17,18 +17,18 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`GraphRAG 設定は構築プロファイルを表示する (${viewport.name})`, async ({ page }) => {
+  test(`関係情報の構築設定は構築方式を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockGraph(page, "off");
 
     await page.goto("/settings/graph");
 
-    await expect(page.getByRole("heading", { name: "知識グラフ構築プロファイル" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "関係情報の構築" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /構築しない/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /軽量/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /フル/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "GraphRAG アダプター" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "関係検索" })).toHaveAttribute(
       "aria-current",
       "page"
     );
@@ -36,7 +36,7 @@ for (const viewport of [
   });
 }
 
-test("GraphRAG 設定は full を選んで保存できる", async ({ page }) => {
+test("関係情報の構築設定は full を選んで保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let saved: unknown = null;
   await page.route("**/api/settings/graph", async (route) => {
@@ -56,19 +56,19 @@ test("GraphRAG 設定は full を選んで保存できる", async ({ page }) => 
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("GraphRAG プロファイルを保存しました。")).toBeVisible();
+  await expect(page.getByText("関係情報の構築設定を保存しました。")).toBeVisible();
   expect(saved).toEqual({ profile: "full" });
   await expectNoHorizontalOverflow(page);
 });
 
-test("GraphRAG 設定取得に失敗したら再試行できる", async ({ page }) => {
+test("関係情報の構築設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/graph", async (route) => {
     await route.fulfill({
       status: 503,
       json: {
         data: null,
-        error_messages: ["GraphRAG アダプター設定を取得できませんでした。"],
+        error_messages: ["関係情報の構築設定を取得できませんでした。"],
         warning_messages: [],
       },
     });
@@ -76,7 +76,7 @@ test("GraphRAG 設定取得に失敗したら再試行できる", async ({ page 
 
   await page.goto("/settings/graph");
 
-  await expect(page.getByRole("alert")).toContainText("GraphRAG アダプター設定を取得できませんでした。");
+  await expect(page.getByRole("alert")).toContainText("関係情報の構築設定を取得できませんでした。");
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
 });
 

@@ -1,21 +1,21 @@
-"""業務アシスタント(Business View)の設定解決。
+"""業務ビュー(Business View)の設定解決。
 
-業務アシスタントは「利用者(回答する側)視点」のエンティティで、**複数の KB を束ねた
-参照集合**と、**1 つの一貫した query アダプター設定**、および **persona(system prompt /
+業務ビューは「利用者(回答する側)視点」のエンティティで、**複数の KB を束ねた
+参照集合**と、**1 つの一貫した検索・回答設定**、および **persona(system prompt /
 既定言語)** を持つ。KB(加工する側視点)とは関心事が異なるため別レイヤーとして扱う。
 
 設計:
 
-* 参照 KB は多対多。1 つの KB を複数の業務アシスタントから共有できる。逆も可。
+* 参照 KB は多対多。1 つの KB を複数の業務ビューから共有できる。逆も可。
 * query 上書き(Retrieval / Grounding / Generation / Guardrail / Vector Index / Evaluation)は
   KB の :class:`KnowledgeBaseQueryConfig` を再利用する。複数 KB の query 設定は競合するため、
-  検索時はこの**業務アシスタント 1 枚から**解決する(KB 個別の query 上書きは単一 KB 指定時のみ)。
+  検索時はこの**業務ビュー 1 枚から**解決する。KB 個別の query legacy 値は使わない。
 * persona は Generation の system prompt を runtime 上書きする
   (:attr:`Settings.rag_generation_system_prompt_override`)。
 * 取込系(Preprocess / Parser / Chunking / Vector Index build)は KB の物理索引方法なので
-  業務アシスタントでは触らない。
+  業務ビューでは触らない。
 * 永続化は ``rag_business_views.view_config`` JSON カラムに一括格納する(DDL 最小)。
-* 解決順は request 明示 > 業務アシスタント > (単一 KB 指定時のみ)KB > グローバル既定。
+* 解決順は request 明示 > 業務ビュー > グローバル既定。
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ MAX_DEFAULT_LANGUAGE_CHARS = 32
 
 
 class BusinessViewConfig(BaseModel):
-    """業務アシスタントの設定一式(参照 KB + query 上書き + persona)。"""
+    """業務ビューの設定一式(参照 KB + query 上書き + persona)。"""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -79,37 +79,31 @@ class BusinessViewConfig(BaseModel):
 
 
 def parse_business_view_config(raw: Mapping[str, object] | None) -> BusinessViewConfig:
-    """``view_config`` JSON から業務アシスタント設定を寛容に復元する。"""
+    """``view_config`` JSON から業務ビュー設定を寛容に復元する。"""
     if not raw:
         return BusinessViewConfig()
     try:
         return BusinessViewConfig.model_validate(dict(raw))
     except Exception:  # noqa: BLE001 - 壊れた永続値は空設定へ縮退して検索を止めない
-        logger.warning("業務アシスタント設定の復元に失敗したため空へ縮退します。", exc_info=True)
+        logger.warning("業務ビュー設定の復元に失敗したため空へ縮退します。", exc_info=True)
         return BusinessViewConfig()
 
 
 def dump_business_view_config(config: BusinessViewConfig) -> dict[str, object]:
-    """業務アシスタント設定を ``view_config`` カラムへ保存する dict へ変換する。"""
+    """業務ビュー設定を ``view_config`` カラムへ保存する dict へ変換する。"""
     return config.model_dump(mode="json")
 
 
 def resolve_business_view_settings(
     global_settings: Settings,
     config: BusinessViewConfig,
-    kb_query: KnowledgeBaseQueryConfig | None = None,
 ) -> tuple[Settings, bool]:
-    """グローバルへ (任意の KB query 下層 →) 業務アシスタント query → persona を重ねた Settings。
+    """グローバルへ 業務ビュー query → persona を重ねた Settings。
 
-    ``kb_query`` を渡すと **per-field merge** で「KB 既定 < 業務アシスタント」の層になり、
-    業務アシスタントが触れない query 項目は KB 既定が残る(検索対象が単一 KB に解決した
-    ときに使う。複数 KB のときは一意な KB 既定が無いので呼び出し側が None を渡す)。
+    KB はナレッジ構築設定だけを持つため、KB に残る query legacy 値はここでは扱わない。
     戻り値 2 番目は上書きが実際に効いたかどうか。
     """
-    overlays: list[KnowledgeBaseQueryConfig] = []
-    if kb_query is not None:
-        overlays.append(kb_query)  # 低優先(KB 既定)
-    overlays.append(config.query)  # 高優先(業務アシスタント)
+    overlays: list[KnowledgeBaseQueryConfig] = [config.query]
     merged, applied = compose_query_settings(global_settings, overlays)
     updates: dict[str, object] = {}
     persona = config.resolved_system_prompt()

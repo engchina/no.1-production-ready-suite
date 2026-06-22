@@ -1,11 +1,15 @@
-# 取込 variant materialization — staging 引き継ぎ
+# 取込チャンク構成 materialization — staging 引き継ぎ
 
-> 「1 文書 × N レシピ(複数チャンク集合)を同時保持・共有」設計の残作業を、**実 Oracle 26ai が
+> 「1 文書 × N 構築レシピ(複数チャンク構成)を同時保持・共有」設計の残作業を、**実 Oracle 26ai が
 > 使える staging 環境**で進めるための引き継ぎ。本リポジトリの CI は実 Oracle 依存(実 DB なしでは
 > 検証不能)のため、DDL・永続化・GC 実行はここで配線・検証する。設計の正本はメモリ
 > `multi-recipe-variants-decision` と本リポジトリの `docs/` 各設計書。
 
-最終更新: 2026-06-21 / 対象ブランチ: `claude/clever-mirzakhani-788f47`
+最終更新: 2026-06-22 / 対象ブランチ: RAG V3 cleanup
+
+> V3 状態: chunk_set / extraction_recipe / 派生 layer の永続状態は実装済み。
+> 本文の Phase A 記述は設計経緯として残し、現在の残作業は GraphRAG / navigation など
+> 個別 layer builder の実体化拡張と staging 運用検証に絞る。
 
 ---
 
@@ -16,8 +20,8 @@
 
 | 既存資産 | 役割 | 場所 |
 |---|---|---|
-| `variant_keys` | 層別 keying。`compute_chunk_set_id(source_sha256, settings)` / `compute_layer_ids(...)`。chunk 軸 → `cs_*`、派生層 → `gr_*`/`md_*`/`nv_*`。 | [variant_keys.py](../backend/app/rag/variant_keys.py) |
-| `variant_planner` | dedup/refcount/GC の計画。`plan_document_materializations(source, global_settings, kb_configs)` → `MaterializationPlan`(層 ID→参照 KB 群=refcount)。`diff_plan(existing_ids, plan)` → `to_create` / `to_collect`(GC)。 | [variant_planner.py](../backend/app/rag/variant_planner.py) |
+| `variant_keys` | 層別 keying。`compute_extraction_recipe_id(source_sha256, settings)` / `compute_chunk_set_id(...)` / `compute_layer_ids(...)`。抽出 recipe → `er_*`、chunk 軸 → `cs_*`、派生層 → `gr_*`/`md_*`/`nv_*`。 | [variant_keys.py](../backend/app/rag/variant_keys.py) |
+| `variant_planner` | dedup/refcount/GC の計画。`plan_document_materializations(source, global_settings, kb_configs)` → `MaterializationPlan`(層 ID→参照 KB 群=refcount、chunk_set→extraction_recipe)。`diff_plan(existing_ids, plan)` → `to_create` / `to_collect`(GC)。 | [variant_planner.py](../backend/app/rag/variant_planner.py) |
 | KB 取込上書き | `_INGESTION_FIELD_MAP` に preprocess/parser/chunking(+params)/graph/field/asset/nav。`apply_adapter_config_or_global(scope="ingestion")` で effective 取込 settings を解決。 | [kb_adapter_config.py](../backend/app/rag/kb_adapter_config.py) |
 | query per-field merge | **配線済み**(`compose_query_settings` + `resolve_business_view_settings(kb_query=…)`)。query 側はこの引き継ぎ範囲外。 | [search.py](../backend/app/api/routes/search.py) |
 
@@ -28,20 +32,21 @@
 
 ## 2. 不変条件(壊してはいけない)
 
-1. **Camp B**: 文書↔KB は N:N、chunk は共有(複製しない)、**embedding は OCI Cohere v4 / 1536 グローバル固定**。
-   variant は **同一 1536 空間内**で chunk 集合を増やすだけ。per-KB embedding / per-KB 物理表(Camp A)にしない。
+1. **Camp B**: 文書↔KB は N:N、chunk は共有(不要に複製しない)、**embedding は OCI Cohere v4 / 1536 グローバル固定**。
+   チャンク構成は **同一 1536 空間内**で chunk 集合を増やすだけ。per-KB embedding / per-KB 物理表(Camp A)にしない。
 2. **確定スタック**: OCI Enterprise AI / OCI GenAI Cohere / Oracle 26ai。外部ベクトル DB・別 LLM provider を入れない。
 3. **VECTOR 索引は単一・共有**: `rag_chunks.embedding` の HNSW は 1 本のまま。`chunk_set_id` は**フィルタ列**であって索引を分割しない。
 4. **版管理 DDL は自動変更しない**: スキーマ追加は DDL artifact(下記)へ明示追加し、`requires_reprovision` 扱い。
-5. **2 段階処理**: parse → 人手プレビュー確認 → index。variant の materialize は **index 段**に入る(parse artifact は共有・再利用)。
+5. **2 段階処理**: parse → 人手プレビュー確認 → index。チャンク構成の materialize は **index 段**に入る。同じ extraction recipe だけ parse artifact を共有・再利用する。
 
 ---
 
-## 3. 残作業(staging Phase A → C)
+## 3. 設計経緯(staging Phase A → C)
 
 ### Phase A — chunk_set レベルの共有 + GC(最大の御利益)
 
 派生層(graph/nav)は後回しにし、まず **chunk text + embedding の共有**を実装する。
+V3 時点ではこの Phase A は完了済み。
 
 **A-1. DDL 追加**(版管理 artifact へ)
 - 生成箇所: 新規テーブルは `app/clients/oracle.py` の `oracle_*_schema_sql()` に倣って追加し、
@@ -101,9 +106,10 @@ CREATE INDEX rag_kb_cs_bind_cs_idx ON rag_kb_chunk_set_bindings (chunk_set_id);
   1. 文書の所属 KB 群 + 各 KB の `adapter_config` を取得(`list_document_knowledge_bases` を adapter_config 込みへ)。
   2. `plan_document_materializations(source_sha256, global_settings, {kb_id: adapter_config})` → `MaterializationPlan`。
   3. 既存 chunk_set 群(`rag_chunk_sets` の当該 document)と `diff_plan` → `to_create` / `to_collect`。
-  4. `to_create` の各 chunk_set を、その chunk_set_id を生んだ effective settings で materialize
-     (`IngestionPipeline(settings=effective).index_reviewed(...)` 相当を **chunk_set 単位**に。
-     `rag_chunks` 各行へ `chunk_set_id` を書く)。**上限**(例 ≤4 chunk_set/doc)+ 追加 embedding コスト preview。
+  4. `to_create` の各 chunk_set を、その chunk_set_id を生んだ effective settings で materialize。
+     同じ extraction_recipe の chunk_set は保存済み extraction を共有し、chunking だけを変えて再索引する。
+     extraction_recipe が違う場合は原本 bytes がある取込経路で extract+index を実行する。
+     review-only 経路で原本再抽出できない場合は再取込要求として止める。**上限**(例 ≤4 chunk_set/doc)+ 追加 embedding コスト preview。
   5. `rag_kb_chunk_set_bindings` を計画どおり upsert(KB→chunk_set)。`is_serving` は KB 既定を 1 件。
   6. `to_collect`(refcount 0)を GC(下記)。
 - 既存 1 chunk_set 文書の **backfill**: 既存 `rag_chunks` に、現 owning-KB effective settings から計算した
@@ -126,10 +132,10 @@ CREATE INDEX rag_kb_cs_bind_cs_idx ON rag_kb_chunk_set_bindings (chunk_set_id);
   parent_chunk_set_id, …)+ `rag_kb_layer_bindings` で同型に refcount/GC。`variant_planner.MaterializationPlan` は
   既に `graph_layers` / `nav_layers` / `metadata_layers` を返すのでそのまま流用。
 
-### Phase C — 配信モード(業務アシスタント層)
+### Phase C — 配信モード(業務ビュー層)
 - `single`(= Phase A の is_serving、実装済みの素地)→ `fused`(複数 variant を RRF 融合 +
   **source-span(page/bbox/element_id)単位の重複除去**)→ `routed`(既存 Router で query ごと variant 選択)。
-- ポリシーは業務アシスタントの overlay JSON(`variant_policy`)に持つ(DDL 不要)。`fused` の二重ヒット除去は
+- ポリシーは業務ビューの overlay JSON(`variant_policy`)に持つ(DDL 不要)。`fused` の二重ヒット除去は
   storage dedup とは別問題なので citation/context 構築で対応。
 
 ---
@@ -166,19 +172,25 @@ CREATE INDEX rag_kb_cs_bind_cs_idx ON rag_kb_chunk_set_bindings (chunk_set_id);
 A-1(DDL)→ A-4(検索フィルタ・既定 is_serving のみ)→ A-2(取込 planner 駆動 + backfill)→ A-3(GC)→ B → C。
 A だけで「1 文書 × 複数 chunk_set の共有」という中核価値が出る。B/C は opt-in 拡張。
 
-## 8. 実装進捗(2026-06-21、ブランチ claude/clever-mirzakhani-788f47・実 Oracle 検証済)
+## 8. 実装進捗(2026-06-22)
 - **A-1 DDL 適用済**(`79152e7`)、**A-2 永続化メソッド**(`a0affb5`)、**A-2 取込 reconcile 配線**(`490b015`)、**A-4 検索 chunk_set フィルタ**(`53eb9d9`)。
   単一 materialization(所属 KB 全部を 1 chunk_set に bind)で「取込→記録→検索 is_serving 尊重」が実 DB で一貫動作。
-- **残り = per-recipe 複数 materialization**(KB 設定が chunking で分岐するとき chunk_set を分裂)。
+- **V2 で追加済み**: `extraction_recipe_id` と `chunk_set_id` を分離。chunking 差分は extraction を共有し、preprocess/parser 差分は原本 bytes 経路で再抽出、review-only では再取込要求にする。
+- **V3 で追加済み**: `rag_document_extractions` / `rag_artifact_layers` に extraction と layer 状態を永続化。`GET /api/documents/{id}/chunk-sets` は `extraction_recipe_id`、`extraction_status`、metadata / graph / navigation の `planned_only` / `materialized` / `needs_reingest` などの実状態を返す。
+- **V3 で除去済み**: RAG repo の Select AI 公開面(`/api/search/select-ai`、frontend panel/API/hook、設定値、schema)を削除。SQL 専用能力は sibling repo `../no.1-production-ready-nl2sql` の責務。
+- **V4-0 で追加済み**: [oracle-variant-backfill-runbook.md](./oracle-variant-backfill-runbook.md) と `app.rag.variant_backfill_cli` により、schema migration 後の read-only validation SQL / JSON manifest / Markdown runbook を生成できる。実データの回填は staging でレビュー済み手順として実行し、CLI は production data を変更しない。
+- **V4-1 で追加済み**: navigation layer は保存済み extraction から決定論的に章節 tree を作れる場合、`materialized` として永続化し `navigation_node_count` を metrics に残す。
+- **残り = 個別 layer builder の拡張**。metadata は保存済み extraction に実 payload があれば `materialized`、GraphRAG は実 builder が未接続なら `planned_only` と表示する。
 
 ### per-recipe 複数 materialization の実装計画(コード調査済・要注意の深い変更)
-**重要な前提**: parse(`StructuredExtraction`)は **extract 相で 1 回だけ実行され文書に保存**、index 相([`ingestion._run_index_phase`](../backend/app/rag/ingestion.py))が再利用する。
-→ **chunking 軸だけ違う chunk_set は re-parse 不要**(同一 extraction を別 chunking で再 chunk するだけ)。preprocess/parser 軸の分岐は別 extraction が要る(後回し)。
+**重要な前提**: parse(`StructuredExtraction`)は **extract 相で実行され文書に保存**、index 相([`ingestion._run_index_phase`](../backend/app/rag/ingestion.py))が再利用する。
+→ **chunking 軸だけ違う chunk_set は re-parse 不要**(同一 extraction を別 chunking で再 chunk するだけ)。preprocess/parser 軸が分岐する場合は別 extraction が必要で、V2 では原本 bytes がある取込経路のみ再抽出し、review-only 経路では 409/re-ingest warning として止める。
 
-**ブロッカー**: チャンクストア [`oracle._save_index_with_oracle`](../backend/app/clients/oracle.py) は `DELETE FROM rag_chunks WHERE document_id = :document_id`(文書の全 chunk 削除)→ `INSERT`。これだと chunk_set を複数共存できない。
+**解消済み**: チャンクストアは `chunk_set_id` 指定時に対象 chunk_set だけを差し替える。
+これにより同一文書の複数 chunk_set が共存できる。
 
 **必要な改修**:
 1. `save_index` / `_save_index_with_oracle` / `_chunk_insert_rows` に `chunk_set_id: str | None = None` を通す。`None` のとき現行どおり(全削除・NULL タグ)で**完全後方互換**。指定時は DELETE を `AND chunk_set_id = :chunk_set_id` に scope し、INSERT 列に `chunk_set_id` を含めて**挿入時タグ付け**(現 reconcile の事後 UPDATE タグは不要に)。
-2. `_run_index_phase` を「1 chunk_set 分の chunk→embed→save」と「文書 finalize(status/audit)」に分け、**所属 KB を chunk_set_id でグルーピングした plan**(`variant_planner.plan_document_materializations`)に従い、**保存済み extraction を再利用**して chunk_set ごとに chunk→embed→save(chunk_set_id scope)。各 KB グループを binding、stale を GC。
+2. `_run_index_phase` を「1 chunk_set 分の chunk→embed→save」と「文書 finalize(status/audit)」に分け、**所属 KB を extraction_recipe → chunk_set_id でグルーピングした plan**(`variant_planner.plan_document_materializations`)に従う。同一 extraction recipe 内では保存済み extraction を再利用し、recipe が違う場合は原本から再抽出できる経路だけ materialize する。各 KB グループを binding、stale を GC。
 3. 検証: 実 Oracle で「同一文書を chunk_size 違いの 2 KB が参照 → chunk_set 2 つ共存、各 KB スコープ検索が自分の chunk_set だけを取得(§A-4 フィルタが効く)」を `oracle_db` fixture で。embedding は決定論スタブ。
 - 着手は専用セッション推奨(チャンクストア hot path・破壊的リスク)。`chunk_set_id=None` 既定で段階導入し、既存の `test_two_phase_review` / `test_oracle_chunk_set_adapter` を回帰の番人にする。

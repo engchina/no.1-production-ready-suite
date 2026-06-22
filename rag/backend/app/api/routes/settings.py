@@ -34,21 +34,6 @@ from app.config import (
     get_settings,
     resolve_model_settings_file,
 )
-from app.nl2sql.cache import (
-    cache_adapter_runtime_settings,
-    normalize_cache_policy,
-)
-from app.nl2sql.guardrail import (
-    guardrail_adapter_runtime_settings as nl2sql_guardrail_runtime_settings,
-)
-from app.nl2sql.guardrail import (
-    normalize_guardrail_policy as normalize_nl2sql_guardrail_policy,
-)
-from app.nl2sql.presets import get_adapter, normalize_selection, pipeline_runtime
-from app.nl2sql.router import (
-    normalize_router_profile,
-    router_adapter_runtime_settings,
-)
 from app.rag.agentic_adapter import (
     agentic_adapter_runtime_settings,
     normalize_agentic_profile,
@@ -110,9 +95,6 @@ from app.schemas.settings import (
     AgenticProfileStatusData,
     AgenticSettingsData,
     AgenticSettingsUpdate,
-    CachePolicyStatusData,
-    CacheSettingsData,
-    CacheSettingsUpdate,
     ChunkingSettingsData,
     ChunkingSettingsUpdate,
     ChunkingStrategyStatusData,
@@ -146,10 +128,6 @@ from app.schemas.settings import (
     ModelSettingsTestRequest,
     ModelSettingsTestResult,
     ModelSettingsTestTargetType,
-    Nl2SqlGuardrailPolicyStatusData,
-    Nl2SqlGuardrailSettingsData,
-    Nl2SqlGuardrailSettingsUpdate,
-    Nl2SqlPipelineSettingsData,
     OciConfigField,
     OciConfigReadData,
     OciConfigReadRequest,
@@ -172,9 +150,6 @@ from app.schemas.settings import (
     ParserAdapterSourceRouteData,
     ParserAdapterStatusData,
     ParserServiceBackendData,
-    PipelineAdapterData,
-    PipelineAdapterOptionData,
-    PipelinePresetUpdate,
     PreprocessProfileStatusData,
     PreprocessSettingsData,
     PreprocessSettingsUpdate,
@@ -184,9 +159,6 @@ from app.schemas.settings import (
     RetrievalSettingsData,
     RetrievalSettingsUpdate,
     RetrievalStrategyStatusData,
-    RouterProfileStatusData,
-    RouterSettingsData,
-    RouterSettingsUpdate,
     UploadStorageSettingsData,
     UploadStorageSettingsUpdate,
     VectorIndexProfileStatusData,
@@ -508,7 +480,7 @@ async def get_preprocess_settings() -> ApiResponse[PreprocessSettingsData]:
 async def update_preprocess_settings(
     payload: PreprocessSettingsUpdate,
 ) -> ApiResponse[PreprocessSettingsData]:
-    """前処理アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """ファイル準備設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = _preprocess_settings_candidate(settings, payload)
     _persist_preprocess_settings(candidate)
@@ -526,7 +498,7 @@ async def get_chunking_settings() -> ApiResponse[ChunkingSettingsData]:
 async def update_chunking_settings(
     payload: ChunkingSettingsUpdate,
 ) -> ApiResponse[ChunkingSettingsData]:
-    """Chunking アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """文書分割設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = _chunking_settings_candidate(settings, payload)
     _persist_chunking_settings(candidate)
@@ -544,7 +516,7 @@ async def get_retrieval_settings() -> ApiResponse[RetrievalSettingsData]:
 async def update_retrieval_settings(
     payload: RetrievalSettingsUpdate,
 ) -> ApiResponse[RetrievalSettingsData]:
-    """Retrieval アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """検索方法設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_retrieval_strategy": normalize_retrieval_strategy(payload.strategy)}
@@ -564,7 +536,7 @@ async def get_grounding_settings() -> ApiResponse[GroundingSettingsData]:
 async def update_grounding_settings(
     payload: GroundingSettingsUpdate,
 ) -> ApiResponse[GroundingSettingsData]:
-    """Grounding アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """根拠確認設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_post_retrieval_pipeline": normalize_post_retrieval_pipeline(payload.pipeline)}
@@ -584,7 +556,7 @@ async def get_generation_settings() -> ApiResponse[GenerationSettingsData]:
 async def update_generation_settings(
     payload: GenerationSettingsUpdate,
 ) -> ApiResponse[GenerationSettingsData]:
-    """Generation アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """回答スタイル設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_generation_profile": normalize_generation_profile(payload.profile)}
@@ -691,7 +663,7 @@ async def get_guardrail_settings() -> ApiResponse[GuardrailSettingsData]:
 async def update_guardrail_settings(
     payload: GuardrailSettingsUpdate,
 ) -> ApiResponse[GuardrailSettingsData]:
-    """Guardrail アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """安全チェック設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     update: dict[str, object] = {"rag_guardrail_policy": normalize_guardrail_policy(payload.policy)}
     if payload.backend is not None:
@@ -713,7 +685,7 @@ async def get_vector_index_settings() -> ApiResponse[VectorIndexSettingsData]:
 async def update_vector_index_settings(
     payload: VectorIndexSettingsUpdate,
 ) -> ApiResponse[VectorIndexSettingsData]:
-    """Vector Index アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """検索インデックス設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_vector_index_profile": normalize_vector_index_profile(payload.profile)}
@@ -721,110 +693,6 @@ async def update_vector_index_settings(
     _persist_vector_index_settings(candidate)
     settings.rag_vector_index_profile = candidate.rag_vector_index_profile
     return ApiResponse(data=_vector_index_settings_data(settings))
-
-
-@router.get("/nl2sql/router", response_model=ApiResponse[RouterSettingsData])
-async def get_nl2sql_router_settings() -> ApiResponse[RouterSettingsData]:
-    """NL2SQL Router アダプター(ルーティング)の選択と解決内容を返す。"""
-    return ApiResponse(data=_nl2sql_router_settings_data(get_settings()))
-
-
-@router.patch("/nl2sql/router", response_model=ApiResponse[RouterSettingsData])
-async def update_nl2sql_router_settings(
-    payload: RouterSettingsUpdate,
-) -> ApiResponse[RouterSettingsData]:
-    """NL2SQL Router アダプター設定を backend/.env と現在プロセスへ反映する。"""
-    settings = get_settings()
-    update: dict[str, object] = {"nl2sql_router_profile": normalize_router_profile(payload.profile)}
-    if payload.complexity_threshold is not None:
-        update["nl2sql_router_complexity_threshold"] = payload.complexity_threshold
-    candidate = settings.model_copy(update=update)
-    _persist_nl2sql_router_settings(candidate)
-    settings.nl2sql_router_profile = candidate.nl2sql_router_profile
-    settings.nl2sql_router_complexity_threshold = candidate.nl2sql_router_complexity_threshold
-    return ApiResponse(data=_nl2sql_router_settings_data(settings))
-
-
-@router.get("/nl2sql/guardrail", response_model=ApiResponse[Nl2SqlGuardrailSettingsData])
-async def get_nl2sql_guardrail_settings() -> ApiResponse[Nl2SqlGuardrailSettingsData]:
-    """NL2SQL Guardrail アダプター(SQL 安全)の選択と解決内容を返す。"""
-    return ApiResponse(data=_nl2sql_guardrail_settings_data(get_settings()))
-
-
-@router.patch("/nl2sql/guardrail", response_model=ApiResponse[Nl2SqlGuardrailSettingsData])
-async def update_nl2sql_guardrail_settings(
-    payload: Nl2SqlGuardrailSettingsUpdate,
-) -> ApiResponse[Nl2SqlGuardrailSettingsData]:
-    """NL2SQL Guardrail アダプター設定を backend/.env と現在プロセスへ反映する。"""
-    settings = get_settings()
-    update: dict[str, object] = {
-        "nl2sql_guardrail_policy": normalize_nl2sql_guardrail_policy(payload.policy)
-    }
-    if payload.max_rows is not None:
-        update["nl2sql_guardrail_max_rows"] = payload.max_rows
-    if payload.run_role is not None:
-        update["nl2sql_guardrail_run_role"] = payload.run_role
-    candidate = settings.model_copy(update=update)
-    _persist_nl2sql_guardrail_settings(candidate)
-    settings.nl2sql_guardrail_policy = candidate.nl2sql_guardrail_policy
-    settings.nl2sql_guardrail_max_rows = candidate.nl2sql_guardrail_max_rows
-    settings.nl2sql_guardrail_run_role = candidate.nl2sql_guardrail_run_role
-    return ApiResponse(data=_nl2sql_guardrail_settings_data(settings))
-
-
-@router.get("/nl2sql/cache", response_model=ApiResponse[CacheSettingsData])
-async def get_nl2sql_cache_settings() -> ApiResponse[CacheSettingsData]:
-    """NL2SQL Cache アダプター(意味キャッシュ)の選択と解決内容を返す。"""
-    return ApiResponse(data=_nl2sql_cache_settings_data(get_settings()))
-
-
-@router.patch("/nl2sql/cache", response_model=ApiResponse[CacheSettingsData])
-async def update_nl2sql_cache_settings(
-    payload: CacheSettingsUpdate,
-) -> ApiResponse[CacheSettingsData]:
-    """NL2SQL Cache アダプター設定を backend/.env と現在プロセスへ反映する。"""
-    settings = get_settings()
-    update: dict[str, object] = {"nl2sql_cache_policy": normalize_cache_policy(payload.policy)}
-    if payload.similarity_threshold is not None:
-        update["nl2sql_cache_similarity_threshold"] = payload.similarity_threshold
-    if payload.ttl_seconds is not None:
-        update["nl2sql_cache_ttl_seconds"] = payload.ttl_seconds
-    candidate = settings.model_copy(update=update)
-    _persist_nl2sql_cache_settings(candidate)
-    settings.nl2sql_cache_policy = candidate.nl2sql_cache_policy
-    settings.nl2sql_cache_similarity_threshold = candidate.nl2sql_cache_similarity_threshold
-    settings.nl2sql_cache_ttl_seconds = candidate.nl2sql_cache_ttl_seconds
-    return ApiResponse(data=_nl2sql_cache_settings_data(settings))
-
-
-@router.get("/nl2sql/pipeline", response_model=ApiResponse[Nl2SqlPipelineSettingsData])
-async def get_nl2sql_pipeline_settings() -> ApiResponse[Nl2SqlPipelineSettingsData]:
-    """NL2SQL パイプライン preset 群(schema_source 〜 evaluation)の選択と選択肢を返す。"""
-    return ApiResponse(data=_nl2sql_pipeline_settings_data(get_settings()))
-
-
-@router.patch(
-    "/nl2sql/pipeline/{adapter_key}",
-    response_model=ApiResponse[Nl2SqlPipelineSettingsData],
-)
-async def update_nl2sql_pipeline_setting(
-    adapter_key: str,
-    payload: PipelinePresetUpdate,
-) -> ApiResponse[Nl2SqlPipelineSettingsData]:
-    """1 アダプターの preset 選択を backend/.env と現在プロセスへ反映する。"""
-    adapter = get_adapter(adapter_key)
-    if adapter is None:
-        raise HTTPException(status_code=404, detail=f"未知のアダプター: {adapter_key}")
-    if payload.selection not in adapter.option_names:
-        raise HTTPException(
-            status_code=422, detail=f"{adapter_key} に無い選択肢: {payload.selection}"
-        )
-    settings = get_settings()
-    normalized = normalize_selection(adapter_key, payload.selection)
-    candidate = settings.model_copy(update={adapter.settings_field: normalized})
-    _persist_nl2sql_pipeline_setting(adapter.env_key, normalized)
-    setattr(settings, adapter.settings_field, getattr(candidate, adapter.settings_field))
-    return ApiResponse(data=_nl2sql_pipeline_settings_data(settings))
 
 
 @router.get("/evaluation-suite", response_model=ApiResponse[EvaluationSettingsData])
@@ -837,7 +705,7 @@ async def get_evaluation_settings() -> ApiResponse[EvaluationSettingsData]:
 async def update_evaluation_settings(
     payload: EvaluationSettingsUpdate,
 ) -> ApiResponse[EvaluationSettingsData]:
-    """Evaluation アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """品質評価設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_evaluation_suite": normalize_evaluation_suite(payload.suite)}
@@ -857,7 +725,7 @@ async def get_graph_settings() -> ApiResponse[GraphSettingsData]:
 async def update_graph_settings(
     payload: GraphSettingsUpdate,
 ) -> ApiResponse[GraphSettingsData]:
-    """GraphRAG アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """関係情報設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_graph_profile": normalize_graph_profile(payload.profile)}
@@ -877,7 +745,7 @@ async def get_agentic_settings() -> ApiResponse[AgenticSettingsData]:
 async def update_agentic_settings(
     payload: AgenticSettingsUpdate,
 ) -> ApiResponse[AgenticSettingsData]:
-    """Agentic アダプター設定を backend/.env と現在プロセスへ反映する。"""
+    """高度な検索設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_agentic_profile": normalize_agentic_profile(payload.profile)}
@@ -2231,7 +2099,7 @@ def _persist_upload_storage_settings(settings: Settings) -> None:
 
 
 def _graph_settings_data(settings: Settings) -> GraphSettingsData:
-    """Settings から GraphRAG アダプター設定の表示用データを作る。"""
+    """Settings から関係情報設定の表示用データを作る。"""
     runtime = graph_adapter_runtime_settings(settings)
     return GraphSettingsData(
         profile=runtime.profile,
@@ -2255,17 +2123,17 @@ def _graph_settings_data(settings: Settings) -> GraphSettingsData:
 
 
 def _persist_graph_settings(settings: Settings) -> None:
-    """GraphRAG アダプター設定を backend/.env へ永続化する。"""
+    """関係情報設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_GRAPH_PROFILE": settings.rag_graph_profile},
         section_comment="# GraphRAG アダプター",
-        error_detail="GraphRAG アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="関係情報設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _agentic_settings_data(settings: Settings) -> AgenticSettingsData:
-    """Settings から Agentic アダプター設定の表示用データを作る。"""
+    """Settings から高度な検索設定の表示用データを作る。"""
     runtime = agentic_adapter_runtime_settings(settings)
     return AgenticSettingsData(
         profile=runtime.profile,
@@ -2292,17 +2160,17 @@ def _agentic_settings_data(settings: Settings) -> AgenticSettingsData:
 
 
 def _persist_agentic_settings(settings: Settings) -> None:
-    """Agentic アダプター設定を backend/.env へ永続化する。"""
+    """高度な検索設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_AGENTIC_PROFILE": settings.rag_agentic_profile},
         section_comment="# Agentic アダプター",
-        error_detail="Agentic アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="高度な検索設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _evaluation_settings_data(settings: Settings) -> EvaluationSettingsData:
-    """Settings から Evaluation アダプター設定の表示用データを作る。"""
+    """Settings から品質評価設定の表示用データを作る。"""
     runtime = evaluation_adapter_runtime_settings(settings)
 
     def _thresholds_dict(thresholds: EvaluationThresholds | None) -> dict[str, float]:
@@ -2332,17 +2200,17 @@ def _evaluation_settings_data(settings: Settings) -> EvaluationSettingsData:
 
 
 def _persist_evaluation_settings(settings: Settings) -> None:
-    """Evaluation アダプター設定を backend/.env へ永続化する。"""
+    """品質評価設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_EVALUATION_SUITE": settings.rag_evaluation_suite},
         section_comment="# Evaluation アダプター",
-        error_detail="Evaluation アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="品質評価設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
-    """Settings から Vector Index アダプター設定の表示用データを作る。"""
+    """Settings から検索インデックス設定の表示用データを作る。"""
     runtime = vector_index_adapter_runtime_settings(settings)
     return VectorIndexSettingsData(
         profile=runtime.profile,
@@ -2369,166 +2237,17 @@ def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
 
 
 def _persist_vector_index_settings(settings: Settings) -> None:
-    """Vector Index アダプター設定を backend/.env へ永続化する。"""
+    """検索インデックス設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_VECTOR_INDEX_PROFILE": settings.rag_vector_index_profile},
         section_comment="# Vector Index アダプター",
-        error_detail="Vector Index アダプター設定を backend/.env へ保存できませんでした。",
-    )
-
-
-def _nl2sql_router_settings_data(settings: Settings) -> RouterSettingsData:
-    """Settings から NL2SQL Router アダプター設定の表示用データを作る。"""
-    runtime = router_adapter_runtime_settings(settings)
-    return RouterSettingsData(
-        profile=runtime.profile,
-        default_generation_backend=runtime.default_generation_backend,
-        complexity_threshold=runtime.complexity_threshold,
-        profiles=[
-            RouterProfileStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-            )
-            for status in runtime.profiles
-        ],
-        config_source="runtime",
-    )
-
-
-def _persist_nl2sql_router_settings(settings: Settings) -> None:
-    """NL2SQL Router アダプター設定を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "NL2SQL_ROUTER_PROFILE": settings.nl2sql_router_profile,
-            "NL2SQL_ROUTER_COMPLEXITY_THRESHOLD": str(settings.nl2sql_router_complexity_threshold),
-        },
-        section_comment="# NL2SQL Router アダプター",
-        error_detail="NL2SQL Router アダプター設定を backend/.env へ保存できませんでした。",
-    )
-
-
-def _nl2sql_guardrail_settings_data(settings: Settings) -> Nl2SqlGuardrailSettingsData:
-    """Settings から NL2SQL Guardrail アダプター設定の表示用データを作る。"""
-    runtime = nl2sql_guardrail_runtime_settings(settings)
-    return Nl2SqlGuardrailSettingsData(
-        policy=runtime.policy,
-        enforce_read_only=runtime.enforce_read_only,
-        max_rows=runtime.max_rows,
-        require_object_allowlist=runtime.require_object_allowlist,
-        semantic_verify=runtime.semantic_verify,
-        run_role=runtime.run_role,
-        policies=[
-            Nl2SqlGuardrailPolicyStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-                enforce_read_only=status.enforce_read_only,
-                require_object_allowlist=status.require_object_allowlist,
-                semantic_verify=status.semantic_verify,
-            )
-            for status in runtime.policies
-        ],
-        config_source="runtime",
-    )
-
-
-def _persist_nl2sql_guardrail_settings(settings: Settings) -> None:
-    """NL2SQL Guardrail アダプター設定を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "NL2SQL_GUARDRAIL_POLICY": settings.nl2sql_guardrail_policy,
-            "NL2SQL_GUARDRAIL_MAX_ROWS": str(settings.nl2sql_guardrail_max_rows),
-            "NL2SQL_GUARDRAIL_RUN_ROLE": settings.nl2sql_guardrail_run_role,
-        },
-        section_comment="# NL2SQL Guardrail アダプター",
-        error_detail="NL2SQL Guardrail アダプター設定を backend/.env へ保存できませんでした。",
-    )
-
-
-def _nl2sql_cache_settings_data(settings: Settings) -> CacheSettingsData:
-    """Settings から NL2SQL Cache アダプター設定の表示用データを作る。"""
-    runtime = cache_adapter_runtime_settings(settings)
-    return CacheSettingsData(
-        policy=runtime.policy,
-        cache_nl_to_sql=runtime.cache_nl_to_sql,
-        cache_nl_to_result=runtime.cache_nl_to_result,
-        cache_sql_to_result=runtime.cache_sql_to_result,
-        similarity_threshold=runtime.similarity_threshold,
-        ttl_seconds=runtime.ttl_seconds,
-        policies=[
-            CachePolicyStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-                cache_nl_to_sql=status.cache_nl_to_sql,
-                cache_nl_to_result=status.cache_nl_to_result,
-                cache_sql_to_result=status.cache_sql_to_result,
-            )
-            for status in runtime.policies
-        ],
-        config_source="runtime",
-    )
-
-
-def _persist_nl2sql_cache_settings(settings: Settings) -> None:
-    """NL2SQL Cache アダプター設定を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "NL2SQL_CACHE_POLICY": settings.nl2sql_cache_policy,
-            "NL2SQL_CACHE_SIMILARITY_THRESHOLD": str(settings.nl2sql_cache_similarity_threshold),
-            "NL2SQL_CACHE_TTL_SECONDS": str(settings.nl2sql_cache_ttl_seconds),
-        },
-        section_comment="# NL2SQL Cache アダプター",
-        error_detail="NL2SQL Cache アダプター設定を backend/.env へ保存できませんでした。",
-    )
-
-
-def _nl2sql_pipeline_settings_data(settings: Settings) -> Nl2SqlPipelineSettingsData:
-    """Settings から NL2SQL パイプライン preset 群の表示用データを作る。"""
-    return Nl2SqlPipelineSettingsData(
-        adapters=[
-            PipelineAdapterData(
-                key=runtime.key,
-                settings_field=runtime.settings_field,
-                label=runtime.label,
-                selected=runtime.selected,
-                options=[
-                    PipelineAdapterOptionData(
-                        name=option.name,
-                        origin=option.origin,
-                        recommended_for=list(option.recommended_for),
-                        summary=option.summary,
-                        selected=option.selected,
-                    )
-                    for option in runtime.options
-                ],
-            )
-            for runtime in pipeline_runtime(settings)
-        ],
-        config_source="runtime",
-    )
-
-
-def _persist_nl2sql_pipeline_setting(env_key: str, value: str) -> None:
-    """1 アダプターの preset 選択を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {env_key: value},
-        section_comment="# NL2SQL パイプライン preset アダプター",
-        error_detail="NL2SQL パイプライン preset 設定を backend/.env へ保存できませんでした。",
+        error_detail="検索インデックス設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _generation_settings_data(settings: Settings) -> GenerationSettingsData:
-    """Settings から Generation アダプター設定の表示用データを作る。"""
+    """Settings から回答スタイル設定の表示用データを作る。"""
     runtime = generation_adapter_runtime_settings(settings)
     return GenerationSettingsData(
         profile=runtime.profile,
@@ -2548,17 +2267,17 @@ def _generation_settings_data(settings: Settings) -> GenerationSettingsData:
 
 
 def _persist_generation_settings(settings: Settings) -> None:
-    """Generation アダプター設定を backend/.env へ永続化する。"""
+    """回答スタイル設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_GENERATION_PROFILE": settings.rag_generation_profile},
         section_comment="# Generation アダプター",
-        error_detail="Generation アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="回答スタイル設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
-    """Settings から Guardrail アダプター設定の表示用データを作る。"""
+    """Settings から安全チェック設定の表示用データを作る。"""
     runtime = guardrail_adapter_runtime_settings(settings)
     return GuardrailSettingsData(
         policy=runtime.policy,
@@ -2605,7 +2324,7 @@ def _oci_guardrails_warning_code(settings: Settings) -> str | None:
 
 
 def _persist_guardrail_settings(settings: Settings) -> None:
-    """Guardrail アダプター設定を backend/.env へ永続化する。"""
+    """安全チェック設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {
@@ -2613,12 +2332,12 @@ def _persist_guardrail_settings(settings: Settings) -> None:
             "RAG_GUARDRAIL_BACKEND": settings.rag_guardrail_backend,
         },
         section_comment="# Guardrail アダプター",
-        error_detail="Guardrail アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="安全チェック設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
-    """Settings から Retrieval アダプター設定の表示用データを作る。"""
+    """Settings から検索方法設定の表示用データを作る。"""
     runtime = retrieval_adapter_runtime_settings(settings)
     return RetrievalSettingsData(
         strategy=runtime.strategy,
@@ -2643,17 +2362,17 @@ def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
 
 
 def _persist_retrieval_settings(settings: Settings) -> None:
-    """Retrieval アダプター設定を backend/.env へ永続化する。"""
+    """検索方法設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_RETRIEVAL_STRATEGY": settings.rag_retrieval_strategy},
         section_comment="# Retrieval アダプター",
-        error_detail="Retrieval アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="検索方法設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
-    """Settings から Grounding アダプター設定の表示用データを作る。"""
+    """Settings から根拠確認設定の表示用データを作る。"""
     runtime = grounding_adapter_runtime_settings(settings)
     return GroundingSettingsData(
         pipeline=runtime.pipeline,
@@ -2679,17 +2398,17 @@ def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
 
 
 def _persist_grounding_settings(settings: Settings) -> None:
-    """Grounding アダプター設定を backend/.env へ永続化する。"""
+    """根拠確認設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline},
         section_comment="# Grounding アダプター",
-        error_detail="Grounding アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="根拠確認設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _preprocess_settings_data(settings: Settings) -> PreprocessSettingsData:
-    """Settings から前処理アダプター設定の表示用データを作る。"""
+    """Settings からファイル準備設定の表示用データを作る。"""
     runtime = preprocess_runtime_settings(settings)
     return PreprocessSettingsData(
         profile=runtime.profile,
@@ -2723,22 +2442,22 @@ def _preprocess_settings_candidate(
 
 
 def _apply_preprocess_settings(target: Settings, source: Settings) -> None:
-    """保存済み前処理アダプター設定を現在プロセスへ反映する。"""
+    """保存済みファイル準備設定を現在プロセスへ反映する。"""
     target.rag_preprocess_profile = source.rag_preprocess_profile
 
 
 def _persist_preprocess_settings(settings: Settings) -> None:
-    """前処理アダプター設定を backend/.env へ永続化する。"""
+    """ファイル準備設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_PREPROCESS_PROFILE": settings.rag_preprocess_profile},
         section_comment="# 前処理(Preprocess)アダプター",
-        error_detail="前処理アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="ファイル準備設定を backend/.env へ保存できませんでした。",
     )
 
 
 def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
-    """Settings から Chunking アダプター設定の表示用データを作る。"""
+    """Settings から文書分割設定の表示用データを作る。"""
     runtime = chunking_runtime_settings(settings)
     return ChunkingSettingsData(
         strategy=runtime.strategy,
@@ -2780,7 +2499,7 @@ def _chunking_settings_candidate(
 
 
 def _apply_chunking_settings(target: Settings, source: Settings) -> None:
-    """保存済み Chunking アダプター設定を現在プロセスへ反映する。"""
+    """保存済み文書分割設定を現在プロセスへ反映する。"""
     target.rag_chunking_strategy = source.rag_chunking_strategy
     target.rag_chunk_size = source.rag_chunk_size
     target.rag_chunk_overlap = source.rag_chunk_overlap
@@ -2790,7 +2509,7 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
 
 
 def _persist_chunking_settings(settings: Settings) -> None:
-    """Chunking アダプター設定を backend/.env へ永続化する。"""
+    """文書分割設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {
@@ -2802,7 +2521,7 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
         },
         section_comment="# Chunking アダプター",
-        error_detail="Chunking アダプター設定を backend/.env へ保存できませんでした。",
+        error_detail="文書分割設定を backend/.env へ保存できませんでした。",
     )
 
 

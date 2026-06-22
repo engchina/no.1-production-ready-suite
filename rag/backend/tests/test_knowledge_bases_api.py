@@ -8,7 +8,7 @@ import pytest
 from app.api.routes import documents as documents_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
 from app.main import app
-from app.rag.kb_adapter_config import parse_adapter_config
+from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig, parse_adapter_config
 from app.schemas.document import DocumentDetail, DocumentSummary, FileStatus
 from app.schemas.knowledge_base import (
     KnowledgeBaseDetail,
@@ -45,6 +45,7 @@ class FakeKnowledgeBaseOracle:
         default_search_mode: SearchMode = SearchMode.HYBRID,
         retrieval_config: dict[str, object] | None = None,
     ) -> KnowledgeBaseDetail:
+        adapter_config = parse_adapter_config(retrieval_config)
         detail = KnowledgeBaseDetail(
             id=f"kb-{uuid4().hex[:8]}",
             name=name,
@@ -52,7 +53,8 @@ class FakeKnowledgeBaseOracle:
             status=KnowledgeBaseStatus.ACTIVE,
             default_search_mode=default_search_mode,
             retrieval_config=retrieval_config or {},
-            adapter_config=parse_adapter_config(retrieval_config),
+            adapter_config=adapter_config,
+            legacy_query_config_ignored=adapter_config.query != KnowledgeBaseQueryConfig(),
             document_count=0,
             indexed_document_count=0,
             error_document_count=0,
@@ -111,6 +113,11 @@ class FakeKnowledgeBaseOracle:
         if detail is None:
             raise KeyError(knowledge_base_id)
         fields = update_fields or set()
+        adapter_config = (
+            parse_adapter_config(retrieval_config)
+            if "retrieval_config" in fields
+            else detail.adapter_config
+        )
         updated = detail.model_copy(
             update={
                 "name": name if "name" in fields and name is not None else detail.name,
@@ -125,10 +132,9 @@ class FakeKnowledgeBaseOracle:
                     if "retrieval_config" in fields and retrieval_config is not None
                     else detail.retrieval_config
                 ),
-                "adapter_config": (
-                    parse_adapter_config(retrieval_config)
-                    if "retrieval_config" in fields
-                    else detail.adapter_config
+                "adapter_config": adapter_config,
+                "legacy_query_config_ignored": (
+                    adapter_config.query != KnowledgeBaseQueryConfig()
                 ),
                 "updated_at": datetime(2026, 1, 2, tzinfo=UTC),
             }
@@ -367,7 +373,7 @@ def test_archived_knowledge_base_rejects_assignment(
 def test_create_knowledge_base_with_adapter_config(
     fake_oracle: FakeKnowledgeBaseOracle,
 ) -> None:
-    """adapter_config を指定して作成すると detail に型付きで戻る。"""
+    """adapter_config を指定して作成すると構築設定だけが detail に型付きで戻る。"""
     resp = client.post(
         "/api/knowledge-bases",
         json={
@@ -383,7 +389,8 @@ def test_create_knowledge_base_with_adapter_config(
     data = resp.json()["data"]
     assert data["adapter_config"]["ingestion"]["chunking_strategy"] == "markdown_heading"
     assert data["adapter_config"]["ingestion"]["chunk_size"] == 1200
-    assert data["adapter_config"]["query"]["generation_profile"] == "detailed_cited"
+    assert data["adapter_config"]["query"]["generation_profile"] is None
+    assert data["legacy_query_config_ignored"] is False
     # 未指定フィールドはグローバル継承を表す None で戻る。
     assert data["adapter_config"]["ingestion"]["parser_adapter_backend"] is None
     assert data["adapter_config"]["query"]["retrieval_strategy"] is None
@@ -419,6 +426,31 @@ def test_patch_knowledge_base_replaces_adapter_config(
     get_resp = client.get(f"/api/knowledge-bases/{created['id']}")
     reloaded = get_resp.json()["data"]["adapter_config"]
     assert reloaded["ingestion"]["chunking_strategy"] == "page_level"
+
+
+def test_knowledge_base_legacy_query_config_is_flagged(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """既存 retrieval_config に残る query は読めるが legacy ignored として返る。"""
+    created = client.post(
+        "/api/knowledge-bases",
+        json={
+            "name": "Legacy KB",
+            "retrieval_config": {"query": {"generation_profile": "detailed_cited"}},
+        },
+    ).json()["data"]
+
+    assert created["adapter_config"]["query"]["generation_profile"] == "detailed_cited"
+    assert created["legacy_query_config_ignored"] is True
+
+    patched = client.patch(
+        f"/api/knowledge-bases/{created['id']}",
+        json={"adapter_config": {"ingestion": {"chunking_strategy": "page_level"}}},
+    ).json()["data"]
+
+    assert patched["adapter_config"]["ingestion"]["chunking_strategy"] == "page_level"
+    assert patched["adapter_config"]["query"]["generation_profile"] is None
+    assert patched["legacy_query_config_ignored"] is False
 
 
 def test_create_knowledge_base_rejects_invalid_adapter_config(

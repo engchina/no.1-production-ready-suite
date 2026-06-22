@@ -96,7 +96,7 @@ test("DB 利用可能時は本来のページを表示する", async ({ page }) 
 
   await page.goto("/knowledge-bases");
 
-  await expect(page.getByRole("heading", { name: "知識ベース管理" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ナレッジベース" })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "データベースを起動してください" })
   ).toHaveCount(0);

@@ -27,7 +27,7 @@ const PIPELINE_ORDER: PostRetrievalPipelineName[] = [
   "full_governed",
 ];
 
-/** Grounding アダプター(検索後処理)の runtime 設定を管理する設定画面。 */
+/** 根拠確認の現在設定を管理する設定画面。 */
 export function GroundingSettingsClient() {
   const query = useGroundingSettings();
   const save = useUpdateGroundingSettings();
@@ -157,7 +157,10 @@ export function GroundingSettingsClient() {
               label={t("settings.grounding.expansion")}
               value={expansionLabel(settings.expansion_mode)}
             />
-            <RuntimeFact label={t("settings.grounding.source")} value="runtime" />
+            <RuntimeFact
+              label={t("settings.grounding.source")}
+              value={t("settings.common.currentConfig")}
+            />
           </dl>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">

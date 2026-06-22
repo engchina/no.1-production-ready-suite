@@ -104,7 +104,7 @@ def test_unknown_graph_profile_is_rejected() -> None:
 
 def test_agentic_profile_defaults_to_off() -> None:
     """Agentic アダプターの既定 off は LLM 計画なし(現行挙動)と一致させる。"""
-    assert Settings().rag_agentic_profile == "off"
+    assert Settings(_env_file=None).rag_agentic_profile == "off"
 
 
 def test_unknown_agentic_profile_is_rejected() -> None:

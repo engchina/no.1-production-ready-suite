@@ -25,7 +25,7 @@ const PROFILE_ORDER: GenerationProfileName[] = [
   "bilingual_ja_en",
 ];
 
-/** Generation アダプター(回答生成プロファイル)の runtime 設定を管理する設定画面。 */
+/** 回答スタイルの現在設定を管理する設定画面。 */
 export function GenerationSettingsClient() {
   const query = useGenerationSettings();
   const save = useUpdateGenerationSettings();
@@ -157,7 +157,10 @@ export function GenerationSettingsClient() {
               label={t("settings.generation.structuredOutput")}
               value={settings.structured_output ? "JSON" : "—"}
             />
-            <RuntimeFact label={t("settings.generation.source")} value="runtime" />
+            <RuntimeFact
+              label={t("settings.generation.source")}
+              value={t("settings.common.currentConfig")}
+            />
           </dl>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">

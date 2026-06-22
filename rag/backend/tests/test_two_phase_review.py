@@ -12,7 +12,6 @@ from app.config import get_settings
 from app.main import app
 from app.rag import ingestion as ingestion_module
 from app.rag.audit import record_rag_ingestion_audit
-from app.rag.variant_keys import compute_chunk_set_id, compute_extraction_id
 from app.rag.variant_planner import plan_document_materializations
 from tests.support import AsgiTestClient
 
@@ -228,126 +227,45 @@ def test_multiple_kb_configs_materialize_separate_chunk_sets(monkeypatch: Monkey
     materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
     # 2 つの取込設定 → 2 chunk_set が共存。
     assert len(materialized) == 2
+    detail = _get_document(document_id)
+    configs = dict(asyncio.run(oracle.list_document_knowledge_base_configs(document_id)))
+    plan = plan_document_materializations(
+        cast(str, detail["content_sha256"]), get_settings(), configs
+    )
+    # chunking だけの差分なので extraction は 1 つを共有する。
+    assert len(plan.extraction_recipes) == 1
     # 各 chunk_set はちょうど 1 KB に bind(materialization が KB ごとに分裂)。
     for chunk_set_id in materialized:
         assert asyncio.run(oracle.chunk_set_refcount(chunk_set_id)) == 1
 
 
-def test_gate_off_parser_axis_materializes_separate_extractions() -> None:
-    """gate-off で parser 軸が違う 2 KB は別 extraction を materialize する(#6 P3 の核心)。
-
-    parser グループごとに extract 1 回 → 各 chunk_set がその親抽出を指す。外部 parser 未導入でも
-    parser registry が fallback するため抽出は produce され、extraction_id は parser config で別。
-    """
-    document_id = _upload_sample()
-    detail = _get_document(document_id)
-    content_sha256 = cast(str, detail["content_sha256"])
-
-    # parser を docling / marker に上書きした 2 KB を作り、文書を両方へ所属させる。
-    for kb_name, parser in (("docling-KB", "docling"), ("marker-KB", "marker")):
-        kb_resp = client.post(
-            "/api/knowledge-bases",
-            json={
-                "name": kb_name,
-                "adapter_config": {"ingestion": {"parser_adapter_backend": parser}},
-            },
-        )
-        assert kb_resp.status_code == 200
-        kb_id = kb_resp.json()["data"]["id"]
-        assign_resp = client.post(
-            f"/api/knowledge-bases/{kb_id}/documents", json={"document_ids": [document_id]}
-        )
-        assert assign_resp.status_code == 200
-
-    # gate-off(既定): extract+index を 1 ジョブで実行(抽出グループごとに extract)。
-    job = _enqueue_extract(document_id)
-    _run_job(cast(str, job["id"]))
-    assert _get_document(document_id)["status"] == "INDEXED"
-
-    settings = get_settings()
-    docling = settings.model_copy(update={"rag_parser_adapter_backend": "docling"})
-    marker = settings.model_copy(update={"rag_parser_adapter_backend": "marker"})
-    ex_docling = compute_extraction_id(content_sha256, docling)
-    ex_marker = compute_extraction_id(content_sha256, marker)
-
-    oracle = OracleClient()
-    extraction_ids = asyncio.run(oracle.list_document_extraction_ids(document_id))
-    # parser ごとに別抽出が materialize されている(これが #6 で潰れていた parser 軸)。
-    assert ex_docling != ex_marker
-    assert ex_docling in extraction_ids
-    assert ex_marker in extraction_ids
-
-    # chunk_set はその親抽出に紐づく(reconcile が chunk_set.extraction_id をセット)。
-    chunk_set = asyncio.run(oracle.get_chunk_set(compute_chunk_set_id(content_sha256, docling)))
-    assert chunk_set is not None
-    assert chunk_set["extraction_id"] == ex_docling
-
-    # variant 表示 API は chunk_set ごとに親 extraction_id と parser を返す(P5 の 2 階層 UI 用)。
-    listed = {
-        cs["chunk_set_id"]: cs for cs in asyncio.run(oracle.list_document_chunk_sets(document_id))
-    }
-    docling_cs = listed[compute_chunk_set_id(content_sha256, docling)]
-    assert docling_cs["extraction_id"] == ex_docling
-    assert docling_cs["parser"] == "docling"
-
-
-def test_gate_on_parser_axis_extracts_non_owning_after_approve(monkeypatch: MonkeyPatch) -> None:
-    """gate-ON で owning のみレビュー、承認後に他 parser グループを自動抽出する(#6 P4 案 A)。
-
-    REVIEW 時点では owning(既定 parser)抽出のみ存在し、承認後に非 owning parser グループが
-    原本を再取得して自動抽出・materialize される(派生自動)。
-    """
+def test_approve_rejects_review_only_extraction_recipe_split(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """REVIEW 後に前処理/Parser が分岐した場合、保存済み抽出の静かな再利用は 409 で止める。"""
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
-    detail = _get_document(document_id)
-    content_sha256 = cast(str, detail["content_sha256"])
+    _extract_to_review(document_id)
 
-    settings = get_settings()
-    # 既定(owning)parser と必ず異なる parser を 2 つ目の KB に与える。
-    other_parser = "marker" if settings.rag_parser_adapter_backend != "marker" else "docling"
     kb_resp = client.post(
         "/api/knowledge-bases",
         json={
-            "name": "他parser-KB",
-            "adapter_config": {"ingestion": {"parser_adapter_backend": other_parser}},
+            "name": "正規化KB",
+            "adapter_config": {"ingestion": {"preprocess_profile": "text_normalize"}},
         },
     )
     assert kb_resp.status_code == 200
-    kb_id = kb_resp.json()["data"]["id"]
-    assign_resp = client.post(
-        f"/api/knowledge-bases/{kb_id}/documents", json={"document_ids": [document_id]}
+    kb_b = kb_resp.json()["data"]["id"]
+    assert (
+        client.post(
+            f"/api/knowledge-bases/{kb_b}/documents", json={"document_ids": [document_id]}
+        ).status_code
+        == 200
     )
-    assert assign_resp.status_code == 200
 
-    owning_ex = compute_extraction_id(content_sha256, settings)
-    other = settings.model_copy(update={"rag_parser_adapter_backend": other_parser})
-    other_ex = compute_extraction_id(content_sha256, other)
-    assert owning_ex != other_ex
-
-    # EXTRACT → REVIEW: owning(既定 parser)だけ抽出されレビュー待ちになる。
-    _extract_to_review(document_id)
-    assert _get_document(document_id)["status"] == "REVIEW"
-
-    oracle = OracleClient()
-    review_extractions = asyncio.run(oracle.list_document_extraction_ids(document_id))
-    assert owning_ex in review_extractions
-    # 案 A の核心: 非 owning parser はレビュー時点ではまだ抽出されていない。
-    assert other_ex not in review_extractions
-
-    # 承認 → 非 owning グループが原本再取得で自動抽出され materialize される。
     approve_resp = client.post(f"/api/documents/{document_id}/approve")
-    assert approve_resp.status_code == 200
-    _run_job(cast(str, approve_resp.json()["data"]["id"]))
-    assert _get_document(document_id)["status"] == "INDEXED"
-
-    indexed_extractions = asyncio.run(oracle.list_document_extraction_ids(document_id))
-    assert owning_ex in indexed_extractions
-    assert other_ex in indexed_extractions  # 承認後に派生自動抽出された
-
-    # 非 owning chunk_set がその親抽出に紐づく(reconcile が extraction_id をセット)。
-    chunk_set = asyncio.run(oracle.get_chunk_set(compute_chunk_set_id(content_sha256, other)))
-    assert chunk_set is not None
-    assert chunk_set["extraction_id"] == other_ex
+    assert approve_resp.status_code == 409
+    assert "再取込" in approve_resp.json()["error_messages"][0]
 
 
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
@@ -492,6 +410,45 @@ def test_gate_disabled_multiple_kb_configs_materialize_separate_chunk_sets(
         assert asyncio.run(oracle.chunk_set_refcount(chunk_set_id)) == 1
 
 
+def test_gate_disabled_extraction_recipe_split_reextracts_from_source(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """原文 bytes がある取込経路では、前処理差分ごとに extract+index を実行する。"""
+    monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
+    document_id = _upload_sample()
+
+    kb_resp = client.post(
+        "/api/knowledge-bases",
+        json={
+            "name": "正規化KB-ingest",
+            "adapter_config": {"ingestion": {"preprocess_profile": "text_normalize"}},
+        },
+    )
+    assert kb_resp.status_code == 200
+    kb_b = kb_resp.json()["data"]["id"]
+    assert (
+        client.post(
+            f"/api/knowledge-bases/{kb_b}/documents", json={"document_ids": [document_id]}
+        ).status_code
+        == 200
+    )
+
+    job = _enqueue_extract(document_id)
+    _run_job(cast(str, job["id"]))
+    detail = _get_document(document_id)
+    assert detail["status"] == "INDEXED"
+
+    oracle = OracleClient()
+    materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
+    assert len(materialized) == 2
+    configs = dict(asyncio.run(oracle.list_document_knowledge_base_configs(document_id)))
+    plan = plan_document_materializations(
+        cast(str, detail["content_sha256"]), get_settings(), configs
+    )
+    assert len(plan.extraction_recipes) == 2
+    assert len(plan.chunk_sets_by_extraction_recipe()) == 2
+
+
 def test_multi_chunk_set_records_single_success_audit(monkeypatch: MonkeyPatch) -> None:
     """複数 chunk_set を materialize しても成功 audit は 1 回(1 文書 1 論理取込に集約)。
 
@@ -534,10 +491,25 @@ def test_multi_chunk_set_records_single_success_audit(monkeypatch: MonkeyPatch) 
 def test_document_chunk_sets_endpoint_lists_variants(monkeypatch: MonkeyPatch) -> None:
     """/chunk-sets が文書の複数 chunk_set(variant)を状態/件数/配信 KB つきで返す。"""
     monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
-    document_id = _upload_sample()
+    document_id = _upload_sample(
+        "# 第1章 概要\n\n"
+        "社内規程の概要を説明します。\n\n"
+        "## 1.1 経費申請\n\n"
+        "部門長の承認後、経理部が確認します。\n"
+    )
     kb_resp = client.post(
         "/api/knowledge-bases",
-        json={"name": "高chunk-KB-csapi", "adapter_config": {"ingestion": {"chunk_size": 3500}}},
+        json={
+            "name": "高chunk-KB-csapi",
+            "adapter_config": {
+                "ingestion": {
+                    "chunk_size": 3500,
+                    "graph_profile": "entities",
+                    "field_extraction_enabled": True,
+                    "navigation_summary_enabled": True,
+                }
+            },
+        },
     )
     assert kb_resp.status_code == 200
     kb_b = kb_resp.json()["data"]["id"]
@@ -559,9 +531,54 @@ def test_document_chunk_sets_endpoint_lists_variants(monkeypatch: MonkeyPatch) -
     assert len(chunk_sets) == 2
     for chunk_set in chunk_sets:
         assert chunk_set["status"] == "INDEXED"
+        assert chunk_set["extraction_recipe_id"].startswith("er_")
+        assert chunk_set["extraction_status"] == "materialized"
         assert chunk_set["chunk_count"] > 0
         # 各 variant はいずれかの KB に配信 binding される。
         assert chunk_set["serving_knowledge_base_ids"]
+        assert set(chunk_set["layer_statuses"]) == {"metadata", "graph", "navigation"}
     # 全 binding KB の和集合に追加した kb_b が含まれる。
     all_kbs = {kb for chunk_set in chunk_sets for kb in chunk_set["knowledge_base_ids"]}
     assert kb_b in all_kbs
+    planned_layers = [
+        (name, status)
+        for chunk_set in chunk_sets
+        for name, status in chunk_set["layer_statuses"].items()
+        if status["requested"]
+    ]
+    assert planned_layers
+    assert all(status["layer_id"] for _name, status in planned_layers)
+    assert any(
+        name == "navigation" and status["status"] == "materialized"
+        for name, status in planned_layers
+    )
+    assert any(
+        name == "graph" and status["status"] == "planned_only"
+        for name, status in planned_layers
+    )
+
+    metadata_owner = next(
+        chunk_set
+        for chunk_set in chunk_sets
+        if chunk_set["layer_statuses"]["metadata"]["requested"]
+    )
+    metadata_status = metadata_owner["layer_statuses"]["metadata"]
+    oracle = OracleClient()
+    asyncio.run(
+        oracle.upsert_artifact_layer(
+            layer_id=metadata_status["layer_id"],
+            layer_kind="metadata",
+            parent_chunk_set_id=metadata_owner["chunk_set_id"],
+            document_id=document_id,
+            requested=True,
+            status="materialized",
+            reason="項目抽出は保存済み抽出 artifact から実体化済みです。",
+        )
+    )
+    materialized_resp = client.get(f"/api/documents/{document_id}/chunk-sets")
+    assert materialized_resp.status_code == 200
+    materialized_sets = cast(list[dict[str, Any]], materialized_resp.json()["data"])
+    assert any(
+        chunk_set["layer_statuses"]["metadata"]["status"] == "materialized"
+        for chunk_set in materialized_sets
+    )

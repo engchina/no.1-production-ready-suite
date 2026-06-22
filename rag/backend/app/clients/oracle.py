@@ -35,7 +35,11 @@ from app.rag.graph_index import (
     GraphIndex,
     GraphRelationship,
 )
-from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig, parse_adapter_config
+from app.rag.kb_adapter_config import (
+    KnowledgeBaseAdapterConfig,
+    KnowledgeBaseQueryConfig,
+    parse_adapter_config,
+)
 from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
@@ -63,7 +67,7 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseStatus,
     KnowledgeBaseSummary,
 )
-from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
+from app.schemas.search import RetrievedChunk, SearchMode
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
 SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
@@ -71,7 +75,6 @@ type MetadataValue = JsonValue
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 T = TypeVar("T")
 DocumentT = TypeVar("DocumentT", bound=DocumentSummary)
-SELECT_AI_UNAVAILABLE_ERROR = "Select AI は ORACLE_SELECT_AI_PROFILE の設定が必要です。"
 DEFAULT_KNOWLEDGE_BASE_NAME = "既定ナレッジベース"
 
 
@@ -192,7 +195,7 @@ class StoredKnowledgeBase:
 
 @dataclass
 class StoredBusinessView:
-    """業務アシスタント(Business View)行。"""
+    """業務ビュー(Business View)行。"""
 
     id: str
     name: str
@@ -241,12 +244,6 @@ class LocalOracleStore:
 _LOCAL_STORE = LocalOracleStore()
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
 _DB_TEST_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="oracle_db_test_")
-
-
-class SelectAiUnavailableError(RuntimeError):
-    """Select AI を実行できる Oracle 設定がない。"""
-
-    safe_for_user = True
 
 
 class DocumentDeleteBlockedByRunningIngestionError(RuntimeError):
@@ -409,39 +406,6 @@ class OracleClient:
             anchors,
             max_chunks_per_anchor=max_chunks_per_anchor,
         )
-
-    async def select_ai(
-        self,
-        query: str,
-        *,
-        action: SelectAiAction = SelectAiAction.SHOWSQL,
-        profile_name: str | None = None,
-        max_result_chars: int | None = None,
-    ) -> str:
-        """Oracle Select AI profile で自然言語 query を SQL/結果へ変換する。"""
-        resolved_profile = (profile_name or self._settings.oracle_select_ai_profile).strip()
-        if not resolved_profile:
-            raise SelectAiUnavailableError(SELECT_AI_UNAVAILABLE_ERROR)
-        result_limit = max_result_chars or self._settings.oracle_select_ai_max_result_chars
-        row = await self._fetch_one(
-            """
-            SELECT DBMS_CLOUD_AI.GENERATE(
-                prompt       => :prompt,
-                profile_name => :profile_name,
-                action       => :action
-            ) AS result_text
-            FROM dual
-            """,
-            {
-                "prompt": query,
-                "profile_name": resolved_profile,
-                "action": action.value,
-            },
-        )
-        if row is None:
-            return ""
-        result = row.get("result_text")
-        return str(result or "")[:result_limit]
 
     async def create_document(
         self,
@@ -611,16 +575,17 @@ class OracleClient:
         quality: Mapping[str, object] | None = None,
         status: str = "EXTRACTED",
     ) -> None:
-        """抽出(extraction 層)を冪等に作成/更新する。preprocess×parser ごとに 1 行。"""
+        """旧 API 互換: extraction_id を extraction_recipe_id として保存する。"""
         tenant = current_audit_request_context().tenant_id_hash
+        normalized_status = _legacy_extraction_status(status)
         binds = {
-            "extraction_id": extraction_id,
+            "extraction_recipe_id": extraction_id,
             "document_id": document_id,
             "tenant_id_hash": tenant,
             "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
             "extraction_json": _json_dumps(extraction.to_document_payload()),
-            "quality_json": _json_dumps(quality) if quality is not None else None,
-            "status": status,
+            "metrics_json": _json_dumps(quality) if quality is not None else None,
+            "status": normalized_status,
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -628,19 +593,24 @@ class OracleClient:
                 connection,
                 """
                 MERGE INTO rag_document_extractions t
-                USING (SELECT :extraction_id AS extraction_id FROM dual) s
-                ON (t.extraction_id = s.extraction_id)
+                USING (
+                    SELECT :document_id AS document_id,
+                           :extraction_recipe_id AS extraction_recipe_id
+                    FROM dual
+                ) s
+                ON (t.document_id = s.document_id
+                    AND t.extraction_recipe_id = s.extraction_recipe_id)
                 WHEN MATCHED THEN UPDATE SET
                     t.extraction_json = :extraction_json,
                     t.recipe_subset = :recipe_subset,
-                    t.quality_json = :quality_json,
+                    t.metrics_json = :metrics_json,
                     t.status = :status,
                     t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
-                    (extraction_id, document_id, tenant_id_hash, recipe_subset,
-                     extraction_json, quality_json, status)
-                    VALUES (:extraction_id, :document_id, :tenant_id_hash, :recipe_subset,
-                            :extraction_json, :quality_json, :status)
+                    (document_id, extraction_recipe_id, tenant_id_hash, recipe_subset,
+                     extraction_json, metrics_json, status)
+                    VALUES (:document_id, :extraction_recipe_id, :tenant_id_hash, :recipe_subset,
+                            :extraction_json, :metrics_json, :status)
                 """,
                 binds,
             )
@@ -651,8 +621,13 @@ class OracleClient:
         """抽出 1 件(status / recipe_subset / extraction payload)を返す。無ければ None。"""
         row = await self._fetch_one(
             """
-            SELECT extraction_id, document_id, status, recipe_subset, extraction_json
-            FROM rag_document_extractions WHERE extraction_id = :extraction_id
+            SELECT extraction_recipe_id AS extraction_id,
+                   document_id,
+                   status,
+                   recipe_subset,
+                   extraction_json
+            FROM rag_document_extractions
+            WHERE extraction_recipe_id = :extraction_id
             """,
             {"extraction_id": extraction_id},
         )
@@ -663,14 +638,18 @@ class OracleClient:
     async def list_document_extraction_ids(self, document_id: str) -> list[str]:
         """文書が持つ extraction_id 一覧(diff/GC 入力)。"""
         rows = await self._fetch_all(
-            "SELECT extraction_id FROM rag_document_extractions WHERE document_id = :document_id",
+            """
+            SELECT extraction_recipe_id
+            FROM rag_document_extractions
+            WHERE document_id = :document_id
+            """,
             {"document_id": document_id},
         )
         return [str(next(iter(row.values()))) for row in rows]
 
     async def mark_document_extraction(self, *, extraction_id: str, status: str) -> None:
         """抽出の status(EXTRACTING/EXTRACTED/ERROR)を更新する。"""
-        binds = {"extraction_id": extraction_id, "status": status}
+        binds = {"extraction_id": extraction_id, "status": _legacy_extraction_status(status)}
 
         def operation(connection: OracleConnectionProtocol) -> None:
             _execute(
@@ -678,7 +657,7 @@ class OracleClient:
                 """
                 UPDATE rag_document_extractions
                 SET status = :status, updated_at = SYSTIMESTAMP
-                WHERE extraction_id = :extraction_id
+                WHERE extraction_recipe_id = :extraction_id
                 """,
                 binds,
             )
@@ -721,7 +700,7 @@ class OracleClient:
         keep = list(dict.fromkeys(keep_extraction_ids))
         if not keep:
             return []
-        keep_in_sql, keep_binds = _oracle_in_predicate("extraction_id", "keep_ex", keep)
+        keep_in_sql, keep_binds = _oracle_in_predicate("extraction_recipe_id", "keep_ex", keep)
         binds: dict[str, object] = {"document_id": document_id, **keep_binds}
 
         def operation(connection: OracleConnectionProtocol) -> list[str]:
@@ -729,7 +708,7 @@ class OracleClient:
                 connection,
                 _render_sql(
                     """
-                    SELECT extraction_id FROM rag_document_extractions
+                    SELECT extraction_recipe_id FROM rag_document_extractions
                     WHERE document_id = :document_id AND NOT ({keep_in_sql})
                     """,
                     keep_in_sql=keep_in_sql,
@@ -757,21 +736,21 @@ class OracleClient:
         *,
         chunk_set_id: str,
         document_id: str,
+        extraction_recipe_id: str | None = None,
         recipe_subset: Mapping[str, object] | None = None,
-        extraction_id: str | None = None,
         status: str = "INGESTING",
     ) -> None:
         """chunk_set(chunk text/embedding 層)を冪等に作成する。既存なら updated_at のみ更新。
 
-        ``extraction_id`` を渡すと親抽出への所属を記録する(NULL なら既存値を保持)。
+        ``extraction_recipe_id`` を渡すと親抽出 recipe への所属を記録する。
         """
         tenant = current_audit_request_context().tenant_id_hash
         binds = {
             "chunk_set_id": chunk_set_id,
             "document_id": document_id,
+            "extraction_recipe_id": extraction_recipe_id,
             "tenant_id_hash": tenant,
             "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
-            "extraction_id": extraction_id,
             "status": status,
         }
 
@@ -783,13 +762,14 @@ class OracleClient:
                 USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
                 ON (t.chunk_set_id = s.chunk_set_id)
                 WHEN MATCHED THEN UPDATE SET
-                    t.extraction_id = NVL(:extraction_id, t.extraction_id),
+                    t.extraction_recipe_id =
+                        COALESCE(:extraction_recipe_id, t.extraction_recipe_id),
                     t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
-                    (chunk_set_id, document_id, tenant_id_hash, recipe_subset,
-                     extraction_id, status)
-                    VALUES (:chunk_set_id, :document_id, :tenant_id_hash, :recipe_subset,
-                            :extraction_id, :status)
+                    (chunk_set_id, document_id, extraction_recipe_id, tenant_id_hash,
+                     recipe_subset, status)
+                    VALUES (:chunk_set_id, :document_id, :extraction_recipe_id, :tenant_id_hash,
+                            :recipe_subset, :status)
                 """,
                 binds,
             )
@@ -833,7 +813,8 @@ class OracleClient:
         """chunk_set の状態(status/件数/親 extraction_id)を返す。キーは小文字へ正規化。"""
         row = await self._fetch_one(
             """
-            SELECT chunk_set_id, document_id, extraction_id, status, chunk_count, vector_count
+            SELECT chunk_set_id, document_id, extraction_recipe_id,
+                   status, chunk_count, vector_count
             FROM rag_chunk_sets WHERE chunk_set_id = :chunk_set_id
             """,
             {"chunk_set_id": chunk_set_id},
@@ -841,6 +822,172 @@ class OracleClient:
         if row is None:
             return None
         return {str(key).lower(): value for key, value in row.items()}
+
+    async def upsert_document_extraction_artifact(
+        self,
+        *,
+        document_id: str,
+        extraction_recipe_id: str,
+        source_sha256: str | None,
+        recipe_subset: Mapping[str, object] | None = None,
+        extraction: Mapping[str, object] | None = None,
+        status: str = "planned_only",
+        reason: str | None = None,
+        metrics: Mapping[str, object] | None = None,
+    ) -> None:
+        """extraction recipe 単位の抽出 artifact 状態を冪等に保存する。"""
+        tenant = current_audit_request_context().tenant_id_hash
+        binds = {
+            "document_id": document_id,
+            "extraction_recipe_id": extraction_recipe_id,
+            "source_sha256": source_sha256,
+            "tenant_id_hash": tenant,
+            "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
+            "extraction_json": _json_dumps(extraction) if extraction is not None else None,
+            "status": status,
+            "reason": reason,
+            "metrics_json": _json_dumps(metrics) if metrics is not None else None,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_document_extractions t
+                USING (
+                    SELECT :document_id AS document_id,
+                           :extraction_recipe_id AS extraction_recipe_id
+                    FROM dual
+                ) s
+                ON (t.document_id = s.document_id
+                    AND t.extraction_recipe_id = s.extraction_recipe_id)
+                WHEN MATCHED THEN UPDATE SET
+                    t.source_sha256 = :source_sha256,
+                    t.recipe_subset = :recipe_subset,
+                    t.extraction_json = :extraction_json,
+                    t.status = :status,
+                    t.reason = :reason,
+                    t.metrics_json = :metrics_json,
+                    t.updated_at = SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT
+                    (document_id, extraction_recipe_id, source_sha256, tenant_id_hash,
+                     recipe_subset, extraction_json, status, reason, metrics_json)
+                    VALUES
+                    (:document_id, :extraction_recipe_id, :source_sha256, :tenant_id_hash,
+                     :recipe_subset, :extraction_json, :status, :reason, :metrics_json)
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
+    async def get_document_extraction_artifact(
+        self,
+        *,
+        document_id: str,
+        extraction_recipe_id: str,
+    ) -> dict[str, object] | None:
+        """指定 extraction recipe の永続状態を返す。"""
+        row = await self._fetch_one(
+            """
+            SELECT document_id, extraction_recipe_id, source_sha256, status, reason,
+                   recipe_subset, extraction_json, metrics_json
+            FROM rag_document_extractions
+            WHERE document_id = :document_id
+              AND extraction_recipe_id = :extraction_recipe_id
+            """,
+            {"document_id": document_id, "extraction_recipe_id": extraction_recipe_id},
+        )
+        if row is None:
+            return None
+        normalized = {str(key).lower(): value for key, value in row.items()}
+        normalized["recipe_subset"] = _json_loads(normalized.get("recipe_subset"))
+        normalized["extraction_json"] = _json_loads(normalized.get("extraction_json"))
+        normalized["metrics_json"] = _json_loads(normalized.get("metrics_json"))
+        return normalized
+
+    async def upsert_artifact_layer(
+        self,
+        *,
+        layer_id: str,
+        layer_kind: str,
+        parent_chunk_set_id: str,
+        document_id: str,
+        requested: bool,
+        status: str,
+        reason: str | None = None,
+        metrics: Mapping[str, object] | None = None,
+    ) -> None:
+        """chunk_set 派生 layer の実体化状態を保存する。"""
+        tenant = current_audit_request_context().tenant_id_hash
+        binds = {
+            "layer_id": layer_id,
+            "layer_kind": layer_kind,
+            "parent_chunk_set_id": parent_chunk_set_id,
+            "document_id": document_id,
+            "tenant_id_hash": tenant,
+            "requested": 1 if requested else 0,
+            "status": status,
+            "reason": reason,
+            "metrics_json": _json_dumps(metrics) if metrics is not None else None,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_artifact_layers t
+                USING (SELECT :layer_id AS layer_id FROM dual) s
+                ON (t.layer_id = s.layer_id)
+                WHEN MATCHED THEN UPDATE SET
+                    t.layer_kind = :layer_kind,
+                    t.parent_chunk_set_id = :parent_chunk_set_id,
+                    t.document_id = :document_id,
+                    t.requested = :requested,
+                    t.status = :status,
+                    t.reason = :reason,
+                    t.metrics_json = :metrics_json,
+                    t.updated_at = SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT
+                    (layer_id, layer_kind, parent_chunk_set_id, document_id, tenant_id_hash,
+                     requested, status, reason, metrics_json)
+                    VALUES
+                    (:layer_id, :layer_kind, :parent_chunk_set_id, :document_id, :tenant_id_hash,
+                     :requested, :status, :reason, :metrics_json)
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
+    async def list_artifact_layers_for_chunk_sets(
+        self,
+        chunk_set_ids: Sequence[str],
+    ) -> dict[str, dict[str, object]]:
+        """chunk_set 群に紐づく layer 状態を layer_id keyed で返す。"""
+        ids = list(dict.fromkeys(chunk_set_ids))
+        if not ids:
+            return {}
+        in_sql, binds = _oracle_in_predicate("parent_chunk_set_id", "cs", ids)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+                SELECT layer_id, layer_kind, parent_chunk_set_id, requested, status, reason,
+                       metrics_json
+                FROM rag_artifact_layers
+                WHERE {in_sql}
+                """,
+                in_sql=in_sql,
+            ),
+            binds,
+        )
+        result: dict[str, dict[str, object]] = {}
+        for row in rows:
+            normalized = {str(key).lower(): value for key, value in row.items()}
+            normalized["requested"] = int(str(normalized.get("requested") or 0)) == 1
+            normalized["metrics_json"] = _json_loads(normalized.get("metrics_json"))
+            result[str(normalized["layer_id"])] = normalized
+        return result
 
     async def list_document_knowledge_base_configs(
         self, document_id: str
@@ -891,15 +1038,17 @@ class OracleClient:
         rows = await self._fetch_all(
             """
             SELECT cs.chunk_set_id AS chunk_set_id,
+                   cs.extraction_recipe_id AS extraction_recipe_id,
                    cs.status AS status,
                    cs.chunk_count AS chunk_count,
                    cs.vector_count AS vector_count,
-                   cs.extraction_id AS extraction_id,
                    ex.recipe_subset AS extraction_recipe,
                    b.knowledge_base_id AS knowledge_base_id,
                    b.is_serving AS is_serving
             FROM rag_chunk_sets cs
-            LEFT JOIN rag_document_extractions ex ON ex.extraction_id = cs.extraction_id
+            LEFT JOIN rag_document_extractions ex
+              ON ex.document_id = cs.document_id
+             AND ex.extraction_recipe_id = cs.extraction_recipe_id
             LEFT JOIN rag_kb_chunk_set_bindings b ON b.chunk_set_id = cs.chunk_set_id
             WHERE cs.document_id = :document_id
             ORDER BY cs.created_at, cs.chunk_set_id, b.knowledge_base_id
@@ -915,13 +1064,17 @@ class OracleClient:
             chunk_set_id = str(norm["chunk_set_id"])
             if chunk_set_id not in by_id:
                 recipe = _json_loads(norm.get("extraction_recipe"))
-                extraction_id = norm.get("extraction_id")
                 by_id[chunk_set_id] = {
                     "chunk_set_id": chunk_set_id,
+                    "extraction_recipe_id": (
+                        str(norm["extraction_recipe_id"])
+                        if norm.get("extraction_recipe_id") is not None
+                        else None
+                    ),
                     "status": str(norm["status"]),
                     "chunk_count": int(str(norm["chunk_count"] or 0)),
                     "vector_count": int(str(norm["vector_count"] or 0)),
-                    "extraction_id": str(extraction_id) if extraction_id is not None else None,
+                    "extraction_id": None,
                     "parser": recipe.get("rag_parser_adapter_backend"),
                     "preprocess": recipe.get("rag_preprocess_profile"),
                 }
@@ -1193,7 +1346,7 @@ class OracleClient:
         description: str | None = None,
         config: BusinessViewConfig | None = None,
     ) -> BusinessViewDetail:
-        """業務アシスタントを作成する。"""
+        """業務ビューを作成する。"""
         return await self._create_business_view_with_oracle(
             name=name,
             description=description,
@@ -1208,7 +1361,7 @@ class OracleClient:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[BusinessViewSummary]:
-        """業務アシスタント一覧を返す。"""
+        """業務ビュー一覧を返す。"""
         return await self._list_business_views_with_oracle(
             status=status,
             query=query,
@@ -1222,14 +1375,14 @@ class OracleClient:
         status: BusinessViewStatus | None = None,
         query: str | None = None,
     ) -> int:
-        """条件に一致する業務アシスタント数を返す。"""
+        """条件に一致する業務ビュー数を返す。"""
         return await self._count_business_views_with_oracle(status=status, query=query)
 
     async def get_business_view(
         self,
         business_view_id: str,
     ) -> BusinessViewDetail | None:
-        """業務アシスタント詳細を返す。参照 KB の名前も解決して埋める。"""
+        """業務ビュー詳細を返す。参照 KB の名前も解決して埋める。"""
         view = await self._get_business_view_with_oracle(business_view_id)
         if view is None:
             return None
@@ -1245,7 +1398,7 @@ class OracleClient:
         config: BusinessViewConfig | None = None,
         update_fields: set[str] | None = None,
     ) -> BusinessViewDetail:
-        """業務アシスタントを更新する。"""
+        """業務ビューを更新する。"""
         return await self._update_business_view_with_oracle(
             business_view_id=business_view_id,
             name=name,
@@ -1255,7 +1408,7 @@ class OracleClient:
         )
 
     async def archive_business_view(self, business_view_id: str) -> BusinessViewDetail:
-        """業務アシスタントをアーカイブする。参照 KB・文書は変更しない。"""
+        """業務ビューをアーカイブする。参照 KB・文書は変更しない。"""
         return await self._archive_business_view_with_oracle(business_view_id)
 
     async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
@@ -5083,7 +5236,7 @@ class OracleClient:
         return self._pool().acquire()
 
     def connection_pool(self) -> OraclePoolProtocol:
-        """共有 connection pool を返す(Select AI クライアント等が再利用する)。"""
+        """共有 connection pool を返す。"""
         return self._pool()
 
     def _pool(self) -> OraclePoolProtocol:
@@ -6914,8 +7067,31 @@ def _bbox_from_metadata(value: object) -> list[float] | None:
     return bbox
 
 
+def _json_default(value: object) -> object:
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _json_dumps(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+
+
+def _legacy_extraction_status(status: str) -> str:
+    mapping = {
+        "EXTRACTING": "planned_only",
+        "EXTRACTED": "materialized",
+        "ERROR": "error",
+        "extracting": "planned_only",
+        "extracted": "materialized",
+    }
+    normalized = mapping.get(status, status)
+    allowed = {"not_requested", "planned_only", "materialized", "needs_reingest", "error"}
+    return normalized if normalized in allowed else "planned_only"
 
 
 def _json_loads(value: object) -> dict[str, object]:
@@ -7335,7 +7511,7 @@ CREATE INDEX {membership_table}_tenant_kb_idx
 def oracle_business_view_schema_sql(
     table_name: str = "rag_business_views",
 ) -> str:
-    """Oracle business view(業務アシスタント)table の DDL 例を返す。
+    """Oracle business view(業務ビュー)table の DDL 例を返す。
 
     参照 KB は ``view_config`` JSON 内に ID 群として保持する(多対多。link table 不要で
     DDL を最小化する)。query 上書きと persona も同 JSON へ束ねる。
@@ -7497,6 +7673,7 @@ def oracle_chunk_set_schema_sql() -> str:
 CREATE TABLE rag_chunk_sets (
     chunk_set_id    VARCHAR2(64) PRIMARY KEY,
     document_id     VARCHAR2(64) NOT NULL,
+    extraction_recipe_id VARCHAR2(64),
     tenant_id_hash  CHAR(64),
     recipe_subset   JSON,
     status          VARCHAR2(32) DEFAULT 'INGESTING' NOT NULL,
@@ -7513,6 +7690,63 @@ CREATE TABLE rag_chunk_sets (
 
 CREATE INDEX rag_chunk_sets_document_idx
     ON rag_chunk_sets (document_id, status);
+
+CREATE INDEX rag_chunk_sets_extraction_idx
+    ON rag_chunk_sets (document_id, extraction_recipe_id);
+
+CREATE TABLE rag_document_extractions (
+    document_id          VARCHAR2(64) NOT NULL,
+    extraction_recipe_id VARCHAR2(64) NOT NULL,
+    source_sha256        CHAR(64),
+    tenant_id_hash       CHAR(64),
+    recipe_subset        JSON,
+    extraction_json      JSON,
+    status               VARCHAR2(32) DEFAULT 'planned_only' NOT NULL,
+    reason               VARCHAR2(2000),
+    metrics_json         JSON,
+    created_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_document_extractions_pk
+        PRIMARY KEY (document_id, extraction_recipe_id),
+    CONSTRAINT rag_doc_ext_document_fk
+        FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_doc_ext_status_ck
+        CHECK (
+            status IN ('not_requested', 'planned_only', 'materialized', 'needs_reingest', 'error')
+        )
+);
+
+CREATE INDEX rag_doc_ext_status_idx
+    ON rag_document_extractions (document_id, status);
+
+CREATE TABLE rag_artifact_layers (
+    layer_id            VARCHAR2(64) PRIMARY KEY,
+    layer_kind          VARCHAR2(32) NOT NULL,
+    parent_chunk_set_id VARCHAR2(64) NOT NULL,
+    document_id         VARCHAR2(64) NOT NULL,
+    tenant_id_hash      CHAR(64),
+    requested           NUMBER(1) DEFAULT 1 NOT NULL,
+    status              VARCHAR2(32) DEFAULT 'planned_only' NOT NULL,
+    reason              VARCHAR2(2000),
+    metrics_json        JSON,
+    created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_artifact_layers_chunk_set_fk
+        FOREIGN KEY (parent_chunk_set_id)
+        REFERENCES rag_chunk_sets (chunk_set_id) ON DELETE CASCADE,
+    CONSTRAINT rag_artifact_layers_document_fk
+        FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_artifact_layers_requested_ck CHECK (requested IN (0, 1)),
+    CONSTRAINT rag_artifact_layers_kind_ck
+        CHECK (layer_kind IN ('metadata', 'graph', 'navigation')),
+    CONSTRAINT rag_artifact_layers_status_ck
+        CHECK (
+            status IN ('not_requested', 'planned_only', 'materialized', 'needs_reingest', 'error')
+        )
+);
+
+CREATE INDEX rag_artifact_layers_parent_idx
+    ON rag_artifact_layers (parent_chunk_set_id, layer_kind, status);
 
 CREATE TABLE rag_kb_chunk_set_bindings (
     knowledge_base_id VARCHAR2(64) NOT NULL,
@@ -8407,10 +8641,12 @@ def _to_knowledge_base_summary(
 
 
 def _to_knowledge_base_detail(knowledge_base: StoredKnowledgeBase) -> KnowledgeBaseDetail:
+    adapter_config = parse_adapter_config(knowledge_base.retrieval_config)
     return KnowledgeBaseDetail(
         **_to_knowledge_base_summary(knowledge_base).model_dump(),
         retrieval_config=knowledge_base.retrieval_config,
-        adapter_config=parse_adapter_config(knowledge_base.retrieval_config),
+        adapter_config=adapter_config,
+        legacy_query_config_ignored=adapter_config.query != KnowledgeBaseQueryConfig(),
     )
 
 

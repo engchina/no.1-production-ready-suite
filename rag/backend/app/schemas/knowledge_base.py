@@ -45,15 +45,21 @@ class KnowledgeBaseDetail(KnowledgeBaseSummary):
     adapter_config: KnowledgeBaseAdapterConfig = Field(
         default_factory=KnowledgeBaseAdapterConfig,
         description=(
-            "KB 単位のアダプター上書き設定(Parser/Chunking は取込時、Retrieval 系は"
-            "クエリ時に効く)。None フィールドはグローバル設定を継承する。"
+            "KB 単位の構築設定。query は legacy 互換として読めるが検索・回答 runtime へは"
+            "反映しない。None フィールドはグローバル設定を継承する。"
         ),
     )
     effective_adapter_config: KnowledgeBaseAdapterConfig | None = Field(
         default=None,
         description=(
-            "KB 上書きをグローバル既定で埋めた解決済み設定(表示専用)。継承フィールドに"
-            "「実際に効く値」を出すために使う。materialize には使わない。"
+            "KB 構築上書きをグローバル既定で埋めた解決済み設定(表示専用)。継承フィールドに"
+            "「実際に効く値」を出すために使う。query は常に空。materialize には使わない。"
+        ),
+    )
+    legacy_query_config_ignored: bool = Field(
+        default=False,
+        description=(
+            "既存 retrieval_config に legacy query 設定が残っており、現在は無視されている。"
         ),
     )
 
@@ -67,7 +73,7 @@ class KnowledgeBaseCreateRequest(BaseModel):
     retrieval_config: dict[str, object] = Field(default_factory=dict)
     adapter_config: KnowledgeBaseAdapterConfig | None = Field(
         default=None,
-        description="KB 単位のアダプター上書き設定。未指定ならグローバル設定を全継承する。",
+        description="KB 単位の構築設定。未指定ならグローバル設定を全継承する。",
     )
 
     @field_validator("name")
@@ -92,7 +98,7 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     retrieval_config: dict[str, object] | None = None
     adapter_config: KnowledgeBaseAdapterConfig | None = Field(
         default=None,
-        description="KB 単位のアダプター上書き設定。指定時は既存設定を置換する。",
+        description="KB 単位の構築設定。指定時は既存設定を置換する。",
     )
 
     @field_validator("name")

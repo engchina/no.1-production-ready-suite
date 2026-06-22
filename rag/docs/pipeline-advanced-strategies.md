@@ -1,7 +1,7 @@
-# パイプライン高度戦略の実装計画(段階導入)
+# 検索・回答フロー高度戦略の実装計画(段階導入)
 
-> 本ドキュメントは、pipeline プラグイン基盤(`rag_pipeline_core` + `services/pipeline/*`)の上に
-> 追加する **実行配線が重い高度戦略** の設計と段階導入計画をまとめる。いずれも確定スタック
+> 本ドキュメントは、処理フローの内部基盤(`rag_pipeline_core` + `services/pipeline/*`)の上に
+> 追加する **実行配線が重い高度な検索・回答方式** の設計と段階導入計画をまとめる。いずれも確定スタック
 > (OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai)を不変とし、外部ベクトル DB・別
 > LLM provider は導入しない。GPU / 版管理 schema DDL / 実 Oracle を要するものは **本リポジトリの
 > CI(GPU・実 DB なし)では検証不能** のため、scaffold(safe-degrade)→ 実環境配線 → 検証の順で導入する。
@@ -12,15 +12,15 @@
 
 | 戦略 | 種別 | 現状 | 既定挙動 |
 |---|---|---|---|
-| `reasoning_tree_search` | retrieval(PageIndex 型) | 戦略として**選択可能**(`rag_retrieval_strategy`)。`pending_execution=True` | `strategy_bias=None` のため **hybrid 検索へ安全縮退** |
-| `colpali_visual_retrieval` | retrieval(ColPali 型) | 同上 | 同上(hybrid 縮退) |
-| `self_reflective`(Self-RAG) | generation profile | 未着手 | — |
-| Temporal GraphRAG 検索時フィルタ | retrieval/graph | フラグ `rag_graph_temporal_enabled` のみ存在 | build 側 timestamp 付与のみ |
-| RAPTOR 検索時昇格 | retrieval/grounding | 取込側で summary node を索引済 | 通常検索が summary node にヒット |
+| `reasoning_tree_search` | 検索方式(PageIndex 型) | 戦略として**選択可能**(`rag_retrieval_strategy`)。`pending_execution=True` | `strategy_bias=None` のため **hybrid 検索へ安全縮退** |
+| `colpali_visual_retrieval` | 検索方式(ColPali 型) | 同上 | 同上(hybrid 縮退) |
+| `self_reflective`(Self-RAG) | 回答スタイル | 未着手 | — |
+| Temporal GraphRAG 検索時フィルタ | 検索/関係情報 | フラグ `rag_graph_temporal_enabled` のみ存在 | 構築側 timestamp 付与のみ |
+| RAPTOR 検索時昇格 | 検索/根拠確認 | 取込側で summary node を索引済 | 通常検索が summary node にヒット |
 
-scaffold の安全縮退は `app/rag/retrieval_strategy.py::resolve_retrieval_strategy` が未対応 strategy を
-`SearchStrategy.HYBRID` へ落とす既存挙動を利用する(`retrieval_strategy_adapter` は選択値を
-diagnostics に残すため、`runtime_retrieval_strategy=hybrid` との差分で「縮退中」を判別できる)。
+未配線時の安全縮退は `app/rag/retrieval_strategy.py::resolve_retrieval_strategy` が未対応 strategy を
+`SearchStrategy.HYBRID` へ落とす既存挙動を利用する。高度な診断では `retrieval_strategy_adapter` と
+`runtime_retrieval_strategy=hybrid` の差分で「縮退中」を判別できる。
 
 ---
 

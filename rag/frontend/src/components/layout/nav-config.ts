@@ -18,9 +18,7 @@ import {
   Share2,
   ShieldAlert,
   ShieldCheck,
-  SlidersHorizontal,
   Sparkles,
-  SquareTerminal,
   UserCog,
   Workflow,
   Upload,
@@ -68,12 +66,6 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch },
       {
-        href: APP_ROUTES.nl2sqlConsole,
-        labelKey: "nav.nl2sqlConsole",
-        sidebarLabelKey: "nav.nl2sqlConsole.sidebar",
-        icon: SquareTerminal,
-      },
-      {
         href: APP_ROUTES.businessViews,
         labelKey: "nav.businessViews",
         sidebarLabelKey: "nav.businessViews.sidebar",
@@ -83,7 +75,7 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // RAG パイプラインの各段階を切り替えるアダプター群（パイプライン順に整列）。
+    // RAG の検索・回答設定を、利用者が理解しやすい処理順で並べる。
     titleKey: "nav.section.pipeline",
     items: [
       {
@@ -149,12 +141,6 @@ export const NAV_SECTIONS: NavSection[] = [
         href: APP_ROUTES.settingsAgentic,
         labelKey: "nav.settingsAgentic",
         icon: Workflow,
-      },
-      {
-        href: APP_ROUTES.settingsNl2SqlPipeline,
-        labelKey: "nav.settingsNl2SqlPipeline",
-        sidebarLabelKey: "nav.settingsNl2SqlPipeline.sidebar",
-        icon: SlidersHorizontal,
       },
     ],
   },

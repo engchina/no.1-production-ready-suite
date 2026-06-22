@@ -31,11 +31,9 @@ def test_vector_and_keyword_disable_expansion_and_set_mode() -> None:
     assert keyword.query_expansion is False
 
 
-def test_graph_and_select_ai_set_strategy_bias() -> None:
+def test_graph_augmented_sets_strategy_bias() -> None:
     graph = resolve_retrieval_adapter(Settings(rag_retrieval_strategy="graph_augmented"))
     assert graph.strategy_bias == SearchStrategy.GRAPH_GLOBAL
-    select_ai = resolve_retrieval_adapter(Settings(rag_retrieval_strategy="select_ai_structured"))
-    assert select_ai.strategy_bias == SearchStrategy.SELECT_AI
 
 
 def test_business_context_strict_enables_gap_stop_and_business_fit() -> None:

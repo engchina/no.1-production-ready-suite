@@ -69,7 +69,7 @@ export function ServicesManagementClient() {
 
   const controlEnabled = data.control_enabled;
   const deploymentMode = data.deployment_mode;
-  // サービス管理ページのセクションは RAG パイプライン順(サイドナビと一致)で表示する。
+  // サービス管理ページのセクションは検索・回答フロー順(サイドナビと一致)で表示する。
   // 各ステージは CPU/GPU/OCI のうち存在するプロファイルごとにグループを分けて表示する。
   const PIPELINE_STAGE_ORDER: { category: string; labelKey: I18nKey }[] = [
     { category: "preprocess", labelKey: "settings.services.stage.preprocess" },

@@ -1,7 +1,7 @@
-"""検索 API の業務アシスタント(Business View)解決テスト。
+"""検索 API の Business View 解決テスト。
 
-業務アシスタント指定時に参照 KB 群を検索対象へ展開し、その query 設定・persona を
-pipeline / diagnostics へ反映することを検証する。
+Business View 指定時に参照 KB 群を検索対象へ展開し、その query 設定・persona を
+検索 runtime / diagnostics へ反映することを検証する。
 """
 
 from datetime import UTC, datetime
@@ -58,7 +58,7 @@ class RecordingPipeline:
 
 
 class FakeViewOracle:
-    """業務アシスタントを返すテスト用 Oracle。"""
+    """業務ビューを返すテスト用 Oracle。"""
 
     def __init__(self, views: dict[str, BusinessViewConfig]) -> None:
         self._views = views
@@ -135,7 +135,7 @@ def test_business_view_persona_overrides_system_prompt(monkeypatch: MonkeyPatch)
 
 
 def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> None:
-    """request 明示の KB は業務アシスタントの参照 KB より優先する。"""
+    """request 明示の KB は業務ビューの参照 KB より優先する。"""
     config = BusinessViewConfig(knowledge_base_ids=["kb-1", "kb-2"])
     _install(monkeypatch, {"bv-1": config})
 
@@ -154,7 +154,7 @@ def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> N
 
 
 def test_missing_business_view_falls_back_to_global(monkeypatch: MonkeyPatch) -> None:
-    """存在しない業務アシスタント ID はグローバル既定へ安全縮退する。"""
+    """存在しない業務ビュー ID はグローバル既定へ安全縮退する。"""
     _install(monkeypatch, {})
 
     response = client.post(
@@ -171,7 +171,7 @@ def test_missing_business_view_falls_back_to_global(monkeypatch: MonkeyPatch) ->
 def test_business_view_serving_mode_flows_to_settings_and_diagnostics(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """業務アシスタントの serving_mode=fused が pipeline settings と diagnostics へ流れる。"""
+    """業務ビューの serving_mode=fused が pipeline settings と diagnostics へ流れる。"""
     config = BusinessViewConfig(knowledge_base_ids=["kb-1"], serving_mode="fused")
     _install(monkeypatch, {"bv-1": config})
 
@@ -190,7 +190,7 @@ def test_business_view_serving_mode_flows_to_settings_and_diagnostics(
 
 
 class FakeViewAndKbOracle:
-    """業務アシスタントと、その参照 KB(query 上書き付き)を返すテスト用 Oracle。"""
+    """Business View と、その参照 KB(legacy query 付き)を返すテスト用 Oracle。"""
 
     def __init__(
         self,
@@ -227,12 +227,8 @@ class FakeViewAndKbOracle:
         )
 
 
-def test_business_view_layers_over_single_kb_query(monkeypatch: MonkeyPatch) -> None:
-    """業務アシスタントが単一 KB に解決するとき、KB query 既定の上に per-field merge で重なる。
-
-    KB は vector_index=accurate、業務アシスタントは generation=detailed_cited を設定。
-    → generation は業務アシスタント値、業務アシスタントが触れない vector_index は KB 既定が残る。
-    """
+def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) -> None:
+    """Business View は単一 KB に解決しても KB legacy query を下層に重ねない。"""
     kb_config = KnowledgeBaseAdapterConfig.model_validate(
         {"query": {"vector_index_profile": "accurate"}}
     )
@@ -255,10 +251,10 @@ def test_business_view_layers_over_single_kb_query(monkeypatch: MonkeyPatch) -> 
     assert response.status_code == 200
     settings = RecordingPipeline.captured_settings
     assert settings is not None
-    # 業務アシスタントが設定した generation は業務アシスタント値が勝つ。
+    # Business View が設定した generation は Business View 値が効く。
     assert settings.rag_generation_profile == "detailed_cited"
-    # 業務アシスタントが触れない vector_index は KB 既定が残る(per-field merge の肝)。
-    assert settings.rag_vector_index_profile == "accurate"
+    # Business View が触れていない vector_index は KB legacy 値ではなく global 既定。
+    assert settings.rag_vector_index_profile == "balanced"
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["business_view_applied"] == "bv-1"
-    assert diagnostics["kb_adapter_config_applied"] == "kb-1"
+    assert diagnostics["kb_adapter_config_applied"] is None

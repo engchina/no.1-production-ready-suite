@@ -1,24 +1,21 @@
-"""KB 単位のアダプター設定(per-knowledge-base adapter overrides)。
+"""KB 単位の構築設定(per-knowledge-base build overrides)。
 
 業界の RAG 製品(Dify / RAGFlow / FastGPT 等)に倣い、Parser / Chunking /
-Retrieval 系アダプターの既定値を **ナレッジベース単位** で上書きできるようにする。
+索引構築系の既定値を **ナレッジベース単位** で上書きできるようにする。
 ただし確定スタック(OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai)は
-不変で、上書きは既存アダプター preset の選択に限定する。
+不変で、上書きは既存 preset の選択に限定する。
 
 設計:
 
-* 上書きは 2 つの scope に分かれる。
-  - ``ingestion``: 取込時にしか効かない Parser / Chunking。文書取込の瞬間に
-    owning KB の設定で確定し(取込時スナップショット)、後から KB を変えても
-    既存チャンクは作り直さない。
-  - ``query``: クエリ時に効く Retrieval / Grounding / Generation / Guardrail /
-    Vector Index / Evaluation。次の検索から即反映。
+* KB が持つ正規の上書きは ``ingestion`` のみ。文書取込の瞬間に owning KB の設定で
+  確定し(取込時スナップショット)、後から KB を変えても既存チャンクは作り直さない。
+* ``query`` は V1 の互換読み取り用 legacy フィールドとして受け取るが、KB から runtime
+  settings へは反映しない。検索・回答方針は Business View が正本。
 * Embedding/Rerank(Cohere v4/1536)・DB・OCI・Object Storage はグローバル固定で
   KB 別にしない(ベクトル次元混在不可など物理制約)。
 * 永続化は既存 ``rag_knowledge_bases.retrieval_config`` JSON カラムを再利用し、
   DDL 変更を避ける。保存形は :func:`dump_adapter_config` 参照。
-* 解決順は request 明示 > KB 設定 > グローバル既定。本モジュールは
-  「KB 設定 > グローバル既定」の overlay を担う(request 明示は呼び出し側)。
+* 検索時の解決順は request 明示 > Business View > グローバル既定。KB query 設定は使わない。
 """
 
 from __future__ import annotations
@@ -47,7 +44,7 @@ from app.config import (
 
 logger = logging.getLogger(__name__)
 
-ADAPTER_CONFIG_VERSION = 1
+ADAPTER_CONFIG_VERSION = 2
 
 AdapterConfigScope = Literal["ingestion", "query"]
 
@@ -92,7 +89,7 @@ _EXTERNAL_PARSER_BACKEND_FLAGS: dict[str, str] = {
 
 
 class KbAdapterConfigError(ValueError):
-    """KB アダプター設定がグローバル設定と整合しないときに送出する。"""
+    """KB 構築設定がグローバル設定と整合しないときに送出する。"""
 
 
 class KnowledgeBaseIngestionConfig(BaseModel):
@@ -119,7 +116,11 @@ class KnowledgeBaseIngestionConfig(BaseModel):
 
 
 class KnowledgeBaseQueryConfig(BaseModel):
-    """クエリ時(Retrieval 以降)の KB 上書き。None はグローバル継承。"""
+    """検索・回答時の上書き。
+
+    Business View の query 設定として使う。KB 内に残る同形の値は legacy として読み取りは
+    できるが、KB から検索 runtime へは反映しない。
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -132,7 +133,7 @@ class KnowledgeBaseQueryConfig(BaseModel):
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):
-    """KB 単位のアダプター上書き設定一式。"""
+    """KB 単位の構築設定。query は legacy 互換読み取り用。"""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -141,8 +142,8 @@ class KnowledgeBaseAdapterConfig(BaseModel):
     query: KnowledgeBaseQueryConfig = Field(default_factory=KnowledgeBaseQueryConfig)
 
     def is_empty(self) -> bool:
-        """上書きが 1 件も無ければ True。"""
-        return not self._scope_overrides("ingestion") and not self._scope_overrides("query")
+        """正規の KB 構築上書きが 1 件も無ければ True。legacy query は判定に含めない。"""
+        return not self._scope_overrides("ingestion")
 
     def _scope_overrides(self, scope: AdapterConfigScope) -> dict[str, object]:
         """scope の非 None 上書きを {KB フィールド名: 値} で返す。"""
@@ -151,6 +152,9 @@ class KnowledgeBaseAdapterConfig(BaseModel):
 
     def settings_overrides(self, scope: AdapterConfigScope) -> dict[str, object]:
         """scope の上書きを {Settings フィールド名: 値} へ変換する。"""
+        if scope == "query":
+            # KB query は legacy。検索・回答方針は Business View が正本なので反映しない。
+            return {}
         field_map = _INGESTION_FIELD_MAP if scope == "ingestion" else _QUERY_FIELD_MAP
         overrides = {
             field_map[key]: value
@@ -181,7 +185,7 @@ def _ensure_external_parser_backend_enabled(overrides: dict[str, object]) -> Non
 
 
 def parse_adapter_config(raw: Mapping[str, object] | None) -> KnowledgeBaseAdapterConfig:
-    """``retrieval_config`` JSON から KB アダプター設定を寛容に復元する。
+    """``retrieval_config`` JSON から KB 構築設定を寛容に復元する。
 
     旧来の free-form ``retrieval_config`` や未知キーは ``extra=ignore`` で捨て、
     壊れた値があっても空設定へ縮退して取込/検索を止めない。
@@ -191,13 +195,20 @@ def parse_adapter_config(raw: Mapping[str, object] | None) -> KnowledgeBaseAdapt
     try:
         return KnowledgeBaseAdapterConfig.model_validate(dict(raw))
     except Exception:  # noqa: BLE001 - 壊れた永続値は空設定へ縮退する
-        logger.warning("KB アダプター設定の復元に失敗したため空設定へ縮退します。", exc_info=True)
+        logger.warning("KB 構築設定の復元に失敗したため空設定へ縮退します。", exc_info=True)
         return KnowledgeBaseAdapterConfig()
 
 
 def dump_adapter_config(config: KnowledgeBaseAdapterConfig) -> dict[str, object]:
-    """KB アダプター設定を ``retrieval_config`` カラムへ保存する dict へ変換する。"""
-    return config.model_dump(mode="json")
+    """KB 構築設定を ``retrieval_config`` カラムへ保存する dict へ変換する。
+
+    V2 では ``query`` を保存しない。既存 JSON に残る query は parse できるが、次回保存で
+    自然に落とす。
+    """
+    return {
+        "version": ADAPTER_CONFIG_VERSION,
+        "ingestion": config.ingestion.model_dump(mode="json"),
+    }
 
 
 def _validate_chunk_consistency(settings: Settings) -> None:
@@ -222,6 +233,8 @@ def resolve_effective_settings(
     バリデータを再実行しないため、ingestion scope では chunk 整合性を明示的に
     再検査し、矛盾があれば :class:`KbAdapterConfigError` を送出する。
     """
+    if scope == "query":
+        return global_settings
     overrides = config.settings_overrides(scope)
     if not overrides:
         return global_settings
@@ -248,22 +261,19 @@ def resolve_effective_adapter_config(
     global_settings: Settings,
     config: KnowledgeBaseAdapterConfig,
 ) -> KnowledgeBaseAdapterConfig:
-    """KB 上書きをグローバル既定で埋めた「解決済み」設定を返す(UI の継承値表示用)。
+    """KB 構築上書きをグローバル既定で埋めた「解決済み」設定を返す(UI 表示用)。
 
-    各フィールドは override があればその値、無ければグローバル設定の対応値で埋める。
+    ingestion 各フィールドは override があればその値、無ければグローバル設定の対応値で埋める。
+    query は KB では legacy ignored のため空で返す。
     ``materialize`` には使わず **表示専用**。継承行に「実際に効く値」を出すために使う。
     """
     ingestion = {
         kb_field: _resolved_field_value(config.ingestion, kb_field, global_settings, settings_field)
         for kb_field, settings_field in _INGESTION_FIELD_MAP.items()
     }
-    query = {
-        kb_field: _resolved_field_value(config.query, kb_field, global_settings, settings_field)
-        for kb_field, settings_field in _QUERY_FIELD_MAP.items()
-    }
     return KnowledgeBaseAdapterConfig(
         ingestion=KnowledgeBaseIngestionConfig(**ingestion),
-        query=KnowledgeBaseQueryConfig(**query),
+        query=KnowledgeBaseQueryConfig(),
     )
 
 
@@ -282,7 +292,7 @@ def apply_adapter_config_or_global(
         merged = resolve_effective_settings(global_settings, config, scope=scope)
     except KbAdapterConfigError:
         logger.warning(
-            "KB アダプター設定(%s)がグローバル設定と矛盾するためグローバルへ縮退します。",
+            "KB 構築設定(%s)がグローバル設定と矛盾するためグローバルへ縮退します。",
             scope,
             exc_info=True,
         )
@@ -294,21 +304,28 @@ def compose_query_settings(
     global_settings: Settings,
     overlays: Sequence[KnowledgeBaseQueryConfig],
 ) -> tuple[Settings, bool]:
-    """複数の query 上書きを precedence 順(後勝ち)に **per-field** で重ねた Settings を返す。
+    """Business View の query 上書きを precedence 順(後勝ち)に重ねた Settings を返す。
 
     各 overlay の非 None フィールドだけが上位を上書きする(per-field merge)。解決順
-    「リクエスト > 業務アシスタント > KB > グローバル」は、呼び出し側が ``overlays`` を
-    **低優先 → 高優先** の順で渡すことで表現する(後の overlay が前を上書き)。
+    呼び出し側が ``overlays`` を **低優先 → 高優先** の順で渡すことで表現する
+    (後の overlay が前を上書き)。
 
-    これにより「業務アシスタントが ``generation_profile`` だけ上書きし、``vector_index``
-    は KB の既定を活かす」といった層をまたいだ部分上書きができる(従来の『最上位層を
-    丸ごと採用 = select』の制限を解消)。1 件でも有効な上書きがあれば 2 番目は True。
+    1 件でも有効な上書きがあれば 2 番目は True。
     """
     merged_overrides: dict[str, object] = {}
     for overlay in overlays:
-        config = KnowledgeBaseAdapterConfig(query=overlay)
         # 後の overlay(高優先)が前を上書きする per-field merge。
-        merged_overrides.update(config.settings_overrides("query"))
+        merged_overrides.update(query_settings_overrides(overlay))
     if not merged_overrides:
         return global_settings, False
     return global_settings.model_copy(update=merged_overrides), True
+
+
+def query_settings_overrides(query: KnowledgeBaseQueryConfig) -> dict[str, object]:
+    """Business View query 設定を {Settings フィールド名: 値} へ変換する。"""
+    values = {key: value for key, value in query.model_dump().items() if value is not None}
+    return {
+        settings_field: values[key]
+        for key, settings_field in _QUERY_FIELD_MAP.items()
+        if key in values
+    }

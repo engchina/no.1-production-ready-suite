@@ -1,6 +1,6 @@
 # pipeline ステージ: retrieval
 
-検索戦略(hybrid_rrf/vector/keyword/graph_augmented/select_ai_structured/business_context_strict/
+検索戦略(hybrid_rrf/vector/keyword/graph_augmented/business_context_strict/
 corrective_multi_query)→ 検索挙動フラグ(mode_override / strategy_bias / query_expansion /
 gap_stop / corrective / business_fit)へ解決するステージマイクロサービス。解決ロジックは backend と
 **同一(`rag_pipeline_core.retrieval`)** で決定論・外部依存なし。**実 retrieval(Oracle 26ai 経路)は

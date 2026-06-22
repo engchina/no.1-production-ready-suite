@@ -606,7 +606,7 @@ END;
 
 
 def _business_views_migration_sql() -> str:
-    """rag_business_views(業務アシスタント)table を追加する。"""
+    """rag_business_views(業務ビュー)table を追加する。"""
     return """
 DECLARE
     v_table_count NUMBER;
@@ -667,6 +667,21 @@ DECLARE
     v_table_count NUMBER;
     v_index_count NUMBER;
     v_col_count   NUMBER;
+    v_constraint_count NUMBER;
+    PROCEDURE add_column_if_missing(
+        p_table_name IN VARCHAR2,
+        p_column_name IN VARCHAR2,
+        p_definition IN VARCHAR2
+    ) IS
+    BEGIN
+        SELECT COUNT(*) INTO v_col_count
+        FROM user_tab_columns
+        WHERE table_name = p_table_name AND column_name = p_column_name;
+
+        IF v_col_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE ' || p_table_name || ' ADD (' || p_definition || ')';
+        END IF;
+    END;
 BEGIN
     SELECT COUNT(*) INTO v_table_count
     FROM user_tables WHERE table_name = 'RAG_CHUNK_SETS';
@@ -676,6 +691,7 @@ BEGIN
             'CREATE TABLE rag_chunk_sets ('
             || 'chunk_set_id VARCHAR2(64) PRIMARY KEY,'
             || 'document_id VARCHAR2(64) NOT NULL,'
+            || 'extraction_recipe_id VARCHAR2(64),'
             || 'tenant_id_hash CHAR(64),'
             || 'recipe_subset JSON,'
             || 'status VARCHAR2(32) DEFAULT ''INGESTING'' NOT NULL,'
@@ -697,6 +713,251 @@ BEGIN
     IF v_index_count = 0 THEN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_chunk_sets_document_idx ON rag_chunk_sets (document_id, status)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_col_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'EXTRACTION_RECIPE_ID';
+
+    IF v_col_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunk_sets ADD (extraction_recipe_id VARCHAR2(64))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes WHERE index_name = 'RAG_CHUNK_SETS_EXTRACTION_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_chunk_sets_extraction_idx '
+            || 'ON rag_chunk_sets (document_id, extraction_recipe_id)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables WHERE table_name = 'RAG_DOCUMENT_EXTRACTIONS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_document_extractions ('
+            || 'document_id VARCHAR2(64) NOT NULL,'
+            || 'extraction_recipe_id VARCHAR2(64) NOT NULL,'
+            || 'source_sha256 CHAR(64),'
+            || 'tenant_id_hash CHAR(64),'
+            || 'recipe_subset JSON,'
+            || 'extraction_json JSON,'
+            || 'status VARCHAR2(32) DEFAULT ''planned_only'' NOT NULL,'
+            || 'reason VARCHAR2(2000),'
+            || 'metrics_json JSON,'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_document_extractions_pk '
+            || 'PRIMARY KEY (document_id, extraction_recipe_id),'
+            || 'CONSTRAINT rag_doc_ext_document_fk FOREIGN KEY (document_id) '
+            || 'REFERENCES rag_documents (document_id) ON DELETE CASCADE,'
+            || 'CONSTRAINT rag_doc_ext_status_ck CHECK '
+            || '(status IN (''not_requested'', ''planned_only'', ''materialized'', '
+            || '''needs_reingest'', ''error''))'
+            || ')';
+    END IF;
+
+    add_column_if_missing('RAG_DOCUMENT_EXTRACTIONS', 'DOCUMENT_ID', 'document_id VARCHAR2(64)');
+    add_column_if_missing(
+        'RAG_DOCUMENT_EXTRACTIONS',
+        'EXTRACTION_RECIPE_ID',
+        'extraction_recipe_id VARCHAR2(64)'
+    );
+    add_column_if_missing('RAG_DOCUMENT_EXTRACTIONS', 'SOURCE_SHA256', 'source_sha256 CHAR(64)');
+    add_column_if_missing('RAG_DOCUMENT_EXTRACTIONS', 'TENANT_ID_HASH', 'tenant_id_hash CHAR(64)');
+    add_column_if_missing('RAG_DOCUMENT_EXTRACTIONS', 'RECIPE_SUBSET', 'recipe_subset JSON');
+    add_column_if_missing('RAG_DOCUMENT_EXTRACTIONS', 'EXTRACTION_JSON', 'extraction_json JSON');
+    add_column_if_missing(
+        'RAG_DOCUMENT_EXTRACTIONS',
+        'STATUS',
+        'status VARCHAR2(32) DEFAULT ''planned_only'''
+    );
+    add_column_if_missing('RAG_DOCUMENT_EXTRACTIONS', 'REASON', 'reason VARCHAR2(2000)');
+    add_column_if_missing('RAG_DOCUMENT_EXTRACTIONS', 'METRICS_JSON', 'metrics_json JSON');
+    add_column_if_missing(
+        'RAG_DOCUMENT_EXTRACTIONS',
+        'CREATED_AT',
+        'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP'
+    );
+    add_column_if_missing(
+        'RAG_DOCUMENT_EXTRACTIONS',
+        'UPDATED_AT',
+        'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP'
+    );
+
+    SELECT COUNT(*) INTO v_col_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENT_EXTRACTIONS' AND column_name = 'EXTRACTION_ID';
+
+    IF v_col_count > 0 THEN
+        BEGIN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_document_extractions '
+                || 'MODIFY (extraction_id DEFAULT RAWTOHEX(SYS_GUID()))';
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+    END IF;
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_DOCUMENT_EXTRACTIONS'
+      AND constraint_name = 'RAG_DOCUMENT_EXTRACTIONS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_document_extractions '
+            || 'DROP CONSTRAINT rag_document_extractions_status_ck';
+    END IF;
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_DOCUMENT_EXTRACTIONS'
+      AND constraint_name = 'RAG_DOC_EXT_STATUS_CK';
+
+    IF v_constraint_count = 0 THEN
+        BEGIN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_document_extractions ADD CONSTRAINT rag_doc_ext_status_ck '
+                || 'CHECK (status IN (''not_requested'', ''planned_only'', ''materialized'', '
+                || '''needs_reingest'', ''error''))';
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes WHERE index_name = 'RAG_DOC_EXT_STATUS_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_doc_ext_status_idx ON rag_document_extractions (document_id, status)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables WHERE table_name = 'RAG_ARTIFACT_LAYERS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_artifact_layers ('
+            || 'layer_id VARCHAR2(64) PRIMARY KEY,'
+            || 'layer_kind VARCHAR2(32) NOT NULL,'
+            || 'parent_chunk_set_id VARCHAR2(64) NOT NULL,'
+            || 'document_id VARCHAR2(64) NOT NULL,'
+            || 'tenant_id_hash CHAR(64),'
+            || 'requested NUMBER(1) DEFAULT 1 NOT NULL,'
+            || 'status VARCHAR2(32) DEFAULT ''planned_only'' NOT NULL,'
+            || 'reason VARCHAR2(2000),'
+            || 'metrics_json JSON,'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_artifact_layers_chunk_set_fk FOREIGN KEY (parent_chunk_set_id) '
+            || 'REFERENCES rag_chunk_sets (chunk_set_id) ON DELETE CASCADE,'
+            || 'CONSTRAINT rag_artifact_layers_document_fk FOREIGN KEY (document_id) '
+            || 'REFERENCES rag_documents (document_id) ON DELETE CASCADE,'
+            || 'CONSTRAINT rag_artifact_layers_requested_ck CHECK (requested IN (0, 1)),'
+            || 'CONSTRAINT rag_artifact_layers_kind_ck CHECK '
+            || '(layer_kind IN (''metadata'', ''graph'', ''navigation'')),'
+            || 'CONSTRAINT rag_artifact_layers_status_ck CHECK '
+            || '(status IN (''not_requested'', ''planned_only'', ''materialized'', '
+            || '''needs_reingest'', ''error''))'
+            || ')';
+    END IF;
+
+    add_column_if_missing('RAG_ARTIFACT_LAYERS', 'LAYER_ID', 'layer_id VARCHAR2(64)');
+    add_column_if_missing('RAG_ARTIFACT_LAYERS', 'LAYER_KIND', 'layer_kind VARCHAR2(32)');
+    add_column_if_missing(
+        'RAG_ARTIFACT_LAYERS',
+        'PARENT_CHUNK_SET_ID',
+        'parent_chunk_set_id VARCHAR2(64)'
+    );
+    add_column_if_missing('RAG_ARTIFACT_LAYERS', 'DOCUMENT_ID', 'document_id VARCHAR2(64)');
+    add_column_if_missing('RAG_ARTIFACT_LAYERS', 'TENANT_ID_HASH', 'tenant_id_hash CHAR(64)');
+    add_column_if_missing('RAG_ARTIFACT_LAYERS', 'REQUESTED', 'requested NUMBER(1) DEFAULT 1');
+    add_column_if_missing(
+        'RAG_ARTIFACT_LAYERS',
+        'STATUS',
+        'status VARCHAR2(32) DEFAULT ''planned_only'''
+    );
+    add_column_if_missing('RAG_ARTIFACT_LAYERS', 'REASON', 'reason VARCHAR2(2000)');
+    add_column_if_missing('RAG_ARTIFACT_LAYERS', 'METRICS_JSON', 'metrics_json JSON');
+    add_column_if_missing(
+        'RAG_ARTIFACT_LAYERS',
+        'CREATED_AT',
+        'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP'
+    );
+    add_column_if_missing(
+        'RAG_ARTIFACT_LAYERS',
+        'UPDATED_AT',
+        'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP'
+    );
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_ARTIFACT_LAYERS'
+      AND constraint_name = 'RAG_ARTIFACT_LAYERS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_artifact_layers '
+            || 'DROP CONSTRAINT rag_artifact_layers_status_ck';
+    END IF;
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_ARTIFACT_LAYERS'
+      AND constraint_name = 'RAG_ARTIFACT_LAYERS_KIND_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_artifact_layers '
+            || 'DROP CONSTRAINT rag_artifact_layers_kind_ck';
+    END IF;
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_ARTIFACT_LAYERS'
+      AND constraint_name = 'RAG_ARTIFACT_LAYERS_STATUS_CK';
+
+    IF v_constraint_count = 0 THEN
+        BEGIN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_artifact_layers ADD CONSTRAINT rag_artifact_layers_status_ck '
+                || 'CHECK (status IN (''not_requested'', ''planned_only'', ''materialized'', '
+                || '''needs_reingest'', ''error''))';
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+    END IF;
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_ARTIFACT_LAYERS'
+      AND constraint_name = 'RAG_ARTIFACT_LAYERS_KIND_CK';
+
+    IF v_constraint_count = 0 THEN
+        BEGIN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_artifact_layers ADD CONSTRAINT rag_artifact_layers_kind_ck '
+                || 'CHECK (layer_kind IN (''metadata'', ''graph'', ''navigation''))';
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL;
+        END;
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes WHERE index_name = 'RAG_ARTIFACT_LAYERS_PARENT_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_artifact_layers_parent_idx '
+            || 'ON rag_artifact_layers (parent_chunk_set_id, layer_kind, status)';
     END IF;
 
     SELECT COUNT(*) INTO v_table_count

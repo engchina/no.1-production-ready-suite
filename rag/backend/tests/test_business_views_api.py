@@ -1,4 +1,4 @@
-"""業務アシスタント(Business View)API のテスト。"""
+"""業務ビュー(Business View)API のテスト。"""
 
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -150,7 +150,7 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
 
 
 def test_list_business_views(fake_oracle: FakeBusinessViewOracle) -> None:
-    """作成した業務アシスタントを一覧・検索できる。"""
+    """作成した業務ビューを一覧・検索できる。"""
     client.post("/api/business-views", json={"name": "経理アシスタント"})
     client.post("/api/business-views", json={"name": "営業アシスタント"})
 
@@ -160,7 +160,7 @@ def test_list_business_views(fake_oracle: FakeBusinessViewOracle) -> None:
 
 
 def test_update_and_archive_business_view(fake_oracle: FakeBusinessViewOracle) -> None:
-    """業務アシスタントの更新とアーカイブができる。"""
+    """業務ビューの更新とアーカイブができる。"""
     detail = client.post("/api/business-views", json={"name": "FAQ ビュー"}).json()["data"]
 
     update_resp = client.patch(

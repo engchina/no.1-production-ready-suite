@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 
 const POLICY_ORDER: GuardrailPolicyName[] = ["standard", "strict", "lenient", "regulated"];
 
-/** Guardrail アダプター(安全ポリシー)の runtime 設定を管理する設定画面。 */
+/** 安全チェックの現在設定を管理する設定画面。 */
 export function GuardrailSettingsClient() {
   const query = useGuardrailSettings();
   const save = useUpdateGuardrailSettings();

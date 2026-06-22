@@ -4,7 +4,7 @@ profile→system prompt 変種の静的解決は共有パッケージ ``rag_pipe
 ソースとして使い、backend と generation マイクロサービスが同一結果を返す。
 `rag_generation_service_enabled` が真のとき静的解決を pipeline-generation サービスへ委譲し、
 未達/失敗時は in-process(同一ロジック)へ安全縮退する。custom(prompt version store)と
-業務アシスタント persona override は backend 固有のため解決後に上乗せする。外部 provider なし。
+業務ビュー persona override は backend 固有のため解決後に上乗せする。外部 provider なし。
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def resolve_generation_adapter(settings: Settings) -> GenerationAdapterParams:
     """Settings から Generation アダプターの解決済みパラメータを作る。
 
     静的 system prompt は core / サービスで解決し、custom(prompt version store)と
-    業務アシスタント persona override を backend 側で上乗せする。
+    業務ビュー persona override を backend 側で上乗せする。
     """
     profile = normalize_generation_profile(
         getattr(settings, "rag_generation_profile", DEFAULT_GENERATION_PROFILE)
@@ -76,7 +76,7 @@ def resolve_generation_adapter(settings: Settings) -> GenerationAdapterParams:
         from app.rag.prompt_versions import active_custom_system_prompt
 
         system_prompt = active_custom_system_prompt()
-    # 業務アシスタント(Business View)の persona 上書きは profile prompt より優先する。
+    # 業務ビュー(Business View)の persona 上書きは profile prompt より優先する。
     override = getattr(settings, "rag_generation_system_prompt_override", None)
     if isinstance(override, str) and override.strip():
         system_prompt = override.strip()

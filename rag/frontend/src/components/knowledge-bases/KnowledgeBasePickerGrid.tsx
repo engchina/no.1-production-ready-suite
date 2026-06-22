@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
  * - 文書数の多い順に並べ、空(0 文書)の KB は既定で畳んで雑音を抑える。
  * - キーボードのみで開閉・移動・選択・解除が完結する(combobox / listbox ロール)。
  *
- * props 互換を保つため、アップロード/検索/評価/業務アシスタントで共用できる。
+ * props 互換を保つため、アップロード/検索/評価/業務ビューで共用できる。
  */
 export function KnowledgeBasePickerGrid({
   items,

@@ -15,7 +15,6 @@ from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
     OracleClient,
     OracleWalletPasswordRequiredError,
-    SelectAiUnavailableError,
     _test_oracle_connection_sync,
     oracle_agent_memory_schema_sql,
     oracle_audit_schema_sql,
@@ -49,7 +48,7 @@ from app.rag.request_context import (
 from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus, IngestionSegment
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.knowledge_base import KnowledgeBaseStatus
-from app.schemas.search import RetrievedChunk, SearchMode, SelectAiAction
+from app.schemas.search import RetrievedChunk, SearchMode
 
 IN_MEMORY_ORACLE_REMOVED = pytest.mark.skip(reason="in-memory Oracle fallback was removed")
 
@@ -1648,37 +1647,6 @@ async def test_oci_delete_document_rolls_back_when_running_job_appears() -> None
     assert not any(statement.startswith("DELETE FROM rag_documents") for statement in statements)
     assert pool.connection.commits == 0
     assert pool.connection.rollbacks == 1
-
-
-async def test_oci_select_ai_uses_dbms_cloud_ai_generate_with_binds() -> None:
-    """Select AI は DBMS_CLOUD_AI.GENERATE を bind 付きで呼び出す。"""
-    pool = FakeOraclePool(execute_results=[[{"result_text": "SELECT COUNT(*) FROM rag_documents"}]])
-    settings = _oci_settings()
-    settings.oracle_select_ai_profile = "rag_select_ai"
-    client = OracleClient(settings=settings, pool=pool, db_call_runner=_run_inline)
-
-    result = await client.select_ai(
-        "索引済み文書数を教えて",
-        action=SelectAiAction.SHOWSQL,
-    )
-
-    assert result == "SELECT COUNT(*) FROM rag_documents"
-    call = pool.connection.calls[0]
-    assert "DBMS_CLOUD_AI.GENERATE" in call.statement
-    assert ":prompt" in call.statement
-    assert call.parameters == {
-        "prompt": "索引済み文書数を教えて",
-        "profile_name": "rag_select_ai",
-        "action": "showsql",
-    }
-    assert "索引済み文書数" not in call.statement
-    assert pool.connection.commits == 0
-
-
-async def test_select_ai_without_profile_is_unavailable() -> None:
-    """profile 未設定では Select AI を実行しない。"""
-    with pytest.raises(SelectAiUnavailableError):
-        await OracleClient().select_ai("索引済み文書数を教えて")
 
 
 async def test_oci_retrieval_applies_request_access_scope_predicates() -> None:

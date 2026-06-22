@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: VectorIndexProfileName[] = ["balanced", "accurate", "fast"];
 
-/** Vector Index アダプター(索引/検索精度)の runtime 設定を管理する設定画面。 */
+/** 検索インデックスの現在設定を管理する設定画面。 */
 export function VectorIndexSettingsClient() {
   const query = useVectorIndexSettings();
   const save = useUpdateVectorIndexSettings();

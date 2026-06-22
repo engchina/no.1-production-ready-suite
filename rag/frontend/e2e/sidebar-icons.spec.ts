@@ -52,7 +52,7 @@ for (const viewport of [
 
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
     const brand = sidebar.locator('[title="Production Ready RAG"]').first();
-    const uploadLink = sidebar.getByRole("link", { name: "ドキュメントアップロード" });
+    const uploadLink = sidebar.getByRole("link", { name: "文書アップロード" });
 
     if (viewport.width <= 640) {
       await expect(brand).toHaveAttribute("aria-hidden", "true");

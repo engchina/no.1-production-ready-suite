@@ -156,7 +156,7 @@ for (const viewport of [
     await page.goto("/settings/services");
 
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
-    // セクション見出しは RAG パイプライン順(前処理→解析→分割→…)で表示。
+    // セクション見出しは検索・回答フロー順(前処理→解析→分割→…)で表示。
     // ラベルはサイドナビと統一しているため heading role で限定する。
     await expect(
       page.getByRole("heading", { name: "前処理 (Preprocess)", exact: true })
@@ -178,10 +178,10 @@ for (const viewport of [
     await expect(page.getByText("OCI 認証はメイン設定を継承", { exact: false })).toBeVisible();
     // 単一プロファイルのステージは接尾辞なし。
     await expect(
-      page.getByRole("heading", { name: "分割 (Chunking)", exact: true })
+      page.getByRole("heading", { name: "文書分割", exact: true })
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "検索 (Retrieval)", exact: true })
+      page.getByRole("heading", { name: "検索方法", exact: true })
     ).toBeVisible();
     // 稼働状態バッジ。
     await expect(page.getByText("稼働中").first()).toBeVisible();

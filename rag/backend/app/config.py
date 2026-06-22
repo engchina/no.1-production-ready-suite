@@ -57,7 +57,6 @@ RetrievalStrategy = Literal[
     "vector",
     "keyword",
     "graph_augmented",
-    "select_ai_structured",
     "business_context_strict",
     "corrective_multi_query",
     "reasoning_tree_search",
@@ -71,7 +70,7 @@ PostRetrievalPipeline = Literal[
     "compact",
     "full_governed",
 ]
-# 配信モード(業務アシスタント層): 1 文書が複数 chunk_set を持つとき、検索時にどう配信するか。
+# 配信モード(業務ビュー層): 1 文書が複数 chunk_set を持つとき、検索時にどう配信するか。
 # single=is_serving の単一 chunk_set のみ(既定・現挙動)、fused=複数 chunk_set を RRF 融合 +
 # source-span 重複除去(opt-in)、routed=Router で query ごと選択(後続)。
 ServingMode = Literal["single", "fused", "routed"]
@@ -123,31 +122,6 @@ AgenticProfile = Literal[
     "multi_hop",
 ]
 EnterpriseAiVlmInputMode = Literal["auto", "files_api", "inline_image"]
-# --- NL2SQL パイプラインアダプター(Select AI 中核)---
-# ルーティング(profile 自動選択 / 複雑度で単段↔多段)。off=現行(ルーティングなし)。
-Nl2SqlRouterProfile = Literal["off", "classifier", "complexity_aware"]
-# SQL 安全ポリシー。read_only(既定)は SELECT のみ、strict は object allowlist+row limit+
-# semantic_verify、sandboxed は専用低権限ロール実行。
-Nl2SqlGuardrailPolicy = Literal["read_only", "strict", "sandboxed"]
-# 意味キャッシュ。off(既定)/ nl_sql / nl_result / sql_result。
-Nl2SqlCachePolicy = Literal["off", "nl_sql", "nl_result", "sql_result"]
-# 生成バックエンド(Generation)。select_ai_agent(既定・RUN_TEAM)/ select_ai(GENERATE)/
-# app_enterprise_ai(アプリ側オーケストレーション)。
-Nl2SqlGenerationBackend = Literal["select_ai_agent", "select_ai", "app_enterprise_ai"]
-# --- NL2SQL パイプライン preset アダプター(決定論・現行=各既定)---
-Nl2SqlSchemaSource = Literal["full", "curated", "sampled"]
-Nl2SqlSchemaLinking = Literal["enforce_all", "curated", "auto_prune"]
-Nl2SqlKnowledgeProfile = Literal["off", "glossary", "few_shot", "rag_trained"]
-Nl2SqlClarifyPolicy = Literal["off", "detect", "interactive"]
-Nl2SqlGenerationProfile = Literal[
-    "grounded_sql", "sql_with_explanation", "narrated", "structured_json", "bilingual_ja_en"
-]
-Nl2SqlCorrectionProfile = Literal["off", "retry_on_error", "verified"]
-Nl2SqlAgenticProfile = Literal["off", "decompose", "multi_hop"]
-Nl2SqlResultProfile = Literal["table", "narrate", "chart", "bilingual_ja_en"]
-Nl2SqlEvaluationSuite = Literal[
-    "request_only", "execution_focused", "balanced", "strict_ci", "bird_like"
-]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
@@ -361,11 +335,6 @@ class Settings(BaseSettings):
         le=180.0,
         description="Oracle 接続テスト API 全体の待機秒数。",
     )
-    oracle_select_ai_profile: str = Field(
-        default="",
-        description="Oracle Select AI で使う DBMS_CLOUD_AI profile 名。DB 側で管理する。",
-    )
-    oracle_select_ai_max_result_chars: int = Field(default=20000, ge=1000, le=200000)
     oracle_vector_target_accuracy: int = Field(
         default=95,
         ge=1,
@@ -743,7 +712,7 @@ class Settings(BaseSettings):
         default="hybrid_rrf",
         description=(
             "検索段階の Retrieval アダプター。hybrid_rrf は hybrid + query expansion + RRF、"
-            "vector/keyword は単一モード、graph_augmented/select_ai_structured は構造寄り、"
+            "vector/keyword は単一モード、graph_augmented は構造寄り、"
             "business_context_strict は業務適合加重 + gap-stop、"
             "corrective_multi_query は多 query + 不足時の再検索。"
             "per-request の strategy/mode を明示した場合はそちらを優先する。"
@@ -752,7 +721,7 @@ class Settings(BaseSettings):
     rag_serving_mode: ServingMode = Field(
         default="single",
         description=(
-            "配信モード(業務アシスタント層)。1 文書が複数 chunk_set を持つときの検索時配信。"
+            "配信モード(業務ビュー層)。1 文書が複数 chunk_set を持つときの検索時配信。"
             "single(既定)は is_serving の単一 chunk_set のみ(現挙動)、fused は複数 chunk_set を "
             "RRF 融合 + source-span 重複除去、routed は Router で query ごと選択(後続)。"
         ),
@@ -776,7 +745,7 @@ class Settings(BaseSettings):
     rag_generation_system_prompt_override: str | None = Field(
         default=None,
         description=(
-            "回答生成 system prompt の上書き。業務アシスタント(Business View)の persona を"
+            "回答生成 system prompt の上書き。業務ビュー(Business View)の persona を"
             "クエリ時に注入するための runtime 上書きで env からは設定しない(既定 None=上書きなし)。"
             "設定時は Generation アダプターの profile prompt より優先する。"
         ),
@@ -849,147 +818,6 @@ class Settings(BaseSettings):
             "fast は低レイテンシ(85)へ検索時 target accuracy を上書きする。"
             "推奨 HNSW ビルドパラメータは設定画面に表示し、適用には索引再作成が必要。"
         ),
-    )
-    # --- NL2SQL パイプラインアダプター(Select AI 中核)---
-    nl2sql_generation_backend: Nl2SqlGenerationBackend = Field(
-        default="select_ai_agent",
-        description=(
-            "SQL 生成バックエンド。select_ai_agent(既定)は DBMS_CLOUD_AI_AGENT.RUN_TEAM、"
-            "select_ai は SET_PROFILE→DBMS_CLOUD_AI.GENERATE、app_enterprise_ai はアプリ側"
-            "オーケストレーション。確定スタックは不変(別 LLM provider は不採用)。"
-        ),
-    )
-    nl2sql_router_profile: Nl2SqlRouterProfile = Field(
-        default="off",
-        description=(
-            "ルーティングの Router アダプター。off(既定)は固定 profile/backend、"
-            "classifier は質問埋め込み+決定論分類器で profile を自動選択、complexity_aware は"
-            "複雑度で select_ai(単段)↔select_ai_agent(多段)を振り分ける(コスト最適化)。"
-        ),
-    )
-    nl2sql_router_complexity_threshold: int = Field(
-        default=2,
-        ge=1,
-        le=6,
-        description="complexity_aware で多段(select_ai_agent)へ切替える複雑度シグナル数の閾値。",
-    )
-    nl2sql_guardrail_policy: Nl2SqlGuardrailPolicy = Field(
-        default="read_only",
-        description=(
-            "SQL ガードレールの Guardrail アダプター。read_only(既定)は SELECT のみ許可し"
-            "DDL/DML/複文をブロック、strict は object allowlist+row limit+EXPLAIN+semantic_verify、"
-            "sandboxed は専用低権限ロールで実行。実行前の人手承認ゲートは必須。"
-        ),
-    )
-    nl2sql_guardrail_max_rows: int = Field(
-        default=1000,
-        ge=1,
-        le=1_000_000,
-        description="strict/sandboxed で許可する最大取得行数(row limit)。",
-    )
-    nl2sql_guardrail_run_role: str = Field(
-        default="",
-        description="sandboxed で実行に用いる専用低権限 DB ロール名(空欄は接続ユーザのまま)。",
-    )
-    nl2sql_cache_policy: Nl2SqlCachePolicy = Field(
-        default="off",
-        description=(
-            "意味キャッシュの Cache アダプター。off(既定)/ nl_sql(NL→SQL)/ nl_result(NL→結果)"
-            "/ sql_result(SQL→結果)。NL 類似は Oracle 26ai ベクトル検索(Cohere 埋め込み)で判定。"
-        ),
-    )
-    nl2sql_cache_similarity_threshold: float = Field(
-        default=0.95,
-        ge=0.0,
-        le=1.0,
-        description="NL 類似キャッシュをヒット扱いにする cosine 類似度の下限(0.0–1.0)。",
-    )
-    nl2sql_cache_ttl_seconds: int = Field(
-        default=300,
-        ge=0,
-        le=86_400,
-        description="キャッシュエントリの TTL 秒(0 は無期限)。鮮度要件で調整する。",
-    )
-    # --- NL2SQL パイプライン preset アダプター(各既定は現行=最小挙動)---
-    nl2sql_schema_source: Nl2SqlSchemaSource = Field(
-        default="full",
-        description="スキーマ取込。full(既定)/ curated(明示選択)/ sampled(M-Schema 風サンプル値)。",
-    )
-    nl2sql_schema_linking: Nl2SqlSchemaLinking = Field(
-        default="enforce_all",
-        description="スキーマリンク。enforce_all(既定)/ curated / auto_prune(ベクトル多段)。",
-    )
-    nl2sql_knowledge_profile: Nl2SqlKnowledgeProfile = Field(
-        default="off",
-        description="知識/例示。off(既定)/ glossary / few_shot / rag_trained。",
-    )
-    nl2sql_clarify_policy: Nl2SqlClarifyPolicy = Field(
-        default="off",
-        description="曖昧性解決。off(既定)/ detect / interactive(確認質問)。",
-    )
-    nl2sql_generation_profile: Nl2SqlGenerationProfile = Field(
-        default="grounded_sql",
-        description=(
-            "回答スタイル。grounded_sql(既定・純 SQL)/ sql_with_explanation / narrated / "
-            "structured_json / bilingual_ja_en。"
-        ),
-    )
-    nl2sql_correction_profile: Nl2SqlCorrectionProfile = Field(
-        default="off",
-        description="自己修正。off(既定)/ retry_on_error / verified(逆翻訳突合)。",
-    )
-    nl2sql_agentic_profile: Nl2SqlAgenticProfile = Field(
-        default="off",
-        description="エージェント計画。off(既定)/ decompose / multi_hop。",
-    )
-    nl2sql_result_profile: Nl2SqlResultProfile = Field(
-        default="table",
-        description="結果整形。table(既定)/ narrate / chart / bilingual_ja_en。",
-    )
-    nl2sql_evaluation_suite: Nl2SqlEvaluationSuite = Field(
-        default="request_only",
-        description=(
-            "評価スイート(CI 閾値)。request_only(既定)/ execution_focused / balanced / "
-            "strict_ci / bird_like。決定論指標のみ。"
-        ),
-    )
-    # --- Select AI プロビジョニング(credential/profile/tool/agent/task/team)---
-    select_ai_model: str = Field(
-        default="",
-        description="Select AI profile の model 名(空欄は未設定。region 非対応時は fallback)。",
-    )
-    select_ai_oci_endpoint_id: str = Field(
-        default="",
-        description=(
-            "Select AI profile の oci_endpoint_id。OCI Enterprise AI / 専用エンドポイントを指す"
-            "(モデルの頭脳を Enterprise AI に寄せる)。空欄は profile attributes へ含めない。"
-        ),
-    )
-    select_ai_region: str = Field(
-        default="",
-        description="Select AI profile の region(空欄は OCI 設定の region を使う)。",
-    )
-    select_ai_embedding_model: str = Field(
-        default="cohere.embed-v4.0",
-        description="Select AI RAG / 類似例検索に使う埋め込みモデル(OCI GenAI Cohere)。",
-    )
-    select_ai_credential_name: str = Field(
-        default="",
-        description="Select AI profile が使う既存 credential 名(空欄は決定論命名を生成)。",
-    )
-    select_ai_response_language: str = Field(
-        default="日本語",
-        description="Select AI Agent task の応答言語(既定 日本語)。",
-    )
-    select_ai_max_tokens: int = Field(
-        default=0,
-        ge=0,
-        le=128_000,
-        description="Select AI profile の max_tokens(0 は profile attributes へ含めない)。",
-    )
-    select_ai_api_format: str = Field(
-        default="",
-        description="Select AI profile の oci_apiformat(空欄は含めない。例: COHERE / GENERIC)。",
     )
     # --- 前処理(Preprocess)ステージ(parse の前の原本変換)---
     rag_preprocess_profile: PreprocessProfile = Field(

@@ -79,14 +79,6 @@ class SearchStrategy(StrEnum):
     HYBRID = "hybrid"
     GRAPH_LOCAL = "graph_local"
     GRAPH_GLOBAL = "graph_global"
-    SELECT_AI = "select_ai"
-
-
-class SelectAiAction(StrEnum):
-    """Oracle Select AI の安全に公開する action。"""
-
-    SHOWSQL = "showsql"
-    RUNSQL = "runsql"
 
 
 class SearchRequest(BaseModel):
@@ -103,8 +95,8 @@ class SearchRequest(BaseModel):
         default=None,
         max_length=128,
         description=(
-            "業務アシスタント(Business View)ID。指定時は参照 KB 群を検索対象へ展開し、"
-            "業務アシスタントの query 設定・persona を適用する(request 明示パラメータが最優先)。"
+            "業務ビュー(Business View)ID。指定時は参照 KB 群を検索対象へ展開し、"
+            "業務ビューの query 設定・persona を適用する(request 明示パラメータが最優先)。"
         ),
     )
 
@@ -245,41 +237,6 @@ class SearchResponse(BaseModel):
     guardrail_warnings: list[str] = Field(default_factory=list)
     elapsed_ms: float
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
-
-
-class SelectAiRequest(BaseModel):
-    """Oracle Select AI による自然言語 -> SQL / 結果取得リクエスト。"""
-
-    query: str = Field(..., min_length=1)
-    action: SelectAiAction = SelectAiAction.SHOWSQL
-    profile_name: str | None = Field(default=None, max_length=128)
-    max_result_chars: int | None = Field(default=None, ge=1000, le=200000)
-
-    @field_validator("query")
-    @classmethod
-    def validate_query(cls, query: str) -> str:
-        """SearchRequest と同じ規則で query を正規化する。"""
-        return normalize_query_text(query)
-
-    @field_validator("profile_name")
-    @classmethod
-    def validate_profile_name(cls, profile_name: str | None) -> str | None:
-        """空 profile は未指定として扱う。"""
-        if profile_name is None:
-            return None
-        cleaned = profile_name.strip()
-        return cleaned or None
-
-
-class SelectAiResponse(BaseModel):
-    """Oracle Select AI の実行結果。"""
-
-    action: SelectAiAction
-    result_text: str
-    generated_sql: str | None = None
-    profile_name: str
-    query_chars: int
-    guardrail_warnings: list[str] = Field(default_factory=list)
 
 
 def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:

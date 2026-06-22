@@ -40,7 +40,7 @@ def test_sensitive_identifier_masking_can_be_disabled() -> None:
 
 
 def test_validate_query_warns_for_japanese_sql_mutation_intent() -> None:
-    """日本語のデータ変更意図も Select AI runsql 用 warning として検出する。"""
+    """日本語のデータ変更意図も安全チェック warning として検出する。"""
     result = GuardrailPolicy().validate_query("rag_documents の古い行を削除してください")
 
     assert result.allowed is True

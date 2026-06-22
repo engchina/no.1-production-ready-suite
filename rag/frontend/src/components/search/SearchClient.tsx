@@ -1,14 +1,13 @@
 "use client";
 
 import {
-  DatabaseZap,
   Plus,
   Search as SearchIcon,
   SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-react";
-import { type FormEvent, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { CitationCard } from "./CitationCard";
@@ -25,13 +24,11 @@ import {
   type RetrievedChunk,
   type SearchDiagnostics,
   type SearchMode,
-  type SelectAiAction,
 } from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
-import { useBusinessViews, useSelectAi } from "@/lib/queries";
-import { cn } from "@/lib/utils";
+import { useBusinessViews } from "@/lib/queries";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
 
@@ -43,7 +40,6 @@ interface Meta {
 }
 
 const MODES: SearchMode[] = ["hybrid", "vector", "keyword"];
-const SELECT_AI_ACTIONS: SelectAiAction[] = ["showsql", "runsql"];
 const CONTENT_KIND_OPTIONS = [
   "",
   "text",
@@ -73,10 +69,6 @@ const CONTENT_KIND_LABEL: Record<ContentKindFilter, Parameters<typeof t>[0]> = {
   email: "search.filters.contentKind.email",
   slide: "search.filters.contentKind.slide",
   sheet: "search.filters.contentKind.sheet",
-};
-const SELECT_AI_ACTION_LABEL: Record<SelectAiAction, Parameters<typeof t>[0]> = {
-  showsql: "search.selectAi.action.showsql",
-  runsql: "search.selectAi.action.runsql",
 };
 const CONTENT_KIND_SELECT_OPTIONS = CONTENT_KIND_OPTIONS.map((option) => ({
   value: option,
@@ -183,7 +175,7 @@ export function SearchClient() {
   return (
     <div>
       <PageHeader title={t("nav.search")} subtitle={t("search.initial")} />
-      <div className="grid grid-cols-1 gap-6 p-8 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.9fr)]">
+      <div className="p-4 sm:p-6 lg:p-8">
         <section className="space-y-6">
           {businessViewsQuery.isLoading ? (
             <Card>
@@ -339,7 +331,7 @@ export function SearchClient() {
             <ErrorState message={errorText} onRetry={() => void submit()} />
           ) : (
             <>
-              {/* ガードレール警告 */}
+              {/* 安全チェック警告 */}
               {meta?.guardrail_warnings.length ? (
                 <Banner severity="warning">
                   <span className="font-medium">{t("search.guardrail")}: </span>
@@ -403,8 +395,6 @@ export function SearchClient() {
             </>
           )}
         </section>
-
-        <SelectAiPanel />
       </div>
     </div>
   );
@@ -480,167 +470,9 @@ function buildSearchFilters({
   return filters;
 }
 
-function SelectAiPanel() {
-  const mutation = useSelectAi();
-  const [query, setQuery] = useState("");
-  const [action, setAction] = useState<SelectAiAction>("showsql");
-  const [profileName, setProfileName] = useState("");
-  const [maxChars, setMaxChars] = useState(20000);
-  const [errorText, setErrorText] = useState("");
-
-  const result = mutation.data;
-  const canSubmit = query.trim().length > 0 && maxChars >= 1000 && maxChars <= 200000;
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!canSubmit) return;
-    setErrorText("");
-    mutation.reset();
-    try {
-      await mutation.mutateAsync({
-        query: query.trim(),
-        action,
-        profile_name: profileName.trim() || null,
-        max_result_chars: maxChars,
-      });
-    } catch (error) {
-      setErrorText(
-        error instanceof ApiError ? error.message : t("search.selectAi.error")
-      );
-    }
-  };
-
-  return (
-    <aside className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <DatabaseZap size={16} className="text-primary" aria-hidden />
-            {t("search.selectAi.title")}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-4" onSubmit={(event) => void submit(event)}>
-            <div className="space-y-1.5">
-              <label htmlFor="select-ai-query" className="text-xs font-medium text-foreground">
-                {t("search.selectAi.query")}
-              </label>
-              <textarea
-                id="select-ai-query"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t("search.selectAi.placeholder")}
-                rows={4}
-                className="min-h-28 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-foreground">
-                {t("search.selectAi.action")}
-              </span>
-              <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-1">
-                {SELECT_AI_ACTIONS.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => setAction(item)}
-                    aria-pressed={action === item}
-                    className={cn(
-                      "min-h-10 cursor-pointer rounded px-3 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-                      action === item
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted hover:bg-card hover:text-foreground"
-                    )}
-                  >
-                    {t(SELECT_AI_ACTION_LABEL[item])}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_128px] xl:grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_128px]">
-              <div className="space-y-1.5">
-                <label htmlFor="select-ai-profile" className="text-xs font-medium text-foreground">
-                  {t("search.selectAi.profile")}
-                </label>
-                <input
-                  id="select-ai-profile"
-                  type="text"
-                  value={profileName}
-                  onChange={(event) => setProfileName(event.target.value)}
-                  placeholder={t("search.selectAi.profilePlaceholder")}
-                  className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label htmlFor="select-ai-max-chars" className="text-xs font-medium text-foreground">
-                  {t("search.selectAi.maxChars")}
-                </label>
-                <input
-                  id="select-ai-max-chars"
-                  type="number"
-                  min={1000}
-                  max={200000}
-                  step={1000}
-                  value={maxChars}
-                  onChange={(event) => setMaxChars(Number(event.target.value))}
-                  className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                />
-              </div>
-            </div>
-
-            <Button
-              type="submit"
-              className="w-full"
-              loading={mutation.isPending}
-              disabled={!canSubmit}
-            >
-              {mutation.isPending ? t("search.selectAi.running") : t("search.selectAi.run")}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-
-      {errorText ? <Banner severity="danger">{errorText}</Banner> : null}
-
-      {result ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">{t("search.selectAi.result")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {result.guardrail_warnings.length ? (
-              <Banner severity="warning" className="text-xs">
-                <span className="font-medium">{t("search.guardrail")}: </span>
-                {result.guardrail_warnings.join(" / ")}
-              </Banner>
-            ) : null}
-            <pre className="max-h-[420px] overflow-auto rounded-md border border-border bg-background p-3 text-xs leading-relaxed text-foreground">
-              <code>{result.result_text}</code>
-            </pre>
-            <p className="tnum flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-muted">
-              <span>
-                {t("search.selectAi.resultAction")}: {t(SELECT_AI_ACTION_LABEL[result.action])}
-              </span>
-              <span>
-                {t("search.selectAi.queryChars")}: {result.query_chars}
-              </span>
-              {result.profile_name ? (
-                <span>
-                  {t("search.selectAi.profile")}: {result.profile_name}
-                </span>
-              ) : null}
-            </p>
-          </CardContent>
-        </Card>
-      ) : null}
-    </aside>
-  );
-}
 
 /**
- * RAG 検索の対象業務アシスタント(Business View)選択。RAG 検索は業務アシスタント単位で
+ * RAG 検索の対象業務ビュー(Business View)選択。RAG 検索は業務ビュー単位で
  * 行うため必須。選ぶと参照 KB 群と query 方針・persona が適用される。
  */
 function BusinessViewSelect({

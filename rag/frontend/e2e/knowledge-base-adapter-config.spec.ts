@@ -67,7 +67,7 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
-test("知識ベース単位で Chunking 戦略を上書きして保存できる", async ({ page }) => {
+test("ナレッジベース単位で文書分割方式を上書きして保存できる", async ({ page }) => {
   let patched: { adapter_config?: { ingestion?: { chunking_strategy?: string | null } } } | null =
     null;
 
@@ -113,30 +113,30 @@ test("知識ベース単位で Chunking 戦略を上書きして保存できる"
 
   await page.goto("/knowledge-bases/kb-1");
 
-  await expect(page.getByRole("heading", { name: "アダプター設定" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "構築設定", exact: true })).toBeVisible();
   await expectNoPageOverflow(page);
 
-  // Chunking 戦略の行で「上書き」を有効化する(リボンが同名ラベルを持つため取込 region に限定)。
-  const ingestSection = page.getByRole("region", { name: "取込アダプター(取込時に適用)" });
+  // 文書分割の行で「上書き」を有効化する(リボンが同名ラベルを持つため構築 region に限定)。
+  const ingestSection = page.getByRole("region", { name: "ナレッジ構築設定" });
   const chunkingRow = ingestSection
-    .getByText("Chunking 戦略", { exact: true })
+    .getByText("文書分割", { exact: true })
     .locator("xpath=ancestor::div[contains(@class,'rounded-lg')][1]");
   await expect(chunkingRow.getByText("グローバル設定に従う")).toBeVisible();
   await chunkingRow.getByRole("button", { name: "上書き" }).click();
 
-  // 上書き既定値 markdown_heading の選択欄が現れる(trigger の名前はラベル、値は内部テキスト)。
-  const select = chunkingRow.getByRole("combobox", { name: "Chunking 戦略" });
-  await expect(select).toContainText("markdown_heading");
+  // 上書き既定値(見出し単位)の選択欄が現れる。
+  const select = chunkingRow.getByRole("combobox", { name: "文書分割" });
+  await expect(select).toContainText("見出し単位");
   await select.click();
-  await page.getByRole("option", { name: /page_level/ }).click();
+  await page.getByRole("option", { name: /ページ単位/ }).click();
 
-  await page.getByRole("button", { name: "アダプター設定を保存" }).click();
+  await page.getByRole("button", { name: "構築設定を保存" }).click();
 
-  await expect(page.getByText("アダプター設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("構築設定を保存しました。")).toBeVisible();
   expect(patched?.adapter_config?.ingestion?.chunking_strategy).toBe("page_level");
 });
 
-test("継承トグルに戻すと上書きが解除される", async ({ page }) => {
+test("KB legacy query 設定は構築設定画面に表示されない", async ({ page }) => {
   const withOverride = emptyAdapterConfig();
   withOverride.query.generation_profile = "detailed_cited";
 
@@ -169,15 +169,7 @@ test("継承トグルに戻すと上書きが解除される", async ({ page }) 
 
   await page.goto("/knowledge-bases/kb-1");
 
-  const querySection = page.getByRole("region", { name: "クエリアダプター(検索時に適用)" });
-  const generationRow = querySection
-    .getByText("Generation プロファイル", { exact: true })
-    .locator("xpath=ancestor::div[contains(@class,'rounded-lg')][1]");
-  // 既存上書きが選択欄として表示されている。
-  await expect(generationRow.getByRole("combobox", { name: "Generation プロファイル" })).toContainText(
-    "detailed_cited"
-  );
-  // 継承へ戻すと選択欄が消え、継承表示になる。
-  await generationRow.getByRole("button", { name: "グローバルを継承" }).click();
-  await expect(generationRow.getByText("グローバル設定に従う")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "構築設定", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "検索・回答設定(legacy)" })).toHaveCount(0);
+  await expect(page.getByText("詳細・出典明示")).toHaveCount(0);
 });

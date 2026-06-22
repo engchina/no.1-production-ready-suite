@@ -23,7 +23,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`前処理設定はプロファイルを表示する (${viewport.name})`, async ({ page }) => {
+  test(`前処理設定はファイル準備方式を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await page.addInitScript(() => {
@@ -37,7 +37,7 @@ for (const viewport of [
 
     await page.goto("/settings/preprocess");
 
-    await expect(page.getByRole("heading", { name: "前処理プロファイル" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "ファイル準備方式" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /原本をそのまま解析/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /文字コード→UTF-8/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Office を PDF へ変換/ })).toBeVisible();
@@ -68,7 +68,7 @@ test("前処理設定取得に失敗したら再試行できる", async ({ page 
   await expectNoHorizontalOverflow(page);
 });
 
-test("前処理設定はプロファイルを保存できる", async ({ page }) => {
+test("前処理設定はファイル準備方式を保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let savedPayload: unknown = null;
   await page.route("**/api/settings/preprocess", async (route) => {

@@ -190,7 +190,7 @@ def build_retrieval_plan(
         memory_backends={
             "evidence": "Oracle 26ai Hybrid Vector Search + Oracle Text",
             "similar": "Oracle 26ai AI Vector Search + OCI Cohere Rerank",
-            "structure": "Oracle Select AI / GraphRAG-lite SQL boundary",
+            "structure": "GraphRAG-lite relationship boundary",
             "history": "Oracle 26ai rag_agent_memories Agent Memory Search",
         },
         query_shape=query_shape,
@@ -337,16 +337,12 @@ def _query_shape(
 ) -> str:
     if resolved_strategy.strategy in (SearchStrategy.GRAPH_GLOBAL, SearchStrategy.GRAPH_LOCAL):
         return "graph_structure"
-    if resolved_strategy.route_reason.endswith("select_ai_candidate"):
-        return "structured_query_candidate"
     return f"{mode.value}_retrieval"
 
 
 def _plan_purpose(resolved_strategy: ResolvedRetrievalStrategy) -> str:
     if resolved_strategy.strategy in (SearchStrategy.GRAPH_GLOBAL, SearchStrategy.GRAPH_LOCAL):
         return "relationship_or_summary_grounding"
-    if resolved_strategy.route_reason.endswith("select_ai_candidate"):
-        return "structured_business_query_boundary"
     return "grounded_answer_generation"
 
 
@@ -394,7 +390,7 @@ def _context_role(chunk: RetrievedChunk) -> ContextRole:
     retrieval_mode = _metadata_lower(chunk.metadata, "retrieval_mode")
     if retrieval_mode in {"agent_memory", "memory", "history"}:
         return "history"
-    if retrieval_mode in {"graph_global", "graph_local", "select_ai", "structure"}:
+    if retrieval_mode in {"graph_global", "graph_local", "structure"}:
         return "structure"
     if _metadata_bool(chunk.metadata.get("support_only")):
         return "support"

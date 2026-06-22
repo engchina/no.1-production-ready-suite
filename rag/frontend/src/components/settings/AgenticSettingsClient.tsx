@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: AgenticProfileName[] = ["off", "query_rewrite", "decompose", "multi_hop"];
 
-/** Agentic アダプター(検索前の LLM クエリ計画)の runtime 設定を管理する設定画面。 */
+/** 高度な検索方式の現在設定を管理する設定画面。 */
 export function AgenticSettingsClient() {
   const query = useAgenticSettings();
   const save = useUpdateAgenticSettings();

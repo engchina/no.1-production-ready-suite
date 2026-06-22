@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -1296,13 +1295,11 @@ def test_run_evaluation_request_only_keeps_no_preset_thresholds(
     assert captured["thresholds"] is None
 
 
-def test_run_evaluation_uses_kb_evaluation_suite_when_request_omits(
+def test_run_evaluation_ignores_kb_legacy_evaluation_suite_when_request_omits(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """単一 KB 指定時、request 未指定なら KB の evaluation_suite が解決順 2 番目で効く。"""
+    """単一 KB 指定時も KB legacy evaluation_suite は使わずグローバル既定が効く。"""
     from app.api.routes import evaluation as evaluation_route
-    from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
-    from app.schemas.knowledge_base import KnowledgeBaseDetail, KnowledgeBaseStatus
 
     captured: dict[str, Any] = {}
 
@@ -1311,17 +1308,8 @@ def test_run_evaluation_uses_kb_evaluation_suite_when_request_omits(
         return _minimal_eval_metrics()
 
     class FakeOracleClient:
-        async def get_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail:
-            return KnowledgeBaseDetail(
-                id=knowledge_base_id,
-                name="KB",
-                status=KnowledgeBaseStatus.ACTIVE,
-                adapter_config=KnowledgeBaseAdapterConfig.model_validate(
-                    {"query": {"evaluation_suite": "strict_ci"}}
-                ),
-                created_at=datetime(2026, 1, 1, tzinfo=UTC),
-                updated_at=datetime(2026, 1, 1, tzinfo=UTC),
-            )
+        async def get_knowledge_base(self, knowledge_base_id: str) -> None:
+            raise AssertionError("KB legacy query は評価 suite 解決で参照しない")
 
         async def save_evaluation_artifact(self, artifact: dict[str, Any]) -> str:
             return "eval-1"
@@ -1334,8 +1322,8 @@ def test_run_evaluation_uses_kb_evaluation_suite_when_request_omits(
     resp = client.post("/api/evaluation/run", json=body)
 
     assert resp.status_code == 200
-    # グローバル balanced ではなく KB の strict_ci が選ばれる。
-    assert resp.json()["data"]["evaluation_suite"] == "strict_ci"
+    # KB legacy strict_ci ではなく、グローバル balanced が選ばれる。
+    assert resp.json()["data"]["evaluation_suite"] == "balanced"
     assert captured["thresholds"] is not None
 
 

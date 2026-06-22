@@ -31,7 +31,7 @@ def test_auto_graph_candidate_falls_back_when_graph_disabled() -> None:
     assert resolved.fallback_reason == "graph_disabled"
 
 
-def test_select_ai_candidate_keeps_dedicated_endpoint_boundary() -> None:
+def test_aggregate_query_uses_baseline_retrieval_without_sql_boundary() -> None:
     settings = Settings.model_construct(rag_graph_enabled=False)
     request = SearchRequest(query="索引済み文書の件数を集計して", mode=SearchMode.HYBRID)
 
@@ -39,8 +39,8 @@ def test_select_ai_candidate_keeps_dedicated_endpoint_boundary() -> None:
 
     assert resolved.strategy == SearchStrategy.HYBRID
     assert resolved.mode == SearchMode.HYBRID
-    assert resolved.route_reason == "auto_select_ai_candidate"
-    assert resolved.fallback_reason == "select_ai_uses_dedicated_endpoint"
+    assert resolved.route_reason == "auto_baseline_hybrid"
+    assert resolved.fallback_reason is None
 
 
 def test_graph_strategy_is_preserved_when_graph_enabled() -> None:

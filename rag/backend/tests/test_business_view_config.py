@@ -1,4 +1,4 @@
-"""業務アシスタント(Business View)設定解決の単体テスト(DB 非依存)。"""
+"""業務ビュー(Business View)設定解決の単体テスト(DB 非依存)。"""
 
 from app.config import get_settings
 from app.rag.business_view_config import (

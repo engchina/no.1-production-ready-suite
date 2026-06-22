@@ -1,6 +1,6 @@
-"""業務アシスタント(Business View)API。作成・一覧・詳細・更新・アーカイブ。
+"""業務ビュー(Business View)API。作成・一覧・詳細・更新・アーカイブ。
 
-KB が「文書をどう加工して索引するか」を司るのに対し、業務アシスタントは「どの KB 群を
+KB が「文書をどう加工して索引するか」を司るのに対し、業務ビューは「どの KB 群を
 どんな検索/生成方針・persona で束ねて回答するか」を司る利用者視点のエンティティ。
 """
 
@@ -28,7 +28,7 @@ async def list_business_views(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ApiResponse[Page[BusinessViewSummary]]:
-    """業務アシスタント一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
+    """業務ビュー一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
     oracle = OracleClient()
     settings = get_settings()
 
@@ -62,7 +62,7 @@ async def list_business_views(
 async def create_business_view(
     request: BusinessViewCreateRequest,
 ) -> ApiResponse[BusinessViewDetail]:
-    """業務アシスタントを作成する。"""
+    """業務ビューを作成する。"""
     created = await OracleClient().create_business_view(
         name=request.name,
         description=request.description,
@@ -77,10 +77,10 @@ async def create_business_view(
 async def get_business_view(
     business_view_id: str,
 ) -> ApiResponse[BusinessViewDetail]:
-    """業務アシスタント詳細を返す。"""
+    """業務ビュー詳細を返す。"""
     detail = await OracleClient().get_business_view(business_view_id)
     if detail is None:
-        raise HTTPException(status_code=404, detail="業務アシスタントが見つかりません。")
+        raise HTTPException(status_code=404, detail="業務ビューが見つかりません。")
     return ApiResponse(data=detail)
 
 
@@ -89,7 +89,7 @@ async def update_business_view(
     business_view_id: str,
     request: BusinessViewUpdateRequest,
 ) -> ApiResponse[BusinessViewDetail]:
-    """業務アシスタントを更新する。"""
+    """業務ビューを更新する。"""
     update_fields = set(request.model_fields_set)
     try:
         await OracleClient().update_business_view(
@@ -100,10 +100,10 @@ async def update_business_view(
             update_fields=update_fields,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="業務アシスタントが見つかりません。") from exc
+        raise HTTPException(status_code=404, detail="業務ビューが見つかりません。") from exc
     detail = await OracleClient().get_business_view(business_view_id)
     if detail is None:
-        raise HTTPException(status_code=404, detail="業務アシスタントが見つかりません。")
+        raise HTTPException(status_code=404, detail="業務ビューが見つかりません。")
     return ApiResponse(data=detail)
 
 
@@ -111,10 +111,10 @@ async def update_business_view(
 async def archive_business_view(
     business_view_id: str,
 ) -> ApiResponse[BusinessViewDetail]:
-    """業務アシスタントをアーカイブする。参照 KB・文書は変更しない。"""
+    """業務ビューをアーカイブする。参照 KB・文書は変更しない。"""
     try:
         await OracleClient().archive_business_view(business_view_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="業務アシスタントが見つかりません。") from exc
+        raise HTTPException(status_code=404, detail="業務ビューが見つかりません。") from exc
     detail = await OracleClient().get_business_view(business_view_id)
     return ApiResponse(data=detail)

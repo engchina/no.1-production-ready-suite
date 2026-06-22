@@ -21,7 +21,7 @@ router = APIRouter()
 
 
 def _detail_response(detail: KnowledgeBaseDetail) -> ApiResponse[KnowledgeBaseDetail]:
-    """詳細に解決済みアダプター設定(継承値表示用)を埋めて返す。"""
+    """詳細に解決済み構築設定(継承値表示用)を埋めて返す。"""
     effective = resolve_effective_adapter_config(get_settings(), detail.adapter_config)
     return ApiResponse(data=detail.model_copy(update={"effective_adapter_config": effective}))
 

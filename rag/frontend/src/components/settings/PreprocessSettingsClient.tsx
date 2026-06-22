@@ -175,7 +175,10 @@ export function PreprocessSettingsClient() {
               label={t("settings.preprocess.canonicalPrefix")}
               value={settings.canonical_artifact_prefix}
             />
-            <RuntimeFact label={t("settings.preprocess.source")} value="runtime" />
+            <RuntimeFact
+              label={t("settings.preprocess.source")}
+              value={t("settings.common.currentConfig")}
+            />
           </dl>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">

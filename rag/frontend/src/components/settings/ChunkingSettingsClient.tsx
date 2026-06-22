@@ -31,7 +31,7 @@ const STRATEGY_ORDER: ChunkingStrategyName[] = [
   "fixed_size",
 ];
 
-/** Chunking アダプター(分割戦略)の runtime 設定とパラメータを管理する設定画面。 */
+/** 文書分割方式の現在設定とパラメータを管理する設定画面。 */
 export function ChunkingSettingsClient() {
   const query = useChunkingSettings();
   const save = useUpdateChunkingSettings();
@@ -216,7 +216,10 @@ function OverviewCard({
             label={t("settings.chunking.params.chunkSize")}
             value={String(form.chunk_size)}
           />
-          <RuntimeFact label={t("settings.chunking.source")} value="runtime" />
+          <RuntimeFact
+            label={t("settings.chunking.source")}
+            value={t("settings.common.currentConfig")}
+          />
         </dl>
         <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
           <div className="min-h-6">

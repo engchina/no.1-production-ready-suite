@@ -31,14 +31,14 @@ async function mockApi(page: Page) {
     }
 
     if (url.pathname === "/api/business-views") {
-      // 検索ページは業務アシスタント選択が前提のため、最低 1 件を返してフィルタを描画する。
+      // 検索ページは業務ビュー選択が前提のため、最低 1 件を返してフィルタを描画する。
       await route.fulfill({
         json: {
           data: {
             items: [
               {
                 id: "bv-1",
-                name: "経理アシスタント",
+                name: "経理ビュー",
                 description: null,
                 status: "ACTIVE",
                 knowledge_base_count: 1,

@@ -32,7 +32,7 @@ const LIMIT = 20;
 const FILTERS: (KnowledgeBaseStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
 const NAME_ERROR_ID = "knowledge-base-name-error";
 
-/** ナレッジベース一覧。作成・一覧・アーカイブを扱う。詳細(所属文書・アダプター設定)は詳細ページへ。 */
+/** ナレッジベース一覧。作成・一覧・アーカイブを扱う。詳細(所属文書・構築設定)は詳細ページへ。 */
 export function KnowledgeBaseManagementClient() {
   const confirm = useConfirm();
   const navigate = useNavigate();

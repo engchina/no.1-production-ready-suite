@@ -47,51 +47,56 @@ const NAME_ERROR_ID = "business-view-name-error";
 const SCOPE_ERROR_ID = "business-view-scope-error";
 
 const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalStrategyName>[] = [
-  { value: "hybrid_rrf", label: "hybrid_rrf(既定)" },
-  { value: "vector", label: "vector" },
-  { value: "keyword", label: "keyword" },
-  { value: "graph_augmented", label: "graph_augmented" },
-  { value: "select_ai_structured", label: "select_ai_structured" },
-  { value: "business_context_strict", label: "business_context_strict" },
-  { value: "corrective_multi_query", label: "corrective_multi_query" },
+  { value: "hybrid_rrf", label: `${t("settings.retrieval.strategy.hybrid_rrf")}(既定)` },
+  { value: "vector", label: t("settings.retrieval.strategy.vector") },
+  { value: "keyword", label: t("settings.retrieval.strategy.keyword") },
+  { value: "graph_augmented", label: t("settings.retrieval.strategy.graph_augmented") },
+  {
+    value: "business_context_strict",
+    label: t("settings.retrieval.strategy.business_context_strict"),
+  },
+  {
+    value: "corrective_multi_query",
+    label: t("settings.retrieval.strategy.corrective_multi_query"),
+  },
 ];
 const GROUNDING_OPTIONS: SelectFieldOption<PostRetrievalPipelineName>[] = [
-  { value: "custom", label: "custom(既定)" },
-  { value: "lean", label: "lean" },
-  { value: "verified_context", label: "verified_context" },
-  { value: "context_enrich", label: "context_enrich" },
-  { value: "compact", label: "compact" },
-  { value: "full_governed", label: "full_governed" },
+  { value: "custom", label: `${t("settings.grounding.pipeline.custom")}(既定)` },
+  { value: "lean", label: t("settings.grounding.pipeline.lean") },
+  { value: "verified_context", label: t("settings.grounding.pipeline.verified_context") },
+  { value: "context_enrich", label: t("settings.grounding.pipeline.context_enrich") },
+  { value: "compact", label: t("settings.grounding.pipeline.compact") },
+  { value: "full_governed", label: t("settings.grounding.pipeline.full_governed") },
 ];
 const GENERATION_OPTIONS: SelectFieldOption<GenerationProfileName>[] = [
-  { value: "grounded_concise", label: "grounded_concise(既定)" },
-  { value: "detailed_cited", label: "detailed_cited(出典明示)" },
-  { value: "strict_extractive", label: "strict_extractive(抽出のみ)" },
-  { value: "structured_json", label: "structured_json" },
-  { value: "bilingual_ja_en", label: "bilingual_ja_en(日英)" },
+  { value: "grounded_concise", label: `${t("settings.generation.profile.grounded_concise")}(既定)` },
+  { value: "detailed_cited", label: t("settings.generation.profile.detailed_cited") },
+  { value: "strict_extractive", label: t("settings.generation.profile.strict_extractive") },
+  { value: "structured_json", label: t("settings.generation.profile.structured_json") },
+  { value: "bilingual_ja_en", label: t("settings.generation.profile.bilingual_ja_en") },
 ];
 const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
-  { value: "standard", label: "standard(既定)" },
-  { value: "strict", label: "strict" },
-  { value: "lenient", label: "lenient" },
-  { value: "regulated", label: "regulated" },
+  { value: "standard", label: `${t("settings.guardrail.policy.standard")}(既定)` },
+  { value: "strict", label: t("settings.guardrail.policy.strict") },
+  { value: "lenient", label: t("settings.guardrail.policy.lenient") },
+  { value: "regulated", label: t("settings.guardrail.policy.regulated") },
 ];
 const VECTOR_INDEX_OPTIONS: SelectFieldOption<VectorIndexProfileName>[] = [
-  { value: "balanced", label: "balanced(既定)" },
-  { value: "accurate", label: "accurate(高再現)" },
-  { value: "fast", label: "fast(低レイテンシ)" },
+  { value: "balanced", label: `${t("settings.vectorIndex.profile.balanced")}(既定)` },
+  { value: "accurate", label: t("settings.vectorIndex.profile.accurate") },
+  { value: "fast", label: t("settings.vectorIndex.profile.fast") },
 ];
 const EVALUATION_OPTIONS: SelectFieldOption<EvaluationSuiteName>[] = [
-  { value: "request_only", label: "request_only(既定)" },
-  { value: "retrieval_focused", label: "retrieval_focused" },
-  { value: "balanced", label: "balanced" },
-  { value: "strict_ci", label: "strict_ci" },
-  { value: "ragas_like", label: "ragas_like" },
+  { value: "request_only", label: `${t("settings.evaluation.suite.request_only")}(既定)` },
+  { value: "retrieval_focused", label: t("settings.evaluation.suite.retrieval_focused") },
+  { value: "balanced", label: t("settings.evaluation.suite.balanced") },
+  { value: "strict_ci", label: t("settings.evaluation.suite.strict_ci") },
+  { value: "ragas_like", label: t("settings.evaluation.suite.ragas_like") },
 ];
 const SERVING_MODE_OPTIONS: SelectFieldOption<ServingMode>[] = [
-  { value: "single", label: "single(既定・単一 chunk_set)" },
-  { value: "fused", label: "fused(複数 chunk_set を融合)" },
-  { value: "routed", label: "routed(query ごと選択・後続)" },
+  { value: "single", label: "単一(既定)" },
+  { value: "fused", label: "融合(複数の知識範囲を統合)" },
+  { value: "routed", label: "自動選択(質問ごとに切替)" },
 ];
 
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
@@ -116,7 +121,7 @@ function emptyConfig(): BusinessViewConfig {
   };
 }
 
-/** 業務アシスタント(Business View)管理。複数 KB を業務視点で束ね、方針と persona を設定する。 */
+/** 業務ビュー(Business View)管理。複数 KB を業務視点で束ね、検索・回答方針と persona を設定する。 */
 export function BusinessViewManagementClient() {
   const confirm = useConfirm();
   const [filter, setFilter] = useState<BusinessViewStatus | "ALL">("ACTIVE");

@@ -89,7 +89,7 @@
 
 - 見た目(ピル): `rounded-full px-3 py-1 text-xs`、選択中 `bg-primary text-primary-foreground`、非選択 `border-border bg-card text-muted hover:bg-background`。
 - グループは `role="group"` + `aria-label` で囲う。状態は色だけでなく `aria-pressed`(`<ToggleChip>` が付与)で伝える(`color-not-only`)。
-- **Boxed segmented control**(コンテナ枠 + 内部分割、例: 検索の Select AI アクション切替)は、より目立つ排他選択に使う別パターン。`grid ... rounded-md border bg-background p-1` のコンテナに、各項目を `rounded`(full でない)+ `aria-pressed` で並べる。プロミネンスが異なる場合のみ使い、通常のトグルは `<ToggleChip>` を優先する。
+- **Boxed segmented control**(コンテナ枠 + 内部分割)は、より目立つ排他選択に使う別パターン。`grid ... rounded-md border bg-background p-1` のコンテナに、各項目を `rounded`(full でない)+ `aria-pressed` で並べる。プロミネンスが異なる場合のみ使い、通常のトグルは `<ToggleChip>` を優先する。
 
 ---
 
@@ -159,4 +159,4 @@
 - ✅ `<Button>` に React 19 流の `ref` 対応を追加(ConfirmDialog のフォーカス制御で利用)。
 - ✅ 手書き secondary ボタン(`StateViews` 再試行 / `DashboardHeader` 更新)を `<Button variant="secondary">` へ統一。
 - ✅ 主アクションバーの高さ表現を `min-h-10` override → `size="lg"` に統一(設定各画面)。
-- ✅ 共通 `<ToggleChip>` を抽出し、FileList フィルタ・検索モード切替を移行(`role="group"` 付与)。Boxed segmented control(Select AI アクション)は別パターンとして維持。
+- ✅ 共通 `<ToggleChip>` を抽出し、FileList フィルタ・検索モード切替を移行(`role="group"` 付与)。

@@ -51,7 +51,6 @@ import {
   type GraphSettingsUpdate,
   type AgenticSettingsData,
   type AgenticSettingsUpdate,
-  type SelectAiRequestBody,
   type UploadIngestionMode,
   type UploadStorageSettingsUpdate,
 } from "./api";
@@ -111,7 +110,6 @@ export const queryKeys = {
   evaluationSettings: ["settings", "evaluation-suite"] as const,
   graphSettings: ["settings", "graph"] as const,
   agenticSettings: ["settings", "agentic"] as const,
-  nl2sqlPipelineSettings: ["settings", "nl2sql-pipeline"] as const,
   services: ["services"] as const,
 };
 
@@ -484,7 +482,7 @@ export function useArchiveKnowledgeBase() {
   });
 }
 
-/** 業務アシスタント(Business View)一覧。 */
+/** 業務ビュー(Business View)一覧。 */
 export function useBusinessViews(params: {
   status?: BusinessViewStatus;
   q?: string;
@@ -497,7 +495,7 @@ export function useBusinessViews(params: {
   });
 }
 
-/** 業務アシスタント詳細(config・参照 KB を含む)。 */
+/** 業務ビュー詳細(config・参照 KB を含む)。 */
 export function useBusinessView(id: string | null) {
   return useQuery({
     queryKey: queryKeys.businessView(id ?? ""),
@@ -506,7 +504,7 @@ export function useBusinessView(id: string | null) {
   });
 }
 
-/** 業務アシスタント作成。 */
+/** 業務ビュー作成。 */
 export function useCreateBusinessView() {
   const qc = useQueryClient();
   return useMutation({
@@ -517,7 +515,7 @@ export function useCreateBusinessView() {
   });
 }
 
-/** 業務アシスタント更新。 */
+/** 業務ビュー更新。 */
 export function useUpdateBusinessView() {
   const qc = useQueryClient();
   return useMutation({
@@ -529,7 +527,7 @@ export function useUpdateBusinessView() {
   });
 }
 
-/** 業務アシスタントをアーカイブする。 */
+/** 業務ビューをアーカイブする。 */
 export function useArchiveBusinessView() {
   const qc = useQueryClient();
   return useMutation({
@@ -575,6 +573,7 @@ export function useIngestDocument() {
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(job.document_id) });
       qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -591,6 +590,7 @@ export function useEnqueueDocumentIngestionJob() {
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(job.document_id) });
       qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -607,6 +607,7 @@ export function useApproveDocument() {
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(job.document_id) });
       qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -670,13 +671,6 @@ export function useCancelIngestionJob() {
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
-  });
-}
-
-/** Oracle Select AI。 */
-export function useSelectAi() {
-  return useMutation({
-    mutationFn: (payload: SelectAiRequestBody) => api.selectAi(payload),
   });
 }
 
@@ -969,41 +963,6 @@ export function useUpdateGuardrailSettings() {
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.guardrailSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
-    },
-  });
-}
-
-/** NL2SQL: 自然言語から SQL を生成(未実行)。 */
-export function useGenerateNl2Sql() {
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof api.generateNl2Sql>[0]) => api.generateNl2Sql(payload),
-  });
-}
-
-/** NL2SQL: 承認済み SQL を read-only 実行。 */
-export function useExecuteNl2Sql() {
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof api.executeNl2Sql>[0]) => api.executeNl2Sql(payload),
-  });
-}
-
-/** NL2SQL パイプライン preset 群の runtime 設定。 */
-export function useNl2SqlPipelineSettings() {
-  return useQuery({
-    queryKey: queryKeys.nl2sqlPipelineSettings,
-    queryFn: api.getNl2SqlPipelineSettings,
-    retry: false,
-  });
-}
-
-/** NL2SQL パイプライン preset を 1 アダプター分ランタイム保存。 */
-export function useUpdateNl2SqlPipelineSetting() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: { adapterKey: string; selection: string }) =>
-      api.updateNl2SqlPipelineSetting(payload.adapterKey, { selection: payload.selection }),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.nl2sqlPipelineSettings, data);
     },
   });
 }

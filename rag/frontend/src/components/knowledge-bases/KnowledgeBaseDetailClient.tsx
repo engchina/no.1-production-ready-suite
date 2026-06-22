@@ -1,10 +1,11 @@
 "use client";
 
-import { ChevronRight, FilePlus2, Files, Layers, Trash2 } from "lucide-react";
+import { ChevronRight, FilePlus2, Files, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormStatus } from "@/components/ui/form-status";
@@ -13,15 +14,18 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
   type DocumentChunkSet,
+  type DocumentChunkSetLayerStatuses,
+  type DocumentMaterializationLayerStatus,
   type DocumentSummary,
   type KnowledgeBaseDetail,
 } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import {
   useAssignDocumentsToKnowledgeBase,
   useDocumentChunkSets,
   useDocuments,
+  useEnqueueDocumentIngestionJob,
   useKnowledgeBase,
   useRemoveDocumentFromKnowledgeBase,
 } from "@/lib/queries";
@@ -31,7 +35,7 @@ import { cn } from "@/lib/utils";
 import { KnowledgeBaseAdapterConfigPanel } from "./KnowledgeBaseAdapterConfigPanel";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
 
-/** ナレッジベース詳細ページ。概要・所属文書・アダプター設定(パイプライン地図 + フォーム)を全幅で扱う。 */
+/** ナレッジベース詳細ページ。概要・所属文書・構築設定(構築フロー + フォーム)を全幅で扱う。 */
 export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const detail = useKnowledgeBase(knowledgeBaseId);
 
@@ -259,43 +263,7 @@ function KnowledgeBaseDocuments({ knowledgeBase }: { knowledgeBase: KnowledgeBas
   );
 }
 
-/** 抽出(parser×前処理)ごとに chunk_set をまとめた 2 階層の variant グループ。 */
-export interface ChunkSetExtractionGroup {
-  extractionId: string | null;
-  parser: string | null;
-  preprocess: string | null;
-  chunkSets: DocumentChunkSet[];
-}
-
-/**
- * chunk_set 群を親抽出(extraction_id)でグルーピングする。
- *
- * parser×前処理 が同じ chunk_set は 1 抽出を共有する(extract 1 回・chunking 違いで分裂)。
- * extraction_id を持たない旧 chunk_set は各々単独グループにして表示を欠落させない。
- * backend の created_at 昇順(挿入順)を保つ。
- */
-export function groupChunkSetsByExtraction(
-  chunkSets: DocumentChunkSet[]
-): ChunkSetExtractionGroup[] {
-  const groups = new Map<string, ChunkSetExtractionGroup>();
-  for (const chunkSet of chunkSets) {
-    const key = chunkSet.extraction_id ?? `__cs__${chunkSet.chunk_set_id}`;
-    let group = groups.get(key);
-    if (!group) {
-      group = {
-        extractionId: chunkSet.extraction_id,
-        parser: chunkSet.parser,
-        preprocess: chunkSet.preprocess,
-        chunkSets: [],
-      };
-      groups.set(key, group);
-    }
-    group.chunkSets.push(chunkSet);
-  }
-  return [...groups.values()];
-}
-
-/** 所属文書 1 行。展開で variant(extraction▸chunk_set の 2 階層)を遅延取得して比較表示する。 */
+/** 所属文書 1 行。展開でチャンク構成(chunk_set)を遅延取得して比較表示する。 */
 function KnowledgeBaseDocumentRow({
   document,
   onRemove,
@@ -307,6 +275,24 @@ function KnowledgeBaseDocumentRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const chunkSets = useDocumentChunkSets(document.id, expanded);
+  const reingest = useEnqueueDocumentIngestionJob();
+  const needsReingest = documentChunkSetsNeedReingest(chunkSets.data ?? []);
+  const reingestReason = documentChunkSetReingestReason(chunkSets.data ?? []);
+
+  const handleReingest = () => {
+    reingest.mutate(
+      { id: document.id, force: true },
+      {
+        onSuccess: () => toast.success(t("knowledgeBases.variant.reingestQueued")),
+        onError: (error) =>
+          toast.error(
+            error instanceof ApiError
+              ? error.message
+              : t("knowledgeBases.variant.reingestFailed")
+          ),
+      }
+    );
+  };
 
   return (
     <li className="px-3 py-2">
@@ -351,62 +337,70 @@ function KnowledgeBaseDocumentRow({
           ) : chunkSets.isError ? (
             <p className="text-xs text-danger">{t("knowledgeBases.variant.error")}</p>
           ) : chunkSets.data && chunkSets.data.length > 0 ? (
-            <ul className="space-y-2" aria-label={t("knowledgeBases.variant.extractionTitle")}>
-              {groupChunkSetsByExtraction(chunkSets.data).map((group) => (
-                <li
-                  key={group.extractionId ?? group.chunkSets[0].chunk_set_id}
-                  className="overflow-hidden rounded-md border border-border bg-background"
-                >
-                  {/* 上位: 抽出(parser×前処理)= extract 1 回の単位 */}
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/60 bg-muted/5 px-2.5 py-1.5 text-xs">
-                    <Layers size={13} className="shrink-0 text-muted" aria-hidden />
-                    <span className="font-medium text-foreground">
-                      {t("knowledgeBases.variant.parser")}:{" "}
-                      {group.parser ?? t("knowledgeBases.variant.unknownRecipe")}
+            <div className="space-y-2">
+              {needsReingest ? (
+                <Banner severity="warning" title={t("knowledgeBases.variant.reingestTitle")}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="min-w-0 text-sm">
+                      {reingestReason ?? t("knowledgeBases.variant.reingestDescription")}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleReingest}
+                      loading={reingest.isPending}
+                      className="min-h-9 shrink-0 self-start sm:self-center"
+                    >
+                      {!reingest.isPending ? <RefreshCw size={14} aria-hidden /> : null}
+                      {t("knowledgeBases.variant.reingestAction")}
+                    </Button>
+                  </div>
+                </Banner>
+              ) : null}
+              <ul className="space-y-1.5" aria-label={t("knowledgeBases.variant.title")}>
+                {chunkSets.data.map((chunkSet) => (
+                  <li
+                    key={chunkSet.chunk_set_id}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="font-mono text-muted" title={chunkSet.chunk_set_id}>
+                      {chunkSet.chunk_set_id.slice(0, 10)}
                     </span>
-                    {group.preprocess ? (
-                      <span className="text-muted">
-                        {t("knowledgeBases.variant.preprocess")}: {group.preprocess}
+                    {chunkSet.extraction_recipe_id ? (
+                      <span
+                        className="font-mono text-muted"
+                        title={chunkSet.extraction_recipe_id}
+                      >
+                        {t("knowledgeBases.variant.extractionRecipe")}:{" "}
+                        {chunkSet.extraction_recipe_id.slice(0, 10)}
                       </span>
                     ) : null}
-                    {group.extractionId ? (
-                      <span className="font-mono text-muted" title={group.extractionId}>
-                        {group.extractionId.slice(0, 10)}
-                      </span>
-                    ) : null}
-                    <span className="tnum ml-auto text-muted">
-                      {t("knowledgeBases.variant.chunkSetCount", {
-                        count: group.chunkSets.length,
+                    <span className="rounded-sm bg-muted/10 px-1.5 py-0.5 text-muted">
+                      {chunkSet.status}
+                    </span>
+                    <LayerStatusPill
+                      label={t("knowledgeBases.variant.extractionStatus")}
+                      status={{
+                        layer_id: chunkSet.extraction_recipe_id,
+                        requested: Boolean(chunkSet.extraction_recipe_id),
+                        status: chunkSet.extraction_status,
+                        reason: chunkSet.extraction_reason,
+                      }}
+                    />
+                    <span className="tnum text-muted">
+                      {t("knowledgeBases.variant.chunkCount", { count: chunkSet.chunk_count })}
+                    </span>
+                    <span className="tnum text-muted">
+                      {t("knowledgeBases.variant.servingCount", {
+                        count: chunkSet.serving_knowledge_base_ids.length,
                       })}
                     </span>
-                  </div>
-                  {/* 下位: chunk_set(chunking 違い)= 抽出を共有する変種 */}
-                  <ul className="space-y-1 p-1.5">
-                    {group.chunkSets.map((chunkSet) => (
-                      <li
-                        key={chunkSet.chunk_set_id}
-                        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-sm bg-muted/5 px-2 py-1 text-xs"
-                      >
-                        <span className="font-mono text-muted" title={chunkSet.chunk_set_id}>
-                          {chunkSet.chunk_set_id.slice(0, 10)}
-                        </span>
-                        <span className="rounded-sm bg-muted/10 px-1.5 py-0.5 text-muted">
-                          {chunkSet.status}
-                        </span>
-                        <span className="tnum text-muted">
-                          {t("knowledgeBases.variant.chunkCount", { count: chunkSet.chunk_count })}
-                        </span>
-                        <span className="tnum text-muted">
-                          {t("knowledgeBases.variant.servingCount", {
-                            count: chunkSet.serving_knowledge_base_ids.length,
-                          })}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </li>
-              ))}
-            </ul>
+                    <DerivedLayerStatuses statuses={chunkSet.layer_statuses} />
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : (
             <p className="text-xs text-muted">{t("knowledgeBases.variant.empty")}</p>
           )}
@@ -426,6 +420,96 @@ function KnowledgeBaseDocumentRow({
       ) : null}
     </li>
   );
+}
+
+const DERIVED_LAYER_KEYS: Array<{
+  key: keyof DocumentChunkSetLayerStatuses;
+  labelKey: I18nKey;
+}> = [
+  { key: "metadata", labelKey: "knowledgeBases.variant.layer.metadata" },
+  { key: "graph", labelKey: "knowledgeBases.variant.layer.graph" },
+  { key: "navigation", labelKey: "knowledgeBases.variant.layer.navigation" },
+];
+
+const LAYER_STATUS_LABEL_KEYS: Record<DocumentMaterializationLayerStatus["status"], I18nKey> = {
+  not_requested: "knowledgeBases.variant.layerStatus.not_requested",
+  planned_only: "knowledgeBases.variant.layerStatus.planned_only",
+  materialized: "knowledgeBases.variant.layerStatus.materialized",
+  needs_reingest: "knowledgeBases.variant.layerStatus.needs_reingest",
+  error: "knowledgeBases.variant.layerStatus.error",
+};
+
+const DEFAULT_LAYER_STATUS: DocumentMaterializationLayerStatus = {
+  layer_id: null,
+  requested: false,
+  status: "not_requested",
+  reason: null,
+};
+
+function DerivedLayerStatuses({
+  statuses,
+}: {
+  statuses?: Partial<DocumentChunkSetLayerStatuses> | null;
+}) {
+  return (
+    <div
+      className="flex basis-full flex-wrap items-center gap-1.5 pt-0.5"
+      aria-label={t("knowledgeBases.variant.layers")}
+    >
+      {DERIVED_LAYER_KEYS.map(({ key, labelKey }) => (
+        <LayerStatusPill
+          key={key}
+          label={t(labelKey)}
+          status={statuses?.[key] ?? DEFAULT_LAYER_STATUS}
+        />
+      ))}
+    </div>
+  );
+}
+
+function LayerStatusPill({
+  label,
+  status,
+}: {
+  label: string;
+  status: DocumentMaterializationLayerStatus;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex min-h-6 items-center gap-1 rounded border px-1.5 text-[11px] leading-none",
+        status.requested
+          ? "border-primary/30 bg-primary/5 text-primary"
+          : "border-border bg-muted/5 text-muted"
+      )}
+      title={status.reason ?? undefined}
+    >
+      <span>{label}</span>
+      <span className="font-medium">{t(LAYER_STATUS_LABEL_KEYS[status.status])}</span>
+    </span>
+  );
+}
+
+export function documentChunkSetsNeedReingest(chunkSets: DocumentChunkSet[]) {
+  return chunkSets.some(
+    (chunkSet) =>
+      chunkSet.extraction_status === "needs_reingest" ||
+      Object.values(chunkSet.layer_statuses ?? {}).some(
+        (status) => status.status === "needs_reingest"
+      )
+  );
+}
+
+export function documentChunkSetReingestReason(chunkSets: DocumentChunkSet[]) {
+  for (const chunkSet of chunkSets) {
+    if (chunkSet.extraction_status === "needs_reingest" && chunkSet.extraction_reason) {
+      return chunkSet.extraction_reason;
+    }
+    for (const status of Object.values(chunkSet.layer_statuses ?? {})) {
+      if (status.status === "needs_reingest" && status.reason) return status.reason;
+    }
+  }
+  return null;
 }
 
 function documentHasKnowledgeBase(document: DocumentSummary, knowledgeBaseId: string) {

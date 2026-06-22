@@ -23,7 +23,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`Chunking 設定は戦略とパラメータを表示する (${viewport.name})`, async ({ page }) => {
+  test(`文書分割設定は方式とパラメータを表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await page.addInitScript(() => {
@@ -37,7 +37,7 @@ for (const viewport of [
 
     await page.goto("/settings/chunking");
 
-    await expect(page.getByRole("heading", { name: "Chunking 戦略" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "文書分割方式" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /構造認識/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /親子階層/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /ページ単位/ })).toBeVisible();
@@ -45,20 +45,20 @@ for (const viewport of [
     await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveValue("800");
     await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");
 
-    const navLink = page.getByRole("link", { name: "Chunking アダプター" });
+    const navLink = page.getByRole("link", { name: "文書分割" });
     await expect(navLink).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
   });
 }
 
-test("Chunking 設定取得に失敗したら再試行できる", async ({ page }) => {
+test("文書分割設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/chunking", async (route) => {
     await route.fulfill({
       status: 503,
       json: {
         data: null,
-        error_messages: ["Chunking 設定を取得できませんでした。"],
+        error_messages: ["文書分割設定を取得できませんでした。"],
         warning_messages: [],
       },
     });
@@ -66,12 +66,12 @@ test("Chunking 設定取得に失敗したら再試行できる", async ({ page 
 
   await page.goto("/settings/chunking");
 
-  await expect(page.getByRole("alert")).toContainText("Chunking 設定を取得できませんでした。");
+  await expect(page.getByRole("alert")).toContainText("文書分割設定を取得できませんでした。");
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
-test("Chunking 設定は戦略とパラメータを保存できる", async ({ page }) => {
+test("文書分割設定は方式とパラメータを保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let savedPayload: unknown = null;
   await page.route("**/api/settings/chunking", async (route) => {
@@ -108,7 +108,7 @@ test("Chunking 設定は戦略とパラメータを保存できる", async ({ pa
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("Chunking 設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("文書分割設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({
     strategy: "hierarchical_parent_child",
     chunk_size: 1000,

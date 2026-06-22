@@ -332,66 +332,6 @@ describe("api.request envelope", () => {
     expect(result.checks.oci_common).toBe("missing");
   });
 
-  it("selectAi は Select AI endpoint へ JSON body を送る", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        data: {
-          action: "showsql",
-          result_text: "SELECT COUNT(*) FROM rag_documents",
-          generated_sql: "SELECT COUNT(*) FROM rag_documents",
-          profile_name: "rag_profile",
-          query_chars: 12,
-          guardrail_warnings: [],
-        },
-        error_messages: [],
-        warning_messages: [],
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await api.selectAi({
-      query: "文書数を集計",
-      action: "showsql",
-      profile_name: "rag_profile",
-      max_result_chars: 12000,
-    });
-
-    expect(result.generated_sql).toContain("SELECT COUNT");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/search/select-ai",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          query: "文書数を集計",
-          action: "showsql",
-          profile_name: "rag_profile",
-          max_result_chars: 12000,
-        }),
-      })
-    );
-  });
-
-  it("selectAi は 503 を ApiError として扱う", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse(
-          {
-            data: null,
-            error_messages: ["Oracle Select AI profile が未設定です。"],
-            warning_messages: [],
-          },
-          503
-        )
-      )
-    );
-
-    await expect(api.selectAi({ query: "文書数" })).rejects.toMatchObject({
-      status: 503,
-      messages: ["Oracle Select AI profile が未設定です。"],
-    });
-  });
-
   it("updateModelSettings は Enterprise AI payload template を保持して送る", async () => {
     const payload = {
       enterprise_ai: {

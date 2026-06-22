@@ -17,34 +17,34 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`Generation 設定は回答生成プロファイルを表示する (${viewport.name})`, async ({ page }) => {
+  test(`回答スタイル設定は回答スタイルを表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockGeneration(page);
 
     await page.goto("/settings/generation");
 
-    await expect(page.getByRole("heading", { name: "回答生成プロファイル" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "回答スタイル" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /根拠重視・簡潔/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /構造化 JSON/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Generation アダプター" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "回答スタイル" })).toHaveAttribute(
       "aria-current",
       "page"
     );
     await expectNoHorizontalOverflow(page);
   });
 
-  test(`Guardrail 設定は安全ポリシーを表示する (${viewport.name})`, async ({ page }) => {
+  test(`安全チェック設定は安全チェックを表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockGuardrail(page);
 
     await page.goto("/settings/guardrail");
 
-    await expect(page.getByRole("heading", { name: "安全ポリシー" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "安全チェック" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /標準/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /規制対応/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Guardrail アダプター" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "安全チェック" })).toHaveAttribute(
       "aria-current",
       "page"
     );
@@ -52,7 +52,7 @@ for (const viewport of [
   });
 }
 
-test("Generation 設定はプロファイルを保存できる", async ({ page }) => {
+test("回答スタイル設定は回答スタイルを保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let saved: unknown = null;
   await page.route("**/api/settings/generation", async (route) => {
@@ -70,12 +70,12 @@ test("Generation 設定はプロファイルを保存できる", async ({ page }
   await expect(detailed).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("回答生成プロファイルを保存しました。")).toBeVisible();
+  await expect(page.getByText("回答スタイルを保存しました。")).toBeVisible();
   expect(saved).toEqual({ profile: "detailed_cited" });
   await expectNoHorizontalOverflow(page);
 });
 
-test("Guardrail 設定はポリシーを保存できる", async ({ page }) => {
+test("安全チェック設定は方針を保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let saved: unknown = null;
   await page.route("**/api/settings/guardrail", async (route) => {
@@ -93,23 +93,23 @@ test("Guardrail 設定はポリシーを保存できる", async ({ page }) => {
   await expect(strict).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("安全ポリシーを保存しました。")).toBeVisible();
+  await expect(page.getByText("安全チェックを保存しました。")).toBeVisible();
   expect(saved).toEqual({ policy: "strict" });
   await expectNoHorizontalOverflow(page);
 });
 
-test("Generation 設定取得に失敗したら再試行できる", async ({ page }) => {
+test("回答スタイル設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/generation", async (route) => {
     await route.fulfill({
       status: 503,
-      json: { data: null, error_messages: ["回答生成設定を取得できませんでした。"], warning_messages: [] },
+      json: { data: null, error_messages: ["回答スタイル設定を取得できませんでした。"], warning_messages: [] },
     });
   });
 
   await page.goto("/settings/generation");
 
-  await expect(page.getByRole("alert")).toContainText("回答生成設定を取得できませんでした。");
+  await expect(page.getByRole("alert")).toContainText("回答スタイル設定を取得できませんでした。");
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
 });
 

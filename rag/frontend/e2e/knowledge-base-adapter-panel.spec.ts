@@ -26,7 +26,7 @@ const kbSummary = {
   archived_at: null,
 };
 
-// chunking_strategy だけ上書き、それ以外は継承(= 上書き 1 / 13 段)。
+// chunking_strategy だけ上書き、それ以外は継承(= 個別設定 1 / 7 項目)。
 const adapterConfig = {
   version: 1,
   ingestion: {
@@ -116,36 +116,32 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
 });
 
-test("KB 詳細ページのアダプター設定が上書き件数と継承の解決値を表示する", async ({ page }) => {
+test("KB 詳細ページの構築設定が上書き件数と継承の解決値を表示する", async ({ page }) => {
   await mockKnowledgeBasePage(page);
 
   await page.goto("/knowledge-bases/kb-1");
 
-  // 上書き件数サマリ(9 段中 1 段が上書き)。
-  await expect(page.getByText("上書き 1 / 13 段")).toBeVisible();
+  // 上書き件数サマリ(7 項目中 1 項目が個別設定)。
+  await expect(page.getByText("個別設定 1 / 7 項目")).toBeVisible();
 
   // 継承行は「実際に効く値(グローバル既定の解決値)」を表示する。
   await expect(
-    page.getByText("グローバル設定に従う: text_normalize(テキスト正規化)")
+    page.getByText("グローバル設定に従う: テキスト正規化")
   ).toBeVisible();
-  await expect(
-    page.getByText("グローバル設定に従う: grounded_concise(既定)")
-  ).toBeVisible();
+  await expect(page.getByText("根拠重視・簡潔")).toHaveCount(0);
 
-  // パイプラインリボン(read-only 地図)が取込→検索の各段の実効値を表示する。
-  const ribbon = page.getByRole("region", { name: "パイプライン地図(取込 → 検索)" });
+  // 構築フロー(read-only 地図)がナレッジ構築に使う段だけを表示する。
+  const ribbon = page.getByRole("region", { name: "構築フロー" });
   await expect(ribbon).toBeVisible();
-  await expect(ribbon.getByText("取込時")).toBeVisible();
-  await expect(ribbon.getByText("検索時")).toBeVisible();
-  // 上書き段(Chunking=page_level)はリボンに上書きバッジ + 値が出る。
-  await expect(ribbon.getByText("page_level(ページ単位)")).toBeVisible();
+  await expect(ribbon.getByText("現在の構築設定")).toBeVisible();
+  await expect(ribbon.getByText("検索・回答設定")).toHaveCount(0);
+  // 上書き段(文書分割=page_level)はリボンに上書きバッジ + 値が出る。
+  await expect(ribbon.getByText("ページ単位")).toBeVisible();
   await expect(ribbon.getByText("上書き", { exact: true })).toBeVisible();
-  // 継承段(Generation)はリボンに解決値が出る。
-  await expect(ribbon.getByText("grounded_concise(既定)")).toBeVisible();
 
-  // Phase 2: 取込側の高度軸(GraphRAG / メタデータ抽出 / 図表要約 / ナビ要約)も表示。
-  await expect(ribbon.getByText("GraphRAG 構築")).toBeVisible();
-  await expect(ribbon.getByText("off(構築なし)")).toBeVisible();
+  // 取込側の高度軸(関係情報 / メタデータ抽出 / 図表要約 / ナビ要約)も表示。
+  await expect(ribbon.getByText("関係情報の構築")).toBeVisible();
+  await expect(ribbon.getByText("構築しない")).toBeVisible();
 });
 
 test("一覧から KB 名リンクで詳細ページへ遷移できる", async ({ page }) => {
@@ -153,11 +149,11 @@ test("一覧から KB 名リンクで詳細ページへ遷移できる", async (
 
   await page.goto("/knowledge-bases");
 
-  // 一覧では右サイドバーにアダプター設定を出さない(詳細ページへ移設済み)。
-  await expect(page.getByText("上書き 1 / 13 段")).toHaveCount(0);
+  // 一覧では右サイドバーに構築設定を出さない(詳細ページへ移設済み)。
+  await expect(page.getByText("個別設定 1 / 7 項目")).toHaveCount(0);
 
   await page.getByRole("link", { name: "社内規程" }).click();
 
   await expect(page).toHaveURL(/\/knowledge-bases\/kb-1$/);
-  await expect(page.getByText("上書き 1 / 13 段")).toBeVisible();
+  await expect(page.getByText("個別設定 1 / 7 項目")).toBeVisible();
 });

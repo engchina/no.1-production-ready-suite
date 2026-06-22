@@ -1,4 +1,4 @@
-"""KB 単位アダプター設定(kb_adapter_config)の単体テスト。"""
+"""KB 単位構築設定(kb_adapter_config)の単体テスト。"""
 
 import pytest
 
@@ -45,8 +45,8 @@ def test_ingestion_scope_overlays_only_ingestion_fields() -> None:
     assert effective.rag_generation_profile == settings.rag_generation_profile
 
 
-def test_query_scope_overlays_only_query_fields() -> None:
-    """query scope は Retrieval 以降だけ上書きし、Parser/Chunking には触れない。"""
+def test_kb_query_scope_is_legacy_noop() -> None:
+    """KB query scope は legacy として読めるが Settings へは反映しない。"""
     settings = get_settings()
     config = _config(
         ingestion={"chunk_size": 1200},
@@ -55,9 +55,8 @@ def test_query_scope_overlays_only_query_fields() -> None:
 
     effective = resolve_effective_settings(settings, config, scope="query")
 
-    assert effective.rag_retrieval_strategy == "vector"
-    assert effective.rag_guardrail_policy == "strict"
-    assert effective.rag_chunk_size == settings.rag_chunk_size
+    assert effective is settings
+    assert config.settings_overrides("query") == {}
 
 
 def test_settings_overrides_uses_allowlist_only() -> None:
@@ -128,14 +127,13 @@ def test_apply_or_global_falls_back_on_inconsistency() -> None:
     assert applied is False
 
 
-def test_apply_or_global_reports_applied_true_on_valid_override() -> None:
-    """有効な上書きは applied=True で別 Settings を返す。"""
+def test_apply_or_global_ignores_kb_query_override() -> None:
+    """KB query の legacy 上書きは applied=False でグローバルのまま返す。"""
     settings = get_settings()
     config = _config(query={"vector_index_profile": "accurate"})
     merged, applied = apply_adapter_config_or_global(settings, config, scope="query")
-    assert applied is True
-    assert merged is not settings
-    assert merged.rag_vector_index_profile == "accurate"
+    assert applied is False
+    assert merged is settings
 
 
 def test_parse_is_tolerant_of_legacy_and_unknown_keys() -> None:
@@ -148,13 +146,14 @@ def test_parse_is_tolerant_of_legacy_and_unknown_keys() -> None:
 
 
 def test_dump_parse_round_trip() -> None:
-    """dump → parse でフィールドが保たれる。"""
+    """dump → parse で正規の KB 構築フィールドだけが保たれる。"""
     config = _config(
         ingestion={"chunking_strategy": "page_level", "parser_adapter_backend": "marker"},
         query={"evaluation_suite": "strict_ci"},
     )
     restored = parse_adapter_config(dump_adapter_config(config))
-    assert restored.model_dump() == config.model_dump()
+    assert restored.ingestion == config.ingestion
+    assert restored.query == KnowledgeBaseQueryConfig()
 
 
 def test_ingestion_scope_overlays_advanced_axes() -> None:
@@ -187,7 +186,7 @@ def test_ingestion_scope_overlays_advanced_axes() -> None:
 
 
 def test_resolve_effective_adapter_config_fills_inherited_with_global() -> None:
-    """継承(None)フィールドはグローバル既定で埋められ、上書きはそのまま残る。"""
+    """構築設定の継承(None)フィールドはグローバル既定で埋められる。"""
     settings = get_settings()
     config = _config(
         ingestion={"chunking_strategy": "page_level"},
@@ -198,12 +197,11 @@ def test_resolve_effective_adapter_config_fills_inherited_with_global() -> None:
 
     # 上書きフィールドは override 値。
     assert effective.ingestion.chunking_strategy == "page_level"
-    assert effective.query.vector_index_profile == "accurate"
     # 継承フィールドはグローバル既定で解決され、None にはならない。
     assert effective.ingestion.preprocess_profile == settings.rag_preprocess_profile
     assert effective.ingestion.parser_adapter_backend == settings.rag_parser_adapter_backend
-    assert effective.query.generation_profile == settings.rag_generation_profile
-    assert effective.query.retrieval_strategy == settings.rag_retrieval_strategy
+    # query は KB では legacy ignored なので解決済み表示にも出さない。
+    assert effective.query == KnowledgeBaseQueryConfig()
 
 
 def test_resolve_effective_adapter_config_all_global_when_empty() -> None:
@@ -213,8 +211,7 @@ def test_resolve_effective_adapter_config_all_global_when_empty() -> None:
 
     assert effective.ingestion.chunking_strategy == settings.rag_chunking_strategy
     assert effective.ingestion.chunk_size == settings.rag_chunk_size
-    assert effective.query.guardrail_policy == settings.rag_guardrail_policy
-    assert effective.query.evaluation_suite == settings.rag_evaluation_suite
+    assert effective.query == KnowledgeBaseQueryConfig()
     # 解決済みは表示専用なので継承判定の元データ(config)は変更しない。
     assert KnowledgeBaseAdapterConfig().is_empty()
 

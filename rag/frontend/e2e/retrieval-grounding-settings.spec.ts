@@ -23,7 +23,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`Retrieval 設定は検索戦略を表示する (${viewport.name})`, async ({ page }) => {
+  test(`検索方法設定は検索方法を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await collapseSidebar(page);
@@ -32,18 +32,18 @@ for (const viewport of [
 
     await page.goto("/settings/retrieval");
 
-    await expect(page.getByRole("heading", { name: "検索戦略" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "検索方法" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /業務厳格/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /補正マルチクエリ/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Retrieval アダプター" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "検索方法" })).toHaveAttribute(
       "aria-current",
       "page"
     );
     await expectNoHorizontalOverflow(page);
   });
 
-  test(`Grounding 設定は検索後処理プリセットを表示する (${viewport.name})`, async ({ page }) => {
+  test(`根拠確認設定は処理方式を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await collapseSidebar(page);
@@ -52,10 +52,10 @@ for (const viewport of [
 
     await page.goto("/settings/grounding");
 
-    await expect(page.getByRole("heading", { name: "検索後処理パイプライン" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "根拠確認" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /カスタム/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Grounding アダプター" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "根拠確認" })).toHaveAttribute(
       "aria-current",
       "page"
     );
@@ -63,7 +63,7 @@ for (const viewport of [
   });
 }
 
-test("Retrieval 設定は検索戦略を保存できる", async ({ page }) => {
+test("検索方法設定は検索方法を保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let savedPayload: unknown = null;
   await page.route("**/api/settings/retrieval", async (route) => {
@@ -84,12 +84,12 @@ test("Retrieval 設定は検索戦略を保存できる", async ({ page }) => {
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("検索戦略を保存しました。")).toBeVisible();
+  await expect(page.getByText("検索方法を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({ strategy: "business_context_strict" });
   await expectNoHorizontalOverflow(page);
 });
 
-test("Grounding 設定は検索後処理プリセットを保存できる", async ({ page }) => {
+test("根拠確認設定は処理方式を保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let savedPayload: unknown = null;
   await page.route("**/api/settings/grounding", async (route) => {
@@ -108,23 +108,23 @@ test("Grounding 設定は検索後処理プリセットを保存できる", asyn
   await expect(full).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("検索後処理設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("根拠確認設定を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({ pipeline: "full_governed" });
   await expectNoHorizontalOverflow(page);
 });
 
-test("Retrieval 設定取得に失敗したら再試行できる", async ({ page }) => {
+test("検索方法設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/retrieval", async (route) => {
     await route.fulfill({
       status: 503,
-      json: { data: null, error_messages: ["検索戦略設定を取得できませんでした。"], warning_messages: [] },
+      json: { data: null, error_messages: ["検索方法設定を取得できませんでした。"], warning_messages: [] },
     });
   });
 
   await page.goto("/settings/retrieval");
 
-  await expect(page.getByRole("alert")).toContainText("検索戦略設定を取得できませんでした。");
+  await expect(page.getByRole("alert")).toContainText("検索方法設定を取得できませんでした。");
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
 });
 
@@ -143,7 +143,6 @@ function retrievalEnvelope(strategy: string) {
     { name: "vector", recommended_for: ["semantic"], gap_stop: false, corrective_retrieval: false, business_fit_weighting: false },
     { name: "keyword", recommended_for: ["named_entity"], gap_stop: false, corrective_retrieval: false, business_fit_weighting: false },
     { name: "graph_augmented", recommended_for: ["relationship"], gap_stop: false, corrective_retrieval: false, business_fit_weighting: false },
-    { name: "select_ai_structured", recommended_for: ["aggregate"], gap_stop: false, corrective_retrieval: false, business_fit_weighting: false },
     { name: "business_context_strict", recommended_for: ["compliance"], gap_stop: true, corrective_retrieval: false, business_fit_weighting: true },
     { name: "corrective_multi_query", recommended_for: ["recall_critical"], gap_stop: false, corrective_retrieval: true, business_fit_weighting: false },
   ];

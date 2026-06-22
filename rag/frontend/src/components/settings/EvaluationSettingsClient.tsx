@@ -25,7 +25,7 @@ const SUITE_ORDER: EvaluationSuiteName[] = [
   "ragas_like",
 ];
 
-/** Evaluation アダプター(評価スイート/閾値)の runtime 設定を管理する設定画面。 */
+/** 品質評価の基準と閾値の現在設定を管理する設定画面。 */
 export function EvaluationSettingsClient() {
   const query = useEvaluationSettings();
   const save = useUpdateEvaluationSettings();

@@ -27,17 +27,17 @@ test.describe("サイドナビのセクション折りたたみ", () => {
     const ragItem = sidebar.getByText("RAG 検索", { exact: true });
     await expect(ragItem).toBeVisible();
 
-    // RAG セクション見出しへフォーカスして Enter で折りたたむ。
-    const toggle = sidebar.getByRole("button", { name: "RAG を折りたたむ" });
+    // 業務ビューセクション見出しへフォーカスして Enter で折りたたむ。
+    const toggle = sidebar.getByRole("button", { name: "業務ビュー を折りたたむ" });
     await toggle.focus();
     await page.keyboard.press("Enter");
     await expect(ragItem).toBeHidden();
     await expect(
-      sidebar.getByRole("button", { name: "RAG を展開" })
+      sidebar.getByRole("button", { name: "業務ビュー を展開" })
     ).toHaveAttribute("aria-expanded", "false");
 
     // Space で再展開。
-    await sidebar.getByRole("button", { name: "RAG を展開" }).focus();
+    await sidebar.getByRole("button", { name: "業務ビュー を展開" }).focus();
     await page.keyboard.press(" ");
     await expect(ragItem).toBeVisible();
   });
@@ -48,15 +48,15 @@ test.describe("サイドナビのセクション折りたたみ", () => {
     await page.goto("/dashboard");
 
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-    const evalLink = sidebar.getByRole("link", { name: "RAG 評価" });
+    const evalLink = sidebar.getByRole("link", { name: "品質評価", exact: true });
     await expect(evalLink).toHaveCount(1);
 
     // 折りたたむと visibility:hidden + inert で a11y ツリーから外れ、role として見えなくなる。
-    await sidebar.getByRole("button", { name: "RAG を折りたたむ" }).click();
+    await sidebar.getByRole("button", { name: "業務ビュー を折りたたむ" }).click();
     await expect(evalLink).toHaveCount(0);
 
     // 展開で復帰する。
-    await sidebar.getByRole("button", { name: "RAG を展開" }).click();
+    await sidebar.getByRole("button", { name: "業務ビュー を展開" }).click();
     await expect(evalLink).toHaveCount(1);
   });
 
@@ -67,8 +67,8 @@ test.describe("サイドナビのセクション折りたたみ", () => {
 
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
     // icon-only 幅ではセクション開閉ボタンは出さず、全リンクを表示する。
-    await expect(sidebar.getByRole("button", { name: "RAG を折りたたむ" })).toHaveCount(0);
-    await expect(sidebar.getByRole("link", { name: "Retrieval アダプター" })).toBeVisible();
-    await expect(sidebar.getByRole("link", { name: "Agentic アダプター" })).toBeVisible();
+    await expect(sidebar.getByRole("button", { name: "業務ビュー を折りたたむ" })).toHaveCount(0);
+    await expect(sidebar.getByRole("link", { name: "検索方法" })).toBeVisible();
+    await expect(sidebar.getByRole("link", { name: "高度な検索" })).toBeVisible();
   });
 });

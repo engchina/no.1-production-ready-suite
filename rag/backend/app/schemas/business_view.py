@@ -1,6 +1,6 @@
-"""業務アシスタント(Business View)関連スキーマ。
+"""業務ビュー(Business View)関連スキーマ。
 
-KB が「文書をどう加工して索引するか(加工する側視点)」を司るのに対し、業務アシスタントは
+KB が「文書をどう加工して索引するか(加工する側視点)」を司るのに対し、業務ビューは
 「どの KB 群を、どんな検索/生成方針・persona で束ねて回答するか(利用する側視点)」を司る。
 """
 
@@ -14,21 +14,21 @@ from app.schemas.knowledge_base import KnowledgeBaseRef
 
 
 class BusinessViewStatus(StrEnum):
-    """業務アシスタントの運用状態。"""
+    """業務ビューの運用状態。"""
 
     ACTIVE = "ACTIVE"
     ARCHIVED = "ARCHIVED"
 
 
 class BusinessViewRef(BaseModel):
-    """他スキーマへ埋め込む軽量な業務アシスタント参照。"""
+    """他スキーマへ埋め込む軽量な業務ビュー参照。"""
 
     id: str
     name: str
 
 
 class BusinessViewSummary(BusinessViewRef):
-    """一覧表示用の業務アシスタント要約。"""
+    """一覧表示用の業務ビュー要約。"""
 
     description: str | None = None
     status: BusinessViewStatus
@@ -39,7 +39,7 @@ class BusinessViewSummary(BusinessViewRef):
 
 
 class BusinessViewDetail(BusinessViewSummary):
-    """詳細表示用の業務アシスタント情報。"""
+    """詳細表示用の業務ビュー情報。"""
 
     config: BusinessViewConfig = Field(default_factory=BusinessViewConfig)
     knowledge_bases: list[KnowledgeBaseRef] = Field(
@@ -49,7 +49,7 @@ class BusinessViewDetail(BusinessViewSummary):
 
 
 class BusinessViewCreateRequest(BaseModel):
-    """業務アシスタント作成 request。"""
+    """業務ビュー作成 request。"""
 
     name: str = Field(..., min_length=1, max_length=256)
     description: str | None = Field(default=None, max_length=2000)
@@ -67,7 +67,7 @@ class BusinessViewCreateRequest(BaseModel):
 
 
 class BusinessViewUpdateRequest(BaseModel):
-    """業務アシスタント更新 request。指定フィールドのみ更新する。"""
+    """業務ビュー更新 request。指定フィールドのみ更新する。"""
 
     name: str | None = Field(default=None, min_length=1, max_length=256)
     description: str | None = Field(default=None, max_length=2000)

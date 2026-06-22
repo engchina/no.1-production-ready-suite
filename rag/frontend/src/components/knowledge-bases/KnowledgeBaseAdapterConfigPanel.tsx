@@ -11,33 +11,26 @@ import { ToggleChip } from "@/components/ui/toggle-chip";
 import {
   ApiError,
   type ChunkingStrategyName,
-  type EvaluationSuiteName,
-  type GenerationProfileName,
   type GraphProfileName,
-  type GuardrailPolicyName,
   type KnowledgeBaseAdapterConfig,
   type ParserAdapterBackend,
   type PreprocessProfileName,
-  type PostRetrievalPipelineName,
-  type RetrievalStrategyName,
-  type VectorIndexProfileName,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useUpdateKnowledgeBase } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
-/** 各カテゴリ選択肢(value と日本語ラベル)。グローバル設定画面の選択肢と整合させる。 */
+/** 各カテゴリ選択肢。グローバル設定画面の表示名と整合させる。 */
 const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = [
-  { value: "passthrough", label: "passthrough(変換なし)" },
-  { value: "text_normalize", label: "text_normalize(テキスト正規化)" },
-  { value: "office_to_pdf", label: "office_to_pdf(Office→PDF)" },
-  { value: "pdf_to_page_images", label: "pdf_to_page_images(PDF→画像PDF)" },
-  { value: "csv_to_json", label: "csv_to_json(CSV→JSON)" },
-  { value: "excel_to_json", label: "excel_to_json(Excel→JSON)" },
+  { value: "passthrough", label: t("settings.preprocess.profile.passthrough") },
+  { value: "text_normalize", label: t("settings.preprocess.profile.text_normalize") },
+  { value: "office_to_pdf", label: t("settings.preprocess.profile.office_to_pdf") },
+  { value: "pdf_to_page_images", label: t("settings.preprocess.profile.pdf_to_page_images") },
+  { value: "csv_to_json", label: t("settings.preprocess.profile.csv_to_json") },
+  { value: "excel_to_json", label: t("settings.preprocess.profile.excel_to_json") },
 ];
-// parser バックエンドはサービスとして起動できる parser microservice のみを並べる
-// (local/auto は廃止)。グローバル設定の選択肢と整合させる。
+// 文書解析はサービスとして起動できる解析エンジンのみを並べる(local/auto は廃止)。
 const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = [
   { value: "docling", label: "Docling" },
   { value: "marker", label: "Marker" },
@@ -49,63 +42,24 @@ const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = [
   { value: "oci_document_understanding", label: "OCI Document Understanding" },
 ];
 const CHUNKING_OPTIONS: SelectFieldOption<ChunkingStrategyName>[] = [
-  { value: "structure_aware", label: "structure_aware(構造認識)" },
-  { value: "recursive_character", label: "recursive_character(固定長)" },
-  { value: "sentence_window", label: "sentence_window(文単位)" },
-  { value: "hierarchical_parent_child", label: "hierarchical_parent_child(親子)" },
-  { value: "markdown_heading", label: "markdown_heading(章節)" },
-  { value: "page_level", label: "page_level(ページ単位)" },
-  { value: "fixed_size", label: "fixed_size(固定長)" },
+  { value: "structure_aware", label: t("settings.chunking.strategy.structure_aware") },
+  { value: "recursive_character", label: t("settings.chunking.strategy.recursive_character") },
+  { value: "sentence_window", label: t("settings.chunking.strategy.sentence_window") },
+  {
+    value: "hierarchical_parent_child",
+    label: t("settings.chunking.strategy.hierarchical_parent_child"),
+  },
+  { value: "markdown_heading", label: t("settings.chunking.strategy.markdown_heading") },
+  { value: "page_level", label: t("settings.chunking.strategy.page_level") },
+  { value: "fixed_size", label: t("settings.chunking.strategy.fixed_size") },
 ];
 const GRAPH_OPTIONS: SelectFieldOption<GraphProfileName>[] = [
-  { value: "off", label: "off(構築なし)" },
-  { value: "entities", label: "entities(エンティティ+関係)" },
-  { value: "full", label: "full(claims+コミュニティ要約)" },
-];
-const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalStrategyName>[] = [
-  { value: "hybrid_rrf", label: "hybrid_rrf(既定)" },
-  { value: "vector", label: "vector" },
-  { value: "keyword", label: "keyword" },
-  { value: "graph_augmented", label: "graph_augmented" },
-  { value: "select_ai_structured", label: "select_ai_structured" },
-  { value: "business_context_strict", label: "business_context_strict" },
-  { value: "corrective_multi_query", label: "corrective_multi_query" },
-];
-const GROUNDING_OPTIONS: SelectFieldOption<PostRetrievalPipelineName>[] = [
-  { value: "custom", label: "custom(既定)" },
-  { value: "lean", label: "lean" },
-  { value: "verified_context", label: "verified_context" },
-  { value: "context_enrich", label: "context_enrich" },
-  { value: "compact", label: "compact" },
-  { value: "full_governed", label: "full_governed" },
-];
-const GENERATION_OPTIONS: SelectFieldOption<GenerationProfileName>[] = [
-  { value: "grounded_concise", label: "grounded_concise(既定)" },
-  { value: "detailed_cited", label: "detailed_cited(出典明示)" },
-  { value: "strict_extractive", label: "strict_extractive(抽出のみ)" },
-  { value: "structured_json", label: "structured_json" },
-  { value: "bilingual_ja_en", label: "bilingual_ja_en(日英)" },
-];
-const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
-  { value: "standard", label: "standard(既定)" },
-  { value: "strict", label: "strict" },
-  { value: "lenient", label: "lenient" },
-  { value: "regulated", label: "regulated" },
-];
-const VECTOR_INDEX_OPTIONS: SelectFieldOption<VectorIndexProfileName>[] = [
-  { value: "balanced", label: "balanced(既定)" },
-  { value: "accurate", label: "accurate(高再現)" },
-  { value: "fast", label: "fast(低レイテンシ)" },
-];
-const EVALUATION_OPTIONS: SelectFieldOption<EvaluationSuiteName>[] = [
-  { value: "request_only", label: "request_only(既定)" },
-  { value: "retrieval_focused", label: "retrieval_focused" },
-  { value: "balanced", label: "balanced" },
-  { value: "strict_ci", label: "strict_ci" },
-  { value: "ragas_like", label: "ragas_like" },
+  { value: "off", label: t("settings.graph.profile.off") },
+  { value: "entities", label: t("settings.graph.profile.entities") },
+  { value: "full", label: t("settings.graph.profile.full") },
 ];
 
-/** パイプラインリボン(read-only 地図)の 1 段ぶんの表示データ。 */
+/** 構築フロー(read-only 地図)の 1 段ぶんの表示データ。 */
 interface RibbonStage {
   id: string;
   label: string;
@@ -134,6 +88,17 @@ function boolLabel(value: boolean): string {
     : t("knowledgeBases.adapter.bool.disabled");
 }
 
+function emptyQueryConfig(): KnowledgeBaseAdapterConfig["query"] {
+  return {
+    retrieval_strategy: null,
+    post_retrieval_pipeline: null,
+    generation_profile: null,
+    guardrail_policy: null,
+    vector_index_profile: null,
+    evaluation_suite: null,
+  };
+}
+
 /** ブール軸からリボン 1 段の表示データを作る。 */
 function resolveBoolStage(
   id: string,
@@ -154,10 +119,10 @@ interface KnowledgeBaseAdapterConfigPanelProps {
   disabled?: boolean;
 }
 
-/** 上書きサマリの対象段数(取込 7 + クエリ 6)。 */
-const TOTAL_STAGES = 13;
+/** 上書きサマリの対象段数(構築 7)。 */
+const TOTAL_STAGES = 7;
 
-/** 上書き対象 13 段のうち、非継承(上書き)の件数を数える。 */
+/** 上書き対象 7 段のうち、非継承(上書き)の件数を数える。 */
 function countOverrides(config: KnowledgeBaseAdapterConfig): number {
   const ingestion = [
     config.ingestion.preprocess_profile,
@@ -168,18 +133,10 @@ function countOverrides(config: KnowledgeBaseAdapterConfig): number {
     config.ingestion.asset_summary_enabled,
     config.ingestion.navigation_summary_enabled,
   ];
-  const query = [
-    config.query.retrieval_strategy,
-    config.query.post_retrieval_pipeline,
-    config.query.generation_profile,
-    config.query.guardrail_policy,
-    config.query.vector_index_profile,
-    config.query.evaluation_suite,
-  ];
-  return [...ingestion, ...query].filter((value) => value !== null).length;
+  return ingestion.filter((value) => value !== null).length;
 }
 
-/** KB 単位のアダプター上書きを編集するパネル。継承を既定とし、上書き時のみ選択肢を表示する。 */
+/** KB 単位の構築設定を編集するパネル。継承を既定とし、上書き時のみ選択肢を表示する。 */
 export function KnowledgeBaseAdapterConfigPanel({
   knowledgeBaseId,
   adapterConfig,
@@ -202,8 +159,8 @@ export function KnowledgeBaseAdapterConfigPanel({
   );
   const overrideCount = useMemo(() => countOverrides(form), [form]);
 
-  // パイプラインリボン(read-only 地図)。取込→検索のパイプライン順に各段の実効値を並べる。
-  const ribbonIngest = useMemo<RibbonStage[]>(
+  // 構築フローの read-only 地図。ナレッジ構築に効く段だけを表示する。
+  const ribbonBuild = useMemo<RibbonStage[]>(
     () => [
       resolveStage(
         "preprocess",
@@ -254,62 +211,16 @@ export function KnowledgeBaseAdapterConfigPanel({
     ],
     [form.ingestion, effectiveConfig]
   );
-  const ribbonQuery = useMemo<RibbonStage[]>(
-    () => [
-      resolveStage(
-        "retrieval",
-        t("knowledgeBases.adapter.field.retrievalStrategy"),
-        form.query.retrieval_strategy,
-        effectiveConfig?.query.retrieval_strategy ?? null,
-        RETRIEVAL_OPTIONS
-      ),
-      resolveStage(
-        "grounding",
-        t("knowledgeBases.adapter.field.postRetrievalPipeline"),
-        form.query.post_retrieval_pipeline,
-        effectiveConfig?.query.post_retrieval_pipeline ?? null,
-        GROUNDING_OPTIONS
-      ),
-      resolveStage(
-        "generation",
-        t("knowledgeBases.adapter.field.generationProfile"),
-        form.query.generation_profile,
-        effectiveConfig?.query.generation_profile ?? null,
-        GENERATION_OPTIONS
-      ),
-      resolveStage(
-        "guardrail",
-        t("knowledgeBases.adapter.field.guardrailPolicy"),
-        form.query.guardrail_policy,
-        effectiveConfig?.query.guardrail_policy ?? null,
-        GUARDRAIL_OPTIONS
-      ),
-      resolveStage(
-        "vector",
-        t("knowledgeBases.adapter.field.vectorIndexProfile"),
-        form.query.vector_index_profile,
-        effectiveConfig?.query.vector_index_profile ?? null,
-        VECTOR_INDEX_OPTIONS
-      ),
-      resolveStage(
-        "evaluation",
-        t("knowledgeBases.adapter.field.evaluationSuite"),
-        form.query.evaluation_suite,
-        effectiveConfig?.query.evaluation_suite ?? null,
-        EVALUATION_OPTIONS
-      ),
-    ],
-    [form.query, effectiveConfig]
-  );
 
   const updateIngestion = (patch: Partial<KnowledgeBaseAdapterConfig["ingestion"]>) =>
     setForm((current) => ({ ...current, ingestion: { ...current.ingestion, ...patch } }));
-  const updateQuery = (patch: Partial<KnowledgeBaseAdapterConfig["query"]>) =>
-    setForm((current) => ({ ...current, query: { ...current.query, ...patch } }));
 
   const handleSave = () => {
     save.mutate(
-      { id: knowledgeBaseId, payload: { adapter_config: form } },
+      {
+        id: knowledgeBaseId,
+        payload: { adapter_config: { ...form, query: emptyQueryConfig() } },
+      },
       {
         onSuccess: () => toast.success(t("knowledgeBases.adapter.toast.saved")),
       }
@@ -322,7 +233,10 @@ export function KnowledgeBaseAdapterConfigPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center justify-between gap-2 text-base">
+        <CardTitle
+          className="flex items-center justify-between gap-2 text-base"
+          aria-label={t("knowledgeBases.adapter.title")}
+        >
           <span className="flex items-center gap-2">
             <SlidersHorizontal className="size-4 text-muted" aria-hidden />
             {t("knowledgeBases.adapter.title")}
@@ -348,7 +262,7 @@ export function KnowledgeBaseAdapterConfigPanel({
           <FormStatus tone="info" message={t("knowledgeBases.adapter.archivedHint")} />
         ) : null}
 
-        <PipelineRibbon ingest={ribbonIngest} query={ribbonQuery} />
+        <PipelineRibbon stages={ribbonBuild} />
 
         <section className="space-y-4" aria-label={t("knowledgeBases.adapter.section.ingestion")}>
           <SectionHeading
@@ -421,73 +335,6 @@ export function KnowledgeBaseAdapterConfigPanel({
           />
         </section>
 
-        <section className="space-y-4" aria-label={t("knowledgeBases.adapter.section.query")}>
-          <SectionHeading
-            title={t("knowledgeBases.adapter.section.query")}
-            hint={t("knowledgeBases.adapter.section.queryHint")}
-          />
-          <AdapterSelectRow
-            id={`kb-adapter-retrieval-${knowledgeBaseId}`}
-            label={t("knowledgeBases.adapter.field.retrievalStrategy")}
-            value={form.query.retrieval_strategy}
-            effectiveValue={effectiveConfig?.query.retrieval_strategy ?? null}
-            options={RETRIEVAL_OPTIONS}
-            disabled={disabled}
-            defaultOnOverride="vector"
-            onChange={(value) => updateQuery({ retrieval_strategy: value })}
-          />
-          <AdapterSelectRow
-            id={`kb-adapter-grounding-${knowledgeBaseId}`}
-            label={t("knowledgeBases.adapter.field.postRetrievalPipeline")}
-            value={form.query.post_retrieval_pipeline}
-            effectiveValue={effectiveConfig?.query.post_retrieval_pipeline ?? null}
-            options={GROUNDING_OPTIONS}
-            disabled={disabled}
-            defaultOnOverride="verified_context"
-            onChange={(value) => updateQuery({ post_retrieval_pipeline: value })}
-          />
-          <AdapterSelectRow
-            id={`kb-adapter-generation-${knowledgeBaseId}`}
-            label={t("knowledgeBases.adapter.field.generationProfile")}
-            value={form.query.generation_profile}
-            effectiveValue={effectiveConfig?.query.generation_profile ?? null}
-            options={GENERATION_OPTIONS}
-            disabled={disabled}
-            defaultOnOverride="detailed_cited"
-            onChange={(value) => updateQuery({ generation_profile: value })}
-          />
-          <AdapterSelectRow
-            id={`kb-adapter-guardrail-${knowledgeBaseId}`}
-            label={t("knowledgeBases.adapter.field.guardrailPolicy")}
-            value={form.query.guardrail_policy}
-            effectiveValue={effectiveConfig?.query.guardrail_policy ?? null}
-            options={GUARDRAIL_OPTIONS}
-            disabled={disabled}
-            defaultOnOverride="strict"
-            onChange={(value) => updateQuery({ guardrail_policy: value })}
-          />
-          <AdapterSelectRow
-            id={`kb-adapter-vector-${knowledgeBaseId}`}
-            label={t("knowledgeBases.adapter.field.vectorIndexProfile")}
-            value={form.query.vector_index_profile}
-            effectiveValue={effectiveConfig?.query.vector_index_profile ?? null}
-            options={VECTOR_INDEX_OPTIONS}
-            disabled={disabled}
-            defaultOnOverride="accurate"
-            onChange={(value) => updateQuery({ vector_index_profile: value })}
-          />
-          <AdapterSelectRow
-            id={`kb-adapter-evaluation-${knowledgeBaseId}`}
-            label={t("knowledgeBases.adapter.field.evaluationSuite")}
-            value={form.query.evaluation_suite}
-            effectiveValue={effectiveConfig?.query.evaluation_suite ?? null}
-            options={EVALUATION_OPTIONS}
-            disabled={disabled}
-            defaultOnOverride="strict_ci"
-            onChange={(value) => updateQuery({ evaluation_suite: value })}
-          />
-        </section>
-
         {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
 
         <div className="flex items-center justify-end gap-2">
@@ -515,8 +362,8 @@ export function KnowledgeBaseAdapterConfigPanel({
   );
 }
 
-/** 取込→検索のパイプライン順に各段の実効値を一望する read-only 地図。編集は下のフォームで行う。 */
-function PipelineRibbon({ ingest, query }: { ingest: RibbonStage[]; query: RibbonStage[] }) {
+/** ナレッジ構築フローの実効値を一望する read-only 地図。編集は下のフォームで行う。 */
+function PipelineRibbon({ stages }: { stages: RibbonStage[] }) {
   return (
     <section
       aria-label={t("knowledgeBases.adapter.ribbon.title")}
@@ -525,8 +372,7 @@ function PipelineRibbon({ ingest, query }: { ingest: RibbonStage[]; query: Ribbo
       <h3 className="text-sm font-semibold text-foreground">
         {t("knowledgeBases.adapter.ribbon.title")}
       </h3>
-      <RibbonGroup label={t("knowledgeBases.adapter.ribbon.ingest")} stages={ingest} />
-      <RibbonGroup label={t("knowledgeBases.adapter.ribbon.query")} stages={query} />
+      <RibbonGroup label={t("knowledgeBases.adapter.ribbon.ingest")} stages={stages} />
     </section>
   );
 }

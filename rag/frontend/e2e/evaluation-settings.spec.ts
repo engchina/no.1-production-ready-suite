@@ -17,21 +17,21 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`Evaluation 設定は評価スイートを表示する (${viewport.name})`, async ({ page }) => {
+  test(`品質評価設定は品質評価設定を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockEvaluation(page, "request_only");
 
     await page.goto("/settings/evaluation");
 
-    await expect(page.getByRole("heading", { name: "評価スイート" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "品質評価設定" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /リクエスト準拠/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /厳格 CI/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Ragas 観点/ })).toBeVisible();
     await expect(
       page.getByText("プリセット閾値なし(request の thresholds を使用)")
     ).toBeVisible();
-    await expect(page.getByRole("link", { name: "Evaluation アダプター" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "品質評価設定" })).toHaveAttribute(
       "aria-current",
       "page"
     );
@@ -39,7 +39,7 @@ for (const viewport of [
   });
 }
 
-test("Evaluation 設定は strict_ci を選んで閾値表示し保存できる", async ({ page }) => {
+test("品質評価設定は strict_ci を選んで閾値表示し保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let saved: unknown = null;
   await page.route("**/api/settings/evaluation-suite", async (route) => {
@@ -60,23 +60,23 @@ test("Evaluation 設定は strict_ci を選んで閾値表示し保存できる"
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("評価スイートを保存しました。")).toBeVisible();
+  await expect(page.getByText("品質評価設定を保存しました。")).toBeVisible();
   expect(saved).toEqual({ suite: "strict_ci" });
   await expectNoHorizontalOverflow(page);
 });
 
-test("Evaluation 設定取得に失敗したら再試行できる", async ({ page }) => {
+test("品質評価設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/evaluation-suite", async (route) => {
     await route.fulfill({
       status: 503,
-      json: { data: null, error_messages: ["評価スイート設定を取得できませんでした。"], warning_messages: [] },
+      json: { data: null, error_messages: ["品質評価設定を取得できませんでした。"], warning_messages: [] },
     });
   });
 
   await page.goto("/settings/evaluation");
 
-  await expect(page.getByRole("alert")).toContainText("評価スイート設定を取得できませんでした。");
+  await expect(page.getByRole("alert")).toContainText("品質評価設定を取得できませんでした。");
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
 });
 

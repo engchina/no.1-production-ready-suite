@@ -13,7 +13,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("api 業務アシスタント(Business View)", () => {
+describe("api 業務ビュー(Business View)", () => {
   it("createBusinessView は config を POST し data を返す", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({

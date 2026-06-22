@@ -23,7 +23,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`Parser adapter 設定は runtime readiness を表示する (${viewport.name})`, async ({ page }) => {
+  test(`文書解析設定は稼働状況を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await page.addInitScript(() => {
@@ -38,13 +38,13 @@ for (const viewport of [
 
     await page.goto("/settings/parser-adapters");
 
-    await expect(page.getByRole("heading", { name: "Parser アダプター" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "文書解析" })).toBeVisible();
     await expect(page.getByText("Docling -> Marker", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Active", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Missing", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("package 未導入", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("有効", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("未導入", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("パッケージ未導入", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("導入: pip install marker-pdf[full]==1.10.2")).toBeVisible();
-    await expect(page.getByText("backend 選択外", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("使用エンジン選択外", { exact: true }).first()).toBeVisible();
     await expect(
       page.getByRole("radio", { name: /OCI Document Understanding/ })
     ).toBeVisible();
@@ -53,29 +53,29 @@ for (const viewport of [
     ).toBeVisible();
     await expect(page.getByText("未設定", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("OCI サービス", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Source routing matrix")).toBeVisible();
+    await expect(page.getByText("原本種別ごとの実行順")).toBeVisible();
     await expect(page.getByText("PDF", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Docling -> Marker -> Unstructured")).toBeVisible();
     await expect(page.getByText("音声は未対応")).toBeVisible();
-    await expect(page.getByText("標準 parser を優先")).toBeVisible();
+    await expect(page.getByText("標準解析を優先")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Schema remap 契約" })).toBeVisible();
     await expect(page.getByText("Schema remap 契約は未実行です。")).toBeVisible();
     await page.getByRole("button", { name: "互換性を確認" }).click();
     await expect(page.getByText("失敗", { exact: true }).first()).toBeVisible();
-    await expect(page.getByLabel("Contract code summary")).toBeVisible();
-    await expect(page.getByText("阻害 reason", { exact: true })).toBeVisible();
-    await expect(page.getByText("Warning 分布", { exact: true })).toBeVisible();
-    await expect(page.getByText("Reason 分布", { exact: true })).toBeVisible();
-    await expect(page.getByText("未導入 / blocking")).toBeVisible();
+    await expect(page.getByLabel("コード別サマリ")).toBeVisible();
+    await expect(page.getByText("阻害理由", { exact: true })).toBeVisible();
+    await expect(page.getByText("警告分布", { exact: true })).toBeVisible();
+    await expect(page.getByText("理由分布", { exact: true })).toBeVisible();
+    await expect(page.getByText("未導入 / 阻害")).toBeVisible();
     await expect(
-      page.getByText("Runtime 証跡", { exact: true }).nth(viewport.width >= 768 ? 0 : 1)
+      page.getByText("現在の設定の証跡", { exact: true }).nth(viewport.width >= 768 ? 0 : 1)
     ).toBeVisible();
     await expect(page.getByText("docling 1.2.3", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("pdf_fixture:hash-policy", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("要素 1 / ページ 1 / 表 0 / セル 0 / アセット 0 / BBox 1")).toBeVisible();
     await expect(page.getByText("schema remap 成功", { exact: true })).toBeVisible();
 
-    const navLink = page.getByRole("link", { name: "Parser アダプター" });
+    const navLink = page.getByRole("link", { name: "文書解析" });
     await expect(navLink).toHaveAttribute("aria-current", "page");
     await navLink.focus();
     await expect(navLink).toBeFocused();
@@ -207,14 +207,14 @@ async function mockParserAdapterContract(page: Page) {
   });
 }
 
-test("Parser adapter 設定取得に失敗したら再試行できる", async ({ page }) => {
+test("文書解析設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/parser-adapters", async (route) => {
     await route.fulfill({
       status: 503,
       json: {
         data: null,
-        error_messages: ["Parser adapter 設定を取得できませんでした。"],
+        error_messages: ["文書解析設定を取得できませんでした。"],
         warning_messages: [],
       },
     });
@@ -223,13 +223,13 @@ test("Parser adapter 設定取得に失敗したら再試行できる", async ({
   await page.goto("/settings/parser-adapters");
 
   await expect(page.getByRole("alert")).toContainText(
-    "Parser adapter 設定を取得できませんでした。"
+    "文書解析設定を取得できませんでした。"
   );
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
-test("Parser adapter 設定は backend と feature flag を保存できる", async ({ page }) => {
+test("文書解析設定は使用エンジンと有効化設定を保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.addInitScript(() => {
     window.localStorage.setItem(
@@ -307,7 +307,7 @@ test("Parser adapter 設定は backend と feature flag を保存できる", asy
 
   await page.goto("/settings/parser-adapters");
 
-  // local/auto は廃止。microservice backend(MinerU)を選択する。MinerU は feature flag
+  // local/auto は廃止。microservice エンジン(MinerU)を選択する。MinerU は有効化設定
   // を自動 ON しないため、下の docling/unstructured トグル assert と干渉しない。
   const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
   await mineruBackend.focus();
@@ -315,13 +315,13 @@ test("Parser adapter 設定は backend と feature flag を保存できる", asy
   await page.keyboard.press("Enter");
   await expect(mineruBackend).toHaveAttribute("aria-checked", "true");
 
-  await page.getByRole("switch", { name: "Docling adapter feature flag" }).click();
-  await page.getByRole("switch", { name: "Unstructured adapter feature flag" }).click();
+  await page.getByRole("switch", { name: "Docling 解析方式の有効化設定" }).click();
+  await page.getByRole("switch", { name: "Unstructured 解析方式の有効化設定" }).click();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("Parser adapter 設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("文書解析設定を保存しました。")).toBeVisible();
   await expect(page.getByText("Docling -> Unstructured")).toBeVisible();
   expect(savedPayload).toEqual({
     adapter_backend: "mineru",

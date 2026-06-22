@@ -38,11 +38,11 @@ from app.rag.ingestion import (
     IngestionUserError,
 )
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
-from app.rag.kb_adapter_config import apply_adapter_config_or_global
+from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig, apply_adapter_config_or_global
 from app.rag.navigation import build_navigation_tree
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.source_profile import build_source_profile
-from app.rag.variant_keys import compute_chunk_set_id, compute_extraction_id
+from app.rag.variant_keys import compute_chunk_set_id, compute_extraction_recipe_id
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
@@ -50,12 +50,15 @@ from app.schemas.document import (
     BatchUploadResult,
     DocumentApproveRequest,
     DocumentChunkSet,
+    DocumentChunkSetLayerStatuses,
     DocumentChunkView,
     DocumentDeleteResult,
     DocumentDetail,
     DocumentExtractionExport,
     DocumentExtractionExportFormat,
     DocumentIngestionConfigData,
+    DocumentLayerStatusName,
+    DocumentMaterializationLayerStatus,
     DocumentStats,
     DocumentSummary,
     DocumentTableCellTextEdit,
@@ -556,10 +559,189 @@ async def list_document_chunks(document_id: str) -> ApiResponse[list[DocumentChu
 async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[DocumentChunkSet]]:
     """文書の chunk_set(variant)一覧を返す。KB 詳細での variant 可視化に使う。"""
     oracle = OracleClient()
-    if await oracle.get_document(document_id) is None:
+    detail = await oracle.get_document(document_id)
+    if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     rows = await oracle.list_document_chunk_sets(document_id)
-    return ApiResponse(data=[DocumentChunkSet.model_validate(row) for row in rows])
+    plan, configs = await _materialization_plan_for_document(oracle, detail)
+    effective_by_kb = _effective_ingestion_settings_by_kb(get_settings(), configs)
+    persisted_layers = await oracle.list_artifact_layers_for_chunk_sets(
+        [str(row.get("chunk_set_id")) for row in rows if row.get("chunk_set_id") is not None]
+    )
+    chunk_sets: list[DocumentChunkSet] = []
+    for row in rows:
+        chunk_set = DocumentChunkSet.model_validate(row)
+        if chunk_set.extraction_recipe_id:
+            extraction = await oracle.get_document_extraction_artifact(
+                document_id=document_id,
+                extraction_recipe_id=chunk_set.extraction_recipe_id,
+            )
+            if extraction is not None:
+                chunk_set.extraction_status = DocumentLayerStatusName(
+                    str(extraction.get("status") or DocumentLayerStatusName.PLANNED_ONLY.value)
+                )
+                chunk_set.extraction_reason = (
+                    str(extraction["reason"]) if extraction.get("reason") is not None else None
+                )
+        if plan is not None:
+            chunk_set.layer_statuses = _layer_statuses_for_chunk_set(
+                chunk_set.chunk_set_id,
+                plan,
+                effective_by_kb,
+                persisted_layers,
+            )
+        chunk_sets.append(chunk_set)
+    return ApiResponse(data=chunk_sets)
+
+
+async def _materialization_plan_for_document(
+    oracle: OracleClient,
+    detail: DocumentDetail,
+    *,
+    global_settings: Settings | None = None,
+) -> tuple[MaterializationPlan | None, dict[str, KnowledgeBaseAdapterConfig]]:
+    """文書の所属 KB 構築設定から materialization plan を復元する。"""
+    configs = dict(await oracle.list_document_knowledge_base_configs(detail.id))
+    if not detail.content_sha256 or not configs:
+        return None, configs
+    settings = global_settings or get_settings()
+    return plan_document_materializations(detail.content_sha256, settings, configs), configs
+
+
+def _effective_ingestion_settings_by_kb(
+    global_settings: Settings,
+    configs: Mapping[str, KnowledgeBaseAdapterConfig],
+) -> dict[str, Settings]:
+    """KB ごとの有効な構築設定を返す。矛盾時は apply 側でグローバルへ縮退する。"""
+    effective: dict[str, Settings] = {}
+    for knowledge_base_id, config in configs.items():
+        settings, _applied = apply_adapter_config_or_global(
+            global_settings,
+            config,
+            scope="ingestion",
+        )
+        effective[knowledge_base_id] = settings
+    return effective
+
+
+def _layer_statuses_for_chunk_set(
+    chunk_set_id: str,
+    plan: MaterializationPlan,
+    effective_by_kb: Mapping[str, Settings],
+    persisted_layers: Mapping[str, Mapping[str, object]] | None = None,
+) -> DocumentChunkSetLayerStatuses:
+    """派生情報レイヤーの現在状態を chunk_set 単位で作る。"""
+    return DocumentChunkSetLayerStatuses(
+        metadata=_layer_status_for_chunk_set(
+            chunk_set_id,
+            plan,
+            effective_by_kb,
+            persisted_layers or {},
+            layer="metadata",
+            user_label="項目抽出",
+        ),
+        graph=_layer_status_for_chunk_set(
+            chunk_set_id,
+            plan,
+            effective_by_kb,
+            persisted_layers or {},
+            layer="graph",
+            user_label="関係情報",
+        ),
+        navigation=_layer_status_for_chunk_set(
+            chunk_set_id,
+            plan,
+            effective_by_kb,
+            persisted_layers or {},
+            layer="navigation",
+            user_label="ナビゲーション",
+        ),
+    )
+
+
+def _layer_status_for_chunk_set(
+    chunk_set_id: str,
+    plan: MaterializationPlan,
+    effective_by_kb: Mapping[str, Settings],
+    persisted_layers: Mapping[str, Mapping[str, object]],
+    *,
+    layer: str,
+    user_label: str,
+) -> DocumentMaterializationLayerStatus:
+    requested_ids = _requested_layer_ids_for_chunk_set(
+        chunk_set_id,
+        plan,
+        effective_by_kb,
+        layer=layer,
+    )
+    if not requested_ids:
+        return DocumentMaterializationLayerStatus(
+            requested=False,
+            status=DocumentLayerStatusName.NOT_REQUESTED,
+            reason=f"現在の構築設定では{user_label}を使用しません。",
+        )
+    if len(requested_ids) > 1:
+        return DocumentMaterializationLayerStatus(
+            requested=True,
+            status=DocumentLayerStatusName.PLANNED_ONLY,
+            reason=(
+                f"{user_label}は複数の方針がこのチャンク構成を共有しています。"
+                "現時点では計画だけを表示しています。"
+            ),
+        )
+    persisted = persisted_layers.get(requested_ids[0])
+    if persisted is not None:
+        return DocumentMaterializationLayerStatus(
+            layer_id=requested_ids[0],
+            requested=bool(persisted.get("requested", True)),
+            status=DocumentLayerStatusName(
+                str(persisted.get("status") or DocumentLayerStatusName.PLANNED_ONLY.value)
+            ),
+            reason=str(persisted["reason"]) if persisted.get("reason") is not None else None,
+        )
+    return DocumentMaterializationLayerStatus(
+        layer_id=requested_ids[0],
+        requested=True,
+        status=DocumentLayerStatusName.PLANNED_ONLY,
+        reason=f"{user_label}は構築計画に含まれていますが、まだ実体化していません。",
+    )
+
+
+def _requested_layer_ids_for_chunk_set(
+    chunk_set_id: str,
+    plan: MaterializationPlan,
+    effective_by_kb: Mapping[str, Settings],
+    *,
+    layer: str,
+) -> tuple[str, ...]:
+    knowledge_base_ids = plan.chunk_sets.get(chunk_set_id, frozenset())
+    layer_map = {
+        "metadata": plan.metadata_layers,
+        "graph": plan.graph_layers,
+        "navigation": plan.nav_layers,
+    }.get(layer)
+    if not knowledge_base_ids or layer_map is None:
+        return ()
+    requested: list[str] = []
+    for layer_id, owners in layer_map.items():
+        relevant_owners = owners & knowledge_base_ids
+        if any(
+            _layer_requested(layer, effective_by_kb[knowledge_base_id])
+            for knowledge_base_id in relevant_owners
+            if knowledge_base_id in effective_by_kb
+        ):
+            requested.append(layer_id)
+    return tuple(sorted(requested))
+
+
+def _layer_requested(layer: str, settings: Settings) -> bool:
+    if layer == "metadata":
+        return bool(settings.rag_field_extraction_enabled or settings.rag_asset_summary_enabled)
+    if layer == "graph":
+        return settings.rag_graph_profile != "off"
+    if layer == "navigation":
+        return bool(settings.rag_navigation_summary_enabled or settings.rag_raptor_enabled)
+    return False
 
 
 @router.get(
@@ -867,12 +1049,37 @@ async def approve_document(
     含む場合は、bbox・構造を保持したままテキストのみ差し替えて保存してから index する。
     """
     enforce_rate_limit("ingest", http_request)
+    await _ensure_review_only_materialization_safe(document_id)
     if body is not None and (
         body.element_edits or body.table_cell_edits or body.raw_text is not None
     ):
         await _apply_review_text_edits(document_id, body)
     job = await _enqueue_index_phase_job_for_document(document_id)
     return ApiResponse(data=job)
+
+
+async def _ensure_review_only_materialization_safe(document_id: str) -> None:
+    """保存済み抽出だけで後段索引できる構築設定かを検査する。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status != FileStatus.REVIEW:
+        raise HTTPException(
+            status_code=409,
+            detail="プレビュー確認待ちの文書のみ索引できます。",
+        )
+    plan, _configs = await _materialization_plan_for_document(oracle, detail)
+    if plan is not None and len(plan.extraction_recipes) > 1:
+        await _record_reingest_required_extractions(oracle, detail, plan)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "所属ナレッジベースで文書解析または前処理の設定が分かれています。"
+                "保存済みプレビューだけでは別の解析結果を安全に作れないため、"
+                "現在の構築設定で文書を再取込してください。"
+            ),
+        )
 
 
 async def _apply_review_text_edits(
@@ -1021,17 +1228,6 @@ async def _load_source_bytes(
     return data, source_profile
 
 
-def _owning_first(extraction_ids: list[str], owning_extraction_id: str | None) -> list[str]:
-    """抽出グループを owning(既定 parser)優先で並べる。
-
-    gate-ON では先頭グループだけが REVIEW で抽出されるため、利用者が確認するのは
-    既定 parser の抽出(owning)であるべき。owning が無ければ元の順序のまま。
-    """
-    if owning_extraction_id is None or owning_extraction_id not in extraction_ids:
-        return extraction_ids
-    return [owning_extraction_id, *(e for e in extraction_ids if e != owning_extraction_id)]
-
-
 async def _ingest_existing_document(
     document_id: str,
     *,
@@ -1048,15 +1244,11 @@ async def _ingest_existing_document(
     if detail.status == FileStatus.INDEXED and not force:
         return detail
     data, source_profile = await _load_source_bytes(oracle, document_id, detail)
-    # plan 駆動の複数 chunk_set materialization（_index_reviewed_document と整合）。
-    # 抽出グループ(parser×preprocess)ごとに extract 1 回 → 同抽出の chunking 変種は再チャンク。
-    # 所属 KB / content_sha256 が無ければ現行の単一(owning)挙動へ縮退。
     global_settings = get_settings()
-    configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
-    plan = (
-        plan_document_materializations(detail.content_sha256, global_settings, configs)
-        if detail.content_sha256 and configs
-        else None
+    plan, configs = await _materialization_plan_for_document(
+        oracle,
+        detail,
+        global_settings=global_settings,
     )
     ingest_prompt = "ドキュメントを日本語で OCR し、本文テキストを抽出してください。"
     ingest_content_type = detail.content_type or "application/octet-stream"
@@ -1077,28 +1269,21 @@ async def _ingest_existing_document(
         await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
         return result
     # plan 2 段実体化: 抽出グループ(parser×preprocess)ごとに extract 1 回 → 各 chunking で index。
-    # gate-ON では先頭グループ(owning)で REVIEW 停止するため owning を先頭に並べる。
     result = detail
-    groups = plan.extraction_groups()
-    owning_extraction_id = (
-        compute_extraction_id(detail.content_sha256, global_settings)
-        if detail.content_sha256
-        else None
-    )
-    total_chunk_sets = len(plan.chunk_sets)
-    done = 0
-    for extraction_id in _owning_first(sorted(groups), owning_extraction_id):
-        for position, chunk_set_id in enumerate(sorted(groups[extraction_id])):
+    recipe_groups = plan.chunk_sets_by_extraction_recipe()
+    total_chunk_sets = sum(len(chunk_set_ids) for chunk_set_ids in recipe_groups.values())
+    processed_chunk_sets = 0
+    for _recipe_id, chunk_set_ids in recipe_groups.items():
+        for index, chunk_set_id in enumerate(chunk_set_ids):
             representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
             recipe_settings, _applied = apply_adapter_config_or_global(
                 global_settings, configs[representative_kb_id], scope="ingestion"
             )
             pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
-            done += 1
+            processed_chunk_sets += 1
             # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
-            record_outcome = done == total_chunk_sets
-            if position == 0:
-                # 抽出グループの先頭: この parser/前処理 で extract(+ index)。
+            record_outcome = processed_chunk_sets == total_chunk_sets
+            if index == 0:
                 result = await pipeline.ingest(
                     document_id=document_id,
                     image_bytes=data,
@@ -1140,11 +1325,10 @@ async def _index_reviewed_document(
             detail="プレビュー確認待ちの文書のみ索引できます。",
         )
     global_settings = get_settings()
-    configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
-    plan = (
-        plan_document_materializations(detail.content_sha256, global_settings, configs)
-        if detail.content_sha256 and configs
-        else None
+    plan, configs = await _materialization_plan_for_document(
+        oracle,
+        detail,
+        global_settings=global_settings,
     )
     if plan is None or not plan.chunk_sets:
         # 所属 KB / content_sha256 が無い → 現行の単一(owning)挙動へ縮退する。
@@ -1156,56 +1340,32 @@ async def _index_reviewed_document(
         )
         await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
         return result
-    # 案 A の plan 駆動: owning 抽出グループは REVIEW 済み抽出を再利用して index、
-    # 他 parser グループは原本を再取得して extract+index(派生自動・gate off)。
+    if len(plan.extraction_recipes) > 1:
+        await _record_reingest_required_extractions(oracle, detail, plan)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "所属ナレッジベースで文書解析または前処理の設定が分かれています。"
+                "保存済みプレビューだけでは別の解析結果を安全に作れないため、"
+                "現在の構築設定で文書を再取込してください。"
+            ),
+        )
+    # plan 駆動: 同一 extraction recipe の chunk_set を保存済み extraction から再チャンクする。
     result = detail
-    groups = plan.extraction_groups()
-    owning_extraction_id = (
-        compute_extraction_id(detail.content_sha256, global_settings)
-        if detail.content_sha256
-        else None
-    )
-    total_chunk_sets = len(plan.chunk_sets)
-    done = 0
-    source: tuple[bytes, SourceProfile] | None = None
-    for extraction_id in _owning_first(sorted(groups), owning_extraction_id):
-        is_owning = extraction_id == owning_extraction_id
-        for position, chunk_set_id in enumerate(sorted(groups[extraction_id])):
-            representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
-            recipe_settings, _applied = apply_adapter_config_or_global(
-                global_settings, configs[representative_kb_id], scope="ingestion"
-            )
-            done += 1
-            # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
-            record_outcome = done == total_chunk_sets
-            if is_owning or position > 0:
-                # owning(REVIEW 済み抽出)/ 同抽出の chunking 変種: 抽出を再利用して index。
-                pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
-                result = await pipeline.index_reviewed(
-                    document_id,
-                    chunk_set_id=chunk_set_id,
-                    record_outcome=record_outcome,
-                    cancel_checker=cancel_checker,
-                )
-            else:
-                # 非 owning parser グループの先頭: 原本を再取得し gate off で extract+index。
-                if source is None:
-                    source = await _load_source_bytes(oracle, document_id, detail)
-                data, source_profile = source
-                derived_settings = recipe_settings.model_copy(
-                    update={"rag_review_gate_enabled": False}
-                )
-                pipeline = IngestionPipeline(oracle=oracle, settings=derived_settings)
-                result = await pipeline.ingest(
-                    document_id=document_id,
-                    image_bytes=data,
-                    prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
-                    content_type=detail.content_type or "application/octet-stream",
-                    source_profile=source_profile,
-                    chunk_set_id=chunk_set_id,
-                    record_outcome=record_outcome,
-                    cancel_checker=cancel_checker,
-                )
+    chunk_set_ids = sorted(plan.chunk_sets)
+    for index, chunk_set_id in enumerate(chunk_set_ids):
+        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
+        recipe_settings, _applied = apply_adapter_config_or_global(
+            global_settings, configs[representative_kb_id], scope="ingestion"
+        )
+        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
+        result = await pipeline.index_reviewed(
+            document_id,
+            chunk_set_id=chunk_set_id,
+            record_outcome=index == len(chunk_set_ids) - 1,
+            cancel_checker=cancel_checker,
+        )
     await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
     return result
 
@@ -1225,10 +1385,11 @@ async def _reconcile_plan_chunk_sets(
     try:
         for chunk_set_id, knowledge_base_ids in plan.chunk_sets.items():
             chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
+            extraction_recipe_id = plan.extraction_recipe_for_chunk_set(chunk_set_id)
             await oracle.upsert_chunk_set(
                 chunk_set_id=chunk_set_id,
                 document_id=document_id,
-                extraction_id=plan.chunk_set_parents.get(chunk_set_id),
+                extraction_recipe_id=extraction_recipe_id,
             )
             await oracle.mark_chunk_set_indexed(
                 chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
@@ -1239,12 +1400,26 @@ async def _reconcile_plan_chunk_sets(
                     document_id=document_id,
                     chunk_set_id=chunk_set_id,
                 )
+            if extraction_recipe_id is not None:
+                representative_kb_id = sorted(knowledge_base_ids)[0]
+                configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
+                settings, _applied = apply_adapter_config_or_global(
+                    get_settings(),
+                    configs.get(representative_kb_id, KnowledgeBaseAdapterConfig()),
+                    scope="ingestion",
+                )
+                await _record_document_extraction_artifact(
+                    oracle,
+                    detail,
+                    extraction_recipe_id=extraction_recipe_id,
+                    settings=settings,
+                )
+        await _reconcile_plan_artifact_layers(oracle, document_id, detail, plan)
         await oracle.delete_document_chunk_sets_except(
             document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
         )
-        # chunk_set GC 後に、参照されない抽出を GC(計画の抽出だけ残す)。
         await oracle.delete_document_extractions_except(
-            document_id=document_id, keep_extraction_ids=list(plan.extractions)
+            document_id=document_id, keep_extraction_ids=list(plan.extraction_recipes)
         )
         if plan.truncated_extractions:
             logger.warning(
@@ -1260,11 +1435,212 @@ async def _reconcile_plan_chunk_sets(
         )
 
 
+async def _reconcile_plan_artifact_layers(
+    oracle: OracleClient,
+    document_id: str,
+    detail: DocumentDetail,
+    plan: MaterializationPlan,
+) -> None:
+    """plan に含まれる派生 layer の状態を永続化する。"""
+    configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
+    effective_by_kb = _effective_ingestion_settings_by_kb(get_settings(), configs)
+    for chunk_set_id in plan.chunk_sets:
+        for layer, user_label in (
+            ("metadata", "項目抽出"),
+            ("graph", "関係情報"),
+            ("navigation", "ナビゲーション"),
+        ):
+            requested_ids = _requested_layer_ids_for_chunk_set(
+                chunk_set_id,
+                plan,
+                effective_by_kb,
+                layer=layer,
+            )
+            for layer_id in requested_ids:
+                status, reason = _materialized_layer_state(
+                    layer=layer,
+                    user_label=user_label,
+                    detail=detail,
+                )
+                await oracle.upsert_artifact_layer(
+                    layer_id=layer_id,
+                    layer_kind=layer,
+                    parent_chunk_set_id=chunk_set_id,
+                    document_id=document_id,
+                    requested=True,
+                    status=status.value,
+                    reason=reason,
+                    metrics=_layer_metrics(layer, detail.extraction),
+                )
+
+
+def _materialized_layer_state(
+    *,
+    layer: str,
+    user_label: str,
+    detail: DocumentDetail,
+) -> tuple[DocumentLayerStatusName, str]:
+    if not detail.extraction:
+        return (
+            DocumentLayerStatusName.NEEDS_REINGEST,
+            (
+                f"{user_label}の作成に必要な抽出 artifact がありません。"
+                "現在の構築設定で再取込してください。"
+            ),
+        )
+    if layer == "metadata" and _metadata_layer_is_materialized(detail.extraction):
+        return (
+            DocumentLayerStatusName.MATERIALIZED,
+            f"{user_label}は保存済み抽出 artifact から実体化済みです。",
+        )
+    if layer == "navigation":
+        node_count = _navigation_node_count(detail.extraction)
+        if node_count > 0:
+            return (
+                DocumentLayerStatusName.MATERIALIZED,
+                (
+                    f"{user_label}は保存済み抽出 artifact から "
+                    f"{node_count} 件の章節として実体化済みです。"
+                ),
+            )
+        return (
+            DocumentLayerStatusName.PLANNED_ONLY,
+            f"{user_label}は要求されていますが、章節構造を抽出できていません。",
+        )
+    return (
+        DocumentLayerStatusName.PLANNED_ONLY,
+        f"{user_label}は構築計画に含まれていますが、まだ実体化していません。",
+    )
+
+
+def _metadata_layer_is_materialized(extraction: Mapping[str, object]) -> bool:
+    """field / asset summary 由来の metadata layer が実 payload を持つかを見る。"""
+    return any(bool(extraction.get(key)) for key in ("fields", "assets", "asset_summary"))
+
+
+def _layer_metrics(layer: str, extraction: Mapping[str, object] | None) -> dict[str, object]:
+    if not extraction:
+        return {}
+    if layer == "navigation":
+        return {"navigation_node_count": _navigation_node_count(extraction)}
+    if layer != "metadata":
+        return {}
+    return {
+        "field_count": _metadata_item_count(extraction.get("fields")),
+        "asset_count": _metadata_item_count(extraction.get("assets")),
+        "has_asset_summary": bool(extraction.get("asset_summary")),
+    }
+
+
+def _navigation_node_count(extraction: Mapping[str, object]) -> int:
+    """保存済み extraction から決定論的 navigation node 数を数える。"""
+    nodes = _navigation_nodes_from_extraction(extraction)
+    return len(nodes)
+
+
+def _navigation_nodes_from_extraction(
+    extraction: Mapping[str, object],
+) -> list[DocumentNavigationNode]:
+    if not extraction:
+        return []
+    try:
+        structured = StructuredExtraction.model_validate(dict(extraction))
+    except Exception:
+        return []
+    return list(structured.navigation or build_navigation_tree(structured))
+
+
+def _metadata_item_count(value: object) -> int:
+    return len(value) if isinstance(value, list | tuple) else 0
+
+
 def _document_chunk_set_id(detail: DocumentDetail, settings: Settings) -> str | None:
     """文書の content_sha256 と effective 取込設定から chunk_set_id を求める(無ければ None)。"""
     if not detail.content_sha256:
         return None
     return compute_chunk_set_id(detail.content_sha256, settings)
+
+
+def _document_extraction_recipe_id(detail: DocumentDetail, settings: Settings) -> str | None:
+    """文書の content_sha256 と effective 解析設定から extraction_recipe_id を求める。"""
+    if not detail.content_sha256:
+        return None
+    return compute_extraction_recipe_id(detail.content_sha256, settings)
+
+
+def _extraction_recipe_subset(settings: Settings) -> dict[str, object]:
+    """extraction recipe の人が読める snapshot。正規 ID は variant_keys 側の hash を正とする。"""
+    return {
+        "preprocess_profile": getattr(settings, "rag_preprocess_profile", "passthrough"),
+        "parser_adapter_backend": getattr(settings, "rag_parser_adapter_backend", "local"),
+        "parser_docling_enabled": bool(getattr(settings, "rag_parser_docling_enabled", False)),
+        "parser_marker_enabled": bool(getattr(settings, "rag_parser_marker_enabled", False)),
+        "parser_unstructured_enabled": bool(
+            getattr(settings, "rag_parser_unstructured_enabled", False)
+        ),
+    }
+
+
+async def _record_document_extraction_artifact(
+    oracle: OracleClient,
+    detail: DocumentDetail,
+    *,
+    extraction_recipe_id: str | None,
+    settings: Settings,
+    status: DocumentLayerStatusName = DocumentLayerStatusName.MATERIALIZED,
+    reason: str | None = None,
+) -> None:
+    """extraction recipe 単位の抽出 artifact 状態を保存する。"""
+    if extraction_recipe_id is None:
+        return
+    await oracle.upsert_document_extraction_artifact(
+        document_id=detail.id,
+        extraction_recipe_id=extraction_recipe_id,
+        source_sha256=detail.content_sha256,
+        recipe_subset=_extraction_recipe_subset(settings),
+        extraction=detail.extraction if detail.extraction else None,
+        status=status.value,
+        reason=reason,
+        metrics=_extraction_metrics(detail.extraction),
+    )
+
+
+async def _record_reingest_required_extractions(
+    oracle: OracleClient,
+    detail: DocumentDetail,
+    plan: MaterializationPlan,
+) -> None:
+    """review-only では作れない extraction recipe を needs_reingest として残す。"""
+    configs = dict(await oracle.list_document_knowledge_base_configs(detail.id))
+    effective_by_kb = _effective_ingestion_settings_by_kb(get_settings(), configs)
+    reason = (
+        "保存済みプレビューだけでは別の文書解析/前処理結果を安全に作れません。"
+        "現在の構築設定で文書を再取込してください。"
+    )
+    for extraction_recipe_id, knowledge_base_ids in plan.extraction_recipes.items():
+        representative_kb_id = sorted(knowledge_base_ids)[0]
+        settings = effective_by_kb.get(representative_kb_id, get_settings())
+        await oracle.upsert_document_extraction_artifact(
+            document_id=detail.id,
+            extraction_recipe_id=extraction_recipe_id,
+            source_sha256=detail.content_sha256,
+            recipe_subset=_extraction_recipe_subset(settings),
+            extraction=None,
+            status=DocumentLayerStatusName.NEEDS_REINGEST.value,
+            reason=reason,
+            metrics=None,
+        )
+
+
+def _extraction_metrics(extraction: Mapping[str, object] | None) -> dict[str, object]:
+    if not extraction:
+        return {}
+    return {
+        "element_count": _metadata_item_count(extraction.get("elements")),
+        "table_count": _metadata_item_count(extraction.get("tables")),
+        "asset_count": _metadata_item_count(extraction.get("assets")),
+        "field_count": _metadata_item_count(extraction.get("fields")),
+    }
 
 
 async def _reconcile_document_chunk_sets(
@@ -1283,9 +1659,21 @@ async def _reconcile_document_chunk_sets(
         return
     try:
         chunk_count = await oracle.count_document_chunks(document_id)
-        await oracle.upsert_chunk_set(chunk_set_id=chunk_set_id, document_id=document_id)
+        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        extraction_recipe_id = _document_extraction_recipe_id(detail, effective_settings)
+        await oracle.upsert_chunk_set(
+            chunk_set_id=chunk_set_id,
+            document_id=document_id,
+            extraction_recipe_id=extraction_recipe_id,
+        )
         await oracle.mark_chunk_set_indexed(
             chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
+        )
+        await _record_document_extraction_artifact(
+            oracle,
+            detail,
+            extraction_recipe_id=extraction_recipe_id,
+            settings=effective_settings,
         )
         # 取込設定変更で生じた旧 chunk_set とその chunk(+未タグ chunk)を削除し、keep だけ残す。
         await oracle.delete_stale_document_chunk_sets(

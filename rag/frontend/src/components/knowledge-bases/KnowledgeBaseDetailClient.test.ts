@@ -1,61 +1,71 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  documentChunkSetReingestReason,
+  documentChunkSetsNeedReingest,
+} from "./KnowledgeBaseDetailClient";
 import type { DocumentChunkSet } from "@/lib/api";
 
-import { groupChunkSetsByExtraction } from "./KnowledgeBaseDetailClient";
-
-function cs(overrides: Partial<DocumentChunkSet>): DocumentChunkSet {
+function chunkSet(patch: Partial<DocumentChunkSet> = {}): DocumentChunkSet {
   return {
-    chunk_set_id: "cs_x",
+    chunk_set_id: "cs_1",
+    extraction_recipe_id: "er_1",
+    extraction_status: "materialized",
+    extraction_reason: null,
     status: "INDEXED",
     chunk_count: 1,
     vector_count: 1,
     extraction_id: null,
     parser: null,
     preprocess: null,
-    knowledge_base_ids: [],
-    serving_knowledge_base_ids: [],
-    ...overrides,
+    knowledge_base_ids: ["kb-1"],
+    serving_knowledge_base_ids: ["kb-1"],
+    layer_statuses: {
+      metadata: { layer_id: "md_1", requested: true, status: "materialized", reason: null },
+      graph: { layer_id: "gr_1", requested: true, status: "planned_only", reason: null },
+      navigation: { layer_id: "nv_1", requested: true, status: "materialized", reason: null },
+    },
+    ...patch,
   };
 }
 
-describe("groupChunkSetsByExtraction", () => {
-  it("同じ extraction の chunk_set を 1 グループにまとめ parser/preprocess を保つ", () => {
-    const groups = groupChunkSetsByExtraction([
-      cs({
-        chunk_set_id: "cs_a",
-        extraction_id: "ex_1",
-        parser: "docling",
-        preprocess: "passthrough",
+describe("KnowledgeBaseDetailClient reingest CTA helpers", () => {
+  it("detects extraction recipes that need reingest", () => {
+    const sets = [
+      chunkSet({
+        extraction_status: "needs_reingest",
+        extraction_reason: "現在の構築設定で文書を再取込してください。",
       }),
-      cs({
-        chunk_set_id: "cs_b",
-        extraction_id: "ex_1",
-        parser: "docling",
-        preprocess: "passthrough",
-      }),
-    ]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].parser).toBe("docling");
-    expect(groups[0].preprocess).toBe("passthrough");
-    expect(groups[0].chunkSets.map((c) => c.chunk_set_id)).toEqual(["cs_a", "cs_b"]);
+    ];
+
+    expect(documentChunkSetsNeedReingest(sets)).toBe(true);
+    expect(documentChunkSetReingestReason(sets)).toBe(
+      "現在の構築設定で文書を再取込してください。"
+    );
   });
 
-  it("parser が違う extraction は別グループになる(挿入順を保つ)", () => {
-    const groups = groupChunkSetsByExtraction([
-      cs({ chunk_set_id: "cs_a", extraction_id: "ex_1", parser: "docling" }),
-      cs({ chunk_set_id: "cs_b", extraction_id: "ex_2", parser: "marker" }),
-    ]);
-    expect(groups).toHaveLength(2);
-    expect(groups.map((g) => g.parser)).toEqual(["docling", "marker"]);
+  it("detects derived layers that need reingest", () => {
+    const sets = [
+      chunkSet({
+        layer_statuses: {
+          metadata: {
+            layer_id: "md_1",
+            requested: true,
+            status: "needs_reingest",
+            reason: "項目抽出には再取込が必要です。",
+          },
+          graph: { layer_id: "gr_1", requested: true, status: "planned_only", reason: null },
+          navigation: { layer_id: "nv_1", requested: true, status: "materialized", reason: null },
+        },
+      }),
+    ];
+
+    expect(documentChunkSetsNeedReingest(sets)).toBe(true);
+    expect(documentChunkSetReingestReason(sets)).toBe("項目抽出には再取込が必要です。");
   });
 
-  it("extraction_id を持たない旧 chunk_set は各々単独グループにして欠落させない", () => {
-    const groups = groupChunkSetsByExtraction([
-      cs({ chunk_set_id: "cs_legacy1", extraction_id: null }),
-      cs({ chunk_set_id: "cs_legacy2", extraction_id: null }),
-    ]);
-    expect(groups).toHaveLength(2);
-    expect(groups.every((g) => g.extractionId === null)).toBe(true);
+  it("does not show a CTA for planned-only work", () => {
+    expect(documentChunkSetsNeedReingest([chunkSet()])).toBe(false);
+    expect(documentChunkSetReingestReason([chunkSet()])).toBeNull();
   });
 });

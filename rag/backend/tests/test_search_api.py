@@ -136,83 +136,6 @@ def test_search_api_records_knowledge_base_scope_in_audit(
     assert audit_event["knowledge_base_ids"] == ["kb-1", "kb-2"]
 
 
-def test_select_ai_api_returns_showsql_with_sanitized_query(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Select AI API は query を脱敏して Oracle client へ渡し、showsql を返す。"""
-    fake = CapturingSelectAiClient()
-    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
-
-    response = client.post(
-        "/api/search/select-ai",
-        json={
-            "query": "口座番号: 1234567 の文書件数を SQL にして",
-            "profile_name": "rag_select_ai",
-        },
-    )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["action"] == "showsql"
-    assert data["generated_sql"] == "SELECT COUNT(*) FROM rag_documents"
-    assert data["result_text"] == "SELECT COUNT(*) FROM rag_documents"
-    assert data["profile_name"] == "rag_select_ai"
-    assert data["guardrail_warnings"] == ["個人番号や口座番号などの機微な識別子をマスクしました。"]
-    assert fake.calls[0]["query"] == "口座番号: [機微情報] の文書件数を SQL にして"
-    assert "1234567" not in str(fake.calls)
-
-
-def test_select_ai_runsql_blocks_sql_mutation_intent() -> None:
-    """runsql はデータ変更意図を含む自然言語を拒否する。"""
-    response = client.post(
-        "/api/search/select-ai",
-        json={
-            "query": "delete from rag_documents を実行して",
-            "action": "runsql",
-            "profile_name": "rag_select_ai",
-        },
-    )
-
-    assert response.status_code == 400
-    body = response.json()
-    assert body["data"] is None
-    assert body["error_messages"] == [search_route.SELECT_AI_BLOCKED_MESSAGE]
-
-
-def test_select_ai_runsql_blocks_japanese_mutation_intent(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """runsql は日本語のデータ変更意図も拒否し、Oracle へ送らない。"""
-    fake = CapturingSelectAiClient()
-    monkeypatch.setattr(search_route, "OracleClient", lambda: fake)
-
-    response = client.post(
-        "/api/search/select-ai",
-        json={
-            "query": "古い評価ログを削除してください",
-            "action": "runsql",
-            "profile_name": "rag_select_ai",
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error_messages"] == [search_route.SELECT_AI_BLOCKED_MESSAGE]
-    assert fake.calls == []
-
-
-def test_select_ai_api_returns_503_when_unavailable() -> None:
-    """Select AI profile 未設定では endpoint は 503 を返す。"""
-    response = client.post(
-        "/api/search/select-ai",
-        json={"query": "索引済み文書数を SQL にして"},
-    )
-
-    assert response.status_code == 503
-    body = response.json()
-    assert body["data"] is None
-    assert "Select AI" in body["error_messages"][0]
-
-
 def test_citation_feedback_api_saves_low_sensitivity_payload(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -415,17 +338,6 @@ class AuditingPipeline:
             elapsed_ms=1.0,
             diagnostics=diagnostics,
         )
-
-
-class CapturingSelectAiClient:
-    """Select AI API テスト用の fake Oracle client。"""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    async def select_ai(self, query: str, **kwargs: object) -> str:
-        self.calls.append({"query": query, **kwargs})
-        return "SELECT COUNT(*) FROM rag_documents"
 
 
 class CapturingFeedbackClient:

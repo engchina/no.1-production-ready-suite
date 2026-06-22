@@ -22,12 +22,11 @@ const STRATEGY_ORDER: RetrievalStrategyName[] = [
   "vector",
   "keyword",
   "graph_augmented",
-  "select_ai_structured",
   "business_context_strict",
   "corrective_multi_query",
 ];
 
-/** Retrieval アダプター(検索戦略)の runtime 設定を管理する設定画面。 */
+/** 検索方法の現在設定を管理する設定画面。 */
 export function RetrievalSettingsClient() {
   const query = useRetrievalSettings();
   const save = useUpdateRetrievalSettings();
@@ -157,7 +156,10 @@ export function RetrievalSettingsClient() {
               label={t("settings.retrieval.queryExpansion")}
               value={settings.query_expansion ? "ON" : "OFF"}
             />
-            <RuntimeFact label={t("settings.retrieval.source")} value="runtime" />
+            <RuntimeFact
+              label={t("settings.retrieval.source")}
+              value={t("settings.common.currentConfig")}
+            />
           </dl>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">

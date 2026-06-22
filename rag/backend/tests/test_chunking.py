@@ -210,7 +210,7 @@ def test_chunk_extraction_groups_figure_with_caption() -> None:
             DocumentElement(kind="title", text="## アーキテクチャ", page_number=4),
             DocumentElement(
                 kind="figure",
-                text="RAG パイプライン構成図: 取込、検索、生成の流れ。",
+                text="検索・回答フロー構成図: 取込、検索、生成の流れ。",
                 element_id="fig-1",
                 page_number=4,
             ),

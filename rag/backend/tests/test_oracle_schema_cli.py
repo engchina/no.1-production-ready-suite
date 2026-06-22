@@ -33,6 +33,9 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "WITH TARGET ACCURACY 95" in sql
     assert "-- section: chunk_sets" in sql
     assert "CREATE TABLE rag_chunk_sets" in sql
+    assert "extraction_recipe_id VARCHAR2(64)" in sql
+    assert "CREATE TABLE rag_document_extractions" in sql
+    assert "CREATE TABLE rag_artifact_layers" in sql
     assert "CREATE TABLE rag_kb_chunk_set_bindings" in sql
     assert "rag_chunk_sets_document_fk" in sql
     assert "CREATE TABLE rag_search_audit" in sql
@@ -167,7 +170,10 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "rag_business_views_status_ck" in sql
     assert "-- migration: 20260621_001_chunk_sets" in sql
     assert "CREATE TABLE rag_chunk_sets" in sql
+    assert "RAG_DOCUMENT_EXTRACTIONS" in sql
+    assert "RAG_ARTIFACT_LAYERS" in sql
     assert "CREATE TABLE rag_kb_chunk_set_bindings" in sql
+    assert "column_name = 'EXTRACTION_RECIPE_ID'" in sql
     assert "column_name = 'CHUNK_SET_ID'" in sql
     assert "ALTER TABLE rag_chunks ADD (chunk_set_id VARCHAR2(64))" in sql
     assert "-- migration: 20260621_002_document_extractions" in sql

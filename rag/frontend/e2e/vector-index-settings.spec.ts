@@ -17,18 +17,18 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`Vector Index 設定は精度プロファイルを表示する (${viewport.name})`, async ({ page }) => {
+  test(`検索インデックス設定は検索精度を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockVectorIndex(page, "balanced");
 
     await page.goto("/settings/vector-index");
 
-    await expect(page.getByRole("heading", { name: "索引/検索精度プロファイル" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "検索インデックス" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /バランス/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /高精度/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /高速/ })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Vector Index アダプター" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "検索インデックス" })).toHaveAttribute(
       "aria-current",
       "page"
     );
@@ -36,7 +36,7 @@ for (const viewport of [
   });
 }
 
-test("Vector Index 設定は accurate 選択で再プロビジョニング警告を出して保存できる", async ({
+test("検索インデックス設定は accurate 選択で索引再作成警告を出して保存できる", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -55,27 +55,27 @@ test("Vector Index 設定は accurate 選択で再プロビジョニング警告
   const accurate = page.getByRole("radio", { name: /高精度/ });
   await accurate.click();
   await expect(accurate).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByText("再プロビジョニング", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText("索引再作成", { exact: false }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("索引/検索精度を保存しました。")).toBeVisible();
+  await expect(page.getByText("検索インデックス設定を保存しました。")).toBeVisible();
   expect(saved).toEqual({ profile: "accurate" });
   await expectNoHorizontalOverflow(page);
 });
 
-test("Vector Index 設定取得に失敗したら再試行できる", async ({ page }) => {
+test("検索インデックス設定取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/vector-index", async (route) => {
     await route.fulfill({
       status: 503,
-      json: { data: null, error_messages: ["索引/検索精度設定を取得できませんでした。"], warning_messages: [] },
+      json: { data: null, error_messages: ["検索インデックス設定を取得できませんでした。"], warning_messages: [] },
     });
   });
 
   await page.goto("/settings/vector-index");
 
-  await expect(page.getByRole("alert")).toContainText("索引/検索精度設定を取得できませんでした。");
+  await expect(page.getByRole("alert")).toContainText("検索インデックス設定を取得できませんでした。");
   await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
 });
 

@@ -242,6 +242,11 @@ export function DocumentWorkspace({
     searchParams,
   ]);
   const status = query.data?.status;
+  const approveErrorText = approveDocument.isError
+    ? errorMessage(approveDocument.error, t("flow.approveFailed"))
+    : "";
+  const approveNeedsReingest =
+    approveErrorText.includes("再取込") || approveErrorText.includes("再取り込み");
   const parsedExtraction = useMemo(
     () => parseStructuredExtraction(query.data?.extraction ?? {}),
     [query.data?.extraction]
@@ -753,8 +758,33 @@ export function DocumentWorkspace({
         ) : null}
 
         {approveDocument.isError ? (
-          <Banner severity="danger">
-            {errorMessage(approveDocument.error, t("flow.approveFailed"))}
+          <Banner severity={approveNeedsReingest ? "warning" : "danger"}>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1">{approveErrorText}</span>
+              {approveNeedsReingest ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() =>
+                    enqueueIngestion.mutate(
+                      { id: documentId, force: true },
+                      {
+                        onSuccess: (job) => {
+                          setLocalWatchProcessing(
+                            job.status === "QUEUED" || job.status === "RUNNING"
+                          );
+                          toast.success(t("flow.reingestQueued"));
+                        },
+                      }
+                    )
+                  }
+                  loading={enqueueIngestion.isPending}
+                >
+                  {t("flow.reingest")}
+                </Button>
+              ) : null}
+            </div>
           </Banner>
         ) : null}
         {rejectDocument.isError ? (
