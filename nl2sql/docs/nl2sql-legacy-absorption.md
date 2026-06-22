@@ -94,10 +94,17 @@ uv run python scripts/nl2sql_manual_integration.py \
 
 JSON report は Engine Operations の `Manual integration report` に取り込める。
 
+Destructive smoke の table mutation (`--execute-comments`, `--execute-annotations`,
+`--execute-synthetic-data`) は `--allowed-table NL2SQL_<DISPOSABLE_TABLE>` が必須。
+COMMENT / ANNOTATION 候補も allowed table に絞るため、既存業務表を誤更新しない。
+Synthetic data は Oracle 環境差異に合わせ、function 型の operation id 返却と
+procedure 型 signature の両方をサポートする。
+
 ## 危険操作ポリシー
 
 - destructive/live DB 操作はすべて dry-run を既定にする。
 - CLI では `--execute-*` または既存の `--confirm-cleanup` が無い限り DB 変更を行わない。
 - DB profile drop の実行は `--db-profile-drop-name` で disposable profile を明示した場合のみ許可する。
+- table mutation の実行は `NL2SQL_` prefix の disposable allowed table に限定する。
 - UI では実行チェックボックスをオンにしたときだけ danger variant の実行ボタンに切り替える。
 - 実行結果は `executed`、`status`、`runtime`、`warning`、対象 asset/table/object を表示する。

@@ -621,6 +621,32 @@ class OracleNl2SqlAdapter:
                 {"table_name": safe_table, "row_count": int(row_count)},
             ),
         ]
+        procedure_candidates: list[tuple[str, dict[str, Any]]] = []
+        if profile_name.strip():
+            procedure_candidates.append(
+                (
+                    """
+                    BEGIN
+                        DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA(
+                            profile_name => :profile_name,
+                            object_name => :object_name,
+                            owner_name => :owner_name,
+                            record_count => :row_count,
+                            user_prompt => :user_prompt,
+                            params => :params
+                        );
+                    END;
+                    """,
+                    {
+                        "profile_name": profile_name,
+                        "object_name": safe_table,
+                        "owner_name": self.settings.oracle_user.strip().upper(),
+                        "row_count": int(row_count),
+                        "user_prompt": None,
+                        "params": "{}",
+                    },
+                )
+            )
         errors: list[str] = []
         with self.connection() as conn, conn.cursor() as cursor:
             for sql, params in candidates:
@@ -633,6 +659,26 @@ class OracleNl2SqlAdapter:
                         "runtime": "oracle",
                         "package": "DBMS_CLOUD_AI",
                         "operation_id": operation_id,
+                        "table_name": safe_table,
+                        "row_count": int(row_count),
+                    }
+                except Exception as exc:
+                    message = str(exc)
+                    if self._looks_like_signature_error(message):
+                        errors.append(message)
+                        continue
+                    raise OracleAdapterError(
+                        f"DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA に失敗しました: {message}"
+                    ) from exc
+            for sql, params in procedure_candidates:
+                try:
+                    cursor.execute(sql, params)
+                    conn.commit()
+                    return {
+                        "runtime": "oracle",
+                        "package": "DBMS_CLOUD_AI",
+                        "mode": "procedure",
+                        "operation_id": "",
                         "table_name": safe_table,
                         "row_count": int(row_count),
                     }

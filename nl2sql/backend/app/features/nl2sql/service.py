@@ -4238,7 +4238,7 @@ class Nl2SqlService:
 
     def run_select_ai_agent_team(self, request: AgentTeamRunRequest) -> AgentTeamRunData:
         profile = self.get_profile(request.profile_id)
-        team_name = request.team_name.strip() or self._select_ai_team_name(profile)
+        team_name = request.team_name.strip() or self._select_ai_runtime_team_name(profile)
         warnings: list[str] = []
         if self._use_oracle_runtime():
             try:

@@ -123,9 +123,8 @@ class OciGenAiEmbeddingClient:
         else:
             config_file = self.settings.oci_config_file or str(Path.home() / ".oci" / "config")
             config = oci.config.from_file(config_file, self.settings.oci_profile)
-        self._client = inference.GenerativeAiInferenceClient(
-            config=config,
-            signer=signer,
-            service_endpoint=endpoint,
-        )
+        client_kwargs: dict[str, Any] = {"config": config, "service_endpoint": endpoint}
+        if signer is not None:
+            client_kwargs["signer"] = signer
+        self._client = inference.GenerativeAiInferenceClient(**client_kwargs)
         return self._client

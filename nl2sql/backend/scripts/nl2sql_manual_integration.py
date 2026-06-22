@@ -89,6 +89,10 @@ def _parse_tables(values: list[str]) -> list[str]:
     return tables
 
 
+def _is_disposable_table_name(table_name: str) -> bool:
+    return table_name.strip().upper().startswith("NL2SQL_")
+
+
 def _status_line(result: StepResult) -> str:
     prefix = "ok" if result.ok else "ng"
     return f"[{prefix}] {result.name}: {result.message}"
@@ -741,28 +745,38 @@ def _legacy_absorption_checks(
 ) -> list[StepResult]:
     """Run post-absorption checks for legacy no.1-sql-assist operations."""
 
-    return [
+    results = [
         _legacy_classifier_smoke(
             question=question,
             require_oracle_state=require_classifier_oracle_state,
         ),
-        *_legacy_db_profile_smoke(
-            execute_drop=execute_db_profile_drop,
-            drop_name=db_profile_drop_name,
-        ),
-        *_legacy_agent_smoke(profile_id=profile_id, question=question),
-        _legacy_comments_smoke(execute=execute_comments),
-        _legacy_annotations_smoke(execute=execute_annotations),
+    ]
+    db_profile_dry_run = _legacy_db_profile_smoke(
+        execute_drop=False,
+        drop_name=db_profile_drop_name,
+    )
+    results.extend(db_profile_dry_run[:1])
+    results.extend(_legacy_agent_smoke(profile_id=profile_id, question=question))
+    results.append(_legacy_comments_smoke(execute=execute_comments, allowed_tables=allowed_tables))
+    results.append(
+        _legacy_annotations_smoke(execute=execute_annotations, allowed_tables=allowed_tables)
+    )
+    results.append(
         _legacy_synthetic_data_smoke(
+            profile_id=profile_id,
             allowed_tables=allowed_tables,
             execute=execute_synthetic_data,
-        ),
-        *_legacy_feedback_vector_smoke(
+        )
+    )
+    results.extend(
+        _legacy_feedback_vector_smoke(
             question=question,
             profile_id=profile_id,
             execute_index=execute_feedback_index,
-        ),
-    ]
+        )
+    )
+    results.extend(db_profile_dry_run[1:])
+    return results
 
 
 def _legacy_classifier_smoke(*, question: str, require_oracle_state: bool) -> StepResult:
@@ -896,18 +910,24 @@ def _legacy_agent_smoke(*, profile_id: str | None, question: str) -> list[StepRe
     return results
 
 
-def _legacy_comments_smoke(*, execute: bool) -> StepResult:
+def _legacy_comments_smoke(*, execute: bool, allowed_tables: list[str]) -> StepResult:
     try:
+        allowed = {table.strip().upper() for table in allowed_tables if table.strip()}
         suggestions = nl2sql_service.suggest_comments(
-            CommentSuggestionRequest(use_llm=False, max_items=5)
+            CommentSuggestionRequest(use_llm=False, max_items=500 if allowed else 5)
         )
+        filtered_suggestions = [
+            item
+            for item in suggestions.suggestions
+            if not allowed or item.object_name.split(".", 1)[0].strip().upper() in allowed
+        ]
         items = [
             CommentApplyItem(
                 object_name=item.object_name,
                 object_type=item.object_type,
                 comment=item.suggested_comment,
             )
-            for item in suggestions.suggestions[:1]
+            for item in filtered_suggestions[:1]
         ]
         applied = nl2sql_service.apply_comments(CommentApplyRequest(items=items, execute=execute))
     except Exception as exc:
@@ -917,23 +937,35 @@ def _legacy_comments_smoke(*, execute: bool) -> StepResult:
         ok=bool(items) and (applied.executed == execute if execute else not applied.executed),
         message=(
             f"execute={execute}; executed={applied.executed}; runtime={applied.runtime}; "
-            f"suggestions={len(suggestions.suggestions)}; statements={len(applied.statements)}; "
+            f"suggestions={len(suggestions.suggestions)}; "
+            f"target_suggestions={len(filtered_suggestions)}; "
+            f"statements={len(applied.statements)}; "
             f"warnings={len(applied.warnings)}"
         ),
     )
 
 
-def _legacy_annotations_smoke(*, execute: bool) -> StepResult:
+def _legacy_annotations_smoke(*, execute: bool, allowed_tables: list[str]) -> StepResult:
     try:
+        allowed = {table.strip().upper() for table in allowed_tables if table.strip()}
         suggestions = nl2sql_service.suggest_annotations()
+        filtered_suggestions = [
+            item
+            for item in suggestions.suggestions
+            if not allowed or item.object_name.split(".", 1)[0].strip().upper() in allowed
+        ]
         items = [
             AnnotationApplyItem(
                 object_name=item.object_name,
                 object_type=item.object_type,
                 annotation_name=item.annotation_name,
-                annotation_value=item.annotation_value,
+                annotation_value=(
+                    f"{item.annotation_value} smoke {_iso_z(datetime.now(UTC))}"
+                    if execute
+                    else item.annotation_value
+                ),
             )
-            for item in suggestions.suggestions[:1]
+            for item in filtered_suggestions[:1]
         ]
         applied = nl2sql_service.apply_annotations(
             AnnotationApplyRequest(items=items, execute=execute)
@@ -945,18 +977,29 @@ def _legacy_annotations_smoke(*, execute: bool) -> StepResult:
         ok=bool(items) and (applied.executed == execute if execute else not applied.executed),
         message=(
             f"execute={execute}; executed={applied.executed}; runtime={applied.runtime}; "
-            f"suggestions={len(suggestions.suggestions)}; statements={len(applied.statements)}; "
+            f"suggestions={len(suggestions.suggestions)}; "
+            f"target_suggestions={len(filtered_suggestions)}; "
+            f"statements={len(applied.statements)}; "
             f"warnings={len(applied.warnings)}"
         ),
     )
 
 
-def _legacy_synthetic_data_smoke(*, allowed_tables: list[str], execute: bool) -> StepResult:
+def _legacy_synthetic_data_smoke(
+    *, profile_id: str | None, allowed_tables: list[str], execute: bool
+) -> StepResult:
     try:
         catalog = nl2sql_service.get_catalog()
         table_name = allowed_tables[0] if allowed_tables else catalog.tables[0].table_name
+        profile = nl2sql_service.get_profile(profile_id)
+        profile_name = nl2sql_service._select_ai_profile_name(profile)
         operation = nl2sql_service.generate_synthetic_data(
-            SyntheticDataGenerateRequest(table_name=table_name, row_count=1, execute=execute)
+            SyntheticDataGenerateRequest(
+                table_name=table_name,
+                row_count=1,
+                profile_name=profile_name,
+                execute=execute,
+            )
         )
         status_summary = "-"
         if operation.operation_id:
@@ -1614,6 +1657,22 @@ def main(argv: list[str] | None = None) -> int:
     require_oracle_persistence = args.require_oracle_persistence or release_gate
     require_refreshed_assets = args.require_refreshed_assets or args.full_smoke or release_gate
     allowed = AllowedObjects(table_names=_parse_tables(args.allowed_table), columns={})
+    execute_table_mutation = (
+        args.execute_comments or args.execute_annotations or args.execute_synthetic_data
+    )
+    if execute_table_mutation and not args.check_legacy_absorption:
+        parser.error(
+            "--execute-comments/--execute-annotations/--execute-synthetic-data "
+            "require --check-legacy-absorption"
+        )
+    if execute_table_mutation and not allowed.table_names:
+        parser.error("table mutation smoke requires --allowed-table NL2SQL_<DISPOSABLE_TABLE>")
+    unsafe_tables = [table for table in allowed.table_names if not _is_disposable_table_name(table)]
+    if execute_table_mutation and unsafe_tables:
+        parser.error(
+            "table mutation smoke only allows disposable NL2SQL_* tables; "
+            f"unsafe={','.join(unsafe_tables)}"
+        )
     if (
         args.cleanup_assets
         and not args.confirm_cleanup
@@ -1791,6 +1850,17 @@ def main(argv: list[str] | None = None) -> int:
                 require_oracle=require_oracle,
                 require_enterprise_ai=args.require_enterprise_ai,
             )
+        )
+
+    if args.execute_db_profile_drop:
+        drop_results = _legacy_db_profile_smoke(
+            execute_drop=True,
+            drop_name=args.db_profile_drop_name,
+        )
+        final_drop_results = drop_results[1:] or drop_results
+        results.extend(
+            _rename_result(result, "legacy_db_profile_drop_execute")
+            for result in final_drop_results
         )
 
     return _print_results(

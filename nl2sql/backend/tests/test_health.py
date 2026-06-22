@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app.features.nl2sql.models import (
+    AgentTeamRunRequest,
     CompareRequest,
     CsvImportRequest,
     EvaluateRequest,
@@ -54,6 +55,8 @@ class _FakeOracleDb:
         self.run_team_profile_loss = False
         self.create_team_profile_exists_failures = 0
         self.create_team_calls = 0
+        self.synthetic_function_signature_failures = 0
+        self.synthetic_procedure_calls = 0
 
     def connection(self) -> "_FakeOracleConnection":
         return _FakeOracleConnection(self)
@@ -122,6 +125,17 @@ class _FakeOracleCursor:
             self._rows = self.db.feedback_vector_rows
         elif "DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in normalized_sql:
             self._row = ("conversation-001",)
+        elif "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA" in normalized_sql:
+            if normalized_sql.startswith("SELECT"):
+                if self.db.synthetic_function_signature_failures > 0:
+                    self.db.synthetic_function_signature_failures -= 1
+                    raise RuntimeError(
+                        'ORA-00904: "DBMS_CLOUD_AI"."GENERATE_SYNTHETIC_DATA": '
+                        "invalid identifier"
+                    )
+                self._row = ("operation-001",)
+            else:
+                self.db.synthetic_procedure_calls += 1
         elif "DBMS_CLOUD_AI_AGENT.RUN_TEAM" in normalized_sql:
             self.db.run_team_calls += 1
             if self.db.run_team_profile_loss:
@@ -1459,6 +1473,44 @@ def test_service_refresh_agent_uses_versioned_team_when_generated_profile_remain
     assert data.team_name.startswith("NL2SQL_DEFAULT_TEAM_V")
     assert "versioned team" in data.warning
     assert preview.engine_meta["team_name"] == data.team_name
+
+
+def test_service_run_agent_team_uses_runtime_team_name() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.create_team_profile_exists_failures = 2
+    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+
+    assets = service.refresh_select_ai_agent_assets(None)
+    result = service.run_select_ai_agent_team(AgentTeamRunRequest(prompt="請求金額を確認したい"))
+
+    assert assets.team_name.startswith("NL2SQL_DEFAULT_TEAM_V")
+    assert result.runtime == "oracle"
+    assert result.team_name == assets.team_name
+    assert any(
+        params and params.get("team_name") == assets.team_name for params in fake_db.executed_params
+    )
+
+
+def test_oracle_adapter_generate_synthetic_data_falls_back_to_procedure_signature() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.synthetic_function_signature_failures = 2
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    meta = adapter.generate_synthetic_data(
+        table_name="NL2SQL_SMOKE_TABLE",
+        row_count=1,
+        profile_name="NL2SQL_SMOKE_PROFILE",
+    )
+
+    assert meta["mode"] == "procedure"
+    assert meta["operation_id"] == ""
+    assert fake_db.synthetic_procedure_calls == 1
+    assert any(
+        params
+        and params.get("profile_name") == "NL2SQL_SMOKE_PROFILE"
+        and params.get("object_name") == "NL2SQL_SMOKE_TABLE"
+        for params in fake_db.executed_params
+    )
 
 
 def test_service_refresh_agent_cleans_previous_versioned_team() -> None:

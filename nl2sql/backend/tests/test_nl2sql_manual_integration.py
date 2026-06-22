@@ -256,6 +256,22 @@ def test_manual_integration_execute_feedback_index_smoke(
             ),
         ),
     )
+    monkeypatch.setattr(
+        script,
+        "_legacy_db_profile_smoke",
+        lambda *, execute_drop, drop_name: [
+            script.StepResult(
+                name="legacy_db_profile_list",
+                ok=True,
+                message=f"execute={execute_drop}; drop={drop_name}",
+            ),
+            script.StepResult(
+                name="legacy_db_profile_drop",
+                ok=True,
+                message=f"execute={execute_drop}; drop={drop_name}",
+            ),
+        ],
+    )
 
     exit_code = script.main(
         [
@@ -517,6 +533,32 @@ def test_manual_integration_legacy_absorption_flags_and_report(
             message="execute=True; executed=True",
         ),
     )
+    monkeypatch.setattr(
+        script,
+        "_legacy_db_profile_smoke",
+        lambda *, execute_drop, drop_name: [
+            script.StepResult(
+                name="legacy_db_profile_list",
+                ok=True,
+                message=f"execute={execute_drop}; drop={drop_name}",
+            ),
+            script.StepResult(
+                name="legacy_db_profile_drop",
+                ok=True,
+                message=f"execute={execute_drop}; drop={drop_name}",
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        script,
+        "_preview",
+        lambda **kwargs: (
+            script.StepResult(
+                name=f"preview_{kwargs['engine'].value}", ok=True, message="safe=True"
+            ),
+            None,
+        ),
+    )
 
     exit_code = script.main(
         [
@@ -526,7 +568,7 @@ def test_manual_integration_legacy_absorption_flags_and_report(
             "--question",
             "請求金額を確認したい",
             "--allowed-table",
-            "INVOICES",
+            "NL2SQL_DISPOSABLE_TABLE",
             "--execute-db-profile-drop",
             "--db-profile-drop-name",
             "NL2SQL_DISPOSABLE_PROFILE",
@@ -544,7 +586,7 @@ def test_manual_integration_legacy_absorption_flags_and_report(
     output = capsys.readouterr().out
     assert "[ok] legacy_classifier:" in output
     assert "[ok] legacy_db_profile_drop:" in output
-    assert captured["allowed_tables"] == ["INVOICES"]
+    assert captured["allowed_tables"] == ["NL2SQL_DISPOSABLE_TABLE"]
     assert captured["db_profile_drop_name"] == "NL2SQL_DISPOSABLE_PROFILE"
     assert captured["execute_db_profile_drop"] is True
     assert captured["execute_comments"] is True
@@ -556,6 +598,7 @@ def test_manual_integration_legacy_absorption_flags_and_report(
     assert {step["name"] for step in report["steps"]} >= {
         "legacy_classifier",
         "legacy_db_profile_drop",
+        "legacy_db_profile_drop_execute",
         "feedback_index_rebuild",
     }
     assert "ORACLE_PASSWORD" not in output
@@ -592,6 +635,18 @@ def test_manual_integration_execute_db_profile_drop_requires_explicit_name() -> 
 def test_manual_integration_db_profile_drop_name_requires_legacy_absorption() -> None:
     with pytest.raises(SystemExit):
         script.main(["--db-profile-drop-name", "NL2SQL_DISPOSABLE_PROFILE"])
+
+
+def test_manual_integration_table_mutation_requires_disposable_allowed_table() -> None:
+    with pytest.raises(SystemExit):
+        script.main(
+            [
+                "--check-legacy-absorption",
+                "--execute-comments",
+                "--allowed-table",
+                "DENPYO_REGISTRATIONS",
+            ]
+        )
 
 
 def test_manual_integration_debug_raw_preview_smoke(
