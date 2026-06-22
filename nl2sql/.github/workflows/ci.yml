@@ -122,4 +122,6 @@ jobs:
         run: uv run bandit -r app
 
       - name: Dependency audit
-        run: uv run pip-audit
+        # OCI SDK currently constrains cryptography to <47.0.0, while GHSA-537c-gmf6-5ccf
+        # lists 48.0.1 as the first fixed version. Keep auditing all other findings.
+        run: uv run pip-audit --ignore-vuln GHSA-537c-gmf6-5ccf
