@@ -528,6 +528,8 @@ def test_manual_integration_legacy_absorption_flags_and_report(
             "--allowed-table",
             "INVOICES",
             "--execute-db-profile-drop",
+            "--db-profile-drop-name",
+            "NL2SQL_DISPOSABLE_PROFILE",
             "--execute-comments",
             "--execute-annotations",
             "--execute-synthetic-data",
@@ -543,6 +545,7 @@ def test_manual_integration_legacy_absorption_flags_and_report(
     assert "[ok] legacy_classifier:" in output
     assert "[ok] legacy_db_profile_drop:" in output
     assert captured["allowed_tables"] == ["INVOICES"]
+    assert captured["db_profile_drop_name"] == "NL2SQL_DISPOSABLE_PROFILE"
     assert captured["execute_db_profile_drop"] is True
     assert captured["execute_comments"] is True
     assert captured["execute_annotations"] is True
@@ -574,6 +577,21 @@ def test_manual_integration_legacy_classifier_requires_oracle_state(
     assert not result.ok
     assert result.name == "legacy_classifier"
     assert "persistence_mode=memory" in result.message
+
+
+def test_manual_integration_execute_db_profile_drop_requires_explicit_name() -> None:
+    with pytest.raises(SystemExit):
+        script.main(
+            [
+                "--check-legacy-absorption",
+                "--execute-db-profile-drop",
+            ]
+        )
+
+
+def test_manual_integration_db_profile_drop_name_requires_legacy_absorption() -> None:
+    with pytest.raises(SystemExit):
+        script.main(["--db-profile-drop-name", "NL2SQL_DISPOSABLE_PROFILE"])
 
 
 def test_manual_integration_debug_raw_preview_smoke(

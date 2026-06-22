@@ -731,6 +731,7 @@ def _legacy_absorption_checks(
     profile_id: str | None,
     question: str,
     allowed_tables: list[str],
+    db_profile_drop_name: str,
     execute_db_profile_drop: bool,
     execute_comments: bool,
     execute_annotations: bool,
@@ -745,7 +746,10 @@ def _legacy_absorption_checks(
             question=question,
             require_oracle_state=require_classifier_oracle_state,
         ),
-        *_legacy_db_profile_smoke(execute_drop=execute_db_profile_drop),
+        *_legacy_db_profile_smoke(
+            execute_drop=execute_db_profile_drop,
+            drop_name=db_profile_drop_name,
+        ),
         *_legacy_agent_smoke(profile_id=profile_id, question=question),
         _legacy_comments_smoke(execute=execute_comments),
         _legacy_annotations_smoke(execute=execute_annotations),
@@ -807,7 +811,7 @@ def _legacy_classifier_smoke(*, question: str, require_oracle_state: bool) -> St
     )
 
 
-def _legacy_db_profile_smoke(*, execute_drop: bool) -> list[StepResult]:
+def _legacy_db_profile_smoke(*, execute_drop: bool, drop_name: str) -> list[StepResult]:
     try:
         profiles = nl2sql_service.list_select_ai_db_profiles()
         list_result = StepResult(
@@ -825,13 +829,14 @@ def _legacy_db_profile_smoke(*, execute_drop: bool) -> list[StepResult]:
                 message=f"skipped; execute={execute_drop}; profiles=0",
             )
         else:
-            target = profiles.profiles[0].name
+            target = drop_name.strip() or profiles.profiles[0].name
             dropped = nl2sql_service.drop_select_ai_db_profile(target, execute_drop)
             drop_result = StepResult(
                 name="legacy_db_profile_drop",
                 ok=dropped.status != "error",
                 message=(
-                    f"profile={target}; execute={execute_drop}; "
+                    f"profile={target}; explicit_target={bool(drop_name.strip())}; "
+                    f"execute={execute_drop}; "
                     f"executed={dropped.executed}; status={dropped.status}; "
                     f"warning={_one_line(dropped.warning, 180) if dropped.warning else '-'}"
                 ),
@@ -887,9 +892,7 @@ def _legacy_agent_smoke(*, profile_id: str | None, question: str) -> list[StepRe
             )
         )
     except Exception as exc:
-        results.append(
-            StepResult(name="legacy_agent_conversations", ok=False, message=str(exc))
-        )
+        results.append(StepResult(name="legacy_agent_conversations", ok=False, message=str(exc)))
     return results
 
 
@@ -906,9 +909,7 @@ def _legacy_comments_smoke(*, execute: bool) -> StepResult:
             )
             for item in suggestions.suggestions[:1]
         ]
-        applied = nl2sql_service.apply_comments(
-            CommentApplyRequest(items=items, execute=execute)
-        )
+        applied = nl2sql_service.apply_comments(CommentApplyRequest(items=items, execute=execute))
     except Exception as exc:
         return StepResult(name="legacy_comments_apply", ok=False, message=str(exc))
     return StepResult(
@@ -1435,8 +1436,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--execute-db-profile-drop",
         action="store_true",
         help=(
-            "Actually drop the first listed Select AI DB profile during "
+            "Actually drop the DB profile named by --db-profile-drop-name during "
             "--check-legacy-absorption. Mutates Oracle."
+        ),
+    )
+    parser.add_argument(
+        "--db-profile-drop-name",
+        default="",
+        help=(
+            "Exact Select AI DB profile name used by --check-legacy-absorption. "
+            "Required with --execute-db-profile-drop; optional for dry-run."
         ),
     )
     parser.add_argument(
@@ -1589,6 +1598,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.confirm_cleanup and not args.cleanup_assets:
         parser.error("--confirm-cleanup requires --cleanup-assets")
+    if args.execute_db_profile_drop and not args.check_legacy_absorption:
+        parser.error("--execute-db-profile-drop requires --check-legacy-absorption")
+    if args.db_profile_drop_name and not args.check_legacy_absorption:
+        parser.error("--db-profile-drop-name requires --check-legacy-absorption")
+    if args.execute_db_profile_drop and not args.db_profile_drop_name.strip():
+        parser.error("--execute-db-profile-drop requires --db-profile-drop-name")
     release_gate = args.release_gate
     refresh_assets = args.refresh_assets or args.full_smoke or release_gate
     execute_jobs = args.execute or args.full_smoke or release_gate
@@ -1721,6 +1736,7 @@ def main(argv: list[str] | None = None) -> int:
                 profile_id=profile_id,
                 question=args.question,
                 allowed_tables=allowed.table_names,
+                db_profile_drop_name=args.db_profile_drop_name,
                 execute_db_profile_drop=args.execute_db_profile_drop,
                 execute_comments=args.execute_comments,
                 execute_annotations=args.execute_annotations,

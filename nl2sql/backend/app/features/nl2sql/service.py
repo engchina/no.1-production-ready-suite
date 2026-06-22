@@ -1329,9 +1329,7 @@ class Nl2SqlService:
                 category_count=len(categories),
                 categories=categories,
                 persistence_mode=self._store.mode,
-                warnings=[
-                    "LogisticRegression には 2 category 以上の training data が必要です。"
-                ],
+                warnings=["LogisticRegression には 2 category 以上の training data が必要です。"],
             )
 
         try:
@@ -1490,9 +1488,7 @@ class Nl2SqlService:
         skipped = 0
         for raw_row in rows_iter:
             category = (
-                str(raw_row[category_index] or "").strip()
-                if len(raw_row) > category_index
-                else ""
+                str(raw_row[category_index] or "").strip() if len(raw_row) > category_index else ""
             )
             value = str(raw_row[text_index] or "").strip() if len(raw_row) > text_index else ""
             if not category or not value:
@@ -1893,9 +1889,7 @@ class Nl2SqlService:
         if classifier_prediction and classifier_prediction.candidates:
             mapped_candidates: list[ProfileRecommendationCandidate] = []
             for candidate in classifier_prediction.candidates:
-                profile = (
-                    self.get_profile(candidate.profile_id) if candidate.profile_id else None
-                )
+                profile = self.get_profile(candidate.profile_id) if candidate.profile_id else None
                 if profile is None:
                     continue
                 mapped_candidates.append(
@@ -2443,9 +2437,7 @@ class Nl2SqlService:
         structure = self._sql_structure(request.sql, referenced)
         return ReverseSqlData(
             question=f"{table_names} のデータを条件に沿って確認したい",
-            explanation=(
-                "SELECT 句・FROM/JOIN 句・条件・集計をもとに自然言語説明を生成しました。"
-            ),
+            explanation=("SELECT 句・FROM/JOIN 句・条件・集計をもとに自然言語説明を生成しました。"),
             referenced_tables=referenced,
             logical_steps=[
                 structure["summary"],
@@ -2881,9 +2873,7 @@ class Nl2SqlService:
             if table is None:
                 raise ValueError(f"{item.object_name}: catalog に存在しない object です。")
             ddl_kind = (
-                "VIEW"
-                if object_type == "view" or table.table_type.lower() == "view"
-                else "TABLE"
+                "VIEW" if object_type == "view" or table.table_type.lower() == "view" else "TABLE"
             )
             return AnnotationApplyStatement(
                 object_name=table.table_name,
@@ -2914,9 +2904,7 @@ class Nl2SqlService:
                     f"ANNOTATIONS ({annotation_name} {_quote_sql_string(annotation_value)});"
                 ),
             )
-        raise ValueError(
-            f"{item.object_name}: object_type は table/view/column のみ指定できます。"
-        )
+        raise ValueError(f"{item.object_name}: object_type は table/view/column のみ指定できます。")
 
     def _annotation_name(self, value: str) -> str:
         normalized = value.strip().replace('"', "").upper()
@@ -3036,9 +3024,7 @@ class Nl2SqlService:
                 message="operation status の取得には NL2SQL_RUNTIME_MODE=oracle が必要です。",
             )
         try:
-            result = self._oracle_adapter.synthetic_data_operation_status(
-                operation_id=operation_id
-            )
+            result = self._oracle_adapter.synthetic_data_operation_status(operation_id=operation_id)
             return SyntheticDataOperationStatusData(
                 operation_id=operation_id,
                 runtime=str(result.get("runtime") or "oracle"),

@@ -331,7 +331,7 @@ def test_update_model_settings_persists_json_with_resolved_secret(
                         "model_id": "mistral.vision-model",
                         "display_name": "画像解析",
                         "vision_enabled": True,
-                    }
+                    },
                 ],
                 "default_model_id": "cohere.command-r-plus",
                 "api_path": "/responses",

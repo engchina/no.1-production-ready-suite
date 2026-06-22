@@ -408,23 +408,16 @@ def _apply_model_settings(settings: Settings, payload: ModelSettingsPayload) -> 
     ]
     settings.oci_enterprise_ai_default_model = enterprise.default_model_id
     default_model = enterprise.default_model_id
-    vision_model = (
-        next(
-            (
-                model.model_id
-                for model in enterprise.models
-                if model.model_id == default_model and model.vision_enabled
-            ),
-            "",
-        )
-        or next(
-            (
-                model.model_id
-                for model in enterprise.models
-                if model.model_id and model.vision_enabled
-            ),
-            default_model,
-        )
+    vision_model = next(
+        (
+            model.model_id
+            for model in enterprise.models
+            if model.model_id == default_model and model.vision_enabled
+        ),
+        "",
+    ) or next(
+        (model.model_id for model in enterprise.models if model.model_id and model.vision_enabled),
+        default_model,
     )
     settings.oci_enterprise_ai_llm_model = default_model
     settings.oci_enterprise_ai_vlm_model = vision_model
@@ -1109,8 +1102,7 @@ def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsDa
     local_dir = getattr(settings, "local_storage_dir", "")
     readiness = (
         "ok"
-        if (backend == "local" and local_dir)
-        or (backend == "oci" and namespace and bucket)
+        if (backend == "local" and local_dir) or (backend == "oci" and namespace and bucket)
         else "missing"
     )
     return UploadStorageSettingsData(
