@@ -48,6 +48,19 @@ export interface NavSection {
 /** RAG コンソールのサイドナビ構成。 */
 export const NAV_SECTIONS: NavSection[] = [
   {
+    titleKey: "nav.section.rag",
+    items: [
+      { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch },
+      {
+        href: APP_ROUTES.businessViews,
+        labelKey: "nav.businessViews",
+        sidebarLabelKey: "nav.businessViews.sidebar",
+        icon: UserCog,
+      },
+      { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical },
+    ],
+  },
+  {
     titleKey: "nav.section.ingestion",
     items: [
       { href: APP_ROUTES.dashboard, labelKey: "nav.dashboard", icon: LayoutDashboard },
@@ -59,19 +72,6 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       { href: APP_ROUTES.fileList, labelKey: "nav.fileList", icon: FileStack },
       { href: APP_ROUTES.knowledgeBases, labelKey: "nav.knowledgeBases", icon: Library },
-    ],
-  },
-  {
-    titleKey: "nav.section.rag",
-    items: [
-      { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch },
-      {
-        href: APP_ROUTES.businessViews,
-        labelKey: "nav.businessViews",
-        sidebarLabelKey: "nav.businessViews.sidebar",
-        icon: UserCog,
-      },
-      { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical },
     ],
   },
   {
