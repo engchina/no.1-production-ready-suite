@@ -46,7 +46,7 @@ class PlannerRuntimeConfig(BaseModel):
     oci_agent_endpoint: str | None = None
     oci_agent_api_key: str | None = None
     timeout_seconds: float = 8.0
-    max_retries: int = 1
+    max_retries: int = 3
     fallback_to_heuristic: bool = True
     allowed_tool_names: list[str] = Field(default_factory=lambda: ["agent_skill_run"])
     allow_command_generation: bool = False

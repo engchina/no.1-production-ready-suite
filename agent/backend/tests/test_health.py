@@ -631,7 +631,7 @@ def _reset_planner() -> None:
         oci_agent_endpoint="",
         enterprise_ai_endpoint="",
         timeout_seconds=8,
-        max_retries=1,
+        max_retries=3,
         fallback_to_heuristic=True,
         allowed_tool_names=["agent_skill_run"],
         allow_command_generation=False,
@@ -1383,14 +1383,17 @@ def test_list_tools_v2_includes_external_tools() -> None:
     tools = {tool["name"]: tool for tool in resp.json()["data"]["tools"]}
     assert "echo" in tools
     assert tools["external_rag_search"]["permission_level"] == "read"
-    assert tools["external_rag_search"]["max_retries"] == 1
+    assert tools["external_rag_search"]["max_retries"] == 3
     assert tools["external_nl2sql_query"]["permission_level"] == "sensitive"
+    assert tools["external_nl2sql_query"]["max_retries"] == 3
     assert tools["external_nl2sql_query"]["output_schema"]["properties"]["columns"]
     assert tools["external_mcp_call"]["permission_level"] == "sensitive"
     assert tools["external_mcp_call"]["side_effects"] is True
+    assert tools["external_mcp_call"]["max_retries"] == 3
     assert tools["external_mcp_call"]["input_schema"]["properties"]["tool_name"]
     assert tools["external_mcp_list_tools"]["permission_level"] == "read"
     assert tools["external_mcp_list_tools"]["side_effects"] is False
+    assert tools["external_mcp_list_tools"]["max_retries"] == 3
     assert tools["external_mcp_list_tools"]["output_schema"]["properties"]["tools"]
     assert tools["agent_skill_list"]["permission_level"] == "read"
     assert tools["agent_skill_run"]["permission_level"] == "read"
@@ -6799,12 +6802,12 @@ def test_external_rag_timeout_is_normalized(monkeypatch: MonkeyPatch) -> None:
     assert result.success is False
     assert result.error == "external RAG request timed out"
     assert result.error_code == "external_rag.timeout"
-    assert result.error_details["max_retries"] == 1
+    assert result.error_details["max_retries"] == 3
     assert result.duration_ms >= 0
     assert result.audit_metadata["tool_name"] == "external_rag_search"
-    assert result.audit_metadata["max_retries"] == 1
+    assert result.audit_metadata["max_retries"] == 3
     assert result.audit_metadata["error_code"] == "external_rag.timeout"
-    assert len(calls) == 2
+    assert len(calls) == 4
 
 
 def test_external_rag_invalid_request_is_normalized() -> None:

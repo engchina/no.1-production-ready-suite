@@ -81,12 +81,12 @@ class Settings(BaseServiceSettings):
     agent_external_rag_base_url: str | None = None
     agent_external_rag_api_key: str | None = None
     agent_external_rag_timeout_seconds: float = 10.0
-    agent_external_rag_max_retries: int = 1
+    agent_external_rag_max_retries: int = 3
     agent_external_nl2sql_base_url: str | None = None
     agent_external_nl2sql_api_key: str | None = None
     agent_external_nl2sql_timeout_seconds: float = 15.0
     agent_external_nl2sql_default_limit: int = 100
-    agent_external_nl2sql_max_retries: int = 1
+    agent_external_nl2sql_max_retries: int = 3
     agent_external_mcp_base_url: str | None = None
     agent_external_mcp_api_key: str | None = None
     agent_external_mcp_session_id: str | None = None
@@ -95,7 +95,7 @@ class Settings(BaseServiceSettings):
     agent_external_mcp_oauth_client_secret: str | None = None
     agent_external_mcp_oauth_scope: str | None = None
     agent_external_mcp_timeout_seconds: float = 10.0
-    agent_external_mcp_max_retries: int = 1
+    agent_external_mcp_max_retries: int = 3
     agent_planner_provider: str = "heuristic"
     agent_planner_oci_responses_base_url: str | None = None
     agent_planner_oci_responses_api_key: str | None = None
@@ -107,7 +107,7 @@ class Settings(BaseServiceSettings):
     agent_planner_enterprise_ai_endpoint: str | None = None
     agent_planner_enterprise_ai_api_key: str | None = None
     agent_planner_timeout_seconds: float = 8.0
-    agent_planner_max_retries: int = 1
+    agent_planner_max_retries: int = 3
     agent_planner_fallback_to_heuristic: bool = True
     agent_planner_allowed_tool_names: str = "agent_skill_run"
     agent_planner_allow_command_generation: bool = False

@@ -291,7 +291,7 @@ backend run 作成を JSON summary で確認します。`--rotation-check` は J
   "permission_level": "sensitive",
   "side_effects": false,
   "timeout_seconds": 15,
-  "max_retries": 1,
+  "max_retries": 3,
   "audit_tags": ["external", "nl2sql", "structured-data", "audit-sql"]
 }
 ```
@@ -355,7 +355,7 @@ OCI Responses planner settings:
 - `AGENT_PLANNER_OCI_AGENT_ENDPOINT`
 - `AGENT_PLANNER_OCI_AGENT_API_KEY`
 - `AGENT_PLANNER_TIMEOUT_SECONDS=8`
-- `AGENT_PLANNER_MAX_RETRIES=1`
+- `AGENT_PLANNER_MAX_RETRIES=3`
 - `AGENT_PLANNER_FALLBACK_TO_HEURISTIC=true`
 - `AGENT_PLANNER_ALLOWED_TOOL_NAMES=agent_skill_run`
 - `AGENT_PLANNER_ALLOW_COMMAND_GENERATION=false`
@@ -458,7 +458,7 @@ Settings:
 - `AGENT_EXTERNAL_MCP_OAUTH_CLIENT_SECRET`
 - `AGENT_EXTERNAL_MCP_OAUTH_SCOPE`
 - `AGENT_EXTERNAL_MCP_TIMEOUT_SECONDS=10`
-- `AGENT_EXTERNAL_MCP_MAX_RETRIES=1`
+- `AGENT_EXTERNAL_MCP_MAX_RETRIES=3`
 
 Request:
 
