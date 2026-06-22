@@ -16,7 +16,7 @@ async function fulfillJson(route: Route, data: unknown) {
   });
 }
 
-async function mockRagSettingsApi(page: Page) {
+async function mockNl2sqlSettingsApi(page: Page) {
   const ociSettings = {
     config_file: "~/.oci/config",
     profile: "DEFAULT",
@@ -51,17 +51,17 @@ async function mockRagSettingsApi(page: Page) {
         clear_api_key: false,
         models: [
           {
-            model_id: "enterprise-rag-llm",
-            display_name: "業務 RAG 標準",
+            model_id: "enterprise-nl2sql-llm",
+            display_name: "業務 NL2SQL 標準",
             vision_enabled: false,
           },
           {
-            model_id: "enterprise-rag-vlm",
+            model_id: "enterprise-nl2sql-vlm",
             display_name: "OCR / Vision",
             vision_enabled: true,
           },
         ],
-        default_model_id: "enterprise-rag-llm",
+        default_model_id: "enterprise-nl2sql-llm",
         api_path: "/responses",
         vlm_input_mode: "auto",
         text_payload_template: "",
@@ -87,11 +87,11 @@ async function mockRagSettingsApi(page: Page) {
   };
 
   const databaseSettings = {
-    user: "RAG_APP",
-    dsn: "ragdb_high",
+    user: "NL2SQL_APP",
+    dsn: "nl2sqldb_high",
     wallet_dir: "/u01/aipoc/instantclient_23_26/network/admin",
     wallet_uploaded: true,
-    available_services: ["ragdb_high", "ragdb_low"],
+    available_services: ["nl2sqldb_high", "nl2sqldb_low"],
     has_password: true,
     has_wallet_password: false,
     readiness: "ok",
@@ -106,9 +106,9 @@ async function mockRagSettingsApi(page: Page) {
     status: "success",
     message: "ADB OCID が設定されています。",
     id: "ocid1.autonomousdatabase.oc1.ap-osaka-1.example",
-    display_name: "ragdb",
+    display_name: "nl2sqldb",
     lifecycle_state: "AVAILABLE",
-    db_name: "RAGDB",
+    db_name: "NL2SQLDB",
     cpu_core_count: 2,
     data_storage_size_in_tbs: 1,
     region: "ap-osaka-1",
@@ -162,8 +162,8 @@ async function mockRagSettingsApi(page: Page) {
     fulfillJson(route, {
       status: "success",
       target_type: "enterprise_text",
-      model_id: "enterprise-rag-llm",
-      message: "enterprise-rag-llm の設定を確認しました。",
+      model_id: "enterprise-nl2sql-llm",
+      message: "enterprise-nl2sql-llm の設定を確認しました。",
       troubleshooting: [],
       raw_error: null,
       error_type: null,
@@ -217,7 +217,7 @@ async function expectNoHorizontalOverflow(page: Page) {
     .toBeTruthy();
 }
 
-async function expectRagStyleShellFillsViewport(page: Page) {
+async function expectNl2sqlShellFillsViewport(page: Page) {
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -273,15 +273,50 @@ async function expectNoExcessBottomWhitespace(page: Page) {
   expect(metrics.bottomWhitespace).toBeLessThanOrEqual(96);
 }
 
+async function expectOciConfigFieldsAboveOcidFields(page: Page) {
+  const configFile = page.getByLabel("OCI 設定ファイルのパス");
+  const configProfile = page.getByLabel("OCI プロファイル");
+  const userOcid = page.getByLabel("ユーザー OCID");
+  const tenancyOcid = page.getByLabel("テナンシ OCID");
+
+  await expect(configFile).toBeVisible();
+  await expect(configProfile).toBeVisible();
+  await expect(userOcid).toBeVisible();
+  await expect(tenancyOcid).toBeVisible();
+
+  const boxes = await Promise.all([
+    configFile.boundingBox(),
+    configProfile.boundingBox(),
+    userOcid.boundingBox(),
+    tenancyOcid.boundingBox(),
+  ]);
+
+  if (boxes.some((box) => box === null)) {
+    throw new Error("OCI 認証フォームの入力欄位置を取得できません。");
+  }
+
+  const [configFileBox, configProfileBox, userOcidBox, tenancyOcidBox] = boxes as [
+    NonNullable<(typeof boxes)[number]>,
+    NonNullable<(typeof boxes)[number]>,
+    NonNullable<(typeof boxes)[number]>,
+    NonNullable<(typeof boxes)[number]>,
+  ];
+  const configFieldsBottomRow = Math.max(configFileBox.y, configProfileBox.y);
+  const ocidFieldsTopRow = Math.min(userOcidBox.y, tenancyOcidBox.y);
+
+  expect(configFieldsBottomRow).toBeLessThan(ocidFieldsTopRow);
+}
+
 test.beforeEach(async ({ page }) => {
-  await mockRagSettingsApi(page);
+  await mockNl2sqlSettingsApi(page);
 });
 
-test("RAG 由来の 4 つのシステム設定画面を表示できる", async ({ page }) => {
+test("NL2SQL のシステム設定画面を表示できる", async ({ page }) => {
   await page.goto("/settings/oci");
   await expect(page.getByRole("heading", { name: "OCI 認証設定" }).first()).toBeVisible();
   await expect(page.getByLabel("ユーザー OCID")).toBeVisible();
-  await expectRagStyleShellFillsViewport(page);
+  await expectOciConfigFieldsAboveOcidFields(page);
+  await expectNl2sqlShellFillsViewport(page);
   await expectNoExcessBottomWhitespace(page);
   await expectNoHorizontalOverflow(page);
 
