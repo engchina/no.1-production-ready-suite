@@ -360,6 +360,29 @@ export function OciSettingsClient() {
             </CardHeader>
             <CardContent className="space-y-5 p-6">
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <ConfigFileField
+                  id="oci-config-file"
+                  label={t("settings.oci.field.configFile")}
+                  value={draft.configFile}
+                  error={errorText(errors.configFile)}
+                  helper={t("settings.oci.helper.configFile")}
+                  placeholder="~/.oci/config"
+                  importState={configImportState}
+                  importError={configImportMessage}
+                  onApply={() => void importConfigFromPath()}
+                  readOnly
+                  required
+                />
+                <TextField
+                  id="oci-config-profile"
+                  label={t("settings.oci.field.configProfile")}
+                  value={draft.configProfile}
+                  error={errorText(errors.configProfile)}
+                  helper={t("settings.oci.helper.configProfile")}
+                  placeholder="DEFAULT"
+                  readOnly
+                  required
+                />
                 <TextField
                   id="oci-user-ocid"
                   label={t("settings.oci.field.userOcid")}
@@ -402,29 +425,6 @@ export function OciSettingsClient() {
                   required
                   requiredLabel={t("settings.oci.required")}
                   buttonClassName="h-11"
-                />
-                <ConfigFileField
-                  id="oci-config-file"
-                  label={t("settings.oci.field.configFile")}
-                  value={draft.configFile}
-                  error={errorText(errors.configFile)}
-                  helper={t("settings.oci.helper.configFile")}
-                  placeholder="~/.oci/config"
-                  importState={configImportState}
-                  importError={configImportMessage}
-                  onApply={() => void importConfigFromPath()}
-                  readOnly
-                  required
-                />
-                <TextField
-                  id="oci-config-profile"
-                  label={t("settings.oci.field.configProfile")}
-                  value={draft.configProfile}
-                  error={errorText(errors.configProfile)}
-                  helper={t("settings.oci.helper.configProfile")}
-                  placeholder="DEFAULT"
-                  readOnly
-                  required
                 />
               </div>
 
