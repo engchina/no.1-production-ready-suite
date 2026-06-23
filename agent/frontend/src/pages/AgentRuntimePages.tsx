@@ -1195,56 +1195,35 @@ export function MemoryPage() {
   );
 }
 
-export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" | "mcp" }) {
+export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   const queryClient = useQueryClient();
   const isRag = kind === "rag";
   const isNl2Sql = kind === "nl2sql";
-  const isMcp = kind === "mcp";
-  const title = isRag
-    ? t("nav.settingsExternalRag")
-    : isNl2Sql
-      ? t("nav.settingsExternalNl2Sql")
-      : t("nav.settingsExternalMcp");
-  const subtitle = isRag
-    ? t("page.settings.rag.subtitle")
-    : isNl2Sql
-      ? t("page.settings.nl2sql.subtitle")
-      : t("page.settings.mcp.subtitle");
+  const title = isRag ? t("nav.settingsExternalRag") : t("nav.settingsExternalNl2Sql");
+  const subtitle = isRag ? t("page.settings.rag.subtitle") : t("page.settings.nl2sql.subtitle");
   const settings = useQuery({
     queryKey: ["settings", kind],
-    queryFn: isRag
-      ? agentApi.getExternalRagSettings
-      : isNl2Sql
-        ? agentApi.getExternalNl2SqlSettings
-        : agentApi.getExternalMcpSettings,
+    queryFn: isRag ? agentApi.getExternalRagSettings : agentApi.getExternalNl2SqlSettings,
   });
   const mutation = useMutation({
     mutationFn: (payload: {
       base_url?: string | null;
       timeout_seconds?: number;
       default_limit?: number;
-      session_id?: string | null;
     }) => {
       if (isRag) {
         return agentApi.patchExternalRagSettings(payload);
       }
-      if (isNl2Sql) {
-        return agentApi.patchExternalNl2SqlSettings(payload);
-      }
-      return agentApi.patchExternalMcpSettings(payload);
+      return agentApi.patchExternalNl2SqlSettings(payload);
     },
     onSuccess: () => {
       toast.success(t("common.saved"));
       void queryClient.invalidateQueries({ queryKey: ["settings", kind] });
-      if (isMcp) {
-        void queryClient.invalidateQueries({ queryKey: ["external-mcp-tools"] });
-      }
     },
   });
   const [baseUrl, setBaseUrl] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState("10");
   const [defaultLimit, setDefaultLimit] = useState("100");
-  const [sessionId, setSessionId] = useState("");
 
   useEffect(() => {
     const current = settings.data;
@@ -1252,7 +1231,6 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" | "mcp" 
       setBaseUrl(current.base_url ?? "");
       setTimeoutSeconds(String(current.timeout_seconds));
       setDefaultLimit(String(current.default_limit ?? 100));
-      setSessionId("");
     }
   }, [settings.data]);
 
@@ -1261,7 +1239,6 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" | "mcp" 
       base_url: baseUrl,
       timeout_seconds: Number(timeoutSeconds),
       default_limit: isNl2Sql ? Number(defaultLimit) : undefined,
-      session_id: isMcp && sessionId ? sessionId : undefined,
     });
   }
 
@@ -1282,7 +1259,7 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" | "mcp" 
                   id={`${kind}-base-url`}
                   value={baseUrl}
                   onChange={(event) => setBaseUrl(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className={INPUT_CLASS}
                 />
               </Field>
               <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`}>
@@ -1292,7 +1269,7 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" | "mcp" 
                   min="1"
                   value={timeoutSeconds}
                   onChange={(event) => setTimeoutSeconds(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className={INPUT_CLASS}
                 />
               </Field>
               {isNl2Sql ? (
@@ -1303,29 +1280,8 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" | "mcp" 
                     min="1"
                     value={defaultLimit}
                     onChange={(event) => setDefaultLimit(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    className={INPUT_CLASS}
                   />
-                </Field>
-              ) : null}
-              {isMcp ? (
-                <Field label={t("settings.mcpSessionId")} htmlFor="mcp-session-id">
-                  <input
-                    id="mcp-session-id"
-                    value={sessionId}
-                    onChange={(event) => setSessionId(event.target.value)}
-                    placeholder={
-                      settings.data?.session_configured
-                        ? t("settings.mcpSessionConfigured")
-                        : t("settings.mcpSessionPlaceholder")
-                    }
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                    autoComplete="off"
-                  />
-                  <p className="mt-1 text-xs leading-5 text-muted">
-                    {settings.data?.session_configured
-                      ? t("settings.mcpSessionHintConfigured")
-                      : t("settings.mcpSessionHint")}
-                  </p>
                 </Field>
               ) : null}
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
@@ -1335,7 +1291,6 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" | "mcp" 
               </Button>
             </CardContent>
           </Card>
-          {isMcp ? <McpDiscoveryPanel configured={Boolean(settings.data?.configured)} /> : null}
         </QueryState>
       </main>
     </>
@@ -1477,6 +1432,925 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
     return `${type} / ${count} fields`;
   }
   return type;
+}
+
+const INPUT_CLASS =
+  "h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+const TEXTAREA_CLASS =
+  "w-full rounded-md border border-border bg-background p-3 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+
+function mcpAuthLabel(mode?: string | null): string {
+  if (mode === "oauth_client_credentials") {
+    return t("settings.mcpServers.authOauth");
+  }
+  if (mode === "api_key") {
+    return t("settings.mcpServers.authApiKey");
+  }
+  return t("settings.mcpServers.authNone");
+}
+
+interface McpServerFormState {
+  serverId: string;
+  label: string;
+  baseUrl: string;
+  timeoutSeconds: string;
+  sessionId: string;
+  oauthTokenUrl: string;
+  oauthClientId: string;
+  oauthClientSecret: string;
+  oauthScope: string;
+}
+
+const EMPTY_MCP_FORM: McpServerFormState = {
+  serverId: "",
+  label: "",
+  baseUrl: "",
+  timeoutSeconds: "10",
+  sessionId: "",
+  oauthTokenUrl: "",
+  oauthClientId: "",
+  oauthClientSecret: "",
+  oauthScope: "",
+};
+
+export function McpServersPage() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const servers = useQuery({
+    queryKey: ["mcp-servers"],
+    queryFn: agentApi.listExternalMcpServers,
+  });
+  const [form, setForm] = useState<McpServerFormState>(EMPTY_MCP_FORM);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+
+  function invalidate() {
+    void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+    void queryClient.invalidateQueries({ queryKey: ["external-mcp-tools"] });
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => {
+      const payload = {
+        label: form.label || null,
+        base_url: form.baseUrl,
+        timeout_seconds: Number(form.timeoutSeconds),
+        session_id: form.sessionId || undefined,
+        oauth_token_url: form.oauthTokenUrl || undefined,
+        oauth_client_id: form.oauthClientId || undefined,
+        oauth_client_secret: form.oauthClientSecret || undefined,
+        oauth_scope: form.oauthScope || undefined,
+      };
+      if (editingId) {
+        return agentApi.updateExternalMcpServer(editingId, payload);
+      }
+      return agentApi.createExternalMcpServer({ server_id: form.serverId.trim(), ...payload });
+    },
+    onSuccess: () => {
+      toast.success(editingId ? t("settings.mcpServers.updated") : t("settings.mcpServers.created"));
+      closeForm();
+      invalidate();
+    },
+  });
+
+  const setDefaultMutation = useMutation({
+    mutationFn: (serverId: string) => agentApi.setDefaultExternalMcpServer(serverId),
+    onSuccess: () => {
+      toast.success(t("settings.mcpServers.defaultUpdated"));
+      invalidate();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (serverId: string) => agentApi.deleteExternalMcpServer(serverId),
+    onSuccess: () => {
+      toast.success(t("settings.mcpServers.deleted"));
+      invalidate();
+    },
+  });
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_MCP_FORM);
+    setFormOpen(true);
+  }
+
+  function openEdit(server: ExternalMcpServerSettings) {
+    setEditingId(server.server_id);
+    setForm({
+      ...EMPTY_MCP_FORM,
+      serverId: server.server_id,
+      label: server.label ?? "",
+      baseUrl: server.base_url ?? "",
+      timeoutSeconds: String(server.timeout_seconds),
+    });
+    setFormOpen(true);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    setEditingId(null);
+    setForm(EMPTY_MCP_FORM);
+  }
+
+  function save() {
+    if (!editingId && !form.serverId.trim()) {
+      toast.error(t("settings.mcpServers.idRequired"));
+      return;
+    }
+    saveMutation.mutate();
+  }
+
+  async function remove(server: ExternalMcpServerSettings) {
+    const ok = await confirm({
+      title: t("settings.mcpServers.confirmDeleteTitle"),
+      description: t("settings.mcpServers.confirmDeleteMessage", { id: server.server_id }),
+      confirmLabel: t("settings.mcpServers.delete"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    });
+    if (ok) {
+      deleteMutation.mutate(server.server_id);
+    }
+  }
+
+  const list = servers.data?.servers ?? [];
+  const anyConfigured = list.some((server) => server.configured);
+  const busy = setDefaultMutation.isPending || deleteMutation.isPending;
+
+  return (
+    <>
+      <PageHeader title={t("nav.settingsExternalMcp")} subtitle={t("page.settings.mcp.subtitle")} />
+      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+        <QueryState query={servers}>
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle>{t("settings.mcpServers.title")}</CardTitle>
+                <CardDescription>{t("settings.mcpServers.description")}</CardDescription>
+              </div>
+              <Button size="sm" onClick={openCreate}>
+                <Plus size={15} aria-hidden />
+                {t("settings.mcpServers.add")}
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {list.length === 0 ? (
+                <EmptyState title={t("settings.mcpServers.empty")} />
+              ) : (
+                <McpServerTable
+                  servers={list}
+                  onEdit={openEdit}
+                  onDelete={remove}
+                  onSetDefault={(id) => setDefaultMutation.mutate(id)}
+                  busy={busy}
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          {formOpen ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {editingId ? t("settings.mcpServers.editTitle") : t("settings.mcpServers.addTitle")}
+                </CardTitle>
+                <CardDescription>{t("settings.apiKeyManaged")}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Field label={t("settings.mcpServers.serverId")} htmlFor="mcp-server-id">
+                  <input
+                    id="mcp-server-id"
+                    value={form.serverId}
+                    disabled={Boolean(editingId)}
+                    onChange={(event) => setForm({ ...form, serverId: event.target.value })}
+                    className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
+                  />
+                  <p className="mt-1 text-xs leading-5 text-muted">
+                    {t("settings.mcpServers.serverIdHint")}
+                  </p>
+                </Field>
+                <Field label={t("settings.mcpServers.label")} htmlFor="mcp-server-label">
+                  <input
+                    id="mcp-server-label"
+                    value={form.label}
+                    onChange={(event) => setForm({ ...form, label: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.baseUrl")} htmlFor="mcp-server-base-url">
+                  <input
+                    id="mcp-server-base-url"
+                    value={form.baseUrl}
+                    onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.timeout")} htmlFor="mcp-server-timeout">
+                  <input
+                    id="mcp-server-timeout"
+                    type="number"
+                    min="1"
+                    value={form.timeoutSeconds}
+                    onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("settings.mcpSessionId")} htmlFor="mcp-server-session">
+                  <input
+                    id="mcp-server-session"
+                    value={form.sessionId}
+                    autoComplete="off"
+                    onChange={(event) => setForm({ ...form, sessionId: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label={t("settings.mcpServers.oauthTokenUrl")} htmlFor="mcp-server-oauth-token">
+                    <input
+                      id="mcp-server-oauth-token"
+                      value={form.oauthTokenUrl}
+                      onChange={(event) => setForm({ ...form, oauthTokenUrl: event.target.value })}
+                      className={INPUT_CLASS}
+                    />
+                  </Field>
+                  <Field label={t("settings.mcpServers.oauthScope")} htmlFor="mcp-server-oauth-scope">
+                    <input
+                      id="mcp-server-oauth-scope"
+                      value={form.oauthScope}
+                      onChange={(event) => setForm({ ...form, oauthScope: event.target.value })}
+                      className={INPUT_CLASS}
+                    />
+                  </Field>
+                  <Field label={t("settings.mcpServers.oauthClientId")} htmlFor="mcp-server-oauth-client">
+                    <input
+                      id="mcp-server-oauth-client"
+                      value={form.oauthClientId}
+                      autoComplete="off"
+                      onChange={(event) => setForm({ ...form, oauthClientId: event.target.value })}
+                      className={INPUT_CLASS}
+                    />
+                  </Field>
+                  <Field
+                    label={t("settings.mcpServers.oauthClientSecret")}
+                    htmlFor="mcp-server-oauth-secret"
+                  >
+                    <input
+                      id="mcp-server-oauth-secret"
+                      type="password"
+                      value={form.oauthClientSecret}
+                      autoComplete="off"
+                      onChange={(event) => setForm({ ...form, oauthClientSecret: event.target.value })}
+                      className={INPUT_CLASS}
+                    />
+                  </Field>
+                </div>
+                {saveMutation.error ? (
+                  <Banner severity="danger">{(saveMutation.error as Error).message}</Banner>
+                ) : null}
+                <div className="flex gap-2">
+                  <Button onClick={save} loading={saveMutation.isPending}>
+                    <Save size={15} aria-hidden />
+                    {editingId ? t("common.save") : t("common.create")}
+                  </Button>
+                  <Button variant="ghost" onClick={closeForm}>
+                    <X size={15} aria-hidden />
+                    {t("common.cancel")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <McpDiscoveryPanel configured={anyConfigured} />
+        </QueryState>
+      </main>
+    </>
+  );
+}
+
+function McpServerTable({
+  servers,
+  onEdit,
+  onDelete,
+  onSetDefault,
+  busy,
+}: {
+  servers: ExternalMcpServerSettings[];
+  onEdit: (server: ExternalMcpServerSettings) => void;
+  onDelete: (server: ExternalMcpServerSettings) => void;
+  onSetDefault: (serverId: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-border text-xs text-muted">
+              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.serverId")}</th>
+              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.label")}</th>
+              <th className="px-3 py-2 font-medium">{t("settings.baseUrl")}</th>
+              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.auth")}</th>
+              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {servers.map((server) => (
+              <tr key={server.server_id} className="border-b border-border/70 last:border-0">
+                <td className="px-3 py-3 align-top">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-foreground">{server.server_id}</span>
+                    {server.is_default ? (
+                      <StatusBadge variant="info" label={t("settings.mcpServers.default")} />
+                    ) : null}
+                  </div>
+                </td>
+                <td className="px-3 py-3 align-top text-muted">{server.label || "-"}</td>
+                <td className="max-w-xs break-all px-3 py-3 align-top text-muted">
+                  {server.base_url || "-"}
+                </td>
+                <td className="px-3 py-3 align-top text-muted">{mcpAuthLabel(server.auth_mode)}</td>
+                <td className="px-3 py-3 align-top">
+                  <McpServerActions
+                    server={server}
+                    onEdit={onEdit}
+                    onDelete={onDelete}
+                    onSetDefault={onSetDefault}
+                    busy={busy}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="grid gap-3 md:hidden">
+        {servers.map((server) => (
+          <div key={server.server_id} className="space-y-2 rounded-md border border-border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-xs text-foreground">{server.server_id}</span>
+              {server.is_default ? (
+                <StatusBadge variant="info" label={t("settings.mcpServers.default")} />
+              ) : null}
+            </div>
+            <p className="text-sm text-muted">{server.label || "-"}</p>
+            <p className="break-all text-xs text-muted">{server.base_url || "-"}</p>
+            <p className="text-xs text-muted">
+              {t("settings.mcpServers.auth")}: {mcpAuthLabel(server.auth_mode)}
+            </p>
+            <McpServerActions
+              server={server}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onSetDefault={onSetDefault}
+              busy={busy}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function McpServerActions({
+  server,
+  onEdit,
+  onDelete,
+  onSetDefault,
+  busy,
+}: {
+  server: ExternalMcpServerSettings;
+  onEdit: (server: ExternalMcpServerSettings) => void;
+  onDelete: (server: ExternalMcpServerSettings) => void;
+  onSetDefault: (serverId: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {!server.is_default ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onSetDefault(server.server_id)}
+          disabled={busy}
+          aria-label={`${t("settings.mcpServers.setDefault")} ${server.server_id}`}
+        >
+          <Star size={14} aria-hidden />
+          {t("settings.mcpServers.setDefault")}
+        </Button>
+      ) : null}
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={() => onEdit(server)}
+        aria-label={`${t("settings.mcpServers.edit")} ${server.server_id}`}
+      >
+        <Pencil size={14} aria-hidden />
+        {t("settings.mcpServers.edit")}
+      </Button>
+      <Button
+        size="sm"
+        variant="danger"
+        onClick={() => onDelete(server)}
+        disabled={server.server_id === "default" || busy}
+        aria-label={`${t("settings.mcpServers.delete")} ${server.server_id}`}
+      >
+        <Trash2 size={14} aria-hidden />
+        {t("settings.mcpServers.delete")}
+      </Button>
+    </div>
+  );
+}
+
+interface SkillFormState {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  tags: string;
+  enabled: boolean;
+  toolCallsJson: string;
+}
+
+const EMPTY_SKILL_FORM: SkillFormState = {
+  id: "",
+  name: "",
+  description: "",
+  instructions: "",
+  tags: "",
+  enabled: true,
+  toolCallsJson: "[]",
+};
+
+function skillSourceLabel(source: string): string {
+  switch (source) {
+    case "builtin":
+      return t("skills.sourceBuiltin");
+    case "project":
+      return t("skills.sourceProject");
+    case "env":
+      return t("skills.sourceEnv");
+    default:
+      return t("skills.sourceRuntime");
+  }
+}
+
+function skillSourceVariant(source: string): StatusVariant {
+  if (source === "runtime") {
+    return "success";
+  }
+  return source === "builtin" ? "neutral" : "info";
+}
+
+export function SkillsPage() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
+  const [form, setForm] = useState<SkillFormState>(EMPTY_SKILL_FORM);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  function invalidate() {
+    void queryClient.invalidateQueries({ queryKey: ["skills"] });
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => {
+      const toolCalls = JSON.parse(form.toolCallsJson) as AgentSkillToolCall[];
+      const payload = {
+        name: form.name,
+        description: form.description,
+        instructions: form.instructions,
+        tags: form.tags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+        enabled: form.enabled,
+        tool_calls: toolCalls,
+      };
+      if (editingId) {
+        return agentApi.updateSkill(editingId, payload);
+      }
+      return agentApi.createSkill({ id: form.id.trim(), ...payload });
+    },
+    onSuccess: () => {
+      toast.success(editingId ? t("skills.updated") : t("skills.created"));
+      closeForm();
+      invalidate();
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (skillId: string) => agentApi.deleteSkill(skillId),
+    onSuccess: () => {
+      toast.success(t("skills.deleted"));
+      invalidate();
+    },
+  });
+
+  const reloadMutation = useMutation({
+    mutationFn: () => agentApi.reloadSkills(),
+    onSuccess: () => {
+      toast.success(t("skills.reloaded"));
+      invalidate();
+    },
+  });
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_SKILL_FORM);
+    setFormError(null);
+    setFormOpen(true);
+  }
+
+  function openEdit(skill: AgentSkill) {
+    setEditingId(skill.id);
+    setForm({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      instructions: skill.instructions,
+      tags: skill.tags.join(", "),
+      enabled: skill.enabled,
+      toolCallsJson: JSON.stringify(skill.tool_calls, null, 2),
+    });
+    setFormError(null);
+    setFormOpen(true);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    setEditingId(null);
+    setForm(EMPTY_SKILL_FORM);
+    setFormError(null);
+  }
+
+  function save() {
+    setFormError(null);
+    if (!editingId && !form.id.trim()) {
+      setFormError(t("skills.idRequired"));
+      return;
+    }
+    if (!form.name.trim()) {
+      setFormError(t("skills.nameRequired"));
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(form.toolCallsJson);
+    } catch {
+      setFormError(t("skills.invalidJson"));
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      setFormError(t("skills.invalidJson"));
+      return;
+    }
+    saveMutation.mutate();
+  }
+
+  async function remove(skill: AgentSkill) {
+    const ok = await confirm({
+      title: t("skills.confirmDeleteTitle"),
+      description: t("skills.confirmDeleteMessage", { id: skill.id }),
+      confirmLabel: t("skills.delete"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    });
+    if (ok) {
+      deleteMutation.mutate(skill.id);
+    }
+  }
+
+  const list = skills.data?.skills ?? [];
+  const detail = detailId ? (list.find((skill) => skill.id === detailId) ?? null) : null;
+
+  return (
+    <>
+      <PageHeader title={t("skills.title")} subtitle={t("page.skills.subtitle")} />
+      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+        <QueryState query={skills}>
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle>{t("skills.title")}</CardTitle>
+                <CardDescription>{t("skills.description")}</CardDescription>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => reloadMutation.mutate()}
+                  loading={reloadMutation.isPending}
+                >
+                  <RefreshCw size={15} aria-hidden />
+                  {t("skills.reload")}
+                </Button>
+                <Button size="sm" onClick={openCreate}>
+                  <Plus size={15} aria-hidden />
+                  {t("skills.add")}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {list.length === 0 ? (
+                <EmptyState title={t("skills.empty")} />
+              ) : (
+                <SkillTable
+                  skills={list}
+                  onEdit={openEdit}
+                  onDelete={remove}
+                  onDetail={(id) => setDetailId((current) => (current === id ? null : id))}
+                  busy={deleteMutation.isPending}
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          {detail ? <SkillDetailCard skill={detail} onClose={() => setDetailId(null)} /> : null}
+
+          {formOpen ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>{editingId ? t("skills.editTitle") : t("skills.addTitle")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Field label={t("skills.id")} htmlFor="skill-id">
+                  <input
+                    id="skill-id"
+                    value={form.id}
+                    disabled={Boolean(editingId)}
+                    onChange={(event) => setForm({ ...form, id: event.target.value })}
+                    className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("skills.name")} htmlFor="skill-name">
+                  <input
+                    id="skill-name"
+                    value={form.name}
+                    onChange={(event) => setForm({ ...form, name: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("agent.description")} htmlFor="skill-description">
+                  <input
+                    id="skill-description"
+                    value={form.description}
+                    onChange={(event) => setForm({ ...form, description: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("skills.instructions")} htmlFor="skill-instructions">
+                  <textarea
+                    id="skill-instructions"
+                    value={form.instructions}
+                    rows={3}
+                    onChange={(event) => setForm({ ...form, instructions: event.target.value })}
+                    className={TEXTAREA_CLASS}
+                  />
+                </Field>
+                <Field label={t("skills.tags")} htmlFor="skill-tags">
+                  <input
+                    id="skill-tags"
+                    value={form.tags}
+                    onChange={(event) => setForm({ ...form, tags: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                  <p className="mt-1 text-xs leading-5 text-muted">{t("skills.tagsHint")}</p>
+                </Field>
+                <Field label={t("skills.toolCalls")} htmlFor="skill-tool-calls">
+                  <textarea
+                    id="skill-tool-calls"
+                    value={form.toolCallsJson}
+                    rows={8}
+                    spellCheck={false}
+                    onChange={(event) => setForm({ ...form, toolCallsJson: event.target.value })}
+                    className={`${TEXTAREA_CLASS} font-mono`}
+                  />
+                  <p className="mt-1 text-xs leading-5 text-muted">{t("skills.toolCallsHint")}</p>
+                </Field>
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <Switch
+                    checked={form.enabled}
+                    aria-label={t("skills.enabledLabel")}
+                    onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
+                  />
+                  {t("skills.enabledLabel")}
+                </label>
+                {formError ? <Banner severity="danger">{formError}</Banner> : null}
+                {saveMutation.error ? (
+                  <Banner severity="danger">{(saveMutation.error as Error).message}</Banner>
+                ) : null}
+                <div className="flex gap-2">
+                  <Button onClick={save} loading={saveMutation.isPending}>
+                    <Save size={15} aria-hidden />
+                    {editingId ? t("common.save") : t("common.create")}
+                  </Button>
+                  <Button variant="ghost" onClick={closeForm}>
+                    <X size={15} aria-hidden />
+                    {t("common.cancel")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+        </QueryState>
+      </main>
+    </>
+  );
+}
+
+function SkillTable({
+  skills,
+  onEdit,
+  onDelete,
+  onDetail,
+  busy,
+}: {
+  skills: AgentSkill[];
+  onEdit: (skill: AgentSkill) => void;
+  onDelete: (skill: AgentSkill) => void;
+  onDetail: (skillId: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-border text-xs text-muted">
+              <th className="px-3 py-2 font-medium">{t("skills.skill")}</th>
+              <th className="px-3 py-2 font-medium">{t("skills.source")}</th>
+              <th className="px-3 py-2 font-medium">{t("common.status")}</th>
+              <th className="px-3 py-2 font-medium">{t("skills.tags")}</th>
+              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {skills.map((skill) => (
+              <tr key={skill.id} className="border-b border-border/70 last:border-0">
+                <td className="px-3 py-3 align-top">
+                  <p className="text-sm font-medium text-foreground">{skill.name}</p>
+                  <p className="font-mono text-xs text-muted">{skill.id}</p>
+                </td>
+                <td className="px-3 py-3 align-top">
+                  <StatusBadge
+                    variant={skillSourceVariant(skill.source)}
+                    label={skillSourceLabel(skill.source)}
+                  />
+                </td>
+                <td className="px-3 py-3 align-top">
+                  <StatusBadge
+                    variant={skill.enabled ? "success" : "neutral"}
+                    label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
+                  />
+                </td>
+                <td className="px-3 py-3 align-top text-xs text-muted">
+                  {skill.tags.length ? skill.tags.join(", ") : "-"}
+                </td>
+                <td className="px-3 py-3 align-top">
+                  <SkillActions
+                    skill={skill}
+                    onEdit={onEdit}
+                    onDelete={onDelete}
+                    onDetail={onDetail}
+                    busy={busy}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="grid gap-3 md:hidden">
+        {skills.map((skill) => (
+          <div key={skill.id} className="space-y-2 rounded-md border border-border p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">{skill.name}</p>
+                <p className="font-mono text-xs text-muted">{skill.id}</p>
+              </div>
+              <StatusBadge
+                variant={skillSourceVariant(skill.source)}
+                label={skillSourceLabel(skill.source)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <StatusBadge
+                variant={skill.enabled ? "success" : "neutral"}
+                label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
+              />
+              <span className="text-xs text-muted">
+                {skill.tags.length ? skill.tags.join(", ") : "-"}
+              </span>
+            </div>
+            <SkillActions
+              skill={skill}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onDetail={onDetail}
+              busy={busy}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SkillActions({
+  skill,
+  onEdit,
+  onDelete,
+  onDetail,
+  busy,
+}: {
+  skill: AgentSkill;
+  onEdit: (skill: AgentSkill) => void;
+  onDelete: (skill: AgentSkill) => void;
+  onDetail: (skillId: string) => void;
+  busy: boolean;
+}) {
+  const editable = skill.source === "runtime";
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => onDetail(skill.id)}
+        aria-label={`${t("skills.detail")} ${skill.id}`}
+      >
+        <FileText size={14} aria-hidden />
+        {t("skills.detail")}
+      </Button>
+      {editable ? (
+        <>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => onEdit(skill)}
+            aria-label={`${t("skills.edit")} ${skill.id}`}
+          >
+            <Pencil size={14} aria-hidden />
+            {t("skills.edit")}
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            onClick={() => onDelete(skill)}
+            disabled={busy}
+            aria-label={`${t("skills.delete")} ${skill.id}`}
+          >
+            <Trash2 size={14} aria-hidden />
+            {t("skills.delete")}
+          </Button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function SkillDetailCard({ skill, onClose }: { skill: AgentSkill; onClose: () => void }) {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div className="space-y-1">
+          <CardTitle>{skill.name}</CardTitle>
+          <CardDescription>{skill.description || skill.id}</CardDescription>
+        </div>
+        <Button size="sm" variant="ghost" onClick={onClose} aria-label={t("common.cancel")}>
+          <X size={15} aria-hidden />
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge
+            variant={skillSourceVariant(skill.source)}
+            label={skillSourceLabel(skill.source)}
+          />
+          <StatusBadge
+            variant={skill.enabled ? "success" : "neutral"}
+            label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
+          />
+        </div>
+        {skill.source !== "runtime" ? (
+          <Banner severity="info">{t("skills.readOnly")}</Banner>
+        ) : null}
+        {skill.instructions ? (
+          <div>
+            <p className="mb-1 text-xs font-medium text-muted">{t("skills.instructions")}</p>
+            <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">
+              {skill.instructions}
+            </p>
+          </div>
+        ) : null}
+        <JsonPanel title={t("skills.toolCalls")} value={skill.tool_calls} />
+      </CardContent>
+    </Card>
+  );
 }
 
 function parseCommandPrefixes(value: string): string[] {
