@@ -24,6 +24,7 @@ import {
   type EvaluationCompareRequestBody,
   type EvaluationRunRequestBody,
   type FileStatus,
+  type IngestionJobPhase,
   type IngestionJobStatus,
   type KnowledgeBaseCreateRequest,
   type KnowledgeBaseStatus,
@@ -177,6 +178,7 @@ function invalidateDocumentProcessingQueries(qc: QueryClient, documentId: string
 /** 取込/索引が進行中で一覧を再取得すべき文書状態。 */
 export const DOCUMENT_ACTIVE_STATUSES: ReadonlySet<FileStatus> = new Set<FileStatus>([
   "INGESTING",
+  "CHUNKING",
   "INDEXING",
 ]);
 
@@ -248,11 +250,12 @@ export function documentWorkspaceShouldRefresh({
   if (segmentStatuses.some((status) => status === "QUEUED" || status === "RUNNING")) return true;
   if (documentStatus != null && DOCUMENT_ACTIVE_STATUSES.has(documentStatus)) return true;
 
-  // REVIEW / INDEXED / ERROR は通常は安定状態。ただし job 投入直後の引き継ぎ窓では
+  // REVIEW / CHUNKED / INDEXED / ERROR は通常は安定状態。ただし job 投入直後の引き継ぎ窓では
   // mutation 側の job status が上の判定に入るため、ここでは止めてよい。
   const terminal =
     documentStatus === "INDEXED" || documentStatus === "ERROR" || documentStatus === "REVIEW";
-  return Boolean((watchProcessing || localWatchProcessing) && !terminal);
+  const stageReview = documentStatus === "CHUNKED";
+  return Boolean((watchProcessing || localWatchProcessing) && !terminal && !stageReview);
 }
 
 /** データベース利用可否(DB ゲート用)。設定ページ以外を開く前に参照する。 */
@@ -663,8 +666,15 @@ export function useRemoveDocumentFromKnowledgeBase() {
 export function useIngestDocument() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
-      api.enqueueDocumentIngestionJob(id, force),
+    mutationFn: ({
+      id,
+      force,
+      phase,
+    }: {
+      id: string;
+      force?: boolean;
+      phase?: IngestionJobPhase;
+    }) => api.enqueueDocumentIngestionJob(id, force, phase),
     onSuccess: (job) => {
       if (job.phase === "EXTRACT" && job.status === "QUEUED") {
         clearDocumentProcessingCache(qc, job.document_id);
@@ -678,8 +688,15 @@ export function useIngestDocument() {
 export function useEnqueueDocumentIngestionJob() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
-      api.enqueueDocumentIngestionJob(id, force),
+    mutationFn: ({
+      id,
+      force,
+      phase,
+    }: {
+      id: string;
+      force?: boolean;
+      phase?: IngestionJobPhase;
+    }) => api.enqueueDocumentIngestionJob(id, force, phase),
     onSuccess: (job) => {
       if (job.phase === "EXTRACT" && job.status === "QUEUED") {
         clearDocumentProcessingCache(qc, job.document_id);
@@ -689,7 +706,7 @@ export function useEnqueueDocumentIngestionJob() {
   });
 }
 
-/** REVIEW(確認待ち)文書を承認し、後段 index を投入する。任意でテキスト修正を伴う。 */
+/** 現在の確認段階を承認し、次の取込 stage を投入する。任意で抽出テキスト修正を伴う。 */
 export function useApproveDocument() {
   const qc = useQueryClient();
   return useMutation({

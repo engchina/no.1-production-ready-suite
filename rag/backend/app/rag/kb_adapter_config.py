@@ -71,6 +71,8 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "field_extraction_enabled": "rag_field_extraction_enabled",
     "asset_summary_enabled": "rag_asset_summary_enabled",
     "navigation_summary_enabled": "rag_navigation_summary_enabled",
+    "auto_chunk_after_extract_enabled": "rag_auto_chunk_after_extract_enabled",
+    "auto_index_after_chunk_enabled": "rag_auto_index_after_chunk_enabled",
 }
 _QUERY_FIELD_MAP: dict[str, str] = {
     "retrieval_strategy": "rag_retrieval_strategy",
@@ -122,6 +124,8 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     field_extraction_enabled: bool | None = None
     asset_summary_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
+    auto_chunk_after_extract_enabled: bool | None = None
+    auto_index_after_chunk_enabled: bool | None = None
 
 
 class KnowledgeBaseQueryConfig(BaseModel):

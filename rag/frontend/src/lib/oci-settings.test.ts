@@ -33,8 +33,8 @@ describe("normalizeOciSettingsDraft", () => {
     expect(draft.configFile).toBe(DEFAULT_OCI_SETTINGS.configFile);
     expect(draft.configProfile).toBe("DEFAULT");
     expect(draft.keyFile).toBe(DEFAULT_OCI_SETTINGS.keyFile);
-    expect(draft.region).toBe("us-chicago-1");
-    expect(draft.objectStorageRegion).toBe("ap-osaka-1");
+    expect(draft.region).toBe("");
+    expect(draft.objectStorageRegion).toBe("");
     expect(draft.objectStorageNamespace).toBe("mytenancy");
   });
 });
@@ -50,11 +50,21 @@ describe("readStoredOciSettingsDraft", () => {
     };
     storage.set(
       OCI_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ objectStorageNamespace: " mytenancy " })
+      JSON.stringify({
+        userOcid: "ocid1.user.oc1..stale",
+        fingerprint: "12:34:56:78",
+        tenancyOcid: "ocid1.tenancy.oc1..stale",
+        region: "us-chicago-1",
+        objectStorageNamespace: " mytenancy ",
+      })
     );
 
     const draft = readStoredOciSettingsDraft(fakeStorage);
 
+    expect(draft.userOcid).toBe("");
+    expect(draft.fingerprint).toBe("");
+    expect(draft.tenancyOcid).toBe("");
+    expect(draft.region).toBe("");
     expect(draft.objectStorageNamespace).toBe("mytenancy");
     expect(draft.configFile).toBe(DEFAULT_OCI_SETTINGS.configFile);
   });
@@ -102,6 +112,17 @@ describe("buildOciConfigFile", () => {
     expect(config).toContain("key_file=~/.oci/oci_api_key.pem");
     expect(config).not.toContain("key_file=/home/app/.oci/key.pem");
     expect(config).not.toContain("compartment=");
+  });
+
+  it("空の OCI config 値は default として書き出さない", () => {
+    const config = buildOciConfigFile(DEFAULT_OCI_SETTINGS);
+
+    expect(config).toContain("[DEFAULT]");
+    expect(config).not.toContain("user=");
+    expect(config).not.toContain("fingerprint=");
+    expect(config).not.toContain("tenancy=");
+    expect(config).not.toContain("region=");
+    expect(config).not.toContain("key_file=");
   });
 });
 
@@ -171,14 +192,27 @@ describe("buildOciEnvFile", () => {
       ...COMPLETE_SETTINGS,
       configFile: "/opt/oci/config",
       configProfile: "RAG_PROD",
+      region: "ap-tokyo-1",
+      objectStorageRegion: "ap-osaka-1",
     });
 
     expect(env).toContain("OCI_CONFIG_FILE=~/.oci/config");
     expect(env).not.toContain("OCI_CONFIG_FILE=/opt/oci/config");
     expect(env).toContain("OCI_CONFIG_PROFILE=DEFAULT");
+    expect(env).toContain("OCI_REGION=ap-tokyo-1");
     expect(env).not.toContain("OCI_COMPARTMENT_ID=");
     expect(env).toContain("OBJECT_STORAGE_REGION=ap-osaka-1");
     expect(env).toContain("OBJECT_STORAGE_NAMESPACE=mytenancy");
     expect(env).not.toContain("OBJECT_STORAGE_BUCKET=");
+  });
+
+  it("空の OCI 値は env preview に出さない", () => {
+    const env = buildOciEnvFile(DEFAULT_OCI_SETTINGS);
+
+    expect(env).toContain("OCI_CONFIG_FILE=~/.oci/config");
+    expect(env).toContain("OCI_CONFIG_PROFILE=DEFAULT");
+    expect(env).not.toContain("OCI_REGION=");
+    expect(env).not.toContain("OBJECT_STORAGE_REGION=");
+    expect(env).not.toContain("OBJECT_STORAGE_NAMESPACE=");
   });
 });

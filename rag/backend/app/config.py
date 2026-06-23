@@ -250,7 +250,7 @@ class Settings(BaseSettings):
     # --- OCI 共通 ---
     oci_config_file: str = Field(default="~/.oci/config")
     oci_config_profile: str = Field(default="DEFAULT")
-    oci_region: str = Field(default="ap-osaka-1")
+    oci_region: str = Field(default="")
     oci_compartment_id: str = Field(default="")
 
     # --- OCI Enterprise AI（LLM / Vision-capable LLM）---
@@ -354,7 +354,7 @@ class Settings(BaseSettings):
     )
 
     # --- OCI Object Storage ---
-    object_storage_region: str = Field(default="ap-osaka-1")
+    object_storage_region: str = Field(default="")
     object_storage_namespace: str = Field(default="")
     object_storage_bucket: str = Field(default="")
     upload_storage_backend: UploadStorageBackend = Field(
@@ -1318,12 +1318,19 @@ class Settings(BaseSettings):
         description="構造化抽出 artifact の Object Storage key prefix。",
     )
     rag_review_gate_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "True のときファイル処理を 2 段階(parse → 人がプレビュー確認 → index)にする。"
-            "前段 EXTRACT job は抽出後 REVIEW で停止し、承認 API 経由の INDEX job で索引する。"
-            "False(既定)は従来どおり 1 ジョブで INDEXED まで一気通貫する。"
+            "True のときファイル処理を段階レビュー式(EXTRACT→CHUNK→INDEX)にする。"
+            "False は従来互換で EXTRACT job 内から最後まで進める。"
         ),
+    )
+    rag_auto_chunk_after_extract_enabled: bool = Field(
+        default=False,
+        description="EXTRACT 完了後に REVIEW で止めず、CHUNK job を自動投入する。",
+    )
+    rag_auto_index_after_chunk_enabled: bool = Field(
+        default=False,
+        description="CHUNK 完了後に CHUNKED で止めず、INDEX job を自動投入する。",
     )
 
     # --- レート制限（高コスト API の保護）---

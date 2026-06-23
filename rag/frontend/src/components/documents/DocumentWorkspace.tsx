@@ -52,6 +52,7 @@ import {
   ingestionJobIsActive,
   useDocument,
   useDocumentChunks,
+  useDocumentChunkSets,
   useDocumentExtractionExport,
   useDocumentIngestionJobs,
   useDocumentIngestionSegments,
@@ -102,6 +103,18 @@ type IngestionParserDisplay = {
   profile: string | null;
   source: "segment" | "extraction" | "pending" | "unavailable";
 };
+
+type ProgressUnit = "page" | "slide" | "sheet";
+
+type IngestionProgressSummary =
+  | {
+      kind: "determinate";
+      unit: ProgressUnit;
+      completed: number;
+      failed: number;
+      total: number;
+    }
+  | { kind: "indeterminate" };
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -208,6 +221,52 @@ function selectDisplaySegment(
   );
 }
 
+export function resolveIngestionProgressSummary(
+  segments: Pick<
+    IngestionSegment,
+    "status" | "progress_unit" | "progress_start" | "progress_end"
+  >[]
+): IngestionProgressSummary | null {
+  if (!segments.length) return null;
+  const unit = segments.find(isDeterminateSegment)?.progress_unit as ProgressUnit | undefined;
+  if (!unit) return { kind: "indeterminate" };
+  const scoped = segments.filter(
+    (segment) => segment.progress_unit === unit && isDeterminateSegment(segment)
+  );
+  const total = scoped.reduce((sum, segment) => sum + segmentSpan(segment), 0);
+  if (total <= 0) return { kind: "indeterminate" };
+  return {
+    kind: "determinate",
+    unit,
+    completed: scoped
+      .filter((segment) => segment.status === "SUCCEEDED")
+      .reduce((sum, segment) => sum + segmentSpan(segment), 0),
+    failed: scoped
+      .filter((segment) => segment.status === "FAILED")
+      .reduce((sum, segment) => sum + segmentSpan(segment), 0),
+    total,
+  };
+}
+
+function isDeterminateSegment(
+  segment: Pick<IngestionSegment, "progress_unit" | "progress_start" | "progress_end">
+): boolean {
+  return (
+    (segment.progress_unit === "page" ||
+      segment.progress_unit === "slide" ||
+      segment.progress_unit === "sheet") &&
+    segment.progress_start != null &&
+    segment.progress_end != null
+  );
+}
+
+function segmentSpan(
+  segment: Pick<IngestionSegment, "progress_start" | "progress_end">
+): number {
+  if (segment.progress_start == null || segment.progress_end == null) return 0;
+  return Math.max(0, segment.progress_end - segment.progress_start + 1);
+}
+
 type WorkspaceFocusRequest = {
   key: string;
   target: "chunk" | "element" | "table_cell";
@@ -234,6 +293,7 @@ export function DocumentWorkspace({
 }) {
   const query = useDocument(documentId);
   const chunksQuery = useDocumentChunks(documentId);
+  const chunkSetsQuery = useDocumentChunkSets(documentId);
   const documentJobsQuery = useDocumentIngestionJobs(documentId);
   const segmentsQuery = useDocumentIngestionSegments(documentId);
   const [exportFormat, setExportFormat] =
@@ -338,8 +398,28 @@ export function DocumentWorkspace({
     () => parseStructuredExtraction(query.data?.extraction ?? {}),
     [query.data?.extraction]
   );
+  const latestChunkSet = chunkSetsQuery.data?.[chunkSetsQuery.data.length - 1] ?? null;
+  const handleReprocessPhase = async (phase: "EXTRACT" | "CHUNK" | "INDEX") => {
+    const confirmed = await confirm({
+      title: t(`flow.reprocess.${phase}.title` as I18nKey),
+      description: t(`flow.reprocess.${phase}.description` as I18nKey),
+      confirmLabel: t("flow.reprocess.confirm"),
+      tone: "warning",
+    });
+    if (!confirmed) return;
+    enqueueIngestion.mutate(
+      { id: documentId, force: true, phase },
+      {
+        onSuccess: (job) => {
+          setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
+          toast.success(t("flow.reingestQueued"));
+        },
+      }
+    );
+  };
   const refetchDocument = query.refetch;
   const refetchChunks = chunksQuery.refetch;
+  const refetchChunkSets = chunkSetsQuery.refetch;
   const refetchDocumentJobs = documentJobsQuery.refetch;
   const refetchSegments = segmentsQuery.refetch;
   const refetchExtractionExport = extractionExportQuery.refetch;
@@ -481,11 +561,13 @@ export function DocumentWorkspace({
       void refetchDocumentJobs();
       void refetchSegments();
       void refetchChunks();
+      void refetchChunkSets();
       void refetchExtractionExport();
     }, DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [
     autoRefreshActive,
+    refetchChunkSets,
     refetchChunks,
     refetchDocument,
     refetchDocumentJobs,
@@ -661,6 +743,14 @@ export function DocumentWorkspace({
 
   const doc = query.data;
   const sourceProfile = doc.source_profile ?? initialSourceProfile;
+  const duplicateSource = doc.duplicate_source;
+  const duplicateMessage = duplicateSource
+    ? t("upload.duplicateDetail", {
+        name: duplicateSource.file_name,
+        status: t(`status.${duplicateSource.status}` as I18nKey),
+        uploadedAt: formatDateTime(duplicateSource.uploaded_at),
+      })
+    : t("upload.duplicate");
   const ingestionParser = resolveIngestionParserDisplay({
     segments: segmentsQuery.data ?? [],
     extractionBackend: extractionExportQuery.data?.parser_backend,
@@ -683,11 +773,43 @@ export function DocumentWorkspace({
       </CardHeader>
       <CardContent className="space-y-5">
         {doc.duplicate_of_document_id ? (
-          <Banner severity="warning">{t("upload.duplicate")}</Banner>
+          <Banner severity="warning">
+            <div className="space-y-1">
+              <p>{duplicateMessage}</p>
+              <p className="text-xs">{t("upload.duplicateForceHint")}</p>
+            </div>
+          </Banner>
         ) : null}
 
         <FlowStepper status={doc.status} />
-        {watchProcessing && doc.status !== "INDEXED" && doc.status !== "ERROR" ? (
+        {latestChunkSet ? (
+          <dl className="grid grid-cols-2 gap-3 rounded-md border border-border bg-background p-3 text-sm sm:grid-cols-4">
+            <div>
+              <dt className="text-xs text-muted">{t("flow.indexSummary.chunkSet")}</dt>
+              <dd className="mt-0.5 truncate font-medium text-foreground">
+                {latestChunkSet.chunk_set_id}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted">{t("flow.indexSummary.status")}</dt>
+              <dd className="mt-0.5 font-medium text-foreground">{latestChunkSet.status}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted">{t("flow.indexSummary.chunks")}</dt>
+              <dd className="tnum mt-0.5 font-medium text-foreground">
+                {latestChunkSet.chunk_count}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted">{t("flow.indexSummary.vectors")}</dt>
+              <dd className="tnum mt-0.5 font-medium text-foreground">
+                {latestChunkSet.vector_count}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
+        {watchProcessing &&
+        !["REVIEW", "CHUNKED", "INDEXED", "ERROR"].includes(doc.status) ? (
           <Banner severity="info">{t("upload.ingestion.watch")}</Banner>
         ) : null}
         <IngestionConfigDriftBanner documentId={documentId} />
@@ -731,6 +853,7 @@ export function DocumentWorkspace({
 
         <IngestionJobsPanel
           jobs={documentJobsQuery.data ?? []}
+          segments={segmentsQuery.data ?? []}
           loading={documentJobsQuery.isPending}
           error={documentJobsQuery.isError}
           nowMs={elapsedNowMs}
@@ -877,6 +1000,9 @@ export function DocumentWorkspace({
         {doc.status === "REVIEW" ? (
           <Banner severity="info">{t("flow.review.description")}</Banner>
         ) : null}
+        {doc.status === "CHUNKED" ? (
+          <Banner severity="info">{t("flow.chunked.description")}</Banner>
+        ) : null}
 
         {approveDocument.isError ? (
           <Banner severity={approveNeedsReingest ? "warning" : "danger"}>
@@ -915,7 +1041,7 @@ export function DocumentWorkspace({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          {doc.status === "REVIEW" && (
+          {(doc.status === "REVIEW" || doc.status === "CHUNKED") && (
             <>
               <Button
                 onClick={() =>
@@ -923,6 +1049,7 @@ export function DocumentWorkspace({
                     {
                       id: documentId,
                       payload:
+                        doc.status === "REVIEW" &&
                         editingReview &&
                         reviewEdits &&
                         ((reviewEdits.element_edits?.length ?? 0) > 0 ||
@@ -945,36 +1072,42 @@ export function DocumentWorkspace({
                 disabled={rejectDocument.isPending}
               >
                 {!approveDocument.isPending ? <Check size={15} aria-hidden /> : null}
-                {approveDocument.isPending ? t("action.queueing") : t("flow.approve")}
+                {approveDocument.isPending
+                  ? t("action.queueing")
+                  : doc.status === "CHUNKED"
+                    ? t("flow.approveChunks")
+                    : t("flow.approveExtraction")}
               </Button>
-              <Button
-                variant="secondary"
-                onClick={async () => {
-                  const confirmed = await confirm({
-                    title: t("flow.rejectConfirm.title"),
-                    description: t("flow.rejectConfirm.description"),
-                    confirmLabel: t("flow.reject"),
-                    tone: "warning",
-                  });
-                  if (!confirmed) return;
-                  rejectDocument.mutate(
-                    { id: documentId },
-                    { onSuccess: () => toast.success(t("flow.rejected")) }
-                  );
-                }}
-                loading={rejectDocument.isPending}
-                disabled={approveDocument.isPending}
-              >
-                {!rejectDocument.isPending ? <X size={15} aria-hidden /> : null}
-                {rejectDocument.isPending ? t("action.processing") : t("flow.reject")}
-              </Button>
+              {doc.status === "REVIEW" ? (
+                <Button
+                  variant="secondary"
+                  onClick={async () => {
+                    const confirmed = await confirm({
+                      title: t("flow.rejectConfirm.title"),
+                      description: t("flow.rejectConfirm.description"),
+                      confirmLabel: t("flow.reject"),
+                      tone: "warning",
+                    });
+                    if (!confirmed) return;
+                    rejectDocument.mutate(
+                      { id: documentId },
+                      { onSuccess: () => toast.success(t("flow.rejected")) }
+                    );
+                  }}
+                  loading={rejectDocument.isPending}
+                  disabled={approveDocument.isPending}
+                >
+                  {!rejectDocument.isPending ? <X size={15} aria-hidden /> : null}
+                  {rejectDocument.isPending ? t("action.processing") : t("flow.reject")}
+                </Button>
+              ) : null}
             </>
           )}
           {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
             <Button
               onClick={() =>
                 enqueueIngestion.mutate(
-                  { id: documentId },
+                  { id: documentId, force: Boolean(doc.duplicate_of_document_id) },
                   {
                     onSuccess: (job) => {
                       setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
@@ -985,27 +1118,52 @@ export function DocumentWorkspace({
               loading={enqueueIngestion.isPending}
             >
               {!enqueueIngestion.isPending ? <Send size={15} aria-hidden /> : null}
-              {enqueueIngestion.isPending ? t("action.queueing") : t("action.enqueueIngestion")}
+              {enqueueIngestion.isPending
+                ? t("action.queueing")
+                : doc.duplicate_of_document_id
+                  ? t("action.enqueueDuplicateIngestion")
+                  : t("action.enqueueIngestion")}
             </Button>
           )}
-          {doc.status === "INDEXED" && (
-            <Button
-              variant="secondary"
-              onClick={() =>
-                enqueueIngestion.mutate(
-                  { id: documentId, force: true },
-                  {
-                    onSuccess: (job) => {
-                      setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
-                    },
-                  }
-                )
-              }
-              loading={enqueueIngestion.isPending}
-            >
-              {!enqueueIngestion.isPending ? <RotateCcw size={15} aria-hidden /> : null}
-              {enqueueIngestion.isPending ? t("action.queueing") : t("action.requeueIngestion")}
-            </Button>
+          {(doc.status === "REVIEW" ||
+            doc.status === "CHUNKED" ||
+            doc.status === "INDEXED" ||
+            doc.status === "ERROR") && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void handleReprocessPhase("EXTRACT")}
+                disabled={enqueueIngestion.isPending}
+              >
+                <RotateCcw size={15} aria-hidden />
+                {t("flow.reprocess.extract")}
+              </Button>
+              {(doc.status === "CHUNKED" ||
+                doc.status === "INDEXED" ||
+                (doc.status === "ERROR" && Boolean(parsedExtraction.rawText))) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleReprocessPhase("CHUNK")}
+                  disabled={enqueueIngestion.isPending}
+                >
+                  <RotateCcw size={15} aria-hidden />
+                  {t("flow.reprocess.chunk")}
+                </Button>
+              )}
+              {(doc.status === "INDEXED" || (doc.status === "ERROR" && latestChunkSet)) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleReprocessPhase("INDEX")}
+                  disabled={enqueueIngestion.isPending}
+                >
+                  <RotateCcw size={15} aria-hidden />
+                  {t("flow.reprocess.index")}
+                </Button>
+              )}
+            </>
           )}
         </div>
       </CardContent>
@@ -1015,11 +1173,13 @@ export function DocumentWorkspace({
 
 function IngestionJobsPanel({
   jobs,
+  segments,
   loading,
   error,
   nowMs,
 }: {
   jobs: IngestionJob[];
+  segments: IngestionSegment[];
   loading: boolean;
   error: boolean;
   nowMs: number;
@@ -1036,6 +1196,8 @@ function IngestionJobsPanel({
 
   const latest = jobs[0];
   const active = ingestionJobIsActive(latest.status);
+  const progressSummary =
+    latest.phase === "EXTRACT" ? resolveIngestionProgressSummary(segments) : null;
 
   return (
     <section className="rounded-md border border-border bg-background p-4">
@@ -1081,6 +1243,7 @@ function IngestionJobsPanel({
         {active ? (
           <p className="mt-3 text-xs leading-relaxed text-info">{t("flow.jobs.activeHint")}</p>
         ) : null}
+        {progressSummary ? <IngestionProgressSummaryView summary={progressSummary} /> : null}
         {latest.error_message ? (
           <div className="mt-3 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
             <p className="font-medium text-danger">{t("flow.jobs.errorReason")}</p>
@@ -1090,6 +1253,77 @@ function IngestionJobsPanel({
       </div>
     </section>
   );
+}
+
+function IngestionProgressSummaryView({ summary }: { summary: IngestionProgressSummary }) {
+  const label = ingestionProgressLabel(summary);
+  return (
+    <div className="mt-3 space-y-1.5 rounded-md border border-border bg-background px-3 py-2">
+      <p className="text-xs font-medium text-foreground">{label}</p>
+      {summary.kind === "determinate" ? (
+        <progress
+          className="h-2 w-full"
+          value={summary.completed + summary.failed}
+          max={summary.total}
+          aria-label={label}
+        />
+      ) : (
+        <progress className="h-2 w-full" aria-label={label} />
+      )}
+    </div>
+  );
+}
+
+function ingestionProgressLabel(summary: IngestionProgressSummary): string {
+  if (summary.kind === "indeterminate") {
+    return t("flow.progress.indeterminate");
+  }
+  const unit = t(progressUnitLabelKey(summary.unit));
+  if (summary.failed > 0) {
+    return t("flow.progress.failed", {
+      completed: summary.completed,
+      failed: summary.failed,
+      total: summary.total,
+      unit,
+    });
+  }
+  return t("flow.progress.determinate", {
+    completed: summary.completed,
+    total: summary.total,
+    unit,
+  });
+}
+
+function progressUnitLabelKey(unit: ProgressUnit): I18nKey {
+  if (unit === "slide") return "flow.progress.unit.slide";
+  if (unit === "sheet") return "flow.progress.unit.sheet";
+  return "flow.progress.unit.page";
+}
+
+function segmentProgressLabel(segment: IngestionSegment): string {
+  const start = segment.progress_start ?? segment.page_start;
+  const end = segment.progress_end ?? segment.page_end ?? start;
+  if (start == null || end == null || segment.progress_unit === "source") {
+    return t("flow.segments.source");
+  }
+  if (segment.progress_unit === "slide") {
+    return progressRangeLabel("flow.segments.slideSingle", "flow.segments.slideRange", start, end);
+  }
+  if (segment.progress_unit === "sheet") {
+    return progressRangeLabel("flow.segments.sheetSingle", "flow.segments.sheetRange", start, end);
+  }
+  return progressRangeLabel("flow.segments.pageSingle", "flow.segments.pageRange", start, end);
+}
+
+function progressRangeLabel(
+  singleKey: I18nKey,
+  rangeKey: I18nKey,
+  start: number,
+  end: number
+): string {
+  return start === end
+    ? t(singleKey, { number: start })
+    : t(rangeKey, { start, end });
 }
 
 function JobMetric({
@@ -1173,12 +1407,7 @@ function IngestionSegmentsPanel({
                 {segmentStatusLabel(segment.status)}
               </span>
               <span className="tnum text-xs text-muted">
-                {segment.page_start
-                  ? t("flow.segments.pageRange", {
-                      start: segment.page_start,
-                      end: segment.page_end ?? segment.page_start,
-                    })
-                  : t("flow.segments.source")}
+                {segmentProgressLabel(segment)}
               </span>
               {segment.error_code ? (
                 <span
@@ -1317,7 +1546,9 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
 }
 
 function jobPhaseKey(phase: IngestionJob["phase"]): I18nKey {
-  return phase === "INDEX" ? "flow.jobs.phase.index" : "flow.jobs.phase.extract";
+  if (phase === "INDEX") return "flow.jobs.phase.index";
+  if (phase === "CHUNK") return "flow.jobs.phase.chunk";
+  return "flow.jobs.phase.extract";
 }
 
 function jobStatusClass(status: IngestionJob["status"]): string {

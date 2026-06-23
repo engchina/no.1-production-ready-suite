@@ -10,6 +10,8 @@ const STATUS_VARIANT: Record<FileStatus, StatusVariant> = {
   UPLOADED: "neutral",
   INGESTING: "pending",
   REVIEW: "info",
+  CHUNKING: "pending",
+  CHUNKED: "info",
   INDEXING: "pending",
   INDEXED: "success",
   ERROR: "danger",

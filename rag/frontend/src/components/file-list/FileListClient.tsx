@@ -42,6 +42,8 @@ const FILTERS: (FileStatus | "ALL")[] = [
   "UPLOADED",
   "INGESTING",
   "REVIEW",
+  "CHUNKING",
+  "CHUNKED",
   "INDEXING",
   "INDEXED",
   "ERROR",

@@ -304,6 +304,44 @@ def test_oci_client_prefers_object_storage_region(monkeypatch: pytest.MonkeyPatc
     assert captured_config["profile"] == "DEFAULT"
 
 
+def test_oci_client_keeps_config_region_when_object_storage_region_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """専用 region 未設定時は OCI_REGION ではなく config file の region を使う。"""
+    captured_config: dict[str, object] = {}
+
+    class CapturingObjectStorageSdkClient(FakeObjectStorageSdkClient):
+        def __init__(self, config: dict[str, object]) -> None:
+            super().__init__()
+            captured_config.update(config)
+
+    def fake_import_module(name: str) -> object:
+        if name == "oci.config":
+            return SimpleNamespace(
+                from_file=lambda path, profile: {
+                    "path": path,
+                    "profile": profile,
+                    "region": "ap-tokyo-1",
+                }
+            )
+        if name == "oci.object_storage":
+            return SimpleNamespace(ObjectStorageClient=CapturingObjectStorageSdkClient)
+        raise AssertionError(f"unexpected module import: {name}")
+
+    monkeypatch.setattr("app.clients.object_storage.importlib.import_module", fake_import_module)
+    client = ObjectStorageClient(
+        settings=_oci_settings().model_copy(
+            update={
+                "oci_region": "us-chicago-1",
+                "object_storage_region": "",
+            }
+        )
+    )
+
+    assert isinstance(client._client(), CapturingObjectStorageSdkClient)
+    assert captured_config["region"] == "ap-tokyo-1"
+
+
 def test_oci_client_refuses_encrypted_private_key_without_prompt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

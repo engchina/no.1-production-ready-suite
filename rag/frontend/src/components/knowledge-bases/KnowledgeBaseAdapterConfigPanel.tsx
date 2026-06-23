@@ -119,10 +119,10 @@ interface KnowledgeBaseAdapterConfigPanelProps {
   disabled?: boolean;
 }
 
-/** 上書きサマリの対象段数(構築 7)。 */
-const TOTAL_STAGES = 7;
+/** 上書きサマリの対象段数(構築 9)。 */
+const TOTAL_STAGES = 9;
 
-/** 上書き対象 7 段のうち、非継承(上書き)の件数を数える。 */
+/** 上書き対象 9 段のうち、非継承(上書き)の件数を数える。 */
 function countOverrides(config: KnowledgeBaseAdapterConfig): number {
   const ingestion = [
     config.ingestion.preprocess_profile,
@@ -132,6 +132,8 @@ function countOverrides(config: KnowledgeBaseAdapterConfig): number {
     config.ingestion.field_extraction_enabled,
     config.ingestion.asset_summary_enabled,
     config.ingestion.navigation_summary_enabled,
+    config.ingestion.auto_chunk_after_extract_enabled,
+    config.ingestion.auto_index_after_chunk_enabled,
   ];
   return ingestion.filter((value) => value !== null).length;
 }
@@ -207,6 +209,18 @@ export function KnowledgeBaseAdapterConfigPanel({
         t("knowledgeBases.adapter.field.navigationSummary"),
         form.ingestion.navigation_summary_enabled,
         effectiveConfig?.ingestion.navigation_summary_enabled ?? null
+      ),
+      resolveBoolStage(
+        "auto-chunk",
+        t("knowledgeBases.adapter.field.autoChunkAfterExtract"),
+        form.ingestion.auto_chunk_after_extract_enabled,
+        effectiveConfig?.ingestion.auto_chunk_after_extract_enabled ?? null
+      ),
+      resolveBoolStage(
+        "auto-index",
+        t("knowledgeBases.adapter.field.autoIndexAfterChunk"),
+        form.ingestion.auto_index_after_chunk_enabled,
+        effectiveConfig?.ingestion.auto_index_after_chunk_enabled ?? null
       ),
     ],
     [form.ingestion, effectiveConfig]
@@ -332,6 +346,22 @@ export function KnowledgeBaseAdapterConfigPanel({
             effectiveValue={effectiveConfig?.ingestion.navigation_summary_enabled ?? null}
             disabled={disabled}
             onChange={(value) => updateIngestion({ navigation_summary_enabled: value })}
+          />
+          <AdapterToggleRow
+            id={`kb-adapter-auto-chunk-${knowledgeBaseId}`}
+            label={t("knowledgeBases.adapter.field.autoChunkAfterExtract")}
+            value={form.ingestion.auto_chunk_after_extract_enabled}
+            effectiveValue={effectiveConfig?.ingestion.auto_chunk_after_extract_enabled ?? null}
+            disabled={disabled}
+            onChange={(value) => updateIngestion({ auto_chunk_after_extract_enabled: value })}
+          />
+          <AdapterToggleRow
+            id={`kb-adapter-auto-index-${knowledgeBaseId}`}
+            label={t("knowledgeBases.adapter.field.autoIndexAfterChunk")}
+            value={form.ingestion.auto_index_after_chunk_enabled}
+            effectiveValue={effectiveConfig?.ingestion.auto_index_after_chunk_enabled ?? null}
+            disabled={disabled}
+            onChange={(value) => updateIngestion({ auto_index_after_chunk_enabled: value })}
           />
         </section>
 

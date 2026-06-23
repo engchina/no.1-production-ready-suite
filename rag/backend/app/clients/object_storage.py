@@ -161,7 +161,7 @@ class ObjectStorageClient:
         oci_config = importlib.import_module("oci.config")
         object_storage = importlib.import_module("oci.object_storage")
         object_storage_region = self._settings.object_storage_region.strip()
-        region = object_storage_region or self._settings.oci_region.strip() or None
+        region = object_storage_region or None
         config = load_oci_config_without_prompt(
             oci_config,
             self._settings.oci_config_file,

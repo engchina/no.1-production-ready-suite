@@ -4,17 +4,34 @@ import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import type { FileStatus } from "@/lib/api";
 
-type StepStatus = "UPLOADED" | "INGESTING" | "REVIEW" | "INDEXING" | "INDEXED";
-const ORDER: StepStatus[] = ["UPLOADED", "INGESTING", "REVIEW", "INDEXING", "INDEXED"];
+type StepStatus =
+  | "UPLOADED"
+  | "INGESTING"
+  | "REVIEW"
+  | "CHUNKING"
+  | "CHUNKED"
+  | "INDEXING"
+  | "INDEXED";
+const ORDER: StepStatus[] = [
+  "UPLOADED",
+  "INGESTING",
+  "REVIEW",
+  "CHUNKING",
+  "CHUNKED",
+  "INDEXING",
+  "INDEXED",
+];
 const STEP_LABEL: Record<StepStatus, string> = {
   UPLOADED: "アップロード",
   INGESTING: "抽出",
-  REVIEW: "確認",
+  REVIEW: "抽出確認",
+  CHUNKING: "Chunk",
+  CHUNKED: "Chunk 確認",
   INDEXING: "索引中",
   INDEXED: "索引済み",
 };
 
-/** ドキュメントの処理段階を可視化する（UPLOADED→INGESTING→REVIEW→INDEXING→INDEXED）。 */
+/** ドキュメントの処理段階を可視化する。 */
 export function FlowStepper({ status }: { status: FileStatus }) {
   if (status === "ERROR") {
     return (

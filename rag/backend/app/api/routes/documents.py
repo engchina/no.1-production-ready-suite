@@ -62,6 +62,7 @@ from app.schemas.document import (
     DocumentStats,
     DocumentSummary,
     DocumentTableCellTextEdit,
+    DuplicateDocumentRef,
     FileStatus,
     IngestionJob,
     IngestionJobPhase,
@@ -474,7 +475,8 @@ async def retry_ingestion_job(
         raise HTTPException(status_code=409, detail="この取込ジョブはまだ実行中です。")
     retry_job = await _enqueue_ingestion_job_for_document(
         job.document_id,
-        force=force,
+        force=force or job.status == IngestionJobStatus.FAILED,
+        phase=job.phase,
     )
     return ApiResponse(data=retry_job)
 
@@ -501,10 +503,7 @@ async def cancel_ingestion_job(
     if cancelled is None:
         raise HTTPException(status_code=404, detail="取込ジョブが見つかりません。")
     if job.status == IngestionJobStatus.RUNNING:
-        # INDEX フェーズの取消は抽出をやり直さないよう REVIEW へ戻す。
-        restore_status = (
-            FileStatus.REVIEW if job.phase == IngestionJobPhase.INDEX else FileStatus.UPLOADED
-        )
+        restore_status = _restore_status_for_cancelled_phase(job.phase)
         await oracle.update_document_status(job.document_id, restore_status)
     return ApiResponse(data=cancelled)
 
@@ -523,13 +522,11 @@ async def enqueue_document_ingestion_job(
     http_request: Request,
     document_id: str,
     force: bool = Query(default=False),
+    phase: Annotated[IngestionJobPhase, Query()] = IngestionJobPhase.EXTRACT,
 ) -> ApiResponse[IngestionJob]:
     """保存済みドキュメントを取込 job としてキュー投入する。"""
     enforce_rate_limit("ingest", http_request)
-    job = await _enqueue_ingestion_job_for_document(
-        document_id,
-        force=force,
-    )
+    job = await _enqueue_ingestion_job_for_document(document_id, force=force, phase=phase)
     return ApiResponse(data=job)
 
 
@@ -953,19 +950,80 @@ async def list_document_ingestion_segments(
     except Exception:
         persisted_segments = []
     if persisted_segments:
-        return ApiResponse(data=persisted_segments)
+        return ApiResponse(
+            data=[
+                _segment_with_progress_defaults(segment, detail)
+                for segment in persisted_segments
+            ]
+        )
     effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
     jobs = await oracle.list_document_ingestion_jobs(document_id)
     return ApiResponse(data=_document_ingestion_segments(detail, jobs, effective_settings))
 
 
+def _segment_with_progress_defaults(
+    segment: IngestionSegment,
+    detail: DocumentDetail,
+) -> IngestionSegment:
+    """旧 checkpoint row に progress 表示用の単位を補う。"""
+    if segment.progress_unit != "source":
+        return segment
+    suffix = segment.segment_id.rsplit(":", 1)[-1]
+    if suffix.startswith("slide"):
+        unit = "slide"
+    elif suffix.startswith("sheet"):
+        unit = "sheet"
+    elif segment.page_start is not None and segment.page_end is not None:
+        content_type = (detail.content_type or "").lower()
+        unit = (
+            "page"
+            if content_type == "application/pdf" or content_type.startswith("image/")
+            else "source"
+        )
+    else:
+        unit = "source"
+    return segment.model_copy(
+        update={
+            "progress_unit": unit,
+            "progress_start": segment.page_start if unit != "source" else None,
+            "progress_end": segment.page_end if unit != "source" else None,
+        }
+    )
+
+
 @router.get("/{document_id}", response_model=ApiResponse[DocumentDetail])
 async def get_document(document_id: str) -> ApiResponse[DocumentDetail]:
     """ドキュメント詳細（抽出本文含む）を返す。"""
-    detail = await OracleClient().get_document(document_id)
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    detail = await _attach_duplicate_source(detail, oracle)
     return ApiResponse(data=detail)
+
+
+async def _attach_duplicate_source(
+    detail: DocumentDetail,
+    oracle: OracleClient,
+) -> DocumentDetail:
+    """重複 skip の理由を画面で説明できるよう、参照元の最小摘要を付ける。"""
+    duplicate_id = detail.duplicate_of_document_id
+    if duplicate_id is None:
+        return detail
+    duplicate = await oracle.get_document(duplicate_id)
+    if duplicate is None:
+        return detail
+    return detail.model_copy(
+        update={
+            "duplicate_source": DuplicateDocumentRef(
+                id=duplicate.id,
+                file_name=duplicate.file_name,
+                status=duplicate.status,
+                uploaded_at=duplicate.uploaded_at,
+                indexed_at=duplicate.indexed_at,
+            )
+        }
+    )
 
 
 @router.delete("/{document_id}", response_model=ApiResponse[DocumentDeleteResult])
@@ -1095,18 +1153,29 @@ async def approve_document(
     document_id: str,
     body: DocumentApproveRequest | None = None,
 ) -> ApiResponse[IngestionJob]:
-    """REVIEW(プレビュー確認待ち)の文書を承認し、後段(index)を投入する。
+    """現在のレビュー段階を承認し、次の取込 job を投入する。
 
     body に REVIEW 中のテキスト修正(raw_text / element_edits / table_cell_edits)を
-    含む場合は、bbox・構造を保持したままテキストのみ差し替えて保存してから index する。
+    含む場合は、bbox・構造を保持したままテキストのみ差し替えてから chunk する。
     """
     enforce_rate_limit("ingest", http_request)
-    await _ensure_review_only_materialization_safe(document_id)
-    if body is not None and (
-        body.element_edits or body.table_cell_edits or body.raw_text is not None
-    ):
-        await _apply_review_text_edits(document_id, body)
-    job = await _enqueue_index_phase_job_for_document(document_id)
+    detail = await OracleClient().get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status == FileStatus.REVIEW:
+        await _ensure_review_only_materialization_safe(document_id)
+        if body is not None and (
+            body.element_edits or body.table_cell_edits or body.raw_text is not None
+        ):
+            await _apply_review_text_edits(document_id, body)
+        job = await _enqueue_chunk_phase_job_for_document(document_id)
+    elif detail.status == FileStatus.CHUNKED:
+        job = await _enqueue_index_phase_job_for_document(document_id)
+    else:
+        raise HTTPException(
+            status_code=409,
+            detail="確認待ちの文書のみ承認できます。",
+        )
     return ApiResponse(data=job)
 
 
@@ -1291,7 +1360,7 @@ async def _ingest_existing_document(
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status in (FileStatus.INGESTING, FileStatus.INDEXING):
+    if detail.status in (FileStatus.INGESTING, FileStatus.CHUNKING, FileStatus.INDEXING):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
     if detail.status == FileStatus.INDEXED and not force:
         return detail
@@ -1320,7 +1389,7 @@ async def _ingest_existing_document(
         )
         await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
         return result
-    # plan 2 段実体化: 抽出グループ(parser×preprocess)ごとに extract 1 回 → 各 chunking で index。
+    # plan 実体化: 抽出グループ(parser×preprocess)ごとに extract 1 回 → 各 chunking で index。
     result = detail
     recipe_groups = plan.chunk_sets_by_extraction_recipe()
     total_chunk_sets = sum(len(chunk_set_ids) for chunk_set_ids in recipe_groups.values())
@@ -1347,7 +1416,7 @@ async def _ingest_existing_document(
                     cancel_checker=cancel_checker,
                 )
                 if result.status == FileStatus.REVIEW:
-                    # REVIEW ゲート ON: 抽出は REVIEW で停止。残りは承認後に index する。
+                    # REVIEW ゲート ON: 抽出は REVIEW で停止。残りは承認後に CHUNK→INDEX する。
                     return result
             else:
                 # 同抽出(同 parser/前処理)の chunking 変種: 抽出を再利用して re-chunk。
@@ -1361,20 +1430,20 @@ async def _ingest_existing_document(
     return result
 
 
-async def _index_reviewed_document(
+async def _chunk_reviewed_document(
     document_id: str,
     *,
     cancel_checker: Callable[[], Awaitable[bool]] | None = None,
 ) -> DocumentDetail:
-    """REVIEW で承認済みの文書を後段(index)だけ実行する。"""
+    """REVIEW で承認済みの文書を CHUNK だけ実行する。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status not in (FileStatus.REVIEW, FileStatus.INDEXING):
+    if detail.status not in (FileStatus.REVIEW, FileStatus.CHUNKING):
         raise HTTPException(
             status_code=409,
-            detail="プレビュー確認待ちの文書のみ索引できます。",
+            detail="プレビュー確認待ちの文書のみ Chunk 作成できます。",
         )
     global_settings = get_settings()
     plan, configs = await _materialization_plan_for_document(
@@ -1387,10 +1456,10 @@ async def _index_reviewed_document(
         effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
         chunk_set_id = _document_chunk_set_id(detail, effective_settings)
         pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-        result = await pipeline.index_reviewed(
+        result = await pipeline.chunk_reviewed(
             document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
         )
-        await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+        await _reconcile_document_chunk_sets_chunked(oracle, document_id, result, chunk_set_id)
         return result
     if len(plan.extraction_recipes) > 1:
         await _record_reingest_required_extractions(oracle, detail, plan)
@@ -1402,7 +1471,7 @@ async def _index_reviewed_document(
                 "現在の構築設定で文書を再取込してください。"
             ),
         )
-    # plan 駆動: 同一 extraction recipe の chunk_set を保存済み extraction から再チャンクする。
+    # plan 駆動: 同一 extraction recipe の chunk_set を保存済み extraction から chunk 化する。
     result = detail
     chunk_set_ids = sorted(plan.chunk_sets)
     for index, chunk_set_id in enumerate(chunk_set_ids):
@@ -1412,7 +1481,57 @@ async def _index_reviewed_document(
         )
         pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
         # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
-        result = await pipeline.index_reviewed(
+        result = await pipeline.chunk_reviewed(
+            document_id,
+            chunk_set_id=chunk_set_id,
+            record_outcome=index == len(chunk_set_ids) - 1,
+            cancel_checker=cancel_checker,
+        )
+    await _reconcile_plan_chunk_sets_chunked(oracle, document_id, result, plan)
+    return result
+
+
+async def _index_reviewed_document(
+    document_id: str,
+    *,
+    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+) -> DocumentDetail:
+    """CHUNKED の文書を後段(embedding/index)だけ実行する。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status not in (FileStatus.CHUNKED, FileStatus.INDEXING):
+        raise HTTPException(
+            status_code=409,
+            detail="Chunk 確認済みの文書のみ索引できます。",
+        )
+    global_settings = get_settings()
+    plan, configs = await _materialization_plan_for_document(
+        oracle,
+        detail,
+        global_settings=global_settings,
+    )
+    if plan is None or not plan.chunk_sets:
+        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        chunk_set_id = _document_chunk_set_id(detail, effective_settings)
+        if chunk_set_id is None:
+            raise HTTPException(status_code=409, detail="索引対象の chunk_set がありません。")
+        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
+        result = await pipeline.index_chunked(
+            document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
+        )
+        await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+        return result
+    result = detail
+    chunk_set_ids = sorted(plan.chunk_sets)
+    for index, chunk_set_id in enumerate(chunk_set_ids):
+        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
+        recipe_settings, _applied = apply_adapter_config_or_global(
+            global_settings, configs[representative_kb_id], scope="ingestion"
+        )
+        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        result = await pipeline.index_chunked(
             document_id,
             chunk_set_id=chunk_set_id,
             record_outcome=index == len(chunk_set_ids) - 1,
@@ -1483,6 +1602,60 @@ async def _reconcile_plan_chunk_sets(
     except Exception as exc:
         logger.warning(
             "chunk_set plan reconcile に失敗しました。document_id=%s",
+            document_id,
+            exc_info=True,
+        )
+        await oracle.update_document_status(
+            document_id,
+            FileStatus.ERROR,
+            CHUNK_SET_PUBLISH_ERROR_MESSAGE,
+        )
+        raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
+
+
+async def _reconcile_plan_chunk_sets_chunked(
+    oracle: OracleClient,
+    document_id: str,
+    detail: DocumentDetail,
+    plan: MaterializationPlan,
+) -> None:
+    """plan の各 chunk_set を CHUNKED として永続化する。KB binding は INDEX 後に作る。"""
+    if detail.status != FileStatus.CHUNKED:
+        return
+    try:
+        configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
+        for chunk_set_id, knowledge_base_ids in plan.chunk_sets.items():
+            chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
+            extraction_recipe_id = plan.extraction_recipe_for_chunk_set(chunk_set_id)
+            await oracle.upsert_chunk_set(
+                chunk_set_id=chunk_set_id,
+                document_id=document_id,
+                extraction_recipe_id=extraction_recipe_id,
+                status="CHUNKED",
+            )
+            await oracle.mark_chunk_set_chunked(chunk_set_id=chunk_set_id, chunk_count=chunk_count)
+            if extraction_recipe_id is not None:
+                representative_kb_id = sorted(knowledge_base_ids)[0]
+                settings, _applied = apply_adapter_config_or_global(
+                    get_settings(),
+                    configs.get(representative_kb_id, KnowledgeBaseAdapterConfig()),
+                    scope="ingestion",
+                )
+                await _record_document_extraction_artifact(
+                    oracle,
+                    detail,
+                    extraction_recipe_id=extraction_recipe_id,
+                    settings=settings,
+                )
+        await oracle.delete_document_chunk_sets_except(
+            document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
+        )
+        await oracle.delete_document_extractions_except(
+            document_id=document_id, keep_extraction_ids=list(plan.extraction_recipes)
+        )
+    except Exception as exc:
+        logger.warning(
+            "chunk_set chunk plan reconcile に失敗しました。document_id=%s",
             document_id,
             exc_info=True,
         )
@@ -1661,7 +1834,6 @@ async def _record_document_extraction_artifact(
         extraction_recipe_id=extraction_recipe_id,
         source_sha256=detail.content_sha256,
         recipe_subset=_extraction_recipe_subset(settings),
-        extraction=detail.extraction if detail.extraction else None,
         status=status.value,
         reason=reason,
         metrics=_extraction_metrics(detail.extraction),
@@ -1765,6 +1937,49 @@ async def _reconcile_document_chunk_sets(
         raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
 
 
+async def _reconcile_document_chunk_sets_chunked(
+    oracle: OracleClient,
+    document_id: str,
+    detail: DocumentDetail,
+    chunk_set_id: str | None,
+) -> None:
+    """CHUNK 後、chunk_set 行だけを記録する。KB binding は INDEX 完了まで作らない。"""
+    if detail.status != FileStatus.CHUNKED or chunk_set_id is None:
+        return
+    try:
+        chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
+        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        extraction_recipe_id = _document_extraction_recipe_id(detail, effective_settings)
+        await oracle.upsert_chunk_set(
+            chunk_set_id=chunk_set_id,
+            document_id=document_id,
+            extraction_recipe_id=extraction_recipe_id,
+            status="CHUNKED",
+        )
+        await oracle.mark_chunk_set_chunked(chunk_set_id=chunk_set_id, chunk_count=chunk_count)
+        await _record_document_extraction_artifact(
+            oracle,
+            detail,
+            extraction_recipe_id=extraction_recipe_id,
+            settings=effective_settings,
+        )
+        await oracle.delete_stale_document_chunk_sets(
+            document_id=document_id, keep_chunk_set_id=chunk_set_id
+        )
+    except Exception as exc:
+        logger.warning(
+            "chunk_set chunk reconcile に失敗しました。document_id=%s",
+            document_id,
+            exc_info=True,
+        )
+        await oracle.update_document_status(
+            document_id,
+            FileStatus.ERROR,
+            CHUNK_SET_PUBLISH_ERROR_MESSAGE,
+        )
+        raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
+
+
 async def _resolve_ingestion_settings(
     oracle: OracleClient,
     document_id: str,
@@ -1795,17 +2010,26 @@ def _dispatch_ingestion_job(
     request_ingestion_worker_wakeup()
 
 
+def _restore_status_for_cancelled_phase(phase: IngestionJobPhase) -> FileStatus:
+    if phase == IngestionJobPhase.INDEX:
+        return FileStatus.CHUNKED
+    if phase == IngestionJobPhase.CHUNK:
+        return FileStatus.REVIEW
+    return FileStatus.UPLOADED
+
+
 async def _enqueue_ingestion_job_for_document(
     document_id: str,
     *,
     force: bool,
+    phase: IngestionJobPhase = IngestionJobPhase.EXTRACT,
 ) -> IngestionJob:
     """既存ドキュメントを job 化し、必要ならバックグラウンド実行へ渡す。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status in (FileStatus.INGESTING, FileStatus.INDEXING):
+    if detail.status in (FileStatus.INGESTING, FileStatus.CHUNKING, FileStatus.INDEXING):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
 
     source_profile = _source_profile_for_detail(detail)
@@ -1827,6 +2051,11 @@ async def _enqueue_ingestion_job_for_document(
             status=IngestionJobStatus.SKIPPED,
             skip_reason=source_profile.unsupported_reason,
         )
+    if phase == IngestionJobPhase.CHUNK:
+        return await _enqueue_chunk_phase_job_for_document(document_id, force=force)
+    if phase == IngestionJobPhase.INDEX:
+        return await _enqueue_index_phase_job_for_document(document_id, force=force)
+
     if detail.status == FileStatus.INDEXED and not force:
         return await _create_ingestion_job_record(
             oracle=oracle,
@@ -1850,17 +2079,34 @@ async def _enqueue_ingestion_job_for_document(
 
 async def _enqueue_index_phase_job_for_document(
     document_id: str,
+    *,
+    force: bool = False,
 ) -> IngestionJob:
-    """REVIEW 承認済みの文書に対し INDEX フェーズ job を投入する。"""
+    """CHUNKED 文書に対し INDEX フェーズ job を投入する。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status != FileStatus.REVIEW:
+    if detail.status == FileStatus.ERROR and force:
+        pass
+    elif detail.status not in (FileStatus.CHUNKED, FileStatus.INDEXED):
         raise HTTPException(
             status_code=409,
-            detail="プレビュー確認待ちの文書のみ承認できます。",
+            detail="Chunk 確認済みの文書のみ索引できます。",
         )
+    if detail.status == FileStatus.INDEXED and not force:
+        source_profile = _source_profile_for_detail(detail)
+        return await _create_ingestion_job_record(
+            oracle=oracle,
+            document_id=document_id,
+            parser_profile=source_profile.parser_profile,
+            quality_warnings=source_profile.quality_warnings,
+            status=IngestionJobStatus.SKIPPED,
+            skip_reason="already_indexed",
+            phase=IngestionJobPhase.INDEX,
+        )
+    if force:
+        await oracle.reset_document_index_outputs(document_id, status=FileStatus.CHUNKED)
     source_profile = _source_profile_for_detail(detail)
     job = await _create_ingestion_job_record(
         oracle=oracle,
@@ -1868,6 +2114,37 @@ async def _enqueue_index_phase_job_for_document(
         parser_profile=source_profile.parser_profile,
         quality_warnings=source_profile.quality_warnings,
         phase=IngestionJobPhase.INDEX,
+    )
+    _dispatch_ingestion_job(job.id)
+    return job
+
+
+async def _enqueue_chunk_phase_job_for_document(
+    document_id: str,
+    *,
+    force: bool = False,
+) -> IngestionJob:
+    """REVIEW 文書に対し CHUNK フェーズ job を投入する。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status == FileStatus.ERROR and force:
+        pass
+    elif detail.status not in (FileStatus.REVIEW, FileStatus.CHUNKED, FileStatus.INDEXED):
+        raise HTTPException(
+            status_code=409,
+            detail="抽出確認済みの文書のみ Chunk 作成できます。",
+        )
+    if force or detail.status != FileStatus.REVIEW:
+        await oracle.reset_document_chunk_outputs(document_id, status=FileStatus.REVIEW)
+    source_profile = _source_profile_for_detail(detail)
+    job = await _create_ingestion_job_record(
+        oracle=oracle,
+        document_id=document_id,
+        parser_profile=source_profile.parser_profile,
+        quality_warnings=source_profile.quality_warnings,
+        phase=IngestionJobPhase.CHUNK,
     )
     _dispatch_ingestion_job(job.id)
     return job
@@ -1881,7 +2158,7 @@ async def _enqueue_failed_segment_retry_job_for_document(
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status in (FileStatus.INGESTING, FileStatus.INDEXING):
+    if detail.status in (FileStatus.INGESTING, FileStatus.CHUNKING, FileStatus.INDEXING):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
     segments = await oracle.list_ingestion_segments(document_id)
     if not any(segment.status == "FAILED" for segment in segments):
@@ -1990,6 +2267,7 @@ def _document_ingestion_segments(
     error_message = detail.error_message or (latest_job.error_message if latest_job else None)
     parser_backend = _parser_backend_from_extraction(detail.extraction, source_profile)
     parser_profile = _parser_profile_from_extraction(detail.extraction, source_profile)
+    progress_unit = "page" if page_start is not None and page_end is not None else "source"
     planned_parser = _planned_parser_backend_for_unmaterialized_extract(
         detail,
         latest_job,
@@ -2007,6 +2285,9 @@ def _document_ingestion_segments(
             parser_profile=parser_profile,
             page_start=page_start,
             page_end=page_end,
+            progress_unit=progress_unit,
+            progress_start=page_start,
+            progress_end=page_end,
             attempt_count=attempt_count,
             artifact_path=(
                 _extraction_artifact_path(detail.extraction) or detail.object_storage_path
@@ -2571,18 +2852,24 @@ async def _run_ingestion_job(
         return current is not None and current.status == IngestionJobStatus.CANCELLED
 
     try:
-        if job.phase == IngestionJobPhase.INDEX:
-            await _index_reviewed_document(
+        if job.phase == IngestionJobPhase.CHUNK:
+            detail = await _chunk_reviewed_document(
+                job.document_id,
+                cancel_checker=is_cancelled,
+            )
+        elif job.phase == IngestionJobPhase.INDEX:
+            detail = await _index_reviewed_document(
                 job.document_id,
                 cancel_checker=is_cancelled,
             )
         else:
             await _reset_document_outputs_for_extract(oracle, job.document_id)
-            await _ingest_existing_document(
+            detail = await _ingest_existing_document(
                 job.document_id,
                 force=True,
                 cancel_checker=is_cancelled,
             )
+        await _enqueue_auto_advance_job(job, detail)
     except HTTPException as exc:
         await _finish_ingestion_job_unless_cancelled(
             oracle,
@@ -2633,12 +2920,12 @@ async def _run_ingestion_job(
         )
         if propagate_errors:
             raise
-    except Exception:
+    except Exception as exc:
         await _finish_ingestion_job_unless_cancelled(
             oracle,
             job_id,
             status=IngestionJobStatus.FAILED,
-            error_message="取込処理に失敗しました。",
+            error_message=_safe_ingestion_job_error_message(exc),
         )
         logger.exception(
             "ingestion_job_failed",
@@ -2651,6 +2938,40 @@ async def _run_ingestion_job(
             oracle,
             job_id,
             status=IngestionJobStatus.SUCCEEDED,
+        )
+
+
+def _safe_ingestion_job_error_message(error: Exception) -> str:
+    if getattr(error, "safe_for_user", False):
+        message = str(error).replace("\n", " ").strip()
+        if message:
+            return message[:2000]
+    return "取込処理に失敗しました。"
+
+
+async def _enqueue_auto_advance_job(job: IngestionJob, detail: DocumentDetail) -> None:
+    """KB/グローバル設定に従い、次 stage の job を必要なら投入する。"""
+    try:
+        oracle = OracleClient()
+        settings, _owning = await _resolve_ingestion_settings(oracle, job.document_id)
+        if (
+            job.phase == IngestionJobPhase.EXTRACT
+            and detail.status == FileStatus.REVIEW
+            and settings.rag_auto_chunk_after_extract_enabled
+        ):
+            await _enqueue_chunk_phase_job_for_document(job.document_id)
+        elif (
+            job.phase == IngestionJobPhase.CHUNK
+            and detail.status == FileStatus.CHUNKED
+            and settings.rag_auto_index_after_chunk_enabled
+        ):
+            await _enqueue_index_phase_job_for_document(job.document_id)
+    except Exception:
+        logger.warning(
+            "auto advance job enqueue failed. document_id=%s phase=%s",
+            job.document_id,
+            job.phase,
+            exc_info=True,
         )
 
 

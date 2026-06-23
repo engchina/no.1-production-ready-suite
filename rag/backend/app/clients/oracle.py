@@ -169,7 +169,7 @@ class StoredChunk:
     tenant_id_hash: str | None
     chunk_index: int
     text: str
-    embedding: list[float]
+    embedding: list[float] | None
     metadata: dict[str, MetadataValue] = field(default_factory=dict)
 
 
@@ -810,6 +810,37 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
+    async def mark_chunk_set_chunked(
+        self,
+        *,
+        chunk_set_id: str,
+        chunk_count: int,
+        metrics: Mapping[str, object] | None = None,
+    ) -> None:
+        """chunk_set を CHUNKED にし、chunk 件数を記録する。"""
+        binds = {
+            "chunk_set_id": chunk_set_id,
+            "chunk_count": chunk_count,
+            "metrics_json": _json_dumps(metrics) if metrics is not None else None,
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_chunk_sets
+                SET status = 'CHUNKED',
+                    chunk_count = :chunk_count,
+                    vector_count = 0,
+                    metrics_json = :metrics_json,
+                    updated_at = SYSTIMESTAMP
+                WHERE chunk_set_id = :chunk_set_id
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
     async def get_chunk_set(self, chunk_set_id: str) -> dict[str, object] | None:
         """chunk_set の状態(status/件数/親 extraction_id)を返す。キーは小文字へ正規化。"""
         row = await self._fetch_one(
@@ -850,10 +881,16 @@ class OracleClient:
             "metrics_json": _json_dumps(metrics) if metrics is not None else None,
         }
 
+        extraction_update = (
+            "                    t.extraction_json = :extraction_json,\n"
+            if extraction is not None
+            else ""
+        )
+
         def operation(connection: OracleConnectionProtocol) -> None:
             _execute(
                 connection,
-                """
+                f"""
                 MERGE INTO rag_document_extractions t
                 USING (
                     SELECT :document_id AS document_id,
@@ -865,8 +902,7 @@ class OracleClient:
                 WHEN MATCHED THEN UPDATE SET
                     t.source_sha256 = :source_sha256,
                     t.recipe_subset = :recipe_subset,
-                    t.extraction_json = :extraction_json,
-                    t.status = :status,
+{extraction_update}                    t.status = :status,
                     t.reason = :reason,
                     t.metrics_json = :metrics_json,
                     t.updated_at = SYSTIMESTAMP
@@ -1624,6 +1660,34 @@ class OracleClient:
             error_message=error_message,
         )
 
+    async def reset_document_chunk_outputs(
+        self,
+        document_id: str,
+        *,
+        status: FileStatus = FileStatus.REVIEW,
+        error_message: str | None = None,
+    ) -> DocumentDetail:
+        """CHUNK 再処理前に chunk 以降だけを破棄する。"""
+        return await self._reset_document_chunk_outputs_with_oracle(
+            document_id=document_id,
+            status=status,
+            error_message=error_message,
+        )
+
+    async def reset_document_index_outputs(
+        self,
+        document_id: str,
+        *,
+        status: FileStatus = FileStatus.CHUNKED,
+        error_message: str | None = None,
+    ) -> DocumentDetail:
+        """INDEX 再処理前に embedding/index/binding だけを破棄する。"""
+        return await self._reset_document_index_outputs_with_oracle(
+            document_id=document_id,
+            status=status,
+            error_message=error_message,
+        )
+
     async def save_extraction(
         self, document_id: str, extraction: StructuredExtraction
     ) -> DocumentDetail:
@@ -1666,6 +1730,44 @@ class OracleClient:
             chunks,
             embeddings,
             chunk_set_id=chunk_set_id,
+        )
+
+    async def save_chunk_preview(
+        self,
+        document_id: str,
+        extraction: StructuredExtraction,
+        chunks: list[Chunk],
+        chunk_set_id: str | None = None,
+    ) -> list[RetrievedChunk]:
+        """embedding なしで chunk/citation preview 用 chunk 行を保存する。"""
+        return await self._save_index_with_oracle(
+            document_id,
+            extraction,
+            chunks,
+            [None] * len(chunks),
+            chunk_set_id=chunk_set_id,
+        )
+
+    async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
+        """指定 chunk_set の chunk/citation metadata を返す。"""
+        return await self._list_chunk_set_chunks_with_oracle(chunk_set_id)
+
+    async def update_chunk_set_embeddings(
+        self,
+        *,
+        chunk_set_id: str,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+    ) -> None:
+        """承認済み chunk 行へ embedding を一括反映する。"""
+        if len(chunks) != len(embeddings):
+            raise ValueError("chunks と embeddings の件数が一致しません。")
+        for index, embedding in enumerate(embeddings):
+            self._validate_embedding_width(embedding, f"chunk embedding[{index}]")
+        await self._update_chunk_set_embeddings_with_oracle(
+            chunk_set_id=chunk_set_id,
+            chunks=chunks,
+            embeddings=embeddings,
         )
 
     async def replace_document_graph_index(
@@ -3890,14 +3992,14 @@ class OracleClient:
     ) -> list[IngestionJob]:
         """stale RUNNING job を QUEUED/FAILED へ戻し、固着した文書状態も復旧する。
 
-        サブプロセスがクラッシュした場合、job は RUNNING、文書は INGESTING/INDEXING
+        サブプロセスがクラッシュした場合、job は RUNNING、文書は INGESTING/CHUNKING/INDEXING
         のまま残る。job だけ QUEUED へ戻しても文書が INGESTING のままだと、再投入された
         job が取込中ガード(409)で必ず失敗し、永久に固着する。これを防ぐため:
 
         - job を再キューする際は、文書も再実行可能な状態(EXTRACT→UPLOADED /
           INDEX→REVIEW)へ戻す。
         - 試行上限超過で job を失敗させる際は、文書も ERROR へ戻す。
-        - QUEUED/RUNNING の job が一つも無いのに INGESTING/INDEXING で取り残された
+        - QUEUED/RUNNING の job が一つも無いのに INGESTING/CHUNKING/INDEXING で取り残された
           文書(過去のデッドロックで FAILED になった job しか持たない等)は ERROR へ
           戻し、利用者が再試行できるようにする。
         """
@@ -4000,15 +4102,11 @@ class OracleClient:
                 self._reset_document_status_inline(
                     connection,
                     document_id=job.document_id,
-                    status=(
-                        FileStatus.REVIEW
-                        if job.phase == IngestionJobPhase.INDEX
-                        else FileStatus.UPLOADED
-                    ),
+                    status=_restore_status_for_job_phase(job.phase),
                     error_message=None,
                 )
 
-            # QUEUED/RUNNING の job が無いのに INGESTING/INDEXING で取り残された文書を
+            # QUEUED/RUNNING の job が無いのに INGESTING/CHUNKING/INDEXING で取り残された文書を
             # ERROR へ戻す(過去のデッドロックで固着した文書の自己復旧)。
             orphan_rows = _fetch_all(
                 connection,
@@ -4016,7 +4114,7 @@ class OracleClient:
                     """
                 SELECT d.document_id
                 FROM rag_documents d
-                WHERE d.status IN ('INGESTING', 'INDEXING')
+                WHERE d.status IN ('INGESTING', 'CHUNKING', 'INDEXING')
                   AND {document_access_sql}
                   AND NOT EXISTS (
                       SELECT 1
@@ -4053,42 +4151,9 @@ class OracleClient:
     ) -> None:
         """recovery トランザクション内で固着文書の状態を復旧する。
 
-        INGESTING/INDEXING に取り残された文書だけを対象にし、ERROR へ戻す場合は
-        中途半端なチャンク/抽出を破棄する。再実行可能状態(UPLOADED/REVIEW)へ戻す
-        場合は再利用のため抽出を保持する。
+        INGESTING/CHUNKING/INDEXING に取り残された文書だけを対象にする。
+        ERROR へ戻す場合も段階レビュー用の抽出/chunk 成果物は保持する。
         """
-        if status == FileStatus.ERROR:
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_chunks
-                WHERE document_id = :document_id
-                """,
-                {"document_id": document_id},
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET status = :status,
-                    error_message = :error_message,
-                    extraction = NULL
-                WHERE document_id = :document_id
-                  AND status IN ('INGESTING', 'INDEXING')
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind(
-                    {
-                        "document_id": document_id,
-                        "status": status.value,
-                        "error_message": error_message,
-                    }
-                ),
-            )
-            return
         _execute(
             connection,
             _render_sql(
@@ -4097,7 +4162,7 @@ class OracleClient:
             SET status = :status,
                 error_message = :error_message
             WHERE document_id = :document_id
-              AND status IN ('INGESTING', 'INDEXING')
+              AND status IN ('INGESTING', 'CHUNKING', 'INDEXING')
               AND {access_predicate}
             """,
                 access_predicate=_oracle_access_predicate_sql(),
@@ -4519,6 +4584,88 @@ class OracleClient:
         )
         return [_document_chunk_view_from_row(row) for row in rows]
 
+    async def _list_chunk_set_chunks_with_oracle(
+        self,
+        chunk_set_id: str,
+    ) -> list[DocumentChunkView]:
+        """Oracle chunk/vector table から指定 chunk_set の chunk view を返す。"""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE c.chunk_set_id = :chunk_set_id
+              AND {access_predicate}
+            ORDER BY c.chunk_index ASC, c.chunk_id ASC
+            """,
+                access_predicate=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind({"chunk_set_id": chunk_set_id}),
+        )
+        return [_document_chunk_view_from_row(row) for row in rows]
+
+    async def _update_chunk_set_embeddings_with_oracle(
+        self,
+        *,
+        chunk_set_id: str,
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
+    ) -> None:
+        """既存 chunk_set の chunk 行に embedding を反映する。"""
+
+        def chunk_id_for(chunk: Chunk) -> str:
+            document_id = str(chunk.metadata.get("document_id") or "")
+            return str(
+                chunk.metadata.get("chunk_id")
+                or f"{document_id}:{chunk_set_id}:{chunk.index}"
+            )
+
+        rows = [
+            {
+                "chunk_id": chunk_id_for(chunk),
+                "chunk_set_id": chunk_set_id,
+                "embedding": _to_vector_bind(embedding),
+            }
+            for chunk, embedding in zip(chunks, embeddings, strict=True)
+        ]
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            if rows:
+                _executemany(
+                    connection,
+                    """
+                    UPDATE rag_chunks
+                    SET embedding = :embedding
+                    WHERE chunk_id = :chunk_id
+                      AND chunk_set_id = :chunk_set_id
+                    """,
+                    rows,
+                )
+            count_rows = _fetch_all(
+                connection,
+                """
+                SELECT COUNT(*) AS cnt
+                FROM rag_chunks
+                WHERE chunk_set_id = :chunk_set_id
+                  AND embedding IS NOT NULL
+                """,
+                {"chunk_set_id": chunk_set_id},
+            )
+            vector_count = int(str(next(iter(count_rows[0].values())))) if count_rows else 0
+            if vector_count != len(chunks):
+                raise ValueError(
+                    f"chunk_set の embedding 保存件数が一致しません。"
+                    f"expected={len(chunks)}, actual={vector_count}"
+                )
+
+        await self._run_transaction(operation)
+
     async def _document_stats_with_oracle(self) -> DocumentStats:
         """Oracle document table の状態別集計を取得する。"""
         where_sql, binds = _oracle_document_where()
@@ -4596,7 +4743,7 @@ class OracleClient:
             existing = _select_document(connection, document_id)
             if existing is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
-            if status in (FileStatus.INGESTING, FileStatus.ERROR):
+            if status == FileStatus.INGESTING:
                 _execute(
                     connection,
                     """
@@ -4836,6 +4983,225 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def _reset_document_chunk_outputs_with_oracle(
+        self,
+        *,
+        document_id: str,
+        status: FileStatus,
+        error_message: str | None,
+    ) -> DocumentDetail:
+        """同一文書の再 chunk 前に、chunk 以降を transaction 内で初期化する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            existing = _select_document(connection, document_id)
+            if existing is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+
+            graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
+            _delete_graph_rows_for_document(
+                connection,
+                document_id=document_id,
+                entity_ids=graph_entity_ids,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_artifact_layers
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1 FROM rag_documents d
+                      WHERE d.document_id = rag_artifact_layers.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_kb_chunk_set_bindings
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1 FROM rag_documents d
+                      WHERE d.document_id = rag_kb_chunk_set_bindings.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                "DELETE FROM rag_chunks WHERE document_id = :document_id",
+                {"document_id": document_id},
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_chunk_sets
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1 FROM rag_documents d
+                      WHERE d.document_id = rag_chunk_sets.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET status = :status,
+                    error_message = :error_message,
+                    indexed_at = NULL
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "status": status.value,
+                        "error_message": error_message,
+                    }
+                ),
+            )
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
+
+        return await self._run_transaction(operation)
+
+    async def _reset_document_index_outputs_with_oracle(
+        self,
+        *,
+        document_id: str,
+        status: FileStatus,
+        error_message: str | None,
+    ) -> DocumentDetail:
+        """同一文書の再 index 前に、embedding/index/binding だけ初期化する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            existing = _select_document(connection, document_id)
+            if existing is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+
+            graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
+            _delete_graph_rows_for_document(
+                connection,
+                document_id=document_id,
+                entity_ids=graph_entity_ids,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_artifact_layers
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1 FROM rag_documents d
+                      WHERE d.document_id = rag_artifact_layers.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                DELETE FROM rag_kb_chunk_set_bindings
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1 FROM rag_documents d
+                      WHERE d.document_id = rag_kb_chunk_set_bindings.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                "UPDATE rag_chunks SET embedding = NULL WHERE document_id = :document_id",
+                {"document_id": document_id},
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_chunk_sets
+                SET status = 'CHUNKED',
+                    vector_count = 0,
+                    updated_at = SYSTIMESTAMP
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1 FROM rag_documents d
+                      WHERE d.document_id = rag_chunk_sets.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET status = :status,
+                    error_message = :error_message,
+                    indexed_at = NULL
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "status": status.value,
+                        "error_message": error_message,
+                    }
+                ),
+            )
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
+
+        return await self._run_transaction(operation)
+
     async def _delete_document_with_oracle(self, document_id: str) -> bool:
         """Oracle document table と関連 chunk/vector/ingestion 行を同一 transaction で削除する。"""
 
@@ -4986,7 +5352,7 @@ class OracleClient:
         document_id: str,
         document: StoredDocument,
         chunks: list[Chunk],
-        embeddings: list[list[float]],
+        embeddings: Sequence[Sequence[float] | None],
         chunk_set_id: str | None = None,
     ) -> list[dict[str, object]]:
         """rag_chunks へ挿入する bind row を構築する。chunk_set_id=None は未タグ(後方互換)。
@@ -5017,7 +5383,7 @@ class OracleClient:
                         **chunk.metadata,
                     }
                 ),
-                "embedding": _to_vector_bind(embedding),
+                "embedding": None if embedding is None else _to_vector_bind(embedding),
                 "chunk_set_id": chunk_set_id,
             }
             for chunk, embedding in zip(chunks, embeddings, strict=True)
@@ -5097,7 +5463,7 @@ class OracleClient:
         document_id: str,
         extraction: StructuredExtraction,
         chunks: list[Chunk],
-        embeddings: list[list[float]],
+        embeddings: Sequence[Sequence[float] | None],
         chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
         """抽出 payload と chunk/vector を同一 Oracle transaction で置換する。
@@ -7336,6 +7702,14 @@ def _ingestion_job_phase(value: object) -> IngestionJobPhase:
     return IngestionJobPhase(str(value or IngestionJobPhase.EXTRACT.value))
 
 
+def _restore_status_for_job_phase(phase: IngestionJobPhase) -> FileStatus:
+    if phase == IngestionJobPhase.INDEX:
+        return FileStatus.CHUNKED
+    if phase == IngestionJobPhase.CHUNK:
+        return FileStatus.REVIEW
+    return FileStatus.UPLOADED
+
+
 def _knowledge_base_status(value: object) -> KnowledgeBaseStatus:
     if isinstance(value, KnowledgeBaseStatus):
         return value
@@ -7752,7 +8126,7 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED')),
     CONSTRAINT {table_name}_phase_ck
-        CHECK (phase IN ('EXTRACT', 'INDEX')),
+        CHECK (phase IN ('EXTRACT', 'CHUNK', 'INDEX')),
     CONSTRAINT {table_name}_attempts_ck
         CHECK (attempt_count >= 0 AND max_attempts >= 1),
     CONSTRAINT {table_name}_document_fk
@@ -7871,7 +8245,7 @@ CREATE TABLE rag_chunk_sets (
     CONSTRAINT rag_chunk_sets_document_fk
         FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
     CONSTRAINT rag_chunk_sets_status_ck
-        CHECK (status IN ('INGESTING', 'INDEXED', 'ERROR'))
+        CHECK (status IN ('INGESTING', 'CHUNKED', 'INDEXED', 'ERROR'))
 );
 
 CREATE INDEX rag_chunk_sets_document_idx
@@ -8001,7 +8375,10 @@ CREATE TABLE {table_name} (
     uploaded_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     indexed_at               TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
-        CHECK (status IN ('UPLOADED', 'INGESTING', 'REVIEW', 'INDEXING', 'INDEXED', 'ERROR')),
+        CHECK (status IN (
+            'UPLOADED', 'INGESTING', 'REVIEW', 'CHUNKING', 'CHUNKED',
+            'INDEXING', 'INDEXED', 'ERROR'
+        )),
     CONSTRAINT {table_name}_duplicate_fk
         FOREIGN KEY (duplicate_of_document_id) REFERENCES {table_name} (document_id)
 );

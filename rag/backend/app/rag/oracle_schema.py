@@ -32,7 +32,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260621_002"
+MIGRATION_ARTIFACT_VERSION = "20260623_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -216,6 +216,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260621_002_document_extractions",
             table_name="rag_document_extractions",
             sql=_document_extractions_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260623_001_nullable_chunk_embeddings",
+            table_name="rag_chunks",
+            sql=_nullable_chunk_embeddings_migration_sql(),
         ),
     ]
 
@@ -506,7 +511,7 @@ END;
 
 
 def _documents_review_status_migration_sql() -> str:
-    """rag_documents.status の CHECK constraint に REVIEW / INDEXING を追加する。"""
+    """rag_documents.status の CHECK constraint を段階レビュー状態へ更新する。"""
     return """
 DECLARE
     v_constraint_count NUMBER;
@@ -527,14 +532,14 @@ BEGIN
         'ALTER TABLE rag_documents ADD CONSTRAINT '
         || 'rag_documents_status_ck CHECK '
         || '(status IN (''UPLOADED'', ''INGESTING'', ''REVIEW'', '
-        || '''INDEXING'', ''INDEXED'', ''ERROR''))';
+        || '''CHUNKING'', ''CHUNKED'', ''INDEXING'', ''INDEXED'', ''ERROR''))';
 END;
 /
 """.strip()
 
 
 def _ingestion_jobs_phase_migration_sql() -> str:
-    """rag_ingestion_jobs に phase 列(EXTRACT/INDEX)を追加する。"""
+    """rag_ingestion_jobs に phase 列と EXTRACT/CHUNK/INDEX 制約を追加・更新する。"""
     return """
 DECLARE
     v_column_count NUMBER;
@@ -558,12 +563,16 @@ BEGIN
     WHERE table_name = 'RAG_INGESTION_JOBS'
       AND constraint_name = 'RAG_INGESTION_JOBS_PHASE_CK';
 
-    IF v_constraint_count = 0 THEN
+    IF v_constraint_count > 0 THEN
         EXECUTE IMMEDIATE
-            'ALTER TABLE rag_ingestion_jobs ADD CONSTRAINT '
-            || 'rag_ingestion_jobs_phase_ck CHECK '
-            || '(phase IN (''EXTRACT'', ''INDEX''))';
+            'ALTER TABLE rag_ingestion_jobs DROP CONSTRAINT '
+            || 'rag_ingestion_jobs_phase_ck';
     END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_ingestion_jobs ADD CONSTRAINT '
+        || 'rag_ingestion_jobs_phase_ck CHECK '
+        || '(phase IN (''EXTRACT'', ''CHUNK'', ''INDEX''))';
 END;
 /
 """.strip()
@@ -703,9 +712,23 @@ BEGIN
             || 'CONSTRAINT rag_chunk_sets_document_fk FOREIGN KEY (document_id) '
             || 'REFERENCES rag_documents (document_id) ON DELETE CASCADE,'
             || 'CONSTRAINT rag_chunk_sets_status_ck CHECK '
-            || '(status IN (''INGESTING'', ''INDEXED'', ''ERROR''))'
+            || '(status IN (''INGESTING'', ''CHUNKED'', ''INDEXED'', ''ERROR''))'
             || ')';
     END IF;
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_CHUNK_SETS'
+      AND constraint_name = 'RAG_CHUNK_SETS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_chunk_sets DROP CONSTRAINT rag_chunk_sets_status_ck';
+    END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_chunk_sets ADD CONSTRAINT rag_chunk_sets_status_ck CHECK '
+        || '(status IN (''INGESTING'', ''CHUNKED'', ''INDEXED'', ''ERROR''))';
 
     SELECT COUNT(*) INTO v_index_count
     FROM user_indexes WHERE index_name = 'RAG_CHUNK_SETS_DOCUMENT_IDX';
@@ -1067,6 +1090,28 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_chunk_sets_extraction_idx ON rag_chunk_sets (extraction_id)';
     END IF;
+END;
+/
+""".strip()
+
+
+def _nullable_chunk_embeddings_migration_sql() -> str:
+    """CHUNK preview 保存用に rag_chunks.embedding の NOT NULL を外す。"""
+    return """
+DECLARE
+    v_nullable VARCHAR2(1);
+BEGIN
+    SELECT nullable INTO v_nullable
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS'
+      AND column_name = 'EMBEDDING';
+
+    IF v_nullable = 'N' THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunks MODIFY (embedding NULL)';
+    END IF;
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        NULL;
 END;
 /
 """.strip()

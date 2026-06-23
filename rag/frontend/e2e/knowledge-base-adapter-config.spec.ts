@@ -26,6 +26,8 @@ function emptyAdapterConfig() {
       field_extraction_enabled: null,
       asset_summary_enabled: null,
       navigation_summary_enabled: null,
+      auto_chunk_after_extract_enabled: null,
+      auto_index_after_chunk_enabled: null,
     },
     query: {
       retrieval_strategy: null,
@@ -134,6 +136,76 @@ test("ナレッジベース単位で文書分割方式を上書きして保存�
 
   await expect(page.getByText("構築設定を保存しました。")).toBeVisible();
   expect(patched?.adapter_config?.ingestion?.chunking_strategy).toBe("page_level");
+});
+
+test("ナレッジベース単位で自動進行を上書きして保存できる", async ({ page }) => {
+  let patched: {
+    adapter_config?: {
+      ingestion?: {
+        auto_chunk_after_extract_enabled?: boolean | null;
+        auto_index_after_chunk_enabled?: boolean | null;
+      };
+    };
+  } | null = null;
+
+  await page.route("**/api/knowledge-bases**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const parts = url.pathname.split("/").filter(Boolean);
+
+    if (request.method() === "GET" && url.pathname === "/api/knowledge-bases") {
+      await route.fulfill({
+        json: {
+          data: { items: [summary], total: 1, limit: 20, offset: 0, has_next: false },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+    if (request.method() === "GET" && parts.length === 3) {
+      await route.fulfill({
+        json: {
+          data: { ...summary, retrieval_config: {}, adapter_config: emptyAdapterConfig() },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+    if (request.method() === "PATCH" && parts.length === 3) {
+      patched = request.postDataJSON();
+      const config = patched?.adapter_config ?? emptyAdapterConfig();
+      await route.fulfill({
+        json: {
+          data: { ...summary, retrieval_config: {}, adapter_config: config },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, json: { detail: "not found" } });
+  });
+
+  await page.goto("/knowledge-bases/kb-1");
+
+  const ingestSection = page.getByRole("region", { name: "ナレッジ構築設定" });
+  const autoChunkRow = ingestSection
+    .getByText("抽出後に Chunk 作成へ進む", { exact: true })
+    .locator("xpath=ancestor::div[contains(@class,'rounded-lg')][1]");
+  const autoIndexRow = ingestSection
+    .getByText("Chunk 後に Embedding / 索引へ進む", { exact: true })
+    .locator("xpath=ancestor::div[contains(@class,'rounded-lg')][1]");
+
+  await autoChunkRow.getByRole("button", { name: "上書き" }).click();
+  await autoIndexRow.getByRole("button", { name: "上書き" }).click();
+  await page.getByRole("button", { name: "構築設定を保存" }).click();
+
+  await expect(page.getByText("構築設定を保存しました。")).toBeVisible();
+  expect(patched?.adapter_config?.ingestion?.auto_chunk_after_extract_enabled).toBe(true);
+  expect(patched?.adapter_config?.ingestion?.auto_index_after_chunk_enabled).toBe(true);
+  await expectNoPageOverflow(page);
 });
 
 test("KB legacy query 設定は構築設定画面に表示されない", async ({ page }) => {

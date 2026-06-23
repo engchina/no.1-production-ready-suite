@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveIngestionParserDisplay } from "./DocumentWorkspace";
+import {
+  resolveIngestionParserDisplay,
+  resolveIngestionProgressSummary,
+} from "./DocumentWorkspace";
 
 describe("resolveIngestionParserDisplay", () => {
   it("取込 segment の parser を source profile より優先して表示する", () => {
@@ -52,5 +55,32 @@ describe("resolveIngestionParserDisplay", () => {
       profile: "docling_adapter",
       source: "extraction",
     });
+  });
+});
+
+describe("resolveIngestionProgressSummary", () => {
+  it("page segment を完了数と失敗数へ集計する", () => {
+    const summary = resolveIngestionProgressSummary([
+      { status: "SUCCEEDED", progress_unit: "page", progress_start: 1, progress_end: 5 },
+      { status: "SUCCEEDED", progress_unit: "page", progress_start: 6, progress_end: 9 },
+      { status: "RUNNING", progress_unit: "page", progress_start: 10, progress_end: 13 },
+      { status: "QUEUED", progress_unit: "page", progress_start: 14, progress_end: 17 },
+    ]);
+
+    expect(summary).toEqual({
+      kind: "determinate",
+      unit: "page",
+      completed: 9,
+      failed: 0,
+      total: 17,
+    });
+  });
+
+  it("source segment は indeterminate progress にする", () => {
+    const summary = resolveIngestionProgressSummary([
+      { status: "RUNNING", progress_unit: "source", progress_start: null, progress_end: null },
+    ]);
+
+    expect(summary).toEqual({ kind: "indeterminate" });
   });
 });

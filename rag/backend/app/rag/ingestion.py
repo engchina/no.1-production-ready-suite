@@ -74,7 +74,13 @@ from app.rag.parsers import (
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import resolve_preprocess_profile
 from app.rag.variant_keys import compute_extraction_recipe_id
-from app.schemas.document import DocumentDetail, FileStatus, IngestionSegment, SourceProfile
+from app.schemas.document import (
+    DocumentChunkView,
+    DocumentDetail,
+    FileStatus,
+    IngestionSegment,
+    SourceProfile,
+)
 from app.schemas.extraction import (
     DocumentElement,
     ExtractionArtifactValue,
@@ -465,7 +471,7 @@ class IngestionPipeline:
             # extraction 層(rag_document_extractions)へ正本として書く(両ゲート共通)。
             await self._persist_extraction_layer(document_id, source_profile, extraction)
             if self._settings.rag_review_gate_enabled:
-                # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 index で再利用する。
+                # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 CHUNK で再利用する。
                 await self._oracle.save_extraction(document_id, extraction)
                 detail = await self._oracle.update_document_status(document_id, FileStatus.REVIEW)
                 record_ingestion("review", 0)
@@ -587,10 +593,10 @@ class IngestionPipeline:
         record_outcome: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
-        """REVIEW で承認済みの文書を後段(chunk→embed→index)だけ実行する。
+        """保存済み抽出から chunk→embed→index を一括実行する legacy 後段。
 
         前段(parse/抽出)は再実行せず、保存済み抽出本文を再利用する。
-        2 段階処理(parse → 人がプレビュー確認 → index)の INDEX フェーズ。
+        review gate 無効時や旧互換の複数 chunk_set materialization で使う。
         """
         started_at = now()
         trace_id = new_trace_id()
@@ -647,28 +653,176 @@ class IngestionPipeline:
             )
             raise
 
-    async def _run_index_phase(
+    async def chunk_reviewed(
         self,
-        *,
-        trace_id: str,
         document_id: str,
-        extraction: StructuredExtraction,
-        quality_report: IngestionQualityReport,
-        parser_profile: str,
-        checkpoint_segments: list[IngestionSegment],
-        source_bytes: bytes,
-        started_at: float,
+        *,
         chunk_set_id: str | None = None,
         record_outcome: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
-        """抽出結果から chunk→embed→index を実行し INDEXED まで進める後段。
+        """REVIEW で承認済みの抽出から chunk だけを作り、CHUNKED で停止する。"""
+        started_at = now()
+        trace_id = new_trace_id()
+        detail = await self._oracle.get_document(document_id)
+        if detail is None:
+            raise IngestionUserError("ドキュメントが見つかりません。")
+        extraction = await self._load_reviewed_extraction(detail)
+        quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        await self._oracle.update_document_status(document_id, FileStatus.CHUNKING)
+        checkpoint_segments = await self._safe_list_ingestion_segments(document_id)
+        try:
+            chunks = await self._build_chunks_for_extraction(
+                trace_id=trace_id,
+                extraction=extraction,
+                quality_report=quality_report,
+                parser_profile=quality_report.parser_profile,
+                cancel_checker=cancel_checker,
+            )
+            await _raise_if_cancelled(cancel_checker)
+            await _observe_ingestion_stage(
+                trace_id,
+                "chunk_save",
+                self._oracle.save_chunk_preview(
+                    document_id,
+                    extraction,
+                    chunks,
+                    chunk_set_id=chunk_set_id,
+                ),
+                attributes={"chunk_count": len(chunks)},
+            )
+            await _raise_if_cancelled(cancel_checker)
+            detail = await self._oracle.update_document_status(document_id, FileStatus.CHUNKED)
+            if record_outcome:
+                record_ingestion("review", len(chunks))
+                record_rag_ingestion_audit(
+                    trace_id=trace_id,
+                    document_id=document_id,
+                    outcome="success",
+                    source_bytes=b"",
+                    document_type=_observability_document_type(extraction.document_type),
+                    extraction_confidence=extraction.confidence,
+                    parser_backend=quality_report.parser_backend,
+                    parser_profile=quality_report.parser_profile,
+                    segment_count=len(checkpoint_segments),
+                    fallback_count=1 if quality_report.fallback_used else 0,
+                    failed_segment_count=quality_report.failed_segment_count,
+                    chunk_count=len(chunks),
+                    vector_count=0,
+                    elapsed_ms=elapsed_ms(started_at),
+                )
+            return detail
+        except IngestionCancelledError as exc:
+            record_ingestion("cancelled", 0)
+            record_rag_ingestion_audit(
+                trace_id=trace_id,
+                document_id=document_id,
+                outcome="error",
+                source_bytes=b"",
+                segment_count=len(checkpoint_segments),
+                failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
+                elapsed_ms=elapsed_ms(started_at),
+                error=exc,
+            )
+            raise
+        except Exception as exc:
+            record_ingestion("error", 0)
+            await self._oracle.update_document_status(
+                document_id,
+                FileStatus.ERROR,
+                _safe_persistent_error_message(exc),
+            )
+            record_rag_ingestion_audit(
+                trace_id=trace_id,
+                document_id=document_id,
+                outcome="error",
+                source_bytes=b"",
+                segment_count=len(checkpoint_segments),
+                failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
+                elapsed_ms=elapsed_ms(started_at),
+                error=exc,
+            )
+            raise
 
-        ``record_outcome=False`` のときは成功 metric / audit を出さない(複数 chunk_set を
-        materialize する loop で、1 文書 1 論理取込として記録を 1 回に集約するため)。
+    async def index_chunked(
+        self,
+        document_id: str,
+        *,
+        chunk_set_id: str,
+        record_outcome: bool = True,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+    ) -> DocumentDetail:
+        """CHUNKED の chunk_set から embedding→index だけを実行する。"""
+        started_at = now()
+        trace_id = new_trace_id()
+        detail = await self._oracle.get_document(document_id)
+        if detail is None:
+            raise IngestionUserError("ドキュメントが見つかりません。")
+        extraction = await self._load_reviewed_extraction(detail)
+        quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        await self._oracle.update_document_status(document_id, FileStatus.INDEXING)
+        checkpoint_segments = await self._safe_list_ingestion_segments(document_id)
+        try:
+            chunk_views = await self._oracle.list_chunk_set_chunks(chunk_set_id)
+            chunks = [_chunk_view_to_chunk(view) for view in chunk_views]
+            if not chunks:
+                raise IngestionUserError("索引対象のチャンクが見つかりません。")
+            return await self._run_embedding_index_phase(
+                trace_id=trace_id,
+                document_id=document_id,
+                extraction=extraction,
+                quality_report=quality_report,
+                chunks=chunks,
+                checkpoint_segments=checkpoint_segments,
+                source_bytes=b"",
+                started_at=started_at,
+                chunk_set_id=chunk_set_id,
+                record_outcome=record_outcome,
+                cancel_checker=cancel_checker,
+                reuse_saved_chunks=True,
+            )
+        except IngestionCancelledError as exc:
+            record_ingestion("cancelled", 0)
+            record_rag_ingestion_audit(
+                trace_id=trace_id,
+                document_id=document_id,
+                outcome="error",
+                source_bytes=b"",
+                segment_count=len(checkpoint_segments),
+                failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
+                elapsed_ms=elapsed_ms(started_at),
+                error=exc,
+            )
+            raise
+        except Exception as exc:
+            record_ingestion("error", 0)
+            await self._oracle.update_document_status(
+                document_id,
+                FileStatus.ERROR,
+                _safe_persistent_error_message(exc),
+            )
+            record_rag_ingestion_audit(
+                trace_id=trace_id,
+                document_id=document_id,
+                outcome="error",
+                source_bytes=b"",
+                segment_count=len(checkpoint_segments),
+                failed_segment_count=_failed_checkpoint_count(checkpoint_segments),
+                elapsed_ms=elapsed_ms(started_at),
+                error=exc,
+            )
+            raise
 
-        例外はそのまま呼び出し側(ingest / index_reviewed)の except へ伝播させる。
-        """
+    async def _build_chunks_for_extraction(
+        self,
+        *,
+        trace_id: str,
+        extraction: StructuredExtraction,
+        quality_report: IngestionQualityReport,
+        parser_profile: str,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+    ) -> list[Chunk]:
+        """抽出結果から chunk を作る。embedding/index は行わない。"""
         text = _text_for_chunking(extraction)
         if not text:
             raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
@@ -724,8 +878,69 @@ class IngestionPipeline:
             raise IngestionUserError("索引用チャンクを作成できませんでした。")
         # RAPTOR 再帰要約索引(opt-in)。leaf に summary node を足して索引する。要約失敗は leaf のみ。
         chunks = await self._augment_with_raptor(trace_id, chunks, cancel_checker)
-        # 派生系譜(溯源)を chunk metadata へ貫通させ、citation → 派生原本 → 原本を追跡可能にする。
-        chunks = _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
+        return _chunks_with_source_derivation(chunks, _source_derivation_id(extraction))
+
+    async def _run_index_phase(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        extraction: StructuredExtraction,
+        quality_report: IngestionQualityReport,
+        parser_profile: str,
+        checkpoint_segments: list[IngestionSegment],
+        source_bytes: bytes,
+        started_at: float,
+        chunk_set_id: str | None = None,
+        record_outcome: bool = True,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+    ) -> DocumentDetail:
+        """抽出結果から chunk→embed→index を実行し INDEXED まで進める後段。
+
+        ``record_outcome=False`` のときは成功 metric / audit を出さない(複数 chunk_set を
+        materialize する loop で、1 文書 1 論理取込として記録を 1 回に集約するため)。
+
+        例外はそのまま呼び出し側(ingest / index_reviewed)の except へ伝播させる。
+        """
+        chunks = await self._build_chunks_for_extraction(
+            trace_id=trace_id,
+            extraction=extraction,
+            quality_report=quality_report,
+            parser_profile=parser_profile,
+            cancel_checker=cancel_checker,
+        )
+        return await self._run_embedding_index_phase(
+            trace_id=trace_id,
+            document_id=document_id,
+            extraction=extraction,
+            quality_report=quality_report,
+            chunks=chunks,
+            checkpoint_segments=checkpoint_segments,
+            source_bytes=source_bytes,
+            started_at=started_at,
+            chunk_set_id=chunk_set_id,
+            record_outcome=record_outcome,
+            cancel_checker=cancel_checker,
+            reuse_saved_chunks=False,
+        )
+
+    async def _run_embedding_index_phase(
+        self,
+        *,
+        trace_id: str,
+        document_id: str,
+        extraction: StructuredExtraction,
+        quality_report: IngestionQualityReport,
+        chunks: list[Chunk],
+        checkpoint_segments: list[IngestionSegment],
+        source_bytes: bytes,
+        started_at: float,
+        chunk_set_id: str | None = None,
+        record_outcome: bool = True,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+        reuse_saved_chunks: bool,
+    ) -> DocumentDetail:
+        """chunk を embedding し、Oracle index として検索可能にする。"""
         await _raise_if_cancelled(cancel_checker)
         vectors = await _observe_ingestion_stage(
             trace_id,
@@ -738,23 +953,42 @@ class IngestionPipeline:
             result_attributes=lambda result: {"vector_count": len(result)},
         )
         await _raise_if_cancelled(cancel_checker)
-        await _observe_ingestion_stage(
-            trace_id,
-            "indexing",
-            self._save_index(
+        if reuse_saved_chunks and chunk_set_id is not None:
+            await _observe_ingestion_stage(
                 trace_id,
-                document_id,
-                extraction,
-                chunks,
-                vectors,
-                chunk_set_id=chunk_set_id,
-                cancel_checker=cancel_checker,
-            ),
-            attributes={
-                "chunk_count": len(chunks),
-                "vector_count": len(vectors),
-            },
-        )
+                "indexing",
+                self._save_embeddings_for_chunk_set(
+                    trace_id,
+                    document_id,
+                    extraction,
+                    chunks,
+                    vectors,
+                    chunk_set_id=chunk_set_id,
+                    cancel_checker=cancel_checker,
+                ),
+                attributes={
+                    "chunk_count": len(chunks),
+                    "vector_count": len(vectors),
+                },
+            )
+        else:
+            await _observe_ingestion_stage(
+                trace_id,
+                "indexing",
+                self._save_index(
+                    trace_id,
+                    document_id,
+                    extraction,
+                    chunks,
+                    vectors,
+                    chunk_set_id=chunk_set_id,
+                    cancel_checker=cancel_checker,
+                ),
+                attributes={
+                    "chunk_count": len(chunks),
+                    "vector_count": len(vectors),
+                },
+            )
         await _raise_if_cancelled(cancel_checker)
         detail = await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
         if record_outcome:
@@ -1967,6 +2201,48 @@ class IngestionPipeline:
                 "GraphRAG 設定、抽出結果、データベース保存先を確認してから再実行してください。"
             ) from exc
 
+    async def _save_embeddings_for_chunk_set(
+        self,
+        trace_id: str,
+        document_id: str,
+        extraction: StructuredExtraction,
+        chunks: list[Chunk],
+        vectors: list[list[float]],
+        *,
+        chunk_set_id: str,
+        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
+        """保存済み chunk_set の chunk 行へ embedding と派生 index を保存する。"""
+        await _raise_if_cancelled(cancel_checker)
+        await self._oracle.update_chunk_set_embeddings(
+            chunk_set_id=chunk_set_id,
+            chunks=chunks,
+            embeddings=vectors,
+        )
+        await _raise_if_cancelled(cancel_checker)
+        if not resolve_graph_adapter(self._settings).enabled:
+            return
+        try:
+            await _observe_ingestion_stage(
+                trace_id,
+                "graph_indexing",
+                self._save_graph_index(document_id, extraction, chunks),
+                attributes={
+                    "chunk_count": len(chunks),
+                    "element_count": len(extraction.elements),
+                },
+                result_attributes=_graph_index_result_attributes,
+            )
+        except Exception as exc:
+            logger.info(
+                "graph_indexing_failed",
+                extra={"document_id": document_id, "error_type": type(exc).__name__},
+            )
+            raise IngestionUserError(
+                "GraphRAG 索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "GraphRAG 設定、抽出結果、データベース保存先を確認してから再実行してください。"
+            ) from exc
+
     async def _save_graph_index(
         self,
         document_id: str,
@@ -2330,6 +2606,38 @@ def _chunks_with_source_derivation(chunks: list[Chunk], derivation_id: str | Non
     return chunks
 
 
+def _chunk_view_to_chunk(view: DocumentChunkView) -> Chunk:
+    """保存済み chunk view を embedding/index 用 Chunk へ戻す。"""
+    metadata = {
+        key: value
+        for key, value in view.metadata.items()
+        if isinstance(value, str | int | float | bool) or value is None
+    }
+    metadata["document_id"] = view.document_id
+    metadata["chunk_id"] = view.chunk_id
+    start = _stored_chunk_int(metadata.get("start_offset"), default=0)
+    end = _stored_chunk_int(metadata.get("end_offset"), default=len(view.text))
+    return Chunk(
+        text=view.text,
+        index=view.chunk_index,
+        start_offset=start,
+        end_offset=end,
+        metadata=metadata,
+    )
+
+
+def _stored_chunk_int(value: object, *, default: int) -> int:
+    """保存済み chunk metadata の整数値を安全に読む。"""
+    if isinstance(value, bool) or value is None:
+        return default
+    if not isinstance(value, str | int | float):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _canonical_artifact_extension(content_type: str) -> str:
     """canonical artifact の保存拡張子を content_type から決める(表示・取り回し用)。"""
     normalized = (content_type or "").split(";", 1)[0].strip().casefold()
@@ -2420,6 +2728,9 @@ def _checkpoint_segments_for_source(
                 parser_profile=parser_profile,
                 page_start=segment.page_start,
                 page_end=segment.page_end,
+                progress_unit="page",
+                progress_start=segment.page_start,
+                progress_end=segment.page_end,
             )
             for segment in pdf_segments
         ]
@@ -2434,6 +2745,10 @@ def _checkpoint_segments_for_source(
     )
     if office_segments:
         return office_segments
+    single_pdf_page = bool(pdf_segments and pdf_segments[0].page_count <= 1)
+    source_is_page = single_pdf_page or _observability_content_type(content_type).startswith(
+        "image/"
+    )
     return [
         IngestionSegment(
             segment_id=f"{document_id}:source",
@@ -2441,10 +2756,11 @@ def _checkpoint_segments_for_source(
             status="QUEUED",
             parser_backend=parser_backend,
             parser_profile=parser_profile,
-            page_start=(
-                1 if _observability_content_type(content_type).startswith("image/") else None
-            ),
-            page_end=1 if _observability_content_type(content_type).startswith("image/") else None,
+            page_start=1 if source_is_page else None,
+            page_end=1 if source_is_page else None,
+            progress_unit="page" if source_is_page else "source",
+            progress_start=1 if source_is_page else None,
+            progress_end=1 if source_is_page else None,
         )
     ]
 
@@ -2486,6 +2802,9 @@ def _office_checkpoint_segments_for_source(
             parser_profile=parser_profile,
             page_start=number,
             page_end=number,
+            progress_unit=office_kind,
+            progress_start=number,
+            progress_end=number,
         )
         for number in numbers
     ]

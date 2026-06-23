@@ -51,10 +51,15 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
             user: options.ociSettings?.user ?? "",
             fingerprint: options.ociSettings?.fingerprint ?? "",
             tenancy: options.ociSettings?.tenancy ?? "",
-            region: options.ociSettings?.region ?? "us-chicago-1",
+            region: options.ociSettings?.region ?? "",
             key_file: "~/.oci/oci_api_key.pem",
-            key_file_exists: options.ociSettings?.key_file_exists ?? true,
-            config_file_exists: true,
+            key_file_exists: options.ociSettings?.key_file_exists ?? false,
+            config_file_exists: Boolean(
+              options.ociSettings?.user ||
+                options.ociSettings?.fingerprint ||
+                options.ociSettings?.tenancy ||
+                options.ociSettings?.region
+            ),
             config_source: "runtime",
           },
           error_messages: [],
@@ -80,10 +85,12 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
             user: body.user ?? "",
             fingerprint: body.fingerprint ?? "",
             tenancy: body.tenancy ?? "",
-            region: body.region ?? "ap-osaka-1",
+            region: body.region ?? "",
             key_file: "~/.oci/oci_api_key.pem",
-            key_file_exists: options.ociSettings?.key_file_exists ?? true,
-            config_file_exists: true,
+            key_file_exists: options.ociSettings?.key_file_exists ?? false,
+            config_file_exists: Boolean(
+              body.user || body.fingerprint || body.tenancy || body.region
+            ),
             config_source: "runtime",
           },
           error_messages: [],
@@ -341,6 +348,10 @@ test("OCI 認証設定の下書きは Object Storage 未入力でも保存でき
   await page.getByLabel("ユーザー OCID").fill("ocid1.user.oc1..profile");
   await page.getByLabel("フィンガープリント").fill("12:34:56:78:90:ab:cd:ef");
   await page.getByLabel("テナンシ OCID").fill("ocid1.tenancy.oc1..profile");
+  await page.getByRole("combobox", { name: "リージョン", exact: true }).click();
+  await page.getByRole("listbox", { name: "リージョン" }).getByRole("option", {
+    name: "us-chicago-1",
+  }).click();
 
   await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
 
@@ -364,12 +375,12 @@ test("OCI 認証設定の下書きは Object Storage 未入力でも保存でき
   const stored = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("production-ready-rag.oci-settings.v1") ?? "{}")
   );
-  expect(stored.userOcid).toBe("ocid1.user.oc1..profile");
-  expect(stored.configFile).toBe("~/.oci/config");
-  expect(stored.configProfile).toBe("DEFAULT");
+  expect(stored.userOcid).toBeUndefined();
+  expect(stored.configFile).toBeUndefined();
+  expect(stored.configProfile).toBeUndefined();
   expect(stored.compartmentId).toBeUndefined();
-  expect(stored.objectStorageRegion).toBe("ap-osaka-1");
-  expect(stored.objectStorageNamespace).toBe("");
+  expect(stored.objectStorageRegion).toBeUndefined();
+  expect(stored.objectStorageNamespace).toBeUndefined();
   expect(stored.objectStorageBucket).toBeUndefined();
 });
 
@@ -393,7 +404,7 @@ test("OCI 認証設定は未入力でも保存できる", async ({ page }) => {
     user: "",
     fingerprint: "",
     tenancy: "",
-    region: "us-chicago-1",
+    region: "",
   });
 });
 
@@ -414,7 +425,7 @@ test("Object Storage 設定は namespace 未取得でも保存できる", async 
 
   await expect(page.getByRole("button", { name: "Object Storage: 保存しました" })).toBeVisible();
   expect(savedPayload).toEqual({
-    object_storage_region: "ap-osaka-1",
+    object_storage_region: "",
     object_storage_namespace: "",
   });
 });
@@ -429,7 +440,7 @@ test("Object Storage リージョンは OCI 認証設定と同じ候補で保存
   await page.goto("/settings/oci");
 
   const storageRegion = page.getByRole("combobox", { name: "Object Storage リージョン" });
-  await expect(storageRegion).toContainText("ap-osaka-1");
+  await expect(storageRegion).toContainText("選択してください");
 
   await storageRegion.click();
   const listbox = page.getByRole("listbox", { name: "Object Storage リージョン" });
@@ -578,6 +589,10 @@ test("Object Storage ネームスペースを OCI API から取得できる", as
   await expect(
     page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
   ).not.toBeEditable();
+  await page.getByRole("combobox", { name: "Object Storage リージョン" }).click();
+  await page.getByRole("listbox", { name: "Object Storage リージョン" }).getByRole("option", {
+    name: "ap-osaka-1",
+  }).click();
   await page.getByRole("button", { name: "Object Storage ネームスペース: 取得" }).click();
 
   expect(namespaceRequest).toEqual({

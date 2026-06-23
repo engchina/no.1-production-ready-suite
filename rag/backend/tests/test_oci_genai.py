@@ -8,7 +8,11 @@ from typing import Any
 import pytest
 
 from app.clients.oci_auth import OciPrivateKeyPassPhraseRequiredError
-from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS, OciGenAiClient
+from app.clients.oci_genai import (
+    EMBEDDING_INPUT_MAX_CHARS,
+    OciGenAiClient,
+    OciGenAiConfigError,
+)
 from app.config import Settings
 
 
@@ -47,6 +51,42 @@ def test_oci_genai_client_refuses_encrypted_private_key_without_prompt(
         client._client()
 
     assert initialized is False
+
+
+def test_oci_genai_client_reports_malformed_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """OCI SDK の fingerprint 不正は利用者が直せる設定エラーとして返す。"""
+
+    class InvalidConfig(Exception):
+        pass
+
+    class FakeGenerativeAiInferenceClient:
+        def __init__(self, config: dict[str, object]) -> None:
+            _ = config
+            raise InvalidConfig({"fingerprint": "malformed"})
+
+    def fake_import_module(name: str) -> object:
+        if name == "oci.config":
+            return SimpleNamespace(
+                from_file=lambda path, profile: {
+                    "fingerprint": "bad",
+                    "key_file": "",
+                    "region": "ap-osaka-1",
+                }
+            )
+        if name == "oci.generative_ai_inference":
+            return SimpleNamespace(GenerativeAiInferenceClient=FakeGenerativeAiInferenceClient)
+        raise AssertionError(f"unexpected module import: {name}")
+
+    monkeypatch.setattr("app.clients.oci_genai.importlib.import_module", fake_import_module)
+    client = OciGenAiClient(
+        settings=_oci_settings().model_copy(update={"oci_config_file": str(tmp_path / "config")})
+    )
+
+    with pytest.raises(OciGenAiConfigError, match="fingerprint が不正です"):
+        client._client()
 
 
 async def test_embed_validates_oci_embedding_count() -> None:

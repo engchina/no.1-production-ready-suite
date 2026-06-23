@@ -26,19 +26,26 @@ describe("documentsHaveActiveWork", () => {
     expect(documentsHaveActiveWork(undefined)).toBe(false);
   });
 
-  it("取込/索引中があれば true", () => {
+  it("取込/Chunk/索引中があれば true", () => {
     expect(documentsHaveActiveWork([doc("INDEXED"), doc("INGESTING")])).toBe(true);
+    expect(documentsHaveActiveWork([doc("CHUNKING")])).toBe(true);
     expect(documentsHaveActiveWork([doc("INDEXING")])).toBe(true);
   });
 
-  it("安定状態のみなら false(UPLOADED/REVIEW/INDEXED/ERROR)", () => {
+  it("安定状態のみなら false(UPLOADED/REVIEW/CHUNKED/INDEXED/ERROR)", () => {
     expect(
-      documentsHaveActiveWork([doc("UPLOADED"), doc("REVIEW"), doc("INDEXED"), doc("ERROR")])
+      documentsHaveActiveWork([
+        doc("UPLOADED"),
+        doc("REVIEW"),
+        doc("CHUNKED"),
+        doc("INDEXED"),
+        doc("ERROR"),
+      ])
     ).toBe(false);
   });
 
-  it("DOCUMENT_ACTIVE_STATUSES は INGESTING/INDEXING のみ", () => {
-    expect([...DOCUMENT_ACTIVE_STATUSES].sort()).toEqual(["INDEXING", "INGESTING"]);
+  it("DOCUMENT_ACTIVE_STATUSES は実行中ステータスのみ", () => {
+    expect([...DOCUMENT_ACTIVE_STATUSES].sort()).toEqual(["CHUNKING", "INDEXING", "INGESTING"]);
   });
 });
 

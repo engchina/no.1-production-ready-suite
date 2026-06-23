@@ -18,6 +18,7 @@ from app.schemas.document import (
     DocumentSummary,
     FileStatus,
     IngestionJob,
+    IngestionJobPhase,
     IngestionJobStatus,
     IngestionSegment,
 )
@@ -54,6 +55,24 @@ def test_structured_table_html_preserves_formula_cell_metadata() -> None:
     assert 'data-formula-value="&lt;INDEXED&gt;"' in html
     assert "&lt;INDEXED&gt;" in html
     assert "<INDEXED>" not in html
+
+
+def test_ingestion_job_error_message_preserves_safe_errors() -> None:
+    """job 表示では利用者が直せる設定エラーだけ原因を表示する。"""
+
+    class SafeConfigError(RuntimeError):
+        safe_for_user = True
+
+    assert (
+        documents_route._safe_ingestion_job_error_message(
+            SafeConfigError("OCI 認証設定の fingerprint が不正です。")
+        )
+        == "OCI 認証設定の fingerprint が不正です。"
+    )
+    assert (
+        documents_route._safe_ingestion_job_error_message(RuntimeError("secret detail"))
+        == "取込処理に失敗しました。"
+    )
 
 
 class FakeWorkspaceOracle:
@@ -131,9 +150,15 @@ class FakeWorkspaceOracle:
     async def list_document_chunks(self, document_id: str) -> list[DocumentChunkView]:
         return list(self.chunks.get(document_id, []))
 
+    async def count_document_chunks(self, document_id: str) -> int:
+        return len(self.chunks.get(document_id, []))
+
     async def get_owning_knowledge_base(self, document_id: str) -> None:
         # この fake は KB 別の取込上書きを使わない(グローバル設定で取込する)。
         return None
+
+    async def list_document_knowledge_bases(self, document_id: str) -> list[KnowledgeBaseRef]:
+        return list(self.documents[document_id].knowledge_bases)
 
     async def list_ingestion_segments(self, document_id: str) -> list[IngestionSegment]:
         return list(self.ingestion_segments.get(document_id, []))
@@ -202,6 +227,43 @@ class FakeWorkspaceOracle:
         self.documents[document_id] = updated
         self.chunks.pop(document_id, None)
         self.ingestion_segments.pop(document_id, None)
+        return updated
+
+    async def reset_document_chunk_outputs(
+        self,
+        document_id: str,
+        *,
+        status: FileStatus = FileStatus.REVIEW,
+        error_message: str | None = None,
+    ) -> DocumentDetail:
+        detail = self.documents[document_id]
+        updated = detail.model_copy(
+            update={
+                "status": status,
+                "error_message": error_message,
+                "indexed_at": None,
+            }
+        )
+        self.documents[document_id] = updated
+        self.chunks.pop(document_id, None)
+        return updated
+
+    async def reset_document_index_outputs(
+        self,
+        document_id: str,
+        *,
+        status: FileStatus = FileStatus.CHUNKED,
+        error_message: str | None = None,
+    ) -> DocumentDetail:
+        detail = self.documents[document_id]
+        updated = detail.model_copy(
+            update={
+                "status": status,
+                "error_message": error_message,
+                "indexed_at": None,
+            }
+        )
+        self.documents[document_id] = updated
         return updated
 
     async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
@@ -312,6 +374,21 @@ class FakeWorkspaceOracle:
         )
         self.ingestion_jobs[job_id] = updated
         return updated
+
+    async def upsert_chunk_set(self, **kwargs: object) -> None:
+        _ = kwargs
+
+    async def mark_chunk_set_indexed(self, **kwargs: object) -> None:
+        _ = kwargs
+
+    async def delete_stale_document_chunk_sets(self, **kwargs: object) -> None:
+        _ = kwargs
+
+    async def upsert_chunk_set_binding(self, **kwargs: object) -> None:
+        _ = kwargs
+
+    async def upsert_document_extraction_artifact(self, **kwargs: object) -> None:
+        _ = kwargs
 
 
 class FakeWorkspaceIngestionPipeline:
@@ -655,7 +732,10 @@ def test_document_upload_duplicate_source_does_not_enqueue() -> None:
 
     detail = client.get(f"/api/documents/{payload['id']}")
     assert detail.status_code == 200
-    assert detail.json()["data"]["status"] == "UPLOADED"
+    detail_payload = detail.json()["data"]
+    assert detail_payload["status"] == "UPLOADED"
+    assert detail_payload["duplicate_source"]["id"] == original.json()["data"]["id"]
+    assert detail_payload["duplicate_source"]["file_name"] == "original.txt"
 
 
 def test_batch_upload_saves_documents_without_ingestion_jobs() -> None:
@@ -778,6 +858,29 @@ def test_document_ingestion_job_endpoint_skips_duplicate_document() -> None:
     assert detail.json()["data"]["status"] == "UPLOADED"
 
 
+def test_document_ingestion_job_endpoint_force_queues_duplicate_document() -> None:
+    """force=true なら重複文書も明示的な再取込としてキュー投入する。"""
+    body = "重複でも取り込む本文".encode()
+    original = client.post(
+        "/api/documents/upload",
+        files={"file": ("original.txt", body, "text/plain")},
+    )
+    assert original.status_code == 200
+    duplicate = client.post(
+        "/api/documents/upload",
+        files={"file": ("duplicate.txt", body, "text/plain")},
+    )
+    assert duplicate.status_code == 200
+    document_id = duplicate.json()["data"]["id"]
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs?force=true")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["status"] == "QUEUED"
+    assert job["skip_reason"] is None
+
+
 def test_document_ingestion_job_endpoint_skips_indexed_without_force() -> None:
     """既に索引済みの文書は force なしなら再取込せず job 履歴だけ残す。"""
     document_id = _upload(
@@ -795,6 +898,133 @@ def test_document_ingestion_job_endpoint_skips_indexed_without_force() -> None:
     job = second.json()["data"]
     assert job["status"] == "SKIPPED"
     assert job["skip_reason"] == "already_indexed"
+
+
+def test_document_approve_review_queues_chunk_phase(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """REVIEW 承認は INDEX ではなく CHUNK job を投入する。"""
+    document_id = _upload("review-policy.txt", b"review text", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.REVIEW,
+            "extraction": {"document_type": "text", "raw_text": "review text"},
+        }
+    )
+
+    resp = client.post(f"/api/documents/{document_id}/approve")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["phase"] == "CHUNK"
+    assert job["status"] == "QUEUED"
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.REVIEW
+
+
+def test_document_approve_chunked_queues_index_phase(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """CHUNKED 承認は embedding/index 専用の INDEX job を投入する。"""
+    document_id = _upload("chunked-policy.txt", b"chunked text", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.CHUNKED,
+            "extraction": {"document_type": "text", "raw_text": "chunked text"},
+        }
+    )
+    fake_document_dependencies.chunks[document_id] = [
+        DocumentChunkView(
+            document_id=document_id,
+            chunk_id=f"{document_id}:chunk-0",
+            chunk_index=0,
+            text="chunked text",
+        )
+    ]
+
+    resp = client.post(f"/api/documents/{document_id}/approve")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["phase"] == "INDEX"
+    assert job["status"] == "QUEUED"
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.CHUNKED
+
+
+def test_document_chunk_reprocess_resets_downstream_only(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """CHUNK から再処理すると抽出は保持し、chunk 以降だけ削除する。"""
+    document_id = _upload("chunk-reprocess.txt", b"chunk source", "text/plain")
+    extraction = {"document_type": "text", "raw_text": "抽出済み"}
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": extraction,
+            "indexed_at": datetime.now(UTC),
+        }
+    )
+    fake_document_dependencies.chunks[document_id] = [
+        DocumentChunkView(
+            document_id=document_id,
+            chunk_id=f"{document_id}:old",
+            chunk_index=0,
+            text="古い chunk",
+        )
+    ]
+
+    resp = client.post(
+        f"/api/documents/{document_id}/ingestion-jobs",
+        params={"phase": "CHUNK", "force": "true"},
+    )
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["phase"] == "CHUNK"
+    reset = fake_document_dependencies.documents[document_id]
+    assert reset.status == FileStatus.REVIEW
+    assert reset.extraction == extraction
+    assert reset.indexed_at is None
+    assert fake_document_dependencies.chunks.get(document_id) is None
+
+
+def test_document_index_reprocess_keeps_chunks(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """INDEX から再処理すると chunk は保持し、索引状態だけ戻す。"""
+    document_id = _upload("index-reprocess.txt", b"index source", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "extraction": {"document_type": "text", "raw_text": "chunk 済み"},
+            "indexed_at": datetime.now(UTC),
+        }
+    )
+    chunks = [
+        DocumentChunkView(
+            document_id=document_id,
+            chunk_id=f"{document_id}:chunk-0",
+            chunk_index=0,
+            text="chunk 済み",
+        )
+    ]
+    fake_document_dependencies.chunks[document_id] = chunks
+
+    resp = client.post(
+        f"/api/documents/{document_id}/ingestion-jobs",
+        params={"phase": "INDEX", "force": "true"},
+    )
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["phase"] == "INDEX"
+    reset = fake_document_dependencies.documents[document_id]
+    assert reset.status == FileStatus.CHUNKED
+    assert reset.indexed_at is None
+    assert fake_document_dependencies.chunks[document_id] == chunks
 
 
 def test_document_ingestion_job_endpoint_clears_previous_outputs_on_force_reingest(
@@ -861,6 +1091,7 @@ def test_document_ingestion_job_endpoint_clears_previous_outputs_on_force_reinge
     assert segments.status_code == 200
     assert [item["segment_id"] for item in segments.json()["data"]] == [f"{document_id}:source"]
     assert segments.json()["data"][0]["status"] == "QUEUED"
+    assert segments.json()["data"][0]["progress_unit"] == "source"
 
 
 def test_document_ingestion_job_endpoint_skips_unsupported_audio() -> None:
@@ -1022,6 +1253,40 @@ def test_retry_ingestion_job_creates_new_job_for_failed_document(
     original_job = client.get("/api/documents/ingestion-jobs/job-failed")
     assert original_job.status_code == 200
     assert original_job.json()["data"]["status"] == "FAILED"
+
+
+def test_retry_failed_chunk_job_requeues_from_error(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """FAILED の CHUNK job は ERROR 文書からでも同じ stage を再投入できる。"""
+    document_id = _upload("failed-chunk.txt", b"chunk retry", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.ERROR,
+            "extraction": {"document_type": "text", "raw_text": "抽出済み"},
+            "error_message": "前回 chunk 失敗",
+        }
+    )
+    failed_job = IngestionJob(
+        id="job-failed-chunk",
+        document_id=document_id,
+        status=IngestionJobStatus.FAILED,
+        phase=IngestionJobPhase.CHUNK,
+        parser_profile="local_text_structure",
+        error_message="前回 chunk 失敗",
+        queued_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[failed_job.id] = failed_job
+
+    resp = client.post("/api/documents/ingestion-jobs/job-failed-chunk/retry")
+
+    assert resp.status_code == 200
+    retry_job = resp.json()["data"]
+    assert retry_job["phase"] == "CHUNK"
+    assert retry_job["status"] == "QUEUED"
+    assert fake_document_dependencies.documents[document_id].status == FileStatus.REVIEW
 
 
 def test_retry_ingestion_job_rejects_running_job(
@@ -1442,8 +1707,55 @@ def test_ingestion_segments_fallback_uses_table_and_asset_pages(
     assert len(segments) == 1
     assert segments[0]["page_start"] == 3
     assert segments[0]["page_end"] == 5
+    assert segments[0]["progress_unit"] == "page"
+    assert segments[0]["progress_start"] == 3
+    assert segments[0]["progress_end"] == 5
     assert segments[0]["parser_backend"] == "docling"
     assert segments[0]["artifact_path"] == artifact_path
+
+
+def test_ingestion_segments_progress_unit_for_persisted_office_segments(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """既存 checkpoint row でも segment_id から slide/sheet 進捗単位を補う。"""
+    pptx_id = _upload(
+        "deck.pptx",
+        b"pptx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+    xlsx_id = _upload(
+        "book.xlsx",
+        b"xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    fake_document_dependencies.ingestion_segments[pptx_id] = [
+        IngestionSegment(
+            segment_id=f"{pptx_id}:slide2",
+            document_id=pptx_id,
+            status="RUNNING",
+            page_start=2,
+            page_end=2,
+        )
+    ]
+    fake_document_dependencies.ingestion_segments[xlsx_id] = [
+        IngestionSegment(
+            segment_id=f"{xlsx_id}:sheet3",
+            document_id=xlsx_id,
+            status="QUEUED",
+            page_start=3,
+            page_end=3,
+        )
+    ]
+
+    pptx_resp = client.get(f"/api/documents/{pptx_id}/ingestion-segments")
+    xlsx_resp = client.get(f"/api/documents/{xlsx_id}/ingestion-segments")
+
+    assert pptx_resp.status_code == 200
+    assert xlsx_resp.status_code == 200
+    assert pptx_resp.json()["data"][0]["progress_unit"] == "slide"
+    assert pptx_resp.json()["data"][0]["progress_start"] == 2
+    assert xlsx_resp.json()["data"][0]["progress_unit"] == "sheet"
+    assert xlsx_resp.json()["data"][0]["progress_start"] == 3
 
 
 def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job(

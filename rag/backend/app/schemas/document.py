@@ -19,15 +19,16 @@ __all__ = [
 class FileStatus(StrEnum):
     """ファイル処理状態。
 
-    RAG はアップロード後に 2 段階で取込む。前段(INGESTING)で parse/抽出を行い、
-    人手のプレビュー確認待ち(REVIEW)で停止する。承認後に後段(INDEXING)で
-    チャンク→埋め込み→索引を行い、成功した文書を検索対象の INDEXED として扱う。
-    REVIEW / INDEXING は検索対象に含めず、INDEXED のみを検索可能とする。
+    RAG はアップロード後に段階ごとに取込む。EXTRACT は REVIEW、CHUNK は CHUNKED で
+    停止でき、INDEX だけが検索対象の INDEXED へ進める。
+    REVIEW / CHUNKED / 実行中状態は検索対象に含めず、INDEXED のみを検索可能とする。
     """
 
     UPLOADED = "UPLOADED"
     INGESTING = "INGESTING"
     REVIEW = "REVIEW"
+    CHUNKING = "CHUNKING"
+    CHUNKED = "CHUNKED"
     INDEXING = "INDEXING"
     INDEXED = "INDEXED"
     ERROR = "ERROR"
@@ -56,11 +57,13 @@ class IngestionJobStatus(StrEnum):
 class IngestionJobPhase(StrEnum):
     """取込 job の処理フェーズ。
 
-    EXTRACT は parse/抽出を行い REVIEW(プレビュー確認待ち)で停止する前段、
-    INDEX は承認後にチャンク→埋め込み→索引を行う後段。
+    EXTRACT は parse/抽出を行い REVIEW で停止する前段、
+    CHUNK は保存済み抽出から chunk を作成して CHUNKED で停止する中段、
+    INDEX は承認済み chunk から embedding→索引を行う後段。
     """
 
     EXTRACT = "EXTRACT"
+    CHUNK = "CHUNK"
     INDEX = "INDEX"
 
 
@@ -99,12 +102,23 @@ class DocumentSummary(BaseModel):
     source_profile: SourceProfile | None = None
 
 
+class DuplicateDocumentRef(BaseModel):
+    """重複判定で参照している既存ドキュメントの表示用摘要。"""
+
+    id: str
+    file_name: str
+    status: FileStatus
+    uploaded_at: datetime
+    indexed_at: datetime | None = None
+
+
 class DocumentDetail(DocumentSummary):
     """詳細表示用。VLM/LLM の抽出本文とメタデータを含む。"""
 
     object_storage_path: str | None = None
     extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
+    duplicate_source: DuplicateDocumentRef | None = None
 
 
 class DocumentIngestionConfigData(BaseModel):
@@ -263,6 +277,9 @@ class IngestionSegment(BaseModel):
     parser_profile: str = "enterprise_ai_generic"
     page_start: int | None = None
     page_end: int | None = None
+    progress_unit: str = "source"
+    progress_start: int | None = None
+    progress_end: int | None = None
     attempt_count: int = Field(default=0, ge=0)
     artifact_path: str | None = None
     error_code: str | None = None

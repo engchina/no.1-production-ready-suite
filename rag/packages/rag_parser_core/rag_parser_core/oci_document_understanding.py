@@ -335,7 +335,6 @@ class OciDocumentUnderstandingService:
             oci_config,
             self._config.oci_config_file,
             self._config.oci_config_profile,
-            region=self._config.oci_region.strip() or None,
         )
         self._document_client = ai_document.AIServiceDocumentClient(config)
         return self._document_client
@@ -345,11 +344,7 @@ class OciDocumentUnderstandingService:
             return self._object_storage_client
         oci_config = importlib.import_module("oci.config")
         object_storage = importlib.import_module("oci.object_storage")
-        region = (
-            self._config.object_storage_region.strip()
-            or self._config.oci_region.strip()
-            or None
-        )
+        region = self._config.object_storage_region.strip() or None
         config = load_oci_config_without_prompt(
             oci_config,
             self._config.oci_config_file,

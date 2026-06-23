@@ -33,6 +33,8 @@ export type FileStatus =
   | "UPLOADED"
   | "INGESTING"
   | "REVIEW"
+  | "CHUNKING"
+  | "CHUNKED"
   | "INDEXING"
   | "INDEXED"
   | "ERROR";
@@ -280,7 +282,7 @@ export interface SourceProfile {
   quality_warnings: string[];
 }
 
-export type IngestionJobPhase = "EXTRACT" | "INDEX";
+export type IngestionJobPhase = "EXTRACT" | "CHUNK" | "INDEX";
 
 export interface DocumentElementTextEdit {
   element_id: string;
@@ -329,6 +331,14 @@ export interface DocumentSummary {
   indexed_at: string | null;
   knowledge_bases: KnowledgeBaseRef[];
   source_profile: SourceProfile | null;
+}
+
+export interface DuplicateDocumentRef {
+  id: string;
+  file_name: string;
+  status: FileStatus;
+  uploaded_at: string;
+  indexed_at: string | null;
 }
 
 export interface DocumentElement {
@@ -403,6 +413,7 @@ export interface DocumentDetail extends DocumentSummary {
   object_storage_path: string | null;
   extraction: Record<string, unknown>;
   error_message: string | null;
+  duplicate_source: DuplicateDocumentRef | null;
 }
 
 export interface DocumentDeleteResult {
@@ -516,6 +527,9 @@ export interface IngestionSegment {
   parser_profile: string;
   page_start: number | null;
   page_end: number | null;
+  progress_unit: "page" | "slide" | "sheet" | "source" | string;
+  progress_start: number | null;
+  progress_end: number | null;
   attempt_count: number;
   artifact_path: string | null;
   error_code: string | null;
@@ -568,6 +582,8 @@ export interface KnowledgeBaseIngestionConfig {
   field_extraction_enabled: boolean | null;
   asset_summary_enabled: boolean | null;
   navigation_summary_enabled: boolean | null;
+  auto_chunk_after_extract_enabled: boolean | null;
+  auto_index_after_chunk_enabled: boolean | null;
 }
 
 /** 検索・回答設定。Business View の query 設定として使う。 */
@@ -1820,6 +1836,13 @@ function jsonBody(body: unknown): RequestInit {
   };
 }
 
+function ingestionJobSearch(force: boolean, phase: IngestionJobPhase): string {
+  const search = new URLSearchParams();
+  if (force) search.set("force", "true");
+  search.set("phase", phase);
+  return search.toString();
+}
+
 export const api = {
   // 認証
   getAuthStatus: () => request<AuthStatus>("/api/auth/me"),
@@ -1918,14 +1941,18 @@ export const api = {
       body: form,
     });
   },
-  ingestDocument: (id: string, force = false) =>
+  ingestDocument: (id: string, force = false, phase: IngestionJobPhase = "EXTRACT") =>
     request<IngestionJob>(
-      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs${force ? "?force=true" : ""}`,
+      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
       { method: "POST" }
     ),
-  enqueueDocumentIngestionJob: (id: string, force = false) =>
+  enqueueDocumentIngestionJob: (
+    id: string,
+    force = false,
+    phase: IngestionJobPhase = "EXTRACT"
+  ) =>
     request<IngestionJob>(
-      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs${force ? "?force=true" : ""}`,
+      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
       { method: "POST" }
     ),
   retryFailedDocumentIngestionSegments: (id: string) =>
@@ -1933,7 +1960,7 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}/ingestion-segments/retry`,
       { method: "POST" }
     ),
-  /** REVIEW(確認待ち)文書を承認し、後段 index を投入する。任意でテキスト修正を伴う。 */
+  /** 現在の確認段階を承認し、次の取込 stage を投入する。任意で抽出テキスト修正を伴う。 */
   approveDocument: (id: string, payload?: DocumentApproveRequest) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/approve`,

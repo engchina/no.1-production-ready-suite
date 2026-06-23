@@ -383,6 +383,36 @@ test("文書 workspace はこの文書の取込 job と時間線を表示する"
   await expectNoHorizontalOverflow(page);
 });
 
+test("PDF 抽出中はページ単位の進捗を表示する", async ({ page }) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "INGESTING",
+    latestJobStatus: "RUNNING",
+    pdfPreview: true,
+    progressScenario: "pdf17",
+  });
+
+  await page.goto("/documents/doc-1");
+
+  await expect(page.getByText("抽出: 9 / 17 ページ完了")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "抽出: 9 / 17 ページ完了" })).toBeVisible();
+  await expect(page.getByText("p.10-13")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("ページ数が取れない原本は原本全体の解析中として表示する", async ({ page }) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "INGESTING",
+    latestJobStatus: "RUNNING",
+    progressScenario: "source",
+  });
+
+  await page.goto("/documents/doc-1");
+
+  await expect(page.getByText("抽出: 原本全体を解析中")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "抽出: 原本全体を解析中" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 test("取込ジョブ投入後に workspace の本文 export と chunk を自動更新する", async ({ page }) => {
   await mockDocumentWorkspace(page, { autoRefreshAfterEnqueue: true });
 
@@ -398,6 +428,24 @@ test("取込ジョブ投入後に workspace の本文 export と chunk を自動
     timeout: 9_000,
   });
   await expect(page.getByText("<!-- page: 1 -->")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("重複文書は重複元を表示し、明示操作では force 取込する", async ({ page }) => {
+  const state = await mockDocumentWorkspace(page, {
+    chunksEmpty: true,
+    duplicate: true,
+    documentStatus: "UPLOADED",
+  });
+
+  await page.goto("/documents/doc-1");
+
+  await expect(
+    page.getByText(/同一内容の文書が既に登録されています。重複元: original\.pdf \/ 索引済み/)
+  ).toBeVisible();
+  await expect(page.getByText("内容が同じでも別文書として処理したい場合")).toBeVisible();
+  await page.getByRole("button", { name: "重複を無視して取込" }).click();
+  await expect.poll(() => state.enqueueRequest?.force).toBe("true");
   await expectNoHorizontalOverflow(page);
 });
 
@@ -432,13 +480,18 @@ async function mockDocumentWorkspace(
     latestJobStatus?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
     latestJobStartedAt?: string;
     autoRefreshAfterEnqueue?: boolean;
+    documentStatus?: string;
+    duplicate?: boolean;
+    progressScenario?: "pdf17" | "source";
   } = {}
 ) {
   const state: {
     retryRequest: { method: string; path: string } | null;
+    enqueueRequest: { method: string; path: string; force: string | null } | null;
     enqueued: boolean;
   } = {
     retryRequest: null,
+    enqueueRequest: null,
     enqueued: false,
   };
   await page.route("**/api/documents/doc-1", async (route) => {
@@ -448,9 +501,11 @@ async function mockDocumentWorkspace(
           imagePreview: options.imagePreview,
           pdfPreview: options.pdfPreview,
           status:
-            options.segmentError || (options.autoRefreshAfterEnqueue && !state.enqueued)
+            options.documentStatus ??
+            (options.segmentError || (options.autoRefreshAfterEnqueue && !state.enqueued)
               ? "ERROR"
-              : "INDEXED",
+              : "INDEXED"),
+          duplicate: options.duplicate,
         }),
         error_messages: [],
         warning_messages: [],
@@ -473,6 +528,12 @@ async function mockDocumentWorkspace(
   });
   await page.route("**/api/documents/doc-1/ingestion-jobs**", async (route) => {
     if (route.request().method() === "POST") {
+      const url = new URL(route.request().url());
+      state.enqueueRequest = {
+        method: route.request().method(),
+        path: url.pathname,
+        force: url.searchParams.get("force"),
+      };
       state.enqueued = true;
       await route.fulfill({
         json: {
@@ -661,6 +722,7 @@ async function mockDocumentWorkspace(
           ? [failedSegment]
           : ingestionSegments(options.segmentCount ?? 1, {
               mineru: options.mineruSegment,
+              progressScenario: options.progressScenario,
             }),
         error_messages: [],
         warning_messages: [],
@@ -670,7 +732,54 @@ async function mockDocumentWorkspace(
   return state;
 }
 
-function ingestionSegments(count: number, options: { mineru?: boolean } = {}) {
+function ingestionSegments(
+  count: number,
+  options: { mineru?: boolean; progressScenario?: "pdf17" | "source" } = {}
+) {
+  if (options.progressScenario === "source") {
+    return [
+      {
+        segment_id: "doc-1:source",
+        document_id: "doc-1",
+        status: "RUNNING",
+        parser_backend: "local_partition",
+        parser_profile: "local_text_structure",
+        page_start: null,
+        page_end: null,
+        progress_unit: "source",
+        progress_start: null,
+        progress_end: null,
+        attempt_count: 1,
+        artifact_path: null,
+        error_code: null,
+        error_message: null,
+      },
+    ];
+  }
+  if (options.progressScenario === "pdf17") {
+    const ranges: Array<[string, "SUCCEEDED" | "RUNNING" | "QUEUED", number, number]> = [
+      ["1-5", "SUCCEEDED", 1, 5],
+      ["6-9", "SUCCEEDED", 6, 9],
+      ["10-13", "RUNNING", 10, 13],
+      ["14-17", "QUEUED", 14, 17],
+    ];
+    return ranges.map(([range, status, start, end]) => ({
+      segment_id: `doc-1:p${range}`,
+      document_id: "doc-1",
+      status,
+      parser_backend: "enterprise_ai",
+      parser_profile: "enterprise_ai_pdf_layout",
+      page_start: start,
+      page_end: end,
+      progress_unit: "page",
+      progress_start: start,
+      progress_end: end,
+      attempt_count: status === "QUEUED" ? 0 : 1,
+      artifact_path: status === "SUCCEEDED" ? `local://doc-1/${range}` : null,
+      error_code: null,
+      error_message: null,
+    }));
+  }
   return Array.from({ length: count }, (_, index) => {
     const start = index * 10 + 1;
     const end = start + 9;
@@ -688,6 +797,9 @@ function ingestionSegments(count: number, options: { mineru?: boolean } = {}) {
           : "enterprise_ai_pdf_layout",
       page_start: start,
       page_end: end,
+      progress_unit: "page",
+      progress_start: start,
+      progress_end: end,
       attempt_count: status === "QUEUED" ? 0 : 1,
       artifact_path: status === "SUCCEEDED" ? `local://doc-1/${start}` : null,
       error_code: null,
@@ -793,7 +905,12 @@ function ingestionJob(
 }
 
 function documentDetail(
-  options: { imagePreview?: boolean; pdfPreview?: boolean; status?: string } = {}
+  options: {
+    duplicate?: boolean;
+    imagePreview?: boolean;
+    pdfPreview?: boolean;
+    status?: string;
+  } = {}
 ) {
   const fileName = options.pdfPreview
     ? "policy.pdf"
@@ -816,6 +933,7 @@ function documentDetail(
   const parserBackend =
     options.imagePreview || options.pdfPreview ? "enterprise_ai" : "local_partition";
 
+  const duplicateOfDocumentId = options.duplicate ? "doc-original" : null;
   return {
     id: "doc-1",
     file_name: fileName,
@@ -824,7 +942,7 @@ function documentDetail(
     content_type: contentType,
     file_size_bytes: 64,
     content_sha256: "a".repeat(64),
-    duplicate_of_document_id: null,
+    duplicate_of_document_id: duplicateOfDocumentId,
     uploaded_at: "2026-06-15T00:00:00Z",
     indexed_at: "2026-06-15T00:00:03Z",
     object_storage_path: `local://${fileName}`,
@@ -926,6 +1044,15 @@ function documentDetail(
       parser_artifacts: { parser_backend: "local_partition" },
     },
     error_message: null,
+    duplicate_source: options.duplicate
+      ? {
+          id: "doc-original",
+          file_name: "original.pdf",
+          status: "INDEXED",
+          uploaded_at: "2026-06-14T00:00:00Z",
+          indexed_at: "2026-06-14T00:02:00Z",
+        }
+      : null,
     knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
     source_profile: {
       original_file_name: fileName,
@@ -941,10 +1068,10 @@ function documentDetail(
       parser_version: "v1",
       preview_kind: previewKind,
       text_charset: options.imagePreview || options.pdfPreview ? null : "utf-8",
-      duplicate_of_document_id: null,
+      duplicate_of_document_id: duplicateOfDocumentId,
       unsupported_reason: null,
-      quality_status: "ready",
-      quality_warnings: [],
+      quality_status: options.duplicate ? "warning" : "ready",
+      quality_warnings: options.duplicate ? ["duplicate_content"] : [],
     },
   };
 }

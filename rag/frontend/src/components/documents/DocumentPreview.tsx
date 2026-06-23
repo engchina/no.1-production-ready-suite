@@ -218,14 +218,6 @@ function PreviewFrame({
           focusPage={focusPage}
           focusPageSize={focusPageSize}
         />
-      ) : focusBbox ? (
-        <p
-          role="status"
-          aria-live="polite"
-          className="tnum rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-xs text-warning"
-        >
-          {t("preview.bboxUnavailable", { page: focusPage ?? "—" })}
-        </p>
       ) : null}
       {showPreviewOverlay && overlayRect ? (
         <BboxPreviewOverlay

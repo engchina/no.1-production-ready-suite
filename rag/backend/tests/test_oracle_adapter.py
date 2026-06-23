@@ -536,7 +536,7 @@ async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
     document_statuses = {call.parameters.get("status") for call in document_updates}
     assert "UPLOADED" in document_statuses  # 再キューした EXTRACT job の文書
     assert "ERROR" in document_statuses  # 試行上限超過 job の文書
-    assert any("DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls)
+    assert not any("DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls)
 
 
 async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
@@ -560,11 +560,8 @@ async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
         and "NOT EXISTS" in call.statement
         and call.statement.strip().startswith("SELECT")
     )
-    assert "d.status IN ('INGESTING', 'INDEXING')" in orphan_select.statement
-    chunk_delete = next(
-        call for call in pool.connection.calls if "DELETE FROM rag_chunks" in call.statement
-    )
-    assert chunk_delete.parameters["document_id"] == "doc-stuck"
+    assert "d.status IN ('INGESTING', 'CHUNKING', 'INDEXING')" in orphan_select.statement
+    assert not any("DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls)
     document_update = next(
         call
         for call in pool.connection.calls
@@ -572,7 +569,7 @@ async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
         and call.parameters.get("document_id") == "doc-stuck"
     )
     assert document_update.parameters["status"] == "ERROR"
-    assert "status IN ('INGESTING', 'INDEXING')" in document_update.statement
+    assert "status IN ('INGESTING', 'CHUNKING', 'INDEXING')" in document_update.statement
     assert pool.connection.commits == 1
 
 
@@ -943,6 +940,52 @@ async def test_oracle_graph_global_search_returns_community_summary_chunk() -> N
     assert "FROM rag_graph_community_summaries g" in call.statement
     assert call.parameters["top_k"] == 3
     assert call.parameters["graph_title_exact"] == "%全体の関係%"
+
+
+async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitted() -> None:
+    """後段 status 更新では大きい抽出 JSON を再 bind せず、既存 payload を保持する。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.upsert_document_extraction_artifact(
+        document_id="doc-1",
+        extraction_recipe_id="ex-1",
+        source_sha256="a" * 64,
+        recipe_subset={"rag_parser_adapter_backend": "mineru"},
+        extraction=None,
+        status="materialized",
+    )
+
+    call = pool.connection.calls[0]
+    matched_update = call.statement.split("WHEN MATCHED THEN UPDATE SET", 1)[1].split(
+        "WHEN NOT MATCHED",
+        1,
+    )[0]
+    assert "COALESCE(:extraction_json, t.extraction_json)" not in call.statement
+    assert "t.extraction_json" not in matched_update
+    assert call.parameters["extraction_json"] is None
+
+
+async def test_upsert_extraction_artifact_updates_payload_when_provided() -> None:
+    """抽出 payload を渡す経路では JSON 列を明示更新する。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.upsert_document_extraction_artifact(
+        document_id="doc-1",
+        extraction_recipe_id="ex-1",
+        source_sha256="a" * 64,
+        extraction={"elements": [{"text": "本文"}]},
+        status="materialized",
+    )
+
+    call = pool.connection.calls[0]
+    matched_update = call.statement.split("WHEN MATCHED THEN UPDATE SET", 1)[1].split(
+        "WHEN NOT MATCHED",
+        1,
+    )[0]
+    assert "t.extraction_json = :extraction_json" in matched_update
+    assert call.parameters["extraction_json"] == '{"elements":[{"text":"本文"}]}'
 
 
 async def test_oracle_replace_document_graph_index_replaces_document_scope() -> None:
@@ -1648,9 +1691,10 @@ async def test_oci_context_dependency_chunks_falls_back_without_anchor_lineage()
     assert "dependency_token_0" not in call.parameters
 
 
-async def test_oci_update_error_status_clears_chunks_and_extraction() -> None:
-    """ERROR への状態遷移では Oracle 側でも古い chunk と抽出 JSON を外す。"""
-    errored = _oracle_document_row(status="ERROR", extraction=None)
+async def test_oci_update_error_status_preserves_chunks_and_extraction() -> None:
+    """ERROR への状態遷移では段階レビュー用の chunk と抽出 JSON を保持する。"""
+    extraction = {"document_type": "text", "raw_text": "抽出済み"}
+    errored = _oracle_document_row(status="ERROR", extraction=extraction)
     pool = FakeOraclePool(execute_results=[[_oracle_document_row()], [errored]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
@@ -1661,10 +1705,10 @@ async def test_oci_update_error_status_clears_chunks_and_extraction() -> None:
     )
 
     assert detail.status == FileStatus.ERROR
-    assert detail.extraction == {}
+    assert detail.extraction == extraction
     statements = [call.statement for call in pool.connection.calls]
-    assert any("DELETE FROM rag_chunks" in statement for statement in statements)
-    assert any("extraction = NULL" in statement for statement in statements)
+    assert not any("DELETE FROM rag_chunks" in statement for statement in statements)
+    assert not any("extraction = NULL" in statement for statement in statements)
     assert pool.connection.commits == 1
 
 
@@ -1915,10 +1959,8 @@ def test_oracle_document_schema_includes_ingestion_metadata_columns() -> None:
     assert "duplicate_of_document_id VARCHAR2(64)" in ddl
     assert "rag_documents_content_sha256_idx" in ddl
     assert "rag_documents_tenant_status_uploaded_idx" in ddl
-    assert (
-        "CHECK (status IN ('UPLOADED', 'INGESTING', 'REVIEW', "
-        "'INDEXING', 'INDEXED', 'ERROR'))" in ddl
-    )
+    assert "'UPLOADED', 'INGESTING', 'REVIEW', 'CHUNKING', 'CHUNKED'," in ddl
+    assert "'INDEXING', 'INDEXED', 'ERROR'" in ddl
 
 
 def test_oracle_knowledge_base_schema_includes_membership_tables() -> None:
@@ -1949,7 +1991,7 @@ def test_oracle_ingestion_job_schema_includes_queue_table() -> None:
         "CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED'))"
         in ddl
     )
-    assert "CHECK (phase IN ('EXTRACT', 'INDEX'))" in ddl
+    assert "CHECK (phase IN ('EXTRACT', 'CHUNK', 'INDEX'))" in ddl
     assert "CHECK (attempt_count >= 0 AND max_attempts >= 1)" in ddl
     assert "REFERENCES rag_documents (document_id)" in ddl
     assert "ON rag_ingestion_jobs (tenant_id_hash, status, queued_at DESC)" in ddl
@@ -1972,6 +2014,8 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     ddl = oracle_vector_schema_sql()
 
     assert "tenant_id_hash  CHAR(64)" in ddl
+    assert "embedding       VECTOR(1536, FLOAT32)," in ddl
+    assert "embedding       VECTOR(1536, FLOAT32) NOT NULL" not in ddl
     assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in ddl
     assert "ORGANIZATION INMEMORY NEIGHBOR GRAPH" in ddl
     assert "DISTANCE COSINE" in ddl

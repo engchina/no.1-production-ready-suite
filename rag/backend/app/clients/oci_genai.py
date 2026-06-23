@@ -39,6 +39,12 @@ class GenerativeAiInferenceClientProtocol(Protocol):
         """OCI Generative AI rerank_text を呼び出す。"""
 
 
+class OciGenAiConfigError(ValueError):
+    """利用者が OCI 認証設定を直せる Generative AI 設定エラー。"""
+
+    safe_for_user = True
+
+
 class OciGenAiClient:
     """OCI Generative AI による埋め込み / リランククライアント。"""
 
@@ -229,9 +235,13 @@ class OciGenAiClient:
             oci_config,
             self._settings.oci_config_file,
             self._settings.oci_config_profile,
-            region=self._settings.oci_region.strip() or None,
         )
-        self._inference_client = genai.GenerativeAiInferenceClient(config)
+        try:
+            self._inference_client = genai.GenerativeAiInferenceClient(config)
+        except Exception as exc:
+            if type(exc).__name__ == "InvalidConfig":
+                raise OciGenAiConfigError(_oci_invalid_config_message(exc)) from exc
+            raise
         return self._inference_client
 
     def _embedding_cache_disabled(self) -> bool:
@@ -327,6 +337,17 @@ def _cache_key(payload: dict[str, object]) -> str:
 
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _oci_invalid_config_message(error: Exception) -> str:
+    text = str(error).lower()
+    if "fingerprint" in text:
+        return (
+            "OCI 認証設定の fingerprint が不正です。"
+            "システム設定 > OCI 認証で API key fingerprint を"
+            "16 進数のコロン区切り形式に修正してください。"
+        )
+    return "OCI 認証設定が不正です。システム設定 > OCI 認証で設定を確認してください。"
 
 
 def _require_cached_vector(vector: list[float] | None, index: int) -> list[float]:

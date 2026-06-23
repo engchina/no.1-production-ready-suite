@@ -1499,7 +1499,7 @@ def test_get_oci_settings_returns_runtime_and_config_values(
         "user": "ocid1.user.oc1..runtime",
         "fingerprint": "12:34:56:78",
         "tenancy": "ocid1.tenancy.oc1..runtime",
-        "region": "us-chicago-1",
+        "region": "ap-tokyo-1",
         "key_file": "~/.oci/oci_api_key.pem",
         "key_file_exists": True,
         "config_file_exists": True,
@@ -1523,7 +1523,7 @@ def test_get_oci_settings_reports_missing_private_key_without_failing(
     assert body["user"] == ""
     assert body["fingerprint"] == ""
     assert body["tenancy"] == ""
-    assert body["region"] == "ap-osaka-1"
+    assert body["region"] == ""
     assert body["key_file"] == "~/.oci/oci_api_key.pem"
     assert body["key_file_exists"] is False
     assert body["config_file_exists"] is False
@@ -1585,7 +1585,7 @@ def test_update_oci_settings_creates_config_dir_and_file_with_private_permission
     assert "OCI_REGION=ap-osaka-1" in persisted
 
 
-def test_update_oci_settings_allows_incomplete_profile(
+def test_update_oci_settings_does_not_write_empty_config_defaults(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1608,12 +1608,13 @@ def test_update_oci_settings_allows_incomplete_profile(
 
     assert resp.status_code == 200
     content = (tmp_path / ".oci" / "config").read_text(encoding="utf-8")
-    assert "user=" in content
-    assert "fingerprint=" in content
-    assert "tenancy=" in content
-    assert "region=" in content
+    assert "user=" not in content
+    assert "fingerprint=" not in content
+    assert "tenancy=" not in content
+    assert "region=" not in content
+    assert "key_file=" not in content
     assert settings.oci_region == ""
-    assert "OCI_REGION=" in env_file.read_text(encoding="utf-8")
+    assert "OCI_REGION" not in env_file.read_text(encoding="utf-8")
 
 
 def test_update_oci_settings_preserves_existing_non_default_profile(

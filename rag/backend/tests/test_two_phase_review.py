@@ -1,4 +1,4 @@
-"""2 段階ファイル処理(parse → 人がプレビュー確認 → index)の API テスト。"""
+"""段階レビュー可能なファイル処理(EXTRACT → CHUNK → INDEX)の API テスト。"""
 
 import asyncio
 from typing import Any, cast
@@ -27,7 +27,7 @@ def setup_function() -> None:
 
 
 def _enable_review_gate(monkeypatch: MonkeyPatch) -> None:
-    """REVIEW ゲート(2 段階処理)を有効化する。"""
+    """段階レビューゲートを有効化する。"""
     monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", True)
 
 
@@ -55,6 +55,37 @@ def _extract_to_review(document_id: str) -> None:
     job = _enqueue_extract(document_id)
     assert job["phase"] == "EXTRACT"
     _run_job(cast(str, job["id"]))
+
+
+def _approve_to_chunked(document_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """抽出レビューを承認し、CHUNK フェーズだけ実行して CHUNKED で停止させる。"""
+    kwargs: dict[str, Any] = {}
+    if payload is not None:
+        kwargs["json"] = payload
+    approve_resp = client.post(f"/api/documents/{document_id}/approve", **kwargs)
+    assert approve_resp.status_code == 200
+    chunk_job = cast(dict[str, Any], approve_resp.json()["data"])
+    assert chunk_job["phase"] == "CHUNK"
+    _run_job(cast(str, chunk_job["id"]))
+    assert _get_document(document_id)["status"] == "CHUNKED"
+    return chunk_job
+
+
+def _approve_chunks_to_indexed(document_id: str) -> dict[str, Any]:
+    """chunk レビューを承認し、INDEX フェーズを実行して INDEXED にする。"""
+    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    assert approve_resp.status_code == 200
+    index_job = cast(dict[str, Any], approve_resp.json()["data"])
+    assert index_job["phase"] == "INDEX"
+    _run_job(cast(str, index_job["id"]))
+    assert _get_document(document_id)["status"] == "INDEXED"
+    return index_job
+
+
+def _approve_all(document_id: str, payload: dict[str, Any] | None = None) -> None:
+    """REVIEW から CHUNKED を経て INDEXED まで進める。"""
+    _approve_to_chunked(document_id, payload=payload)
+    _approve_chunks_to_indexed(document_id)
 
 
 def _get_document(document_id: str) -> dict[str, Any]:
@@ -92,25 +123,30 @@ def test_review_gate_stops_at_review_and_excludes_from_search(monkeypatch: Monke
     assert all(citation["document_id"] != document_id for citation in search["citations"])
 
 
-def test_approve_indexes_and_makes_searchable(monkeypatch: MonkeyPatch) -> None:
-    """承認すると INDEX フェーズが走り、INDEXED・検索可能になる。"""
+def test_approve_chunks_then_second_approve_indexes_and_makes_searchable(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """REVIEW 承認では CHUNKED で止まり、chunk 承認後に INDEXED・検索可能になる。"""
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
     _extract_to_review(document_id)
 
     approve_resp = client.post(f"/api/documents/{document_id}/approve")
     assert approve_resp.status_code == 200
-    index_job = approve_resp.json()["data"]
-    assert index_job["phase"] == "INDEX"
-    assert index_job["status"] == "QUEUED"
+    chunk_job = approve_resp.json()["data"]
+    assert chunk_job["phase"] == "CHUNK"
+    assert chunk_job["status"] == "QUEUED"
 
-    _run_job(cast(str, index_job["id"]))
+    _run_job(cast(str, chunk_job["id"]))
 
     detail = _get_document(document_id)
-    assert detail["status"] == "INDEXED"
+    assert detail["status"] == "CHUNKED"
     chunks_resp = client.get(f"/api/documents/{document_id}/chunks")
     assert chunks_resp.json()["data"]
+    search = _search("経費申請の承認者は？")
+    assert all(citation["document_id"] != document_id for citation in search["citations"])
 
+    _approve_chunks_to_indexed(document_id)
     search = _search("経費申請の承認者は？")
     assert any(citation["document_id"] == document_id for citation in search["citations"])
 
@@ -121,9 +157,7 @@ def test_approve_records_chunk_set_and_kb_binding(monkeypatch: MonkeyPatch) -> N
     document_id = _upload_sample()
     _extract_to_review(document_id)
 
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
-    assert approve_resp.status_code == 200
-    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+    _approve_all(document_id)
     assert _get_document(document_id)["status"] == "INDEXED"
 
     oracle = OracleClient()
@@ -152,9 +186,11 @@ def test_publish_binding_failure_marks_document_error(monkeypatch: MonkeyPatch) 
 
     monkeypatch.setattr(OracleClient, "upsert_chunk_set_binding", _fail_binding)
 
+    _approve_to_chunked(document_id)
     approve_resp = client.post(f"/api/documents/{document_id}/approve")
     assert approve_resp.status_code == 200
     index_job = approve_resp.json()["data"]
+    assert index_job["phase"] == "INDEX"
     _run_job(cast(str, index_job["id"]))
 
     job_resp = client.get(f"/api/documents/ingestion-jobs/{index_job['id']}")
@@ -175,9 +211,7 @@ def test_kb_scoped_search_finds_serving_chunk_set(monkeypatch: MonkeyPatch) -> N
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
     _extract_to_review(document_id)
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
-    assert approve_resp.status_code == 200
-    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+    _approve_all(document_id)
 
     detail = _get_document(document_id)
     assert detail["status"] == "INDEXED"
@@ -206,9 +240,7 @@ def test_plan_yields_the_single_materialized_chunk_set(monkeypatch: MonkeyPatch)
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
     _extract_to_review(document_id)
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
-    assert approve_resp.status_code == 200
-    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+    _approve_all(document_id)
 
     detail = _get_document(document_id)
     assert detail["status"] == "INDEXED"
@@ -247,9 +279,7 @@ def test_multiple_kb_configs_materialize_separate_chunk_sets(monkeypatch: Monkey
     )
     assert assign_resp.status_code == 200
 
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
-    assert approve_resp.status_code == 200
-    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+    _approve_all(document_id)
     assert _get_document(document_id)["status"] == "INDEXED"
 
     oracle = OracleClient()
@@ -336,9 +366,7 @@ def test_double_approve_after_index_conflicts(monkeypatch: MonkeyPatch) -> None:
     document_id = _upload_sample()
     _extract_to_review(document_id)
 
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
-    assert approve_resp.status_code == 200
-    _run_job(cast(str, approve_resp.json()["data"]["id"]))
+    _approve_all(document_id)
     assert _get_document(document_id)["status"] == "INDEXED"
 
     second = client.post(f"/api/documents/{document_id}/approve")
@@ -356,14 +384,12 @@ def test_approve_with_text_edits_indexes_edited_content(monkeypatch: MonkeyPatch
     target = next(el for el in elements if el.get("element_id"))
     edited_text = "編集後マーカー ZZZ 経費の最終承認は役員会です。"
 
-    approve_resp = client.post(
-        f"/api/documents/{document_id}/approve",
-        json={
+    _approve_all(
+        document_id,
+        payload={
             "element_edits": [{"element_id": target["element_id"], "text": edited_text}],
         },
     )
-    assert approve_resp.status_code == 200
-    _run_job(cast(str, approve_resp.json()["data"]["id"]))
 
     indexed = _get_document(document_id)
     assert indexed["status"] == "INDEXED"

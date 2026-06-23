@@ -161,15 +161,19 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260618_001_documents_review_status" in sql
     assert "rag_documents_status_ck" in sql
     assert "''REVIEW''" in sql
+    assert "''CHUNKING''" in sql
+    assert "''CHUNKED''" in sql
     assert "''INDEXING''" in sql
     assert "-- migration: 20260618_002_ingestion_jobs_phase" in sql
     assert "rag_ingestion_jobs_phase_ck" in sql
-    assert "(phase IN (''EXTRACT'', ''INDEX''))" in sql
+    assert "ALTER TABLE rag_ingestion_jobs DROP CONSTRAINT" in sql
+    assert "(phase IN (''EXTRACT'', ''CHUNK'', ''INDEX''))" in sql
     assert "-- migration: 20260619_001_business_views" in sql
     assert "table_name = 'RAG_BUSINESS_VIEWS'" in sql
     assert "rag_business_views_status_ck" in sql
     assert "-- migration: 20260621_001_chunk_sets" in sql
     assert "CREATE TABLE rag_chunk_sets" in sql
+    assert "(status IN (''INGESTING'', ''CHUNKED'', ''INDEXED'', ''ERROR''))" in sql
     assert "RAG_DOCUMENT_EXTRACTIONS" in sql
     assert "RAG_ARTIFACT_LAYERS" in sql
     assert "CREATE TABLE rag_kb_chunk_set_bindings" in sql
@@ -179,7 +183,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260621_002_document_extractions" in sql
     assert "CREATE TABLE rag_document_extractions" in sql
     assert "ALTER TABLE rag_chunk_sets ADD (extraction_id VARCHAR2(64))" in sql
-    assert len(statements) == 17
+    assert "-- migration: 20260623_001_nullable_chunk_embeddings" in sql
+    assert "ALTER TABLE rag_chunks MODIFY (embedding NULL)" in sql
+    assert len(statements) == 18
     assert all(statement.startswith(("-- migration:", "DECLARE")) for statement in statements)
 
 
@@ -192,7 +198,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260621_002"
+    assert manifest["migration_artifact_version"] == "20260623_001"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -211,6 +217,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260619_001_business_views",
         "20260621_001_chunk_sets",
         "20260621_002_document_extractions",
+        "20260623_001_nullable_chunk_embeddings",
     ]
 
 
