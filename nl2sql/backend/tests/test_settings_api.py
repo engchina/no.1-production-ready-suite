@@ -569,7 +569,7 @@ def test_model_settings_test_enterprise_vision_uses_smoke_image_payload(
 def test_adb_start_uses_oci_database_client(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "oracle_adb_ocid", "ocid1.autonomousdatabase.oc1..example")
-    monkeypatch.setattr(settings, "oci_region", "ap-osaka-1")
+    monkeypatch.setattr(settings, "oracle_adb_region", "ap-osaka-1")
     calls: list[tuple[str, str]] = []
 
     class FakeDatabaseClient:
@@ -603,6 +603,50 @@ def test_adb_start_uses_oci_database_client(monkeypatch: MonkeyPatch) -> None:
         ("get", "ocid1.autonomousdatabase.oc1..example"),
         ("start", "ocid1.autonomousdatabase.oc1..example"),
     ]
+
+
+def test_update_adb_settings_persists_dedicated_region(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(settings, "oracle_adb_ocid", "")
+    monkeypatch.setattr(settings, "oracle_adb_region", "")
+    calls: list[str] = []
+
+    class FakeDatabaseClient:
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            calls.append(adb_ocid)
+            return AutonomousDatabaseInfo(
+                id=adb_ocid,
+                display_name="NL2SQLADB",
+                lifecycle_state="STOPPED",
+                db_name="NL2SQL",
+                cpu_core_count=1,
+                data_storage_size_in_tbs=1,
+            )
+
+    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+
+    resp = client.post(
+        "/api/settings/database/adb/settings",
+        json={"adb_ocid": "ocid1.autonomousdatabase.oc1..saved", "region": "ap-tokyo-1"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["region"] == "ap-tokyo-1"
+    assert settings.oracle_adb_ocid == "ocid1.autonomousdatabase.oc1..saved"
+    assert settings.oracle_adb_region == "ap-tokyo-1"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..saved" in env_text
+    assert "ORACLE_ADB_REGION=ap-tokyo-1" in env_text
+    assert "OCI_REGION=ap-tokyo-1" not in env_text
+    assert calls == ["ocid1.autonomousdatabase.oc1..saved"]
 
 
 def test_oracle_adapter_wallet_only_connection_uses_wallet_kwargs(

@@ -921,7 +921,7 @@ def _database_settings_data(
         embedding_dimension=settings.oci_genai_embedding_dim,
         vector_column=f"VECTOR({settings.oci_genai_embedding_dim}, FLOAT32)",
         adb_ocid=getattr(settings, "oracle_adb_ocid", ""),
-        region=getattr(settings, "oci_region", ""),
+        region=settings.resolved_oracle_adb_region,
         config_source="runtime",
     )
 
@@ -1003,21 +1003,21 @@ def _adb_info(
     message: str | None = None,
 ) -> AdbInfoData:
     adb_ocid = getattr(settings, "oracle_adb_ocid", "").strip()
+    region = settings.resolved_oracle_adb_region
     resolved_status: AdbOperationStatus = status or ("success" if adb_ocid else "not_configured")
     return AdbInfoData(
         status=resolved_status,
         message=message
         or ("ADB OCID が設定されています。" if adb_ocid else "ADB OCID が設定されていません。"),
         id=adb_ocid or None,
-        region=getattr(settings, "oci_region", "") or None,
+        region=region or None,
     )
 
 
 def _apply_adb_settings(settings: Settings, payload: AdbSettingsUpdate) -> None:
     """ADB 操作対象 OCID と region を現在プロセスへ反映する。"""
     settings.oracle_adb_ocid = payload.adb_ocid.strip()
-    if payload.region.strip():
-        settings.oci_region = payload.region.strip()
+    settings.oracle_adb_region = payload.region.strip()
 
 
 def _adb_info_data(
@@ -1044,7 +1044,7 @@ def _adb_info_data(
 
 async def _load_adb_info(settings: Settings) -> AdbInfoData:
     """ADB の情報を取得する。設定不足や OCI エラーは status へ載せて返す。"""
-    region = settings.oci_region.strip() or None
+    region = settings.resolved_oracle_adb_region or None
     adb_ocid = settings.oracle_adb_ocid.strip()
     if not adb_ocid:
         return _adb_info(settings, status="not_configured")
@@ -1067,7 +1067,7 @@ async def _load_adb_info(settings: Settings) -> AdbInfoData:
 
 async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) -> AdbInfoData:
     """ADB の起動/停止を OCI Database API 経由で行う。"""
-    region = settings.oci_region.strip() or None
+    region = settings.resolved_oracle_adb_region or None
     adb_ocid = settings.oracle_adb_ocid.strip()
     if not adb_ocid:
         return _adb_info(settings, status="not_configured")
@@ -1138,7 +1138,7 @@ def _persist_adb_settings(settings: Settings) -> None:
         BACKEND_ENV_FILE,
         {
             "ORACLE_ADB_OCID": settings.oracle_adb_ocid,
-            "OCI_REGION": settings.oci_region,
+            "ORACLE_ADB_REGION": settings.oracle_adb_region,
         },
         section_comment="# Oracle Autonomous Database 管理",
         error_detail="ADB 設定を backend/.env へ保存できませんでした。",

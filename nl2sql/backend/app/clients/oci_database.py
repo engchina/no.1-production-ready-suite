@@ -78,7 +78,7 @@ class OciDatabaseClient:
             oci_config,
             self._settings.oci_config_file,
             self._settings.oci_config_profile,
-            region=self._settings.oci_region.strip() or None,
+            region=self._settings.resolved_oracle_adb_region or None,
         )
         self._database_client = database.DatabaseClient(config)
         return self._database_client

@@ -68,6 +68,7 @@ class Settings(BaseServiceSettings):
     oracle_wallet_dir: str = ""
     oracle_wallet_password: str = ""
     oracle_adb_ocid: str = ""
+    oracle_adb_region: str = ""
     oci_region: str = ""
     oci_compartment_id: str = ""
     oci_config_file: str = "~/.oci/config"
@@ -144,6 +145,11 @@ class Settings(BaseServiceSettings):
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
         return self.oracle_wallet_dir.strip()
+
+    @property
+    def resolved_oracle_adb_region(self) -> str:
+        """ADB 管理専用 region。未設定なら OCI_REGION へ fallback する。"""
+        return self.oracle_adb_region.strip() or self.oci_region.strip()
 
     @field_validator("model_settings_file")
     @classmethod
