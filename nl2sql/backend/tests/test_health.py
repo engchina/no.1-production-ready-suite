@@ -22,6 +22,10 @@ from app.features.nl2sql.models import (
     Nl2SqlEngine,
     Nl2SqlProfile,
     PreviewRequest,
+    SampleDataMutationRequest,
+    SampleDataStep,
+    SchemaCatalog,
+    SchemaTable,
     SimilarHistoryRequest,
     SyntheticCase,
 )
@@ -210,13 +214,53 @@ class _QuestionCaptureOracleAdapter(_FakeRuntimeOracleAdapter):
         return "SELECT TOTAL_AMOUNT FROM INVOICES", "conversation-001"
 
 
-class _OracleRuntimeNl2SqlService(Nl2SqlService):
-    def __init__(self, adapter: OracleNl2SqlAdapter) -> None:
-        super().__init__(store=MemoryNl2SqlStore())
-        self._oracle_adapter = adapter
+class _SampleAdminOracleAdapter(_FakeRuntimeOracleAdapter):
+    def __init__(self, db: _FakeOracleDb, *, missing_objects: bool = False) -> None:
+        super().__init__(db)
+        self.missing_objects = missing_objects
+        self.admin_statements: list[str] = []
 
-    def _use_oracle_runtime(self) -> bool:
-        return True
+    def execute_admin_statements(self, statements: list[str]) -> list[dict[str, Any]]:
+        self.admin_statements.extend(statements)
+        results: list[dict[str, Any]] = []
+        for index, statement in enumerate(statements, start=1):
+            statement_type = statement.split(None, 1)[0].upper()
+            if self.missing_objects:
+                results.append(
+                    {
+                        "index": index,
+                        "statement_type": statement_type,
+                        "status": "error",
+                        "sql": statement,
+                        "error_message": "ORA-00942: table or view does not exist",
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "index": index,
+                        "statement_type": statement_type,
+                        "status": "success",
+                        "sql": statement,
+                        "message": "ok",
+                    }
+                )
+        return results
+
+    def fetch_catalog(self) -> SchemaCatalog:
+        return SchemaCatalog(
+            refreshed_at="2026-06-23T00:00:00+00:00",
+            tables=[
+                SchemaTable(table_name=name, logical_name=name)
+                for name in [
+                    "DEPARTMENT",
+                    "EMPLOYEE",
+                    "PROJECT",
+                    "V_EMP_DEPT",
+                    "V_DEPT_PROJECT",
+                ]
+            ],
+        )
 
 
 class _FakeEmbeddingClient:
@@ -228,6 +272,16 @@ class _FakeEmbeddingClient:
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         return [[0.01 for _ in range(1536)] for _text in texts]
+
+
+class _OracleRuntimeNl2SqlService(Nl2SqlService):
+    def __init__(self, adapter: OracleNl2SqlAdapter) -> None:
+        super().__init__(store=MemoryNl2SqlStore())
+        self._oracle_adapter = adapter
+        self._embedding_client = _FakeEmbeddingClient()
+
+    def _use_oracle_runtime(self) -> bool:
+        return True
 
 
 class _FakeEnterpriseAiClient:
@@ -246,6 +300,25 @@ class _FakeEnterpriseAiClient:
         return self.text
 
 
+def _import_sample(service: Nl2SqlService) -> None:
+    service.import_sample_data(
+        SampleDataMutationRequest(
+            step=SampleDataStep.ALL,
+            execute=True,
+            confirmation="SQL_ASSIST_SAMPLE",
+        )
+    )
+
+
+async def _api_import_sample(client: httpx.AsyncClient) -> None:
+    resp = await client.post(
+        "/api/nl2sql/sample-data/import",
+        json={"step": "all", "execute": True, "confirmation": "SQL_ASSIST_SAMPLE"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["executed"] is True
+
+
 async def test_health() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         resp = await client.get("/api/health")
@@ -260,48 +333,115 @@ async def test_ready() -> None:
     assert resp.json()["data"]["status"] == "ok"
 
 
-async def test_nl2sql_preview_returns_safe_select() -> None:
+async def test_nl2sql_starts_with_empty_business_catalog_and_profile() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         resp = await client.post("/api/nl2sql/preview", json={"question": "売上トップ10は?"})
-    assert resp.status_code == 200
+        catalog_resp = await client.get("/api/schema/catalog")
+        profiles_resp = await client.get("/api/nl2sql/profiles")
+
+    assert resp.status_code == 400
+    assert "Schema catalog が空です" in " ".join(resp.json()["error_messages"])
+    assert catalog_resp.status_code == 200
+    assert catalog_resp.json()["data"]["tables"] == []
+    default_profile = next(
+        profile for profile in profiles_resp.json()["data"] if profile["id"] == "default"
+    )
+    assert default_profile["allowed_tables"] == []
+    assert default_profile["glossary"] == {}
+    assert default_profile["few_shot_examples"] == []
+
+
+async def test_sample_import_enables_preview_and_delete() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        info_resp = await client.get("/api/nl2sql/sample-data")
+        assert info_resp.status_code == 200
+        assert info_resp.json()["data"]["imported_objects"] == []
+
+        dry_run_resp = await client.post(
+            "/api/nl2sql/sample-data/import",
+            json={"step": "tables", "execute": False},
+        )
+        assert dry_run_resp.status_code == 200
+        dry_run_data = dry_run_resp.json()["data"]
+        assert dry_run_data["executed"] is False
+        assert dry_run_data["statements"]
+        assert {item["status"] for item in dry_run_data["statements"]} == {"dry_run"}
+
+        await _api_import_sample(client)
+        catalog_resp = await client.get("/api/schema/catalog")
+        assert catalog_resp.status_code == 200
+        table_names = {table["table_name"] for table in catalog_resp.json()["data"]["tables"]}
+        assert {"DEPARTMENT", "EMPLOYEE", "PROJECT", "V_EMP_DEPT", "V_DEPT_PROJECT"} <= table_names
+
+        resp = await client.post(
+            "/api/nl2sql/preview",
+            json={"question": "社員一覧を見たい", "profile_id": "sql_assist_sample"},
+        )
+        assert resp.status_code == 200
+        delete_resp = await client.post(
+            "/api/nl2sql/sample-data/delete",
+            json={"execute": True, "confirmation": "SQL_ASSIST_SAMPLE"},
+        )
+
     data = resp.json()["data"]
     assert data["is_safe"] is True
     assert data["sql"].lower().startswith("select")
     assert data["engine"] == "select_ai_agent"
     assert data["timing"]["elapsed_ms"] >= 0
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["data"]["executed"] is True
 
 
 def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
     fake_client = _FakeEnterpriseAiClient(
-        '{"sql":"SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",'
-        '"explanation":"請求金額を取得します。"}'
+        '{"sql":"SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT",'
+        '"explanation":"社員と部署を取得します。"}'
     )
     service._enterprise_ai_client = fake_client
 
     preview = service.preview(
-        PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
+        PreviewRequest(
+            question="社員と部署を確認したい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            profile_id="sql_assist_sample",
+        )
     )
 
     assert preview.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
-    assert preview.sql == "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
+    assert preview.sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
     assert preview.engine_meta["runtime"] == "oci_enterprise_ai"
     assert preview.engine_meta["model"] == "enterprise-nl2sql-model"
     assert preview.executable_sql.endswith("FETCH FIRST 100 ROWS ONLY")
     assert fake_client.calls
-    assert "INVOICES" in fake_client.calls[0]["context"]
-    assert "learning_examples:" in fake_client.calls[0]["context"]
-    assert "今月の請求金額が大きい取引先を見たい" in fake_client.calls[0]["context"]
-    assert "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES" in fake_client.calls[0]["context"]
+    assert "EMPLOYEE" in fake_client.calls[0]["context"]
+    assert "V_EMP_DEPT" in fake_client.calls[0]["context"]
     assert "SELECT または WITH" in fake_client.calls[0]["system_prompt"]
 
 
 def test_oracle_runtime_question_includes_learning_examples() -> None:
     adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
     service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="oracle_fixture_profile",
+            name="Oracle fixture",
+            few_shot_examples=[
+                {
+                    "question": "請求金額を一覧したい",
+                    "sql": "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
+                }
+            ],
+        )
+    )
 
     preview = service.preview(
-        PreviewRequest(question="請求金額を確認したい", engine=Nl2SqlEngine.SELECT_AI)
+        PreviewRequest(
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+        )
     )
 
     assert preview.sql == "SELECT TOTAL_AMOUNT FROM INVOICES"
@@ -347,23 +487,61 @@ def test_select_only_guard() -> None:
 
 async def test_schema_catalog_returns_tables_for_picker() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        await _api_import_sample(client)
         resp = await client.get("/api/schema/catalog")
     assert resp.status_code == 200
     tables = resp.json()["data"]["tables"]
-    assert {table["table_name"] for table in tables} >= {"INVOICES", "CUSTOMERS", "PAYMENTS"}
+    assert {table["table_name"] for table in tables} >= {
+        "DEPARTMENT",
+        "EMPLOYEE",
+        "PROJECT",
+    }
     assert tables[0]["columns"][0]["logical_name"]
+
+
+def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
+    adapter = _SampleAdminOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+
+    imported = service.import_sample_data(
+        SampleDataMutationRequest(execute=True, confirmation="SQL_ASSIST_SAMPLE")
+    )
+
+    assert imported.executed is True
+    assert imported.runtime == "oracle"
+    assert any("CREATE TABLE DEPARTMENT" in statement for statement in adapter.admin_statements)
+    profile = service.get_profile(imported.profile_id)
+    assert set(profile.allowed_tables) == {
+        "DEPARTMENT",
+        "EMPLOYEE",
+        "PROJECT",
+        "V_EMP_DEPT",
+        "V_DEPT_PROJECT",
+    }
+
+    missing_adapter = _SampleAdminOracleAdapter(_FakeOracleDb(), missing_objects=True)
+    service._oracle_adapter = missing_adapter
+    deleted = service.delete_sample_data(
+        SampleDataMutationRequest(execute=True, confirmation="SQL_ASSIST_SAMPLE")
+    )
+
+    assert deleted.executed is True
+    assert {statement.status for statement in deleted.statements} == {"skipped_missing_object"}
+    assert deleted.warnings
+    assert all("DROP" in statement for statement in missing_adapter.admin_statements)
 
 
 async def test_job_supports_select_ai_agent_and_timing() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        await _api_import_sample(client)
         resp = await client.post(
             "/api/nl2sql/jobs",
             json={
-                "question": "請求金額を見たい",
+                "question": "社員一覧を見たい",
                 "engine": "select_ai_agent",
                 "allowed_objects": {
-                    "table_names": ["INVOICES"],
-                    "columns": {"INVOICES": ["INVOICE_ID"]},
+                    "table_names": ["EMPLOYEE"],
+                    "columns": {"EMPLOYEE": ["EMPLOYEE_ID"]},
                 },
             },
         )
@@ -386,9 +564,10 @@ async def test_job_supports_select_ai_agent_and_timing() -> None:
 
 async def test_auto_falls_back_from_agent_to_select_ai() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        await _api_import_sample(client)
         resp = await client.post(
             "/api/nl2sql/preview",
-            json={"question": "select_ai_agent_fail 請求一覧", "engine": "auto"},
+            json={"question": "select_ai_agent_fail 社員一覧", "engine": "auto"},
         )
     assert resp.status_code == 200
     data = resp.json()["data"]
@@ -520,6 +699,7 @@ async def test_repair_oracle_error_converts_limit_syntax() -> None:
 
 async def test_asset_refresh_feedback_and_evaluation() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        await _api_import_sample(client)
         profile_resp = await client.post("/api/nl2sql/select-ai-agent/assets/refresh")
         assert profile_resp.status_code == 200
         asset_data = profile_resp.json()["data"]
@@ -529,7 +709,11 @@ async def test_asset_refresh_feedback_and_evaluation() -> None:
 
         eval_resp = await client.post(
             "/api/nl2sql/evaluate",
-            json={"cases": [{"question": "請求一覧", "expected_sql": "SELECT * FROM INVOICES"}]},
+            json={
+                "cases": [
+                    {"question": "社員一覧", "expected_sql": "SELECT EMPLOYEE_ID FROM EMPLOYEE"}
+                ]
+            },
         )
     assert eval_resp.status_code == 200
     assert eval_resp.json()["data"]["total_cases"] == 1
@@ -573,18 +757,19 @@ async def test_profile_training_examples_update_and_evaluate() -> None:
     payload = {
         "name": "モデル訓練",
         "description": "few-shot 訓練データを管理する profile",
-        "allowed_tables": ["INVOICES"],
-        "glossary": {"粗利": "INVOICES.PROFIT"},
+        "allowed_tables": ["EMPLOYEE"],
+        "glossary": {"社員": "EMPLOYEE.EMPLOYEE_NAME"},
         "sql_rules": ["SELECT/WITH のみ"],
         "default_row_limit": 25,
         "safety_policy": "select_only",
         "few_shot_examples": [],
     }
     training_examples = [
-        {"question": "請求金額を見たい", "sql": "SELECT TOTAL_AMOUNT FROM INVOICES"},
-        {"question": "粗利を見たい", "sql": "SELECT PROFIT FROM INVOICES"},
+        {"question": "社員名を見たい", "sql": "SELECT EMPLOYEE_NAME FROM EMPLOYEE"},
+        {"question": "部署 ID を見たい", "sql": "SELECT DEPARTMENT_ID FROM EMPLOYEE"},
     ]
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        await _api_import_sample(client)
         create_resp = await client.post("/api/nl2sql/profiles", json=payload)
         assert create_resp.status_code == 200
         profile_id = create_resp.json()["data"]["id"]
@@ -652,9 +837,10 @@ async def test_recommend_profile_returns_business_profile_and_rewrite() -> None:
 
 async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        await _api_import_sample(client)
         job_resp = await client.post(
             "/api/nl2sql/jobs",
-            json={"question": "請求金額を確認したい", "engine": "select_ai_agent"},
+            json={"question": "社員一覧を確認したい", "engine": "select_ai_agent"},
         )
         assert job_resp.status_code == 200
         job_id = job_resp.json()["data"]["job_id"]
@@ -711,7 +897,7 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
 
         similar_resp = await client.post(
             "/api/nl2sql/similar-history",
-            json={"question": "請求金額をもう一度確認したい", "profile_id": "default"},
+            json={"question": "社員一覧をもう一度確認したい", "profile_id": "default"},
         )
         assert similar_resp.status_code == 200
         similar = similar_resp.json()["data"]["items"]
@@ -721,7 +907,7 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
 
         preview_resp = await client.post(
             "/api/nl2sql/preview",
-            json={"question": "請求金額をもう一度確認したい", "profile_id": "default"},
+            json={"question": "社員一覧をもう一度確認したい", "profile_id": "default"},
         )
         assert preview_resp.status_code == 200
         examples = preview_resp.json()["data"]["engine_meta"]["similar_history_examples"]
@@ -734,44 +920,32 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(clear_data["warnings"])
 
 
-async def test_demo_learning_seed_creates_feedback_history() -> None:
-    demo_ids = {
-        "demo-learning-invoice-total",
-        "demo-learning-customer-sales",
-        "demo-learning-payment-delay",
-    }
+async def test_demo_learning_seed_no_longer_creates_fixed_business_history() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         seed_resp = await client.post("/api/nl2sql/demo/learning")
         assert seed_resp.status_code == 200
         seed_data = seed_resp.json()["data"]
-        assert set(seed_data["history_ids"]).issubset(demo_ids)
-        assert seed_data["profile_ids"] == ["default"]
+        assert seed_data["history_ids"] == []
+        assert seed_data["profile_ids"] == []
+        assert seed_data["seeded_history_count"] == 0
+        assert seed_data["seeded_feedback_count"] == 0
+        assert "sample data" in seed_data["message"]
 
         history_resp = await client.get("/api/nl2sql/history")
         assert history_resp.status_code == 200
         history_items = history_resp.json()["data"]["items"]
-        history_by_id = {item["id"]: item for item in history_items}
-        assert demo_ids.issubset(history_by_id)
-        assert history_by_id["demo-learning-invoice-total"]["feedback_rating"] == "good"
-        assert history_by_id["demo-learning-payment-delay"]["feedback_rating"] == "needs_review"
-
-        similar_resp = await client.post(
-            "/api/nl2sql/similar-history",
-            json={"question": "顧客別の売上推移を見たい", "profile_id": "default"},
-        )
-        assert similar_resp.status_code == 200
-        similar_ids = {item["item"]["id"] for item in similar_resp.json()["data"]["items"]}
-        assert "demo-learning-customer-sales" in similar_ids
+        assert not any(str(item["id"]).startswith("demo-learning-") for item in history_items)
 
         index_resp = await client.get("/api/nl2sql/feedback-index")
         assert index_resp.status_code == 200
-        assert index_resp.json()["data"]["indexable_count"] >= 3
+        assert index_resp.json()["data"]["indexable_count"] >= 0
 
 
 async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        await _api_import_sample(client)
         compare_resp = await client.post(
-            "/api/nl2sql/compare", json={"question": "請求金額を見たい"}
+            "/api/nl2sql/compare", json={"question": "社員一覧を見たい"}
         )
         assert compare_resp.status_code == 200
         compare_data = compare_resp.json()["data"]
@@ -780,7 +954,7 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
         assert compare_data["execution_results"] == []
 
         compare_execute_resp = await client.post(
-            "/api/nl2sql/compare", json={"question": "請求金額を見たい", "execute": True}
+            "/api/nl2sql/compare", json={"question": "社員一覧を見たい", "execute": True}
         )
         assert compare_execute_resp.status_code == 200
         compare_execute_data = compare_execute_resp.json()["data"]
@@ -794,16 +968,16 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
         assert compare_history_resp.status_code == 200
         compare_history = compare_history_resp.json()["data"]["items"]
         assert compare_history
-        assert compare_history[0]["question"] == "請求金額を見たい"
+        assert compare_history[0]["question"] == "社員一覧を見たい"
         assert compare_history[0]["comparison"]["recommendation"]
         assert "NL2SQL engine comparison" in compare_history[0]["report"]
         assert "SELECT" in compare_history[0]["report"]
 
         reverse_resp = await client.post(
-            "/api/nl2sql/reverse", json={"sql": "SELECT TOTAL_AMOUNT FROM INVOICES"}
+            "/api/nl2sql/reverse", json={"sql": "SELECT EMPLOYEE_NAME FROM EMPLOYEE"}
         )
         assert reverse_resp.status_code == 200
-        assert reverse_resp.json()["data"]["referenced_tables"] == ["INVOICES"]
+        assert reverse_resp.json()["data"]["referenced_tables"] == ["EMPLOYEE"]
 
         comments_resp = await client.post("/api/nl2sql/comments/suggest")
         assert comments_resp.status_code == 200
@@ -814,14 +988,14 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
             json={
                 "items": [
                     {
-                        "object_name": "INVOICES",
+                        "object_name": "EMPLOYEE",
                         "object_type": "table",
-                        "comment": "請求情報's dry-run",
+                        "comment": "社員情報's dry-run",
                     },
                     {
-                        "object_name": "INVOICES.TOTAL_AMOUNT",
+                        "object_name": "EMPLOYEE.EMPLOYEE_NAME",
                         "object_type": "column",
-                        "comment": "税込請求金額",
+                        "comment": "社員名",
                     },
                 ],
                 "execute": False,
@@ -833,11 +1007,11 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
         assert apply_data["statements"][0]["status"] == "dry_run"
         assert (
             apply_data["statements"][0]["sql"]
-            == "COMMENT ON TABLE \"INVOICES\" IS '請求情報''s dry-run';"
+            == "COMMENT ON TABLE \"EMPLOYEE\" IS '社員情報''s dry-run';"
         )
         assert (
             apply_data["statements"][1]["sql"]
-            == 'COMMENT ON COLUMN "INVOICES"."TOTAL_AMOUNT" IS \'税込請求金額\';'
+            == 'COMMENT ON COLUMN "EMPLOYEE"."EMPLOYEE_NAME" IS \'社員名\';'
         )
 
         execute_apply_resp = await client.post(
@@ -845,9 +1019,9 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
             json={
                 "items": [
                     {
-                        "object_name": "INVOICES.TOTAL_AMOUNT",
+                        "object_name": "EMPLOYEE.EMPLOYEE_NAME",
                         "object_type": "column",
-                        "comment": "税込請求金額",
+                        "comment": "社員名",
                     }
                 ],
                 "execute": True,
@@ -864,9 +1038,9 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
             json={
                 "items": [
                     {
-                        "object_name": "INVOICES.TOTAL_AMOUNT",
+                        "object_name": "EMPLOYEE.EMPLOYEE_NAME",
                         "object_type": "column",
-                        "comment": "税込請求金額",
+                        "comment": "社員名",
                     }
                 ],
                 "execute": True,
@@ -955,6 +1129,7 @@ async def test_compare_reverse_comments_synthetic_and_diagnostics() -> None:
 
 def test_compare_execute_collects_engine_execution_errors() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
     original_execute_sql = service.execute_sql
     calls = 0
 
@@ -969,7 +1144,7 @@ def test_compare_execute_collects_engine_execution_errors() -> None:
 
     data = service.compare_engines(
         CompareRequest(
-            question="請求金額を見たい",
+            question="社員一覧を見たい",
             execute=True,
             engines=[Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI],
         )
@@ -985,19 +1160,20 @@ def test_compare_execute_collects_engine_execution_errors() -> None:
 async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> None:
     store = MemoryNl2SqlStore()
     service = Nl2SqlService(store=store)
+    _import_sample(service)
     profile = service.create_profile(
         Nl2SqlProfile(
             id="persisted_profile",
             name="永続化テスト",
-            allowed_tables=["INVOICES"],
-            glossary={"請求": "INVOICES.INVOICE_ID"},
+            allowed_tables=["EMPLOYEE"],
+            glossary={"社員": "EMPLOYEE.EMPLOYEE_ID"},
             default_row_limit=20,
         )
     )
 
     job_info = service.start_job(
         JobCreateRequest(
-            question="請求金額を確認したい",
+            question="社員一覧を確認したい",
             engine=Nl2SqlEngine.SELECT_AI_AGENT,
             profile_id=profile.id,
         )
@@ -1014,7 +1190,7 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     history_item = service.list_history().items[0]
     service.save_feedback(history_item.id, FeedbackRating.GOOD, "永続化された feedback")
     compare_data = service.compare_engines(
-        CompareRequest(question="請求金額を比較したい", execute=True)
+        CompareRequest(question="社員一覧を比較したい", execute=True)
     )
     compare_record = service.list_compare_records().items[0]
     evaluation_set = service.create_evaluation_set(
@@ -1024,8 +1200,8 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
             engine=Nl2SqlEngine.SELECT_AI,
             cases=[
                 SyntheticCase(
-                    question="請求金額を一覧したい",
-                    expected_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+                    question="社員名を一覧したい",
+                    expected_sql="SELECT EMPLOYEE_NAME FROM EMPLOYEE",
                 )
             ],
         )
@@ -1037,8 +1213,8 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
             engine=Nl2SqlEngine.SELECT_AI,
             cases=[
                 {
-                    "question": "請求金額を一覧したい",
-                    "expected_sql": "SELECT TOTAL_AMOUNT FROM INVOICES",
+                    "question": "社員名を一覧したい",
+                    "expected_sql": "SELECT EMPLOYEE_NAME FROM EMPLOYEE",
                 }
             ],
         )
@@ -1231,7 +1407,7 @@ def test_oracle_adapter_apply_comment_statements_strips_semicolon() -> None:
 
 def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table() -> None:
     fake_db = _FakeOracleDb()
-    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
     service._embedding_client = _FakeEmbeddingClient()
     service._history.append(
         HistoryItem(
@@ -1279,7 +1455,7 @@ def test_service_similar_history_uses_oracle_vector_search(
             0.08,
         )
     ]
-    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
     service._embedding_client = _FakeEmbeddingClient()
 
     similar = service.similar_history(
@@ -1310,11 +1486,11 @@ def test_service_preview_marks_oracle_vector_few_shot_source(
             0.1,
         )
     ]
-    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
     service._embedding_client = _FakeEmbeddingClient()
 
     preview = service.preview(
-        PreviewRequest(question="請求金額を見たい", engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
+        PreviewRequest(question="請求金額を見たい", engine=Nl2SqlEngine.SELECT_AI)
     )
 
     assert preview.engine_meta["similar_history_source"] == "oracle_vector"

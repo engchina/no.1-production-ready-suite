@@ -81,6 +81,9 @@ from .models import (
     ReverseSqlRequest,
     RewriteData,
     RewriteRequest,
+    SampleDataInfo,
+    SampleDataMutationData,
+    SampleDataMutationRequest,
     SelectAiAgentAssetsData,
     SelectAiDbProfileDetailData,
     SelectAiDbProfileDropRequest,
@@ -111,7 +114,10 @@ def is_select_only(sql: str) -> bool:
 @router.post("/preview", response_model=ApiResponse[PreviewData])
 async def preview(req: PreviewRequest) -> ApiResponse[PreviewData]:
     """自然言語から SQL を生成して実行せずに safety / engine meta を返す。"""
-    return ApiResponse(data=nl2sql_service.preview(req))
+    try:
+        return ApiResponse(data=nl2sql_service.preview(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/execute", response_model=ApiResponse[QueryResults])
@@ -428,6 +434,28 @@ async def feedback(req: FeedbackRequest) -> ApiResponse[FeedbackData]:
 async def seed_demo_learning() -> ApiResponse[DemoLearningData]:
     """Learning / feedback 画面の検証用 demo データを投入する。"""
     return ApiResponse(data=nl2sql_service.seed_demo_learning_data())
+
+
+@router.get("/sample-data", response_model=ApiResponse[SampleDataInfo])
+async def sample_data_info() -> ApiResponse[SampleDataInfo]:
+    """Optional SQL Assist sample package status / SQL preview."""
+    return ApiResponse(data=nl2sql_service.sample_data_info())
+
+
+@router.post("/sample-data/import", response_model=ApiResponse[SampleDataMutationData])
+async def import_sample_data(
+    req: SampleDataMutationRequest,
+) -> ApiResponse[SampleDataMutationData]:
+    """Optional SQL Assist sample data import dry-run / execution."""
+    return ApiResponse(data=nl2sql_service.import_sample_data(req))
+
+
+@router.post("/sample-data/delete", response_model=ApiResponse[SampleDataMutationData])
+async def delete_sample_data(
+    req: SampleDataMutationRequest,
+) -> ApiResponse[SampleDataMutationData]:
+    """Optional SQL Assist sample data delete dry-run / execution."""
+    return ApiResponse(data=nl2sql_service.delete_sample_data(req))
 
 
 @router.get("/feedback-index", response_model=ApiResponse[FeedbackIndexData])

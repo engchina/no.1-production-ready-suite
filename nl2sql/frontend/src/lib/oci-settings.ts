@@ -1,8 +1,7 @@
-export const OCI_SETTINGS_STORAGE_KEY = "production-ready-rag.oci-settings.v1";
+export const OCI_SETTINGS_STORAGE_KEY = "production-ready-nl2sql.oci-settings.v1";
 export const FIXED_OCI_CONFIG_FILE = "~/.oci/config";
 export const FIXED_OCI_CONFIG_PROFILE = "DEFAULT";
 export const FIXED_OCI_KEY_FILE = "~/.oci/oci_api_key.pem";
-export const DEFAULT_OBJECT_STORAGE_REGION = "ap-osaka-1";
 
 export interface OciSettingsDraft {
   configFile: string;
@@ -34,8 +33,8 @@ export const DEFAULT_OCI_SETTINGS: OciSettingsDraft = {
   fingerprint: "",
   tenancyOcid: "",
   keyFile: FIXED_OCI_KEY_FILE,
-  region: "us-chicago-1",
-  objectStorageRegion: DEFAULT_OBJECT_STORAGE_REGION,
+  region: "",
+  objectStorageRegion: "",
   objectStorageNamespace: "",
 };
 
@@ -98,9 +97,12 @@ export function readStoredOciSettingsDraft(
   if (!storage) return DEFAULT_OCI_SETTINGS;
   try {
     const stored = storage.getItem(OCI_SETTINGS_STORAGE_KEY);
-    return stored
-      ? normalizeOciSettingsDraft(JSON.parse(stored) as Partial<OciSettingsDraft>)
-      : DEFAULT_OCI_SETTINGS;
+    if (!stored) return DEFAULT_OCI_SETTINGS;
+    const parsed = normalizeOciSettingsDraft(JSON.parse(stored) as Partial<OciSettingsDraft>);
+    return normalizeOciSettingsDraft({
+      objectStorageRegion: parsed.objectStorageRegion,
+      objectStorageNamespace: parsed.objectStorageNamespace,
+    });
   } catch {
     storage.removeItem(OCI_SETTINGS_STORAGE_KEY);
     return DEFAULT_OCI_SETTINGS;
@@ -144,14 +146,14 @@ export function buildOciEnvFile(draft: OciSettingsDraft): string {
       [
         ["OCI_CONFIG_FILE", normalized.configFile],
         ["OCI_CONFIG_PROFILE", normalized.configProfile],
-        ["OCI_REGION", normalized.region],
+        ...envEntry("OCI_REGION", normalized.region),
       ],
     ],
     [
       "OCI Object Storage",
       [
-        ["OBJECT_STORAGE_REGION", normalized.objectStorageRegion],
-        ["OBJECT_STORAGE_NAMESPACE", normalized.objectStorageNamespace],
+        ...envEntry("OBJECT_STORAGE_REGION", normalized.objectStorageRegion),
+        ...envEntry("OBJECT_STORAGE_NAMESPACE", normalized.objectStorageNamespace),
       ],
     ],
   ];
@@ -166,14 +168,17 @@ export function buildOciEnvFile(draft: OciSettingsDraft): string {
 
 export function buildOciConfigFile(draft: OciSettingsDraft): string {
   const normalized = normalizeOciSettingsDraft(draft);
+  const authLines = [
+    ...configLine("user", normalized.userOcid),
+    ...configLine("fingerprint", normalized.fingerprint),
+    ...configLine("tenancy", normalized.tenancyOcid),
+    ...configLine("region", normalized.region),
+  ];
 
   return [
     `[${FIXED_OCI_CONFIG_PROFILE}]`,
-    `user=${normalized.userOcid}`,
-    `fingerprint=${normalized.fingerprint}`,
-    `tenancy=${normalized.tenancyOcid}`,
-    `region=${normalized.region}`,
-    `key_file=${normalized.keyFile}`,
+    ...authLines,
+    ...configLine("key_file", authLines.length > 0 ? normalized.keyFile : ""),
   ].join("\n");
 }
 
@@ -252,4 +257,12 @@ function formatEnvValue(value: string): string {
   if (!value) return "";
   if (/^[A-Za-z0-9_./:@~+=,-]+$/.test(value)) return value;
   return JSON.stringify(value);
+}
+
+function envEntry(key: string, value: string): [string, string][] {
+  return value.trim() ? [[key, value]] : [];
+}
+
+function configLine(key: string, value: string): string[] {
+  return value.trim() ? [`${key}=${value}`] : [];
 }

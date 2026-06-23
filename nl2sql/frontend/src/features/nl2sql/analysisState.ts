@@ -1,4 +1,4 @@
-export const DEFAULT_ANALYZE_SQL = "SELECT TOTAL_AMOUNT FROM INVOICES";
+export const DEFAULT_ANALYZE_SQL = "";
 
 export function normalizeAnalyzeRowLimit(rowLimit: number): number {
   if (!Number.isFinite(rowLimit)) return 100;

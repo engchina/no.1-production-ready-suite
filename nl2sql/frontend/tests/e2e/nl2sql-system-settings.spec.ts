@@ -311,6 +311,62 @@ test.beforeEach(async ({ page }) => {
   await mockNl2sqlSettingsApi(page);
 });
 
+test("OCI 認証設定はブラウザ草稿のダミー値を runtime 空値で上書きする", async ({ page }) => {
+  await page.addInitScript(() => {
+    const staleDraft = JSON.stringify({
+      userOcid: "ocid1.user.oc1..aaaaaaaa",
+      fingerprint: "12:34:56:78:90:ab:cd:ef",
+      tenancyOcid: "ocid1.tenancy.oc1..aaaaaaaa",
+      region: "us-chicago-1",
+      objectStorageRegion: "ap-osaka-1",
+      objectStorageNamespace: "fake-namespace",
+    });
+    window.localStorage.setItem("production-ready-rag.oci-settings.v1", staleDraft);
+    window.localStorage.setItem("production-ready-nl2sql.oci-settings.v1", staleDraft);
+  });
+  await page.route("**/api/settings/oci", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await fulfillJson(route, {
+      config_file: "~/.oci/config",
+      profile: "DEFAULT",
+      user: "",
+      fingerprint: "",
+      tenancy: "",
+      region: "",
+      key_file: "~/.oci/oci_api_key.pem",
+      key_file_exists: false,
+      config_file_exists: false,
+      config_source: "runtime",
+    });
+  });
+  await page.route("**/api/settings/upload-storage", async (route) => {
+    await fulfillJson(route, {
+      backend: "local",
+      local_storage_dir: "/u01/production-ready-nl2sql",
+      object_storage_region: "",
+      object_storage_namespace: "",
+      object_storage_bucket: "nl2sql-originals",
+      readiness: "ok",
+      max_upload_bytes: 104857600,
+      config_source: "runtime",
+    });
+  });
+
+  await page.goto("/settings/oci");
+
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue("");
+  await expect(page.getByLabel("フィンガープリント")).toHaveValue("");
+  await expect(page.getByLabel("テナンシ OCID")).toHaveValue("");
+  await expect(
+    page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
+  ).toHaveValue("");
+  await expect(page.getByLabel(".env プレビュー")).not.toContainText("aaaaaaaa");
+  await expect(page.getByLabel(".env プレビュー")).not.toContainText("fake-namespace");
+});
+
 test("NL2SQL のシステム設定画面を表示できる", async ({ page }) => {
   await page.goto("/settings/oci");
   await expect(page.getByRole("heading", { name: "OCI 認証設定" }).first()).toBeVisible();
@@ -339,6 +395,9 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await page.goto("/settings/database");
   await expect(page.getByRole("heading", { name: "データベース設定" }).first()).toBeVisible();
   await expect(page.getByLabel("データベースユーザー")).toBeVisible();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("操作履歴")).toBeVisible();
+  await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 

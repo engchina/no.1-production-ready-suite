@@ -38,6 +38,15 @@ class FeedbackRating(StrEnum):
     NEEDS_REVIEW = "needs_review"
 
 
+class SampleDataStep(StrEnum):
+    """SQL Assist sample data import step."""
+
+    TABLES = "tables"
+    VIEWS = "views"
+    DATA = "data"
+    ALL = "all"
+
+
 class StageTiming(BaseModel):
     """処理段階ごとの経過時間。"""
 
@@ -234,6 +243,39 @@ class DbAdminExecuteData(BaseModel):
     committed: bool = False
     rolled_back: bool = False
     warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class SampleDataInfo(BaseModel):
+    """Optional SQL Assist sample package status."""
+
+    runtime: str = "deterministic"
+    profile_id: str = "sql_assist_sample"
+    confirmation: str = "SQL_ASSIST_SAMPLE"
+    objects: list[str] = Field(default_factory=list)
+    imported_objects: list[str] = Field(default_factory=list)
+    sql: dict[str, list[str]] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SampleDataMutationRequest(AdminExecutionConfirmation):
+    """Sample data import/delete dry-run / execution request."""
+
+    step: SampleDataStep = SampleDataStep.ALL
+
+
+class SampleDataMutationData(BaseModel):
+    """Sample data import/delete response."""
+
+    operation: str
+    step: SampleDataStep = SampleDataStep.ALL
+    runtime: str = "deterministic"
+    executed: bool = False
+    dry_run: bool = True
+    objects: list[str] = Field(default_factory=list)
+    statements: list[DbAdminStatementResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    profile_id: str = "sql_assist_sample"
     timing: TimingEnvelope
 
 

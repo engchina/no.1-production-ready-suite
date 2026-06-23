@@ -102,7 +102,7 @@ Real-schema smoke after catalog refresh. Replace the table/question with a known
 table from the configured Oracle schema:
 
 ```bash
-uv run python scripts/nl2sql_manual_integration.py --require-oracle --refresh-catalog --refresh-assets --execute --debug-raw-preview --engines select_ai_agent,select_ai --allowed-table DENPYO_REGISTRATIONS --question "DENPYO_REGISTRATIONS テーブルから STATUS ごとの件数と LINE_COUNT 合計を表示して"
+uv run python scripts/nl2sql_manual_integration.py --require-oracle --refresh-catalog --refresh-assets --execute --debug-raw-preview --engines select_ai_agent,select_ai --allowed-table YOUR_TABLE --question "YOUR_TABLE から主要な列を一覧して"
 ```
 
 Support checks for the absorbed No.1-SQL-Assist features (comment suggestions,

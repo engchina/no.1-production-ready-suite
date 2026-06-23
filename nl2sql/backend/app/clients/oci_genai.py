@@ -130,7 +130,6 @@ class OciGenAiClient:
             oci_config,
             self._settings.oci_config_file,
             self._settings.oci_config_profile,
-            region=self._settings.oci_region.strip() or None,
         )
         endpoint = self._settings.oci_genai_endpoint.strip()
         if endpoint:

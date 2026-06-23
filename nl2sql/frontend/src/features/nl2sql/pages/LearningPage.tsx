@@ -55,7 +55,7 @@ export function LearningPage() {
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [profileId, setProfileId] = useState("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [question, setQuestion] = useState("請求金額が大きい取引先を見たい");
+  const [question, setQuestion] = useState("登録済みの表から主要な列を一覧したい");
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
   const [similar, setSimilar] = useState<SimilarHistoryData | null>(null);
   const [selectedFeedbackId, setSelectedFeedbackId] = useState("");

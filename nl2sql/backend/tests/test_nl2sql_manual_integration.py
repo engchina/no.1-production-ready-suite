@@ -18,6 +18,17 @@ from app.settings import get_settings
 from scripts import nl2sql_manual_integration as script
 
 
+class _UnconfiguredEnterpriseAiClient:
+    def is_configured(self) -> bool:
+        return False
+
+    def model_id(self) -> str:
+        return ""
+
+    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+        raise AssertionError("Enterprise AI must not be called in smoke tests")
+
+
 def test_parse_engines_rejects_auto() -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         script._parse_engines("auto")
@@ -30,13 +41,22 @@ def test_parse_engines_accepts_concrete_select_ai_engines() -> None:
     ]
 
 
-def test_manual_integration_preview_smoke(capsys: pytest.CaptureFixture[str]) -> None:
+def test_manual_integration_preview_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cast(Any, script).nl2sql_service,
+        "_enterprise_ai_client",
+        _UnconfiguredEnterpriseAiClient(),
+    )
     exit_code = script.main(
         [
             "--engines",
             "enterprise_ai_direct",
             "--question",
-            "請求金額を確認したい",
+            "社員一覧を確認したい",
+            "--import-sample-data",
         ]
     )
 
@@ -45,17 +65,26 @@ def test_manual_integration_preview_smoke(capsys: pytest.CaptureFixture[str]) ->
     assert "[ok] diagnostics:" in output
     assert "readiness=" in output
     assert "[ok] preview_enterprise_ai_direct:" in output
-    assert "meta=provider=oci_enterprise_ai,mode=direct" in output
+    assert "provider=oci_enterprise_ai,mode=direct" in output
     assert "ORACLE_PASSWORD" not in output
 
 
-def test_manual_integration_execute_smoke(capsys: pytest.CaptureFixture[str]) -> None:
+def test_manual_integration_execute_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cast(Any, script).nl2sql_service,
+        "_enterprise_ai_client",
+        _UnconfiguredEnterpriseAiClient(),
+    )
     exit_code = script.main(
         [
             "--engines",
             "enterprise_ai_direct",
             "--question",
-            "請求金額を確認したい",
+            "社員一覧を確認したい",
+            "--import-sample-data",
             "--execute",
             "--timeout",
             "5",
@@ -67,7 +96,7 @@ def test_manual_integration_execute_smoke(capsys: pytest.CaptureFixture[str]) ->
     assert "[ok] preview_enterprise_ai_direct:" in output
     assert "[ok] job_enterprise_ai_direct:" in output
     assert "status=done" in output
-    assert "meta=provider=oci_enterprise_ai,mode=direct" in output
+    assert "provider=oci_enterprise_ai,mode=direct" in output
     assert "ORACLE_PASSWORD" not in output
 
 
@@ -278,7 +307,8 @@ def test_manual_integration_execute_feedback_index_smoke(
             "--engines",
             "enterprise_ai_direct",
             "--question",
-            "請求金額を確認したい",
+            "社員一覧を確認したい",
+            "--import-sample-data",
             "--seed-demo-learning",
             "--execute-feedback-index",
         ]
@@ -301,7 +331,8 @@ def test_manual_integration_full_smoke_runs_supporting_compare_and_jobs(
             "--engines",
             "enterprise_ai_direct",
             "--question",
-            "請求金額を確認したい",
+            "社員一覧を確認したい",
+            "--import-sample-data",
             "--full-smoke",
             "--timeout",
             "5",
@@ -469,7 +500,8 @@ def test_manual_integration_reports_diagnostics_after_asset_refresh(
             "--engines",
             "select_ai",
             "--question",
-            "請求金額を確認したい",
+            "社員一覧を確認したい",
+            "--import-sample-data",
             "--refresh-assets",
             "--require-refreshed-assets",
         ]
@@ -491,7 +523,8 @@ def test_manual_integration_supporting_features_smoke(
             "--engines",
             "enterprise_ai_direct",
             "--question",
-            "請求金額を確認したい",
+            "社員一覧を確認したい",
+            "--import-sample-data",
             "--check-supporting-features",
             "--synthetic-limit",
             "2",
@@ -670,7 +703,8 @@ def test_manual_integration_debug_raw_preview_smoke(
             "--engines",
             "enterprise_ai_direct",
             "--question",
-            "請求金額を確認したい",
+            "社員一覧を確認したい",
+            "--import-sample-data",
             "--debug-raw-preview",
         ]
     )

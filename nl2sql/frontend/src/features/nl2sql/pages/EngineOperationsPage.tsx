@@ -47,7 +47,7 @@ export function EngineOperationsPage() {
   const [profileMutation, setProfileMutation] = useState<SelectAiDbProfileMutationData | null>(null);
   const [profileExport, setProfileExport] = useState<SelectAiProfilesExportData | null>(null);
   const [agentAssets, setAgentAssets] = useState<SelectAiAgentAssetsData | null>(null);
-  const [agentPrompt, setAgentPrompt] = useState("請求金額が大きい取引先を見たい");
+  const [agentPrompt, setAgentPrompt] = useState("登録済みの表から主要な列を一覧したい");
   const [agentToolName, setAgentToolName] = useState("");
   const [agentConversationId, setAgentConversationId] = useState("");
   const [agentRun, setAgentRun] = useState<AgentTeamRunData | null>(null);

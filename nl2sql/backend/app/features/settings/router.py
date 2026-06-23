@@ -14,6 +14,7 @@ import shutil
 import stat
 import time
 from base64 import b64decode
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -1223,7 +1224,7 @@ def _oci_settings_data(settings: Settings) -> OciSettingsData:
         user=parsed.user if parsed is not None else "",
         fingerprint=parsed.fingerprint if parsed is not None else "",
         tenancy=parsed.tenancy if parsed is not None else "",
-        region=settings.oci_region.strip() or (parsed.region if parsed is not None else ""),
+        region=parsed.region if parsed is not None else "",
         key_file=key_file,
         key_file_exists=_expand(key_file).exists(),
         config_file_exists=_expand(config_file).exists(),
@@ -1506,12 +1507,13 @@ def _remove_tmp_wallet_dir(path: Path) -> None:
 
 def _persist_oci_settings(settings: Settings, payload: OciSettingsUpdate) -> None:
     """OCI 共通設定を backend/.env へ永続化する。"""
+    region = payload.region.strip()
     _write_env_values(
         BACKEND_ENV_FILE,
         {
             "OCI_CONFIG_FILE": _oci_config_file(settings),
             "OCI_CONFIG_PROFILE": _oci_profile(settings),
-            "OCI_REGION": payload.region.strip(),
+            "OCI_REGION": region or None,
         },
         section_comment="# OCI 共通",
         error_detail="OCI 認証設定を backend/.env へ保存できませんでした。",
@@ -1533,7 +1535,7 @@ def _persist_oci_object_storage_settings(settings: Settings) -> None:
 
 def _write_env_values(
     path: Path,
-    values: dict[str, str],
+    values: Mapping[str, str | None],
     *,
     section_comment: str,
     error_detail: str,
@@ -1545,21 +1547,27 @@ def _write_env_values(
         written: set[str] = set()
         for line in lines:
             key = _env_assignment_key(line)
-            if key not in values:
+            if key is None or key not in values:
                 next_lines.append(line)
                 continue
             if key in written:
                 continue
-            next_lines.append(f"{key}={_format_env_value(values[key])}")
+            value = values[key]
+            if value is None:
+                written.add(key)
+                continue
+            next_lines.append(f"{key}={_format_env_value(value)}")
             written.add(key)
 
-        missing = [key for key in values if key not in written]
+        missing = [key for key, value in values.items() if key not in written and value is not None]
         if missing:
             if next_lines and next_lines[-1].strip():
                 next_lines.append("")
             next_lines.append(section_comment)
             for key in missing:
-                next_lines.append(f"{key}={_format_env_value(values[key])}")
+                value = values[key]
+                if value is not None:
+                    next_lines.append(f"{key}={_format_env_value(value)}")
 
         content = "\n".join(next_lines).rstrip() + "\n"
         _replace_env_file(path, content)
@@ -1609,9 +1617,14 @@ def _write_oci_config(settings: Settings, payload: OciSettingsUpdate) -> Path:
         "fingerprint": payload.fingerprint.strip(),
         "tenancy": payload.tenancy.strip(),
         "region": payload.region.strip(),
-        "key_file": OCI_PRIVATE_KEY_FILE,
     }
-    _set_oci_config_profile(parser, profile, values)
+    if any(value.strip() for value in values.values()):
+        values["key_file"] = OCI_PRIVATE_KEY_FILE
+    _set_oci_config_profile(
+        parser,
+        profile,
+        {key: value for key, value in values.items() if value.strip()},
+    )
     _atomic_write_oci_config(target, parser)
     return target
 

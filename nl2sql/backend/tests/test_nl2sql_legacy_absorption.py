@@ -4,7 +4,7 @@ import importlib
 import io
 from typing import Any, cast
 
-from fastapi.testclient import TestClient
+import httpx
 
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import (
@@ -20,6 +20,8 @@ from app.features.nl2sql.models import (
     ProfileRecommendationRequest,
     ReverseSqlRequest,
     RewriteRequest,
+    SampleDataMutationRequest,
+    SampleDataStep,
     SelectAiDbProfileUpsertRequest,
     SyntheticDataGenerateRequest,
 )
@@ -48,14 +50,38 @@ class FakeEnterpriseAiClient:
         return response
 
 
+class FakeEmbeddingClient:
+    def is_configured(self) -> bool:
+        return True
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for text in texts:
+            vector = [0.0] * 1536
+            vector[1 if "入金" in text or "支払" in text else 2] = 1.0
+            vectors.append(vector)
+        return vectors
+
+
 def _workbook_bytes(workbook: Any) -> bytes:
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
 
 
+def _import_sample(service: Nl2SqlService) -> None:
+    service.import_sample_data(
+        SampleDataMutationRequest(
+            step=SampleDataStep.ALL,
+            execute=True,
+            confirmation="SQL_ASSIST_SAMPLE",
+        )
+    )
+
+
 def test_classifier_training_predicts_and_drives_profile_recommendation() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    cast(Any, service)._embedding_client = FakeEmbeddingClient()
     service.create_profile(
         Nl2SqlProfile(
             id="payment",
@@ -190,6 +216,7 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
 
 def test_annotations_and_synthetic_data_support_dry_run_without_oracle() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
 
     suggestions = service.suggest_annotations()
     assert suggestions.suggestions
@@ -213,10 +240,10 @@ def test_annotations_and_synthetic_data_support_dry_run_without_oracle() -> None
     assert "ANNOTATIONS" in applied.statements[0].sql
 
     synthetic = service.generate_synthetic_data(
-        SyntheticDataGenerateRequest(table_name="INVOICES", row_count=5, execute=False)
+        SyntheticDataGenerateRequest(table_name="EMPLOYEE", row_count=5, execute=False)
     )
     assert synthetic.status == "dry_run"
-    assert synthetic.table_name == "INVOICES"
+    assert synthetic.table_name == "EMPLOYEE"
     assert synthetic.row_count == 5
 
 
@@ -306,56 +333,56 @@ def test_profile_learning_material_xlsx_handles_multi_sheet_dedupe_and_replace()
     assert replaced.profile.few_shot_examples == []
 
 
-def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
+async def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
     monkeypatch: Any,
 ) -> None:
-    client = TestClient(app)
-
-    dry_run = client.post(
-        "/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE/drop",
-        json={"execute": False},
-    )
-    assert dry_run.status_code == 200
-    dry_run_data = dry_run.json()["data"]
-    assert dry_run_data["executed"] is False
-    assert dry_run_data["status"] == "dry_run"
-
-    from app.features.nl2sql import router as nl2sql_router
-
-    captured: dict[str, object] = {}
-
-    def fake_drop(
-        profile_name: str,
-        execute: bool,
-        confirmation: str = "",
-        reason: str = "",
-    ) -> AssetCleanupData:
-        captured["profile_name"] = profile_name
-        captured["execute"] = execute
-        captured["confirmation"] = confirmation
-        captured["reason"] = reason
-        return AssetCleanupData(
-            engine=Nl2SqlEngine.SELECT_AI,
-            executed=execute,
-            status="cleaned" if execute else "dry_run",
-            profile_name=profile_name,
-            asset_names={"profile": profile_name},
-            engine_meta={"runtime": "mock"},
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        dry_run = await client.post(
+            "/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE/drop",
+            json={"execute": False},
         )
+        assert dry_run.status_code == 200
+        dry_run_data = dry_run.json()["data"]
+        assert dry_run_data["executed"] is False
+        assert dry_run_data["status"] == "dry_run"
 
-    monkeypatch.setattr(
-        cast(Any, nl2sql_router).nl2sql_service,
-        "drop_select_ai_db_profile",
-        fake_drop,
-    )
-    executed = client.post(
-        "/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE/drop",
-        json={
-            "execute": True,
-            "confirmation": "NL2SQL_DEFAULT_PROFILE",
-            "reason": "test",
-        },
-    )
+        from app.features.nl2sql import router as nl2sql_router
+
+        captured: dict[str, object] = {}
+
+        def fake_drop(
+            profile_name: str,
+            execute: bool,
+            confirmation: str = "",
+            reason: str = "",
+        ) -> AssetCleanupData:
+            captured["profile_name"] = profile_name
+            captured["execute"] = execute
+            captured["confirmation"] = confirmation
+            captured["reason"] = reason
+            return AssetCleanupData(
+                engine=Nl2SqlEngine.SELECT_AI,
+                executed=execute,
+                status="cleaned" if execute else "dry_run",
+                profile_name=profile_name,
+                asset_names={"profile": profile_name},
+                engine_meta={"runtime": "mock"},
+            )
+
+        monkeypatch.setattr(
+            cast(Any, nl2sql_router).nl2sql_service,
+            "drop_select_ai_db_profile",
+            fake_drop,
+        )
+        executed = await client.post(
+            "/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE/drop",
+            json={
+                "execute": True,
+                "confirmation": "NL2SQL_DEFAULT_PROFILE",
+                "reason": "test",
+            },
+        )
 
     assert executed.status_code == 200
     assert executed.json()["data"]["status"] == "cleaned"
@@ -367,8 +394,16 @@ def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
     }
 
 
-def test_comment_llm_and_agent_privilege_checks_fallback_without_oracle() -> None:
+def test_comment_llm_and_agent_privilege_checks_fallback_without_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    monkeypatch.setattr(
+        cast(Any, service),
+        "_enterprise_ai_client",
+        FakeEnterpriseAiClient(configured=False),
+    )
+    _import_sample(service)
 
     comments = service.suggest_comments(CommentSuggestionRequest(use_llm=True))
     assert comments.suggestions
@@ -383,19 +418,20 @@ def test_comment_llm_and_agent_privilege_checks_fallback_without_oracle() -> Non
 
 def test_comment_llm_generation_uses_enterprise_ai_and_falls_back_on_bad_json() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
-        '{"suggestions":[{"object_name":"INVOICES","object_type":"table",'
-        '"suggested_comment":"請求情報のヘッダ"}]}'
+        '{"suggestions":[{"object_name":"EMPLOYEE","object_type":"table",'
+        '"suggested_comment":"社員情報のヘッダ"}]}'
     )
 
     generated = service.suggest_comments(CommentSuggestionRequest(use_llm=True, max_items=2))
 
     assert generated.source == "oci_enterprise_ai"
-    assert generated.suggestions[0].object_name == "INVOICES"
-    assert generated.suggestions[0].suggested_comment == "請求情報のヘッダ"
+    assert generated.suggestions[0].object_name == "EMPLOYEE"
+    assert generated.suggestions[0].suggested_comment == "社員情報のヘッダ"
 
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
-        '{"suggestions":[{"object_name":"INVOICES","object_type":"invalid",'
+        '{"suggestions":[{"object_name":"EMPLOYEE","object_type":"invalid",'
         '"suggested_comment":"壊れた候補"}]}'
     )
 

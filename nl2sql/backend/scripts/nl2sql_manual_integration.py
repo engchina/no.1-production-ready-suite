@@ -44,6 +44,8 @@ from app.features.nl2sql.models import (
     Nl2SqlProfile,
     PreviewData,
     PreviewRequest,
+    SampleDataMutationRequest,
+    SampleDataStep,
     SimilarHistoryRequest,
     SyntheticCase,
     SyntheticDataGenerateRequest,
@@ -51,7 +53,7 @@ from app.features.nl2sql.models import (
 from app.features.nl2sql.service import nl2sql_service
 from app.settings import get_settings
 
-DEFAULT_QUESTION = "今月の請求金額が大きい取引先を表示して"
+DEFAULT_QUESTION = "登録済みの表から主要な列を一覧して"
 
 
 @dataclass(frozen=True)
@@ -303,6 +305,30 @@ def _refresh_catalog(enabled: bool) -> StepResult:
         name="schema_catalog",
         ok=True,
         message=f"refreshed; tables={len(catalog.tables)}; refreshed_at={catalog.refreshed_at}",
+    )
+
+
+def _import_sample_data(enabled: bool) -> StepResult | None:
+    if not enabled:
+        return None
+    try:
+        data = nl2sql_service.import_sample_data(
+            SampleDataMutationRequest(
+                step=SampleDataStep.ALL,
+                execute=True,
+                confirmation="SQL_ASSIST_SAMPLE",
+            )
+        )
+    except Exception as exc:
+        return StepResult(name="sample_data_import", ok=False, message=str(exc))
+    imported = ",".join(nl2sql_service.sample_data_info().imported_objects) or "-"
+    return StepResult(
+        name="sample_data_import",
+        ok=data.executed,
+        message=(
+            f"runtime={data.runtime}; executed={data.executed}; "
+            f"profile={data.profile_id}; imported={imported}; warnings={len(data.warnings)}"
+        ),
     )
 
 
@@ -791,10 +817,10 @@ def _legacy_classifier_smoke(*, question: str, require_oracle_state: bool) -> St
         payload = "\n".join(
             [
                 "CATEGORY,TEXT",
-                "標準業務プロファイル,請求金額が大きい取引先を表示したい",
-                "標準業務プロファイル,売上合計を取引先別に確認したい",
-                "入金管理,未入金の請求を確認したい",
-                "入金管理,入金が遅れている取引先を見たい",
+                "社員管理,社員と部署の一覧を確認したい",
+                "社員管理,部署別の社員数を確認したい",
+                "プロジェクト管理,部署別のプロジェクトを確認したい",
+                "プロジェクト管理,プロジェクトの予算を確認したい",
             ]
         ).encode("utf-8")
         imported = nl2sql_service.import_classifier_training_data(
@@ -1435,6 +1461,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Refresh schema catalog from Oracle before running checks.",
     )
     parser.add_argument(
+        "--import-sample-data",
+        action="store_true",
+        help=(
+            "Explicitly import the optional SQL Assist sample "
+            "(DEPARTMENT/EMPLOYEE/PROJECT) before previews."
+        ),
+    )
+    parser.add_argument(
         "--refresh-assets",
         action="store_true",
         help="Create/replace Select AI profile and Select AI Agent assets. Mutates Oracle.",
@@ -1733,6 +1767,9 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     results.append(_refresh_catalog(args.refresh_catalog))
+    sample_result = _import_sample_data(args.import_sample_data)
+    if sample_result:
+        results.append(sample_result)
     profile_result, profile_id = _prepare_profile(
         profile_id=args.profile_id,
         allowed_tables=allowed.table_names,

@@ -53,9 +53,9 @@ import {
 } from "./workbenchState";
 
 const QUICK_PROMPTS = [
-  "今月の請求金額が大きい取引先を表示して",
-  "未入金の請求を支払期限が近い順に見たい",
-  "地域別の顧客数を集計して",
+  "登録済みの表から主要な列を一覧して",
+  "社員と部署の一覧を確認したい",
+  "部署別のプロジェクト数を集計して",
 ];
 
 function lastMatchingHistory(history: HistoryItem[], result: Nl2SqlResult | null) {

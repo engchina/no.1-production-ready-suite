@@ -126,13 +126,13 @@ export function OciSettingsClient() {
           if (ociResult.status === "fulfilled" && ociResult.value) {
             next = normalizeOciSettingsDraft({
               ...next,
-              ...runtimeOciSettingsToDraft(ociResult.value, next),
+              ...runtimeOciSettingsToDraft(ociResult.value),
             });
           }
           if (storageResult.status === "fulfilled" && storageResult.value) {
             next = normalizeOciSettingsDraft({
               ...next,
-              ...runtimeObjectStorageSettingsToDraft(storageResult.value, next),
+              ...runtimeObjectStorageSettingsToDraft(storageResult.value),
             });
           }
           return next;
@@ -193,7 +193,7 @@ export function OciSettingsClient() {
       setDraft((current) =>
         normalizeOciSettingsDraft({
           ...current,
-          ...runtimeOciSettingsToDraft(saved, current),
+          ...runtimeOciSettingsToDraft(saved),
         })
       );
       setAuthSaveState("success");
@@ -229,7 +229,7 @@ export function OciSettingsClient() {
       setDraft((current) =>
         normalizeOciSettingsDraft({
           ...current,
-          ...runtimeObjectStorageSettingsToDraft(saved, current),
+          ...runtimeObjectStorageSettingsToDraft(saved),
         })
       );
       setStorageSaveState("success");
@@ -421,7 +421,7 @@ export function OciSettingsClient() {
                   onValueChange={(value) => updateDraft("region", value)}
                   error={errorText(errors.region)}
                   helper={t("settings.oci.helper.region")}
-                  placeholder="us-chicago-1"
+                  placeholder={t("settings.oci.placeholder.region")}
                   required
                   requiredLabel={t("settings.oci.required")}
                   buttonClassName="h-11"
@@ -491,7 +491,7 @@ export function OciSettingsClient() {
                   onValueChange={(value) => updateDraft("objectStorageRegion", value)}
                   error={errorText(errors.objectStorageRegion)}
                   helper={t("settings.oci.helper.objectStorageRegion")}
-                  placeholder="ap-osaka-1"
+                  placeholder={t("settings.oci.placeholder.region")}
                   required
                   requiredLabel={t("settings.oci.required")}
                 />
@@ -707,32 +707,28 @@ function ConfigTestContent({ state }: { state: ConfigTestState }) {
 }
 
 function runtimeOciSettingsToDraft(
-  settings: OciSettingsData,
-  current: OciSettingsDraft
+  settings: OciSettingsData
 ): Pick<
   OciSettingsDraft,
   "configFile" | "configProfile" | "userOcid" | "fingerprint" | "tenancyOcid" | "keyFile" | "region"
 > {
   return {
-    configFile: (settings.config_file ?? "").trim() || current.configFile,
-    configProfile: (settings.profile ?? "").trim() || current.configProfile,
-    userOcid: (settings.user ?? "").trim() || current.userOcid,
-    fingerprint: (settings.fingerprint ?? "").trim() || current.fingerprint,
-    tenancyOcid: (settings.tenancy ?? "").trim() || current.tenancyOcid,
+    configFile: (settings.config_file ?? "").trim() || FIXED_OCI_CONFIG_FILE,
+    configProfile: (settings.profile ?? "").trim() || FIXED_OCI_CONFIG_PROFILE,
+    userOcid: (settings.user ?? "").trim(),
+    fingerprint: (settings.fingerprint ?? "").trim(),
+    tenancyOcid: (settings.tenancy ?? "").trim(),
     keyFile: FIXED_OCI_KEY_FILE,
-    region: (settings.region ?? "").trim() || current.region,
+    region: (settings.region ?? "").trim(),
   };
 }
 
 function runtimeObjectStorageSettingsToDraft(
-  settings: UploadStorageSettingsData,
-  current: OciSettingsDraft
+  settings: UploadStorageSettingsData
 ): Pick<OciSettingsDraft, "objectStorageRegion" | "objectStorageNamespace"> {
   return {
-    objectStorageRegion:
-      (settings.object_storage_region ?? "").trim() || current.objectStorageRegion,
-    objectStorageNamespace:
-      (settings.object_storage_namespace ?? "").trim() || current.objectStorageNamespace,
+    objectStorageRegion: (settings.object_storage_region ?? "").trim(),
+    objectStorageNamespace: (settings.object_storage_namespace ?? "").trim(),
   };
 }
 
@@ -1228,9 +1224,14 @@ function persistDraftFields(
   fields: readonly OciSettingsField[],
   source: OciSettingsDraft
 ) {
+  const persistedFields = fields.filter((field) => !fieldInGroup(AUTH_PROFILE_FIELDS, field));
+  if (persistedFields.length === 0) {
+    window.localStorage.removeItem(OCI_SETTINGS_STORAGE_KEY);
+    return;
+  }
   const next = normalizeOciSettingsDraft({
     ...readStoredOciSettingsDraft(),
-    ...pickDraftFields(source, fields),
+    ...pickDraftFields(source, persistedFields),
   });
 
   if (sameDraft(next, DEFAULT_OCI_SETTINGS)) {

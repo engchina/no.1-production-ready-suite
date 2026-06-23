@@ -403,20 +403,18 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
     );
   }
 
-  async function persist(): Promise<boolean> {
-    if (!ocid.trim()) return false;
+  async function persist(): Promise<AdbInfoData | null> {
+    if (!ocid.trim()) return null;
     try {
-      await saveSettings.mutateAsync({ adb_ocid: ocid.trim(), region: region.trim() });
-      return true;
+      return await saveSettings.mutateAsync({ adb_ocid: ocid.trim(), region: region.trim() });
     } catch {
-      return false;
+      return null;
     }
   }
 
   async function handleRefresh() {
-    const saved = await persist();
-    if (!saved) return;
-    if (saveSettings.data) appendLog(saveSettings.data);
+    const result = await persist();
+    if (result) appendLog(result);
   }
 
   async function handleStart() {
@@ -509,6 +507,19 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
           <Button
             type="button"
             size="lg"
+            loading={saveSettings.isPending}
+            disabled={busy || !ocid.trim()}
+            onClick={() => void handleRefresh()}
+          >
+            <Save size={16} aria-hidden />
+            {saveSettings.isPending
+              ? t("settings.database.actions.saving")
+              : t("settings.database.actions.save")}
+          </Button>
+          <Button
+            type="button"
+            size="lg"
+            variant="secondary"
             loading={start.isPending}
             disabled={busy || !ocid.trim()}
             onClick={() => void handleStart()}

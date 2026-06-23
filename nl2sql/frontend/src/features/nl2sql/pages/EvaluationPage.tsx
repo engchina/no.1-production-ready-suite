@@ -40,10 +40,7 @@ import type {
 } from "../types";
 import { formatElapsed } from "../useOperationTimer";
 
-const DEFAULT_CASES = [
-  { question: "請求金額を一覧で見たい", expected_sql: "SELECT TOTAL_AMOUNT FROM INVOICES" },
-  { question: "顧客の地域を確認したい", expected_sql: "SELECT REGION FROM CUSTOMERS" },
-];
+const DEFAULT_CASES: EvaluationCaseLike[] = [];
 
 type EvaluationCaseLike = {
   question: string;
@@ -52,7 +49,7 @@ type EvaluationCaseLike = {
 };
 
 export function EvaluationPage() {
-  const [question, setQuestion] = useState("今月の請求金額が大きい取引先を表示して");
+  const [question, setQuestion] = useState("");
   const [engine, setEngine] = useState<Nl2SqlEngine>("auto");
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [profileId, setProfileId] = useState("default");
@@ -68,7 +65,7 @@ export function EvaluationPage() {
   const [analysisSql, setAnalysisSql] = useState(DEFAULT_ANALYZE_SQL);
   const [analysisRowLimit, setAnalysisRowLimit] = useState(100);
   const [analysis, setAnalysis] = useState<AnalyzeData | null>(null);
-  const [reverseSql, setReverseSql] = useState("SELECT TOTAL_AMOUNT FROM INVOICES");
+  const [reverseSql, setReverseSql] = useState("");
   const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
   const [loading, setLoading] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(false);

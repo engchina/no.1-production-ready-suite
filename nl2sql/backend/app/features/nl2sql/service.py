@@ -141,6 +141,10 @@ from .models import (
     RewriteData,
     RewriteRequest,
     SafetyReport,
+    SampleDataInfo,
+    SampleDataMutationData,
+    SampleDataMutationRequest,
+    SampleDataStep,
     SchemaCatalog,
     SchemaColumn,
     SchemaTable,
@@ -169,6 +173,22 @@ from .oracle_adapter import OracleAdapterError, OracleNl2SqlAdapter
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
 
 logger = logging.getLogger(__name__)
+
+_SAMPLE_PROFILE_ID = "sql_assist_sample"
+_SAMPLE_CONFIRMATION = "SQL_ASSIST_SAMPLE"
+_SAMPLE_OBJECTS = [
+    "DEPARTMENT",
+    "EMPLOYEE",
+    "PROJECT",
+    "V_EMP_DEPT",
+    "V_DEPT_PROJECT",
+]
+_SAMPLE_TABLES = ["DEPARTMENT", "EMPLOYEE", "PROJECT"]
+_SAMPLE_VIEWS = ["V_EMP_DEPT", "V_DEPT_PROJECT"]
+_SCHEMA_EMPTY_MESSAGE = (
+    "Schema catalog が空です。Oracle schema を refresh するか、"
+    "Data Tools から sample data を明示的に import してください。"
+)
 
 _FORBIDDEN_PREFIXES = (
     "insert",
@@ -668,18 +688,16 @@ class Nl2SqlService:
         self._profiles: dict[str, Nl2SqlProfile] = {
             "default": Nl2SqlProfile(
                 id="default",
-                name="標準業務プロファイル",
-                description="売上・請求・顧客データを対象にした標準 NL2SQL profile。",
-                allowed_tables=["INVOICES", "CUSTOMERS", "PAYMENTS"],
-                glossary={"売上": "INVOICES.TOTAL_AMOUNT", "取引先": "CUSTOMERS.CUSTOMER_NAME"},
-                sql_rules=["SELECT/WITH のみ", "FETCH FIRST で行数制限", "許可テーブルのみ参照"],
+                name="標準プロファイル",
+                description=(
+                    "業務表は未固定です。schema refresh または明示 import 後に"
+                    "対象表を選択します。"
+                ),
+                allowed_tables=[],
+                glossary={},
+                sql_rules=["SELECT/WITH のみ", "FETCH FIRST で行数制限"],
                 default_row_limit=settings.nl2sql_default_row_limit,
-                few_shot_examples=[
-                    {
-                        "question": "今月の請求金額が大きい取引先を見たい",
-                        "sql": "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
-                    }
-                ],
+                few_shot_examples=[],
             )
         }
         self._jobs: dict[str, StoredJob] = {}
@@ -873,6 +891,343 @@ class Nl2SqlService:
         self._persist_state()
         return self._catalog
 
+    def sample_data_info(self) -> SampleDataInfo:
+        sql = self._sample_sql_sections()
+        imported = self._sample_imported_objects()
+        return SampleDataInfo(
+            runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+            profile_id=_SAMPLE_PROFILE_ID,
+            confirmation=_SAMPLE_CONFIRMATION,
+            objects=list(_SAMPLE_OBJECTS),
+            imported_objects=imported,
+            sql=sql,
+        )
+
+    def import_sample_data(self, request: SampleDataMutationRequest) -> SampleDataMutationData:
+        started = time.monotonic()
+        created_at = _utc_now()
+        step = request.step
+        sql_sections = self._sample_sql_sections()
+        statements = self._sample_import_statements(step, sql_sections)
+        warnings: list[str] = []
+        executed = False
+        results: list[DbAdminStatementResult]
+        if request.execute:
+            confirmation_error = self._sample_confirmation_error(request.confirmation)
+            if confirmation_error:
+                warnings.append(confirmation_error)
+                results = self._statement_results(
+                    statements,
+                    status="confirmation_required",
+                    error_message=confirmation_error,
+                )
+            elif self._use_oracle_runtime():
+                execution = self.execute_db_admin_sql(
+                    DbAdminExecuteRequest(
+                        sql="\n".join(statements),
+                        execute=True,
+                        confirmation="ADMIN_EXECUTE",
+                        reason=request.reason or "sql-assist-sample-import",
+                    )
+                )
+                results = execution.statements
+                warnings.extend(execution.warnings)
+                executed = execution.executed
+                if executed:
+                    self._ensure_sample_profile()
+            else:
+                self._apply_sample_import_to_catalog(step)
+                self._ensure_sample_profile()
+                results = self._statement_results(statements, status="applied_to_local_state")
+                executed = True
+                self._persist_state()
+        else:
+            results = self._statement_results(statements, status="dry_run")
+            warnings.append("Dry-run のため sample data は import していません。")
+        return SampleDataMutationData(
+            operation="import",
+            step=step,
+            runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+            executed=executed,
+            dry_run=not executed,
+            objects=list(_SAMPLE_OBJECTS),
+            statements=results,
+            warnings=warnings,
+            profile_id=_SAMPLE_PROFILE_ID,
+            timing=self._timing(created_at, started, "sample_data_import"),
+        )
+
+    def delete_sample_data(self, request: SampleDataMutationRequest) -> SampleDataMutationData:
+        started = time.monotonic()
+        created_at = _utc_now()
+        statements = self._sample_sql_sections()["delete"]
+        warnings: list[str] = []
+        executed = False
+        results: list[DbAdminStatementResult]
+        if request.execute:
+            confirmation_error = self._sample_confirmation_error(request.confirmation)
+            if confirmation_error:
+                warnings.append(confirmation_error)
+                results = self._statement_results(
+                    statements,
+                    status="confirmation_required",
+                    error_message=confirmation_error,
+                )
+            elif self._use_oracle_runtime():
+                results = []
+                for statement in statements:
+                    execution = self.execute_db_admin_sql(
+                        DbAdminExecuteRequest(
+                            sql=statement,
+                            execute=True,
+                            confirmation="ADMIN_EXECUTE",
+                            reason=request.reason or "sql-assist-sample-delete",
+                        )
+                    )
+                    item = execution.statements[0] if execution.statements else None
+                    if item is None:
+                        continue
+                    if item.status == "error" and self._is_missing_object_error(
+                        item.error_message
+                    ):
+                        warnings.append(f"{statement}: 対象が存在しないため skip しました。")
+                        item = item.model_copy(update={"status": "skipped_missing_object"})
+                    results.append(item)
+                executed = all(
+                    item.status in {"success", "skipped_missing_object"} for item in results
+                )
+                if executed:
+                    self._remove_sample_from_state()
+            else:
+                self._remove_sample_from_state()
+                results = self._statement_results(statements, status="applied_to_local_state")
+                executed = True
+                self._persist_state()
+        else:
+            results = self._statement_results(statements, status="dry_run")
+            warnings.append("Dry-run のため sample data は削除していません。")
+        return SampleDataMutationData(
+            operation="delete",
+            step=SampleDataStep.ALL,
+            runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+            executed=executed,
+            dry_run=not executed,
+            objects=list(_SAMPLE_OBJECTS),
+            statements=results,
+            warnings=warnings,
+            profile_id=_SAMPLE_PROFILE_ID,
+            timing=self._timing(created_at, started, "sample_data_delete"),
+        )
+
+    def _sample_sql_sections(self) -> dict[str, list[str]]:
+        base = Path(__file__).with_name("sample_data") / "sql_assist_sample"
+        return {
+            name: _split_sql_statements((base / f"{name}.sql").read_text(encoding="utf-8"))
+            for name in ("tables", "views", "data", "delete")
+        }
+
+    def _sample_import_statements(
+        self, step: SampleDataStep, sql_sections: dict[str, list[str]]
+    ) -> list[str]:
+        names = ["tables", "views", "data"] if step == SampleDataStep.ALL else [step.value]
+        return [statement for name in names for statement in sql_sections[name]]
+
+    def _sample_imported_objects(self) -> list[str]:
+        existing = {table.table_name for table in self._catalog.tables}
+        return [name for name in _SAMPLE_OBJECTS if name in existing]
+
+    def _sample_confirmation_error(self, confirmation: str) -> str:
+        if confirmation.strip() == _SAMPLE_CONFIRMATION:
+            return ""
+        return f"実行するには confirmation に {_SAMPLE_CONFIRMATION} を入力してください。"
+
+    def _statement_results(
+        self,
+        statements: list[str],
+        *,
+        status: str,
+        error_message: str = "",
+    ) -> list[DbAdminStatementResult]:
+        return [
+            DbAdminStatementResult(
+                index=index,
+                statement_type=_admin_statement_type(statement),
+                status=status,
+                sql=statement,
+                error_message=error_message,
+            )
+            for index, statement in enumerate(statements, start=1)
+        ]
+
+    def _apply_sample_import_to_catalog(self, step: SampleDataStep) -> None:
+        current = {table.table_name: table for table in self._catalog.tables}
+        sample = {table.table_name: table for table in self._sample_schema_tables(step)}
+        current.update(sample)
+        ordered = [name for name in _SAMPLE_OBJECTS if name in current]
+        ordered.extend(name for name in current if name not in ordered)
+        self._catalog = SchemaCatalog(
+            refreshed_at=_utc_now(),
+            tables=[current[name] for name in ordered],
+        )
+
+    def _remove_sample_from_state(self) -> None:
+        sample_objects = set(_SAMPLE_OBJECTS)
+        self._catalog = SchemaCatalog(
+            refreshed_at=_utc_now(),
+            tables=[
+                table
+                for table in self._catalog.tables
+                if table.table_name not in sample_objects
+            ],
+        )
+        profile = self._profiles.get(_SAMPLE_PROFILE_ID)
+        if profile is not None:
+            self._profiles[_SAMPLE_PROFILE_ID] = profile.model_copy(update={"archived": True})
+        self._persist_state()
+
+    def _ensure_sample_profile(self) -> None:
+        self._profiles[_SAMPLE_PROFILE_ID] = Nl2SqlProfile(
+            id=_SAMPLE_PROFILE_ID,
+            name="SQL Assist サンプル",
+            description="DEPARTMENT / EMPLOYEE / PROJECT の明示 import sample profile。",
+            allowed_tables=self._sample_imported_objects(),
+            glossary={},
+            sql_rules=["SELECT/WITH のみ", "sample data は明示 import 後のみ利用"],
+            default_row_limit=get_settings().nl2sql_default_row_limit,
+            few_shot_examples=[],
+            archived=False,
+        )
+
+    def _sample_schema_tables(self, step: SampleDataStep) -> list[SchemaTable]:
+        tables: list[SchemaTable] = []
+        if step in {SampleDataStep.TABLES, SampleDataStep.ALL}:
+            tables.extend(self._sample_tables_from_ddl())
+        if step in {SampleDataStep.VIEWS, SampleDataStep.ALL}:
+            tables.extend(self._sample_views_from_ddl())
+        if step in {SampleDataStep.DATA, SampleDataStep.ALL}:
+            row_counts = self._sample_row_counts()
+            if not tables:
+                tables.extend(
+                    table
+                    for table in self._catalog.tables
+                    if table.table_name in _SAMPLE_TABLES
+                )
+            tables = [
+                table.model_copy(
+                    update={"row_count": row_counts.get(table.table_name, table.row_count)}
+                )
+                for table in tables
+            ]
+        return tables
+
+    def _sample_tables_from_ddl(self) -> list[SchemaTable]:
+        sql = "\n".join(self._sample_sql_sections()["tables"])
+        row_counts = self._sample_row_counts()
+        result: list[SchemaTable] = []
+        for match in re.finditer(
+            r"CREATE\s+TABLE\s+([A-Z0-9_]+)\s*\((.*?)\)\s*$",
+            sql,
+            flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
+        ):
+            table_name = _normalize_identifier(match.group(1))
+            body = match.group(2)
+            columns: list[SchemaColumn] = []
+            constraints: list[str] = []
+            for raw_line in body.splitlines():
+                line = raw_line.strip().rstrip(",")
+                if not line:
+                    continue
+                if re.match(r"^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK)\b", line, re.I):
+                    constraints.append(line)
+                    continue
+                parts = line.split()
+                column_name = _normalize_identifier(parts[0])
+                data_type = self._sample_column_type(parts[1:])
+                columns.append(
+                    SchemaColumn(
+                        column_name=column_name,
+                        logical_name=column_name,
+                        data_type=data_type,
+                        nullable=(
+                            "NOT NULL" not in line.upper()
+                            and "PRIMARY KEY" not in line.upper()
+                        ),
+                    )
+                )
+                if "PRIMARY KEY" in line.upper():
+                    constraints.append(f"PK_{table_name} P({column_name})")
+            result.append(
+                SchemaTable(
+                    table_name=table_name,
+                    logical_name=table_name,
+                    comment="SQL Assist sample table",
+                    row_count=row_counts.get(table_name),
+                    constraints=constraints,
+                    columns=columns,
+                )
+            )
+        return result
+
+    def _sample_views_from_ddl(self) -> list[SchemaTable]:
+        views: list[SchemaTable] = []
+        for statement in self._sample_sql_sections()["views"]:
+            match = re.search(
+                r"CREATE\s+OR\s+REPLACE\s+VIEW\s+([A-Z0-9_]+)\s+AS\s+SELECT\s+(.*?)\s+FROM\s+",
+                statement,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if not match:
+                continue
+            view_name = _normalize_identifier(match.group(1))
+            columns = [
+                SchemaColumn(
+                    column_name=self._sample_select_column_name(token),
+                    logical_name=self._sample_select_column_name(token),
+                    data_type="VARCHAR2",
+                )
+                for token in match.group(2).split(",")
+                if self._sample_select_column_name(token)
+            ]
+            views.append(
+                SchemaTable(
+                    table_name=view_name,
+                    logical_name=view_name,
+                    table_type="view",
+                    comment="SQL Assist sample view",
+                    columns=columns,
+                )
+            )
+        return views
+
+    def _sample_row_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for statement in self._sample_sql_sections()["data"]:
+            match = re.match(r"INSERT\s+INTO\s+([A-Z0-9_]+)\b", statement, flags=re.I)
+            if match:
+                table_name = _normalize_identifier(match.group(1))
+                counts[table_name] = counts.get(table_name, 0) + 1
+        return counts
+
+    def _sample_column_type(self, tokens: list[str]) -> str:
+        stop_words = {"NOT", "NULL", "PRIMARY", "DEFAULT", "CONSTRAINT", "REFERENCES"}
+        selected = []
+        for token in tokens:
+            if token.upper() in stop_words:
+                break
+            selected.append(token)
+        return " ".join(selected) or "VARCHAR2"
+
+    def _sample_select_column_name(self, token: str) -> str:
+        cleaned = token.strip()
+        alias = re.search(r"\bAS\s+([A-Z0-9_]+)$", cleaned, flags=re.I)
+        if alias:
+            return _normalize_identifier(alias.group(1))
+        return _normalize_identifier(cleaned.rsplit(".", 1)[-1])
+
+    def _is_missing_object_error(self, message: str) -> bool:
+        normalized = message.upper()
+        return any(code in normalized for code in ("ORA-00942", "ORA-04043"))
+
     def list_profiles(self) -> list[Nl2SqlProfile]:
         with self._lock:
             return [profile for profile in self._profiles.values() if not profile.archived]
@@ -1049,6 +1404,17 @@ class Nl2SqlService:
         row_limit: int,
     ) -> tuple[SafetyReport, str, QueryResults]:
         executable = enforce_row_limit(sql, row_limit)
+        if not self._use_oracle_runtime() and not self._catalog.tables:
+            return (
+                SafetyReport(
+                    is_safe=False,
+                    is_select_only=is_select_only(sql),
+                    row_limit_applied=row_limit,
+                    blocked_reason=_SCHEMA_EMPTY_MESSAGE,
+                ),
+                executable,
+                QueryResults(columns=[], rows=[], total=0),
+            )
         analysis = self.analyze_sql(executable, allowed, row_limit)
         if not analysis.safety.is_safe:
             return analysis.safety, executable, QueryResults(columns=[], rows=[], total=0)
@@ -1208,110 +1574,15 @@ class Nl2SqlService:
         return FeedbackData(history_id=history_id, rating=rating, saved=True, comment=comment)
 
     def seed_demo_learning_data(self) -> DemoLearningData:
-        """学習/feedback 機能をすぐ検証できる demo 履歴を投入する。"""
-        now = _utc_now()
-        profile = self.get_profile("default")
-        demo_items = [
-            HistoryItem(
-                id="demo-learning-invoice-total",
-                question="今月の請求金額が大きい取引先を見たい",
-                engine=Nl2SqlEngine.SELECT_AI_AGENT,
-                generated_sql=(
-                    "SELECT c.CUSTOMER_NAME, SUM(i.TOTAL_AMOUNT) AS TOTAL_AMOUNT "
-                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
-                    "GROUP BY c.CUSTOMER_NAME ORDER BY TOTAL_AMOUNT DESC"
-                ),
-                created_at=now,
-                elapsed_ms=842,
-                feedback_rating=FeedbackRating.GOOD,
-                profile_id=profile.id,
-                profile_name=profile.name,
-                rewritten_question="今月の請求金額合計が大きい取引先を降順で確認する",
-                executable_sql=(
-                    "SELECT c.CUSTOMER_NAME, SUM(i.TOTAL_AMOUNT) AS TOTAL_AMOUNT "
-                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
-                    "GROUP BY c.CUSTOMER_NAME ORDER BY TOTAL_AMOUNT DESC "
-                    "FETCH FIRST 100 ROWS ONLY"
-                ),
-                result_row_count=5,
-                result_columns=["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-                feedback_comment="集計軸と並び順が期待通り。few-shot に利用できる。",
-            ),
-            HistoryItem(
-                id="demo-learning-customer-sales",
-                question="顧客別の売上推移を確認したい",
-                engine=Nl2SqlEngine.SELECT_AI,
-                generated_sql=(
-                    "SELECT c.CUSTOMER_NAME, TRUNC(i.INVOICE_DATE, 'MM') AS SALES_MONTH, "
-                    "SUM(i.TOTAL_AMOUNT) AS SALES_AMOUNT "
-                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
-                    "GROUP BY c.CUSTOMER_NAME, TRUNC(i.INVOICE_DATE, 'MM')"
-                ),
-                created_at=now,
-                elapsed_ms=706,
-                feedback_rating=FeedbackRating.GOOD,
-                profile_id=profile.id,
-                profile_name=profile.name,
-                rewritten_question="顧客別・月別に請求金額合計を集計する",
-                executable_sql=(
-                    "SELECT c.CUSTOMER_NAME, TRUNC(i.INVOICE_DATE, 'MM') AS SALES_MONTH, "
-                    "SUM(i.TOTAL_AMOUNT) AS SALES_AMOUNT "
-                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
-                    "GROUP BY c.CUSTOMER_NAME, TRUNC(i.INVOICE_DATE, 'MM') "
-                    "FETCH FIRST 100 ROWS ONLY"
-                ),
-                result_row_count=12,
-                result_columns=["CUSTOMER_NAME", "SALES_MONTH", "SALES_AMOUNT"],
-                feedback_comment="顧客別・月別の粒度が正しい。",
-            ),
-            HistoryItem(
-                id="demo-learning-payment-delay",
-                question="入金が遅れている請求を確認したい",
-                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
-                generated_sql=(
-                    "SELECT i.INVOICE_ID, c.CUSTOMER_NAME, i.DUE_DATE, p.PAID_AT "
-                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
-                    "LEFT JOIN PAYMENTS p ON p.INVOICE_ID = i.INVOICE_ID "
-                    "WHERE p.PAID_AT IS NULL OR p.PAID_AT > i.DUE_DATE"
-                ),
-                created_at=now,
-                elapsed_ms=918,
-                feedback_rating=FeedbackRating.NEEDS_REVIEW,
-                profile_id=profile.id,
-                profile_name=profile.name,
-                rewritten_question="支払期日を過ぎた未入金または遅延入金の請求を確認する",
-                executable_sql=(
-                    "SELECT i.INVOICE_ID, c.CUSTOMER_NAME, i.DUE_DATE, p.PAID_AT "
-                    "FROM INVOICES i JOIN CUSTOMERS c ON c.CUSTOMER_ID = i.CUSTOMER_ID "
-                    "LEFT JOIN PAYMENTS p ON p.INVOICE_ID = i.INVOICE_ID "
-                    "WHERE p.PAID_AT IS NULL OR p.PAID_AT > i.DUE_DATE "
-                    "FETCH FIRST 100 ROWS ONLY"
-                ),
-                result_row_count=3,
-                result_columns=["INVOICE_ID", "CUSTOMER_NAME", "DUE_DATE", "PAID_AT"],
-                feedback_comment="遅延条件は妥当。業務上の猶予日数があれば追加したい。",
-            ),
-        ]
-        with self._lock:
-            existing_ids = {item.id for item in self._history}
-            new_items = [item for item in demo_items if item.id not in existing_ids]
-            self._history.extend(new_items)
-            for item in demo_items:
-                if item.feedback_rating is not None:
-                    self._feedback[item.id] = item.feedback_rating
-            if new_items:
-                self._feedback_indexed_ids.difference_update(item.id for item in new_items)
-        if new_items:
-            self._persist_state()
+        """Legacy endpoint kept without inserting fixed business data."""
         return DemoLearningData(
-            seeded_history_count=len(new_items),
-            seeded_feedback_count=sum(1 for item in new_items if item.feedback_rating is not None),
-            history_ids=[item.id for item in new_items],
-            profile_ids=[profile.id],
+            seeded_history_count=0,
+            seeded_feedback_count=0,
+            history_ids=[],
+            profile_ids=[],
             message=(
-                "Demo 学習データを投入しました。"
-                if new_items
-                else "Demo 学習データは投入済みです。"
+                "固定 demo 学習データは投入しません。Data Tools の sample data を"
+                "明示 import してください。"
             ),
         )
 
@@ -2055,6 +2326,15 @@ class Nl2SqlService:
                     settings.oci_genai_embed_model_id,
                 )
             except EmbeddingClientError as exc:
+                return (
+                    [self._deterministic_embedding(text) for text in texts],
+                    [
+                        "OCI GenAI embedding に失敗したため deterministic fallback "
+                        f"を使いました: {exc}"
+                    ],
+                    "deterministic-hash-1536",
+                )
+            except Exception as exc:  # pragma: no cover - defensive SDK boundary
                 return (
                     [self._deterministic_embedding(text) for text in texts],
                     [
@@ -3890,7 +4170,7 @@ class Nl2SqlService:
                 status=status(["oracle_adb", "select_ai"]),
                 method="POST",
                 endpoint="/api/nl2sql/preview",
-                request_hint='{"engine":"select_ai","question":"請求金額を確認したい"}',
+                request_hint='{"engine":"select_ai","question":"登録済みの表から主要な列を一覧したい"}',
                 expected="engine=select_ai, safety.is_safe=true, generated SQL が SELECT/WITH。",
                 next_action=next_action(
                     ["oracle_adb", "select_ai"],
@@ -3905,7 +4185,7 @@ class Nl2SqlService:
                 status=status(["oracle_adb", "select_ai_agent"]),
                 method="POST",
                 endpoint="/api/nl2sql/preview",
-                request_hint='{"engine":"select_ai_agent","question":"請求金額を確認したい"}',
+                request_hint='{"engine":"select_ai_agent","question":"登録済みの表から主要な列を一覧したい"}',
                 expected=(
                     "engine=select_ai_agent, engine_meta.team_name / conversation_id, "
                     "safety.is_safe=true。"
@@ -3924,7 +4204,7 @@ class Nl2SqlService:
                 method="POST",
                 endpoint="/api/nl2sql/preview",
                 request_hint=(
-                    '{"engine":"enterprise_ai_direct","question":"請求金額を確認したい"}'
+                    '{"engine":"enterprise_ai_direct","question":"登録済みの表から主要な列を一覧したい"}'
                 ),
                 expected=(
                     "engine=enterprise_ai_direct, provider=enterprise_ai_direct, "
@@ -5987,6 +6267,9 @@ class Nl2SqlService:
         except (EmbeddingClientError, OracleAdapterError, IndexError, ValueError) as exc:
             logger.warning("oracle feedback vector search fallback: %s", exc)
             return []
+        except Exception as exc:  # pragma: no cover - defensive SDK boundary
+            logger.warning("oracle feedback vector search fallback: %s", exc)
+            return []
         history_by_id = {item.id: item for item in history}
         ranked: list[SimilarHistoryItem] = []
         for row in rows:
@@ -6230,6 +6513,8 @@ class Nl2SqlService:
         allowed: AllowedObjects,
         row_limit: int | None,
     ) -> GeneratedSql:
+        if not self._use_oracle_runtime() and not self._catalog.tables:
+            raise ValueError(_SCHEMA_EMPTY_MESSAGE)
         candidates = (
             [
                 Nl2SqlEngine.SELECT_AI_AGENT,
@@ -6261,8 +6546,6 @@ class Nl2SqlService:
         # テスト/デモ用の明示的 failure trigger。実 adapter では不要。
         if f"{engine.value}_fail" in question.lower():
             raise RuntimeError("明示的な fallback テスト要求")
-        table = self._choose_table(question, profile, allowed)
-        columns = self._choose_columns(table, allowed)
         meta: dict[str, Any] = {
             "profile_id": profile.id,
             "profile_name": profile.name,
@@ -6312,6 +6595,10 @@ class Nl2SqlService:
                 )
             except OracleAdapterError as exc:
                 fallback_messages.append(f"{engine.value}: {exc}")
+        if not self._catalog.tables:
+            raise ValueError(_SCHEMA_EMPTY_MESSAGE)
+        table = self._choose_table(question, profile, allowed)
+        columns = self._choose_columns(table, allowed)
         direct_configured = self._enterprise_ai_client.is_configured()
         if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and direct_configured:
             try:
@@ -6580,18 +6867,12 @@ class Nl2SqlService:
         ]
         if not candidates:
             candidates = self._catalog.tables
+        if not candidates:
+            raise ValueError(_SCHEMA_EMPTY_MESSAGE)
         question_upper = question.upper()
         for table in candidates:
             if table.table_name in question_upper or table.logical_name in question:
                 return table
-        if "顧客" in question or "取引先" in question:
-            return next(
-                (table for table in candidates if table.table_name == "CUSTOMERS"), candidates[0]
-            )
-        if "入金" in question or "支払" in question:
-            return next(
-                (table for table in candidates if table.table_name == "PAYMENTS"), candidates[0]
-            )
         return candidates[0]
 
     def _choose_columns(self, table: SchemaTable, allowed: AllowedObjects) -> list[SchemaColumn]:
@@ -6611,7 +6892,7 @@ class Nl2SqlService:
 
     def _mock_execute(self, sql: str, row_limit: int) -> QueryResults:
         referenced = _extract_referenced_tables(sql)
-        table_name = referenced[0] if referenced else "INVOICES"
+        table_name = referenced[0] if referenced else ""
         table = next(
             (candidate for candidate in self._catalog.tables if candidate.table_name == table_name),
             None,
@@ -6890,100 +7171,7 @@ class Nl2SqlService:
         return recommendations
 
     def _build_default_catalog(self) -> SchemaCatalog:
-        return SchemaCatalog(
-            refreshed_at=_utc_now(),
-            tables=[
-                SchemaTable(
-                    table_name="INVOICES",
-                    logical_name="請求",
-                    comment="請求書ヘッダーと金額情報",
-                    row_count=1280,
-                    constraints=["PK_INVOICES", "FK_INVOICES_CUSTOMER"],
-                    columns=[
-                        SchemaColumn(
-                            column_name="INVOICE_ID",
-                            logical_name="請求ID",
-                            data_type="VARCHAR2",
-                            nullable=False,
-                        ),
-                        SchemaColumn(
-                            column_name="CUSTOMER_NAME",
-                            logical_name="取引先名",
-                            data_type="VARCHAR2",
-                            sample_values=["青山商事", "東京製作所", "大阪物流"],
-                        ),
-                        SchemaColumn(
-                            column_name="TOTAL_AMOUNT", logical_name="請求金額", data_type="NUMBER"
-                        ),
-                        SchemaColumn(
-                            column_name="INVOICE_DATE", logical_name="請求日", data_type="DATE"
-                        ),
-                        SchemaColumn(
-                            column_name="STATUS", logical_name="ステータス", data_type="VARCHAR2"
-                        ),
-                        SchemaColumn(
-                            column_name="DUE_DATE", logical_name="支払期限", data_type="DATE"
-                        ),
-                    ],
-                ),
-                SchemaTable(
-                    table_name="CUSTOMERS",
-                    logical_name="顧客",
-                    comment="顧客・取引先マスター",
-                    row_count=320,
-                    constraints=["PK_CUSTOMERS"],
-                    columns=[
-                        SchemaColumn(
-                            column_name="CUSTOMER_ID",
-                            logical_name="顧客ID",
-                            data_type="VARCHAR2",
-                            nullable=False,
-                        ),
-                        SchemaColumn(
-                            column_name="CUSTOMER_NAME",
-                            logical_name="取引先名",
-                            data_type="VARCHAR2",
-                            sample_values=["青山商事", "東京製作所", "大阪物流"],
-                        ),
-                        SchemaColumn(
-                            column_name="INDUSTRY", logical_name="業種", data_type="VARCHAR2"
-                        ),
-                        SchemaColumn(
-                            column_name="REGION", logical_name="地域", data_type="VARCHAR2"
-                        ),
-                    ],
-                ),
-                SchemaTable(
-                    table_name="PAYMENTS",
-                    logical_name="入金",
-                    comment="入金消込と支払状況",
-                    row_count=980,
-                    constraints=["PK_PAYMENTS", "FK_PAYMENTS_INVOICE"],
-                    columns=[
-                        SchemaColumn(
-                            column_name="PAYMENT_ID",
-                            logical_name="入金ID",
-                            data_type="VARCHAR2",
-                            nullable=False,
-                        ),
-                        SchemaColumn(
-                            column_name="INVOICE_ID", logical_name="請求ID", data_type="VARCHAR2"
-                        ),
-                        SchemaColumn(
-                            column_name="PAID_AMOUNT", logical_name="入金額", data_type="NUMBER"
-                        ),
-                        SchemaColumn(
-                            column_name="PAID_AT", logical_name="入金日", data_type="DATE"
-                        ),
-                        SchemaColumn(
-                            column_name="PAYMENT_METHOD",
-                            logical_name="入金方法",
-                            data_type="VARCHAR2",
-                        ),
-                    ],
-                ),
-            ],
-        )
+        return SchemaCatalog(refreshed_at=_utc_now(), tables=[])
 
 
 nl2sql_service = Nl2SqlService()

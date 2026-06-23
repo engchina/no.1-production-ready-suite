@@ -181,6 +181,38 @@ def test_update_oci_settings_writes_config_and_env(
     assert "OCI_REGION=ap-osaka-1" in env_text
 
 
+def test_update_oci_settings_does_not_write_empty_config_defaults(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    env_file = tmp_path / ".env"
+    env_file.write_text("KEEP_ME=1\nOCI_REGION=old-region\n", encoding="utf-8")
+    settings = get_settings()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(settings, "oci_config_file", "~/.oci/config")
+    monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
+    monkeypatch.setattr(settings, "oci_region", "us-chicago-1")
+
+    resp = client.patch(
+        "/api/settings/oci",
+        json={"user": "", "fingerprint": "", "tenancy": "", "region": ""},
+    )
+
+    assert resp.status_code == 200
+    config_text = (home / ".oci" / "config").read_text(encoding="utf-8")
+    assert "user=" not in config_text
+    assert "fingerprint=" not in config_text
+    assert "tenancy=" not in config_text
+    assert "region=" not in config_text
+    assert "key_file=" not in config_text
+    assert settings.oci_region == ""
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "KEEP_ME=1" in env_text
+    assert "OCI_REGION" not in env_text
+
+
 def test_read_oci_config_reports_missing_profile(tmp_path: Path) -> None:
     config_file = tmp_path / "config"
     config_file.write_text(

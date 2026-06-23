@@ -15,10 +15,10 @@ export function SqlAnalysisPage() {
   const [analysisUseLlm, setAnalysisUseLlm] = useState(false);
   const [analysis, setAnalysis] = useState<AnalyzeData | null>(null);
   const [execution, setExecution] = useState<QueryResults | null>(null);
-  const [repairSql, setRepairSql] = useState("SELECT BAD_COLUMN FROM INVOICES");
-  const [repairError, setRepairError] = useState('ORA-00904: "BAD_COLUMN": invalid identifier');
+  const [repairSql, setRepairSql] = useState("");
+  const [repairError, setRepairError] = useState("");
   const [repair, setRepair] = useState<RepairData | null>(null);
-  const [reverseSql, setReverseSql] = useState("SELECT TOTAL_AMOUNT FROM INVOICES");
+  const [reverseSql, setReverseSql] = useState("");
   const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [executeLoading, setExecuteLoading] = useState(false);

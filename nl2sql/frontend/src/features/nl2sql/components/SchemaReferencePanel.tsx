@@ -30,7 +30,7 @@ export function SchemaReferencePanel({
   onInsert: (text: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(["INVOICES"]));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   const filteredTables = useMemo(() => {
     const normalized = query.trim().toLowerCase();

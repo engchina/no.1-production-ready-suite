@@ -693,6 +693,29 @@ export interface DbAdminExecuteData {
   timing: TimingEnvelope;
 }
 
+export interface SampleDataInfo {
+  runtime: string;
+  profile_id: string;
+  confirmation: string;
+  objects: string[];
+  imported_objects: string[];
+  sql: Record<string, string[]>;
+  warnings: string[];
+}
+
+export interface SampleDataMutationData {
+  operation: string;
+  step: "tables" | "views" | "data" | "all";
+  runtime: string;
+  executed: boolean;
+  dry_run: boolean;
+  objects: string[];
+  statements: DbAdminStatementResult[];
+  warnings: string[];
+  profile_id: string;
+  timing: TimingEnvelope;
+}
+
 export interface DbAdminImportTabularData {
   table_name: string;
   filename: string;

@@ -10,6 +10,7 @@ interface MockApiState {
   commentApplyPayload: Record<string, unknown> | null;
   dbProfileDropPayload: Record<string, unknown> | null;
   evaluationSetPayload: Record<string, unknown> | null;
+  samplePayload: Record<string, unknown> | null;
 }
 
 const safety = {
@@ -113,7 +114,29 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     commentApplyPayload: null,
     dbProfileDropPayload: null,
     evaluationSetPayload: null,
+    samplePayload: null,
   };
+  const sampleObjects = ["DEPARTMENT", "EMPLOYEE", "PROJECT", "V_EMP_DEPT", "V_DEPT_PROJECT"];
+  const sampleSql = {
+    tables: [
+      "CREATE TABLE DEPARTMENT (DEPARTMENT_ID NUMBER PRIMARY KEY, DEPARTMENT_NAME VARCHAR2(100) NOT NULL)",
+      "CREATE TABLE EMPLOYEE (EMPLOYEE_ID NUMBER PRIMARY KEY, EMPLOYEE_NAME VARCHAR2(120) NOT NULL, DEPARTMENT_ID NUMBER)",
+      "CREATE TABLE PROJECT (PROJECT_ID NUMBER PRIMARY KEY, PROJECT_NAME VARCHAR2(160) NOT NULL, DEPARTMENT_ID NUMBER)",
+    ],
+    views: [
+      "CREATE OR REPLACE VIEW V_EMP_DEPT AS SELECT E.EMPLOYEE_ID, E.EMPLOYEE_NAME, D.DEPARTMENT_NAME FROM EMPLOYEE E JOIN DEPARTMENT D ON D.DEPARTMENT_ID = E.DEPARTMENT_ID",
+      "CREATE OR REPLACE VIEW V_DEPT_PROJECT AS SELECT D.DEPARTMENT_NAME, P.PROJECT_NAME FROM DEPARTMENT D JOIN PROJECT P ON P.DEPARTMENT_ID = D.DEPARTMENT_ID",
+    ],
+    data: ["INSERT INTO DEPARTMENT (DEPARTMENT_ID, DEPARTMENT_NAME) VALUES (10, '開発部')"],
+    delete: [
+      "DROP VIEW V_EMP_DEPT",
+      "DROP VIEW V_DEPT_PROJECT",
+      "DROP TABLE EMPLOYEE PURGE",
+      "DROP TABLE PROJECT PURGE",
+      "DROP TABLE DEPARTMENT PURGE",
+    ],
+  };
+  let sampleImportedObjects: string[] = [];
   let evaluationSets: Record<string, unknown>[] = [
     {
       id: "eval-001",
@@ -162,6 +185,53 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   ];
 
   await page.route("**/api/schema/catalog", (route) => fulfillJson(route, schemaCatalog));
+  await page.route("**/api/nl2sql/sample-data", (route) =>
+    fulfillJson(route, {
+      runtime: "deterministic",
+      profile_id: "sql_assist_sample",
+      confirmation: "SQL_ASSIST_SAMPLE",
+      objects: sampleObjects,
+      imported_objects: sampleImportedObjects,
+      sql: sampleSql,
+      warnings: [],
+    })
+  );
+  await page.route("**/api/nl2sql/sample-data/import", (route) => {
+    state.samplePayload = route.request().postDataJSON() as Record<string, unknown>;
+    if (state.samplePayload.execute) {
+      sampleImportedObjects = [...sampleObjects];
+    }
+    return fulfillJson(route, {
+      operation: "import",
+      step: state.samplePayload.step ?? "all",
+      runtime: "deterministic",
+      executed: Boolean(state.samplePayload.execute),
+      dry_run: !state.samplePayload.execute,
+      objects: sampleObjects,
+      statements: [{ index: 1, statement_type: "CREATE", status: state.samplePayload.execute ? "applied_to_local_state" : "dry_run", sql: sampleSql.tables[0], error_message: "" }],
+      warnings: [],
+      profile_id: "sql_assist_sample",
+      timing,
+    });
+  });
+  await page.route("**/api/nl2sql/sample-data/delete", (route) => {
+    state.samplePayload = route.request().postDataJSON() as Record<string, unknown>;
+    if (state.samplePayload.execute) {
+      sampleImportedObjects = [];
+    }
+    return fulfillJson(route, {
+      operation: "delete",
+      step: "all",
+      runtime: "deterministic",
+      executed: Boolean(state.samplePayload.execute),
+      dry_run: !state.samplePayload.execute,
+      objects: sampleObjects,
+      statements: [{ index: 1, statement_type: "DROP", status: state.samplePayload.execute ? "applied_to_local_state" : "dry_run", sql: sampleSql.delete[0], error_message: "" }],
+      warnings: [],
+      profile_id: "sql_assist_sample",
+      timing,
+    });
+  });
   await page.route("**/api/schema/import-csv", (route) =>
     fulfillJson(route, {
       table_name: "IMPORTED_CUSTOMERS",
@@ -1371,6 +1441,18 @@ test("data tools and engine operations run imported SQL Assist workflows", async
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/data-tools");
+  await expect(page.getByText("SQL Assist sample data")).toBeVisible();
+  await expect(page.getByText("DEPARTMENT").first()).toBeVisible();
+  await page.getByRole("button", { name: "Import Dry-run" }).first().click();
+  await expect.poll(() => api.samplePayload?.execute).toBe(false);
+  await page.getByLabel("Sample 確認語").fill("SQL_ASSIST_SAMPLE");
+  await page.getByLabel("実行する").check();
+  await page.getByRole("button", { name: "Import 実行" }).first().click();
+  await expect(page.getByText("導入済み 5")).toBeVisible();
+  expect(api.samplePayload?.confirmation).toBe("SQL_ASSIST_SAMPLE");
+  await page.getByRole("button", { name: "Delete 実行" }).first().click();
+  await expect(page.getByText("導入済み 0")).toBeVisible();
+
   await page.getByRole("button", { name: "Dry-run", exact: true }).click();
   await expect(page.getByText("IMPORTED_CUSTOMERS", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
