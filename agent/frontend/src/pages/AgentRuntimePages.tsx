@@ -49,6 +49,9 @@ import {
   type ExternalMcpServerSettings,
   type ExternalMcpToolInfo,
   type ExternalServiceSettings,
+  type MarketplaceSource,
+  type PluginManifest,
+  type PluginSummary,
   type MemoryKind,
   type RuntimeSnapshot,
   type RuntimeSnapshotImportResult,
@@ -2348,6 +2351,587 @@ function SkillDetailCard({ skill, onClose }: { skill: AgentSkill; onClose: () =>
           </div>
         ) : null}
         <JsonPanel title={t("skills.toolCalls")} value={skill.tool_calls} />
+      </CardContent>
+    </Card>
+  );
+}
+
+export function PluginsPage() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const plugins = useQuery({ queryKey: ["plugins"], queryFn: agentApi.listPlugins });
+  const [manifestJson, setManifestJson] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  function invalidate() {
+    void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+    void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+    void queryClient.invalidateQueries({ queryKey: ["agents"] });
+  }
+
+  const installMutation = useMutation({
+    mutationFn: () =>
+      agentApi.installPlugin({ manifest: JSON.parse(manifestJson) as PluginManifest }),
+    onSuccess: () => {
+      toast.success(t("plugins.installed"));
+      setFormOpen(false);
+      setManifestJson("");
+      invalidate();
+    },
+  });
+  const enabledMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      agentApi.setPluginEnabled(id, enabled),
+    onSuccess: () => {
+      toast.success(t("plugins.enabledUpdated"));
+      invalidate();
+    },
+  });
+  const uninstallMutation = useMutation({
+    mutationFn: (id: string) => agentApi.uninstallPlugin(id),
+    onSuccess: () => {
+      toast.success(t("plugins.uninstalled"));
+      invalidate();
+    },
+  });
+  const reloadMutation = useMutation({
+    mutationFn: () => agentApi.reloadPlugins(),
+    onSuccess: invalidate,
+  });
+
+  function install() {
+    setFormError(null);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(manifestJson);
+    } catch {
+      setFormError(t("plugins.invalidJson"));
+      return;
+    }
+    if (typeof parsed !== "object" || parsed === null) {
+      setFormError(t("plugins.invalidJson"));
+      return;
+    }
+    installMutation.mutate();
+  }
+
+  async function uninstall(plugin: PluginSummary) {
+    const ok = await confirm({
+      title: t("plugins.confirmUninstallTitle"),
+      description: t("plugins.confirmUninstallMessage", { id: plugin.id }),
+      confirmLabel: t("plugins.uninstall"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    });
+    if (ok) {
+      uninstallMutation.mutate(plugin.id);
+    }
+  }
+
+  const list = plugins.data?.plugins ?? [];
+  const busy = uninstallMutation.isPending || enabledMutation.isPending;
+
+  return (
+    <>
+      <PageHeader title={t("plugins.title")} subtitle={t("page.plugins.subtitle")} />
+      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+        <QueryState query={plugins}>
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle>{t("plugins.title")}</CardTitle>
+                <CardDescription>{t("plugins.description")}</CardDescription>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => reloadMutation.mutate()}
+                  loading={reloadMutation.isPending}
+                >
+                  <RefreshCw size={15} aria-hidden />
+                  {t("skills.reload")}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setFormOpen(true);
+                    setFormError(null);
+                  }}
+                >
+                  <Plus size={15} aria-hidden />
+                  {t("plugins.install")}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {list.length === 0 ? (
+                <EmptyState title={t("plugins.empty")} />
+              ) : (
+                <PluginTable
+                  plugins={list}
+                  onToggle={(id, enabled) => enabledMutation.mutate({ id, enabled })}
+                  onUninstall={uninstall}
+                  busy={busy}
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          {formOpen ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>{t("plugins.installTitle")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Field label={t("plugins.manifest")} htmlFor="plugin-manifest">
+                  <textarea
+                    id="plugin-manifest"
+                    value={manifestJson}
+                    rows={12}
+                    spellCheck={false}
+                    onChange={(event) => setManifestJson(event.target.value)}
+                    className={`${TEXTAREA_CLASS} font-mono`}
+                  />
+                  <p className="mt-1 text-xs leading-5 text-muted">{t("plugins.manifestHint")}</p>
+                </Field>
+                {formError ? <Banner severity="danger">{formError}</Banner> : null}
+                {installMutation.error ? (
+                  <Banner severity="danger">{(installMutation.error as Error).message}</Banner>
+                ) : null}
+                <div className="flex gap-2">
+                  <Button onClick={install} loading={installMutation.isPending}>
+                    <Download size={15} aria-hidden />
+                    {t("plugins.installSubmit")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setFormOpen(false);
+                      setFormError(null);
+                    }}
+                  >
+                    <X size={15} aria-hidden />
+                    {t("common.cancel")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+        </QueryState>
+      </main>
+    </>
+  );
+}
+
+function PluginBundle({ plugin }: { plugin: PluginSummary }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <StatusBadge variant="info" label={`${t("plugins.skills")} ${plugin.skill_count}`} />
+      <StatusBadge variant="info" label={`${t("plugins.mcp")} ${plugin.mcp_count}`} />
+      <StatusBadge variant="info" label={`${t("plugins.agents")} ${plugin.agent_count}`} />
+    </div>
+  );
+}
+
+function PluginTable({
+  plugins,
+  onToggle,
+  onUninstall,
+  busy,
+}: {
+  plugins: PluginSummary[];
+  onToggle: (id: string, enabled: boolean) => void;
+  onUninstall: (plugin: PluginSummary) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-border text-xs text-muted">
+              <th className="px-3 py-2 font-medium">{t("plugins.title")}</th>
+              <th className="px-3 py-2 font-medium">{t("plugins.source")}</th>
+              <th className="px-3 py-2 font-medium">{t("plugins.bundle")}</th>
+              <th className="px-3 py-2 font-medium">{t("plugins.enabledLabel")}</th>
+              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plugins.map((plugin) => (
+              <tr key={plugin.id} className="border-b border-border/70 last:border-0">
+                <td className="px-3 py-3 align-top">
+                  <p className="text-sm font-medium text-foreground">{plugin.name}</p>
+                  <p className="font-mono text-xs text-muted">
+                    {plugin.id} · v{plugin.version}
+                  </p>
+                </td>
+                <td className="px-3 py-3 align-top text-muted">
+                  {plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")}
+                </td>
+                <td className="px-3 py-3 align-top">
+                  <PluginBundle plugin={plugin} />
+                </td>
+                <td className="px-3 py-3 align-top">
+                  <Switch
+                    checked={plugin.enabled}
+                    aria-label={`${t("plugins.enabledLabel")} ${plugin.id}`}
+                    onCheckedChange={(checked) => onToggle(plugin.id, checked)}
+                  />
+                </td>
+                <td className="px-3 py-3 align-top">
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() => onUninstall(plugin)}
+                    disabled={busy}
+                    aria-label={`${t("plugins.uninstall")} ${plugin.id}`}
+                  >
+                    <Trash2 size={14} aria-hidden />
+                    {t("plugins.uninstall")}
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="grid gap-3 md:hidden">
+        {plugins.map((plugin) => (
+          <div key={plugin.id} className="space-y-2 rounded-md border border-border p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">{plugin.name}</p>
+                <p className="font-mono text-xs text-muted">
+                  {plugin.id} · v{plugin.version}
+                </p>
+              </div>
+              <Switch
+                checked={plugin.enabled}
+                aria-label={`${t("plugins.enabledLabel")} ${plugin.id}`}
+                onCheckedChange={(checked) => onToggle(plugin.id, checked)}
+              />
+            </div>
+            <PluginBundle plugin={plugin} />
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => onUninstall(plugin)}
+              disabled={busy}
+              aria-label={`${t("plugins.uninstall")} ${plugin.id}`}
+            >
+              <Trash2 size={14} aria-hidden />
+              {t("plugins.uninstall")}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function PluginMarketplacesPage() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const markets = useQuery({
+    queryKey: ["plugin-marketplaces"],
+    queryFn: agentApi.listPluginMarketplaces,
+  });
+  const [form, setForm] = useState({ id: "", name: "", url: "" });
+  const [formOpen, setFormOpen] = useState(false);
+  const [browseId, setBrowseId] = useState<string | null>(null);
+
+  function invalidate() {
+    void queryClient.invalidateQueries({ queryKey: ["plugin-marketplaces"] });
+  }
+  function invalidatePlugins() {
+    void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+    void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+    void queryClient.invalidateQueries({ queryKey: ["agents"] });
+  }
+
+  const addMutation = useMutation({
+    mutationFn: () =>
+      agentApi.addPluginMarketplace({
+        id: form.id.trim(),
+        name: form.name || undefined,
+        url: form.url || undefined,
+      }),
+    onSuccess: () => {
+      toast.success(t("marketplaces.added"));
+      setFormOpen(false);
+      setForm({ id: "", name: "", url: "" });
+      invalidate();
+    },
+  });
+  const refreshMutation = useMutation({
+    mutationFn: (id: string) => agentApi.refreshPluginMarketplace(id),
+    onSuccess: (_data, id) => {
+      toast.success(t("marketplaces.refreshed"));
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ["marketplace-plugins", id] });
+    },
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => agentApi.deletePluginMarketplace(id),
+    onSuccess: () => {
+      toast.success(t("marketplaces.deleted"));
+      invalidate();
+    },
+  });
+
+  function add() {
+    if (!form.id.trim()) {
+      toast.error(t("marketplaces.idRequired"));
+      return;
+    }
+    addMutation.mutate();
+  }
+
+  async function remove(source: MarketplaceSource) {
+    const ok = await confirm({
+      title: t("marketplaces.confirmDeleteTitle"),
+      description: t("marketplaces.confirmDeleteMessage", { id: source.id }),
+      confirmLabel: t("marketplaces.delete"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    });
+    if (ok) {
+      if (browseId === source.id) {
+        setBrowseId(null);
+      }
+      deleteMutation.mutate(source.id);
+    }
+  }
+
+  const list = markets.data?.marketplaces ?? [];
+  const busy = refreshMutation.isPending || deleteMutation.isPending;
+
+  return (
+    <>
+      <PageHeader title={t("marketplaces.title")} subtitle={t("page.pluginMarketplaces.subtitle")} />
+      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+        <QueryState query={markets}>
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle>{t("marketplaces.title")}</CardTitle>
+                <CardDescription>{t("marketplaces.description")}</CardDescription>
+              </div>
+              <Button size="sm" onClick={() => setFormOpen(true)}>
+                <Plus size={15} aria-hidden />
+                {t("marketplaces.add")}
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {list.length === 0 ? (
+                <EmptyState title={t("marketplaces.empty")} />
+              ) : (
+                <MarketplaceTable
+                  sources={list}
+                  onRefresh={(id) => refreshMutation.mutate(id)}
+                  onBrowse={(id) => setBrowseId((current) => (current === id ? null : id))}
+                  onDelete={remove}
+                  busy={busy}
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          {browseId ? (
+            <MarketplaceBrowse marketplaceId={browseId} onInstalled={invalidatePlugins} />
+          ) : null}
+
+          {formOpen ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>{t("marketplaces.addTitle")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Field label={t("marketplaces.id")} htmlFor="mkt-id">
+                  <input
+                    id="mkt-id"
+                    value={form.id}
+                    onChange={(event) => setForm({ ...form, id: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("marketplaces.name")} htmlFor="mkt-name">
+                  <input
+                    id="mkt-name"
+                    value={form.name}
+                    onChange={(event) => setForm({ ...form, name: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                <Field label={t("marketplaces.url")} htmlFor="mkt-url">
+                  <input
+                    id="mkt-url"
+                    value={form.url}
+                    onChange={(event) => setForm({ ...form, url: event.target.value })}
+                    className={INPUT_CLASS}
+                  />
+                  <p className="mt-1 text-xs leading-5 text-muted">{t("marketplaces.urlHint")}</p>
+                </Field>
+                {addMutation.error ? (
+                  <Banner severity="danger">{(addMutation.error as Error).message}</Banner>
+                ) : null}
+                <div className="flex gap-2">
+                  <Button onClick={add} loading={addMutation.isPending}>
+                    <Save size={15} aria-hidden />
+                    {t("common.create")}
+                  </Button>
+                  <Button variant="ghost" onClick={() => setFormOpen(false)}>
+                    <X size={15} aria-hidden />
+                    {t("common.cancel")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+        </QueryState>
+      </main>
+    </>
+  );
+}
+
+function MarketplaceTable({
+  sources,
+  onRefresh,
+  onBrowse,
+  onDelete,
+  busy,
+}: {
+  sources: MarketplaceSource[];
+  onRefresh: (id: string) => void;
+  onBrowse: (id: string) => void;
+  onDelete: (source: MarketplaceSource) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="grid gap-3">
+      {sources.map((source) => (
+        <div key={source.id} className="space-y-2 rounded-md border border-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">{source.name || source.id}</p>
+              <p className="font-mono text-xs text-muted">{source.id}</p>
+            </div>
+            <StatusBadge
+              variant="info"
+              label={`${t("marketplaces.pluginCount")}: ${source.plugin_count}`}
+            />
+          </div>
+          {source.url ? <p className="break-all text-xs text-muted">{source.url}</p> : null}
+          {source.last_error ? (
+            <Banner severity="warning">{source.last_error}</Banner>
+          ) : null}
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => onRefresh(source.id)}
+              disabled={busy}
+              aria-label={`${t("marketplaces.refresh")} ${source.id}`}
+            >
+              <RefreshCw size={14} aria-hidden />
+              {t("marketplaces.refresh")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onBrowse(source.id)}
+              aria-label={`${t("marketplaces.browse")} ${source.id}`}
+            >
+              <FileText size={14} aria-hidden />
+              {t("marketplaces.browse")}
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => onDelete(source)}
+              disabled={busy}
+              aria-label={`${t("marketplaces.delete")} ${source.id}`}
+            >
+              <Trash2 size={14} aria-hidden />
+              {t("marketplaces.delete")}
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MarketplaceBrowse({
+  marketplaceId,
+  onInstalled,
+}: {
+  marketplaceId: string;
+  onInstalled: () => void;
+}) {
+  const listing = useQuery({
+    queryKey: ["marketplace-plugins", marketplaceId],
+    queryFn: () => agentApi.listMarketplacePlugins(marketplaceId),
+  });
+  const installMutation = useMutation({
+    mutationFn: (pluginId: string) =>
+      agentApi.installPlugin({ marketplace_id: marketplaceId, plugin_id: pluginId }),
+    onSuccess: () => {
+      toast.success(t("plugins.installed"));
+      onInstalled();
+      void listing.refetch();
+    },
+    onError: (error) => toast.error((error as Error).message),
+  });
+  const plugins = listing.data?.plugins ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("marketplaces.available")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {listing.isLoading ? (
+          <LoadingState rows={3} label={t("common.loading")} />
+        ) : listing.error ? (
+          <Banner severity="danger">{(listing.error as Error).message}</Banner>
+        ) : plugins.length === 0 ? (
+          <EmptyState title={t("marketplaces.availableEmpty")} />
+        ) : (
+          <div className="grid gap-3">
+            {plugins.map((manifest) => (
+              <div
+                key={manifest.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground">{manifest.name}</p>
+                  <p className="font-mono text-xs text-muted">
+                    {manifest.id}
+                    {manifest.version ? ` · v${manifest.version}` : ""}
+                  </p>
+                  {manifest.description ? (
+                    <p className="text-xs text-muted">{manifest.description}</p>
+                  ) : null}
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => installMutation.mutate(manifest.id)}
+                  loading={installMutation.isPending}
+                  aria-label={`${t("marketplaces.installFrom")} ${manifest.id}`}
+                >
+                  <Download size={14} aria-hidden />
+                  {t("marketplaces.installFrom")}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

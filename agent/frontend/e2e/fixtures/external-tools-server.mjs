@@ -33,6 +33,33 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, 200, { status: "ok" });
     return;
   }
+  if (request.method === "GET" && request.url === "/marketplace") {
+    sendJson(response, 200, {
+      name: "Fixture Marketplace",
+      plugins: [
+        {
+          id: "fixture_plugin",
+          name: "Fixture Plugin",
+          version: "1.0.0",
+          description: "検証用 plugin(skill + MCP + agent を束ねる)",
+          skills: [
+            {
+              id: "fixture_plugin_skill",
+              name: "Fixture Skill",
+              tool_calls: [{ name: "agent_skill_list" }],
+            },
+          ],
+          mcp_servers: [
+            { server_id: "fixture_plugin_mcp", base_url: "http://127.0.0.1:8052/jsonrpc" },
+          ],
+          agents: [
+            { id: "fixture_plugin_agent", name: "Fixture Agent", tool_names: ["echo"] },
+          ],
+        },
+      ],
+    });
+    return;
+  }
   if (request.method === "POST" && request.url === "/query") {
     const payload = await readBody(request);
     sendJson(response, 200, {

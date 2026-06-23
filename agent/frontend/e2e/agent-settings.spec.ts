@@ -64,7 +64,7 @@ async function mockMissingOciRuntimeSettings(page: Page) {
         data: {
           backend: "local",
           local_storage_dir: "/u01/production-ready-rag",
-          object_storage_region: "ap-osaka-1",
+          object_storage_region: "",
           object_storage_namespace: "mytenancynamespace",
           object_storage_bucket: "",
           readiness: "ok",
@@ -88,7 +88,7 @@ async function mockMissingOciRuntimeSettings(page: Page) {
           user: "",
           fingerprint: "",
           tenancy: "",
-          region: "ap-osaka-1",
+          region: "",
           key_file: "~/.oci/oci_api_key.pem",
           key_file_exists: false,
           config_file_exists: false,
@@ -108,7 +108,7 @@ async function mockMissingOciRuntimeSettings(page: Page) {
         data: {
           backend: "local",
           local_storage_dir: "/u01/production-ready-rag",
-          object_storage_region: "ap-osaka-1",
+          object_storage_region: "",
           object_storage_namespace: "",
           object_storage_bucket: "",
           readiness: "ok",
@@ -180,8 +180,8 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByLabel("ユーザー OCID")).toHaveValue("");
     await expect(page.getByLabel("テナンシ OCID")).toHaveValue("");
     await expect(page.getByLabel("フィンガープリント")).toHaveValue("");
-    await expect(page.getByRole("combobox", { name: "リージョン", exact: true })).toContainText("ap-osaka-1");
-    await expect(page.getByText("OCI_REGION=ap-osaka-1")).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "リージョン", exact: true })).toContainText("選択してください");
+    await expect(page.getByText("OCI_REGION=ap-osaka-1")).toHaveCount(0);
     await expect(page.getByText(/=None/)).toHaveCount(0);
     await page.locator("main").evaluate((main) => {
       main.scrollTop = main.scrollHeight;
@@ -190,8 +190,12 @@ test.describe("Agent Runtime settings", () => {
     await page.getByLabel("ユーザー OCID").fill("ocid1.user.oc1..aaaaaaaa");
     await page.getByLabel("テナンシ OCID").fill("ocid1.tenancy.oc1..aaaaaaaa");
     await page.getByLabel("フィンガープリント").fill("12:34:56:78:90:ab:cd:ef");
+    await page.getByRole("combobox", { name: "リージョン", exact: true }).click();
+    await page.getByRole("option", { name: "ap-osaka-1" }).click();
     await page.getByRole("button", { name: /OCI 設定を保存/ }).click();
     await expect(page.getByText("保存しました").first()).toBeVisible();
+    await page.getByRole("combobox", { name: "Object Storage リージョン" }).click();
+    await page.getByRole("option", { name: "ap-osaka-1" }).click();
     await page.getByRole("button", { name: /Object Storage ネームスペース: 取得/ }).click();
     await expect(
       page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
@@ -350,6 +354,74 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("button", { name: "詳細 e2e_custom" })).toHaveCount(0);
 
     await page.setViewportSize({ width: 375, height: 812 });
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("plugin を manifest から install・無効化・アンインストールできる", async ({ page }) => {
+    await page.goto("/plugins");
+    await expect(page.getByRole("heading", { name: "プラグイン", level: 1 })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await page.getByRole("button", { name: "manifest から install" }).click();
+    const manifest = JSON.stringify({
+      id: "ui_plugin",
+      name: "UI Plugin",
+      version: "0.1.0",
+      skills: [
+        { id: "ui_plugin_skill", name: "UI Skill", tool_calls: [{ name: "agent_skill_list" }] },
+      ],
+      mcp_servers: [{ server_id: "ui_plugin_mcp", base_url: "http://127.0.0.1:8052/jsonrpc" }],
+      agents: [{ id: "ui_plugin_agent", name: "UI Agent", tool_names: ["echo"] }],
+    });
+    await page.locator("#plugin-manifest").fill(manifest);
+    await page.getByRole("button", { name: "install", exact: true }).click();
+    await expect(page.getByText("plugin を install しました")).toBeVisible();
+    await expect(page.getByRole("button", { name: "アンインストール ui_plugin" })).toBeVisible();
+
+    // 無効化(switch トグル)
+    await page.getByRole("switch", { name: "有効 ui_plugin" }).click();
+    await expect(page.getByText("plugin の有効状態を更新しました")).toBeVisible();
+
+    // アンインストール
+    await page.getByRole("button", { name: "アンインストール ui_plugin" }).click();
+    await page.getByRole("button", { name: "アンインストール", exact: true }).click();
+    await expect(page.getByText("plugin をアンインストールしました")).toBeVisible();
+    await expect(page.getByRole("button", { name: "アンインストール ui_plugin" })).toHaveCount(0);
+  });
+
+  test("marketplace を追加・refresh・install できる", async ({ page }) => {
+    await page.goto("/plugins/marketplaces");
+    await expect(page.getByRole("heading", { name: "マーケットプレイス", level: 1 })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await page.getByRole("button", { name: "マーケットプレイスを追加" }).click();
+    await page.locator("#mkt-id").fill("fixture_market");
+    await page.locator("#mkt-name").fill("Fixture Market");
+    await page.locator("#mkt-url").fill("http://127.0.0.1:8052/marketplace");
+    await page.getByRole("button", { name: "作成" }).click();
+    await expect(page.getByText("マーケットプレイスを追加しました")).toBeVisible();
+
+    // リモート HTTP 取得
+    await page.getByRole("button", { name: "更新 fixture_market" }).click();
+    await expect(page.getByText("plugin 一覧を更新しました")).toBeVisible();
+
+    // 閲覧 → install
+    await page.getByRole("button", { name: "plugin を見る fixture_market" }).click();
+    await expect(page.getByRole("heading", { name: "利用可能な plugin" })).toBeVisible();
+    await expect(page.getByText("Fixture Plugin")).toBeVisible();
+    await page.getByRole("button", { name: "install fixture_plugin" }).click();
+    await expect(page.getByText("plugin を install しました")).toBeVisible();
+
+    // cleanup: plugins ページでアンインストール、marketplace を削除
+    await page.goto("/plugins");
+    await page.getByRole("button", { name: "アンインストール fixture_plugin" }).click();
+    await page.getByRole("button", { name: "アンインストール", exact: true }).click();
+    await expect(page.getByText("plugin をアンインストールしました")).toBeVisible();
+
+    await page.goto("/plugins/marketplaces");
+    await page.getByRole("button", { name: "削除 fixture_market" }).click();
+    await page.getByRole("button", { name: "削除", exact: true }).click();
+    await expect(page.getByText("マーケットプレイスを削除しました")).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 

@@ -137,6 +137,7 @@ export const ja = {
   "settings.oci.field.tenancyOcid": "テナンシ OCID",
   "settings.oci.field.keyFile": "秘密鍵",
   "settings.oci.field.region": "リージョン",
+  "settings.oci.placeholder.region": "選択してください",
   "settings.oci.field.objectStorageRegion": "Object Storage リージョン",
   "settings.oci.field.objectStorageNamespace": "Object Storage ネームスペース",
   "settings.parserAdapters.subtitle":

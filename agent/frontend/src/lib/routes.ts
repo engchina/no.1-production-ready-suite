@@ -7,6 +7,8 @@ export const APP_ROUTES = {
   audit: "/audit",
   tools: "/tools",
   skills: "/skills",
+  plugins: "/plugins",
+  pluginMarketplaces: "/plugins/marketplaces",
   memory: "/memory",
   settingsConnection: "/settings/connection",
   settingsOci: "/settings/oci",

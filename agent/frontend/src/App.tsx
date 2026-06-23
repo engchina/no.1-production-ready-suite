@@ -18,6 +18,8 @@ import {
   ExternalSettingsPage,
   McpServersPage,
   MemoryPage,
+  PluginMarketplacesPage,
+  PluginsPage,
   RuntimeSnapshotSettingsPage,
   RuntimeSafetySettingsPage,
   RunsPage,
@@ -43,6 +45,8 @@ export function App() {
           <Route path={APP_ROUTES.audit} element={<AuditPage />} />
           <Route path={APP_ROUTES.tools} element={<ToolsPage />} />
           <Route path={APP_ROUTES.skills} element={<SkillsPage />} />
+          <Route path={APP_ROUTES.pluginMarketplaces} element={<PluginMarketplacesPage />} />
+          <Route path={APP_ROUTES.plugins} element={<PluginsPage />} />
           <Route path={APP_ROUTES.memory} element={<MemoryPage />} />
           <Route
             path={APP_ROUTES.settingsConnection}

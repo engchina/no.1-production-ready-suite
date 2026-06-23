@@ -47,6 +47,18 @@ from pr_backend_core import ApiResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.features.agent.config import runtime_config_store
+from app.features.agent.plugins import (
+    MarketplaceListing,
+    MarketplaceSource,
+    MarketplaceSourcesOutput,
+    PluginListOutput,
+    PluginManifest,
+    PluginRecord,
+    PluginSummary,
+    marketplace_registry,
+    plugin_registry,
+    reload_declared_plugins,
+)
 from app.features.agent.runtime import (
     AgentProfile,
     AgentProfilePatch,
@@ -213,6 +225,23 @@ class AgentSkillPatch(BaseModel):
     tool_calls: list[SkillToolCallTemplate] | None = None
     enabled: bool | None = None
     tags: list[str] | None = None
+
+
+class PluginInstallRequest(BaseModel):
+    manifest: PluginManifest | None = None
+    marketplace_id: str | None = None
+    plugin_id: str | None = None
+
+
+class PluginPatch(BaseModel):
+    enabled: bool | None = None
+
+
+class MarketplaceAddRequest(BaseModel):
+    id: str
+    name: str = ""
+    url: str | None = None
+    listing: MarketplaceListing | None = None
 
 
 class ToolPolicySettings(BaseModel):
@@ -475,7 +504,7 @@ class AdbSettingsUpdate(BaseModel):
 class UploadStorageSettingsData(BaseModel):
     backend: UploadStorageBackend = "local"
     local_storage_dir: str = "/u01/production-ready-rag"
-    object_storage_region: str = "ap-osaka-1"
+    object_storage_region: str = ""
     object_storage_namespace: str = ""
     object_storage_bucket: str = ""
     readiness: str = "missing"
@@ -598,7 +627,7 @@ class OciSettingsData(BaseModel):
 
 
 class OciObjectStorageSettingsUpdate(BaseModel):
-    object_storage_region: str = Field(default="ap-osaka-1", max_length=128)
+    object_storage_region: str = Field(default="", max_length=128)
     object_storage_namespace: str = Field(default="", max_length=256)
 
     @field_validator("object_storage_region", "object_storage_namespace")
@@ -643,7 +672,7 @@ class OciConfigTestResult(BaseModel):
 class OciObjectStorageNamespaceRequest(BaseModel):
     config_file: str = Field(default="~/.oci/config", max_length=1024)
     profile: str = Field(default="DEFAULT", max_length=128)
-    region: str = Field(default="ap-osaka-1", max_length=128)
+    region: str = Field(default="", max_length=128)
 
     @field_validator("config_file", "profile", "region")
     @classmethod
@@ -875,7 +904,7 @@ def _json_pointer_or_empty(value: str) -> str:
 
 def _write_env_values(
     path: Path,
-    values: dict[str, str],
+    values: Mapping[str, str | None],
     *,
     section_comment: str,
     error_detail: str,
@@ -886,21 +915,27 @@ def _write_env_values(
         written: set[str] = set()
         for line in lines:
             key = _env_assignment_key(line)
-            if key not in values:
+            if key is None or key not in values:
                 next_lines.append(line)
                 continue
             if key in written:
                 continue
-            next_lines.append(f"{key}={_format_env_value(values[key])}")
+            value = values[key]
+            if value is None:
+                written.add(key)
+                continue
+            next_lines.append(f"{key}={_format_env_value(value)}")
             written.add(key)
 
-        missing = [key for key in values if key not in written]
+        missing = [key for key, value in values.items() if key not in written and value is not None]
         if missing:
             if next_lines and next_lines[-1].strip():
                 next_lines.append("")
             next_lines.append(section_comment)
             for key in missing:
-                next_lines.append(f"{key}={_format_env_value(values[key])}")
+                value = values[key]
+                if value is not None:
+                    next_lines.append(f"{key}={_format_env_value(value)}")
 
         _replace_env_file(path, "\n".join(next_lines).rstrip() + "\n")
     except OSError as exc:
@@ -1713,7 +1748,6 @@ def _oci_genai_inference_client(settings: object) -> object:
         oci_config,
         _settings_str_from(settings, "oci_config_file", "~/.oci/config"),
         _settings_str_from(settings, "oci_config_profile", "DEFAULT"),
-        region=_settings_str_from(settings, "oci_region", "ap-osaka-1"),
     )
     return genai.GenerativeAiInferenceClient(config)
 
@@ -2015,7 +2049,7 @@ def _upload_storage_settings_data(settings: object) -> UploadStorageSettingsData
         object_storage_region=_settings_str_from(
             settings,
             "object_storage_region",
-            "ap-osaka-1",
+            "",
         ),
         object_storage_namespace=_settings_str_from(settings, "object_storage_namespace"),
         object_storage_bucket=_settings_str_from(settings, "object_storage_bucket"),
@@ -2074,7 +2108,6 @@ def _oci_settings_data(settings: object) -> OciSettingsData:
     parsed = _read_runtime_oci_config(settings)
     config_file = _settings_str_from(settings, "oci_config_file", "~/.oci/config")
     profile = _settings_str_from(settings, "oci_config_profile", "DEFAULT")
-    region = _settings_str_from(settings, "oci_region", "ap-osaka-1")
     config_path = Path(config_file).expanduser()
     key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
 
@@ -2084,7 +2117,7 @@ def _oci_settings_data(settings: object) -> OciSettingsData:
         user=parsed.user if parsed is not None else "",
         fingerprint=parsed.fingerprint if parsed is not None else "",
         tenancy=parsed.tenancy if parsed is not None else "",
-        region=region.strip() or (parsed.region if parsed is not None else ""),
+        region=parsed.region if parsed is not None else "",
         key_file=OCI_PRIVATE_KEY_FILE,
         key_file_exists=key_path.is_file(),
         config_file_exists=config_path.is_file(),
@@ -2213,9 +2246,14 @@ def _write_oci_config(settings: object, payload: OciSettingsUpdate) -> Path:
         "fingerprint": payload.fingerprint,
         "tenancy": payload.tenancy,
         "region": payload.region,
-        "key_file": OCI_PRIVATE_KEY_FILE,
     }
-    _set_oci_config_profile(parser, profile, values)
+    if any(value.strip() for value in values.values()):
+        values["key_file"] = OCI_PRIVATE_KEY_FILE
+    _set_oci_config_profile(
+        parser,
+        profile,
+        {key: value for key, value in values.items() if value.strip()},
+    )
     _atomic_write_oci_config(target, parser)
     return target
 
@@ -2297,12 +2335,13 @@ def _ensure_private_directory(path: Path) -> None:
 
 
 def _persist_oci_settings(settings: object, payload: OciSettingsUpdate) -> None:
+    region = payload.region.strip()
     _write_env_values(
         BACKEND_ENV_FILE,
         {
             "OCI_CONFIG_FILE": _settings_str_from(settings, "oci_config_file", "~/.oci/config"),
             "OCI_CONFIG_PROFILE": _settings_str_from(settings, "oci_config_profile", "DEFAULT"),
-            "OCI_REGION": payload.region,
+            "OCI_REGION": region or None,
         },
         section_comment="# OCI 共通",
         error_detail="OCI 認証設定を backend/.env へ保存できませんでした。",
@@ -2316,7 +2355,7 @@ def _persist_oci_object_storage_settings(settings: object) -> None:
             "OBJECT_STORAGE_REGION": _settings_str_from(
                 settings,
                 "object_storage_region",
-                "ap-osaka-1",
+                "",
             ),
             "OBJECT_STORAGE_NAMESPACE": _settings_str_from(settings, "object_storage_namespace"),
         },
@@ -3617,6 +3656,170 @@ async def delete_agent_skill(
     )
 
 
+def _plugin_summary(record: PluginRecord) -> PluginSummary:
+    return PluginSummary(
+        id=record.id,
+        name=record.name,
+        version=record.version,
+        description=record.description,
+        author=record.author,
+        enabled=record.enabled,
+        marketplace_id=record.marketplace_id,
+        skill_count=record.skill_count,
+        mcp_count=record.mcp_count,
+        agent_count=record.agent_count,
+    )
+
+
+def _plugin_list_response(metadata: dict[str, object] | None = None) -> PluginListOutput:
+    plugins = [_plugin_summary(record) for record in plugin_registry.list()]
+    meta: dict[str, object] = {"count": len(plugins)}
+    if metadata:
+        meta.update(metadata)
+    return PluginListOutput(plugins=plugins, metadata=meta)
+
+
+@router.get("/plugins", response_model=ApiResponse[PluginListOutput])
+async def list_plugins(_: None = Depends(require_viewer)) -> ApiResponse[PluginListOutput]:
+    return ApiResponse(data=_plugin_list_response())
+
+
+@router.post("/plugins", response_model=ApiResponse[PluginRecord])
+async def install_plugin(
+    payload: PluginInstallRequest,
+    _: None = Depends(require_admin),
+) -> ApiResponse[PluginRecord]:
+    """plugin を install する。body は manifest 直指定 or (marketplace_id, plugin_id)。"""
+    manifest = payload.manifest
+    if manifest is None:
+        if not payload.marketplace_id or not payload.plugin_id:
+            raise HTTPException(
+                status_code=400,
+                detail="manifest or (marketplace_id, plugin_id) is required",
+            )
+        manifest = marketplace_registry.find_manifest(payload.marketplace_id, payload.plugin_id)
+        if manifest is None:
+            raise HTTPException(status_code=404, detail="plugin not found in marketplace")
+    if plugin_registry.get(manifest.id) is not None:
+        raise HTTPException(status_code=409, detail="plugin already installed")
+    try:
+        record = plugin_registry.install(manifest, marketplace_id=payload.marketplace_id)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(data=record)
+
+
+@router.post("/plugins/reload", response_model=ApiResponse[PluginListOutput])
+async def reload_plugins(_: None = Depends(require_admin)) -> ApiResponse[PluginListOutput]:
+    counts = reload_declared_plugins()
+    return ApiResponse(data=_plugin_list_response({"reloaded": counts}))
+
+
+@router.get("/plugins/marketplaces", response_model=ApiResponse[MarketplaceSourcesOutput])
+async def list_plugin_marketplaces(
+    _: None = Depends(require_viewer),
+) -> ApiResponse[MarketplaceSourcesOutput]:
+    return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
+
+
+@router.post("/plugins/marketplaces", response_model=ApiResponse[MarketplaceSource])
+async def add_plugin_marketplace(
+    payload: MarketplaceAddRequest,
+    _: None = Depends(require_admin),
+) -> ApiResponse[MarketplaceSource]:
+    try:
+        source = MarketplaceSource(
+            id=payload.id, name=payload.name or payload.id, url=payload.url
+        )
+        return ApiResponse(data=marketplace_registry.add(source, payload.listing))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/plugins/marketplaces/{marketplace_id}/refresh",
+    response_model=ApiResponse[MarketplaceSource],
+)
+async def refresh_plugin_marketplace(
+    marketplace_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[MarketplaceSource]:
+    """marketplace の url から plugin 一覧を HTTP 取得して更新する(url 無しは no-op)。"""
+    try:
+        return ApiResponse(data=marketplace_registry.refresh(marketplace_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+
+
+@router.get(
+    "/plugins/marketplaces/{marketplace_id}/plugins",
+    response_model=ApiResponse[MarketplaceListing],
+)
+async def list_marketplace_plugins(
+    marketplace_id: str,
+    _: None = Depends(require_viewer),
+) -> ApiResponse[MarketplaceListing]:
+    try:
+        return ApiResponse(data=marketplace_registry.get_listing(marketplace_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+
+
+@router.delete(
+    "/plugins/marketplaces/{marketplace_id}",
+    response_model=ApiResponse[MarketplaceSourcesOutput],
+)
+async def delete_plugin_marketplace(
+    marketplace_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[MarketplaceSourcesOutput]:
+    try:
+        marketplace_registry.remove(marketplace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="marketplace not found") from exc
+    return ApiResponse(data=MarketplaceSourcesOutput(marketplaces=marketplace_registry.list()))
+
+
+@router.get("/plugins/{plugin_id}", response_model=ApiResponse[PluginRecord])
+async def get_plugin(
+    plugin_id: str,
+    _: None = Depends(require_viewer),
+) -> ApiResponse[PluginRecord]:
+    record = plugin_registry.get(plugin_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="plugin not found")
+    return ApiResponse(data=record)
+
+
+@router.patch("/plugins/{plugin_id}", response_model=ApiResponse[PluginRecord])
+async def patch_plugin(
+    plugin_id: str,
+    patch: PluginPatch,
+    _: None = Depends(require_admin),
+) -> ApiResponse[PluginRecord]:
+    if patch.enabled is None:
+        record = plugin_registry.get(plugin_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="plugin not found")
+        return ApiResponse(data=record)
+    try:
+        return ApiResponse(data=plugin_registry.set_enabled(plugin_id, patch.enabled))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="plugin not found") from exc
+
+
+@router.delete("/plugins/{plugin_id}", response_model=ApiResponse[PluginListOutput])
+async def uninstall_plugin(
+    plugin_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[PluginListOutput]:
+    try:
+        plugin_registry.uninstall(plugin_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="plugin not found") from exc
+    return ApiResponse(data=_plugin_list_response())
+
+
 @router.get("/agent/tools", response_model=ApiResponse[ToolsData])
 async def list_tool_names_compat() -> ApiResponse[ToolsData]:
     """旧 UI/テスト互換の names-only ツール一覧を返す。"""
@@ -3990,6 +4193,20 @@ async def patch_agent(
         raise HTTPException(status_code=404, detail="agent not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/agents/{agent_id}", response_model=ApiResponse[AgentsData])
+async def delete_agent(
+    agent_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentsData]:
+    try:
+        runtime_repository.delete_agent(agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="agent not found") from exc
+    return ApiResponse(data=AgentsData(agents=runtime_repository.list_agents()))
 
 
 @router.get("/memory/search", response_model=ApiResponse[MemoryData])

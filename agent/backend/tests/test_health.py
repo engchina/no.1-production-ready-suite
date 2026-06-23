@@ -88,13 +88,13 @@ def _settings_fixture(**overrides: object) -> SimpleNamespace:
         "agent_rbac_enabled": False,
         "upload_storage_backend": "local",
         "local_storage_dir": "/u01/production-ready-rag",
-        "object_storage_region": "ap-osaka-1",
+        "object_storage_region": "",
         "object_storage_namespace": "",
         "object_storage_bucket": "",
         "max_upload_bytes": 100 * 1024 * 1024,
         "oci_config_file": "~/.oci/config",
         "oci_config_profile": "DEFAULT",
-        "oci_region": "ap-osaka-1",
+        "oci_region": "",
         "oci_user_ocid": "",
         "oci_fingerprint": "",
         "oci_tenancy_ocid": "",
@@ -860,7 +860,7 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
         "user": "",
         "fingerprint": "",
         "tenancy": "",
-        "region": "ap-osaka-1",
+        "region": "",
         "key_file": key_file,
         "key_file_exists": False,
         "config_file_exists": False,
@@ -872,7 +872,7 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
     storage = storage_resp.json()["data"]
     assert storage["backend"] == "local"
     assert storage["local_storage_dir"] == "/u01/production-ready-rag"
-    assert storage["object_storage_region"] == "ap-osaka-1"
+    assert storage["object_storage_region"] == ""
     assert storage["object_storage_namespace"] == ""
     assert storage["object_storage_bucket"] == ""
 
@@ -1003,6 +1003,35 @@ def test_oci_settings_save_writes_config_and_env_like_rag(
     assert data["user"] == "ocid1.user.oc1..aaaaaaaa"
     assert data["region"] == "us-chicago-1"
     assert data["config_file_exists"] is True
+
+
+def test_oci_settings_save_does_not_write_empty_defaults_like_rag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / ".oci" / "config"
+    env_file = tmp_path / ".env"
+    key_file = tmp_path / ".oci" / "oci_api_key.pem"
+    monkeypatch.setattr(agent_router, "_oci_settings_state", None)
+    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", str(key_file))
+    settings = _settings_fixture(oci_config_file=str(config_file), oci_region="us-chicago-1")
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+
+    resp = client.patch(
+        "/api/settings/oci",
+        json={"user": "", "fingerprint": "", "tenancy": "", "region": ""},
+    )
+
+    assert resp.status_code == 200
+    config_text = config_file.read_text(encoding="utf-8")
+    assert "user=" not in config_text
+    assert "fingerprint=" not in config_text
+    assert "tenancy=" not in config_text
+    assert "region=" not in config_text
+    assert "key_file=" not in config_text
+    assert settings.oci_region == ""
+    assert "OCI_REGION" not in env_file.read_text(encoding="utf-8")
 
 
 def test_upload_oci_private_key_writes_pem_like_rag(
@@ -8375,5 +8404,147 @@ def test_skill_runtime_crud_and_builtin_protection() -> None:
 
 def test_skill_reload_endpoint_returns_counts() -> None:
     resp = client.post("/api/skills/reload")
+    assert resp.status_code == 200
+    assert "reloaded" in resp.json()["data"]["metadata"]
+
+
+def _plugin_manifest(plugin_id: str = "e2e_plugin") -> dict[str, Any]:
+    return {
+        "id": plugin_id,
+        "name": "E2E Plugin",
+        "version": "1.0.0",
+        "skills": [
+            {
+                "id": f"{plugin_id}_skill",
+                "name": "PLG Skill",
+                "tool_calls": [{"name": "agent_skill_list"}],
+            }
+        ],
+        "mcp_servers": [
+            {"server_id": f"{plugin_id}_mcp", "base_url": "http://127.0.0.1:9/jsonrpc"}
+        ],
+        "agents": [{"id": f"{plugin_id}_agent", "name": "PLG Agent", "tool_names": ["echo"]}],
+    }
+
+
+def _skill_ids() -> set[str]:
+    return {s["id"] for s in client.get("/api/skills").json()["data"]["skills"]}
+
+
+def _mcp_ids() -> set[str]:
+    data = client.get("/api/settings/external-mcp-servers").json()["data"]
+    return {s["server_id"] for s in data["servers"]}
+
+
+def _agent_ids() -> set[str]:
+    return {a["id"] for a in client.get("/api/agents").json()["data"]["agents"]}
+
+
+def test_plugin_install_expands_registries_and_uninstall_removes() -> None:
+    pid = "e2e_plugin"
+    src = f"plugin:{pid}"
+    created = client.post("/api/plugins", json={"manifest": _plugin_manifest(pid)})
+    assert created.status_code == 200
+    data = created.json()["data"]
+    assert (data["skill_count"], data["mcp_count"], data["agent_count"]) == (1, 1, 1)
+
+    # 3 registry に source=plugin:<id> で展開される
+    skills = {s["id"]: s for s in client.get("/api/skills").json()["data"]["skills"]}
+    assert skills[f"{pid}_skill"]["source"] == src
+    assert f"{pid}_mcp" in _mcp_ids()
+    agents = {a["id"]: a for a in client.get("/api/agents").json()["data"]["agents"]}
+    assert agents[f"{pid}_agent"]["source"] == src
+
+    # disable で外れる
+    patched = client.patch(f"/api/plugins/{pid}", json={"enabled": False})
+    assert patched.status_code == 200 and patched.json()["data"]["enabled"] is False
+    assert f"{pid}_skill" not in _skill_ids()
+    assert f"{pid}_mcp" not in _mcp_ids()
+    assert f"{pid}_agent" not in _agent_ids()
+
+    # enable で戻る
+    client.patch(f"/api/plugins/{pid}", json={"enabled": True})
+    assert f"{pid}_skill" in _skill_ids()
+
+    # 重複 install は 409
+    assert client.post("/api/plugins", json={"manifest": _plugin_manifest(pid)}).status_code == 409
+
+    # uninstall で全除去
+    deleted = client.request("DELETE", f"/api/plugins/{pid}")
+    assert deleted.status_code == 200
+    assert pid not in {p["id"] for p in deleted.json()["data"]["plugins"]}
+    assert f"{pid}_skill" not in _skill_ids()
+    assert f"{pid}_mcp" not in _mcp_ids()
+    assert f"{pid}_agent" not in _agent_ids()
+
+
+def test_plugin_marketplace_add_refresh_and_install(monkeypatch: MonkeyPatch) -> None:
+    pid = "mkt_plugin"
+    listing_payload = {"name": "Test Market", "plugins": [_plugin_manifest(pid)]}
+
+    class _FakeMarketResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return listing_payload
+
+    class FakeMarketClient:
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self) -> "FakeMarketClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, *, headers: dict[str, str]) -> _FakeMarketResponse:
+            return _FakeMarketResponse()
+
+    monkeypatch.setattr("app.features.agent.plugins.httpx.Client", FakeMarketClient)
+
+    add = client.post(
+        "/api/plugins/marketplaces",
+        json={"id": "test_market", "name": "Test Market", "url": "https://example.test/m.json"},
+    )
+    assert add.status_code == 200
+
+    refreshed = client.post("/api/plugins/marketplaces/test_market/refresh")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["data"]["plugin_count"] == 1
+    assert refreshed.json()["data"]["last_error"] is None
+
+    listing = client.get("/api/plugins/marketplaces/test_market/plugins")
+    assert pid in {m["id"] for m in listing.json()["data"]["plugins"]}
+
+    installed = client.post(
+        "/api/plugins", json={"marketplace_id": "test_market", "plugin_id": pid}
+    )
+    assert installed.status_code == 200
+    assert installed.json()["data"]["marketplace_id"] == "test_market"
+
+    # cleanup
+    client.request("DELETE", f"/api/plugins/{pid}")
+    removed = client.request("DELETE", "/api/plugins/marketplaces/test_market")
+    assert removed.status_code == 200
+    assert "test_market" not in {m["id"] for m in removed.json()["data"]["marketplaces"]}
+    assert client.post("/api/plugins/marketplaces/test_market/refresh").status_code == 404
+
+
+def test_delete_agent_and_default_protection() -> None:
+    created = client.post(
+        "/api/agents", json={"id": "tmp_agent", "name": "Tmp", "tool_names": ["echo"]}
+    )
+    assert created.status_code == 200
+    deleted = client.request("DELETE", "/api/agents/tmp_agent")
+    assert deleted.status_code == 200
+    assert "tmp_agent" not in {a["id"] for a in deleted.json()["data"]["agents"]}
+    assert client.request("DELETE", "/api/agents/default").status_code == 400
+    assert client.request("DELETE", "/api/agents/missing").status_code == 404
+
+
+def test_plugin_reload_endpoint_returns_counts() -> None:
+    resp = client.post("/api/plugins/reload")
     assert resp.status_code == 200
     assert "reloaded" in resp.json()["data"]["metadata"]

@@ -299,6 +299,32 @@ class AgentRuntimeConfigStore:
             self._mcp_default_id = server_id
             return self._mcp_default_id
 
+    def set_plugin_mcp_servers(
+        self, source: str, configs: list[ExternalMcpRuntimeConfig]
+    ) -> None:
+        """指定 source(例: plugin:<id>)の MCP server を一括置換する。default は保護。"""
+        with self._lock:
+            self._remove_mcp_source_locked(source)
+            for config in configs:
+                sid = config.server_id.strip()
+                if not sid or sid == "default":
+                    continue
+                self._mcp_servers[sid] = config.model_copy(deep=True, update={"source": source})
+
+    def remove_mcp_servers_by_source(self, source: str) -> None:
+        with self._lock:
+            self._remove_mcp_source_locked(source)
+
+    def _remove_mcp_source_locked(self, source: str) -> None:
+        for sid in [
+            server_id
+            for server_id, config in self._mcp_servers.items()
+            if config.source == source and server_id != "default"
+        ]:
+            del self._mcp_servers[sid]
+            if self._mcp_default_id == sid:
+                self._mcp_default_id = "default"
+
     def patch_mcp(
         self,
         *,

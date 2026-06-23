@@ -23,8 +23,8 @@ class Settings(BaseServiceSettings):
     oci_key_file_exists: bool = False
     oci_config_file_exists: bool = False
     oci_compartment_id: str = ""
-    oci_region: str = "ap-osaka-1"
-    object_storage_region: str = "ap-osaka-1"
+    oci_region: str = ""
+    object_storage_region: str = ""
     object_storage_namespace: str = ""
     object_storage_bucket: str = ""
     upload_storage_backend: str = "local"
@@ -103,6 +103,9 @@ class Settings(BaseServiceSettings):
     # Skill 外部定義: 中立ディレクトリ(skills/<id>/SKILL.md)と JSON 宣言。
     agent_skills_dir: str | None = None
     agent_skills_definitions_json: str | None = None
+    # Plugin 宣言: install 済み plugin manifest と marketplace ソース。
+    agent_plugins_json: str | None = None
+    agent_plugin_marketplaces_json: str | None = None
     agent_planner_provider: str = "heuristic"
     agent_planner_oci_responses_base_url: str | None = None
     agent_planner_oci_responses_api_key: str | None = None

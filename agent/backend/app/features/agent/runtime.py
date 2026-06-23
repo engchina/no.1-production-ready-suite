@@ -142,6 +142,8 @@ class AgentProfile(BaseModel):
     tool_names: list[str] = Field(default_factory=list)
     command_allowed_prefixes: list[str] = Field(default_factory=list)
     enabled: bool = True
+    # 由来層: builtin(default)/ runtime(UI/API)/ plugin:<id>(plugin install)。
+    source: str = "runtime"
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -302,6 +304,9 @@ class AgentRuntimeRepositoryContract(Protocol):
     def list_agents(self) -> list[AgentProfile]: ...
     def create_agent(self, agent: AgentProfile) -> AgentProfile: ...
     def patch_agent(self, agent_id: str, patch: AgentProfilePatch) -> AgentProfile: ...
+    def delete_agent(self, agent_id: str) -> None: ...
+    def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None: ...
+    def remove_agents_by_source(self, source: str) -> None: ...
     def add_memory(self, entry: MemoryEntry) -> MemoryEntry: ...
     def search_memory(self, request: MemorySearchRequest) -> list[MemoryEntry]: ...
     def export_snapshot(self) -> AgentRuntimeSnapshot: ...
@@ -610,6 +615,44 @@ class AgentRuntimeRepository:
             agent.updated_at = _now()
             self._persist_locked()
             return agent.model_copy(deep=True)
+
+    def delete_agent(self, agent_id: str) -> None:
+        with self._lock:
+            if agent_id == "default":
+                raise ValueError("default agent cannot be removed")
+            if agent_id not in self._agents:
+                raise KeyError(agent_id)
+            del self._agents[agent_id]
+            self._persist_locked()
+
+    def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None:
+        """指定 source(例: plugin:<id>)の agent を一括置換する。default は保護。"""
+        with self._lock:
+            for agent_id in [
+                aid
+                for aid, agent in self._agents.items()
+                if agent.source == source and aid != "default"
+            ]:
+                del self._agents[agent_id]
+            now = _now()
+            for agent in agents:
+                if agent.id == "default":
+                    continue
+                self._validate_agent_tools(agent.tool_names)
+                self._agents[agent.id] = agent.model_copy(
+                    deep=True, update={"source": source, "created_at": now, "updated_at": now}
+                )
+            self._persist_locked()
+
+    def remove_agents_by_source(self, source: str) -> None:
+        with self._lock:
+            for agent_id in [
+                aid
+                for aid, agent in self._agents.items()
+                if agent.source == source and aid != "default"
+            ]:
+                del self._agents[agent_id]
+            self._persist_locked()
 
     def add_memory(self, entry: MemoryEntry) -> MemoryEntry:
         with self._lock:
@@ -2838,6 +2881,7 @@ def _default_agent() -> AgentProfile:
         description="外部 RAG / NL2SQL と承認フローを使う既定 Agent。",
         instructions="業務データは外部ツール経由で取得し、根拠と監査情報を残す。",
         tool_names=tool_registry.names(),
+        source="builtin",
     )
 
 

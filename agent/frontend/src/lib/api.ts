@@ -290,6 +290,56 @@ export interface AgentSkillWritePayload {
   tags?: string[];
 }
 
+export interface PluginManifest {
+  id: string;
+  name: string;
+  version?: string;
+  description?: string;
+  author?: string;
+  skills?: AgentSkill[];
+  mcp_servers?: Record<string, unknown>[];
+  agents?: Record<string, unknown>[];
+}
+
+export interface PluginSummary {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  enabled: boolean;
+  marketplace_id?: string | null;
+  skill_count: number;
+  mcp_count: number;
+  agent_count: number;
+}
+
+export interface PluginRecord extends PluginSummary {
+  manifest: PluginManifest;
+}
+
+export interface PluginListData {
+  plugins: PluginSummary[];
+  metadata: Record<string, unknown>;
+}
+
+export interface MarketplaceSource {
+  id: string;
+  name: string;
+  url?: string | null;
+  plugin_count: number;
+  last_error?: string | null;
+}
+
+export interface MarketplaceSourcesData {
+  marketplaces: MarketplaceSource[];
+}
+
+export interface MarketplaceListing {
+  name: string;
+  plugins: PluginManifest[];
+}
+
 export interface ObservabilityStatus {
   metrics_enabled: boolean;
   prometheus_metrics_path: string;
@@ -839,6 +889,48 @@ export const agentApi = {
       method: "DELETE",
     }),
   reloadSkills: () => request<AgentSkillListData>("/api/skills/reload", { method: "POST" }),
+  listPlugins: () => request<PluginListData>("/api/plugins"),
+  getPlugin: (pluginId: string) =>
+    request<PluginRecord>(`/api/plugins/${encodeURIComponent(pluginId)}`),
+  installPlugin: (payload: {
+    manifest?: PluginManifest;
+    marketplace_id?: string;
+    plugin_id?: string;
+  }) => request<PluginRecord>("/api/plugins", { method: "POST", body: JSON.stringify(payload) }),
+  setPluginEnabled: (pluginId: string, enabled: boolean) =>
+    request<PluginRecord>(`/api/plugins/${encodeURIComponent(pluginId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  uninstallPlugin: (pluginId: string) =>
+    request<PluginListData>(`/api/plugins/${encodeURIComponent(pluginId)}`, { method: "DELETE" }),
+  reloadPlugins: () => request<PluginListData>("/api/plugins/reload", { method: "POST" }),
+  listPluginMarketplaces: () =>
+    request<MarketplaceSourcesData>("/api/plugins/marketplaces"),
+  addPluginMarketplace: (payload: {
+    id: string;
+    name?: string;
+    url?: string | null;
+    listing?: MarketplaceListing;
+  }) =>
+    request<MarketplaceSource>("/api/plugins/marketplaces", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  refreshPluginMarketplace: (marketplaceId: string) =>
+    request<MarketplaceSource>(
+      `/api/plugins/marketplaces/${encodeURIComponent(marketplaceId)}/refresh`,
+      { method: "POST" }
+    ),
+  listMarketplacePlugins: (marketplaceId: string) =>
+    request<MarketplaceListing>(
+      `/api/plugins/marketplaces/${encodeURIComponent(marketplaceId)}/plugins`
+    ),
+  deletePluginMarketplace: (marketplaceId: string) =>
+    request<MarketplaceSourcesData>(
+      `/api/plugins/marketplaces/${encodeURIComponent(marketplaceId)}`,
+      { method: "DELETE" }
+    ),
 };
 
 export const api = {
