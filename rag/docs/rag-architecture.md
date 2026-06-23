@@ -14,8 +14,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - 同一 `content_sha256` の既存文書がある場合は `duplicate_of_document_id` に最初の原本文書 ID を保存する。
    - upload レスポンスには `source_profile` を含める。`source_profile` は原本ファイル名、正規化後ファイル名、拡張子、保存 MIME type、拡張子から推定した MIME type、サイズ、SHA-256、重複元、原本 modality、推奨 parser profile、テキスト charset、品質警告を返す。
    - Dify Knowledge Pipeline / RAGFlow / R2R の「取込前にデータソース品質・処理方針・重複を明示する」ベストプラクティスは、外部 parser や別 storage を追加せず、この `source_profile` と既存の Oracle document metadata に再マップする。
-   - `ingestion_mode=manual|auto` を multipart form で指定できる。`manual` は保存のみ、`auto` は upload レスポンス後にバックグラウンドで既存の取込パイプラインを開始する。重複原本は embedding コストと重複根拠を増やさないため auto 取込を開始せず、`source_profile.quality_warnings` による確認対象として返す。UI は auto 指定時に文書状態をポーリングし、`UPLOADED → INGESTING → INDEXED|ERROR` を表示する。
-   - 自動取込でも、原本取得後のサイズ・SHA-256 整合性検証、`INGESTING` 二重実行防止、`INDEXED` の force なし早期 return、`ERROR` 時の古い chunk / extraction 削除は手動取込と同じ helper を使う。
+   - `ingestion_mode=manual` を multipart form で受け付ける。アップロードは原本保存と KB 所属確定だけを行い、後続処理は永続取込 job として明示投入する。
 
 2. OCR・本文抽出と索引
    - API: `POST /api/documents/{document_id}/ingest`
@@ -31,8 +30,8 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - `GET /api/documents/{document_id}/extraction-export?format=json|markdown|html|chunks` で保存済み `StructuredExtraction` を JSON / Markdown / escaped HTML / 非 embedding chunk view として監査できる。DocumentPreviewWorkspace では抽出本文 panel 内の「抽出エクスポート」で同じ 4 形式を切り替えて確認できる。HTML は `tables[].cells` を safe `<table>` として再構成し、row / col / bbox lineage を保持する。Marker / Docling 的な多形式出力はここで本プロジェクト schema へ再マップし、再解析や外部 LLM / vector DB 呼び出しは行わない。
    - `UPLOADED` / `ERROR` を取込対象にし、`INGESTING` は二重実行防止で 409 にする。
    - `INDEXED` は force なしなら既存結果を返す。`force=true` は `INDEXED` の再取込に使える。
-   - **方針(2 段階処理): parse → 人がプレビュー確認 → index。** parse/抽出の完了後はいったん `REVIEW`(プレビュー確認待ち)で停止し、`DocumentPreviewWorkspace` で抽出結果を人手で確認・承認(必要なら帳票項目を修正)してから後段の chunk/embed/index を実行する。**人手の確認・承認ゲートを通過した文書のみ `INDEXED` へ遷移し、RAG 検索対象にする。** 抽出 artifact は再利用し、確認・承認は index 実行前の必須ゲートとする。
-     - ※ 本ゲートは方針として確定(AGENTS.md 正本)。`REVIEW` 状態・承認 API・後段専用 index 経路の実装は別途行う。現行コードはまだ 1 ジョブ(`UPLOADED → INGESTING → INDEXED`)で動作するため、実装完了までは記載と挙動が一致しない点に注意する。
+   - **方針(2 段階処理): parse → 人がプレビュー確認 → index。** parse/抽出の完了後はいったん `REVIEW`(プレビュー確認待ち)で停止し、`DocumentPreviewWorkspace` で抽出結果を人手で確認・承認(必要なら帳票項目を修正)してから後段の chunk/embed/index を実行する。抽出 artifact は再利用し、`INDEX` job は再 OCR せず保存済み `StructuredExtraction` から chunk / embedding / Oracle index を作る。
+   - `INDEXED` は chunk、embedding、Oracle 保存、chunk_set、KB binding、extraction artifact が揃った文書だけに付与する。KB binding まで公開できない場合は `ERROR` とし、RAG 検索対象にしない。
 
 3. チャンク分割
    - 実装: `backend/app/rag/chunking.py`

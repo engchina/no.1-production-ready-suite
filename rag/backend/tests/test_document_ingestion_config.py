@@ -121,6 +121,44 @@ def test_ingestion_config_reports_no_drift_when_matching(
     assert data["config_drift"] is False
 
 
+@pytest.mark.parametrize(
+    ("backend", "profile"),
+    [
+        ("docling", "docling_adapter"),
+        ("marker", "marker_adapter"),
+        ("unstructured", "unstructured_adapter"),
+        ("mineru", "mineru_adapter"),
+        ("dots_ocr", "dots_ocr_adapter"),
+        ("glm_ocr", "glm_ocr_adapter"),
+    ],
+)
+def test_ingestion_config_treats_external_adapter_profiles_as_matching(
+    fake_oracle: FakeIngestionConfigOracle,
+    backend: str,
+    profile: str,
+) -> None:
+    """外部 parser の runtime profile 名は同じ backend として扱う。"""
+    fake_oracle.add_document(
+        "doc-1",
+        status=FileStatus.INDEXED,
+        chunk_strategy="structure_aware",
+        source_parser=profile,
+    )
+    fake_oracle.set_owning(
+        "doc-1",
+        _config(
+            chunking_strategy="structure_aware",
+            parser_adapter_backend=backend,
+        ),
+    )
+
+    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+
+    assert data["observed_parser_backend"] == profile
+    assert data["parser_drift"] is False
+    assert data["config_drift"] is False
+
+
 def test_ingestion_config_detects_drift(
     fake_oracle: FakeIngestionConfigOracle,
 ) -> None:

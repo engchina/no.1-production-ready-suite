@@ -80,6 +80,8 @@ import {
   withBboxPageRotation,
 } from "@/lib/bbox";
 import {
+  isSameParserBackend,
+  parserBackendLabel,
   parserProfileKey,
   sourceModalityKey,
   sourcePreviewKey,
@@ -1535,7 +1537,8 @@ function SourceProfilePanel({
       ? t("sourceProfile.ingestionParser.pending")
       : t("sourceProfile.ingestionParser.unavailable");
   const ingestionProfile =
-    ingestionParser.profile && ingestionParser.profile !== ingestionParser.backend
+    ingestionParser.profile &&
+    !isSameParserBackend(ingestionParser.profile, ingestionParser.backend)
       ? ingestionParser.profile
       : null;
   return (
@@ -1611,35 +1614,6 @@ function SourceProfilePanel({
       ) : null}
     </section>
   );
-}
-
-function parserBackendLabel(backend: string): string {
-  switch (backend) {
-    case "docling":
-      return "Docling";
-    case "marker":
-      return "Marker";
-    case "unstructured":
-      return "Unstructured";
-    case "mineru":
-      return "MinerU";
-    case "dots_ocr":
-      return "Dots.OCR";
-    case "glm_ocr":
-      return "GLM-OCR";
-    case "oci_genai_vision":
-    case "enterprise_ai_vlm":
-      return "OCI Generative AI Vision";
-    case "oci_document_understanding":
-      return "OCI Document Understanding";
-    case "enterprise_ai":
-      return "OCI Enterprise AI";
-    case "local":
-    case "local_partition":
-      return "ローカル解析";
-    default:
-      return backend;
-  }
 }
 
 function segmentStatusLabel(status: string): string {

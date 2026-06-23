@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from app.clients.oci_auth import OciPrivateKeyPassPhraseRequiredError
-from app.clients.oci_genai import OciGenAiClient
+from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS, OciGenAiClient
 from app.config import Settings
 
 
@@ -70,6 +70,22 @@ async def test_embed_accepts_expected_dimension() -> None:
     client = StubEmbeddingClient(vectors=[[1.0, 0.0, 0.0]])
 
     assert await client.embed(["a"]) == [[1.0, 0.0, 0.0]]
+
+
+async def test_embed_rejects_too_long_input_before_oci_call() -> None:
+    """異常長 input は OCI embedding 呼び出し前に拒否する。"""
+    client = CountingEmbeddingClient()
+    long_text = "あ" * (EMBEDDING_INPUT_MAX_CHARS + 1)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"index=1, chars={len(long_text)}, max_chars={EMBEDDING_INPUT_MAX_CHARS}"
+        ),
+    ):
+        await client.embed(["短い本文", long_text])
+
+    assert client.calls == 0
 
 
 async def test_embed_cache_reuses_hits_and_batches_only_misses() -> None:

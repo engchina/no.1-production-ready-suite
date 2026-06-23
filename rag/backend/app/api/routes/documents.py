@@ -91,6 +91,9 @@ logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
+CHUNK_SET_PUBLISH_ERROR_MESSAGE = (
+    "索引の公開設定に失敗しました。時間をおいて再実行してください。"
+)
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
 
 
@@ -768,6 +771,12 @@ def _parser_backend_drifted(observed_parser: str, effective_backend: str) -> boo
     if not observed:
         return False
     aliases = {
+        "docling": {"docling", "docling_adapter"},
+        "marker": {"marker", "marker_adapter"},
+        "unstructured": {"unstructured", "unstructured_adapter"},
+        "mineru": {"mineru", "mineru_adapter"},
+        "dots_ocr": {"dots_ocr", "dots_ocr_adapter"},
+        "glm_ocr": {"glm_ocr", "glm_ocr_adapter"},
         "oci_genai_vision": {"oci_genai_vision", "enterprise_ai_vlm"},
         "enterprise_ai_vlm": {"oci_genai_vision", "enterprise_ai_vlm"},
     }
@@ -1421,7 +1430,8 @@ async def _reconcile_plan_chunk_sets(
 ) -> None:
     """plan の各 chunk_set を永続化し、KB グループを binding、plan に無い chunk_set を GC する。
 
-    chunk は save_index で挿入時タグ付け済み。bookkeeping なので失敗しても取込は止めず warning。
+    chunk は save_index で挿入時タグ付け済み。KB binding / extraction artifact まで揃って
+    初めて検索可能な INDEXED とみなすため、失敗時は ERROR に戻す。
     """
     if detail.status != FileStatus.INDEXED:
         return
@@ -1470,12 +1480,18 @@ async def _reconcile_plan_chunk_sets(
                 len(plan.truncated_extractions),
                 document_id,
             )
-    except Exception:  # noqa: BLE001 - reconcile は bookkeeping。失敗しても取込は止めない。
+    except Exception as exc:
         logger.warning(
-            "chunk_set plan reconcile に失敗しました（取込は完了済み）。document_id=%s",
+            "chunk_set plan reconcile に失敗しました。document_id=%s",
             document_id,
             exc_info=True,
         )
+        await oracle.update_document_status(
+            document_id,
+            FileStatus.ERROR,
+            CHUNK_SET_PUBLISH_ERROR_MESSAGE,
+        )
+        raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
 
 
 async def _reconcile_plan_artifact_layers(
@@ -1699,8 +1715,8 @@ async def _reconcile_document_chunk_sets(
     """取込後、materialize した chunk_set を記録し所属 KB を binding する(planner 駆動の基盤)。
 
     chunk は save_index で**挿入時に chunk_set_id タグ付け済み**。本関数は chunk_set 行の永続化・
-    KB binding・旧 chunk_set(とその chunk、未タグ chunk)の GC を行う。bookkeeping なので失敗
-    しても取込自体は止めず warning に留める(chunk は既に INDEXED 済み)。
+    KB binding・旧 chunk_set(とその chunk、未タグ chunk)の GC を行う。公開 binding まで揃って
+    初めて検索可能な INDEXED とみなすため、失敗時は ERROR に戻す。
     """
     if detail.status != FileStatus.INDEXED or chunk_set_id is None:
         return
@@ -1735,12 +1751,18 @@ async def _reconcile_document_chunk_sets(
                 document_id=document_id,
                 chunk_set_id=chunk_set_id,
             )
-    except Exception:  # noqa: BLE001 - reconcile は bookkeeping。失敗しても取込は止めない。
+    except Exception as exc:
         logger.warning(
-            "chunk_set reconcile に失敗しました（取込は完了済み）。document_id=%s",
+            "chunk_set reconcile に失敗しました。document_id=%s",
             document_id,
             exc_info=True,
         )
+        await oracle.update_document_status(
+            document_id,
+            FileStatus.ERROR,
+            CHUNK_SET_PUBLISH_ERROR_MESSAGE,
+        )
+        raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
 
 
 async def _resolve_ingestion_settings(

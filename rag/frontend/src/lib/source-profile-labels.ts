@@ -18,6 +18,30 @@ const PARSER_PROFILE_KEYS: Record<string, I18nKey> = {
   legacy: "evaluation.ingestionQuality.parser.legacy",
 };
 
+const PARSER_BACKEND_ALIASES: Record<string, string> = {
+  docling_adapter: "docling",
+  marker_adapter: "marker",
+  unstructured_adapter: "unstructured",
+  mineru_adapter: "mineru",
+  dots_ocr_adapter: "dots_ocr",
+  glm_ocr_adapter: "glm_ocr",
+  enterprise_ai_vlm: "oci_genai_vision",
+};
+
+const PARSER_BACKEND_LABELS: Record<string, string> = {
+  docling: "Docling",
+  marker: "Marker",
+  unstructured: "Unstructured",
+  mineru: "MinerU",
+  dots_ocr: "Dots.OCR",
+  glm_ocr: "GLM-OCR",
+  oci_genai_vision: "OCI Generative AI Vision",
+  oci_document_understanding: "OCI Document Understanding",
+  enterprise_ai: "OCI Enterprise AI",
+  local: "ローカル解析",
+  local_partition: "ローカル解析",
+};
+
 const SOURCE_WARNING_KEYS: Record<string, I18nKey> = {
   duplicate_content: "sourceProfile.warning.duplicate",
   content_type_missing: "sourceProfile.warning.contentTypeMissing",
@@ -67,6 +91,27 @@ const EVALUATION_WARNING_KEYS: Record<string, I18nKey> = {
 
 export function parserProfileKey(profile: string): I18nKey {
   return PARSER_PROFILE_KEYS[profile] ?? "sourceProfile.parser.generic";
+}
+
+export function canonicalParserBackend(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return PARSER_BACKEND_ALIASES[normalized] ?? normalized;
+}
+
+export function parserBackendLabel(value: string | null | undefined): string {
+  if (!value) return "-";
+  const canonical = canonicalParserBackend(value) ?? value;
+  return PARSER_BACKEND_LABELS[canonical] ?? qualityCodeLabel(value);
+}
+
+export function isSameParserBackend(
+  left: string | null | undefined,
+  right: string | null | undefined
+): boolean {
+  const leftCanonical = canonicalParserBackend(left);
+  const rightCanonical = canonicalParserBackend(right);
+  return leftCanonical !== null && leftCanonical === rightCanonical;
 }
 
 export function sourceModalityKey(modality: SourceModality): I18nKey {

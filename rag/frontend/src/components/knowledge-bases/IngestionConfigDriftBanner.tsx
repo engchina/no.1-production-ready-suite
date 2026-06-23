@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useDocumentIngestionConfig, useEnqueueDocumentIngestionJob } from "@/lib/queries";
-import { qualityCodeLabel } from "@/lib/source-profile-labels";
+import { parserBackendLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
 
 /**
@@ -28,8 +28,8 @@ export function IngestionConfigDriftBanner({ documentId }: { documentId: string 
       : null,
     data.parser_drift
       ? t("ingestionDrift.parser", {
-          observed: parserDisplayLabel(data.observed_parser_backend),
-          effective: parserDisplayLabel(data.effective_parser_adapter_backend),
+          observed: parserBackendLabel(data.observed_parser_backend),
+          effective: parserBackendLabel(data.effective_parser_adapter_backend),
         })
       : null,
   ].filter((item): item is string => item !== null);
@@ -76,34 +76,4 @@ export function IngestionConfigDriftBanner({ documentId }: { documentId: string 
       </Button>
     </div>
   );
-}
-
-function parserDisplayLabel(value: string | null): string {
-  if (!value) return "-";
-  switch (value) {
-    case "docling":
-      return "Docling";
-    case "marker":
-      return "Marker";
-    case "unstructured":
-      return "Unstructured";
-    case "mineru":
-      return "MinerU";
-    case "dots_ocr":
-      return "Dots.OCR";
-    case "glm_ocr":
-      return "GLM-OCR";
-    case "oci_genai_vision":
-    case "enterprise_ai_vlm":
-      return "OCI Generative AI Vision";
-    case "oci_document_understanding":
-      return "OCI Document Understanding";
-    case "enterprise_ai":
-      return "OCI Enterprise AI";
-    case "local":
-    case "local_partition":
-      return "ローカル解析";
-    default:
-      return qualityCodeLabel(value);
-  }
 }

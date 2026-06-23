@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isSameParserBackend,
   parserProfileKey,
+  parserBackendLabel,
   qualityCodeLabel,
   sourceWarningKey,
   unsupportedReasonLabel,
@@ -39,5 +41,10 @@ describe("source profile labels", () => {
     expect(qualityCodeLabel("segment_extraction_artifact_cache_miss")).toBe(
       "Segment artifact 再抽出"
     );
+  });
+
+  it("parser backend labels hide external adapter implementation names", () => {
+    expect(parserBackendLabel("mineru_adapter")).toBe("MinerU");
+    expect(isSameParserBackend("mineru_adapter", "mineru")).toBe(true);
   });
 });

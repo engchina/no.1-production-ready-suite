@@ -124,6 +124,7 @@ test("取込解析エンジンは segment parser だけを表示する", async (
     .locator("xpath=ancestor::section[1]");
   await expect(sourcePanel.getByText("取込解析エンジン")).toBeVisible();
   await expect(sourcePanel.getByText("MinerU")).toBeVisible();
+  await expect(sourcePanel.getByText("mineru_adapter")).toHaveCount(0);
   await expect(
     sourcePanel.getByText("アップロード時の初期判定: OCI Enterprise AI / v1")
   ).toHaveCount(0);
@@ -680,7 +681,11 @@ function ingestionSegments(count: number, options: { mineru?: boolean } = {}) {
       document_id: "doc-1",
       status,
       parser_backend: mineru ? "mineru" : index === 0 ? "local_partition" : "enterprise_ai",
-      parser_profile: mineru ? "mineru" : index === 0 ? "local_text_structure" : "enterprise_ai_pdf_layout",
+      parser_profile: mineru
+        ? "mineru_adapter"
+        : index === 0
+          ? "local_text_structure"
+          : "enterprise_ai_pdf_layout",
       page_start: start,
       page_end: end,
       attempt_count: status === "QUEUED" ? 0 : 1,

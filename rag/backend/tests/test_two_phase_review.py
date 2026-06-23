@@ -141,6 +141,35 @@ def test_approve_records_chunk_set_and_kb_binding(monkeypatch: MonkeyPatch) -> N
     assert asyncio.run(oracle.chunk_set_refcount(chunk_set_ids[0])) == 1
 
 
+def test_publish_binding_failure_marks_document_error(monkeypatch: MonkeyPatch) -> None:
+    """chunk/vector 保存後でも KB binding に失敗したら INDEXED 成功扱いにしない。"""
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    _extract_to_review(document_id)
+
+    async def _fail_binding(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("binding failed")
+
+    monkeypatch.setattr(OracleClient, "upsert_chunk_set_binding", _fail_binding)
+
+    approve_resp = client.post(f"/api/documents/{document_id}/approve")
+    assert approve_resp.status_code == 200
+    index_job = approve_resp.json()["data"]
+    _run_job(cast(str, index_job["id"]))
+
+    job_resp = client.get(f"/api/documents/ingestion-jobs/{index_job['id']}")
+    assert job_resp.status_code == 200
+    job = job_resp.json()["data"]
+    assert job["status"] == "FAILED"
+    assert "公開設定" in job["error_message"]
+
+    detail = _get_document(document_id)
+    assert detail["status"] == "ERROR"
+    assert "公開設定" in detail["error_message"]
+    search = _search("経費申請の承認者は？")
+    assert all(citation["document_id"] != document_id for citation in search["citations"])
+
+
 def test_kb_scoped_search_finds_serving_chunk_set(monkeypatch: MonkeyPatch) -> None:
     """KB スコープ検索でも、配信中 chunk_set はフィルタで除外されない(回帰なし)。"""
     _enable_review_gate(monkeypatch)

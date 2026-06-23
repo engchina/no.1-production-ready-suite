@@ -23,6 +23,9 @@ EmbeddingInputType = Literal["SEARCH_DOCUMENT", "SEARCH_QUERY", "CLASSIFICATION"
 EMBEDDING_INPUT_TYPES = frozenset(
     {"SEARCH_DOCUMENT", "SEARCH_QUERY", "CLASSIFICATION", "CLUSTERING"}
 )
+# ponytail: Cohere Embed v4 128k tokens への保守的な文字数ガード。
+# tokenizer は実際に必要になるまで入れない。
+EMBEDDING_INPUT_MAX_CHARS = 100_000
 type SdkCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 
 
@@ -62,6 +65,7 @@ class OciGenAiClient:
             raise ValueError(f"embedding input_type が不正です。input_type={input_type}")
         if not texts:
             return []
+        _validate_embedding_input_lengths(texts)
         if self._embedding_cache_disabled():
             vectors = await self._embed_with_oci_batches(texts, input_type=input_type)
             _validate_embedding_batch(
@@ -329,6 +333,16 @@ def _require_cached_vector(vector: list[float] | None, index: int) -> list[float
     if vector is None:
         raise ValueError(f"embedding[{index}] の cache 復元に失敗しました。")
     return list(vector)
+
+
+def _validate_embedding_input_lengths(texts: Sequence[str]) -> None:
+    for index, text in enumerate(texts):
+        chars = len(text)
+        if chars > EMBEDDING_INPUT_MAX_CHARS:
+            raise ValueError(
+                "embedding input が長すぎます。"
+                f"index={index}, chars={chars}, max_chars={EMBEDDING_INPUT_MAX_CHARS}"
+            )
 
 
 def _validate_embedding_batch(
