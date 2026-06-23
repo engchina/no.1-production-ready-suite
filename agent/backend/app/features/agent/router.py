@@ -68,9 +68,12 @@ from app.features.agent.runtime import (
     runtime_repository,
 )
 from app.features.agent.skills import (
+    AgentSkillDefinition,
     AgentSkillListOutput,
     AgentSkillPlanOutput,
     AgentSkillRunInput,
+    SkillToolCallTemplate,
+    reload_declared_skills,
     skill_registry,
 )
 from app.features.agent.tools import (
@@ -155,6 +158,61 @@ class SettingsPatch(BaseModel):
     timeout_seconds: float | None = None
     default_limit: int | None = None
     session_id: str | None = None
+
+
+class ExternalMcpServerSettings(ExternalServiceSettings):
+    """単一 MCP server の公開設定(credential は configured フラグのみ)。"""
+
+    server_id: str
+    label: str | None = None
+    is_default: bool = False
+
+
+class ExternalMcpServersData(BaseModel):
+    servers: list[ExternalMcpServerSettings] = Field(default_factory=list)
+    default_server_id: str
+
+
+class ExternalMcpServerCreate(BaseModel):
+    server_id: str
+    label: str | None = None
+    base_url: str | None = None
+    timeout_seconds: float | None = None
+    session_id: str | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
+    oauth_scope: str | None = None
+
+
+class ExternalMcpServerPatch(BaseModel):
+    label: str | None = None
+    base_url: str | None = None
+    timeout_seconds: float | None = None
+    session_id: str | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
+    oauth_scope: str | None = None
+
+
+class AgentSkillCreate(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    instructions: str = ""
+    tool_calls: list[SkillToolCallTemplate] = Field(default_factory=list)
+    enabled: bool = True
+    tags: list[str] = Field(default_factory=list)
+
+
+class AgentSkillPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    instructions: str | None = None
+    tool_calls: list[SkillToolCallTemplate] | None = None
+    enabled: bool | None = None
+    tags: list[str] | None = None
 
 
 class ToolPolicySettings(BaseModel):
@@ -727,6 +785,14 @@ def _settings_str_from(settings: object, name: str, default: str = "") -> str:
 
 def _settings_str(name: str, default: str = "") -> str:
     return _settings_str_from(get_settings(), name, default)
+
+
+def _resolved_oracle_adb_region(settings: object) -> str:
+    return (
+        _settings_str_from(settings, "oracle_adb_region")
+        or _settings_str_from(settings, "oci_region")
+        or _settings_str_from(settings, "oracle_region")
+    )
 
 
 def _settings_first_from(settings: object, names: tuple[str, ...], default: object = "") -> object:
@@ -1848,8 +1914,7 @@ def _database_settings_data(settings: object) -> DatabaseSettingsData:
         vector_column=f"VECTOR({embedding_dim}, FLOAT32)",
         adb_ocid=_settings_str_from(settings, "oracle_adb_ocid")
         or _settings_str_from(settings, "adb_ocid"),
-        region=_settings_str_from(settings, "oci_region")
-        or _settings_str_from(settings, "oracle_region"),
+        region=_resolved_oracle_adb_region(settings),
         config_source="runtime",
     )
     data.readiness = _database_readiness(data)
@@ -2317,6 +2382,21 @@ def _persist_database_settings(
     _set_if_possible(settings, "oracle_dsn", data.dsn)
     _set_if_possible(settings, "oracle_wallet_dir", data.wallet_dir)
     _set_if_possible(settings, "oracle_wallet_password", wallet_password)
+
+
+def _persist_adb_settings(settings: object, data: DatabaseSettingsData) -> None:
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "ORACLE_ADB_OCID": data.adb_ocid,
+            "ORACLE_ADB_REGION": data.region,
+        },
+        section_comment="# Oracle Autonomous Database 管理",
+        error_detail="ADB 設定を backend/.env へ保存できませんでした。",
+    )
+    _set_if_possible(settings, "oracle_adb_ocid", data.adb_ocid)
+    _set_if_possible(settings, "adb_ocid", data.adb_ocid)
+    _set_if_possible(settings, "oracle_adb_region", data.region)
 
 
 def _database_connection_test_candidate(
@@ -3148,7 +3228,9 @@ async def patch_adb_settings(
     patch: AdbSettingsUpdate,
     _: None = Depends(require_admin),
 ) -> ApiResponse[AdbInfoData]:
-    return ApiResponse(data=_set_adb_info_state(patch))
+    info = _set_adb_info_state(patch)
+    _persist_adb_settings(get_settings(), _get_database_settings_state())
+    return ApiResponse(data=info)
 
 
 @router.post("/settings/database/adb/start", response_model=ApiResponse[AdbInfoData])
@@ -3428,6 +3510,111 @@ async def plan_agent_skill(
         raise HTTPException(status_code=404, detail="skill not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/skills/reload", response_model=ApiResponse[AgentSkillListOutput])
+async def reload_agent_skills(
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentSkillListOutput]:
+    """中立ディレクトリ / JSON 宣言を再読込し、project / env 層を更新する。"""
+    counts = reload_declared_skills()
+    skills = skill_registry.list()
+    return ApiResponse(
+        data=AgentSkillListOutput(
+            skills=skills, metadata={"count": len(skills), "reloaded": counts}
+        )
+    )
+
+
+@router.get("/skills/{skill_id}", response_model=ApiResponse[AgentSkillDefinition])
+async def get_agent_skill(
+    skill_id: str,
+    _: None = Depends(require_viewer),
+) -> ApiResponse[AgentSkillDefinition]:
+    """単一 skill の詳細(instructions / tool_calls)を返す(progressive disclosure)。"""
+    skill = skill_registry.get(skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail="skill not found")
+    return ApiResponse(data=skill)
+
+
+@router.post("/skills", response_model=ApiResponse[AgentSkillDefinition])
+async def create_agent_skill(
+    payload: AgentSkillCreate,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentSkillDefinition]:
+    skill_id = payload.id.strip()
+    if not skill_id:
+        raise HTTPException(status_code=400, detail="id is required")
+    if skill_registry.get(skill_id) is not None:
+        raise HTTPException(status_code=409, detail="skill already exists")
+    skill = AgentSkillDefinition(
+        id=skill_id,
+        name=payload.name,
+        description=payload.description,
+        instructions=payload.instructions,
+        tool_calls=payload.tool_calls,
+        enabled=payload.enabled,
+        tags=payload.tags,
+        source="runtime",
+    )
+    try:
+        return ApiResponse(data=skill_registry.upsert_custom(skill))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/skills/{skill_id}", response_model=ApiResponse[AgentSkillDefinition])
+async def patch_agent_skill(
+    skill_id: str,
+    patch: AgentSkillPatch,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentSkillDefinition]:
+    current = skill_registry.get(skill_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="skill not found")
+    if current.source != "runtime":
+        raise HTTPException(
+            status_code=400,
+            detail=f"{current.source} skill is read-only; edit the source definition",
+        )
+    updated = current.model_copy(
+        update={
+            "name": current.name if patch.name is None else patch.name,
+            "description": (
+                current.description if patch.description is None else patch.description
+            ),
+            "instructions": (
+                current.instructions if patch.instructions is None else patch.instructions
+            ),
+            "tool_calls": (
+                current.tool_calls if patch.tool_calls is None else patch.tool_calls
+            ),
+            "enabled": current.enabled if patch.enabled is None else patch.enabled,
+            "tags": current.tags if patch.tags is None else patch.tags,
+        }
+    )
+    try:
+        return ApiResponse(data=skill_registry.upsert_custom(updated))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/skills/{skill_id}", response_model=ApiResponse[AgentSkillListOutput])
+async def delete_agent_skill(
+    skill_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[AgentSkillListOutput]:
+    try:
+        skill_registry.remove(skill_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="skill not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    skills = skill_registry.list()
+    return ApiResponse(
+        data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)})
+    )
 
 
 @router.get("/agent/tools", response_model=ApiResponse[ToolsData])
@@ -3912,6 +4099,130 @@ async def patch_external_mcp_settings(
         session_id=patch.session_id,
     )
     return await get_external_mcp_settings()
+
+
+def _mcp_server_settings(config: object, *, default_id: str) -> ExternalMcpServerSettings:
+    oauth_configured = _mcp_oauth_configured(config)
+    return ExternalMcpServerSettings(
+        server_id=getattr(config, "server_id", "default"),
+        label=getattr(config, "label", None),
+        is_default=getattr(config, "server_id", "default") == default_id,
+        base_url=getattr(config, "base_url", None),
+        api_key_configured=bool(getattr(config, "api_key", None)),
+        oauth_configured=oauth_configured,
+        auth_mode=(
+            "oauth_client_credentials"
+            if oauth_configured
+            else "api_key" if getattr(config, "api_key", None) else "none"
+        ),
+        session_configured=bool(getattr(config, "session_id", None)),
+        timeout_seconds=getattr(config, "timeout_seconds", 10.0),
+        configured=bool(getattr(config, "base_url", None)),
+    )
+
+
+@router.get(
+    "/settings/external-mcp-servers", response_model=ApiResponse[ExternalMcpServersData]
+)
+async def list_external_mcp_servers() -> ApiResponse[ExternalMcpServersData]:
+    """登録済み MCP server を一覧する(credential は露出しない)。"""
+    default_id = runtime_config_store.mcp_default_id()
+    servers = [
+        _mcp_server_settings(config, default_id=default_id)
+        for config in runtime_config_store.list_mcp_servers()
+    ]
+    return ApiResponse(
+        data=ExternalMcpServersData(servers=servers, default_server_id=default_id)
+    )
+
+
+@router.post(
+    "/settings/external-mcp-servers", response_model=ApiResponse[ExternalMcpServerSettings]
+)
+async def create_external_mcp_server(
+    payload: ExternalMcpServerCreate,
+    _: None = Depends(require_admin),
+) -> ApiResponse[ExternalMcpServerSettings]:
+    server_id = payload.server_id.strip()
+    if not server_id:
+        raise HTTPException(status_code=400, detail="server_id is required")
+    existing = {config.server_id for config in runtime_config_store.list_mcp_servers()}
+    if server_id in existing:
+        raise HTTPException(status_code=409, detail="server already exists")
+    config = runtime_config_store.upsert_mcp_server(
+        server_id,
+        label=payload.label,
+        base_url=payload.base_url,
+        timeout_seconds=payload.timeout_seconds,
+        session_id=payload.session_id,
+        oauth_token_url=payload.oauth_token_url,
+        oauth_client_id=payload.oauth_client_id,
+        oauth_client_secret=payload.oauth_client_secret,
+        oauth_scope=payload.oauth_scope,
+    )
+    return ApiResponse(
+        data=_mcp_server_settings(config, default_id=runtime_config_store.mcp_default_id())
+    )
+
+
+@router.patch(
+    "/settings/external-mcp-servers/{server_id}",
+    response_model=ApiResponse[ExternalMcpServerSettings],
+)
+async def patch_external_mcp_server(
+    server_id: str,
+    patch: ExternalMcpServerPatch,
+    _: None = Depends(require_admin),
+) -> ApiResponse[ExternalMcpServerSettings]:
+    existing = {config.server_id for config in runtime_config_store.list_mcp_servers()}
+    if server_id not in existing:
+        raise HTTPException(status_code=404, detail="server not found")
+    config = runtime_config_store.upsert_mcp_server(
+        server_id,
+        label=patch.label,
+        base_url=patch.base_url,
+        timeout_seconds=patch.timeout_seconds,
+        session_id=patch.session_id,
+        oauth_token_url=patch.oauth_token_url,
+        oauth_client_id=patch.oauth_client_id,
+        oauth_client_secret=patch.oauth_client_secret,
+        oauth_scope=patch.oauth_scope,
+    )
+    return ApiResponse(
+        data=_mcp_server_settings(config, default_id=runtime_config_store.mcp_default_id())
+    )
+
+
+@router.delete(
+    "/settings/external-mcp-servers/{server_id}",
+    response_model=ApiResponse[ExternalMcpServersData],
+)
+async def delete_external_mcp_server(
+    server_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[ExternalMcpServersData]:
+    try:
+        runtime_config_store.remove_mcp_server(server_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="server not found") from exc
+    return await list_external_mcp_servers()
+
+
+@router.post(
+    "/settings/external-mcp-servers/{server_id}/default",
+    response_model=ApiResponse[ExternalMcpServersData],
+)
+async def set_default_external_mcp_server(
+    server_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[ExternalMcpServersData]:
+    try:
+        runtime_config_store.set_default_mcp_server(server_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="server not found") from exc
+    return await list_external_mcp_servers()
 
 
 @router.get("/settings/tool-policy", response_model=ApiResponse[ToolPolicySettings])

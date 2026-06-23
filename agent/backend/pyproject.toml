@@ -16,6 +16,7 @@ dependencies = [
   "prometheus-client>=0.24",
   "oci>=2.168",
   "oracledb>=3.4",
+  "pyyaml>=6.0",
   "production-ready-backend-core",
 ]
 
@@ -29,6 +30,7 @@ dev = [
   "mypy>=1.14",
   "bandit>=1.8",
   "pip-audit>=2.9",
+  "types-PyYAML>=6.0",
 ]
 
 [tool.uv.sources]

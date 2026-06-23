@@ -1,6 +1,7 @@
 import {
   BadgeCheck,
   Bot,
+  Boxes,
   ClipboardList,
   DatabaseBackup,
   Cloud,
@@ -48,6 +49,12 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck },
       { href: APP_ROUTES.audit, labelKey: "nav.audit", icon: ClipboardList },
       { href: APP_ROUTES.tools, labelKey: "nav.tools", icon: Wrench },
+      {
+        href: APP_ROUTES.skills,
+        labelKey: "nav.skills",
+        sidebarLabelKey: "nav.skills.sidebar",
+        icon: Boxes,
+      },
       { href: APP_ROUTES.memory, labelKey: "nav.memory", icon: Search },
     ],
   },

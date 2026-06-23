@@ -75,6 +75,7 @@ class Settings(BaseServiceSettings):
     oracle_wallet_uploaded: bool = False
     oracle_region: str | None = None
     oracle_adb_ocid: str | None = None
+    oracle_adb_region: str | None = None
     adb_ocid: str | None = None
     oracle_tcp_connect_timeout_seconds: float = 10.0
     oracle_db_test_timeout_seconds: float = 15.0
@@ -96,6 +97,12 @@ class Settings(BaseServiceSettings):
     agent_external_mcp_oauth_scope: str | None = None
     agent_external_mcp_timeout_seconds: float = 10.0
     agent_external_mcp_max_retries: int = 3
+    # 複数 MCP server の宣言。JSON list か {"servers": [...]}。各項目は
+    # server_id/id 必須、base_url・auth・timeout_seconds を任意で持つ。
+    agent_external_mcp_servers_json: str | None = None
+    # Skill 外部定義: 中立ディレクトリ(skills/<id>/SKILL.md)と JSON 宣言。
+    agent_skills_dir: str | None = None
+    agent_skills_definitions_json: str | None = None
     agent_planner_provider: str = "heuristic"
     agent_planner_oci_responses_base_url: str | None = None
     agent_planner_oci_responses_api_key: str | None = None

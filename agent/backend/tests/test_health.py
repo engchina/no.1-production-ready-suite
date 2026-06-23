@@ -109,6 +109,7 @@ def _settings_fixture(**overrides: object) -> SimpleNamespace:
         "oracle_wallet_dir": "",
         "oracle_wallet_password": "",
         "oracle_adb_ocid": "",
+        "oracle_adb_region": "",
         "adb_ocid": "",
         "oracle_region": "",
         "oracle_tcp_connect_timeout_seconds": 10.0,
@@ -1150,6 +1151,34 @@ def test_database_save_preserves_uploaded_wallet_and_writes_env_like_rag(
     data = resp.json()["data"]
     assert data["wallet_dir"] == str(wallet_dir)
     assert data["wallet_uploaded"] is True
+
+
+def test_adb_settings_save_writes_dedicated_region_env(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    settings = _settings_fixture()
+    monkeypatch.setattr(agent_router, "_database_settings_state", None)
+    monkeypatch.setattr(agent_router, "_adb_info_state", None)
+    monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+
+    resp = client.post(
+        "/api/settings/database/adb/settings",
+        json={"adb_ocid": "ocid1.autonomousdatabase.oc1..agent", "region": "ap-tokyo-1"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["id"] == "ocid1.autonomousdatabase.oc1..agent"
+    assert data["region"] == "ap-tokyo-1"
+    assert settings.oracle_adb_ocid == "ocid1.autonomousdatabase.oc1..agent"
+    assert settings.oracle_adb_region == "ap-tokyo-1"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..agent" in env_text
+    assert "ORACLE_ADB_REGION=ap-tokyo-1" in env_text
+    assert "OCI_REGION=ap-tokyo-1" not in env_text
 
 
 def test_database_connection_test_uses_oracledb_like_rag(
@@ -8184,3 +8213,167 @@ def test_websocket_events_enforces_rbac_roles(monkeypatch: MonkeyPatch) -> None:
         assert message["error_code"] == "rbac.forbidden"
     finally:
         _disable_rbac(monkeypatch)
+
+
+def test_mcp_servers_from_json_parses_declarations() -> None:
+    from app.features.agent.config import _mcp_servers_from_json
+
+    servers = _mcp_servers_from_json(
+        '[{"server_id": "a", "base_url": "https://a.test"},'
+        ' {"id": "b", "base_url": "https://b.test", "timeout_seconds": 20}]'
+    )
+    by_id = {server.server_id: server for server in servers}
+    assert by_id["a"].base_url == "https://a.test"
+    assert by_id["a"].source == "env"
+    assert by_id["b"].timeout_seconds == 20
+    assert _mcp_servers_from_json("not json") == []
+    assert _mcp_servers_from_json(None) == []
+
+
+def test_mcp_server_registry_crud_and_default() -> None:
+    listed = client.get("/api/settings/external-mcp-servers")
+    assert listed.status_code == 200
+    data = listed.json()["data"]
+    assert data["default_server_id"] == "default"
+    assert any(server["server_id"] == "default" for server in data["servers"])
+
+    created = client.post(
+        "/api/settings/external-mcp-servers",
+        json={
+            "server_id": "erp",
+            "label": "ERP",
+            "base_url": "https://erp.example.test",
+            "timeout_seconds": 7,
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["data"]["server_id"] == "erp"
+    assert created.json()["data"]["configured"] is True
+
+    dup = client.post(
+        "/api/settings/external-mcp-servers",
+        json={"server_id": "erp", "base_url": "https://dup.test"},
+    )
+    assert dup.status_code == 409
+
+    patched = client.patch(
+        "/api/settings/external-mcp-servers/erp", json={"timeout_seconds": 12}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["data"]["timeout_seconds"] == 12
+
+    # 登録済み server は専用 endpoint を引く
+    assert runtime_config_store.get_mcp("erp").base_url == "https://erp.example.test"
+    # 未登録 server_id は default へ fallback(従来の gateway ルーティング互換)
+    assert runtime_config_store.get_mcp("unknown").server_id == "default"
+
+    set_default = client.post("/api/settings/external-mcp-servers/erp/default")
+    assert set_default.status_code == 200
+    assert set_default.json()["data"]["default_server_id"] == "erp"
+
+    deleted = client.request("DELETE", "/api/settings/external-mcp-servers/erp")
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["default_server_id"] == "default"
+    assert all(server["server_id"] != "erp" for server in deleted.json()["data"]["servers"])
+
+    # default server は削除不可
+    assert (
+        client.request("DELETE", "/api/settings/external-mcp-servers/default").status_code
+        == 400
+    )
+    # 不在 server は 404
+    assert (
+        client.request("DELETE", "/api/settings/external-mcp-servers/missing").status_code
+        == 404
+    )
+
+
+def test_skill_loader_reads_skill_md_and_json(tmp_path: Any) -> None:
+    from app.features.agent.skills_loader import (
+        load_skills_from_dir,
+        load_skills_from_json,
+    )
+
+    skill_dir = tmp_path / "my_skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "id: my_skill\n"
+        "name: マイスキル\n"
+        "description: テスト用\n"
+        "tags: [test]\n"
+        "tool_calls:\n"
+        "  - name: external_rag_search\n"
+        '    arguments: {query: "${goal}"}\n'
+        "---\n"
+        "本文が instructions になる\n",
+        encoding="utf-8",
+    )
+    loaded = load_skills_from_dir(str(tmp_path))
+    assert len(loaded) == 1
+    skill = loaded[0]
+    assert skill.id == "my_skill"
+    assert skill.source == "project"
+    assert skill.instructions == "本文が instructions になる"
+    assert skill.tool_calls[0].name == "external_rag_search"
+    assert skill.tool_calls[0].arguments == {"query": "${goal}"}
+
+    env_skills = load_skills_from_json(
+        '[{"id": "env_skill", "name": "Env", "tool_calls": [{"name": "agent_skill_list"}]}]'
+    )
+    assert env_skills[0].id == "env_skill"
+    assert env_skills[0].source == "env"
+    assert load_skills_from_json("nope") == []
+    assert load_skills_from_dir(None) == []
+
+
+def test_skill_runtime_crud_and_builtin_protection() -> None:
+    created = client.post(
+        "/api/skills",
+        json={
+            "id": "custom_x",
+            "name": "カスタムX",
+            "description": "d",
+            "tool_calls": [{"name": "agent_skill_list"}],
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["data"]["source"] == "runtime"
+
+    detail = client.get("/api/skills/custom_x")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["tool_calls"][0]["name"] == "agent_skill_list"
+
+    plan = client.post("/api/skills/plan", json={"skill_id": "custom_x", "goal": "g"})
+    assert plan.status_code == 200
+
+    # 重複・builtin 上書きは拒否
+    assert client.post("/api/skills", json={"id": "custom_x", "name": "x"}).status_code == 409
+    assert (
+        client.post(
+            "/api/skills", json={"id": "business_rag_research", "name": "x"}
+        ).status_code
+        == 409
+    )
+    # builtin は patch/delete 不可
+    assert (
+        client.patch("/api/skills/business_rag_research", json={"name": "x"}).status_code
+        == 400
+    )
+    assert (
+        client.request("DELETE", "/api/skills/business_rag_research").status_code == 400
+    )
+
+    patched = client.patch("/api/skills/custom_x", json={"enabled": False})
+    assert patched.status_code == 200
+    assert patched.json()["data"]["enabled"] is False
+
+    deleted = client.request("DELETE", "/api/skills/custom_x")
+    assert deleted.status_code == 200
+    assert client.get("/api/skills/custom_x").status_code == 404
+
+
+def test_skill_reload_endpoint_returns_counts() -> None:
+    resp = client.post("/api/skills/reload")
+    assert resp.status_code == 200
+    assert "reloaded" in resp.json()["data"]["metadata"]

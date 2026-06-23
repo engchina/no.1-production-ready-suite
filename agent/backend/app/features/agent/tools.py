@@ -1239,7 +1239,7 @@ def _external_mcp_call(arguments: JsonObject, context: ToolInvocationContext) ->
         ) from exc
     if request.trace_id is None:
         request.trace_id = context.trace_id
-    return _external_mcp_client().call_tool(request).model_dump()
+    return _external_mcp_client(request.server_id).call_tool(request).model_dump()
 
 
 def _external_mcp_list_tools(arguments: JsonObject, context: ToolInvocationContext) -> JsonObject:
@@ -1264,17 +1264,25 @@ def list_external_mcp_tools(
     server_id: str | None = None,
     trace_id: str | None = None,
 ) -> ExternalMcpToolsData:
-    return _external_mcp_client().list_tools(
+    return _external_mcp_client(server_id).list_tools(
         ExternalMcpListToolsInput(server_id=server_id, trace_id=trace_id)
     )
 
 
-def _external_mcp_client() -> ExternalMcpClient:
-    config = runtime_config_store.get_mcp()
+def _external_mcp_client(server_id: str | None = None) -> ExternalMcpClient:
+    try:
+        config = runtime_config_store.get_mcp(server_id)
+    except KeyError as exc:
+        raise ExternalToolError(
+            "external_mcp.not_configured",
+            "external MCP server is not registered",
+            {"server_id": server_id},
+        ) from exc
     if not config.base_url:
         raise ExternalToolError(
             "external_mcp.not_configured",
             "external MCP gateway is not configured",
+            {"server_id": config.server_id},
         )
     return ExternalMcpClient(
         base_url=config.base_url,

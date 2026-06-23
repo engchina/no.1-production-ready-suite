@@ -36,6 +36,9 @@ class AgentSkillDefinition(BaseModel):
     tool_calls: list[SkillToolCallTemplate] = Field(default_factory=list)
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
+    # 由来層: builtin(code) / project(SKILL.md) / env(JSON 宣言) / runtime(UI/API)。
+    # builtin は予約 id として保護し、宣言・runtime からの上書き/削除を拒否する。
+    source: str = "runtime"
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -65,10 +68,55 @@ class SkillRegistry:
     def __init__(self) -> None:
         self._lock = Lock()
         self._skills: dict[str, AgentSkillDefinition] = {}
+        self._builtin_ids: set[str] = set()
 
     def register(self, skill: AgentSkillDefinition) -> None:
+        """組込み(builtin)skill を登録する。id は予約され保護される。"""
         with self._lock:
-            self._skills[skill.id] = skill
+            stamped = skill.model_copy(deep=True, update={"source": "builtin"})
+            self._skills[stamped.id] = stamped
+            self._builtin_ids.add(stamped.id)
+
+    def set_declared(self, source: str, skills: list[AgentSkillDefinition]) -> None:
+        """宣言層(project / env)を source 単位で置換する。builtin id は無視。"""
+        with self._lock:
+            for skill_id in [
+                sid
+                for sid, skill in self._skills.items()
+                if skill.source == source and sid not in self._builtin_ids
+            ]:
+                del self._skills[skill_id]
+            for skill in skills:
+                if skill.id in self._builtin_ids:
+                    continue
+                self._skills[skill.id] = skill.model_copy(deep=True, update={"source": source})
+
+    def upsert_custom(self, skill: AgentSkillDefinition) -> AgentSkillDefinition:
+        """runtime(UI/API)層へ追加・更新する。builtin id は拒否。"""
+        with self._lock:
+            if skill.id in self._builtin_ids:
+                raise ValueError("builtin skill cannot be overridden")
+            stored = skill.model_copy(deep=True, update={"source": "runtime", "updated_at": _now()})
+            self._skills[stored.id] = stored
+            return stored.model_copy(deep=True)
+
+    def remove(self, skill_id: str) -> None:
+        """runtime 層の skill のみ削除する。builtin / 宣言層は拒否。"""
+        with self._lock:
+            skill = self._skills.get(skill_id)
+            if skill is None:
+                raise KeyError(skill_id)
+            if skill.source != "runtime":
+                raise ValueError(f"{skill.source} skill cannot be removed via API")
+            del self._skills[skill_id]
+
+    def export(self, source: str | None = None) -> list[AgentSkillDefinition]:
+        with self._lock:
+            return [
+                skill.model_copy(deep=True)
+                for skill in sorted(self._skills.values(), key=lambda item: item.id)
+                if source is None or skill.source == source
+            ]
 
     def list(self) -> list[AgentSkillDefinition]:
         with self._lock:
@@ -311,3 +359,27 @@ skill_registry.register(
         ],
     )
 )
+
+
+def reload_declared_skills() -> dict[str, int]:
+    """設定の中立ディレクトリ / JSON 宣言を読み込み、project / env 層を更新する。
+
+    Claude/Codex に倣い宣言(ファイル/env)を永続層、runtime(API/UI)を
+    セッション層とする。env を後勝ちにするため project → env の順で適用する。
+    """
+    from app.features.agent.skills_loader import (
+        load_skills_from_dir,
+        load_skills_from_json,
+    )
+    from app.settings import get_settings
+
+    settings = get_settings()
+    project = load_skills_from_dir(settings.agent_skills_dir)
+    env = load_skills_from_json(settings.agent_skills_definitions_json)
+    skill_registry.set_declared("project", project)
+    skill_registry.set_declared("env", env)
+    return {"project": len(project), "env": len(env)}
+
+
+# 起動時に宣言層を読み込む(未設定なら何もしない)。
+reload_declared_skills()

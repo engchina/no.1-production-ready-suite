@@ -233,6 +233,63 @@ export interface ExternalMcpToolsFilters {
   trace_id?: string;
 }
 
+export interface ExternalMcpServerSettings extends ExternalServiceSettings {
+  server_id: string;
+  label?: string | null;
+  is_default: boolean;
+}
+
+export interface ExternalMcpServersData {
+  servers: ExternalMcpServerSettings[];
+  default_server_id: string;
+}
+
+export interface ExternalMcpServerWritePayload {
+  server_id?: string;
+  label?: string | null;
+  base_url?: string | null;
+  timeout_seconds?: number;
+  session_id?: string | null;
+  oauth_token_url?: string | null;
+  oauth_client_id?: string | null;
+  oauth_client_secret?: string | null;
+  oauth_scope?: string | null;
+}
+
+export interface AgentSkillToolCall {
+  name: string;
+  arguments?: Record<string, unknown>;
+  trace_id?: string | null;
+}
+
+export interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  tool_calls: AgentSkillToolCall[];
+  enabled: boolean;
+  tags: string[];
+  source: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AgentSkillListData {
+  skills: AgentSkill[];
+  metadata: Record<string, unknown>;
+}
+
+export interface AgentSkillWritePayload {
+  id?: string;
+  name?: string;
+  description?: string;
+  instructions?: string;
+  tool_calls?: AgentSkillToolCall[];
+  enabled?: boolean;
+  tags?: string[];
+}
+
 export interface ObservabilityStatus {
   metrics_enabled: boolean;
   prometheus_metrics_path: string;
@@ -745,6 +802,43 @@ export const agentApi = {
     }),
   listExternalMcpTools: (filters: ExternalMcpToolsFilters) =>
     request<ExternalMcpToolsData>(`/api/tools/external-mcp${externalMcpToolsQuery(filters)}`),
+  listExternalMcpServers: () =>
+    request<ExternalMcpServersData>("/api/settings/external-mcp-servers"),
+  createExternalMcpServer: (payload: ExternalMcpServerWritePayload) =>
+    request<ExternalMcpServerSettings>("/api/settings/external-mcp-servers", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateExternalMcpServer: (serverId: string, payload: ExternalMcpServerWritePayload) =>
+    request<ExternalMcpServerSettings>(
+      `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}`,
+      { method: "PATCH", body: JSON.stringify(payload) }
+    ),
+  deleteExternalMcpServer: (serverId: string) =>
+    request<ExternalMcpServersData>(
+      `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}`,
+      { method: "DELETE" }
+    ),
+  setDefaultExternalMcpServer: (serverId: string) =>
+    request<ExternalMcpServersData>(
+      `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}/default`,
+      { method: "POST" }
+    ),
+  listSkills: () => request<AgentSkillListData>("/api/skills"),
+  getSkill: (skillId: string) =>
+    request<AgentSkill>(`/api/skills/${encodeURIComponent(skillId)}`),
+  createSkill: (payload: AgentSkillWritePayload) =>
+    request<AgentSkill>("/api/skills", { method: "POST", body: JSON.stringify(payload) }),
+  updateSkill: (skillId: string, payload: AgentSkillWritePayload) =>
+    request<AgentSkill>(`/api/skills/${encodeURIComponent(skillId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteSkill: (skillId: string) =>
+    request<AgentSkillListData>(`/api/skills/${encodeURIComponent(skillId)}`, {
+      method: "DELETE",
+    }),
+  reloadSkills: () => request<AgentSkillListData>("/api/skills/reload", { method: "POST" }),
 };
 
 export const api = {

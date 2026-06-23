@@ -6,6 +6,7 @@ export const APP_ROUTES = {
   approvals: "/approvals",
   audit: "/audit",
   tools: "/tools",
+  skills: "/skills",
   memory: "/memory",
   settingsConnection: "/settings/connection",
   settingsOci: "/settings/oci",

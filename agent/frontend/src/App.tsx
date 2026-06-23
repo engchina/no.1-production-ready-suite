@@ -16,10 +16,12 @@ import {
   AuditPage,
   CommandPolicySettingsPage,
   ExternalSettingsPage,
+  McpServersPage,
   MemoryPage,
   RuntimeSnapshotSettingsPage,
   RuntimeSafetySettingsPage,
   RunsPage,
+  SkillsPage,
   ToolPolicySettingsPage,
   ToolsPage,
 } from "@/pages/AgentRuntimePages";
@@ -40,6 +42,7 @@ export function App() {
           <Route path={APP_ROUTES.approvals} element={<ApprovalsPage />} />
           <Route path={APP_ROUTES.audit} element={<AuditPage />} />
           <Route path={APP_ROUTES.tools} element={<ToolsPage />} />
+          <Route path={APP_ROUTES.skills} element={<SkillsPage />} />
           <Route path={APP_ROUTES.memory} element={<MemoryPage />} />
           <Route
             path={APP_ROUTES.settingsConnection}
@@ -51,7 +54,7 @@ export function App() {
           <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
           <Route path={APP_ROUTES.settingsExternalRag} element={<ExternalSettingsPage kind="rag" />} />
           <Route path={APP_ROUTES.settingsExternalNl2Sql} element={<ExternalSettingsPage kind="nl2sql" />} />
-          <Route path={APP_ROUTES.settingsExternalMcp} element={<ExternalSettingsPage kind="mcp" />} />
+          <Route path={APP_ROUTES.settingsExternalMcp} element={<McpServersPage />} />
           <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
           <Route path={APP_ROUTES.settingsCommandPolicy} element={<CommandPolicySettingsPage />} />
           <Route path={APP_ROUTES.settingsRuntimeSafety} element={<RuntimeSafetySettingsPage />} />
