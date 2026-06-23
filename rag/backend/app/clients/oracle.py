@@ -136,7 +136,7 @@ class OraclePoolProtocol(Protocol):
     def acquire(self) -> OracleConnectionProtocol:
         """connection を取得する。"""
 
-    def close(self) -> Any:
+    def close(self, force: bool = False) -> Any:
         """pool を閉じる。"""
 
 
@@ -243,6 +243,7 @@ class LocalOracleStore:
 
 _LOCAL_STORE = LocalOracleStore()
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
+_ORACLE_CLIENT_INITIALIZED_LIB_DIR: str | None = None
 _DB_TEST_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="oracle_db_test_")
 
 
@@ -5412,6 +5413,7 @@ class OracleClient:
             return _SHARED_ORACLE_POOL
 
         oracledb = importlib.import_module("oracledb")
+        _init_oracle_client(oracledb, self._settings)
         pool_kwargs = _oracle_connect_kwargs(
             self._settings,
             extra={
@@ -7432,10 +7434,11 @@ def reset_local_store() -> None:
 def close_oracle_pool() -> None:
     """共有 Oracle pool を閉じる。アプリ終了時に呼び出す。"""
     global _SHARED_ORACLE_POOL
-    if _SHARED_ORACLE_POOL is None:
+    pool = _SHARED_ORACLE_POOL
+    if pool is None:
         return
-    _SHARED_ORACLE_POOL.close()
     _SHARED_ORACLE_POOL = None
+    pool.close(force=True)
 
 
 async def test_oracle_connection(
@@ -7461,6 +7464,7 @@ async def test_oracle_connection(
 def _test_oracle_connection_sync(settings: Settings) -> None:
     """同期 SDK で Oracle 接続を検証する。"""
     oracledb = importlib.import_module("oracledb")
+    _init_oracle_client(oracledb, settings)
     connect_kwargs = _oracle_connect_kwargs(
         settings,
         extra={
@@ -7501,6 +7505,19 @@ def _oracle_connect_kwargs(
         kwargs["password"] = settings.oracle_password
     _add_wallet_kwargs(settings, kwargs)
     return kwargs
+
+
+def _init_oracle_client(oracledb: Any, settings: Settings) -> None:
+    """ORACLE_CLIENT_LIB_DIR があるときは nl2sql と同じ thick client を使う。"""
+    global _ORACLE_CLIENT_INITIALIZED_LIB_DIR
+    lib_dir = settings.oracle_client_lib_dir.strip()
+    if not lib_dir or lib_dir == _ORACLE_CLIENT_INITIALIZED_LIB_DIR:
+        return
+    init_oracle_client = getattr(oracledb, "init_oracle_client", None)
+    if not callable(init_oracle_client):
+        return
+    init_oracle_client(lib_dir=lib_dir)
+    _ORACLE_CLIENT_INITIALIZED_LIB_DIR = lib_dir
 
 
 def _oracle_connection_configured(client: OracleClient) -> bool:

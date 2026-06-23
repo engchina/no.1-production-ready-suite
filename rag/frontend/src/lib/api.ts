@@ -1830,12 +1830,7 @@ export const api = {
   getReadiness: () => request<HealthData>("/api/ready", undefined, { allowStatus: [503] }),
 
   // データベース利用可否(設定の有無 + 実接続プローブ)。DB ゲートが参照する。
-  getDatabaseStatus: () =>
-    request<DatabaseStatusData>("/api/ready/database", undefined, {
-      // 実接続プローブはバックエンドで bounded(db_read_timeout_seconds)。
-      // フロントはそれより十分長く待つ。
-      timeoutMs: DASHBOARD_REQUEST_TIMEOUT_MS,
-    }),
+  getDatabaseStatus: () => request<DatabaseStatusData>("/api/ready/database"),
 
   // ダッシュボード
   getDashboardSummary: () =>

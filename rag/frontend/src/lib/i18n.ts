@@ -18,9 +18,9 @@ export const ja = {
   "dbGate.notConfigured.title": "データベースの接続情報が未設定です",
   "dbGate.notConfigured.message":
     "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面を利用できます。",
-  "dbGate.unreachable.title": "データベースを起動してください",
+  "dbGate.unreachable.title": "データベースに接続できません",
   "dbGate.unreachable.message":
-    "データベースが起動していないか、ネットワーク経由で到達できません。データベースを起動してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
+    "データベースの起動状態、ネットワーク到達性、Wallet サービス名、認証情報を確認してから再試行してください。接続情報の確認・変更もデータベース設定から行えます。",
   "dbGate.openDatabaseSettings": "データベース設定を開く",
   "dbGate.settingsHint": "設定ページ(OCI 認証・モデル・データベース設定など)は引き続き利用できます。",
   "dbGate.checkFailed.title": "データベースの状態を確認できません",

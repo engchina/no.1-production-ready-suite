@@ -1,5 +1,6 @@
 """ヘルスチェックの疎通テスト。"""
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -268,6 +269,23 @@ def test_database_status_ok_when_probe_succeeds(monkeypatch: MonkeyPatch) -> Non
     body = resp.json()
     assert body["data"]["status"] == "ok"
     assert body["data"]["check"] == "ok"
+
+
+def test_database_status_uses_oracle_probe_timeout(monkeypatch: MonkeyPatch) -> None:
+    """閲覧 API 用 timeout ではなく Oracle 接続テスト側の timeout に委ねる。"""
+    _configure_oracle_only(monkeypatch)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "db_read_timeout_seconds", 0.001)
+
+    async def _probe_ok(*_args: object, **_kwargs: object) -> None:
+        await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(health_route, "test_oracle_connection", _probe_ok)
+
+    resp = client.get("/api/ready/database")
+
+    body = resp.json()
+    assert body["data"]["status"] == "ok"
 
 
 def test_database_status_unreachable_when_probe_fails(monkeypatch: MonkeyPatch) -> None:

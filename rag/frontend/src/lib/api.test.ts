@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DASHBOARD_REQUEST_TIMEOUT_MS, ApiError, api } from "./api";
+import { API_REQUEST_TIMEOUT_MS, DASHBOARD_REQUEST_TIMEOUT_MS, ApiError, api } from "./api";
 import { t } from "./i18n";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -72,6 +72,29 @@ describe("api.request envelope", () => {
       "/api/dashboard/summary",
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  it("getDatabaseStatus は Oracle 接続テスト用に通常 API timeout を使う", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_path: string, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const requestPromise = expect(api.getDatabaseStatus()).rejects.toMatchObject({
+      status: 408,
+      messages: [
+        t("common.api.timeout", { seconds: Math.ceil(API_REQUEST_TIMEOUT_MS / 1000) }),
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(API_REQUEST_TIMEOUT_MS);
+
+    await requestPromise;
   });
 
   it("listDocuments は query string を組み立てる", async () => {

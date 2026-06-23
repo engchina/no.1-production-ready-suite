@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+import app.clients.oracle as oracle_module
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
     OracleClient,
@@ -57,6 +58,17 @@ IN_MEMORY_ORACLE_REMOVED = pytest.mark.skip(reason="in-memory Oracle fallback wa
 def setup_function() -> None:
     """テストごとにテスト補助 store を初期化する。"""
     reset_local_store()
+
+
+def test_close_oracle_pool_force_closes_busy_shared_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """設定保存時の pool 切り替えは busy connection があっても 500 にしない。"""
+    pool = ForceCloseOnlyPool()
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", pool)
+
+    oracle_module.close_oracle_pool()
+
+    assert pool.close_forces == [True]
+    assert oracle_module._SHARED_ORACLE_POOL is None
 
 
 def test_datetime_value_attaches_utc_to_naive_database_values() -> None:
@@ -138,6 +150,88 @@ def test_oracle_connection_uses_auto_login_wallet_without_wallet_password(
     assert captured["wallet_location"] == str(wallet_dir)
     assert captured["tcp_connect_timeout"] == 10.0
     assert "wallet_password" not in captured
+
+
+def test_oracle_connection_initializes_instant_client_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """RAG も nl2sql と同じく ORACLE_CLIENT_LIB_DIR があれば thick client を使う。"""
+    wallet_dir = tmp_path / "instantclient_23_26" / "network" / "admin"
+    wallet_dir.mkdir(parents=True)
+    (wallet_dir / "tnsnames.ora").write_text("ragdb_high = ...", encoding="utf-8")
+    (wallet_dir / "sqlnet.ora").write_text("WALLET_LOCATION = ...", encoding="utf-8")
+    (wallet_dir / "cwallet.sso").write_bytes(b"auto-login-wallet")
+    calls: list[tuple[str, object]] = []
+
+    def fake_init_oracle_client(*, lib_dir: str) -> None:
+        calls.append(("init", lib_dir))
+
+    def fake_connect(**kwargs: object) -> object:
+        calls.append(("connect", kwargs["dsn"]))
+        return FakeOracleConnection([[{"ok": 1}]])
+
+    monkeypatch.setattr(oracle_module, "_ORACLE_CLIENT_INITIALIZED_LIB_DIR", None)
+    monkeypatch.setattr(
+        "app.clients.oracle.importlib.import_module",
+        lambda name: SimpleNamespace(
+            connect=fake_connect,
+            init_oracle_client=fake_init_oracle_client,
+        ),
+    )
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="db-secret",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir=str(tmp_path / "instantclient_23_26"),
+        oracle_wallet_dir="",
+        oracle_wallet_password="",
+    )
+
+    _test_oracle_connection_sync(settings)
+
+    assert calls[0] == ("init", str(tmp_path / "instantclient_23_26"))
+    assert calls[1] == ("connect", "ragdb_high")
+
+
+def test_oracle_pool_initializes_instant_client_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """共有 pool 作成も thin ではなく nl2sql と同じ thick client に寄せる。"""
+    calls: list[tuple[str, object]] = []
+    pool = FakeOraclePool()
+
+    def fake_init_oracle_client(*, lib_dir: str) -> None:
+        calls.append(("init", lib_dir))
+
+    def fake_create_pool(**kwargs: object) -> object:
+        calls.append(("create_pool", kwargs["dsn"]))
+        return pool
+
+    monkeypatch.setattr(oracle_module, "_SHARED_ORACLE_POOL", None)
+    monkeypatch.setattr(oracle_module, "_ORACLE_CLIENT_INITIALIZED_LIB_DIR", None)
+    monkeypatch.setattr(
+        "app.clients.oracle.importlib.import_module",
+        lambda name: SimpleNamespace(
+            create_pool=fake_create_pool,
+            init_oracle_client=fake_init_oracle_client,
+        ),
+    )
+    settings = Settings.model_construct(
+        oracle_user="rag_app",
+        oracle_password="db-secret",
+        oracle_dsn="ragdb_high",
+        oracle_client_lib_dir=str(tmp_path / "instantclient_23_26"),
+        oracle_wallet_dir="",
+        oracle_wallet_password="",
+    )
+
+    client = OracleClient(settings=settings)
+
+    assert client.connection_pool() is pool
+    assert calls[0] == ("init", str(tmp_path / "instantclient_23_26"))
+    assert calls[1] == ("create_pool", "ragdb_high")
 
 
 def test_oracle_connection_uses_database_password_as_wallet_password(
@@ -2478,8 +2572,25 @@ class FakeOraclePool:
         self.acquire_calls += 1
         return self.connection
 
-    def close(self) -> None:
+    def close(self, force: bool = False) -> None:
         self.close_calls += 1
+
+
+class ForceCloseOnlyPool:
+    """busy pool の fake。force=True でしか閉じられない。"""
+
+    def __init__(self) -> None:
+        self.close_forces: list[bool] = []
+
+    def acquire(self) -> "FakeOracleConnection":
+        raise AssertionError("close_oracle_pool は acquire しない")
+
+    def close(self, force: bool = False) -> None:
+        self.close_forces.append(force)
+        if not force:
+            raise RuntimeError(
+                "DPY-1005: connection pool cannot be closed because connections are busy"
+            )
 
 
 class FakeOracleConnection:

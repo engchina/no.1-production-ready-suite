@@ -1,6 +1,4 @@
 """ヘルスチェックエンドポイント。"""
-
-import asyncio
 import logging
 
 from fastapi import APIRouter, Response, status
@@ -67,11 +65,10 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
         )
 
     # 設定済み: 起動しているかを bounded な実接続プローブで確認する。
+    # test_oracle_connection 側で Oracle 専用 timeout を持つ。閲覧 API 用 timeout で
+    # 先に切ると、起動済み ADB の初回接続を unreachable と誤判定する。
     try:
-        await asyncio.wait_for(
-            test_oracle_connection(settings),
-            timeout=settings.db_read_timeout_seconds,
-        )
+        await test_oracle_connection(settings)
     except Exception as exc:  # noqa: BLE001 - DB 不通を status へ正規化する境界
         logger.warning(
             "database_status_unreachable",
