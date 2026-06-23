@@ -198,6 +198,22 @@ async function mockServices(
       },
     });
   });
+  await page.route("**/api/services/*/logs**", async (route) => {
+    const id = route.request().url().match(/services\/([^/]+)\/logs/)?.[1] ?? "";
+    const serviceId = decodeURIComponent(id);
+    await route.fulfill({
+      json: {
+        data: {
+          service_id: serviceId,
+          source: serviceId.startsWith("preprocess-") ? "uv" : "docker",
+          lines: 200,
+          content: `${serviceId} boot complete\nGET /health 200 OK`,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
   await page.route("**/api/services", async (route) => {
     await route.fulfill({
       json: { data: state, error_messages: [], warning_messages: [] },
@@ -295,6 +311,26 @@ for (const viewport of [
     await expect(
       page.getByRole("button", { name: "GLM-OCR 起動" })
     ).toBeDisabled();
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`サービスログを行内で確認できる (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockServices(page);
+
+    await page.goto("/settings/services");
+
+    await page.getByRole("button", { name: "Docling ログ" }).click();
+    await expect(page.getByText("Docling のログ")).toBeVisible();
+    await expect(page.getByText("docker compose logs / 最新 200 行")).toBeVisible();
+    await expect(page.getByText("parser-docling boot complete")).toBeVisible();
+    await expect(page.getByRole("button", { name: "再取得" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "コピー" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 }

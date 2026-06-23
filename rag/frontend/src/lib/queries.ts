@@ -44,6 +44,7 @@ import {
   type ServiceCatalogData,
   type ServiceControlResultData,
   type ServiceListData,
+  type ServiceLogsData,
   type ServiceStatusData,
   type RetrievalSettingsData,
   type RetrievalSettingsUpdate,
@@ -82,6 +83,7 @@ export const queryKeys = {
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentExtractionExport: (id: string, format: DocumentExtractionExportFormat) =>
     ["documents", id, "extraction-export", format] as const,
+  documentIngestionJobs: (id: string) => ["documents", id, "ingestion-jobs"] as const,
   documentIngestionSegments: (id: string) =>
     ["documents", id, "ingestion-segments"] as const,
   documentIngestionConfig: (id: string) =>
@@ -123,6 +125,7 @@ export const queryKeys = {
   services: ["services"] as const,
   serviceCatalog: ["services", "catalog"] as const,
   serviceStatus: (serviceId: string) => ["services", "status", serviceId] as const,
+  serviceLogs: (serviceId: string, lines: number) => ["services", "logs", serviceId, lines] as const,
 };
 
 const DOCUMENT_EXTRACTION_EXPORT_FORMATS: DocumentExtractionExportFormat[] = [
@@ -158,6 +161,7 @@ function invalidateDocumentProcessingQueries(qc: QueryClient, documentId: string
   qc.invalidateQueries({ queryKey: queryKeys.documentChunks(documentId) });
   qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(documentId) });
   qc.invalidateQueries({ queryKey: ["documents", documentId, "extraction-export"] });
+  qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(documentId) });
   qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(documentId) });
   qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
   qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -167,8 +171,7 @@ function invalidateDocumentProcessingQueries(qc: QueryClient, documentId: string
  * 自動更新(条件付きポーリング)の遷移状態判定。
  *
  * `refetchInterval` を関数形式で使い、状態遷移中だけポーリングして安定/終了したら
- * 止める。`useDocumentIngestionSegments` / `useIngestionJob` と同じ方針。純粋関数
- * として切り出し Vitest で境界を検証する。
+ * 止める。純粋関数として切り出し Vitest で境界を検証する。
  */
 
 /** 取込/索引が進行中で一覧を再取得すべき文書状態。 */
@@ -363,8 +366,16 @@ export function useDocumentIngestionSegments(id: string | null) {
     queryFn: () => api.listDocumentIngestionSegments(id as string),
     enabled: id != null,
     retry: false,
-    refetchInterval: (query) =>
-      ingestionSegmentHasActiveWork(query.state.data) ? 2000 : false,
+  });
+}
+
+/** 文書単位の取込 job 履歴。workspace 側の一括ポーリングで更新する。 */
+export function useDocumentIngestionJobs(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.documentIngestionJobs(id ?? ""),
+    queryFn: () => api.listDocumentIngestionJobs(id as string),
+    enabled: id != null,
+    retry: false,
   });
 }
 
@@ -375,6 +386,7 @@ export function useRetryFailedDocumentIngestionSegments() {
     mutationFn: (id: string) => api.retryFailedDocumentIngestionSegments(id),
     onSuccess: (job, documentId) => {
       qc.invalidateQueries({ queryKey: queryKeys.document(documentId) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(documentId) });
       qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(documentId) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs", job.id] });
@@ -687,6 +699,7 @@ export function useApproveDocument() {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
       qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(job.document_id) });
       qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -732,6 +745,7 @@ export function useRetryIngestionJob() {
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(job.document_id) });
       qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1120,6 +1134,16 @@ export function useServiceStatusQueries(
       refetchInterval: options.refetchInterval ?? 5000,
     })),
   }) as UseQueryResult<ServiceStatusData>[];
+}
+
+/** サービスログ末尾。ユーザーがログを開いた時だけ取得する。 */
+export function useServiceLogs(serviceId: string | null, lines = 200) {
+  return useQuery<ServiceLogsData>({
+    queryKey: queryKeys.serviceLogs(serviceId ?? "", lines),
+    queryFn: () => api.getServiceLogs(serviceId ?? "", lines),
+    enabled: Boolean(serviceId),
+    retry: false,
+  });
 }
 
 /** マイクロサービスの稼働状態一覧。既定 5s でポーリングして稼働状況をライブ表示する。 */

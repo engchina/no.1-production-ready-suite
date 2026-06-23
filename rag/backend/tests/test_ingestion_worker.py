@@ -10,7 +10,7 @@ import pytest
 from app.config import get_settings
 from app.rag import ingestion_worker
 from app.rag.ingestion_worker import IngestionJobSubprocessError, IngestionQueueWorker
-from app.schemas.document import IngestionJob, IngestionJobStatus
+from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus
 
 
 def _job(job_id: str) -> IngestionJob:
@@ -185,6 +185,26 @@ class _FakeProcess:
         self.killed = True
 
 
+class _HangingProcess(_FakeProcess):
+    def __init__(self) -> None:
+        super().__init__(-15)
+        self._done = asyncio.Event()
+
+    async def wait(self) -> int:
+        await self._done.wait()
+        self.returncode = self._return_code
+        return self._return_code
+
+    def terminate(self) -> None:
+        super().terminate()
+        self._done.set()
+
+    def kill(self) -> None:
+        super().kill()
+        self._return_code = -9
+        self._done.set()
+
+
 async def test_subprocess_runner_invokes_single_job_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -222,6 +242,86 @@ async def test_subprocess_runner_raises_without_finishing_job_on_nonzero_exit(
 
     with pytest.raises(IngestionJobSubprocessError):
         await ingestion_worker.run_ingestion_job_subprocess("job-failed-child")
+
+
+async def test_subprocess_runner_times_out_and_terminates_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """parser 子プロセスが固着したら job runner を待ち続けない。"""
+    process = _HangingProcess()
+
+    async def fake_create_subprocess_exec(*cmd: str) -> _HangingProcess:
+        _ = cmd
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    with pytest.raises(IngestionJobSubprocessError, match="timed out"):
+        await ingestion_worker.run_ingestion_job_subprocess(
+            "job-timeout",
+            timeout_seconds=0.01,
+        )
+
+    assert process.terminated is True
+
+
+async def test_worker_marks_running_job_failed_when_runner_crashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """子プロセス異常終了後に RUNNING job を放置しない。"""
+    queued = [_job("crash")]
+    running = queued[0].model_copy(update={"status": IngestionJobStatus.RUNNING})
+    updates: dict[str, object] = {}
+    stop = asyncio.Event()
+
+    class FakeOracle:
+        async def get_ingestion_job(self, job_id: str) -> IngestionJob:
+            assert job_id == "crash"
+            return running
+
+        async def update_ingestion_job(self, job_id: str, **kwargs: object) -> IngestionJob:
+            assert job_id == "crash"
+            updates.update(kwargs)
+            stop.set()
+            return running.model_copy(update=kwargs)
+
+        async def update_document_status(
+            self,
+            document_id: str,
+            status: FileStatus,
+            error_message: str | None = None,
+        ) -> None:
+            updates["document_id"] = document_id
+            updates["document_status"] = status
+            updates["document_error"] = error_message
+
+    async def fetch(limit: int) -> Sequence[IngestionJob]:
+        _ = limit
+        batch = queued[:]
+        queued.clear()
+        return batch
+
+    async def runner(job_id: str) -> None:
+        assert job_id == "crash"
+        raise IngestionJobSubprocessError("child died")
+
+    async def recover() -> Sequence[IngestionJob]:
+        return []
+
+    monkeypatch.setattr(ingestion_worker, "OracleClient", FakeOracle)
+    worker = IngestionQueueWorker(
+        settings=get_settings(),
+        job_runner=runner,
+        fetch_queued=fetch,
+        recover_stale=recover,
+        concurrency=1,
+        poll_interval_seconds=0.01,
+    )
+    await asyncio.wait_for(worker.run_forever(stop_event=stop), timeout=5)
+
+    assert updates["status"] is IngestionJobStatus.FAILED
+    assert updates["error_message"] == "child died"
+    assert updates["document_status"] is FileStatus.ERROR
 
 
 async def test_default_fetch_uses_fifo_order(monkeypatch: pytest.MonkeyPatch) -> None:

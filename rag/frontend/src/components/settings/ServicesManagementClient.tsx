@@ -1,10 +1,13 @@
 "use client";
 
 import { Fragment, useState } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   CircleSlash,
+  Clipboard,
   Container,
   MinusCircle,
   Play,
@@ -25,11 +28,17 @@ import {
   ApiError,
   type DeploymentMode,
   type ServiceCatalogItemData,
+  type ServiceLogsData,
   type ServiceProfile,
   type ServiceRuntimeStatus,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
-import { useControlService, useServiceCatalog, useServiceStatusQueries } from "@/lib/queries";
+import {
+  useControlService,
+  useServiceCatalog,
+  useServiceLogs,
+  useServiceStatusQueries,
+} from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +58,8 @@ export function ServicesManagementClient() {
   const confirm = useConfirm();
   // クリックした行・操作だけにスピナーを出すための識別子(`${serviceId}:${action}`)。
   const [pending, setPending] = useState<string | null>(null);
+  const [logsServiceId, setLogsServiceId] = useState<string | null>(null);
+  const logsQuery = useServiceLogs(logsServiceId);
 
   if (query.isPending) {
     return (
@@ -189,6 +200,10 @@ export function ServicesManagementClient() {
     }
   }
 
+  function toggleLogs(service: DisplayServiceData) {
+    setLogsServiceId((current) => (current === service.service_id ? null : service.service_id));
+  }
+
   return (
     <div className="space-y-5 p-8">
       <Card>
@@ -263,8 +278,11 @@ export function ServicesManagementClient() {
                 services={g.services}
                 controlEnabled={controlEnabled}
                 pending={pending}
+                logsServiceId={logsServiceId}
+                logsQuery={logsQuery}
                 serviceById={serviceById}
                 onAct={act}
+                onToggleLogs={toggleLogs}
               />
             ))}
           </Fragment>
@@ -280,16 +298,22 @@ function ServiceGroup({
   services,
   controlEnabled,
   pending,
+  logsServiceId,
+  logsQuery,
   serviceById,
   onAct,
+  onToggleLogs,
 }: {
   title: string;
   note?: string;
   services: DisplayServiceData[];
   controlEnabled: boolean;
   pending: string | null;
+  logsServiceId: string | null;
+  logsQuery: UseQueryResult<ServiceLogsData>;
   serviceById: Map<string, DisplayServiceData>;
   onAct: (service: DisplayServiceData, action: "start" | "stop") => void;
+  onToggleLogs: (service: DisplayServiceData) => void;
 }) {
   if (services.length === 0) return null;
   return (
@@ -306,8 +330,11 @@ function ServiceGroup({
               service={service}
               controlEnabled={controlEnabled}
               pending={pending}
+              logsOpen={logsServiceId === service.service_id}
+              logsQuery={logsQuery}
               serviceById={serviceById}
               onAct={onAct}
+              onToggleLogs={onToggleLogs}
             />
           ))}
         </ul>
@@ -320,14 +347,20 @@ function ServiceRow({
   service,
   controlEnabled,
   pending,
+  logsOpen,
+  logsQuery,
   serviceById,
   onAct,
+  onToggleLogs,
 }: {
   service: DisplayServiceData;
   controlEnabled: boolean;
   pending: string | null;
+  logsOpen: boolean;
+  logsQuery: UseQueryResult<ServiceLogsData>;
   serviceById: Map<string, DisplayServiceData>;
   onAct: (service: DisplayServiceData, action: "start" | "stop") => void;
+  onToggleLogs: (service: DisplayServiceData) => void;
 }) {
   const running = service.status === "running";
   const stopped = service.status === "stopped";
@@ -363,66 +396,181 @@ function ServiceRow({
     });
   }
 
+  const logsPanelId = `service-logs-${service.service_id}`;
+
   return (
-    <li className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <p className="text-sm font-semibold text-foreground">{serviceLabel(service)}</p>
-        <p className="font-mono text-xs text-muted">{service.service_id}</p>
-        {inferenceServerSummary.length > 0 ? (
-          <p className="mt-1 text-xs text-muted">
-            {t("settings.services.inferenceServers")}:{" "}
-            {inferenceServerSummary.join(", ")}
-          </p>
-        ) : null}
-        {blockedInferenceServers.length > 0 ? (
-          <p className="mt-1 text-xs font-medium text-amber-700">
-            {t("settings.services.inferenceServerRequired", {
-              service: serviceLabel(service),
-              servers: blockedInferenceServers.join(", "),
-            })}
-          </p>
-        ) : null}
-      </div>
-      <div className="flex items-center gap-2">
-        <ServiceStatusBadge status={service.status} />
-        <div className="flex gap-2" title={controlHint}>
+    <li className="py-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-foreground">{serviceLabel(service)}</p>
+          <p className="font-mono text-xs text-muted">{service.service_id}</p>
+          {inferenceServerSummary.length > 0 ? (
+            <p className="mt-1 text-xs text-muted">
+              {t("settings.services.inferenceServers")}:{" "}
+              {inferenceServerSummary.join(", ")}
+            </p>
+          ) : null}
+          {blockedInferenceServers.length > 0 ? (
+            <p className="mt-1 text-xs font-medium text-amber-700">
+              {t("settings.services.inferenceServerRequired", {
+                service: serviceLabel(service),
+                servers: blockedInferenceServers.join(", "),
+              })}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <ServiceStatusBadge status={service.status} />
           <Button
             type="button"
             variant="secondary"
             size="sm"
-            loading={startPending}
-            disabled={
-              !controlEnabled ||
-              !service.statusReady ||
-              running ||
-              dependencyStopped ||
-              (anyPending && !startPending)
-            }
-            onClick={() => onAct(service, "start")}
-            aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
+            onClick={() => onToggleLogs(service)}
+            aria-expanded={logsOpen}
+            aria-controls={logsPanelId}
+            aria-label={`${serviceLabel(service)} ${t("settings.services.action.logs")}`}
           >
-            <Play size={14} aria-hidden />
-            {startPending
-              ? t("settings.services.action.starting")
-              : t("settings.services.action.start")}
+            <TerminalSquare size={14} aria-hidden />
+            {logsOpen
+              ? t("settings.services.action.hideLogs")
+              : t("settings.services.action.logs")}
+            <ChevronDown
+              size={14}
+              className={cn("transition-transform", logsOpen ? "rotate-180" : undefined)}
+              aria-hidden
+            />
+          </Button>
+          <div className="flex gap-2" title={controlHint}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={startPending}
+              disabled={
+                !controlEnabled ||
+                !service.statusReady ||
+                running ||
+                dependencyStopped ||
+                (anyPending && !startPending)
+              }
+              onClick={() => onAct(service, "start")}
+              aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
+            >
+              <Play size={14} aria-hidden />
+              {startPending
+                ? t("settings.services.action.starting")
+                : t("settings.services.action.start")}
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              loading={stopPending}
+              disabled={!controlEnabled || !service.statusReady || stopped || (anyPending && !stopPending)}
+              onClick={() => onAct(service, "stop")}
+              aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
+            >
+              <Square size={14} aria-hidden />
+              {stopPending
+                ? t("settings.services.action.stopping")
+                : t("settings.services.action.stop")}
+            </Button>
+          </div>
+        </div>
+      </div>
+      {logsOpen ? (
+        <ServiceLogPanel id={logsPanelId} service={service} logsQuery={logsQuery} />
+      ) : null}
+    </li>
+  );
+}
+
+function ServiceLogPanel({
+  id,
+  service,
+  logsQuery,
+}: {
+  id: string;
+  service: DisplayServiceData;
+  logsQuery: UseQueryResult<ServiceLogsData>;
+}) {
+  const content = logsQuery.data?.content ?? "";
+  const sourceKey =
+    logsQuery.data?.source === "uv"
+      ? "settings.services.logs.source.uv"
+      : "settings.services.logs.source.docker";
+
+  async function copyLogs() {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success(t("settings.services.logs.copied"));
+    } catch {
+      toast.error(t("settings.services.logs.copyFailed"));
+    }
+  }
+
+  return (
+    <div
+      id={id}
+      className="mt-3 overflow-hidden rounded-md border border-slate-800 bg-slate-950 text-slate-100"
+    >
+      <div className="flex flex-col gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-slate-50">
+            {t("settings.services.logs.title", { service: serviceLabel(service) })}
+          </p>
+          {logsQuery.data ? (
+            <p className="mt-0.5 text-[11px] text-slate-300">
+              {t(sourceKey as I18nKey, { lines: String(logsQuery.data.lines) })}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            loading={logsQuery.isFetching}
+            onClick={() => void logsQuery.refetch()}
+            aria-label={t("settings.services.logs.refresh")}
+          >
+            <RefreshCw size={14} aria-hidden />
+            {t("settings.services.logs.refresh")}
           </Button>
           <Button
             type="button"
-            variant="danger"
+            variant="secondary"
             size="sm"
-            loading={stopPending}
-            disabled={!controlEnabled || !service.statusReady || stopped || (anyPending && !stopPending)}
-            onClick={() => onAct(service, "stop")}
-            aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
+            disabled={!content}
+            onClick={() => void copyLogs()}
+            aria-label={t("settings.services.logs.copy")}
           >
-            <Square size={14} aria-hidden />
-            {stopPending
-              ? t("settings.services.action.stopping")
-              : t("settings.services.action.stop")}
+            <Clipboard size={14} aria-hidden />
+            {t("settings.services.logs.copy")}
           </Button>
         </div>
       </div>
-    </li>
+      {logsQuery.isPending ? (
+        <div className="flex min-h-28 items-center gap-2 px-3 py-4 text-xs text-slate-300">
+          <RefreshCw size={14} className="animate-spin" aria-hidden />
+          {t("settings.services.logs.loading")}
+        </div>
+      ) : logsQuery.isError ? (
+        <div className="px-3 py-4 text-xs text-rose-200" role="alert">
+          {logsQuery.error instanceof ApiError
+            ? logsQuery.error.message
+            : t("settings.services.logs.loadError")}
+        </div>
+      ) : content ? (
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 py-3 font-mono text-[11px] leading-relaxed text-slate-100">
+          {content}
+        </pre>
+      ) : (
+        <div className="px-3 py-4 text-xs text-slate-300">
+          {t("settings.services.logs.empty")}
+        </div>
+      )}
+    </div>
   );
 }
 

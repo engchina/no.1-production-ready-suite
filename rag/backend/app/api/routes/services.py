@@ -6,8 +6,9 @@
 
 import asyncio
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.config import Settings, get_settings
 from app.schemas.common import ApiResponse
@@ -17,6 +18,7 @@ from app.schemas.service_management import (
     ServiceCatalogItemData,
     ServiceControlResultData,
     ServiceListData,
+    ServiceLogsData,
     ServiceStatusData,
 )
 from app.services.catalog import (
@@ -30,6 +32,8 @@ from app.services.control import (
     ServiceAction,
     ServiceControlClient,
     ServiceControlError,
+    ServiceLogsError,
+    read_service_logs,
 )
 from app.services.status import blocked_dependencies, probe_service_status, probe_service_statuses
 
@@ -132,6 +136,40 @@ async def get_service_status(service_id: str) -> ApiResponse[ServiceStatusData]:
             **_catalog_item(settings, entry).model_dump(),
             status=service_status,
             blocked_by=list(blocked_by),
+        )
+    )
+
+
+@router.get("/{service_id}/logs", response_model=ApiResponse[ServiceLogsData])
+async def get_service_logs(
+    service_id: str,
+    lines: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> ApiResponse[ServiceLogsData]:
+    """1 サービスのログ末尾を返す(docker compose logs / dev uv log)。"""
+    settings = get_settings()
+    entry = get_catalog_entry(service_id)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="指定したサービスが見つかりません。",
+        )
+    try:
+        logs = await read_service_logs(settings, entry, lines)
+    except ServiceLogsError as exc:
+        logger.warning(
+            "service_logs_failed",
+            extra={"service_id": service_id, "lines": lines},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc) or "ログを取得できませんでした。",
+        ) from exc
+    return ApiResponse(
+        data=ServiceLogsData(
+            service_id=logs.service_id,
+            source=logs.source,
+            lines=logs.lines,
+            content=logs.content,
         )
     )
 

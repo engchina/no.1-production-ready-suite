@@ -112,6 +112,87 @@ def test_mineru_cli_fallback_reads_generated_markdown(
     assert registry._run_mineru_cli(source) == "# MinerU OCR\n"
 
 
+@pytest.mark.parametrize(
+    ("artifact_name", "payload", "artifact_type"),
+    [
+        (
+            "doc_content_list.json",
+            [{"type": "header", "text": "テストPDF", "bbox": [109, 63, 202, 80], "page_idx": 0}],
+            "header",
+        ),
+        (
+            "doc_content_list_v2.json",
+            [
+                [
+                    {
+                        "type": "page_header",
+                        "content": {
+                            "page_header_content": [
+                                {"type": "text", "content": "テストPDF"}
+                            ]
+                        },
+                        "bbox": [109, 63, 202, 80],
+                    }
+                ]
+            ],
+            "text",
+        ),
+        (
+            "doc_model.json",
+            [[{"type": "header", "content": "テストPDF", "bbox": [0.11, 0.064, 0.204, 0.081]}]],
+            "header",
+        ),
+    ],
+)
+def test_mineru_cli_fallback_reads_json_artifacts_when_markdown_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    artifact_name: str,
+    payload: object,
+    artifact_type: str,
+) -> None:
+    fake = types.ModuleType("mineru")  # MinerU 3.x は top-level API を持たない
+    monkeypatch.setitem(sys.modules, "mineru", fake)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python_path = bin_dir / "python"
+    python_path.write_text("", encoding="utf-8")
+    mineru_bin = bin_dir / "mineru"
+    mineru_bin.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = '-o' ]; then shift; out=\"$1\"; fi\n"
+        "  shift\n"
+        "done\n"
+        "mkdir -p \"$out/doc/hybrid_auto\"\n"
+        ": > \"$out/doc/hybrid_auto/doc.md\"\n"
+        f"cat > \"$out/doc/hybrid_auto/{artifact_name}\" <<'JSON'\n"
+        f"{json.dumps(payload, ensure_ascii=False)}\n"
+        "JSON\n",
+        encoding="utf-8",
+    )
+    mineru_bin.chmod(0o755)
+
+    monkeypatch.setattr(registry.sys, "executable", str(python_path))
+
+    result = _external_adapter_result(
+        "mineru",
+        source_bytes=b"%PDF-1.4 scanned",
+        source_profile=_pdf_profile(),
+        content_type="application/pdf",
+    )
+
+    assert result.parser_backend == "mineru"
+    assert result.fallback_used is False
+    assert result.extraction is not None
+    assert result.extraction.raw_text == "テストPDF"
+    assert result.extraction.parser_artifacts["adapter_export"] == "structured_elements"
+    assert result.extraction.elements[0].kind == "text"
+    assert result.extraction.elements[0].page_number == 1
+    assert result.extraction.elements[0].metadata["mineru_artifact_type"] == artifact_type
+
+
 def test_dots_ocr_vllm_parser_reads_generated_markdown(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

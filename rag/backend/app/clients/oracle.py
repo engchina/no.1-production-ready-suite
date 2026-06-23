@@ -7366,9 +7366,14 @@ def _optional_int(value: object) -> int | None:
 
 def _datetime_value(value: object) -> datetime:
     if isinstance(value, datetime):
-        return value
+        if value.tzinfo is not None and value.utcoffset() is not None:
+            return value
+        return value.replace(tzinfo=UTC)
     if isinstance(value, str):
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+            return parsed
+        return parsed.replace(tzinfo=UTC)
     return datetime.now(UTC)
 
 

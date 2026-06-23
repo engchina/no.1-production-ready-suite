@@ -127,6 +127,27 @@ def test_upload_ingest_search_flow() -> None:
     assert "rrf_score" in search_data["citations"][0]["metadata"]
 
 
+def test_document_ingestion_jobs_endpoint_lists_jobs_for_document() -> None:
+    """文書 workspace は対象文書の取込 job を取得できる。"""
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("job-policy.txt", b"job status", "text/plain")},
+    )
+    assert upload_resp.status_code == 200
+    document_id = upload_resp.json()["data"]["id"]
+    enqueue_resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+    assert enqueue_resp.status_code == 200
+    job = enqueue_resp.json()["data"]
+
+    jobs_resp = client.get(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert jobs_resp.status_code == 200
+    jobs = jobs_resp.json()["data"]
+    assert jobs[0]["id"] == job["id"]
+    assert jobs[0]["document_id"] == document_id
+    assert jobs[0]["status"] == "QUEUED"
+
+
 def test_ingest_emits_ingestion_audit_without_raw_text(caplog: LogCaptureFixture) -> None:
     """取込成功時は OCR 原文を出さず、取込監査イベントを出す。"""
     sample = (

@@ -2,7 +2,7 @@
 
 import logging
 
-from app.logging_config import _NOISY_LOGGERS, configure_logging
+from app.logging_config import _NOISY_LOGGERS, _ServiceStatusAccessFilter, configure_logging
 
 
 def test_configure_logging_sets_root_level() -> None:
@@ -13,8 +13,8 @@ def test_configure_logging_sets_root_level() -> None:
     configure_logging("INFO")
 
 
-def test_configure_logging_quiets_pdfminer_warnings() -> None:
-    """pdfminer の無害な警告ログが抑制される。"""
+def test_configure_logging_quiets_noisy_loggers() -> None:
+    """無害な noisy logger を抑制する。"""
     # 事前に WARNING に下げても configure_logging 後は ERROR に引き上げられる。
     logging.getLogger("pdfminer.pdffont").setLevel(logging.WARNING)
 
@@ -23,5 +23,39 @@ def test_configure_logging_quiets_pdfminer_warnings() -> None:
     for name, level in _NOISY_LOGGERS.items():
         logger = logging.getLogger(name)
         assert logger.level == level
-        # FontBBox 警告(WARNING)は実際に無効化される。
-        assert not logger.isEnabledFor(logging.WARNING)
+        assert not logger.isEnabledFor(logging.INFO)
+    # FontBBox 警告(WARNING)は実際に無効化される。
+    assert not logging.getLogger("pdfminer.pdffont").isEnabledFor(logging.WARNING)
+    # httpx は health check の INFO だけ落とし、警告は残す。
+    assert logging.getLogger("httpx").isEnabledFor(logging.WARNING)
+
+
+def test_configure_logging_filters_service_status_access_logs() -> None:
+    """サービス status poll の access log だけを落とす。"""
+    configure_logging("INFO")
+    access_logger = logging.getLogger("uvicorn.access")
+    assert any(isinstance(item, _ServiceStatusAccessFilter) for item in access_logger.filters)
+    access_filter = next(
+        item for item in access_logger.filters if isinstance(item, _ServiceStatusAccessFilter)
+    )
+    status_record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '127.0.0.1:1 - "GET /api/services/parser-mineru/status HTTP/1.1" 200 OK',
+        (),
+        None,
+    )
+    document_record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '127.0.0.1:1 - "GET /api/documents/doc-1 HTTP/1.1" 200 OK',
+        (),
+        None,
+    )
+
+    assert not access_filter.filter(status_record)
+    assert access_filter.filter(document_record)

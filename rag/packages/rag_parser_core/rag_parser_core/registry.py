@@ -1349,8 +1349,8 @@ def _run_mineru(path: Path) -> object:
     return _run_mineru_cli(path)
 
 
-def _run_mineru_cli(path: Path) -> str:
-    """MinerU CLI で解析して生成 markdown を返す。
+def _run_mineru_cli(path: Path) -> object:
+    """MinerU CLI で解析して生成 markdown / artifact text を返す。
 
     MinerU 3.x は top-level package に Python API を公開していないため、安定した CLI を使う。
     """
@@ -1383,12 +1383,159 @@ def _run_mineru_cli(path: Path) -> str:
             detail = (completed.stderr or completed.stdout or "").strip().splitlines()[-5:]
             raise RuntimeError(f"mineru CLI failed: {' | '.join(detail)}")
         markdown_files = sorted(Path(output_dir).rglob("*.md"))
-        if not markdown_files:
-            raise RuntimeError("mineru CLI did not produce markdown")
-        return "\n\n".join(
+        markdown_text = "\n\n".join(
             markdown_file.read_text(encoding="utf-8", errors="replace")
             for markdown_file in markdown_files
         )
+        if markdown_text.strip():
+            return markdown_text
+        artifact_elements = _mineru_cli_artifact_elements(Path(output_dir))
+        if artifact_elements:
+            return {"elements": artifact_elements}
+        if not markdown_files:
+            raise RuntimeError("mineru CLI did not produce markdown")
+        return markdown_text
+
+
+def _mineru_cli_artifact_elements(output_dir: Path) -> list[dict[str, object]]:
+    """空 markdown 時に MinerU JSON artifact から本文要素を復元する。"""
+    for suffix in (
+        "_content_list.json",
+        "_content_list_v2.json",
+        "_model.json",
+    ):
+        elements: list[dict[str, object]] = []
+        for artifact_path in sorted(output_dir.rglob(f"*{suffix}")):
+            payload = _read_json_file(artifact_path)
+            if payload is None:
+                continue
+            _collect_mineru_text_elements(payload, elements, page_number=None)
+        if elements:
+            return elements
+    return []
+
+
+def _read_json_file(path: Path) -> object | None:
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            payload: object = json.load(handle)
+            return payload
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _collect_mineru_text_elements(
+    value: object,
+    elements: list[dict[str, object]],
+    *,
+    page_number: int | None,
+) -> None:
+    if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):
+        for index, item in enumerate(value):
+            child_page_number = page_number
+            if page_number is None and isinstance(item, Sequence) and not isinstance(
+                item, bytes | bytearray | str
+            ):
+                child_page_number = index + 1
+            _collect_mineru_text_elements(
+                item,
+                elements,
+                page_number=child_page_number,
+            )
+        return
+    if not isinstance(value, Mapping):
+        return
+    raw_type = str(value.get("type") or value.get("kind") or "").strip()
+    normalized_type = raw_type.casefold()
+    effective_page_number = _mineru_page_number(value, page_number)
+    if normalized_type == "page_header":
+        content = value.get("content")
+        if isinstance(content, Mapping):
+            for item in _mineru_nested_content_items(content):
+                _collect_mineru_text_elements(
+                    item,
+                    elements,
+                    page_number=effective_page_number,
+                )
+        return
+    if normalized_type == "page_footer":
+        return
+    text = _mineru_element_text(value)
+    if text and _mineru_text_type_is_searchable(normalized_type):
+        element: dict[str, object] = {
+            "type": "text" if normalized_type in {"header", "page_header"} else raw_type,
+            "text": text,
+            "page_number": effective_page_number,
+            "metadata": {
+                "mineru_artifact_type": raw_type or "text",
+                "mineru_artifact_source": "json_fallback",
+            },
+        }
+        bbox = value.get("bbox")
+        if bbox is not None:
+            element["bbox"] = bbox
+        elements.append(element)
+    for key in ("children", "items", "content", "blocks"):
+        child = value.get(key)
+        if isinstance(child, Mapping | Sequence) and not isinstance(
+            child, bytes | bytearray | str
+        ):
+            _collect_mineru_text_elements(
+                child,
+                elements,
+                page_number=effective_page_number,
+            )
+
+
+def _mineru_nested_content_items(content: Mapping[object, object]) -> list[object]:
+    items: list[object] = []
+    for value in content.values():
+        if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):
+            items.extend(value)
+        else:
+            items.append(value)
+    return items
+
+
+def _mineru_element_text(value: Mapping[object, object]) -> str:
+    for key in ("text", "content", "markdown"):
+        item = value.get(key)
+        if isinstance(item, str) and item.strip():
+            return _clean_text(item)
+    return ""
+
+
+def _mineru_text_type_is_searchable(normalized_type: str) -> bool:
+    return normalized_type in {
+        "",
+        "text",
+        "paragraph",
+        "body",
+        "body_text",
+        "title",
+        "header",
+        "page_header",
+        "list",
+        "list_item",
+        "table",
+        "table_caption",
+        "figure_caption",
+        "caption",
+    }
+
+
+def _mineru_page_number(
+    value: Mapping[object, object],
+    fallback: int | None,
+) -> int | None:
+    for key in ("page_number", "page_no", "page_idx", "page"):
+        candidate = value.get(key)
+        if isinstance(candidate, int):
+            return candidate + 1 if key == "page_idx" else candidate
+        if isinstance(candidate, str) and candidate.strip().isdigit():
+            number = int(candidate.strip())
+            return number + 1 if key == "page_idx" else number
+    return fallback
 
 
 def _run_dots_ocr(path: Path) -> object:

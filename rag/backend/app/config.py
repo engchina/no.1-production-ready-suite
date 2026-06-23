@@ -330,6 +330,10 @@ class Settings(BaseSettings):
             "ベクトル検索とは別経路の OCI Database 制御プレーン操作用。"
         ),
     )
+    oracle_adb_region: str = Field(
+        default="",
+        description="Autonomous Database 管理専用の OCI region。未設定なら OCI_REGION を使う。",
+    )
     oracle_tcp_connect_timeout_seconds: float = Field(
         default=10.0,
         gt=0.0,
@@ -418,7 +422,7 @@ class Settings(BaseSettings):
         description="起動時に永続化済み QUEUED job と stale RUNNING job を自動回復する。",
     )
     ingestion_queue_startup_drain_limit: int = Field(default=50, ge=1, le=500)
-    ingestion_queue_stale_running_seconds: float = Field(default=3600.0, gt=0.0, le=86400.0)
+    ingestion_queue_stale_running_seconds: float = Field(default=300.0, gt=0.0, le=86400.0)
     ingestion_queue_recovery_interval_seconds: float = Field(
         default=60.0,
         gt=0.0,
@@ -1391,6 +1395,11 @@ class Settings(BaseSettings):
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
         return self.oracle_wallet_dir.strip()
+
+    @property
+    def resolved_oracle_adb_region(self) -> str:
+        """ADB 管理専用 region。旧設定互換のため OCI_REGION へ fallback する。"""
+        return self.oracle_adb_region.strip() or self.oci_region.strip()
 
 
 _MODEL_SETTINGS_STATE: dict[str, int | str | None] = {"path": None, "mtime_ns": None}

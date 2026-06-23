@@ -20,6 +20,7 @@ import shlex
 import signal
 import subprocess
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -31,6 +32,7 @@ from app.services.service_env import oci_service_env
 logger = logging.getLogger(__name__)
 
 ServiceAction = Literal["start", "stop", "restart"]
+ServiceLogsSource = Literal["docker", "uv"]
 
 # backend/app/services/control.py → parents[3] = リポジトリ root(services/<…> を解決する基点)。
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -50,12 +52,26 @@ class ControlResult:
     detail: str | None = None
 
 
+@dataclass(frozen=True)
+class ServiceLogsResult:
+    """サービスログの末尾(非機密メタデータ + 本文)。"""
+
+    service_id: str
+    source: ServiceLogsSource
+    lines: int
+    content: str
+
+
 class ServiceControlError(Exception):
     """制御コマンドの実行に失敗したことを表す(API は 502 へ正規化)。"""
 
     def __init__(self, result: ControlResult) -> None:
         super().__init__(result.detail or f"{result.action} failed: {result.service_id}")
         self.result = result
+
+
+class ServiceLogsError(Exception):
+    """サービスログ取得に失敗したことを表す(API は 502 へ正規化)。"""
 
 
 def _compose_args(
@@ -90,6 +106,32 @@ def _compose_args(
         return [*base, *file_args, *profile_args, "stop", entry.service_id]
     # restart も build しない(既存イメージを使う)。
     return [*base, *file_args, *profile_args, "restart", entry.service_id]
+
+
+def _compose_logs_args(
+    settings: Settings,
+    entry: ServiceCatalogEntry,
+    lines: int,
+) -> list[str]:
+    """docker compose logs の引数配列を組み立てる(shell 補間なし)。"""
+    base = shlex.split(settings.rag_service_control_command)
+    if not base:
+        base = ["docker", "compose"]
+    file_args = (
+        ["-f", "docker-compose.yml", "-f", "docker-compose.dev.yml"]
+        if is_dev_mode(settings)
+        else []
+    )
+    return [
+        *base,
+        *file_args,
+        *_compose_profile_args(entry),
+        "logs",
+        "--no-color",
+        "--tail",
+        str(lines),
+        entry.service_id,
+    ]
 
 
 def _compose_profile_args(entry: ServiceCatalogEntry) -> list[str]:
@@ -204,6 +246,15 @@ def _read_log_tail(logfile: Path, max_chars: int = 600) -> str:
     except OSError:
         return ""
     return text[-max_chars:]
+
+
+def _read_log_tail_lines(logfile: Path, lines: int) -> str:
+    """ログファイル末尾を行数指定で読む(ファイル欠如は空文字)。"""
+    try:
+        with logfile.open("r", encoding="utf-8", errors="replace") as handle:
+            return "".join(deque(handle, maxlen=lines)).strip()
+    except OSError:
+        return ""
 
 
 def _read_pid(pidfile: Path) -> int | None:
@@ -457,3 +508,48 @@ class ServiceControlClient:
         if not result.ok:
             raise ServiceControlError(result)
         return result
+
+
+async def read_service_logs(
+    settings: Settings,
+    entry: ServiceCatalogEntry,
+    lines: int,
+) -> ServiceLogsResult:
+    """allowlist 済みサービスのログ末尾を返す。docker は compose、dev uv は .run を読む。"""
+    if is_dev_mode(settings) and entry.dev_runner == "uv":
+        content = _read_log_tail_lines(_runtime_dir() / f"{entry.service_id}.log", lines)
+        return ServiceLogsResult(
+            service_id=entry.service_id,
+            source="uv",
+            lines=lines,
+            content=content,
+        )
+
+    args = _compose_logs_args(settings, entry, lines)
+    cwd = str(REPO_ROOT) if is_dev_mode(settings) else None
+    timeout = float(settings.rag_service_control_timeout_seconds)
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise ServiceLogsError(f"compose コマンドが見つかりません: {exc}") from exc
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except TimeoutError as exc:
+        process.kill()
+        with _suppress_process_cleanup():
+            await process.wait()
+        raise ServiceLogsError(f"timeout({timeout}s)で打ち切りました。") from exc
+    raw = (stdout or stderr or b"").decode("utf-8", "replace").strip()
+    if process.returncode != 0:
+        raise ServiceLogsError(raw or "ログ取得に失敗しました。")
+    return ServiceLogsResult(
+        service_id=entry.service_id,
+        source="docker",
+        lines=lines,
+        content=raw,
+    )

@@ -1395,7 +1395,7 @@ def _database_settings_data(settings: Settings) -> DatabaseSettingsData:
         embedding_dimension=settings.oci_genai_embedding_dim,
         vector_column=f"VECTOR({settings.oci_genai_embedding_dim}, FLOAT32)",
         adb_ocid=settings.oracle_adb_ocid,
-        region=settings.oci_region,
+        region=settings.resolved_oracle_adb_region,
         config_source="runtime",
     )
 
@@ -1467,8 +1467,7 @@ def _persist_database_settings(settings: Settings) -> None:
 def _apply_adb_settings(settings: Settings, payload: AdbSettingsUpdate) -> None:
     """ADB 操作対象 OCID と region を現在プロセスへ反映する。"""
     settings.oracle_adb_ocid = payload.adb_ocid
-    if payload.region:
-        settings.oci_region = payload.region
+    settings.oracle_adb_region = payload.region
 
 
 def _persist_adb_settings(settings: Settings) -> None:
@@ -1477,7 +1476,7 @@ def _persist_adb_settings(settings: Settings) -> None:
         BACKEND_ENV_FILE,
         {
             "ORACLE_ADB_OCID": settings.oracle_adb_ocid,
-            "OCI_REGION": settings.oci_region,
+            "ORACLE_ADB_REGION": settings.oracle_adb_region,
         },
         section_comment="# Oracle Autonomous Database 管理",
         error_detail="ADB 設定を backend/.env へ保存できませんでした。",
@@ -1508,7 +1507,7 @@ def _adb_info_data(
 
 async def _load_adb_info(settings: Settings) -> AdbInfoData:
     """ADB の情報を取得する。設定不足や OCI エラーは status へ載せて返す。"""
-    region = settings.oci_region.strip() or None
+    region = settings.resolved_oracle_adb_region or None
     adb_ocid = settings.oracle_adb_ocid.strip()
     if not adb_ocid:
         return AdbInfoData(
@@ -1530,7 +1529,7 @@ async def _load_adb_info(settings: Settings) -> AdbInfoData:
 
 async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) -> AdbInfoData:
     """ADB を起動 / 停止する。現在状態を確認してから制御リクエストを送る。"""
-    region = settings.oci_region.strip() or None
+    region = settings.resolved_oracle_adb_region or None
     adb_ocid = settings.oracle_adb_ocid.strip()
     if not adb_ocid:
         return AdbInfoData(

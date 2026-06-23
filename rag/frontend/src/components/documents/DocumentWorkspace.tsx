@@ -3,6 +3,7 @@
 import {
   Braces,
   Check,
+  Clock3,
   FileSearch,
   FileText,
   GitBranch,
@@ -40,6 +41,7 @@ import {
   type DocumentExtractionExportFormat,
   type ExtractionTable,
   type ExtractionTableCell,
+  type IngestionJob,
   type IngestionSegment,
   type KnowledgeBaseRef,
   type SourceProfile,
@@ -51,6 +53,7 @@ import {
   useDocument,
   useDocumentChunks,
   useDocumentExtractionExport,
+  useDocumentIngestionJobs,
   useDocumentIngestionSegments,
   useDocumentKnowledgeBases,
   useApproveDocument,
@@ -63,7 +66,7 @@ import {
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { t, type I18nKey } from "@/lib/i18n";
-import { formatBytes, formatDateTime } from "@/lib/format";
+import { formatBytes, formatDateTime, parseApiDateTime } from "@/lib/format";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import {
   type BboxCoordinateMode,
@@ -90,7 +93,7 @@ import {
 } from "@/lib/table-cell-focus";
 import { cn } from "@/lib/utils";
 
-const DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS = 2000;
+const DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS = 4000;
 
 type IngestionParserDisplay = {
   backend: string | null;
@@ -229,6 +232,7 @@ export function DocumentWorkspace({
 }) {
   const query = useDocument(documentId);
   const chunksQuery = useDocumentChunks(documentId);
+  const documentJobsQuery = useDocumentIngestionJobs(documentId);
   const segmentsQuery = useDocumentIngestionSegments(documentId);
   const [exportFormat, setExportFormat] =
     useState<DocumentExtractionExportFormat>("markdown");
@@ -299,10 +303,14 @@ export function DocumentWorkspace({
     searchParams,
   ]);
   const status = query.data?.status;
+  const latestDocumentJob = documentJobsQuery.data?.[0] ?? null;
+  const latestDocumentJobActive = ingestionJobIsActive(latestDocumentJob?.status);
+  const [elapsedNowMs, setElapsedNowMs] = useState(() => Date.now());
   const queuedIngestionJobStatus = queuedJob.data?.status ?? enqueueIngestion.data?.status;
   const approvedIngestionJobStatus = approvedJob.data?.status ?? approveDocument.data?.status;
   const retriedSegmentJobStatus = retriedSegmentJob.data?.status ?? retryFailedSegments.data?.status;
   const activeSubmittedJob = [
+    latestDocumentJob?.status,
     queuedIngestionJobStatus,
     approvedIngestionJobStatus,
     retriedSegmentJobStatus,
@@ -312,6 +320,7 @@ export function DocumentWorkspace({
     watchProcessing,
     localWatchProcessing,
     jobStatuses: [
+      latestDocumentJob?.status,
       queuedIngestionJobStatus,
       approvedIngestionJobStatus,
       retriedSegmentJobStatus,
@@ -329,6 +338,7 @@ export function DocumentWorkspace({
   );
   const refetchDocument = query.refetch;
   const refetchChunks = chunksQuery.refetch;
+  const refetchDocumentJobs = documentJobsQuery.refetch;
   const refetchSegments = segmentsQuery.refetch;
   const refetchExtractionExport = extractionExportQuery.refetch;
   const selectedChunk = useMemo(
@@ -466,6 +476,7 @@ export function DocumentWorkspace({
     if (!autoRefreshActive) return;
     const timer = window.setInterval(() => {
       void refetchDocument();
+      void refetchDocumentJobs();
       void refetchSegments();
       void refetchChunks();
       void refetchExtractionExport();
@@ -475,9 +486,17 @@ export function DocumentWorkspace({
     autoRefreshActive,
     refetchChunks,
     refetchDocument,
+    refetchDocumentJobs,
     refetchExtractionExport,
     refetchSegments,
   ]);
+
+  useEffect(() => {
+    if (!latestDocumentJobActive) return;
+    setElapsedNowMs(Date.now());
+    const timer = window.setInterval(() => setElapsedNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [latestDocumentJob?.id, latestDocumentJob?.started_at, latestDocumentJobActive]);
 
   useEffect(() => {
     if (
@@ -706,6 +725,13 @@ export function DocumentWorkspace({
         <DocumentKnowledgeBaseEditor
           documentId={documentId}
           initialKnowledgeBases={doc.knowledge_bases}
+        />
+
+        <IngestionJobsPanel
+          jobs={documentJobsQuery.data ?? []}
+          loading={documentJobsQuery.isPending}
+          error={documentJobsQuery.isError}
+          nowMs={elapsedNowMs}
         />
 
         <IngestionSegmentsPanel
@@ -985,6 +1011,102 @@ export function DocumentWorkspace({
   );
 }
 
+function IngestionJobsPanel({
+  jobs,
+  loading,
+  error,
+  nowMs,
+}: {
+  jobs: IngestionJob[];
+  loading: boolean;
+  error: boolean;
+  nowMs: number;
+}) {
+  if (loading) return <Skeleton className="h-24 w-full rounded-md" />;
+  if (error) {
+    return (
+      <Banner severity="warning" title={t("flow.jobs.loadError")}>
+        {t("flow.jobs.loadErrorHint")}
+      </Banner>
+    );
+  }
+  if (!jobs.length) return null;
+
+  const latest = jobs[0];
+  const active = ingestionJobIsActive(latest.status);
+
+  return (
+    <section className="rounded-md border border-border bg-background p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Clock3 size={16} className="text-primary" aria-hidden />
+          {t("flow.jobs.title")}
+        </h3>
+        <span className="text-xs text-muted">
+          {t("flow.jobs.count", { count: jobs.length })}
+        </span>
+      </div>
+      <div className="mt-3 rounded-md border border-border bg-card/40 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={jobStatusClass(latest.status)}>{t(jobStatusKey(latest.status))}</span>
+          <span className="rounded-full bg-background px-2 py-0.5 text-xs font-medium text-foreground">
+            {t(jobPhaseKey(latest.phase))}
+          </span>
+          <span className="tnum break-all text-xs text-muted" title={latest.id}>
+            {t("flow.jobs.jobId", { id: shortJobId(latest.id) })}
+          </span>
+        </div>
+        <dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-5">
+          <JobMetric label={t("flow.jobs.queuedAt")} value={formatDateTime(latest.queued_at)} />
+          <JobMetric label={t("flow.jobs.startedAt")} value={formatDateTime(latest.started_at)} />
+          <JobMetric
+            label={t("flow.jobs.finishedAt")}
+            value={formatDateTime(latest.finished_at)}
+          />
+          <JobMetric
+            label={t("flow.jobs.attempt")}
+            value={t("flow.jobs.attemptValue", {
+              count: latest.attempt_count,
+              max: latest.max_attempts,
+            })}
+          />
+          <JobMetric
+            label={t("flow.jobs.elapsed")}
+            value={formatJobElapsed(latest, nowMs)}
+            testId="ingestion-job-elapsed"
+          />
+        </dl>
+        {active ? (
+          <p className="mt-3 text-xs leading-relaxed text-info">{t("flow.jobs.activeHint")}</p>
+        ) : null}
+        {latest.error_message ? (
+          <div className="mt-3 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
+            <p className="font-medium text-danger">{t("flow.jobs.errorReason")}</p>
+            <p className="mt-1 break-words text-danger/90">{latest.error_message}</p>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function JobMetric({
+  label,
+  value,
+  testId,
+}: {
+  label: string;
+  value: string;
+  testId?: string;
+}) {
+  return (
+    <div data-testid={testId}>
+      <dt className="text-muted">{label}</dt>
+      <dd className="tnum mt-0.5 font-medium text-foreground">{value}</dd>
+    </div>
+  );
+}
+
 function IngestionSegmentsPanel({
   segments,
   loading,
@@ -1173,6 +1295,67 @@ function extractionExportFormatLabel(format: DocumentExtractionExportFormat): st
   return t("flow.extractionExport.markdown");
 }
 
+function jobStatusKey(status: IngestionJob["status"]): I18nKey {
+  switch (status) {
+    case "QUEUED":
+      return "upload.job.status.QUEUED";
+    case "RUNNING":
+      return "upload.job.status.RUNNING";
+    case "SUCCEEDED":
+      return "upload.job.status.SUCCEEDED";
+    case "FAILED":
+      return "upload.job.status.FAILED";
+    case "SKIPPED":
+      return "upload.job.status.SKIPPED";
+    case "CANCELLED":
+      return "upload.job.status.CANCELLED";
+    default:
+      return "upload.job.status.QUEUED";
+  }
+}
+
+function jobPhaseKey(phase: IngestionJob["phase"]): I18nKey {
+  return phase === "INDEX" ? "flow.jobs.phase.index" : "flow.jobs.phase.extract";
+}
+
+function jobStatusClass(status: IngestionJob["status"]): string {
+  const base = "rounded-full px-2 py-0.5 text-xs font-medium";
+  switch (status) {
+    case "QUEUED":
+    case "RUNNING":
+      return `${base} bg-info-bg text-info`;
+    case "SUCCEEDED":
+      return `${base} bg-success-bg text-success`;
+    case "FAILED":
+      return `${base} bg-danger-bg text-danger`;
+    case "SKIPPED":
+      return `${base} bg-warning-bg text-warning`;
+    case "CANCELLED":
+      return `${base} bg-background text-muted`;
+    default:
+      return `${base} bg-background text-muted`;
+  }
+}
+
+function shortJobId(id: string): string {
+  return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+}
+
+function formatJobElapsed(job: IngestionJob, nowMs = Date.now()): string {
+  const startDate = parseApiDateTime(job.started_at ?? job.queued_at);
+  const endDate = job.finished_at ? parseApiDateTime(job.finished_at) : null;
+  const start = startDate?.getTime();
+  const end = job.finished_at ? endDate?.getTime() : nowMs;
+  if (start == null || end == null || Number.isNaN(end) || end < start) return "—";
+  const seconds = Math.max(0, Math.round((end - start) / 1000));
+  if (seconds < 60) return t("flow.jobs.elapsedSeconds", { seconds });
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest
+    ? t("flow.jobs.elapsedMinutesSeconds", { minutes, seconds: rest })
+    : t("flow.jobs.elapsedMinutes", { minutes });
+}
+
 function DocumentChunksPanel({
   chunks,
   loading,
@@ -1355,7 +1538,6 @@ function SourceProfilePanel({
     ingestionParser.profile && ingestionParser.profile !== ingestionParser.backend
       ? ingestionParser.profile
       : null;
-  const initialParser = `${parserBackendLabel(profile.parser_backend)} / ${profile.parser_version}`;
   return (
     <section className="rounded-md border border-border bg-background p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1420,18 +1602,13 @@ function SourceProfilePanel({
           {unsupportedReasonLabel(profile.unsupported_reason)}
         </p>
       ) : null}
-      <p className="mt-3 text-xs text-muted">
-        {t("sourceProfile.initialParserBackend")}: {initialParser}
-      </p>
       {warnings.length > 0 ? (
         <ul className="mt-3 space-y-1 text-xs text-warning">
           {warnings.map((warning) => (
             <li key={warning}>{t(sourceWarningKey(warning))}</li>
           ))}
         </ul>
-      ) : (
-        <p className="mt-3 text-xs text-muted">{t("sourceProfile.ready")}</p>
-      )}
+      ) : null}
     </section>
   );
 }

@@ -2604,11 +2604,12 @@ def test_update_adb_settings_persists_ocid_and_region(
     )
 
     assert resp.status_code == 200
+    assert resp.json()["data"]["region"] == "ap-tokyo-1"
     assert settings.oracle_adb_ocid == "ocid1.autonomousdatabase.oc1..saved"
-    assert settings.oci_region == "ap-tokyo-1"
+    assert settings.oracle_adb_region == "ap-tokyo-1"
     persisted = env_file.read_text(encoding="utf-8")
     assert "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..saved" in persisted
-    assert "OCI_REGION=ap-tokyo-1" in persisted
+    assert "ORACLE_ADB_REGION=ap-tokyo-1" in persisted
 
 
 def test_start_adb_sends_start_when_stopped(monkeypatch: MonkeyPatch) -> None:

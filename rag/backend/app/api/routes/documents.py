@@ -530,6 +530,17 @@ async def enqueue_document_ingestion_job(
     return ApiResponse(data=job)
 
 
+@router.get("/{document_id}/ingestion-jobs", response_model=ApiResponse[list[IngestionJob]])
+async def list_document_ingestion_jobs(
+    document_id: str,
+) -> ApiResponse[list[IngestionJob]]:
+    """文書 workspace 用に、この文書の取込 job 履歴を新しい順で返す。"""
+    oracle = OracleClient()
+    if await oracle.get_document(document_id) is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    return ApiResponse(data=await oracle.list_document_ingestion_jobs(document_id))
+
+
 @router.post(
     "/{document_id}/ingestion-segments/retry",
     response_model=ApiResponse[IngestionJob],

@@ -144,6 +144,31 @@ test("ADB 管理パネルが情報を表示し起動操作できる", async ({ p
   ).toBeVisible();
 });
 
+test("ADB 管理パネルで起動前に設定を保存できる", async ({ page }) => {
+  let saveCalls = 0;
+  let savedPayload: Record<string, unknown> | null = null;
+  await mockDatabaseAndAdb(page, {
+    info: () => adbInfo(),
+    onSaveSettings: (payload) => {
+      saveCalls += 1;
+      savedPayload = payload;
+      return adbInfo();
+    },
+  });
+
+  await page.goto("/settings/database");
+
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect.poll(() => saveCalls).toBe(1);
+  expect(savedPayload).toEqual({
+    adb_ocid: "ocid1.autonomousdatabase.oc1..rag",
+    region: "ap-osaka-1",
+  });
+  await expect(page.getByText("操作履歴")).toBeVisible();
+  await expect(page.getByText("データベース情報を取得しました。")).toBeVisible();
+});
+
 test("起動後に lifecycle がポーリングで自動更新される(STARTING→AVAILABLE)", async ({
   page,
 }) => {
@@ -177,14 +202,17 @@ test("起動後に lifecycle がポーリングで自動更新される(STARTING
 });
 
 test("起動済み ADB を停止操作できる", async ({ page }) => {
+  let stopping = false;
   await mockDatabaseAndAdb(page, {
-    info: () => adbInfo({ lifecycle_state: "AVAILABLE" }),
-    onStop: () =>
-      adbInfo({
+    info: () => adbInfo({ lifecycle_state: stopping ? "STOPPING" : "AVAILABLE" }),
+    onStop: () => {
+      stopping = true;
+      return adbInfo({
         status: "accepted",
         message: "データベース 'RAG ADB' の停止を開始しました。",
         lifecycle_state: "STOPPING",
-      }),
+      });
+    },
   });
 
   await page.goto("/settings/database");

@@ -26,10 +26,13 @@ from app.services.control import (
     DockerComposeDriver,
     ServiceControlClient,
     ServiceControlError,
+    ServiceLogsResult,
     UvProcessDriver,
     _compose_args,
+    _compose_logs_args,
+    read_service_logs,
 )
-from app.services.status import probe_service_statuses
+from app.services.status import probe_service_status, probe_service_statuses
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -104,6 +107,7 @@ class _FakeAsyncClient:
 
     routes: dict[str, _FakeResponse] = {}
     raise_on_connect: set[str] = set()
+    calls: list[str] = []
 
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         pass
@@ -115,6 +119,7 @@ class _FakeAsyncClient:
         return False
 
     async def get(self, url: str) -> _FakeResponse:
+        self.calls.append(url)
         base = url.removesuffix("/health")
         if base in self.raise_on_connect:
             raise ConnectionError("connection refused")
@@ -153,6 +158,25 @@ def test_probe_normalizes_statuses(monkeypatch: MonkeyPatch) -> None:
     assert statuses["parser-docling"] == "running"
     assert statuses["parser-marker"] == "degraded"
     assert statuses["parser-unstructured"] == "stopped"
+
+
+def test_probe_stopped_service_is_not_retried(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    _patch_probe_httpx(monkeypatch)
+    entry = get_catalog_entry("parser-docling")
+    assert entry is not None
+    url = service_health_url(settings, entry)
+    _FakeAsyncClient.calls = []
+    _FakeAsyncClient.raise_on_connect = {url}
+    try:
+        status = asyncio.run(probe_service_status(settings, entry))
+        calls = list(_FakeAsyncClient.calls)
+    finally:
+        _FakeAsyncClient.calls = []
+        _FakeAsyncClient.raise_on_connect = set()
+
+    assert status == "stopped"
+    assert calls == [f"{url}/health"]
 
 
 def test_probe_unconfigured_when_url_blank(monkeypatch: MonkeyPatch) -> None:
@@ -301,6 +325,26 @@ def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
     ]
 
 
+def test_compose_logs_args_dev_adds_tail_and_override(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "dev")
+    docling = get_catalog_entry("parser-docling")
+    assert docling is not None
+    assert _compose_logs_args(settings, docling, 123) == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        "docker-compose.dev.yml",
+        "logs",
+        "--no-color",
+        "--tail",
+        "123",
+        "parser-docling",
+    ]
+
+
 def test_friendly_compose_error_maps_missing_image(monkeypatch: MonkeyPatch) -> None:
     from app.services.control import _friendly_compose_error
 
@@ -327,12 +371,13 @@ def test_friendly_compose_error_maps_missing_image(monkeypatch: MonkeyPatch) -> 
 
 
 class _FakeProcess:
-    def __init__(self, returncode: int, stderr: bytes = b"") -> None:
+    def __init__(self, returncode: int, stderr: bytes = b"", stdout: bytes = b"") -> None:
         self.returncode = returncode
         self._stderr = stderr
+        self._stdout = stdout
 
     async def communicate(self) -> tuple[bytes, bytes]:
-        return b"", self._stderr
+        return self._stdout, self._stderr
 
     def kill(self) -> None:  # pragma: no cover - timeout テストでのみ使用
         pass
@@ -371,6 +416,49 @@ def test_control_client_success(monkeypatch: MonkeyPatch) -> None:
     result = asyncio.run(ServiceControlClient().control(settings, entry, "stop"))
     assert isinstance(result, ControlResult)
     assert result.ok is True
+
+
+def test_read_service_logs_docker_success(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    entry = get_catalog_entry("parser-docling")
+    assert entry is not None
+    captured: dict[str, Any] = {}
+
+    async def fake_exec(*args: str, **kwargs: Any) -> _FakeProcess:
+        captured["args"] = list(args)
+        captured["kwargs"] = kwargs
+        return _FakeProcess(returncode=0, stdout=b"line1\nline2\n")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    result = asyncio.run(read_service_logs(settings, entry, 50))
+
+    assert result == ServiceLogsResult(
+        service_id="parser-docling",
+        source="docker",
+        lines=50,
+        content="line1\nline2",
+    )
+    assert captured["args"][-5:] == ["logs", "--no-color", "--tail", "50", "parser-docling"]
+    assert captured["kwargs"]["cwd"] is None
+
+
+def test_read_service_logs_uv_uses_runtime_log(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "dev")
+    entry = get_catalog_entry("preprocess-csv-to-json")
+    assert entry is not None
+    monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
+    (tmp_path / f"{entry.service_id}.log").write_text("line1\nline2\nline3\n")
+
+    result = asyncio.run(read_service_logs(settings, entry, 2))
+
+    assert result == ServiceLogsResult(
+        service_id="preprocess-csv-to-json",
+        source="uv",
+        lines=2,
+        content="line2\nline3",
+    )
 
 
 # --- API --------------------------------------------------------------------
@@ -454,6 +542,34 @@ def test_get_service_status_checks_only_service_and_dependencies(
     assert data["status"] == "dependency_stopped"
     assert data["blocked_by"] == ["parser-dots-ocr-vllm"]
     assert seen == ["parser-dots-ocr", "parser-dots-ocr-vllm"]
+
+
+def test_get_service_logs_returns_tail(monkeypatch: MonkeyPatch) -> None:
+    async def fake_logs(
+        _settings: Any, entry: ServiceCatalogEntry, lines: int
+    ) -> ServiceLogsResult:
+        return ServiceLogsResult(
+            service_id=entry.service_id,
+            source="docker",
+            lines=lines,
+            content="ready",
+        )
+
+    monkeypatch.setattr("app.api.routes.services.read_service_logs", fake_logs)
+    resp = client.get("/api/services/parser-docling/logs?lines=50")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data == {
+        "service_id": "parser-docling",
+        "source": "docker",
+        "lines": 50,
+        "content": "ready",
+    }
+
+
+def test_get_service_logs_unknown_service_is_404() -> None:
+    resp = client.get("/api/services/unknown-service/logs")
+    assert resp.status_code == 404
 
 
 def test_control_rejected_when_disabled_in_prod(monkeypatch: MonkeyPatch) -> None:

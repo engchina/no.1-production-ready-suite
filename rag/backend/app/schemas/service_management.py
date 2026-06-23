@@ -10,6 +10,7 @@ from app.services.catalog import ServiceCategory, ServiceProfile
 from app.services.status import ServiceRuntimeStatus
 
 DeploymentMode = Literal["dev", "prod"]
+ServiceLogsSource = Literal["docker", "uv"]
 
 
 class ServiceCatalogItemData(BaseModel):
@@ -68,3 +69,12 @@ class ServiceControlResultData(BaseModel):
     service_id: str
     action: str
     status: ServiceRuntimeStatus
+
+
+class ServiceLogsData(BaseModel):
+    """サービスログの末尾。"""
+
+    service_id: str
+    source: ServiceLogsSource
+    lines: int = Field(description="取得したログ末尾の最大行数。")
+    content: str = Field(description="ログ本文。ログが無い場合は空文字。")

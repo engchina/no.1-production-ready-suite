@@ -14,12 +14,26 @@ const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
   minute: "2-digit",
 });
 
+const isoDateTimeWithoutZonePattern = /^\d{4}-\d{2}-\d{2}T/;
+const timezoneSuffixPattern = /(?:[zZ]|[+-]\d{2}:?\d{2})$/;
+
+/** API 由来の日付を Date へ変換する。タイムゾーン無しの ISO は UTC として扱う。 */
+export function parseApiDateTime(iso: string | null | undefined): Date | null {
+  if (!iso) return null;
+  const trimmed = iso.trim();
+  if (!trimmed) return null;
+  const normalized =
+    isoDateTimeWithoutZonePattern.test(trimmed) && !timezoneSuffixPattern.test(trimmed)
+      ? `${trimmed}Z`
+      : trimmed;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 /** ISO 文字列を「MM/DD HH:mm」へ。未設定・無効値はダッシュ。 */
 export function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
-  return dateTimeFormat.format(date);
+  const date = parseApiDateTime(iso);
+  return date ? dateTimeFormat.format(date) : "—";
 }
 
 /** バイト数を人間可読サイズへ。 */

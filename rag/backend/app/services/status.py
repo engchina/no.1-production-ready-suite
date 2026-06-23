@@ -13,7 +13,6 @@ from typing import Literal
 
 import httpx
 
-from app.clients.http_retry import async_request_with_retry, retry_config_from_settings
 from app.config import Settings
 from app.services.catalog import (
     SERVICE_CATALOG,
@@ -45,17 +44,9 @@ async def probe_service_status(
     if not url:
         return "unconfigured"
     timeout = float(settings.rag_service_status_probe_timeout_seconds)
-    retry = retry_config_from_settings(settings)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await async_request_with_retry(
-                client,
-                "GET",
-                f"{url}/health",
-                retry=retry,
-                logger=logger,
-                log_extra={"service_id": entry.service_id, "service_url": url},
-            )
+            response = await client.get(f"{url}/health")
             response.raise_for_status()
             payload = response.json()
     except Exception as exc:  # noqa: BLE001 - 到達不可は stopped へ正規化する境界

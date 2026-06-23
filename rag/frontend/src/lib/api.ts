@@ -1334,6 +1334,15 @@ export interface ServiceControlResultData {
   status: ServiceRuntimeStatus;
 }
 
+export type ServiceLogsSource = "docker" | "uv";
+
+export interface ServiceLogsData {
+  service_id: string;
+  source: ServiceLogsSource;
+  lines: number;
+  content: string;
+}
+
 export interface ChunkingStrategyStatusData {
   name: ChunkingStrategyName;
   origin: string;
@@ -1866,6 +1875,8 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}/extraction-export?${search.toString()}`
     );
   },
+  listDocumentIngestionJobs: (id: string) =>
+    request<IngestionJob[]>(`/api/documents/${encodeURIComponent(id)}/ingestion-jobs`),
   listDocumentIngestionSegments: (id: string) =>
     request<IngestionSegment[]>(`/api/documents/${encodeURIComponent(id)}/ingestion-segments`),
   deleteDocument: (id: string) =>
@@ -2123,6 +2134,10 @@ export const api = {
   getServiceCatalog: () => request<ServiceCatalogData>("/api/services/catalog"),
   getServiceStatus: (serviceId: string) =>
     request<ServiceStatusData>(`/api/services/${encodeURIComponent(serviceId)}/status`),
+  getServiceLogs: (serviceId: string, lines = 200) =>
+    request<ServiceLogsData>(
+      `/api/services/${encodeURIComponent(serviceId)}/logs?lines=${encodeURIComponent(String(lines))}`
+    ),
   getServices: () => request<ServiceListData>("/api/services"),
   controlService: (serviceId: string, action: ServiceAction) =>
     request<ServiceControlResultData>(

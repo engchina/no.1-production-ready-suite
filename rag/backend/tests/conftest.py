@@ -102,6 +102,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oracle_client_lib_dir = str(tmp_path / "instantclient_23_26")
     settings.oracle_wallet_dir = ""
     settings.oracle_adb_ocid = ""
+    settings.oracle_adb_region = ""
     settings.local_storage_dir = str(tmp_path / "storage")
     settings.max_upload_bytes = 200 * 1024 * 1024
     settings.rate_limit_enabled = True
@@ -129,6 +130,13 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_enterprise_ai_max_retries = 3
     settings.oci_enterprise_ai_llm_max_output_tokens = 1200
     settings.oci_enterprise_ai_vlm_max_output_tokens = 65536
+    settings.rag_parser_adapter_backend = "local"
+    settings.rag_parser_docling_enabled = False
+    settings.rag_parser_marker_enabled = False
+    settings.rag_parser_unstructured_enabled = False
+    settings.rag_parser_mineru_enabled = False
+    settings.rag_parser_dots_ocr_enabled = False
+    settings.rag_parser_glm_ocr_enabled = False
     settings.oci_genai_embedding_model = "cohere.embed-v4.0"
     settings.oci_genai_embedding_dim = 1536
     settings.oci_genai_rerank_model = "cohere.rerank-v4.0-fast"

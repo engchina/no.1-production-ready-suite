@@ -112,7 +112,7 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
   await expectNoHorizontalOverflow(page);
 });
 
-test("取込解析エンジンはアップロード時初期判定ではなく segment parser を表示する", async ({
+test("取込解析エンジンは segment parser だけを表示する", async ({
   page,
 }) => {
   await mockDocumentWorkspace(page, { pdfPreview: true, mineruSegment: true });
@@ -126,7 +126,10 @@ test("取込解析エンジンはアップロード時初期判定ではなく s
   await expect(sourcePanel.getByText("MinerU")).toBeVisible();
   await expect(
     sourcePanel.getByText("アップロード時の初期判定: OCI Enterprise AI / v1")
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(
+    sourcePanel.getByText("原本メタデータに追加の確認事項はありません。")
+  ).toHaveCount(0);
 });
 
 test("狭い画面幅(375px)でも文書 workspace がページを横スクロール(崩れ)させない", async ({ page }) => {
@@ -352,6 +355,33 @@ test("取込セグメント失敗時は原因と復旧導線を表示する", as
   await expectNoHorizontalOverflow(page);
 });
 
+test("文書 workspace はこの文書の取込 job と時間線を表示する", async ({ page }) => {
+  await mockDocumentWorkspace(page, {
+    latestJobStatus: "RUNNING",
+    latestJobStartedAt: new Date(Date.now() - 2_000).toISOString(),
+    pdfPreview: true,
+  });
+
+  await page.goto("/documents/doc-1");
+
+  const panel = page
+    .getByRole("heading", { name: "この文書の取込ジョブ" })
+    .locator("xpath=ancestor::section[1]");
+  await expect(panel.getByText("取込中")).toBeVisible();
+  await expect(panel.getByText("抽出", { exact: true })).toBeVisible();
+  await expect(panel.getByText(/job: job-runn/)).toBeVisible();
+  await expect(panel.getByText("投入")).toBeVisible();
+  await expect(panel.getByText("開始")).toBeVisible();
+  await expect(panel.getByText("1/3 回")).toBeVisible();
+  const elapsed = panel.getByTestId("ingestion-job-elapsed");
+  const firstElapsed = await elapsed.textContent();
+  await expect.poll(() => elapsed.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
+  await expect(
+    panel.getByText("この job が完了するまで文書状態・segment・抽出結果を自動更新します。")
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 test("取込ジョブ投入後に workspace の本文 export と chunk を自動更新する", async ({ page }) => {
   await mockDocumentWorkspace(page, { autoRefreshAfterEnqueue: true });
 
@@ -364,7 +394,7 @@ test("取込ジョブ投入後に workspace の本文 export と chunk を自動
 
   await expect(page.getByText("取込ジョブをキューに投入しました。")).toBeVisible();
   await expect(page.getByRole("button", { name: /経費申請の概要です。/ })).toBeVisible({
-    timeout: 6_000,
+    timeout: 9_000,
   });
   await expect(page.getByText("<!-- page: 1 -->")).toBeVisible();
   await expectNoHorizontalOverflow(page);
@@ -398,6 +428,8 @@ async function mockDocumentWorkspace(
     segmentError?: boolean;
     segmentCount?: number;
     mineruSegment?: boolean;
+    latestJobStatus?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+    latestJobStartedAt?: string;
     autoRefreshAfterEnqueue?: boolean;
   } = {}
 ) {
@@ -441,10 +473,22 @@ async function mockDocumentWorkspace(
   await page.route("**/api/documents/doc-1/ingestion-jobs**", async (route) => {
     if (route.request().method() === "POST") {
       state.enqueued = true;
+      await route.fulfill({
+        json: {
+          data: ingestionJob("QUEUED"),
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
     }
     await route.fulfill({
       json: {
-        data: retrySegmentsJob(),
+        data: [
+          ingestionJob(options.latestJobStatus ?? "SUCCEEDED", {
+            startedAt: options.latestJobStartedAt,
+          }),
+        ],
         error_messages: [],
         warning_messages: [],
       },
@@ -716,19 +760,30 @@ function extractionExport(format: string) {
 }
 
 function retrySegmentsJob() {
+  return ingestionJob("QUEUED");
+}
+
+function ingestionJob(
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED",
+  options: { queuedAt?: string; startedAt?: string; finishedAt?: string } = {}
+) {
   return {
-    id: "job-retry-segments",
+    id: status === "RUNNING" ? "job-running-0001" : "job-retry-segments",
     document_id: "doc-1",
-    status: "QUEUED",
+    status,
+    phase: "EXTRACT",
     parser_profile: "enterprise_ai_pdf_layout",
     quality_warnings: [],
     skip_reason: null,
-    error_message: null,
-    attempt_count: 0,
+    error_message: status === "FAILED" ? "取込処理に失敗しました。" : null,
+    attempt_count: status === "QUEUED" ? 0 : 1,
     max_attempts: 3,
-    queued_at: "2026-06-15T00:00:05Z",
-    started_at: null,
-    finished_at: null,
+    queued_at: options.queuedAt ?? "2026-06-15T00:00:05Z",
+    started_at: status === "QUEUED" ? null : options.startedAt ?? "2026-06-15T00:00:10Z",
+    finished_at:
+      status === "SUCCEEDED" || status === "FAILED"
+        ? options.finishedAt ?? "2026-06-15T00:00:20Z"
+        : null,
   };
 }
 

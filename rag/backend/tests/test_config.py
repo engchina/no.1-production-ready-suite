@@ -230,6 +230,7 @@ def test_ingestion_queue_defaults_keep_api_process_non_blocking(
         "INGESTION_QUEUE_DEDICATED_WORKER_ENABLED",
         "INGESTION_QUEUE_INPROCESS_WORKER_ENABLED",
         "INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED",
+        "INGESTION_QUEUE_STALE_RUNNING_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
@@ -237,6 +238,7 @@ def test_ingestion_queue_defaults_keep_api_process_non_blocking(
     assert settings.ingestion_queue_dedicated_worker_enabled is True
     assert settings.ingestion_queue_inprocess_worker_enabled is True
     assert settings.ingestion_queue_process_isolation_enabled is True
+    assert settings.ingestion_queue_stale_running_seconds == 300.0
 
 
 def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,6 +15,7 @@ from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
     OracleClient,
     OracleWalletPasswordRequiredError,
+    _datetime_value,
     _test_oracle_connection_sync,
     oracle_agent_memory_schema_sql,
     oracle_audit_schema_sql,
@@ -56,6 +57,14 @@ IN_MEMORY_ORACLE_REMOVED = pytest.mark.skip(reason="in-memory Oracle fallback wa
 def setup_function() -> None:
     """テストごとにテスト補助 store を初期化する。"""
     reset_local_store()
+
+
+def test_datetime_value_attaches_utc_to_naive_database_values() -> None:
+    """Oracle driver が naive datetime を返しても API JSON の基準時刻を失わない。"""
+    value = _datetime_value(datetime(2026, 6, 23, 0, 34, 0))
+
+    assert value.tzinfo is UTC
+    assert value.isoformat() == "2026-06-23T00:34:00+00:00"
 
 
 def test_oracle_connection_refuses_password_wallet_without_prompt(

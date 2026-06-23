@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBytes, formatDateTime, formatNumber } from "./format";
+import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "./format";
 
 describe("formatBytes", () => {
   it("null は em-dash", () => expect(formatBytes(null)).toBe("—"));
@@ -16,4 +16,12 @@ describe("formatNumber", () => {
 describe("formatDateTime", () => {
   it("無効値は em-dash", () => expect(formatDateTime("not-a-date")).toBe("—"));
   it("ISO を整形する", () => expect(formatDateTime("2026-06-14T10:42:00Z")).not.toBe(""));
+  it("タイムゾーン無しの API ISO は UTC として扱う", () => {
+    expect(parseApiDateTime("2026-06-23T00:34:00")?.toISOString()).toBe(
+      "2026-06-23T00:34:00.000Z"
+    );
+    expect(formatDateTime("2026-06-23T00:34:00")).toBe(
+      formatDateTime("2026-06-23T00:34:00Z")
+    );
+  });
 });

@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from app.clients.oracle import OracleClient, close_oracle_pool
 from app.config import Settings, get_settings
 from app.logging_config import configure_logging
-from app.schemas.document import IngestionJob, IngestionJobStatus
+from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -56,17 +56,40 @@ async def _default_job_runner(job_id: str) -> None:
 
 
 class IngestionJobSubprocessError(RuntimeError):
-    """subprocess runner が異常終了した。job 状態は stale recovery に委ねる。"""
+    """subprocess runner が異常終了した。親 worker が job を失敗へ戻す。"""
 
 
 def _job_runner_for_settings(settings: Settings) -> JobRunner:
     if settings.ingestion_queue_process_isolation_enabled:
-        return run_ingestion_job_subprocess
+        return lambda job_id: run_ingestion_job_subprocess(
+            job_id,
+            timeout_seconds=settings.rag_parser_service_timeout_seconds,
+        )
     return _default_job_runner
 
 
-async def run_ingestion_job_subprocess(job_id: str) -> None:
+async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None:
+        return
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=10)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+
+
+async def run_ingestion_job_subprocess(
+    job_id: str,
+    *,
+    timeout_seconds: float | None = None,
+) -> None:
     """1 job を別 Python process で実行し、API event loop / CUDA 初期化と隔離する。"""
+    timeout = (
+        timeout_seconds
+        if timeout_seconds is not None
+        else get_settings().rag_parser_service_timeout_seconds
+    )
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
@@ -74,15 +97,14 @@ async def run_ingestion_job_subprocess(job_id: str) -> None:
         job_id,
     )
     try:
-        return_code = await process.wait()
+        return_code = await asyncio.wait_for(process.wait(), timeout=timeout)
+    except TimeoutError as exc:
+        await _terminate_process(process)
+        raise IngestionJobSubprocessError(
+            f"ingestion job subprocess timed out after {timeout:g}s"
+        ) from exc
     except asyncio.CancelledError:
-        if process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=10)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
+        await _terminate_process(process)
         raise
     if return_code != 0:
         raise IngestionJobSubprocessError(
@@ -203,7 +225,8 @@ class IngestionQueueWorker:
             await self._job_runner(job_id)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            await _mark_running_job_failed(job_id, error=exc)
             logger.exception("ingestion_worker_job_failed", extra={"job_id": job_id})
         finally:
             self._inflight.discard(job_id)
@@ -242,6 +265,28 @@ class IngestionQueueWorker:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def _mark_running_job_failed(job_id: str, *, error: Exception) -> None:
+    """subprocess が落ちた時に RUNNING のまま放置しない。"""
+    try:
+        oracle = OracleClient()
+        job = await oracle.get_ingestion_job(job_id)
+        if job is None or job.status != IngestionJobStatus.RUNNING:
+            return
+        message = str(error)[:500] or "取込ジョブ実行プロセスが異常終了しました。"
+        await oracle.update_ingestion_job(
+            job_id,
+            status=IngestionJobStatus.FAILED,
+            error_message=message,
+            finished_at=datetime.now(UTC),
+        )
+        await oracle.update_document_status(job.document_id, FileStatus.ERROR, message)
+    except Exception:
+        logger.exception(
+            "ingestion_worker_job_failure_mark_failed_failed",
+            extra={"job_id": job_id},
+        )
 
 
 async def run_worker_process() -> None:

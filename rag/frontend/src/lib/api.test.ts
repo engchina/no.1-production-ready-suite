@@ -291,6 +291,7 @@ describe("api.request envelope", () => {
     await api.listDocumentChunks("doc-1");
     await api.exportDocumentExtraction("doc-1", "chunks");
     await api.exportDocumentExtraction("doc-1", "html");
+    await api.listDocumentIngestionJobs("doc-1");
     await api.listDocumentIngestionSegments("doc-1");
     await api.retryFailedDocumentIngestionSegments("doc-1");
 
@@ -301,9 +302,10 @@ describe("api.request envelope", () => {
     expect(fetchMock.mock.calls[2][0]).toBe(
       "/api/documents/doc-1/extraction-export?format=html"
     );
-    expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/doc-1/ingestion-segments");
-    expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/doc-1/ingestion-segments/retry");
-    expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: "POST" });
+    expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/doc-1/ingestion-jobs");
+    expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/doc-1/ingestion-segments");
+    expect(fetchMock.mock.calls[5][0]).toBe("/api/documents/doc-1/ingestion-segments/retry");
+    expect(fetchMock.mock.calls[5][1]).toMatchObject({ method: "POST" });
   });
 
   it("getReadiness は 503 の degraded envelope も data として返す", async () => {
@@ -1114,6 +1116,30 @@ describe("api.services", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/services/parser-mineru/start",
       expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("getServiceLogs は service_id と lines を URL エンコードして取得する", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          service_id: "parser-docling",
+          source: "docker",
+          lines: 200,
+          content: "ready",
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.getServiceLogs("parser-docling", 200);
+
+    expect(result.content).toBe("ready");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/services/parser-docling/logs?lines=200",
+      expect.anything()
     );
   });
 });
