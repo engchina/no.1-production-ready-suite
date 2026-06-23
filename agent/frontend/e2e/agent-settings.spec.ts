@@ -142,9 +142,27 @@ async function mockMissingOciRuntimeSettings(page: Page) {
           readiness: "ok",
           embedding_dimension: 1536,
           vector_column: "VECTOR(1536, FLOAT32)",
-          adb_ocid: "",
+          adb_ocid: "ocid1.autonomousdatabase.oc1.ap-osaka-1.agent",
           region: "ap-osaka-1",
           config_source: "runtime",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/settings/database/adb/settings", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          status: "success",
+          message: "ADB OCID を保存しました。",
+          id: "ocid1.autonomousdatabase.oc1.ap-osaka-1.agent",
+          display_name: null,
+          lifecycle_state: "AVAILABLE",
+          db_name: null,
+          cpu_core_count: null,
+          data_storage_size_in_tbs: null,
+          region: "ap-osaka-1",
         },
       }),
     });
@@ -207,6 +225,9 @@ test.describe("Agent Runtime settings", () => {
     await page.getByLabel("データベースパスワード").fill("secret-password");
     await page.getByRole("button", { name: /DB設定を保存/ }).click();
     await expect(page.getByText("保存しました")).toBeVisible();
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(page.getByText("操作履歴")).toBeVisible();
+    await expect(page.getByText("ADB OCID を保存しました。")).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 375, height: 812 });
@@ -241,34 +262,94 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("設定を保存しました")).toBeVisible();
   });
 
-  test("外部 MCP gateway 設定を保存できる", async ({ page }) => {
+  test("複数 MCP サーバーを登録・既定設定・削除し tool 探索できる", async ({ page }) => {
     await page.goto("/settings/external-mcp");
 
     await expect(page.getByRole("heading", { name: "外部 MCP", level: 1 })).toBeVisible();
     await expect(page.getByText("MCP tool は外部 JSON-RPC gateway として接続する")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "MCP サーバー" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    await page.getByLabel("Base URL").fill("http://127.0.0.1:8052/jsonrpc");
-    await page.getByLabel("タイムアウト秒").fill("7");
-    await page.getByLabel("MCP Session ID").fill("session-ui-1");
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("設定を保存しました")).toBeVisible();
-    await expect(page.getByText("設定済み")).toBeVisible();
-    await expect(page.getByPlaceholder("設定済み（値は表示しません）")).toBeVisible();
+    // サーバーを追加(フォームと探索パネルで Server ID ラベルが重複するため id 指定)
+    await page.getByRole("button", { name: "サーバーを追加" }).click();
+    await page.locator("#mcp-server-id").fill("crm");
+    await page.locator("#mcp-server-label").fill("CRM Gateway");
+    await page.locator("#mcp-server-base-url").fill("http://127.0.0.1:8052/jsonrpc");
+    await page.locator("#mcp-server-timeout").fill("7");
+    await page.getByRole("button", { name: "作成" }).click();
+    await expect(page.getByText("サーバーを追加しました")).toBeVisible();
 
+    // crm 行が描画され、既定に切り替えられる
+    await page.getByRole("button", { name: "既定にする crm" }).click();
+    await expect(page.getByText("既定サーバーを変更しました")).toBeVisible();
+
+    // tool 探索(crm の mock gateway を引く)
     await expect(page.getByRole("heading", { name: "MCP tools/list" })).toBeVisible();
-    await page.getByLabel("Server ID").fill("crm");
-    await page.getByLabel("Trace ID").fill("trace-ui-mcp-list");
+    await page.locator("#mcp-discovery-server-id").fill("crm");
+    await page.locator("#mcp-discovery-trace-id").fill("trace-ui-mcp-list");
     await page.getByRole("button", { name: "取得" }).click();
     await expect(page.getByRole("cell", { name: "lookup_customer" })).toBeVisible();
     await expect(page.getByRole("cell", { name: "search_orders" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "顧客情報を検索する" })).toBeVisible();
-    await expect(page.getByText("object / 1 fields").first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
+    // モバイル幅でも崩れない
     await page.setViewportSize({ width: 375, height: 812 });
-    await expect(page.locator("p").filter({ hasText: "lookup_customer" })).toBeVisible();
-    await expect(page.locator("p").filter({ hasText: "search_orders" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    // 削除(crm を消すと既定は default へ戻る)
+    await page.getByRole("button", { name: "削除 crm" }).click();
+    await page.getByRole("button", { name: "削除", exact: true }).click();
+    await expect(page.getByText("サーバーを削除しました")).toBeVisible();
+    await expect(page.getByRole("button", { name: "削除 crm" })).toHaveCount(0);
+  });
+
+  test("スキルを追加・編集・削除でき、ビルトインは保護される", async ({ page }) => {
+    await page.goto("/skills");
+
+    await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
+    // ビルトインは詳細はあるが編集・削除は持たない
+    await expect(
+      page.getByRole("button", { name: "詳細 business_rag_research" })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "編集 business_rag_research" })
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "削除 business_rag_research" })
+    ).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+
+    // 追加
+    await page.getByRole("button", { name: "スキルを追加" }).click();
+    await page.getByLabel("ID").fill("e2e_custom");
+    await page.getByLabel("名前").fill("E2E カスタム");
+    await page.getByLabel("tool_calls (JSON)").fill('[{"name":"agent_skill_list"}]');
+    await page.getByRole("button", { name: "作成" }).click();
+    await expect(page.getByText("スキルを追加しました")).toBeVisible();
+    await expect(page.getByRole("button", { name: "詳細 e2e_custom" })).toBeVisible();
+
+    // 詳細(progressive disclosure: tool_calls JSON を表示)
+    await page.getByRole("button", { name: "詳細 e2e_custom" }).click();
+    await expect(page.locator("pre").filter({ hasText: "agent_skill_list" })).toBeVisible();
+
+    // 編集
+    await page.getByRole("button", { name: "編集 e2e_custom" }).click();
+    await page.getByLabel("名前").fill("E2E カスタム改");
+    await page.getByRole("button", { name: "保存" }).click();
+    await expect(page.getByText("スキルを更新しました")).toBeVisible();
+
+    // 宣言の再読込
+    await page.getByRole("button", { name: "宣言を再読込" }).click();
+    await expect(page.getByText("宣言スキルを再読込しました")).toBeVisible();
+
+    // 削除
+    await page.getByRole("button", { name: "削除 e2e_custom" }).click();
+    await page.getByRole("button", { name: "削除", exact: true }).click();
+    await expect(page.getByText("スキルを削除しました")).toBeVisible();
+    await expect(page.getByRole("button", { name: "詳細 e2e_custom" })).toHaveCount(0);
+
+    await page.setViewportSize({ width: 375, height: 812 });
     await expectNoHorizontalOverflow(page);
   });
 
