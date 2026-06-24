@@ -10,6 +10,7 @@ import {
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { BusinessViewPickerGrid } from "@/components/business-views/BusinessViewPickerGrid";
 import { CitationCard } from "./CitationCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Banner } from "@/components/ui/banner";
@@ -87,7 +88,7 @@ export function SearchClient() {
   const [contentKind, setContentKind] = useState<ContentKindFilter>("");
   const [sectionTitle, setSectionTitle] = useState("");
   const [sectionPath, setSectionPath] = useState("");
-  const [businessViewId, setBusinessViewId] = useState<string>("");
+  const [businessViewIds, setBusinessViewIds] = useState<string[]>([]);
   const [scopeError, setScopeError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
@@ -99,7 +100,7 @@ export function SearchClient() {
   const submit = async () => {
     const trimmed = query.trim();
     if (!trimmed || phase === "streaming") return;
-    if (!businessViewId) {
+    if (businessViewIds.length === 0) {
       setScopeError(t("businessViews.scope.required"));
       return;
     }
@@ -123,7 +124,7 @@ export function SearchClient() {
           mode,
           top_k: 20,
           rerank_top_n: 5,
-          business_view_id: businessViewId,
+          business_view_ids: businessViewIds,
           ...(Object.keys(filters).length ? { filters } : {}),
         },
         {
@@ -255,12 +256,12 @@ export function SearchClient() {
                 </span>
               </legend>
 
-              <BusinessViewSelect
+              <BusinessViewScopePicker
                 views={businessViews}
-                value={businessViewId}
+                selectedIds={businessViewIds}
                 onChange={(next) => {
-                  setBusinessViewId(next);
-                  if (next) setScopeError("");
+                  setBusinessViewIds(next);
+                  if (next.length > 0) setScopeError("");
                 }}
                 disabled={isStreaming}
                 error={scopeError}
@@ -472,42 +473,50 @@ function buildSearchFilters({
 
 
 /**
- * RAG 検索の対象業務ビュー(Business View)選択。RAG 検索は業務ビュー単位で
- * 行うため必須。選ぶと参照 KB 群と query 方針・persona が適用される。
+ * RAG 検索の対象業務ビュー(Business View)選択。複数選ぶと参照 KB 群を union し、
+ * query 方針・persona は選択順の先頭を代表として適用する。
  */
-function BusinessViewSelect({
+function BusinessViewScopePicker({
   views,
-  value,
+  selectedIds,
   onChange,
   disabled = false,
   error,
 }: {
   views: BusinessViewSummary[];
-  value: string;
-  onChange: (value: string) => void;
+  selectedIds: string[];
+  onChange: (value: string[]) => void;
   disabled?: boolean;
   error?: string;
 }) {
-  const options: SelectFieldOption<string>[] = views.map((view) => ({
-    value: view.id,
-    label: view.name,
-  }));
   return (
-    <SelectField
-      id="search-business-view"
-      label={t("businessViews.scope.label")}
-      value={value}
-      options={options}
-      onValueChange={(next) => {
-        if (!disabled) onChange(next);
-      }}
-      required
-      requiredLabel={t("common.required")}
-      placeholder={t("businessViews.scope.placeholder")}
-      error={error}
-      helper={value ? t("businessViews.scope.applied") : t("businessViews.scope.helper")}
-      className="[&_label]:text-xs sm:col-span-4"
-      buttonClassName="bg-background"
-    />
+    <div className="space-y-1.5 sm:col-span-4">
+      <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+        {t("businessViews.scope.label")}
+        <span className="rounded-full bg-warning-bg px-2 py-0.5 text-[10px] font-medium text-warning">
+          {t("common.required")}
+        </span>
+      </p>
+      <BusinessViewPickerGrid
+        items={views}
+        selectedIds={selectedIds}
+        onChange={(next) => {
+          if (!disabled) onChange(next);
+        }}
+        disabled={disabled}
+        ariaLabel={t("businessViews.scope.label")}
+      />
+      {error ? (
+        <p className="text-xs text-danger" role="alert">
+          {error}
+        </p>
+      ) : (
+        <p className="text-xs text-muted">
+          {selectedIds.length > 0
+            ? t("businessViews.scope.applied", { count: selectedIds.length })
+            : t("businessViews.scope.helper")}
+        </p>
+      )}
+    </div>
   );
 }

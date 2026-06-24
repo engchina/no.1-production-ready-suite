@@ -367,6 +367,7 @@ function ServiceRow({
   const dependencyStopped = service.status === "dependency_stopped";
   const statusLoading = service.status === "loading";
   const statusError = service.status === "error";
+  const required = service.service_id === "pipeline-chunking";
   const startPending = pending === `${service.service_id}:start`;
   const stopPending = pending === `${service.service_id}:stop`;
   const anyPending = pending !== null;
@@ -394,6 +395,8 @@ function ServiceRow({
       service: serviceLabel(service),
       servers: blockedInferenceServers.join(", "),
     });
+  } else if (required && stopped) {
+    controlHint = t("settings.services.requiredStoppedHint");
   }
 
   const logsPanelId = `service-logs-${service.service_id}`;
@@ -402,8 +405,17 @@ function ServiceRow({
     <li className="py-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-foreground">{serviceLabel(service)}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-semibold text-foreground">{serviceLabel(service)}</p>
+            {required ? <RequiredServiceBadge /> : null}
+          </div>
           <p className="font-mono text-xs text-muted">{service.service_id}</p>
+          {required && stopped ? (
+            <p className="mt-1 flex items-center gap-1 text-xs font-medium text-rose-700">
+              <AlertTriangle size={13} aria-hidden />
+              {t("settings.services.requiredStoppedHint")}
+            </p>
+          ) : null}
           {inferenceServerSummary.length > 0 ? (
             <p className="mt-1 text-xs text-muted">
               {t("settings.services.inferenceServers")}:{" "}
@@ -482,6 +494,14 @@ function ServiceRow({
         <ServiceLogPanel id={logsPanelId} service={service} logsQuery={logsQuery} />
       ) : null}
     </li>
+  );
+}
+
+function RequiredServiceBadge() {
+  return (
+    <span className="inline-flex h-5 items-center rounded-full bg-rose-100 px-2 text-[11px] font-medium text-rose-700">
+      {t("settings.services.requiredService")}
+    </span>
   );
 }
 

@@ -137,7 +137,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
   await page
     .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: "経理ビュー" })
+    .getByRole("option", { name: /経理ビュー/ })
     .click();
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
   await page.getByRole("button", { name: "検索", exact: true }).click();

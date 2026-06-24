@@ -34,7 +34,7 @@ from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import Settings, enterprise_ai_vision_model_id, get_settings
 from app.rag.asset_summary import summarize_assets
 from app.rag.audit import record_rag_ingestion_audit
-from app.rag.chunking import Chunk, chunk_extraction_with_strategy
+from app.rag.chunking import Chunk
 from app.rag.chunking_strategy import resolve_chunking_params
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
@@ -830,7 +830,6 @@ class IngestionPipeline:
         chunking_params = resolve_chunking_params(self._settings)
 
         def _run_chunking() -> list[Chunk]:
-            # remote(chunking マイクロサービス)優先。未達/無効は同一ロジックで in-process 実行。
             request = ChunkingStageRequest(
                 extraction=extraction,
                 strategy=chunking_params.strategy,
@@ -840,18 +839,7 @@ class IngestionPipeline:
                 sentence_window_size=chunking_params.sentence_window_size,
                 min_chars=chunking_params.min_chars,
             )
-            remote = self._pipeline_stage.run_chunking(request)
-            if remote is not None:
-                return remote
-            return chunk_extraction_with_strategy(
-                extraction,
-                strategy=chunking_params.strategy,
-                chunk_size=chunking_params.chunk_size,
-                overlap=chunking_params.overlap,
-                child_size=chunking_params.child_size,
-                sentence_window_size=chunking_params.sentence_window_size,
-                min_chars=chunking_params.min_chars,
-            )
+            return self._pipeline_stage.run_chunking(request)
 
         chunks = await _observe_cpu_ingestion_stage(
             trace_id,

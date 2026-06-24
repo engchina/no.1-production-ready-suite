@@ -114,6 +114,34 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
     assert RecordingPipeline.captured_request.filters["knowledge_base_id"] == "kb-1,kb-2"
 
 
+def test_multiple_business_views_expand_union_and_use_first_config(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """複数業務ビューでは参照 KB を union し、query 設定は先頭 View を代表にする。"""
+    first = BusinessViewConfig(
+        knowledge_base_ids=["kb-1", "kb-2"],
+        query=KnowledgeBaseQueryConfig(generation_profile="detailed_cited"),
+    )
+    second = BusinessViewConfig(
+        knowledge_base_ids=["kb-2", "kb-3"],
+        query=KnowledgeBaseQueryConfig(generation_profile="grounded_concise"),
+    )
+    _install(monkeypatch, {"bv-1": first, "bv-2": second})
+
+    response = client.post(
+        "/api/search",
+        json={"query": "経費精算の上限", "business_view_ids": ["bv-1", "bv-2"]},
+    )
+
+    assert response.status_code == 200
+    diagnostics = response.json()["data"]["diagnostics"]
+    assert diagnostics["generation_profile"] == "detailed_cited"
+    assert diagnostics["business_view_applied"] == "bv-1,bv-2"
+    assert RecordingPipeline.captured_request is not None
+    assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-1", "kb-2", "kb-3"]
+    assert RecordingPipeline.captured_request.filters["knowledge_base_id"] == "kb-1,kb-2,kb-3"
+
+
 def test_business_view_persona_overrides_system_prompt(monkeypatch: MonkeyPatch) -> None:
     """persona は generation system prompt 上書きとして pipeline settings へ渡る。"""
     config = BusinessViewConfig(

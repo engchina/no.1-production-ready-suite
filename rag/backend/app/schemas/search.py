@@ -94,8 +94,17 @@ class SearchRequest(BaseModel):
         default=None,
         max_length=128,
         description=(
-            "業務ビュー(Business View)ID。指定時は参照 KB 群を検索対象へ展開し、"
+            "業務ビュー(Business View)ID。business_view_ids が無い旧クライアント向け互換値。"
+            "指定時は参照 KB 群を検索対象へ展開し、"
             "業務ビューの query 設定・persona を適用する(request 明示パラメータが最優先)。"
+        ),
+    )
+    business_view_ids: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description=(
+            "検索対象にする業務ビュー(Business View)ID。複数指定時は参照 KB 群を union し、"
+            "query 設定・persona は先頭の業務ビューを代表として適用する。"
         ),
     )
 
@@ -107,6 +116,12 @@ class SearchRequest(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("business_view_ids")
+    @classmethod
+    def validate_business_view_ids(cls, values: list[str]) -> list[str]:
+        """業務ビュー ID を重複排除する。"""
+        return normalize_search_id_list(values)
 
     @field_validator("query")
     @classmethod
@@ -146,6 +161,12 @@ class SearchRequest(BaseModel):
                 **self.filters,
                 "knowledge_base_id": format_search_id_filter(resolved_knowledge_base_ids),
             }
+        if self.business_view_id:
+            self.business_view_ids = normalize_search_id_list(
+                [self.business_view_id, *self.business_view_ids]
+            )
+        elif self.business_view_ids:
+            self.business_view_id = self.business_view_ids[0]
         return self
 
 

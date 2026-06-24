@@ -286,6 +286,8 @@ for (const viewport of [
     await expect(
       page.getByRole("heading", { name: "文書分割", exact: true })
     ).toBeVisible();
+    await expect(page.getByText("必須サービス")).toBeVisible();
+    await expect(page.getByText("文書分割サービス停止中 / 取込不可")).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "検索方法", exact: true })
     ).toBeVisible();

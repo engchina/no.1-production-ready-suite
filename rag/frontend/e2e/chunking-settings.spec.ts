@@ -38,6 +38,7 @@ for (const viewport of [
     await page.goto("/settings/chunking");
 
     await expect(page.getByRole("heading", { name: "文書分割方式" })).toBeVisible();
+    await expect(page.getByText("実行は必須マイクロサービス pipeline-chunking")).toBeVisible();
     await expect(page.getByRole("radio", { name: /構造認識/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /親子階層/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /ページ単位/ })).toBeVisible();

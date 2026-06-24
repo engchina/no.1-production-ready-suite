@@ -706,6 +706,7 @@ export interface SearchRequestBody {
   filters?: Record<string, string>;
   knowledge_base_ids?: string[];
   business_view_id?: string | null;
+  business_view_ids?: string[];
 }
 
 export interface RetrievedChunk {

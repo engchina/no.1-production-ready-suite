@@ -314,7 +314,9 @@ export const ja = {
     "文書を検索しやすい単位へ分ける方式と分割サイズを設定します。",
   "settings.chunking.overview.title": "文書分割方式",
   "settings.chunking.overview.description":
-    "業界の代表的な chunking 手法を OCI / Oracle スタックへ再マップし、外部依存なしで手動選択できます。",
+    "業界の代表的な chunking 手法を OCI / Oracle スタックへ再マップし、必須マイクロサービスへ渡す方式として選択できます。",
+  "settings.chunking.serviceNote":
+    "ここで選ぶ 7 個は分割方式です。実行は必須マイクロサービス pipeline-chunking が担当します。",
   "settings.chunking.strategy": "分割方式",
   "settings.chunking.selected": "選択中",
   "settings.chunking.recommendedFor": "推奨用途",
@@ -402,7 +404,7 @@ export const ja = {
   "settings.preprocess.loadError": "前処理設定を取得できませんでした。",
   "settings.preprocess.saveError": "前処理設定を保存できませんでした。",
   "settings.services.subtitle":
-    "前処理 / Parser マイクロサービスの稼働状態を確認し、起動・停止します(ローカル開発)。",
+    "前処理 / Parser / pipeline マイクロサービスの稼働状態を確認し、起動・停止します。",
   "settings.services.overview.title": "マイクロサービス",
   "settings.services.overview.description":
     "各サービスの /health を定期的に確認して稼働状態を表示します。起動/停止は配備モード(dev=uv プロセス / prod=docker)に従います。",
@@ -452,6 +454,8 @@ export const ja = {
   "settings.services.inferenceServers": "使用する推論サーバー",
   "settings.services.inferenceServerRequired":
     "{service} を使用するには {servers} を起動してください",
+  "settings.services.requiredService": "必須サービス",
+  "settings.services.requiredStoppedHint": "文書分割サービス停止中 / 取込不可",
   "settings.services.dependencies": "使用する推論サーバー",
   "settings.services.blockedBy": "先に起動してください: {services}",
   "settings.services.action.start": "起動",
@@ -472,7 +476,7 @@ export const ja = {
   "settings.services.logs.loadError": "ログを取得できませんでした。",
   "settings.services.confirm.stop.title": "サービスを停止しますか?",
   "settings.services.confirm.stop.description":
-    "{service} を停止します。このサービスを使う処理段階は passthrough / fallback へ縮退します。",
+    "{service} を停止します。このサービスを必須とする処理段階は利用できなくなります。",
   "settings.services.confirm.stop.confirm": "停止する",
   "settings.services.confirm.cancel": "キャンセル",
   "settings.services.toast.started": "{service} を起動しました。",
@@ -1437,10 +1441,25 @@ export const ja = {
   "businessViews.confirm.archive.description":
     "「{name}」をアーカイブします。参照先の知識ベース・文書は削除されません。",
   "businessViews.scope.label": "対象の業務ビュー",
-  "businessViews.scope.helper": "選ぶと参照 KB 群が検索対象になり、その方針・persona で回答します。",
-  "businessViews.scope.placeholder": "業務ビューを選択",
+  "businessViews.scope.helper":
+    "複数選ぶと参照 KB 群をまとめて検索対象にします。回答方針・persona は先頭の業務ビューを使います。",
+  "businessViews.scope.placeholder": "業務ビューを検索して追加…",
   "businessViews.scope.required": "対象の業務ビューを選択してください。",
-  "businessViews.scope.applied": "この業務ビューの方針で回答します。",
+  "businessViews.scope.applied":
+    "{count} 件の業務ビューを対象にしています。回答方針・persona は先頭の業務ビューを使います。",
+  "businessViewPicker.addPlaceholder": "業務ビューを検索して追加…",
+  "businessViewPicker.toggleListAria": "業務ビューの一覧を開閉",
+  "businessViewPicker.removeChip": "{name} を選択から外す",
+  "businessViewPicker.count": "{shown} / {total} 件",
+  "businessViewPicker.knowledgeBaseCount": "参照 KB {count} 件",
+  "businessViewPicker.noMatch": "「{query}」に一致する業務ビューがありません。",
+  "businessViewPicker.emptyList": "業務ビューがありません。",
+  "businessViewPicker.selectedCount": "{count} 件選択中",
+  "businessViewPicker.selectAllVisible": "表示中をすべて選択",
+  "businessViewPicker.clear": "クリア",
+  "businessViewPicker.hideEmpty": "参照 KB なしを隠す",
+  "businessViewPicker.hiddenEmptyCount": "参照 KB なしの業務ビュー {count} 件を非表示中",
+  "businessViewPicker.primary": "代表方針",
   "knowledgeBases.subtitle": "文書の所属先を管理し、検索スコープごとに整理します。",
   "knowledgeBases.create.title": "知識ベースを作成",
   "knowledgeBases.field.name": "名前",

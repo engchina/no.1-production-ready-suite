@@ -67,7 +67,7 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page })
   await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
   await page
     .getByRole("listbox", { name: /対象の業務ビュー/ })
-    .getByRole("option", { name: "経理ビュー" })
+    .getByRole("option", { name: /経理ビュー/ })
     .click();
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
   await page.getByRole("button", { name: "検索", exact: true }).click();

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import suppress
 from time import perf_counter
 
@@ -93,19 +93,41 @@ async def _resolve_query_context(
     KB はナレッジ構築設定だけを持つため、KB query legacy 値は検索 runtime へ反映しない。
     戻り値は (有効 request, 有効 Settings, 適用 KB id, 適用 Business View id)。
     """
-    if request.business_view_id:
-        view = await OracleClient().get_business_view(request.business_view_id)
-        if view is not None:
+    if request.business_view_ids:
+        oracle = OracleClient()
+        views = []
+        for business_view_id in request.business_view_ids:
+            view = await oracle.get_business_view(business_view_id)
+            if view is not None:
+                views.append(view)
+        if views:
             effective_request = request
-            kb_ids = view.config.normalized_knowledge_base_ids()
+            kb_ids = _merge_business_view_knowledge_base_ids(
+                view.config.normalized_knowledge_base_ids() for view in views
+            )
             # request 明示の KB があればそちらを優先し、無ければ参照 KB 群を展開する。
             if not request.knowledge_base_ids and kb_ids:
                 effective_request = _with_knowledge_base_ids(request, kb_ids)
-            settings, applied = resolve_business_view_settings(global_settings, view.config)
-            applied_view = view.id if (applied or kb_ids) else None
+            settings, applied = resolve_business_view_settings(global_settings, views[0].config)
+            applied_view = ",".join(view.id for view in views) if (applied or kb_ids) else None
             return effective_request, settings, None, applied_view
 
     return request, global_settings, None, None
+
+
+def _merge_business_view_knowledge_base_ids(
+    knowledge_base_id_sets: Iterable[Iterable[str]],
+) -> list[str]:
+    """複数業務ビューの参照 KB ID を選択順で重複排除する。"""
+    seen: set[str] = set()
+    merged: list[str] = []
+    for knowledge_base_ids in knowledge_base_id_sets:
+        for knowledge_base_id in knowledge_base_ids:
+            if knowledge_base_id in seen:
+                continue
+            seen.add(knowledge_base_id)
+            merged.append(knowledge_base_id)
+    return merged
 
 
 def _with_knowledge_base_ids(

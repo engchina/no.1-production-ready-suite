@@ -161,6 +161,7 @@ function OverviewCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
+        <FormStatus tone="info" message={t("settings.chunking.serviceNote")} />
         <div className="space-y-2">
           <div className="text-sm font-medium text-foreground">
             {t("settings.chunking.strategy")}

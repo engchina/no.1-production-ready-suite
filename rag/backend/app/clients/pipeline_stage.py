@@ -1,9 +1,8 @@
 """pipeline ステージマイクロサービスへの HTTP 委譲クライアント。
 
-各 pipeline ステージ(まずは chunking)を独立サービスとして呼ぶ。``RAG_<STAGE>_SERVICE_URL``
-が設定され ``RAG_<STAGE>_SERVICE_ENABLED`` が真のとき ``POST /run`` へ委譲する。未設定・無効の
-ときだけ in-process 実行に任せ、サービスが有効なのに未達・timeout・不正応答の場合は
-利用者向けエラーとして止める。
+各 pipeline ステージを独立サービスとして呼ぶ。chunking は production-ready の必須ステージ
+として常に ``POST /run`` へ委譲し、未達・timeout・不正応答の場合は利用者向けエラーとして
+止める。他ステージは従来どおり ``RAG_<STAGE>_SERVICE_ENABLED`` が真のときだけ委譲する。
 
 確定スタックは不変。ロジックは backend と共有パッケージ ``rag_pipeline_core`` で同一。
 """
@@ -37,6 +36,7 @@ from rag_pipeline_core.stage import (
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
 from app.rag.chunking import Chunk
+from app.services.catalog import resolve_service_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -77,20 +77,26 @@ class PipelineStageClient:
         field = _STAGE_URL_FIELDS.get(stage)
         if field is None:
             return None
-        raw = str(getattr(self._settings, field, "") or "").strip().rstrip("/")
+        raw = resolve_service_base_url(self._settings, field).strip().rstrip("/")
         return raw or None
 
     def is_enabled(self, stage: str) -> bool:
         """ステージが remote 委譲対象か(URL 設定 + enable フラグ)。"""
+        if stage == "chunking":
+            return self._service_url(stage) is not None
         field = _STAGE_ENABLED_FIELDS.get(stage)
         enabled = bool(getattr(self._settings, field, False)) if field else False
         return enabled and self._service_url(stage) is not None
 
-    def _post_run(self, stage: str, request_json: str) -> dict[str, object] | None:
+    def _post_run(
+        self, stage: str, request_json: str, *, required: bool = False
+    ) -> dict[str, object] | None:
         """``POST /run`` を呼び JSON を返す。委譲不可なら None、失敗時は例外。"""
-        if not self.is_enabled(stage):
+        if not required and not self.is_enabled(stage):
             return None
         url = self._service_url(stage)
+        if url is None:
+            raise PipelineStageServiceError(stage, "unconfigured")
         try:
             with httpx.Client(timeout=self._timeout) as client:
                 response = request_with_retry(
@@ -113,11 +119,9 @@ class PipelineStageClient:
             )
             raise PipelineStageServiceError(stage, "unreachable", service_url=url) from exc
 
-    def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk] | None:
-        """chunking ステージを remote 実行する。委譲不可なら None。"""
-        payload = self._post_run("chunking", request.model_dump_json())
-        if payload is None:
-            return None
+    def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk]:
+        """chunking ステージを必ず remote 実行する。失敗時は fallback しない。"""
+        payload = self._post_run("chunking", request.model_dump_json(), required=True)
         try:
             parsed = ChunkingStageResponse.model_validate(payload)
         except ValueError as exc:
@@ -232,6 +236,7 @@ class PipelineStageServiceError(RuntimeError):
         self.stage = stage
         self.reason = reason
         self.service_url = service_url
+        self.error_code = f"{stage}_service_unavailable"
         super().__init__(_stage_error_message(stage, reason, service_url=service_url))
 
 
