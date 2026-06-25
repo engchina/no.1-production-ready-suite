@@ -959,11 +959,12 @@ def _external_adapter_supports_source(
             or extension in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
         )
     if backend == "glm_ocr":
+        # GLM-OCR は vLLM 経路が単一画像、transformers 経路も PIL で PDF 不可。
+        # どちらも PDF を処理できないため、対応は画像のみと正直に申告して PDF は fallback させる。
         return (
-            modality in {SourceModality.PDF, SourceModality.IMAGE}
-            or normalized_content_type == "application/pdf"
+            modality == SourceModality.IMAGE
             or normalized_content_type.startswith("image/")
-            or extension in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+            or extension in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
         )
     if backend == "unlimited_ocr":
         return (
@@ -1933,7 +1934,6 @@ def _content_type_for_path(path: Path) -> str:
         ".gif": "image/gif",
         ".bmp": "image/bmp",
     }.get(suffix, "application/octet-stream")
-    return _run_glm_ocr_transformers(path)
 
 
 def _run_glm_ocr_transformers(path: Path) -> object:

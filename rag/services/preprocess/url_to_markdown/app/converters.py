@@ -27,6 +27,8 @@ from rag_parser_core.source import SourceProfile
 _MAX_URLS = 20
 # 1 URL あたりの取得サイズ上限(10 MiB)。
 _MAX_FETCH_BYTES = 10 * 1024 * 1024
+# リダイレクト追従の上限(SSRF: 各 hop を再検証するため httpx 任せにせず自前で追従する)。
+_MAX_REDIRECTS = 5
 
 # fetcher: url -> HTML 文字列。差し替え可能にしてテストをネットワーク非依存にする。
 Fetcher = Callable[[str], str]
@@ -153,24 +155,51 @@ def _url_to_markdown(
     )
 
 
-def _default_fetcher(url: str) -> str:
-    """httpx でページ HTML を取得する(サイズ上限・リダイレクト追従)。"""
+def _default_fetcher(url: str, *, transport: object | None = None) -> str:
+    """httpx でページ HTML を取得する(サイズ上限・SSRF 安全なリダイレクト追従)。
+
+    SSRF 対策: リダイレクトは httpx 任せ(``follow_redirects=True``)にせず自前で追従し、
+    初手だけでなく **各 hop を ``_is_safe_url`` で再検証** する。``follow_redirects=True`` は
+    検証を挟まず公開 URL から内部 IP(metadata 等)へ飛ばされ得るため使わない
+    (リポジトリ全体が ``follow_redirects=False`` 規約)。``transport`` はテスト注入用。
+
+    残存リスク: ``getaddrinfo``(guard)と httpx の connect の間に残る DNS rebinding の窓。
+    metadata 等 link-local は各 hop の ``_is_safe_url`` で遮断済みのため、実証可能な攻撃
+    (リダイレクト→内部 IP)は塞いである。この経路を「外向きの任意 URL 受付」へ広げる、
+    または同一ネットワークに private な機微 API が居る構成になったら、``_resolve_safe_ip(host)``
+    で検証済み IP へ connect を固定し Host/TLS SNI を元ホストに保つ IP 固定 transport へ更新する。
+    """
     import httpx
 
+    current = url
     with httpx.Client(
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=20.0,
         headers={"User-Agent": "production-ready-rag/url-to-markdown"},
-    ) as client, client.stream("GET", url) as response:
-        response.raise_for_status()
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in response.iter_bytes():
-            total += len(chunk)
-            if total > _MAX_FETCH_BYTES:
-                break
-            chunks.append(chunk)
-    return b"".join(chunks).decode("utf-8", errors="replace")
+        transport=transport,
+    ) as client:
+        for _hop in range(_MAX_REDIRECTS + 1):
+            # ponytail: 各 hop の接続直前に再解決+再検証する。getaddrinfo と httpx の名前
+            # 解決の間に残る DNS rebinding の窓は許容(完全 pin は IP 固定 transport が必要)。
+            if not _is_safe_url(current):
+                raise RuntimeError("url_blocked_redirect")
+            with client.stream("GET", current) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise RuntimeError("url_redirect_without_location")
+                    current = str(httpx.URL(current).join(location))
+                    continue
+                response.raise_for_status()
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_FETCH_BYTES:
+                        break
+                    chunks.append(chunk)
+                return b"".join(chunks).decode("utf-8", errors="replace")
+    raise RuntimeError("url_too_many_redirects")
 
 
 def _default_extractor(html: str) -> str | None:

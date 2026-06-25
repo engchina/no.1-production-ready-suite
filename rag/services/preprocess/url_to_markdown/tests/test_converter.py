@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import socket
+
+import httpx
+import pytest
+
+from app import converters
 from app.converters import convert
 
 
@@ -85,3 +91,55 @@ def test_fetch_failure_is_skipped() -> None:
     )
     assert outcome.converted is False
     assert any(w.startswith("url_fetch_failed") for w in outcome.warnings)
+
+
+# ---- SSRF: _default_fetcher のリダイレクト再検証 / rebinding ガード ----
+# リテラル IP を使い getaddrinfo をローカル解決に留めてネットワーク非依存にする。
+_PUBLIC_IP = "93.184.216.34"  # is_global
+_PUBLIC_IP_ALT = "8.8.8.8"  # is_global
+_INTERNAL_META = "169.254.169.254"  # link-local(クラウド metadata)
+
+
+def test_default_fetcher_blocks_redirect_to_internal_ip() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == _PUBLIC_IP:
+            return httpx.Response(
+                302, headers={"location": f"http://{_INTERNAL_META}/latest/meta-data/"}
+            )
+        raise AssertionError("内部 IP へは接続してはならない")
+
+    with pytest.raises(RuntimeError, match="url_blocked_redirect"):
+        converters._default_fetcher(
+            f"http://{_PUBLIC_IP}/", transport=httpx.MockTransport(handler)
+        )
+
+
+def test_default_fetcher_caps_redirect_chain() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": f"http://{_PUBLIC_IP_ALT}/next"})
+
+    with pytest.raises(RuntimeError, match="url_too_many_redirects"):
+        converters._default_fetcher(
+            f"http://{_PUBLIC_IP}/", transport=httpx.MockTransport(handler)
+        )
+
+
+def test_default_fetcher_follows_safe_redirect() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": f"http://{_PUBLIC_IP_ALT}/final"})
+        return httpx.Response(200, content=b"<html><body><p>ok</p></body></html>")
+
+    body = converters._default_fetcher(
+        f"http://{_PUBLIC_IP}/start", transport=httpx.MockTransport(handler)
+    )
+    assert "ok" in body
+
+
+def test_is_safe_url_blocks_dns_rebinding(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 公開風ホスト名が内部 IP に解決される rebinding を guard が拒否すること。
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port or 0))]
+
+    monkeypatch.setattr(converters.socket, "getaddrinfo", fake_getaddrinfo)
+    assert converters._is_safe_url("http://totally-public.example/") is False

@@ -3,6 +3,9 @@
 # HTTP 委譲する(未達時は local / Enterprise AI VLM へ安全に fallback)。
 # CPU parser(docling/marker/unstructured)は既定起動、GPU parser(unlimited_ocr/mineru/dots_ocr/glm_ocr)は
 # `--profile gpu` で opt-in する。
+# 注意: 各 GPU parser は GPU を 1 枚ずつ予約する。`--profile gpu` は全 GPU parser を起動するため
+# 複数 GPU ホスト向け。単一 GPU では engine 個別 profile(`--profile mineru` 等)で 1 つだけ起動する。
+# dots-ocr / glm-ocr は vLLM sidecar が必要で、個別 profile は parser+sidecar を束ねて起動する。
 
 x-parser-service-urls: &parser-service-urls
   RAG_PARSER_DOCLING_SERVICE_URL: http://parser-docling:8000
@@ -176,7 +179,7 @@ services:
 
   # ---- parser マイクロサービス(GPU・`--profile gpu` で opt-in)----
   parser-unlimited-ocr:
-    profiles: ["gpu"]
+    profiles: ["gpu", "unlimited-ocr"]
     build:
       context: .
       dockerfile: services/parsers/unlimited_ocr/Dockerfile
@@ -197,11 +200,14 @@ services:
               capabilities: ["gpu"]
 
   parser-mineru:
-    profiles: ["gpu"]
+    profiles: ["gpu", "mineru"]
     build:
       context: .
       dockerfile: services/parsers/mineru/Dockerfile
     restart: unless-stopped
+    # MinerU はプロセス内でモデルをロードするため、再生成のたびの再 DL を避けて cache を永続化する。
+    volumes:
+      - hf-cache:/home/appuser/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -211,7 +217,8 @@ services:
               capabilities: ["gpu"]
 
   parser-dots-ocr:
-    profiles: ["gpu"]
+    # `dots-ocr` profile は parser + vLLM sidecar を束ねて起動する(単一 GPU 向け)。
+    profiles: ["gpu", "dots-ocr"]
     build:
       context: .
       dockerfile: services/parsers/dots_ocr/Dockerfile
@@ -234,7 +241,7 @@ services:
   # `docker compose --profile gpu --profile gpu-vllm up parser-dots-ocr-vllm parser-dots-ocr`
   # で起動する。
   parser-dots-ocr-vllm:
-    profiles: ["gpu-vllm"]
+    profiles: ["gpu-vllm", "dots-ocr"]
     image: vllm/vllm-openai:latest
     ipc: host
     command:
@@ -260,7 +267,8 @@ services:
               capabilities: ["gpu"]
 
   parser-glm-ocr:
-    profiles: ["gpu"]
+    # `glm-ocr` profile は parser + vLLM sidecar を束ねて起動する(単一 GPU 向け)。
+    profiles: ["gpu", "glm-ocr"]
     build:
       context: .
       dockerfile: services/parsers/glm_ocr/Dockerfile
@@ -280,7 +288,7 @@ services:
   # GLM-OCR 公式 self-host(vLLM OpenAI-compatible) endpoint。
   # Dots と同時常駐させると 16GB GPU では重いため、必要時だけ `gpu-vllm` profile で起動する。
   parser-glm-ocr-vllm:
-    profiles: ["gpu-vllm"]
+    profiles: ["gpu-vllm", "glm-ocr"]
     image: vllm/vllm-openai:latest
     ipc: host
     command:
@@ -306,7 +314,7 @@ services:
               capabilities: ["gpu"]
 
   parser-asr:
-    profiles: ["gpu"]
+    profiles: ["gpu", "asr"]
     build:
       context: .
       dockerfile: services/parsers/asr/Dockerfile
