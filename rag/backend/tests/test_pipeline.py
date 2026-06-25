@@ -52,13 +52,12 @@ def test_build_context_keeps_truncated_first_chunk_when_window_is_small() -> Non
     assert context == "[policy.txt#doc-"
 
 
-@pytest.mark.usefixtures("oracle_db")
 async def test_pipeline_returns_no_results_without_llm_call(
     caplog: LogCaptureFixture,
 ) -> None:
     """引用候補がない場合は LLM を呼ばず、no_results として返す。"""
     llm = ExplodingLlm()
-    pipeline = RagPipeline(llm=llm)
+    pipeline = RagPipeline(genai=StubGenAiClient(), oracle=EmptyOracleClient(), llm=llm)
     trace_id = "trace-no-results"
 
     with caplog.at_level(logging.INFO, logger="app.audit"):
@@ -347,7 +346,6 @@ async def test_pipeline_keyword_mode_skips_initial_embedding_and_reports_terms()
     assert "embedding" not in response.diagnostics.stream_stage_timings
     assert response.diagnostics.mode == "keyword"
     assert response.diagnostics.keyword_terms == [
-        "社内規程",
         "社内",
         "規程",
         "申請",
@@ -355,6 +353,49 @@ async def test_pipeline_keyword_mode_skips_initial_embedding_and_reports_terms()
     ]
     assert response.diagnostics.retrieved_count == 1
     assert response.diagnostics.reranked_count == 1
+
+
+async def test_pipeline_reports_retrieval_breakdown_and_candidates() -> None:
+    """hybrid 候補の分岐数、rerank 採否、候補 metadata を診断へ残す。"""
+    pipeline = RagPipeline(
+        genai=ThreeResultGenAiClient(),
+        oracle=HybridBreakdownOracleClient(),
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=3, rerank_top_n=2))
+
+    breakdown = response.diagnostics.retrieval_breakdown
+    assert breakdown.vector_count == 3
+    assert breakdown.keyword_count == 2
+    assert breakdown.overlap_count == 1
+    assert breakdown.fused_count == 3
+    assert breakdown.fusion_dropped_count == 1
+    assert breakdown.rerank_input_count == 3
+    assert breakdown.rerank_kept_count == 2
+    assert breakdown.rerank_dropped_count == 1
+    assert breakdown.citation_count == 2
+    assert breakdown.dropped_count == 1
+
+    candidates = response.diagnostics.retrieval_candidates
+    assert [candidate.chunk_id for candidate in candidates] == [
+        "doc-hybrid:0",
+        "doc-hybrid:1",
+        "doc-hybrid:2",
+    ]
+    assert candidates[0].sources == ["vector", "keyword"]
+    assert candidates[0].vector_rank == 1
+    assert candidates[0].keyword_rank == 1
+    assert candidates[0].rrf_score == 0.032787
+    assert candidates[0].rerank_rank == 1
+    assert candidates[0].status == "citation"
+    assert candidates[2].status == "dropped"
+    assert candidates[2].drop_reason == "rerank_out"
+    assert not hasattr(candidates[0], "text")
 
 
 async def test_pipeline_returns_only_citations_in_generation_context(
@@ -1534,6 +1575,21 @@ class StubOracleClient(OracleClient):
         ]
 
 
+class EmptyOracleClient(OracleClient):
+    """候補なしを返すテスト用 Oracle client。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, top_k, mode, filters
+        return []
+
+
 class KeywordOnlyOracleClient(OracleClient):
     """keyword_search だけで候補を返す Oracle fake。"""
 
@@ -1558,6 +1614,73 @@ class KeywordOnlyOracleClient(OracleClient):
                 file_name="keyword.txt",
                 metadata={"chunk_index": 0, "retrieval_mode": "keyword"},
             )
+        ][:top_k]
+
+
+class HybridBreakdownOracleClient(OracleClient):
+    """hybrid retrieval の分岐 diagnostics を持つ候補を返す fake。"""
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        shared = {
+            "retrieval_vector_count": 3,
+            "retrieval_keyword_count": 2,
+            "retrieval_overlap_count": 1,
+            "retrieval_fused_count": 3,
+            "retrieval_fusion_dropped_count": 1,
+        }
+        return [
+            RetrievedChunk(
+                document_id="doc-hybrid",
+                chunk_id="doc-hybrid:0",
+                text="承認条件は 120000 円以上です。",
+                score=0.032787,
+                file_name="hybrid-a.txt",
+                metadata={
+                    **shared,
+                    "retrieval_mode": "hybrid",
+                    "vector_rank": 1,
+                    "vector_score": 0.91,
+                    "keyword_rank": 1,
+                    "keyword_score": 0.82,
+                    "rrf_score": 0.032787,
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-hybrid",
+                chunk_id="doc-hybrid:1",
+                text="承認には部門長の確認が必要です。",
+                score=0.016129,
+                file_name="hybrid-b.txt",
+                metadata={
+                    **shared,
+                    "retrieval_mode": "vector",
+                    "vector_rank": 2,
+                    "vector_score": 0.72,
+                    "rrf_score": 0.016129,
+                },
+            ),
+            RetrievedChunk(
+                document_id="doc-hybrid",
+                chunk_id="doc-hybrid:2",
+                text="申請フローの補足です。",
+                score=0.016129,
+                file_name="hybrid-c.txt",
+                metadata={
+                    **shared,
+                    "retrieval_mode": "keyword",
+                    "keyword_rank": 2,
+                    "keyword_score": 0.64,
+                    "rrf_score": 0.016129,
+                },
+            ),
         ][:top_k]
 
 

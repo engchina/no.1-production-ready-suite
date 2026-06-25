@@ -1024,14 +1024,14 @@ class Settings(BaseSettings):
     )
     # --- pipeline ステージのプラグイン(マイクロサービス)化 ---
     # chunking は必須マイクロサービスとして remote 委譲し、失敗時も in-process へ縮退しない。
-    # その他の opt-in stage は未達/timeout/無効時に backend in-process へ安全縮退する。
+    # その他の opt-in stage は無効時だけ backend in-process。明示有効化後の未達/timeout は停止する。
     rag_pipeline_stage_timeout_seconds: float = Field(
         default=120.0,
         gt=0,
         description=(
             "pipeline ステージサービス呼び出しの HTTP timeout(秒)。"
-            "chunking は超過・接続失敗時に処理を止め、その他の opt-in stage は warning を付けて "
-            "in-process へ安全縮退する。"
+            "chunking は超過・接続失敗時に処理を止め、その他の opt-in stage も明示有効化後は "
+            "接続失敗で停止する。無効時だけ backend in-process を使う。"
         ),
     )
     rag_chunking_service_enabled: bool = Field(
@@ -1049,7 +1049,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "vector_index プロファイル解決を vector_index マイクロサービスへ委譲する。OFF(既定)は "
-            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
         ),
     )
     rag_vector_index_service_url: str = Field(
@@ -1060,7 +1060,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "graphrag プロファイル解決を graphrag マイクロサービスへ委譲する。OFF(既定)は "
-            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
         ),
     )
     rag_graph_service_url: str = Field(
@@ -1071,8 +1071,8 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "generation の system prompt 解決を generation マイクロサービスへ委譲する。OFF(既定)は "
-            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。custom/persona "
-            "override は backend 側で上乗せする。"
+            "in-process(現行挙動)。ON で未達/失敗時は処理を停止する。custom/persona override は "
+            "backend 側で上乗せする。"
         ),
     )
     rag_generation_service_url: str = Field(
@@ -1083,7 +1083,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "guardrail の policy 解決(groundedness 閾値 + 監査強調)を guardrail マイクロサービスへ"
-            "委譲する。OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退。"
+            "委譲する。OFF(既定)は in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
             "OCI Generative AI Guardrails backend(rag_guardrail_backend)とは別レイヤーで共存。"
         ),
     )
@@ -1095,7 +1095,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "agentic の profile 解決(クエリ計画の挙動フラグ)を agentic マイクロサービスへ委譲する。"
-            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "OFF(既定)は in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
             "実 LLM クエリ計画は backend が OCI Enterprise AI で行う。"
         ),
     )
@@ -1107,7 +1107,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "grounding の preset 解決(検索後処理段フラグ)を grounding マイクロサービスへ委譲する。"
-            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "OFF(既定)は in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
             "custom preset は backend の legacy rag_context_* 設定をそのまま使う。"
         ),
     )
@@ -1119,7 +1119,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "evaluation の suite→閾値解決を evaluation マイクロサービスへ委譲する。OFF(既定)は "
-            "in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
         ),
     )
     rag_evaluation_service_url: str = Field(
@@ -1130,7 +1130,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "retrieval の strategy 解決(検索挙動フラグ)を retrieval マイクロサービスへ委譲する。"
-            "OFF(既定)は in-process(現行挙動)。未達/失敗時はいずれも in-process へ縮退する。"
+            "OFF(既定)は in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
             "実 retrieval(Oracle 26ai 経路)は backend が実行する。"
         ),
     )

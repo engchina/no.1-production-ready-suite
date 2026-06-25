@@ -47,6 +47,9 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_marker_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_glm_ocr_enabled", False)
 
     def package_info(
         import_name: str,
@@ -77,6 +80,10 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["marker"]["warning_code"] == "adapter_flag_ignored_by_backend"
     assert by_backend["unstructured"]["install_package"] == "unstructured[all-docs]==0.23.1"
     assert by_backend["unstructured"]["status"] == "disabled"
+    assert by_backend["mineru"]["install_package"] == "mineru[core]==3.4.0"
+    assert by_backend["mineru"]["status"] == "disabled"
+    assert by_backend["dots_ocr"]["status"] == "disabled"
+    assert by_backend["glm_ocr"]["status"] == "disabled"
     assert body["scorecard"]["selected_backend"] == "local"
     assert body["scorecard"]["recommended_backend"] == "local"
     score_by_backend = {entry["backend"]: entry for entry in body["scorecard"]["entries"]}
@@ -321,6 +328,69 @@ def test_update_parser_adapter_settings_persists_env_and_mutates_runtime(
     assert "RAG_PARSER_ADAPTER_BACKEND=local" in persisted
     assert "RAG_PARSER_DOCLING_ENABLED=false" in persisted
     assert "RAG_PARSER_UNSTRUCTURED_ENABLED=true" not in persisted
+
+
+def test_update_parser_adapter_settings_persists_gpu_flags_and_preserves_omitted_flags(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """GPU parser flags も保存し、省略された既存 flag は維持する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
+    monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
+    monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", True)
+    monkeypatch.setattr(settings, "rag_parser_glm_ocr_enabled", False)
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda *_args: (False, None, None),
+    )
+    env_file = _settings_env_file(
+        monkeypatch,
+        tmp_path,
+        "\n".join(
+            [
+                "# Parser adapters",
+                "RAG_PARSER_ADAPTER_BACKEND=local",
+                "RAG_PARSER_DOCLING_ENABLED=true",
+                "",
+            ]
+        ),
+    )
+
+    resp = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "mineru",
+            "mineru_enabled": True,
+            "dots_ocr_enabled": False,
+            "glm_ocr_enabled": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["adapter_backend"] == "mineru"
+    assert body["effective_order"] == ["mineru"]
+    by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
+    assert by_backend["docling"]["enabled"] is True
+    assert by_backend["mineru"]["enabled"] is True
+    assert by_backend["dots_ocr"]["enabled"] is False
+    assert by_backend["glm_ocr"]["enabled"] is True
+    assert settings.rag_parser_adapter_backend == "mineru"
+    assert settings.rag_parser_docling_enabled is True
+    assert settings.rag_parser_mineru_enabled is True
+    assert settings.rag_parser_dots_ocr_enabled is False
+    assert settings.rag_parser_glm_ocr_enabled is True
+    persisted = env_file.read_text(encoding="utf-8")
+    assert "RAG_PARSER_ADAPTER_BACKEND=mineru" in persisted
+    assert "RAG_PARSER_DOCLING_ENABLED=true" in persisted
+    assert "RAG_PARSER_MINERU_ENABLED=true" in persisted
+    assert "RAG_PARSER_DOTS_OCR_ENABLED=false" in persisted
+    assert "RAG_PARSER_GLM_OCR_ENABLED=true" in persisted
 
 
 def test_update_parser_adapter_settings_does_not_mutate_runtime_when_env_write_fails(

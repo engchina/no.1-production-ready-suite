@@ -28,6 +28,7 @@ import {
   ApiError,
   type DeploymentMode,
   type ServiceCatalogItemData,
+  type ServiceExecutionPolicy,
   type ServiceLogsData,
   type ServiceProfile,
   type ServiceRuntimeStatus,
@@ -48,6 +49,28 @@ type DisplayServiceData = ServiceCatalogItemData & {
   blocked_by: string[];
   statusReady: boolean;
 };
+
+export function serviceExecutionPolicyLabelKey(policy: ServiceExecutionPolicy): I18nKey {
+  switch (policy) {
+    case "required_no_fallback":
+      return "settings.services.executionPolicy.requiredNoFallback";
+    case "in_process_when_disabled":
+      return "settings.services.executionPolicy.inProcessWhenDisabled";
+    case "selected_adapter":
+      return "settings.services.executionPolicy.selectedAdapter";
+  }
+}
+
+export function serviceStoppedHintKey(policy: ServiceExecutionPolicy): I18nKey | null {
+  switch (policy) {
+    case "required_no_fallback":
+      return "settings.services.requiredStoppedHint";
+    case "in_process_when_disabled":
+      return "settings.services.optionalStoppedHint.inProcess";
+    case "selected_adapter":
+      return "settings.services.optionalStoppedHint.selectedAdapter";
+  }
+}
 
 /** 前処理 / Parser マイクロサービスの稼働可視化・起動/停止を行う設定画面。 */
 export function ServicesManagementClient() {
@@ -367,7 +390,8 @@ function ServiceRow({
   const dependencyStopped = service.status === "dependency_stopped";
   const statusLoading = service.status === "loading";
   const statusError = service.status === "error";
-  const required = service.service_id === "pipeline-chunking";
+  const required = service.execution_policy === "required_no_fallback";
+  const stoppedHintKey = stopped ? serviceStoppedHintKey(service.execution_policy) : null;
   const startPending = pending === `${service.service_id}:start`;
   const stopPending = pending === `${service.service_id}:stop`;
   const anyPending = pending !== null;
@@ -395,8 +419,8 @@ function ServiceRow({
       service: serviceLabel(service),
       servers: blockedInferenceServers.join(", "),
     });
-  } else if (required && stopped) {
-    controlHint = t("settings.services.requiredStoppedHint");
+  } else if (stoppedHintKey) {
+    controlHint = t(stoppedHintKey);
   }
 
   const logsPanelId = `service-logs-${service.service_id}`;
@@ -407,13 +431,18 @@ function ServiceRow({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-sm font-semibold text-foreground">{serviceLabel(service)}</p>
-            {required ? <RequiredServiceBadge /> : null}
+            <ServiceExecutionPolicyBadge policy={service.execution_policy} />
           </div>
           <p className="font-mono text-xs text-muted">{service.service_id}</p>
-          {required && stopped ? (
-            <p className="mt-1 flex items-center gap-1 text-xs font-medium text-rose-700">
-              <AlertTriangle size={13} aria-hidden />
-              {t("settings.services.requiredStoppedHint")}
+          {stoppedHintKey ? (
+            <p
+              className={cn(
+                "mt-1 flex items-center gap-1 text-xs",
+                required ? "font-medium text-rose-700" : "text-muted"
+              )}
+            >
+              {required ? <AlertTriangle size={13} aria-hidden /> : null}
+              {t(stoppedHintKey)}
             </p>
           ) : null}
           {inferenceServerSummary.length > 0 ? (
@@ -497,10 +526,19 @@ function ServiceRow({
   );
 }
 
-function RequiredServiceBadge() {
+function ServiceExecutionPolicyBadge({ policy }: { policy: ServiceExecutionPolicy }) {
   return (
-    <span className="inline-flex h-5 items-center rounded-full bg-rose-100 px-2 text-[11px] font-medium text-rose-700">
-      {t("settings.services.requiredService")}
+    <span
+      className={cn(
+        "inline-flex min-h-5 items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+        policy === "required_no_fallback"
+          ? "bg-rose-100 text-rose-700"
+          : policy === "in_process_when_disabled"
+            ? "bg-sky-100 text-sky-700"
+            : "bg-slate-100 text-slate-600"
+      )}
+    >
+      {t(serviceExecutionPolicyLabelKey(policy))}
     </span>
   );
 }

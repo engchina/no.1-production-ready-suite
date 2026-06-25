@@ -50,26 +50,29 @@ type ParserAdapterForm = {
   docling_enabled: boolean;
   marker_enabled: boolean;
   unstructured_enabled: boolean;
+  mineru_enabled: boolean;
+  dots_ocr_enabled: boolean;
+  glm_ocr_enabled: boolean;
 };
+type ParserAdapterFlagField = Exclude<keyof ParserAdapterForm, "adapter_backend">;
 
-// parser バックエンドはサービスとして起動できる parser microservice のみを並べる
-// CPU/GPU adapter + OCI クラウド backend の計 8 種。
-const BACKEND_OPTIONS: ParserAdapterBackend[] = [
-  "docling",
-  "marker",
-  "unstructured",
-  "mineru",
-  "dots_ocr",
-  "glm_ocr",
-  // service 系 backend(OCI クラウドサービス直呼び。package readiness 対象外)。
-  "oci_genai_vision",
-  "oci_document_understanding",
-];
+const ADAPTER_FLAG_FIELDS: Record<ParserAdapterBackendName, ParserAdapterFlagField> = {
+  docling: "docling_enabled",
+  marker: "marker_enabled",
+  unstructured: "unstructured_enabled",
+  mineru: "mineru_enabled",
+  dots_ocr: "dots_ocr_enabled",
+  glm_ocr: "glm_ocr_enabled",
+};
 
 const SERVICE_BACKENDS: ParserServiceBackendName[] = [
   "oci_genai_vision",
   "oci_document_understanding",
 ];
+
+function isAdapterBackend(backend: ParserAdapterBackend): backend is ParserAdapterBackendName {
+  return backend in ADAPTER_FLAG_FIELDS;
+}
 
 function isServiceBackend(backend: ParserAdapterBackend): backend is ParserServiceBackendName {
   return (SERVICE_BACKENDS as ParserAdapterBackend[]).includes(backend);
@@ -136,7 +139,7 @@ export function ParserAdapterSettingsClient() {
   }
 
   function updateAdapterFlag(adapter: ParserAdapterBackendName, enabled: boolean) {
-    updateForm({ [adapterFlagField(adapter)]: enabled });
+    updateForm({ [adapterFlagField(adapter)]: enabled } as Partial<ParserAdapterForm>);
   }
 
   function resetForm() {
@@ -171,20 +174,27 @@ export function ParserAdapterSettingsClient() {
         onReset={resetForm}
         onSubmit={submit}
       />
-      <AdapterReadinessCard
-        adapters={settings.adapters}
-        form={form}
-        saving={save.isPending}
-        onFlagChange={updateAdapterFlag}
-      />
-      <ParserAdapterContractCard
-        data={contractQuery.data}
-        checking={contractQuery.isFetching}
-        errorMessage={contractQuery.isError ? contractError : null}
-        hasFetched={contractQuery.isFetched}
-        onRun={() => void contractQuery.refetch()}
-      />
-      <SourceRoutingCard settings={settings} />
+      <details className="border-t border-border pt-4">
+        <summary className="cursor-pointer text-sm font-semibold text-foreground">
+          {t("settings.parserAdapters.diagnostics.title")}
+        </summary>
+        <div className="mt-4 space-y-5">
+          <AdapterReadinessCard
+            adapters={settings.adapters}
+            form={form}
+            saving={save.isPending}
+            onFlagChange={updateAdapterFlag}
+          />
+          <ParserAdapterContractCard
+            data={contractQuery.data}
+            checking={contractQuery.isFetching}
+            errorMessage={contractQuery.isError ? contractError : null}
+            hasFetched={contractQuery.isFetched}
+            onRun={() => void contractQuery.refetch()}
+          />
+          <SourceRoutingCard settings={settings} />
+        </div>
+      </details>
     </div>
   );
 }
@@ -211,13 +221,8 @@ function OverviewCard({
   onSubmit: () => void;
 }) {
   const backendOptions = useMemo(
-    () =>
-      BACKEND_OPTIONS.map((backend) => ({
-        backend,
-        label: backendLabel(backend),
-        description: t(backendDescriptionKey(backend)),
-      })),
-    []
+    () => backendOptionsFromSettings(settings),
+    [settings]
   );
   const serviceByName = useMemo(
     () =>
@@ -225,6 +230,13 @@ function OverviewCard({
         (settings.service_backends ?? []).map((item) => [item.backend, item])
       ),
     [settings.service_backends]
+  );
+  const adapterByName = useMemo(
+    () =>
+      new Map<ParserAdapterBackendName, ParserAdapterStatusData>(
+        settings.adapters.map((item) => [item.backend, item])
+      ),
+    [settings.adapters]
   );
   return (
     <Card>
@@ -251,19 +263,20 @@ function OverviewCard({
             aria-label={t("settings.parserAdapters.backend")}
             className="grid grid-cols-1 gap-2 md:grid-cols-3 lg:grid-cols-4"
           >
-            {backendOptions.map((option) => {
-              const selected = form.adapter_backend === option.backend;
-              const service = isServiceBackend(option.backend)
-                ? serviceByName.get(option.backend)
+            {backendOptions.map((backend) => {
+              const selected = form.adapter_backend === backend;
+              const service = isServiceBackend(backend)
+                ? serviceByName.get(backend)
                 : undefined;
+              const adapter = isAdapterBackend(backend) ? adapterByName.get(backend) : undefined;
               return (
                 <button
-                  key={option.backend}
+                  key={backend}
                   type="button"
                   role="radio"
                   aria-checked={selected}
                   disabled={saving}
-                  onClick={() => onBackendChange(option.backend)}
+                  onClick={() => onBackendChange(backend)}
                   className={cn(
                     "min-h-[76px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                     selected
@@ -272,22 +285,23 @@ function OverviewCard({
                   )}
                 >
                   <span className="flex items-center gap-1.5">
-                    <span className="text-sm font-semibold">{option.label}</span>
+                    <span className="text-sm font-semibold">{backendLabel(backend)}</span>
                     {service ? (
                       <span
-                        className="inline-flex items-center gap-1 rounded-sm bg-info-bg px-1.5 py-0.5 text-[10px] font-medium text-info"
+                        className="inline-flex items-center gap-1 rounded-sm bg-info-bg px-1.5 py-0.5 text-[10px] font-medium text-info whitespace-nowrap"
                         title={t("settings.parserAdapters.serviceBackend.tag")}
                       >
                         <Cloud size={11} aria-hidden />
                         {t("settings.parserAdapters.serviceBackend.tag")}
                       </span>
                     ) : null}
+                    {adapter ? <AdapterOptionBadge adapter={adapter} /> : null}
                   </span>
                   <span className="mt-1 block text-xs leading-relaxed text-muted">
-                    {option.description}
+                    {t(backendDescriptionKey(backend))}
                   </span>
                   {service && !service.configured ? (
-                    <span className="mt-1.5 inline-flex items-center gap-1 rounded-sm bg-warning-bg px-1.5 py-0.5 text-[11px] font-medium text-warning">
+                    <span className="mt-1.5 inline-flex items-center gap-1 rounded-sm bg-warning-bg px-1.5 py-0.5 text-[11px] font-medium text-warning whitespace-nowrap">
                       <AlertTriangle size={12} aria-hidden />
                       {t("settings.parserAdapters.serviceBackend.unconfigured")}
                     </span>
@@ -1048,10 +1062,28 @@ function StatusPill({ status }: { status: ParserAdapterStatus }) {
   );
 }
 
+function AdapterOptionBadge({ adapter }: { adapter: ParserAdapterStatusData }) {
+  if (!adapter.installed) {
+    return (
+      <span className="inline-flex rounded-sm bg-warning-bg px-1.5 py-0.5 text-[10px] font-medium text-warning whitespace-nowrap">
+        {t("settings.parserAdapters.notInstalled")}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex rounded-sm bg-success-bg px-1.5 py-0.5 text-[10px] font-medium text-success whitespace-nowrap">
+      {t(statusLabelKey(adapter.status))}
+    </span>
+  );
+}
+
 function adapterLabel(adapter: ParserAdapterBackendName) {
   if (adapter === "docling") return "Docling";
   if (adapter === "marker") return "Marker";
-  return "Unstructured";
+  if (adapter === "unstructured") return "Unstructured";
+  if (adapter === "mineru") return "MinerU";
+  if (adapter === "dots_ocr") return "Dots.OCR";
+  return "GLM-OCR";
 }
 
 function backendLabel(backend: ParserAdapterBackend) {
@@ -1067,6 +1099,17 @@ function backendLabel(backend: ParserAdapterBackend) {
   if (backend === "oci_document_understanding")
     return t("settings.parserAdapters.backend.oci_document_understanding");
   return adapterLabel(backend);
+}
+
+function backendOptionsFromSettings(settings: ParserAdapterSettingsData): ParserAdapterBackend[] {
+  const ordered: ParserAdapterBackend[] = [
+    "local",
+    ...settings.adapters.map((adapter) => adapter.backend),
+    ...(settings.service_backends ?? []).map((service) => service.backend),
+  ];
+  const selected = normalizeBackend(settings.adapter_backend);
+  if (!ordered.includes(selected)) ordered.push(selected);
+  return [...new Set(ordered.map(normalizeBackend))];
 }
 
 function configSourceLabel(source: string) {
@@ -1294,6 +1337,9 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     docling_enabled: enabledByBackend.get("docling") ?? false,
     marker_enabled: enabledByBackend.get("marker") ?? false,
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
+    mineru_enabled: enabledByBackend.get("mineru") ?? false,
+    dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
+    glm_ocr_enabled: enabledByBackend.get("glm_ocr") ?? false,
   };
 }
 
@@ -1304,10 +1350,8 @@ function normalizeBackend(backend: ParserAdapterBackend): ParserAdapterBackend {
 
 function adapterFlagField(
   adapter: ParserAdapterBackendName
-): "docling_enabled" | "marker_enabled" | "unstructured_enabled" {
-  if (adapter === "docling") return "docling_enabled";
-  if (adapter === "marker") return "marker_enabled";
-  return "unstructured_enabled";
+): ParserAdapterFlagField {
+  return ADAPTER_FLAG_FIELDS[adapter];
 }
 
 function adapterFlagValue(form: ParserAdapterForm, adapter: ParserAdapterBackendName) {
@@ -1317,9 +1361,9 @@ function adapterFlagValue(form: ParserAdapterForm, adapter: ParserAdapterBackend
 function externalBackendFlagUpdate(
   backend: ParserAdapterBackend
 ): Partial<ParserAdapterForm> {
-  if (backend === "docling") return { docling_enabled: true };
-  if (backend === "marker") return { marker_enabled: true };
-  if (backend === "unstructured") return { unstructured_enabled: true };
+  if (isAdapterBackend(backend)) {
+    return { [adapterFlagField(backend)]: true } as Partial<ParserAdapterForm>;
+  }
   return {};
 }
 
@@ -1329,5 +1373,8 @@ function serializeForm(form: ParserAdapterForm) {
     docling_enabled: form.docling_enabled,
     marker_enabled: form.marker_enabled,
     unstructured_enabled: form.unstructured_enabled,
+    mineru_enabled: form.mineru_enabled,
+    dots_ocr_enabled: form.dots_ocr_enabled,
+    glm_ocr_enabled: form.glm_ocr_enabled,
   });
 }

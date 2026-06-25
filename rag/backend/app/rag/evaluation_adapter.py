@@ -2,9 +2,9 @@
 
 suite→CI gate 用閾値の静的解決は共有パッケージ ``rag_pipeline_core.evaluation`` を単一ソースとして
 使い、backend と evaluation マイクロサービスが同一結果を返す。`rag_evaluation_service_enabled` が
-真のとき設定由来の解決を pipeline-evaluation サービスへ委譲し、未達/失敗時は in-process(同一
-ロジック)へ安全縮退する。閾値 dict は backend で `EvaluationThresholds` へ写す。外部評価 SaaS /
-LLM-as-judge は導入しない(決定論指標のみ)。
+真のとき設定由来の解決を pipeline-evaluation サービスへ委譲する。無効時は in-process(同一
+ロジック)、有効時の未達/失敗は処理停止する。閾値 dict は backend で `EvaluationThresholds`
+へ写す。外部評価 SaaS / LLM-as-judge は導入しない(決定論指標のみ)。
 """
 
 from __future__ import annotations
@@ -76,8 +76,8 @@ def resolve_evaluation_suite(value: object) -> EvaluationThresholds | None:
 def resolve_evaluation_adapter(settings: Settings) -> EvaluationAdapterParams:
     """Settings から Evaluation アダプターの解決済みパラメータを作る。
 
-    `rag_evaluation_service_enabled` のときは pipeline-evaluation サービスへ委譲し、未達/失敗時は
-    in-process(同一 rag_pipeline_core ロジック)へ安全縮退する。
+    `rag_evaluation_service_enabled` のときは pipeline-evaluation サービスへ委譲する。
+    無効時は in-process(同一 rag_pipeline_core ロジック)、有効時の未達/失敗は停止する。
     """
     suite = normalize_evaluation_suite(
         getattr(settings, "rag_evaluation_suite", DEFAULT_EVALUATION_SUITE)
@@ -93,7 +93,7 @@ def resolve_evaluation_adapter(settings: Settings) -> EvaluationAdapterParams:
 def _resolve_static(
     settings: Settings, suite: str
 ) -> tuple[dict[str, float] | None, tuple[str, ...]]:
-    """静的 (thresholds dict, focus_metrics) を service 優先 + in-process 縮退で解決する。"""
+    """静的 (thresholds dict, focus_metrics) を opt-in service / disabled 時 local で解決する。"""
     from rag_pipeline_core.stage import EvaluationStageRequest
 
     from app.clients.pipeline_stage import PipelineStageClient

@@ -1850,7 +1850,7 @@ def test_oracle_text_terms_extracts_safe_display_keywords() -> None:
     """表示用 keyword terms は自然文から安全な短い語だけを返す。"""
     terms = oracle_text_terms("社内規程の申請フローは？")
 
-    assert terms == ["社内規程", "社内", "規程", "申請", "フロー"]
+    assert terms == ["社内", "規程", "申請", "フロー"]
     assert "？" not in "".join(terms)
     assert not {"の申", "請フ", "ーは"} & set(terms)
     assert len(terms) <= 12
@@ -1881,7 +1881,7 @@ async def test_oci_keyword_search_normalizes_natural_language_query() -> None:
     assert isinstance(text_query, str)
     assert text_query != raw_query
     assert "？" not in text_query
-    assert "{社内規程}" in text_query
+    assert "{社内規程}" not in text_query
     assert "{社内}" in text_query
     assert "{規程}" in text_query
     assert "{フロー}" in text_query
@@ -1941,7 +1941,7 @@ async def test_oci_hybrid_search_uses_normalized_keyword_query() -> None:
     text_query = keyword_call.parameters["query"]
     assert isinstance(text_query, str)
     assert text_query != raw_query
-    assert "{社内規程}" in text_query
+    assert "{社内規程}" not in text_query
     assert "{社内}" in text_query
     assert "？" not in text_query
 

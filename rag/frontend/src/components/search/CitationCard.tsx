@@ -36,6 +36,7 @@ export function CitationCard({
 }) {
   const maxima = scoreMaxima ?? { score: chunk.score, rerankScore: chunk.rerank_score ?? 0 };
   const chips = citationMetadataChips(chunk.metadata);
+  const retrievalBadges = citationRetrievalBadges(chunk);
   const variantId = variantIdFromChunkId(chunk.chunk_id);
   const previewUrl = citationPreviewUrl(chunk);
   const [pendingRating, setPendingRating] = useState<CitationFeedbackRating | null>(null);
@@ -77,6 +78,18 @@ export function CitationCard({
               {chunk.file_name ?? chunk.document_id}
             </span>
           </span>
+          {retrievalBadges.length ? (
+            <span className="flex flex-wrap gap-1">
+              {retrievalBadges.map((badge) => (
+                <span
+                  key={badge}
+                  className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted"
+                >
+                  {badge}
+                </span>
+              ))}
+            </span>
+          ) : null}
         </div>
         <CitationScoreMeters chunk={chunk} maxima={maxima} />
       </div>
@@ -159,6 +172,21 @@ export function CitationCard({
 export interface CitationScoreMaxima {
   score: number;
   rerankScore: number;
+}
+
+function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
+  const vectorRank = integerMetadataValue(chunk.metadata.vector_rank);
+  const keywordRank = integerMetadataValue(chunk.metadata.keyword_rank);
+  const rerankRank = integerMetadataValue(chunk.metadata.rerank_rank);
+  const badges: string[] = [];
+  if (vectorRank != null && keywordRank != null) badges.push(t("search.citation.badge.both"));
+  if (vectorRank != null) badges.push(t("search.citation.badge.vector", { rank: vectorRank }));
+  if (keywordRank != null) badges.push(t("search.citation.badge.keyword", { rank: keywordRank }));
+  if (rerankRank != null) badges.push(t("search.citation.badge.rerank", { rank: rerankRank }));
+  if (chunk.metadata.context_role === "evidence" || badges.length > 0) {
+    badges.push(t("search.citation.badge.evidence"));
+  }
+  return badges;
 }
 
 function CitationScoreMeters({

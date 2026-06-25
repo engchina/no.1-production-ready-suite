@@ -72,6 +72,15 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
     assert glm.depends_on == ("parser-glm-ocr-vllm",)
 
 
+def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
+    by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
+    assert by_id["pipeline-chunking"].execution_policy == "required_no_fallback"
+    assert by_id["pipeline-retrieval"].execution_policy == "in_process_when_disabled"
+    assert by_id["pipeline-generation"].execution_policy == "in_process_when_disabled"
+    assert by_id["parser-docling"].execution_policy == "selected_adapter"
+    assert by_id["preprocess-office-to-pdf"].execution_policy == "selected_adapter"
+
+
 def test_get_catalog_entry_allowlist() -> None:
     assert get_catalog_entry("parser-docling") is not None
     assert get_catalog_entry("unknown-service") is None
@@ -484,6 +493,11 @@ def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     dots = next(s for s in data["services"] if s["service_id"] == "parser-dots-ocr")
     assert dots["depends_on"] == ["parser-dots-ocr-vllm"]
     assert dots["blocked_by"] == ["parser-dots-ocr-vllm"]
+    assert dots["execution_policy"] == "selected_adapter"
+    chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
+    assert chunking["execution_policy"] == "required_no_fallback"
+    retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
+    assert retrieval["execution_policy"] == "in_process_when_disabled"
 
 
 def test_list_services_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> None:
@@ -519,6 +533,11 @@ def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) ->
     assert "status" not in data["services"][0]
     dots = next(s for s in data["services"] if s["service_id"] == "parser-dots-ocr")
     assert dots["depends_on"] == ["parser-dots-ocr-vllm"]
+    assert dots["execution_policy"] == "selected_adapter"
+    chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
+    assert chunking["execution_policy"] == "required_no_fallback"
+    retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
+    assert retrieval["execution_policy"] == "in_process_when_disabled"
 
 
 def test_get_service_status_checks_only_service_and_dependencies(

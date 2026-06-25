@@ -2047,9 +2047,30 @@ def _parser_adapter_settings_candidate(
     return base.model_copy(
         update={
             "rag_parser_adapter_backend": payload.adapter_backend,
-            "rag_parser_docling_enabled": payload.docling_enabled,
-            "rag_parser_marker_enabled": payload.marker_enabled,
-            "rag_parser_unstructured_enabled": payload.unstructured_enabled,
+            "rag_parser_docling_enabled": _optional_bool(
+                payload.docling_enabled,
+                base.rag_parser_docling_enabled,
+            ),
+            "rag_parser_marker_enabled": _optional_bool(
+                payload.marker_enabled,
+                base.rag_parser_marker_enabled,
+            ),
+            "rag_parser_unstructured_enabled": _optional_bool(
+                payload.unstructured_enabled,
+                base.rag_parser_unstructured_enabled,
+            ),
+            "rag_parser_mineru_enabled": _optional_bool(
+                payload.mineru_enabled,
+                base.rag_parser_mineru_enabled,
+            ),
+            "rag_parser_dots_ocr_enabled": _optional_bool(
+                payload.dots_ocr_enabled,
+                base.rag_parser_dots_ocr_enabled,
+            ),
+            "rag_parser_glm_ocr_enabled": _optional_bool(
+                payload.glm_ocr_enabled,
+                base.rag_parser_glm_ocr_enabled,
+            ),
         }
     )
 
@@ -2060,6 +2081,13 @@ def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
     target.rag_parser_docling_enabled = source.rag_parser_docling_enabled
     target.rag_parser_marker_enabled = source.rag_parser_marker_enabled
     target.rag_parser_unstructured_enabled = source.rag_parser_unstructured_enabled
+    target.rag_parser_mineru_enabled = source.rag_parser_mineru_enabled
+    target.rag_parser_dots_ocr_enabled = source.rag_parser_dots_ocr_enabled
+    target.rag_parser_glm_ocr_enabled = source.rag_parser_glm_ocr_enabled
+
+
+def _optional_bool(value: bool | None, fallback: bool) -> bool:
+    return fallback if value is None else value
 
 
 def _upload_storage_settings_candidate(
@@ -2536,6 +2564,9 @@ def _persist_parser_adapter_settings(settings: Settings) -> None:
             "RAG_PARSER_UNSTRUCTURED_ENABLED": _format_env_bool(
                 settings.rag_parser_unstructured_enabled
             ),
+            "RAG_PARSER_MINERU_ENABLED": _format_env_bool(settings.rag_parser_mineru_enabled),
+            "RAG_PARSER_DOTS_OCR_ENABLED": _format_env_bool(settings.rag_parser_dots_ocr_enabled),
+            "RAG_PARSER_GLM_OCR_ENABLED": _format_env_bool(settings.rag_parser_glm_ocr_enabled),
         },
         section_comment="# Parser adapters",
         error_detail="Parser adapter 設定を backend/.env へ保存できませんでした。",

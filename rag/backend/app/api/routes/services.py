@@ -55,6 +55,7 @@ def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCata
         category=entry.category,
         profile=entry.profile,
         label_key=entry.label_key,
+        execution_policy=entry.execution_policy,
         depends_on=list(entry.depends_on),
         configured=bool(service_health_url(settings, entry)),
     )
@@ -75,6 +76,7 @@ async def list_services() -> ApiResponse[ServiceListData]:
             category=entry.category,
             profile=entry.profile,
             label_key=entry.label_key,
+            execution_policy=entry.execution_policy,
             status=statuses[entry.service_id],
             depends_on=list(entry.depends_on),
             blocked_by=list(blocked_dependencies(statuses, entry)),

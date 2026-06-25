@@ -2,9 +2,10 @@
 
 preset→検索後処理段フラグの静的解決は共有パッケージ ``rag_pipeline_core.grounding`` を単一ソース
 として使い、backend と grounding マイクロサービスが同一結果を返す。`rag_grounding_service_enabled`
-が真のとき preset 解決を pipeline-grounding サービスへ委譲し、未達/失敗時は in-process(同一
-ロジック)へ安全縮退する。`custom` は backend の legacy `rag_context_*` 設定をそのまま使う
-(後方互換)。CRAG 的 corrective(confidence-based)は verified_context/full_governed で surface する。
+が真のとき preset 解決を pipeline-grounding サービスへ委譲する。無効時は in-process(同一
+ロジック)、有効時の未達/失敗は処理停止する。`custom` は backend の legacy `rag_context_*`
+設定をそのまま使う(後方互換)。CRAG 的 corrective(confidence-based)は
+verified_context/full_governed で surface する。
 """
 
 from __future__ import annotations
@@ -122,7 +123,7 @@ def resolve_grounding_adapter(settings: Settings) -> GroundingAdapterParams:
 
 
 def _resolve_static(settings: Settings, pipeline: str):  # type: ignore[no-untyped-def]
-    """preset の静的解決を service 優先 + in-process 縮退で行う。"""
+    """preset の静的解決を service opt-in + disabled 時 in-process で行う。"""
     from rag_pipeline_core.grounding import GroundingResolved
     from rag_pipeline_core.stage import GroundingStageRequest
 

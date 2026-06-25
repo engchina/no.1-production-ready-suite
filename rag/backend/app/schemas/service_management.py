@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.services.catalog import ServiceCategory, ServiceProfile
+from app.services.catalog import ServiceCategory, ServiceExecutionPolicy, ServiceProfile
 from app.services.status import ServiceRuntimeStatus
 
 DeploymentMode = Literal["dev", "prod"]
@@ -20,6 +20,9 @@ class ServiceCatalogItemData(BaseModel):
     category: ServiceCategory
     profile: ServiceProfile
     label_key: str
+    execution_policy: ServiceExecutionPolicy = Field(
+        description="停止時・未使用時の runtime 契約。fallback 境界の UI 表示に使う。",
+    )
     depends_on: list[str] = Field(
         default_factory=list,
         description="このサービスの稼働に必要な依存サービス ID。",

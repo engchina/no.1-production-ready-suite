@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import math
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -46,6 +47,8 @@ from app.schemas.search import (
     SearchMode,
     SearchRequest,
     SearchResponse,
+    SearchRetrievalBreakdown,
+    SearchRetrievalCandidate,
     SearchStrategy,
 )
 
@@ -63,6 +66,7 @@ WHITESPACE_RE = re.compile(r"\s+")
 CONTEXT_SEGMENT_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
 QUERY_FEATURE_RE = re.compile(r"[a-z0-9_]{2,}|[ぁ-んァ-ン一-龯々ー]{2,}", re.IGNORECASE)
 CONTEXT_DIVERSITY_NGRAM_SIZE = 3
+RETRIEVAL_CANDIDATE_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -367,12 +371,20 @@ class RagPipeline:
             reranked_count = len(ranked)
             if not ranked:
                 elapsed = elapsed_ms(started_at)
+                retrieval_breakdown, retrieval_candidates = _build_retrieval_diagnostics(
+                    request_mode=resolved_strategy.mode,
+                    retrieved=retrieved,
+                    ranked=ranked,
+                    citations=[],
+                )
                 diagnostics = build_search_diagnostics(
                     request,
                     settings=self._settings,
                     retrieval_strategy=runtime_retrieval_strategy,
                     route_reason=resolved_strategy.route_reason,
                     keyword_terms=keyword_terms,
+                    retrieval_breakdown=retrieval_breakdown,
+                    retrieval_candidates=retrieval_candidates,
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
@@ -674,12 +686,20 @@ class RagPipeline:
                             context_pack = hop_pack
             if not context_pack.chunks:
                 elapsed = elapsed_ms(started_at)
+                retrieval_breakdown, retrieval_candidates = _build_retrieval_diagnostics(
+                    request_mode=resolved_strategy.mode,
+                    retrieved=retrieved,
+                    ranked=ranked,
+                    citations=[],
+                )
                 diagnostics = build_search_diagnostics(
                     request,
                     settings=self._settings,
                     retrieval_strategy=runtime_retrieval_strategy,
                     route_reason=resolved_strategy.route_reason,
                     keyword_terms=keyword_terms,
+                    retrieval_breakdown=retrieval_breakdown,
+                    retrieval_candidates=retrieval_candidates,
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
@@ -753,12 +773,21 @@ class RagPipeline:
             context = built_context.context
             context_citations = built_context.citations
             context_builder_diagnostics = built_context.diagnostics()
+            retrieval_breakdown, retrieval_candidates = _build_retrieval_diagnostics(
+                request_mode=resolved_strategy.mode,
+                retrieved=retrieved,
+                ranked=ranked,
+                citations=context_citations,
+                evidence_count=built_context.evidence_count,
+            )
             diagnostics = build_search_diagnostics(
                 request,
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
                 keyword_terms=keyword_terms,
+                retrieval_breakdown=retrieval_breakdown,
+                retrieval_candidates=retrieval_candidates,
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
@@ -881,12 +910,20 @@ class RagPipeline:
             )
         except Exception as exc:
             elapsed = elapsed_ms(started_at)
+            retrieval_breakdown, retrieval_candidates = _build_retrieval_diagnostics(
+                request_mode=resolved_strategy.mode,
+                retrieved=retrieved,
+                ranked=ranked,
+                citations=ranked,
+            )
             diagnostics = build_search_diagnostics(
                 request,
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
                 keyword_terms=keyword_terms,
+                retrieval_breakdown=retrieval_breakdown,
+                retrieval_candidates=retrieval_candidates,
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
@@ -988,6 +1025,10 @@ class RagPipeline:
             key=lambda chunk: chunk.rerank_score if chunk.rerank_score is not None else chunk.score,
             reverse=True,
         )[:top_n]
+        ranked_context = [
+            chunk.model_copy(update={"metadata": {**chunk.metadata, "rerank_rank": rank}})
+            for rank, chunk in enumerate(ranked_context, start=1)
+        ]
         return [*ranked_context, *history_chunks]
 
     async def _generate_answer(
@@ -1400,6 +1441,186 @@ def _is_agent_memory_chunk(chunk: RetrievedChunk) -> bool:
         "memory",
         "history",
     }
+
+
+def _build_retrieval_diagnostics(
+    *,
+    request_mode: SearchMode,
+    retrieved: list[RetrievedChunk],
+    ranked: list[RetrievedChunk],
+    citations: list[RetrievedChunk],
+    evidence_count: int = 0,
+) -> tuple[SearchRetrievalBreakdown, list[SearchRetrievalCandidate]]:
+    """本文を含めず、検索候補の流れだけを diagnostics 化する。"""
+    document_candidates = [chunk for chunk in retrieved if not _is_agent_memory_chunk(chunk)]
+    vector_count = _metadata_max_int(document_candidates, "retrieval_vector_count")
+    keyword_count = _metadata_max_int(document_candidates, "retrieval_keyword_count")
+    overlap_count = _metadata_max_int(document_candidates, "retrieval_overlap_count")
+    fused_count = _metadata_max_int(document_candidates, "retrieval_fused_count")
+    fusion_dropped_count = _metadata_max_int(
+        document_candidates,
+        "retrieval_fusion_dropped_count",
+    )
+
+    if vector_count is None:
+        vector_count = (
+            len(document_candidates)
+            if request_mode == SearchMode.VECTOR
+            else sum(1 for chunk in document_candidates if _candidate_has_source(chunk, "vector"))
+        )
+    if keyword_count is None:
+        keyword_count = (
+            len(document_candidates)
+            if request_mode == SearchMode.KEYWORD
+            else sum(1 for chunk in document_candidates if _candidate_has_source(chunk, "keyword"))
+        )
+    if overlap_count is None:
+        overlap_count = sum(
+            1
+            for chunk in document_candidates
+            if _candidate_has_source(chunk, "vector") and _candidate_has_source(chunk, "keyword")
+        )
+    if fused_count is None:
+        fused_count = len(document_candidates)
+    if fusion_dropped_count is None:
+        fusion_dropped_count = max(0, vector_count + keyword_count - overlap_count - fused_count)
+
+    ranked_ids = {chunk.chunk_id for chunk in ranked if not _is_agent_memory_chunk(chunk)}
+    citation_ids = {chunk.chunk_id for chunk in citations}
+    rerank_rank_by_id = {
+        chunk.chunk_id: rank
+        for rank, chunk in enumerate(
+            [item for item in ranked if not _is_agent_memory_chunk(item)],
+            start=1,
+        )
+    }
+    rerank_input_count = len(document_candidates)
+    rerank_kept_count = len(ranked_ids)
+    citation_count = len(citations)
+    breakdown = SearchRetrievalBreakdown(
+        vector_count=vector_count,
+        keyword_count=keyword_count,
+        overlap_count=overlap_count,
+        fused_count=fused_count,
+        fusion_dropped_count=fusion_dropped_count,
+        rerank_input_count=rerank_input_count,
+        rerank_kept_count=rerank_kept_count,
+        rerank_dropped_count=max(0, rerank_input_count - rerank_kept_count),
+        evidence_count=evidence_count,
+        citation_count=citation_count,
+        dropped_count=max(0, rerank_input_count - citation_count),
+    )
+    candidates = [
+        _retrieval_candidate(
+            chunk,
+            request_mode=request_mode,
+            ranked_ids=ranked_ids,
+            citation_ids=citation_ids,
+            rerank_rank_by_id=rerank_rank_by_id,
+        )
+        for chunk in document_candidates[:RETRIEVAL_CANDIDATE_LIMIT]
+    ]
+    return breakdown, candidates
+
+
+def _retrieval_candidate(
+    chunk: RetrievedChunk,
+    *,
+    request_mode: SearchMode,
+    ranked_ids: set[str],
+    citation_ids: set[str],
+    rerank_rank_by_id: dict[str, int],
+) -> SearchRetrievalCandidate:
+    sources = _candidate_sources(chunk, request_mode)
+    if chunk.chunk_id in citation_ids:
+        status = "citation"
+        drop_reason = None
+    elif chunk.chunk_id in ranked_ids:
+        status = "reranked"
+        drop_reason = "not_cited"
+    else:
+        status = "dropped"
+        drop_reason = "rerank_out"
+    return SearchRetrievalCandidate(
+        chunk_id=chunk.chunk_id,
+        document_id=chunk.document_id,
+        file_name=chunk.file_name,
+        sources=sources,
+        vector_rank=_metadata_optional_int(chunk.metadata.get("vector_rank")),
+        vector_score=_metadata_optional_float(chunk.metadata.get("vector_score")),
+        keyword_rank=_metadata_optional_int(chunk.metadata.get("keyword_rank")),
+        keyword_score=_metadata_optional_float(chunk.metadata.get("keyword_score")),
+        rrf_score=_metadata_optional_float(chunk.metadata.get("rrf_score")),
+        rerank_rank=rerank_rank_by_id.get(chunk.chunk_id),
+        rerank_score=chunk.rerank_score,
+        status=status,
+        drop_reason=drop_reason,
+    )
+
+
+def _candidate_sources(chunk: RetrievedChunk, request_mode: SearchMode) -> list[str]:
+    sources: list[str] = []
+    if _candidate_has_source(chunk, "vector"):
+        sources.append("vector")
+    if _candidate_has_source(chunk, "keyword"):
+        sources.append("keyword")
+    retrieval_mode = str(chunk.metadata.get("retrieval_mode") or "").casefold()
+    if retrieval_mode.startswith("graph"):
+        sources.append("graph")
+    if retrieval_mode == "agent_memory":
+        sources.append("agent_memory")
+    if not sources and request_mode in {SearchMode.VECTOR, SearchMode.KEYWORD}:
+        sources.append(request_mode.value)
+    if not sources:
+        sources.append(retrieval_mode or request_mode.value)
+    return _dedupe_strings(sources)
+
+
+def _candidate_has_source(chunk: RetrievedChunk, source: str) -> bool:
+    if source == "vector" and "vector_rank" in chunk.metadata:
+        return True
+    if source == "keyword" and "keyword_rank" in chunk.metadata:
+        return True
+    retrieval_mode = str(chunk.metadata.get("retrieval_mode") or "").casefold()
+    return retrieval_mode == source or retrieval_mode == "hybrid"
+
+
+def _metadata_max_int(chunks: list[RetrievedChunk], key: str) -> int | None:
+    values = [
+        value
+        for chunk in chunks
+        if (value := _metadata_optional_int(chunk.metadata.get(key))) is not None
+    ]
+    return max(values) if values else None
+
+
+def _metadata_optional_int(value: object) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned and cleaned.lstrip("-").isdigit():
+            return int(cleaned)
+    return None
+
+
+def _metadata_optional_float(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+        return number if math.isfinite(number) else None
+    return None
 
 
 def _agent_memory_chunk_matches_request(chunk: RetrievedChunk, request: SearchRequest) -> bool:

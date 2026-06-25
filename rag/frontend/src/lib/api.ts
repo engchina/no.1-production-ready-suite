@@ -120,9 +120,15 @@ export type ParserAdapterBackend =
   | "enterprise_ai_vlm"
   | "oci_document_understanding";
 export type ParserServiceBackendName = "oci_genai_vision" | "oci_document_understanding";
-export type ParserAdapterBackendName = "docling" | "marker" | "unstructured";
+export type ParserAdapterBackendName =
+  | "docling"
+  | "marker"
+  | "unstructured"
+  | "mineru"
+  | "dots_ocr"
+  | "glm_ocr";
 export type ParserAdapterStatus = "active" | "available" | "disabled" | "ignored" | "missing";
-export type ParserAdapterScoreBackend = "local" | "docling" | "marker" | "unstructured";
+export type ParserAdapterScoreBackend = "local" | ParserAdapterBackendName;
 export type ParserAdapterScoreStatus =
   | "recommended"
   | "eligible"
@@ -726,6 +732,8 @@ export interface SearchDiagnostics {
   retrieval_strategy: string;
   route_reason: string;
   keyword_terms: string[];
+  retrieval_breakdown: SearchRetrievalBreakdown;
+  retrieval_candidates: SearchRetrievalCandidate[];
   graph_hit_count: number;
   fallback_reason: string | null;
   stream_stage_timings: Record<string, number>;
@@ -751,6 +759,36 @@ export interface SearchDiagnostics {
   knowledge_base_count: number;
   business_view_applied?: string | null;
   config_fingerprint: string;
+}
+
+export interface SearchRetrievalBreakdown {
+  vector_count: number;
+  keyword_count: number;
+  overlap_count: number;
+  fused_count: number;
+  fusion_dropped_count: number;
+  rerank_input_count: number;
+  rerank_kept_count: number;
+  rerank_dropped_count: number;
+  evidence_count: number;
+  citation_count: number;
+  dropped_count: number;
+}
+
+export interface SearchRetrievalCandidate {
+  chunk_id: string;
+  document_id: string;
+  file_name: string | null;
+  sources: string[];
+  vector_rank: number | null;
+  vector_score: number | null;
+  keyword_rank: number | null;
+  keyword_score: number | null;
+  rrf_score: number | null;
+  rerank_rank: number | null;
+  rerank_score: number | null;
+  status: string;
+  drop_reason: string | null;
 }
 
 export interface SearchResponse {
@@ -1249,9 +1287,12 @@ export interface ParserAdapterSettingsData {
 
 export interface ParserAdapterSettingsUpdate {
   adapter_backend: ParserAdapterBackend;
-  docling_enabled: boolean;
-  marker_enabled: boolean;
-  unstructured_enabled: boolean;
+  docling_enabled?: boolean;
+  marker_enabled?: boolean;
+  unstructured_enabled?: boolean;
+  mineru_enabled?: boolean;
+  dots_ocr_enabled?: boolean;
+  glm_ocr_enabled?: boolean;
 }
 
 // --- 設定: Chunking アダプター ---
@@ -1316,6 +1357,10 @@ export type ServiceRuntimeStatus =
   | "stopped"
   | "dependency_stopped"
   | "unconfigured";
+export type ServiceExecutionPolicy =
+  | "required_no_fallback"
+  | "in_process_when_disabled"
+  | "selected_adapter";
 export type ServiceAction = "start" | "stop" | "restart";
 
 export interface ServiceCatalogItemData {
@@ -1323,6 +1368,7 @@ export interface ServiceCatalogItemData {
   category: ServiceCategory;
   profile: ServiceProfile;
   label_key: string;
+  execution_policy: ServiceExecutionPolicy;
   depends_on: string[];
   configured: boolean;
 }

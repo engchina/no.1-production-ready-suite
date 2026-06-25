@@ -2,7 +2,8 @@
 
 各 pipeline ステージを独立サービスとして呼ぶ。chunking は production-ready の必須ステージ
 として常に ``POST /run`` へ委譲し、未達・timeout・不正応答の場合は利用者向けエラーとして
-止める。他ステージは従来どおり ``RAG_<STAGE>_SERVICE_ENABLED`` が真のときだけ委譲する。
+止める。他ステージは ``RAG_<STAGE>_SERVICE_ENABLED`` が真のときだけ委譲し、委譲後の失敗は
+in-process へ戻さず停止する。
 
 確定スタックは不変。ロジックは backend と共有パッケージ ``rag_pipeline_core`` で同一。
 """
@@ -138,7 +139,7 @@ class PipelineStageClient:
         ]
 
     def run_vector_index(self, request: VectorIndexStageRequest) -> VectorIndexStageResponse | None:
-        """vector_index ステージを remote 実行する。委譲不可/失敗時は None。"""
+        """vector_index ステージを remote 実行する。委譲不可なら None、失敗時は例外。"""
         payload = self._post_run("vector_index", request.model_dump_json())
         if payload is None:
             return None
@@ -148,7 +149,7 @@ class PipelineStageClient:
             raise PipelineStageServiceError("vector_index", "invalid_response") from exc
 
     def run_graph(self, request: GraphStageRequest) -> GraphStageResponse | None:
-        """graphrag ステージを remote 実行する。委譲不可/失敗時は None。"""
+        """graphrag ステージを remote 実行する。委譲不可なら None、失敗時は例外。"""
         payload = self._post_run("graphrag", request.model_dump_json())
         if payload is None:
             return None
@@ -158,7 +159,10 @@ class PipelineStageClient:
             raise PipelineStageServiceError("graphrag", "invalid_response") from exc
 
     def run_generation(self, request: GenerationStageRequest) -> GenerationStageResponse | None:
-        """generation ステージ(静的 prompt 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        """generation ステージ(静的 prompt 解決)を remote 実行する。
+
+        委譲不可なら None、失敗時は例外。
+        """
         payload = self._post_run("generation", request.model_dump_json())
         if payload is None:
             return None
@@ -168,7 +172,10 @@ class PipelineStageClient:
             raise PipelineStageServiceError("generation", "invalid_response") from exc
 
     def run_guardrail(self, request: GuardrailStageRequest) -> GuardrailStageResponse | None:
-        """guardrail ステージ(静的 policy 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        """guardrail ステージ(静的 policy 解決)を remote 実行する。
+
+        委譲不可なら None、失敗時は例外。
+        """
         payload = self._post_run("guardrail", request.model_dump_json())
         if payload is None:
             return None
@@ -178,7 +185,10 @@ class PipelineStageClient:
             raise PipelineStageServiceError("guardrail", "invalid_response") from exc
 
     def run_agentic(self, request: AgenticStageRequest) -> AgenticStageResponse | None:
-        """agentic ステージ(静的 profile 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        """agentic ステージ(静的 profile 解決)を remote 実行する。
+
+        委譲不可なら None、失敗時は例外。
+        """
         payload = self._post_run("agentic", request.model_dump_json())
         if payload is None:
             return None
@@ -188,7 +198,7 @@ class PipelineStageClient:
             raise PipelineStageServiceError("agentic", "invalid_response") from exc
 
     def run_grounding(self, request: GroundingStageRequest) -> GroundingStageResponse | None:
-        """grounding ステージ(preset 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        """grounding ステージ(preset 解決)を remote 実行する。委譲不可なら None、失敗時は例外。"""
         payload = self._post_run("grounding", request.model_dump_json())
         if payload is None:
             return None
@@ -198,7 +208,10 @@ class PipelineStageClient:
             raise PipelineStageServiceError("grounding", "invalid_response") from exc
 
     def run_evaluation(self, request: EvaluationStageRequest) -> EvaluationStageResponse | None:
-        """evaluation ステージ(suite→閾値解決)を remote 実行する。委譲不可/失敗時は None。"""
+        """evaluation ステージ(suite→閾値解決)を remote 実行する。
+
+        委譲不可なら None、失敗時は例外。
+        """
         payload = self._post_run("evaluation", request.model_dump_json())
         if payload is None:
             return None
@@ -208,7 +221,7 @@ class PipelineStageClient:
             raise PipelineStageServiceError("evaluation", "invalid_response") from exc
 
     def run_retrieval(self, request: RetrievalStageRequest) -> RetrievalStageResponse | None:
-        """retrieval ステージ(strategy 解決)を remote 実行する。委譲不可/失敗時は None。"""
+        """retrieval ステージ(strategy 解決)を remote 実行する。委譲不可なら None、失敗時は例外。"""
         payload = self._post_run("retrieval", request.model_dump_json())
         if payload is None:
             return None

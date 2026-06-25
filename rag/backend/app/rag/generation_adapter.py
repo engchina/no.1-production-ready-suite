@@ -3,7 +3,7 @@
 profile→system prompt 変種の静的解決は共有パッケージ ``rag_pipeline_core.generation`` を単一
 ソースとして使い、backend と generation マイクロサービスが同一結果を返す。
 `rag_generation_service_enabled` が真のとき静的解決を pipeline-generation サービスへ委譲し、
-未達/失敗時は in-process(同一ロジック)へ安全縮退する。custom(prompt version store)と
+無効時は in-process(同一ロジック)、有効時の未達/失敗は処理停止する。custom(prompt version store)と
 業務ビュー persona override は backend 固有のため解決後に上乗せする。外部 provider なし。
 """
 
@@ -88,7 +88,7 @@ def resolve_generation_adapter(settings: Settings) -> GenerationAdapterParams:
 
 
 def _resolve_static(settings: Settings, profile: str) -> tuple[str | None, bool]:
-    """静的 (system_prompt, structured_output) を service 優先 + in-process 縮退で解決する。"""
+    """静的 (system_prompt, structured_output) を opt-in service / disabled 時 local で解決する。"""
     from rag_pipeline_core.stage import GenerationStageRequest
 
     from app.clients.pipeline_stage import PipelineStageClient

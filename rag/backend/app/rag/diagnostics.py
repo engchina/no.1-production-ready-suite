@@ -8,6 +8,8 @@ from app.schemas.search import (
     SUPPORTED_SCALAR_SEARCH_FILTER_KEYS,
     SearchDiagnostics,
     SearchRequest,
+    SearchRetrievalBreakdown,
+    SearchRetrievalCandidate,
 )
 
 
@@ -27,6 +29,8 @@ def build_search_diagnostics(
     agentic_hops: int = 0,
     route_reason: str | None = None,
     keyword_terms: list[str] | None = None,
+    retrieval_breakdown: SearchRetrievalBreakdown | None = None,
+    retrieval_candidates: list[SearchRetrievalCandidate] | None = None,
     memory_plan_id: str | None = None,
     graph_hit_count: int = 0,
     fallback_reason: str | None = None,
@@ -81,6 +85,8 @@ def build_search_diagnostics(
         agentic_hops=agentic_hops,
         route_reason=route_reason or "default_hybrid",
         keyword_terms=keyword_terms or [],
+        retrieval_breakdown=retrieval_breakdown or SearchRetrievalBreakdown(),
+        retrieval_candidates=retrieval_candidates or [],
         memory_plan_id=memory_plan_id,
         graph_hit_count=graph_hit_count,
         fallback_reason=fallback_reason,

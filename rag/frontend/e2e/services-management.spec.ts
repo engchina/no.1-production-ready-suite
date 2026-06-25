@@ -35,6 +35,10 @@ interface ServiceRow {
     | "agentic";
   profile: "cpu" | "gpu" | "oci";
   label_key: string;
+  execution_policy:
+    | "required_no_fallback"
+    | "in_process_when_disabled"
+    | "selected_adapter";
   status: ServiceStatus;
   configured: boolean;
   depends_on: string[];
@@ -48,6 +52,7 @@ function defaultServices(): ServiceRow[] {
       category: "preprocess",
       profile: "cpu",
       label_key: "settings.services.item.preprocessOfficeToPdf",
+      execution_policy: "selected_adapter",
       status: "running",
       configured: true,
       depends_on: [],
@@ -58,6 +63,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "cpu",
       label_key: "settings.services.item.parserDocling",
+      execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
       depends_on: [],
@@ -68,6 +74,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "gpu",
       label_key: "settings.services.item.parserMineru",
+      execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
       depends_on: [],
@@ -78,6 +85,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "gpu",
       label_key: "settings.services.item.parserDotsOcr",
+      execution_policy: "selected_adapter",
       status: "dependency_stopped",
       configured: true,
       depends_on: ["parser-dots-ocr-vllm"],
@@ -88,6 +96,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "gpu",
       label_key: "settings.services.item.parserDotsOcrVllm",
+      execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
       depends_on: [],
@@ -98,6 +107,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "gpu",
       label_key: "settings.services.item.parserGlmOcr",
+      execution_policy: "selected_adapter",
       status: "dependency_stopped",
       configured: true,
       depends_on: ["parser-glm-ocr-vllm"],
@@ -108,6 +118,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "gpu",
       label_key: "settings.services.item.parserGlmOcrVllm",
+      execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
       depends_on: [],
@@ -118,6 +129,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "oci",
       label_key: "settings.services.item.parserOciGenaiVision",
+      execution_policy: "selected_adapter",
       status: "stopped",
       configured: false,
       depends_on: [],
@@ -128,6 +140,7 @@ function defaultServices(): ServiceRow[] {
       category: "parser",
       profile: "oci",
       label_key: "settings.services.item.parserOciDocumentUnderstanding",
+      execution_policy: "selected_adapter",
       status: "unconfigured",
       configured: false,
       depends_on: [],
@@ -138,6 +151,7 @@ function defaultServices(): ServiceRow[] {
       category: "chunking",
       profile: "cpu",
       label_key: "settings.services.item.pipelineChunking",
+      execution_policy: "required_no_fallback",
       status: "stopped",
       configured: true,
       depends_on: [],
@@ -148,6 +162,7 @@ function defaultServices(): ServiceRow[] {
       category: "retrieval",
       profile: "cpu",
       label_key: "settings.services.item.pipelineRetrieval",
+      execution_policy: "in_process_when_disabled",
       status: "stopped",
       configured: true,
       depends_on: [],
@@ -175,6 +190,7 @@ async function mockServices(
       category: service.category,
       profile: service.profile,
       label_key: service.label_key,
+      execution_policy: service.execution_policy,
       configured: service.configured,
       depends_on: service.depends_on,
     }));
@@ -286,8 +302,16 @@ for (const viewport of [
     await expect(
       page.getByRole("heading", { name: "文書分割", exact: true })
     ).toBeVisible();
-    await expect(page.getByText("必須サービス")).toBeVisible();
+    await expect(page.getByText("必須 / fallbackなし")).toBeVisible();
+    await expect(page.getByText("選択時のみ使用").first()).toBeVisible();
+    await expect(page.getByText("既定は backend 内処理")).toBeVisible();
     await expect(page.getByText("文書分割サービス停止中 / 取込不可")).toBeVisible();
+    await expect(
+      page.getByText("既定検索は backend 内処理で継続します", { exact: false })
+    ).toBeVisible();
+    await expect(
+      page.getByText("取込/解析設定でこのサービスを選択した場合のみ", { exact: false }).first()
+    ).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "検索方法", exact: true })
     ).toBeVisible();

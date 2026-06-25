@@ -2,8 +2,8 @@
 
 決定論ロジック・spec は共有パッケージ ``rag_pipeline_core.vector_index`` を単一ソースとして使い、
 backend と vector_index マイクロサービスが同一結果を返す。`rag_vector_index_service_enabled` が
-真のとき profile 解決を pipeline-vector-index サービスへ委譲し、未達/失敗時は in-process(同一
-ロジック)へ安全縮退する。外部ベクトル DB は導入しない。
+真のとき profile 解決を pipeline-vector-index サービスへ委譲する。無効時は in-process(同一
+ロジック)、有効時の未達/失敗は処理停止する。外部ベクトル DB は導入しない。
 """
 
 from __future__ import annotations
@@ -79,8 +79,8 @@ def _settings_target_accuracy(settings: Settings) -> int:
 def resolve_vector_index_adapter(settings: Settings) -> VectorIndexParams:
     """Settings から Vector Index アダプターの解決済みパラメータを作る。
 
-    `rag_vector_index_service_enabled` のときは pipeline-vector-index サービスへ委譲し、
-    未達/失敗時は in-process(同一 rag_pipeline_core ロジック)へ安全縮退する。
+    `rag_vector_index_service_enabled` のときは pipeline-vector-index サービスへ委譲する。
+    無効時は in-process(同一 rag_pipeline_core ロジック)、有効時の未達/失敗は停止する。
     """
     profile = normalize_vector_index_profile(
         getattr(settings, "rag_vector_index_profile", DEFAULT_VECTOR_INDEX_PROFILE)

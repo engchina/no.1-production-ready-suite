@@ -2,9 +2,10 @@
 
 profile→クエリ計画の挙動フラグの静的解決は共有パッケージ ``rag_pipeline_core.agentic`` を単一
 ソースとして使い、backend と agentic マイクロサービスが同一結果を返す。
-`rag_agentic_service_enabled` が真のとき静的解決を pipeline-agentic サービスへ委譲し、未達/失敗
-時は in-process(同一ロジック)へ安全縮退する。max_subqueries は backend 設定由来のため解決後に
-上乗せ。off 以外は OCI Enterprise AI への追加呼び出しを伴う opt-in。外部 LLM provider は導入しない。
+`rag_agentic_service_enabled` が真のとき静的解決を pipeline-agentic サービスへ委譲する。無効時は
+in-process(同一ロジック)、有効時の未達/失敗は処理停止する。max_subqueries は backend
+設定由来のため解決後に上乗せ。off 以外は OCI Enterprise AI への追加呼び出しを伴う opt-in。
+外部 LLM provider は導入しない。
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ def resolve_agentic_adapter(settings: Settings) -> AgenticAdapterParams:
 
 
 def _resolve_static(settings: Settings, profile: str):  # type: ignore[no-untyped-def]
-    """静的な挙動フラグを service 優先 + in-process 縮退で解決する。"""
+    """静的な挙動フラグを service opt-in + disabled 時 in-process で解決する。"""
     from rag_pipeline_core.agentic import AgenticResolved
     from rag_pipeline_core.stage import AgenticStageRequest
 

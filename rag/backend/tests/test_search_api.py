@@ -14,7 +14,12 @@ from app.main import app
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.pipeline import SearchTokenDelta
-from app.schemas.search import SearchRequest, SearchResponse
+from app.schemas.search import (
+    SearchRequest,
+    SearchResponse,
+    SearchRetrievalBreakdown,
+    SearchRetrievalCandidate,
+)
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -82,6 +87,10 @@ def test_stream_search_api_uses_realtime_deltas_without_duplicate_answer(
     assert '{"text": "承認条件は 120000 円です。"}' not in response.text
     assert "event: metadata" in response.text
     assert '"keyword_terms": ["承認条件"]' in response.text
+    assert '"retrieval_breakdown":' in response.text
+    assert '"vector_count": 1' in response.text
+    assert '"retrieval_candidates":' in response.text
+    assert "候補本文" not in response.text
     assert "event: citations" in response.text
     assert "event: done" in response.text
 
@@ -301,6 +310,32 @@ class RealtimeStreamingPipeline:
                 request,
                 settings=get_settings(),
                 keyword_terms=["承認条件"],
+                retrieval_breakdown=SearchRetrievalBreakdown(
+                    vector_count=1,
+                    keyword_count=1,
+                    overlap_count=1,
+                    fused_count=1,
+                    rerank_input_count=1,
+                    rerank_kept_count=1,
+                    evidence_count=1,
+                    citation_count=1,
+                ),
+                retrieval_candidates=[
+                    SearchRetrievalCandidate(
+                        chunk_id="doc-1:0",
+                        document_id="doc-1",
+                        file_name="policy.txt",
+                        sources=["vector", "keyword"],
+                        vector_rank=1,
+                        vector_score=0.91,
+                        keyword_rank=1,
+                        keyword_score=0.82,
+                        rrf_score=0.032,
+                        rerank_rank=1,
+                        rerank_score=0.96,
+                        status="citation",
+                    )
+                ],
             ),
         )
 

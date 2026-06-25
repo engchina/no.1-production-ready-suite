@@ -183,6 +183,40 @@ class RetrievedChunk(BaseModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class SearchRetrievalBreakdown(BaseModel):
+    """検索候補が各段階で何件残ったかを示す非機密サマリ。"""
+
+    vector_count: int = 0
+    keyword_count: int = 0
+    overlap_count: int = 0
+    fused_count: int = 0
+    fusion_dropped_count: int = 0
+    rerank_input_count: int = 0
+    rerank_kept_count: int = 0
+    rerank_dropped_count: int = 0
+    evidence_count: int = 0
+    citation_count: int = 0
+    dropped_count: int = 0
+
+
+class SearchRetrievalCandidate(BaseModel):
+    """検索候補の取得元と採用状態。本文は含めない。"""
+
+    chunk_id: str
+    document_id: str
+    file_name: str | None = None
+    sources: list[str] = Field(default_factory=list)
+    vector_rank: int | None = None
+    vector_score: float | None = None
+    keyword_rank: int | None = None
+    keyword_score: float | None = None
+    rrf_score: float | None = None
+    rerank_rank: int | None = None
+    rerank_score: float | None = None
+    status: str = "retrieved"
+    drop_reason: str | None = None
+
+
 class SearchDiagnostics(BaseModel):
     """検索実行時の非機密診断情報。"""
 
@@ -200,6 +234,10 @@ class SearchDiagnostics(BaseModel):
     agentic_hops: int = 0
     route_reason: str = "default_hybrid"
     keyword_terms: list[str] = Field(default_factory=list)
+    retrieval_breakdown: SearchRetrievalBreakdown = Field(
+        default_factory=SearchRetrievalBreakdown
+    )
+    retrieval_candidates: list[SearchRetrievalCandidate] = Field(default_factory=list)
     memory_plan_id: str | None = None
     graph_hit_count: int = 0
     fallback_reason: str | None = None

@@ -284,10 +284,12 @@ describe("api.request envelope", () => {
     await api.listIngestionJobs({ status: "FAILED", limit: 10, offset: 20 });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/documents/doc-1/ingestion-jobs?force=true"
+      "/api/documents/doc-1/ingestion-jobs?force=true&phase=EXTRACT"
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc-2/ingestion-jobs");
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/documents/doc-2/ingestion-jobs?phase=EXTRACT"
+    );
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "POST" });
     expect(fetchMock.mock.calls[2][0]).toBe("/api/documents/ingestion-jobs/job-1");
     expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/ingestion-jobs/job-1/retry");
@@ -591,7 +593,87 @@ describe("api.request envelope", () => {
           version: null,
           warning_code: null,
         },
+        {
+          backend: "mineru",
+          package_name: "mineru",
+          import_name: "mineru",
+          distribution_name: null,
+          install_package: "mineru[core]==3.4.0",
+          enabled: false,
+          selected: false,
+          installed: false,
+          status: "disabled",
+          version: null,
+          warning_code: null,
+        },
       ],
+      service_backends: [
+        {
+          backend: "oci_genai_vision",
+          selected: false,
+          configured: false,
+          warning_code: "enterprise_ai_endpoint_unconfigured",
+        },
+      ],
+      scorecard: {
+        selected_backend: "docling",
+        recommended_backend: "local",
+        metrics_source: "runtime",
+        metrics_applied_to: null,
+        entries: [
+          {
+            backend: "local",
+            rank: 1,
+            score: 62,
+            status: "recommended",
+            recommended: true,
+            executable: true,
+            selected: false,
+            enabled: true,
+            installed: true,
+            metric_source: "none",
+            metric_count: 0,
+            signals: {},
+            reason_codes: ["local_parser_available"],
+            warning_codes: [],
+          },
+          {
+            backend: "mineru",
+            rank: 2,
+            score: 24,
+            status: "disabled",
+            recommended: false,
+            executable: false,
+            selected: false,
+            enabled: false,
+            installed: false,
+            metric_source: "none",
+            metric_count: 0,
+            signals: {},
+            reason_codes: ["adapter_disabled"],
+            warning_codes: [],
+          },
+        ],
+      },
+      source_routes: [
+        {
+          source_kind: "pdf",
+          candidate_order: ["docling", "marker", "unstructured", "mineru", "glm_ocr"],
+          attempted_order: ["docling"],
+          active_order: ["docling"],
+          selected_backend: "docling",
+          reason_codes: ["selected_adapter_supported_for_source"],
+          warning_codes: [],
+        },
+      ],
+      backend_source_kind_matrix: {
+        evidence_source: "runtime_routes",
+        required_source_kinds: ["pdf"],
+        covered_source_kinds: ["pdf"],
+        missing_source_kinds: [],
+        backend_source_kinds: { docling: ["pdf"] },
+        route_evidence: [],
+      },
       config_source: "runtime",
     };
     const fetchMock = vi.fn().mockResolvedValue(
@@ -608,6 +690,9 @@ describe("api.request envelope", () => {
     expect(result.adapter_backend).toBe("docling");
     expect(result.effective_order).toEqual(["docling"]);
     expect(result.adapters[1].warning_code).toBe("adapter_flag_ignored_by_backend");
+    expect(result.adapters.map((adapter) => adapter.backend)).toContain("mineru");
+    expect(result.service_backends[0].backend).toBe("oci_genai_vision");
+    expect(result.source_routes[0].candidate_order).toContain("mineru");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/parser-adapters",
       expect.objectContaining({
@@ -713,6 +798,9 @@ describe("api.request envelope", () => {
       docling_enabled: true,
       marker_enabled: false,
       unstructured_enabled: true,
+      mineru_enabled: false,
+      dots_ocr_enabled: false,
+      glm_ocr_enabled: false,
     };
     const responsePayload = {
       adapter_backend: "docling",
@@ -757,7 +845,37 @@ describe("api.request envelope", () => {
           version: null,
           warning_code: "adapter_flag_ignored_by_backend",
         },
+        {
+          backend: "dots_ocr",
+          package_name: "dots_ocr",
+          import_name: "dots_ocr",
+          distribution_name: null,
+          install_package: "git+https://github.com/rednote-hilab/dots.ocr.git",
+          enabled: false,
+          selected: false,
+          installed: false,
+          status: "disabled",
+          version: null,
+          warning_code: null,
+        },
       ],
+      service_backends: [],
+      scorecard: {
+        selected_backend: "docling",
+        recommended_backend: "local",
+        metrics_source: "runtime",
+        metrics_applied_to: null,
+        entries: [],
+      },
+      source_routes: [],
+      backend_source_kind_matrix: {
+        evidence_source: "runtime_routes",
+        required_source_kinds: [],
+        covered_source_kinds: [],
+        missing_source_kinds: [],
+        backend_source_kinds: {},
+        route_evidence: [],
+      },
       config_source: "runtime",
     };
     const fetchMock = vi.fn().mockResolvedValue(
@@ -772,6 +890,7 @@ describe("api.request envelope", () => {
     const result = await api.updateParserAdapterSettings(requestPayload);
 
     expect(result.effective_order).toEqual(["docling"]);
+    expect(result.adapters[result.adapters.length - 1]?.backend).toBe("dots_ocr");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/parser-adapters",
       expect.objectContaining({
@@ -1048,6 +1167,7 @@ describe("api.services", () => {
               category: "parser",
               profile: "cpu",
               label_key: "settings.services.item.parserDocling",
+              execution_policy: "selected_adapter",
               depends_on: [],
               configured: true,
             },
@@ -1074,6 +1194,7 @@ describe("api.services", () => {
           category: "parser",
           profile: "gpu",
           label_key: "settings.services.item.parserDotsOcr",
+          execution_policy: "selected_adapter",
           status: "dependency_stopped",
           depends_on: ["parser-dots-ocr-vllm"],
           blocked_by: ["parser-dots-ocr-vllm"],
@@ -1105,6 +1226,7 @@ describe("api.services", () => {
               category: "parser",
               profile: "cpu",
               label_key: "settings.services.item.parserDocling",
+              execution_policy: "selected_adapter",
               status: "stopped",
               configured: true,
             },

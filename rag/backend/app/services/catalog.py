@@ -36,6 +36,11 @@ ServiceProfile = Literal["cpu", "gpu", "oci"]
 # dev(ホスト)での起動方式。軽量な前処理は uv プロセス、重い ML 依存の parser は
 # (dev でも)docker compose で起動する。prod は常に docker。
 DevRunner = Literal["uv", "docker"]
+ServiceExecutionPolicy = Literal[
+    "required_no_fallback",
+    "in_process_when_disabled",
+    "selected_adapter",
+]
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,7 @@ class ServiceCatalogEntry:
     - ``working_dir``: リポジトリ root からの相対パス(dev の ``uv run --directory`` 起動先)。
     - ``dev_port``: dev で localhost に bind / 公開するポート(uv プロセス、または docker の公開先)。
     - ``dev_runner``: dev での起動方式(``uv``=ホストプロセス / ``docker``=コンテナ)。
+    - ``execution_policy``: 停止時・未使用時の runtime 契約。UI/API で fallback 境界を明示する。
     - ``depends_on``: 稼働に必要な別サービス。未起動なら画面/API でブロック状態として見せる。
     """
 
@@ -59,6 +65,7 @@ class ServiceCatalogEntry:
     working_dir: str
     dev_port: int
     dev_runner: DevRunner
+    execution_policy: ServiceExecutionPolicy = "selected_adapter"
     depends_on: tuple[str, ...] = ()
 
 
@@ -258,6 +265,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/chunking",
         dev_port=18030,
         dev_runner="uv",
+        execution_policy="required_no_fallback",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-vector-index",
@@ -268,6 +276,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/vector_index",
         dev_port=18031,
         dev_runner="uv",
+        execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-graphrag",
@@ -278,6 +287,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/graphrag",
         dev_port=18032,
         dev_runner="uv",
+        execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-generation",
@@ -288,6 +298,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/generation",
         dev_port=18033,
         dev_runner="uv",
+        execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-guardrail",
@@ -298,6 +309,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/guardrail",
         dev_port=18034,
         dev_runner="uv",
+        execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-agentic",
@@ -308,6 +320,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/agentic",
         dev_port=18035,
         dev_runner="uv",
+        execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-grounding",
@@ -318,6 +331,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/grounding",
         dev_port=18036,
         dev_runner="uv",
+        execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-evaluation",
@@ -328,6 +342,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/evaluation",
         dev_port=18037,
         dev_runner="uv",
+        execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-retrieval",
@@ -338,6 +353,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/retrieval",
         dev_port=18038,
         dev_runner="uv",
+        execution_policy="in_process_when_disabled",
     ),
 )
 

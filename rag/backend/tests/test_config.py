@@ -248,6 +248,9 @@ def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.Monk
         "RAG_PARSER_DOCLING_ENABLED",
         "RAG_PARSER_MARKER_ENABLED",
         "RAG_PARSER_UNSTRUCTURED_ENABLED",
+        "RAG_PARSER_MINERU_ENABLED",
+        "RAG_PARSER_DOTS_OCR_ENABLED",
+        "RAG_PARSER_GLM_OCR_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
@@ -256,6 +259,9 @@ def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.Monk
     assert settings.rag_parser_docling_enabled is False
     assert settings.rag_parser_marker_enabled is False
     assert settings.rag_parser_unstructured_enabled is False
+    assert settings.rag_parser_mineru_enabled is False
+    assert settings.rag_parser_dots_ocr_enabled is False
+    assert settings.rag_parser_glm_ocr_enabled is False
     assert Settings(rag_parser_adapter_backend="auto").rag_parser_adapter_backend == "local"
     assert Settings(rag_parser_adapter_backend="docling").rag_parser_adapter_backend == "docling"
     assert Settings(rag_parser_docling_enabled=True).rag_parser_docling_enabled is True

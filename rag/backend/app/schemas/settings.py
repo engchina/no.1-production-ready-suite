@@ -516,9 +516,12 @@ class ParserAdapterSettingsUpdate(BaseModel):
     """任意 parser adapter feature flags の更新 payload。"""
 
     adapter_backend: ParserAdapterBackend
-    docling_enabled: bool = False
-    marker_enabled: bool = False
-    unstructured_enabled: bool = False
+    docling_enabled: bool | None = None
+    marker_enabled: bool | None = None
+    unstructured_enabled: bool | None = None
+    mineru_enabled: bool | None = None
+    dots_ocr_enabled: bool | None = None
+    glm_ocr_enabled: bool | None = None
 
     @field_validator("adapter_backend", mode="before")
     @classmethod

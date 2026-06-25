@@ -408,6 +408,8 @@ class OracleClient:
 
         vector_hits = await self.vector_search(embedding, top_k, filters)
         keyword_hits = await self.keyword_search(query, top_k, filters)
+        vector_ids = {hit.chunk_id for hit in vector_hits}
+        keyword_ids = {hit.chunk_id for hit in keyword_hits}
         fused: dict[str, RetrievedChunk] = {}
         scores: dict[str, float] = {}
         retrieval_metadata: dict[str, dict[str, MetadataValue]] = {}
@@ -432,12 +434,21 @@ class OracleClient:
                 scores[chunk_id],
             ),
         )[:top_k]
+        fused_count = len(ranked_ids)
+        branch_metadata: dict[str, MetadataValue] = {
+            "retrieval_vector_count": len(vector_hits),
+            "retrieval_keyword_count": len(keyword_hits),
+            "retrieval_overlap_count": len(vector_ids & keyword_ids),
+            "retrieval_fused_count": fused_count,
+            "retrieval_fusion_dropped_count": max(0, len(fused) - fused_count),
+        }
         return [
             _with_retrieval_metadata(
                 fused[chunk_id].model_copy(update={"score": round(scores[chunk_id], 6)}),
                 retrieval_mode=_hybrid_retrieval_mode(retrieval_metadata[chunk_id]),
                 rrf_k=self._settings.rag_rrf_k,
                 rrf_score=round(scores[chunk_id], 6),
+                **branch_metadata,
                 **retrieval_metadata[chunk_id],
             )
             for chunk_id in ranked_ids
@@ -9458,7 +9469,8 @@ def _japanese_query_terms(token: str) -> list[str]:
     for run in KANJI_RUN_PATTERN.findall(token):
         if len(run) < 2 or run in JAPANESE_QUERY_STOP_TERMS:
             continue
-        terms.append(run)
+        if len(run) <= 3:
+            terms.append(run)
         terms.extend(_kanji_compound_terms(run))
     for run in KATAKANA_RUN_PATTERN.findall(token):
         if len(run) >= 2 and run not in JAPANESE_QUERY_STOP_TERMS:

@@ -64,6 +64,12 @@ const CONTENT_KIND_OPTIONS = [
   "sheet",
 ] as const;
 type ContentKindFilter = (typeof CONTENT_KIND_OPTIONS)[number];
+const TOP_K_OPTIONS = ["5", "10", "20", "50"] as const;
+const RERANK_TOP_N_OPTIONS = ["1", "3", "5", "8", "10"] as const;
+const DEFAULT_TOP_K = "20";
+const DEFAULT_RERANK_TOP_N = "5";
+type TopKOption = (typeof TOP_K_OPTIONS)[number];
+type RerankTopNOption = (typeof RERANK_TOP_N_OPTIONS)[number];
 const MODE_LABEL: Record<SearchMode, Parameters<typeof t>[0]> = {
   hybrid: "search.mode.hybrid",
   vector: "search.mode.vector",
@@ -85,6 +91,14 @@ const CONTENT_KIND_SELECT_OPTIONS = CONTENT_KIND_OPTIONS.map((option) => ({
   value: option,
   label: t(CONTENT_KIND_LABEL[option]),
 })) satisfies SelectFieldOption<ContentKindFilter>[];
+const TOP_K_SELECT_OPTIONS = TOP_K_OPTIONS.map((option) => ({
+  value: option,
+  label: option,
+})) satisfies SelectFieldOption<TopKOption>[];
+const RERANK_TOP_N_SELECT_OPTIONS = RERANK_TOP_N_OPTIONS.map((option) => ({
+  value: option,
+  label: option,
+})) satisfies SelectFieldOption<RerankTopNOption>[];
 const STAGE_LABEL: Record<string, I18nKey> = {
   agentic_multi_hop: "search.stage.agentic",
   agentic_planning: "search.stage.agentic",
@@ -116,6 +130,11 @@ export function SearchClient() {
   const [contentKind, setContentKind] = useState<ContentKindFilter>("");
   const [sectionTitle, setSectionTitle] = useState("");
   const [sectionPath, setSectionPath] = useState("");
+  const [topK, setTopK] = useState<TopKOption>(DEFAULT_TOP_K);
+  const [rerankTopN, setRerankTopN] = useState<RerankTopNOption>(DEFAULT_RERANK_TOP_N);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [sectionFiltersOpen, setSectionFiltersOpen] = useState(false);
+  const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
   const [businessViewIds, setBusinessViewIds] = useState<string[]>([]);
   const [scopeError, setScopeError] = useState("");
   const [run, setRun] = useState<SearchRun | null>(null);
@@ -124,8 +143,15 @@ export function SearchClient() {
   const navigate = useNavigate();
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
   const businessViews = businessViewsQuery.data?.items ?? [];
+  const hasSectionFilters = Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
   const hasFilters =
-    Boolean(contentKind) || Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
+    Boolean(contentKind) || hasSectionFilters;
+  const hasSearchTuning = topK !== DEFAULT_TOP_K || rerankTopN !== DEFAULT_RERANK_TOP_N;
+  const hasAdvancedSettings = hasFilters || hasSearchTuning;
+  const sectionFiltersVisible = sectionFiltersOpen || hasSectionFilters;
+  const rerankTopNOptions = RERANK_TOP_N_SELECT_OPTIONS.filter(
+    (option) => Number(option.value) <= Number(topK)
+  );
   const runStartedAtMs = run?.startedAtMs;
 
   useEffect(() => {
@@ -165,12 +191,13 @@ export function SearchClient() {
 
     try {
       const filters = buildSearchFilters({ contentKind, sectionTitle, sectionPath });
+      setAppliedFilters(filters);
       await streamSearch(
         {
           query: trimmed,
           mode,
-          top_k: 20,
-          rerank_top_n: 5,
+          top_k: Number(topK),
+          rerank_top_n: Number(rerankTopN),
           business_view_ids: businessViewIds,
           ...(Object.keys(filters).length ? { filters } : {}),
         },
@@ -242,6 +269,14 @@ export function SearchClient() {
     setContentKind("");
     setSectionTitle("");
     setSectionPath("");
+    setTopK(DEFAULT_TOP_K);
+    setRerankTopN(DEFAULT_RERANK_TOP_N);
+    setAdvancedOpen(false);
+    setSectionFiltersOpen(false);
+  };
+  const changeTopK = (next: TopKOption) => {
+    setTopK(next);
+    setRerankTopN((current) => clampRerankTopN(current, next));
   };
 
   const noResults = phase === "done" && citations.length === 0;
@@ -281,56 +316,9 @@ export function SearchClient() {
             </Card>
           ) : (
             <>
-          {/* 検索バー */}
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <div className="relative min-w-0 flex-1">
-                <SearchIcon
-                  size={16}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
-                  aria-hidden
-                />
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void submit();
-                  }}
-                  placeholder={t("search.placeholder")}
-                  aria-label={t("nav.search")}
-                  className="w-full rounded-md border border-border bg-card py-2.5 pl-9 pr-3 text-sm outline-none focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                />
-              </div>
-              <Button onClick={() => void submit()} loading={isStreaming} size="lg">
-                {isStreaming ? t("search.searching") : t("search.button")}
-              </Button>
-              {isStreaming ? (
-                <Button type="button" variant="secondary" size="lg" onClick={cancel}>
-                  <X size={16} aria-hidden />
-                  {t("search.cancel")}
-                </Button>
-              ) : null}
-            </div>
-
-            {/* モード切替 */}
-            <div className="flex items-center gap-1" role="group" aria-label={t("search.pipeline")}>
-              {MODES.map((m) => (
-                <ToggleChip key={m} selected={mode === m} onClick={() => setMode(m)}>
-                  {t(MODE_LABEL[m])}
-                </ToggleChip>
-              ))}
-            </div>
-            <p className="text-xs text-muted">{t("search.pipeline")}</p>
-
-            <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3 sm:grid-cols-[160px_minmax(0,1fr)_minmax(0,1fr)_auto]">
-              <legend className="px-1 text-xs font-medium text-foreground">
-                <span className="inline-flex items-center gap-1.5">
-                  <SlidersHorizontal size={14} className="text-primary" aria-hidden />
-                  {t("search.filters.title")}
-                </span>
-              </legend>
-
+          {/* 検索条件 */}
+          <Card>
+            <CardContent className="space-y-4 pt-4">
               <BusinessViewScopePicker
                 views={businessViews}
                 selectedIds={businessViewIds}
@@ -342,59 +330,194 @@ export function SearchClient() {
                 error={scopeError}
               />
 
-              <SelectField
-                id="search-content-kind"
-                label={t("search.filters.contentKind")}
-                value={contentKind}
-                options={CONTENT_KIND_SELECT_OPTIONS}
-                onValueChange={setContentKind}
-                className="[&_label]:text-xs"
-                buttonClassName="bg-background"
-              />
-
-              <div className="space-y-1.5">
-                <label htmlFor="search-section-title" className="text-xs font-medium text-foreground">
-                  {t("search.filters.sectionTitle")}
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <label htmlFor="search-query" className="sr-only">
+                  {t("nav.search")}
                 </label>
-                <input
-                  id="search-section-title"
-                  type="text"
-                  value={sectionTitle}
-                  onChange={(event) => setSectionTitle(event.target.value)}
-                  placeholder={t("search.filters.sectionTitlePlaceholder")}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label htmlFor="search-section-path" className="text-xs font-medium text-foreground">
-                  {t("search.filters.sectionPath")}
-                </label>
-                <input
-                  id="search-section-path"
-                  type="text"
-                  value={sectionPath}
-                  onChange={(event) => setSectionPath(event.target.value)}
-                  placeholder={t("search.filters.sectionPathPlaceholder")}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
-                />
-              </div>
-
-              <div className="flex items-end">
+                <div className="relative min-w-0 flex-1">
+                  <SearchIcon
+                    size={16}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+                    aria-hidden
+                  />
+                  <input
+                    id="search-query"
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submit();
+                    }}
+                    placeholder={t("search.placeholder")}
+                    aria-label={t("nav.search")}
+                    className="h-11 w-full rounded-md border border-border bg-background py-2.5 pl-9 pr-3 text-sm outline-none focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                  />
+                </div>
                 <Button
                   type="button"
-                  variant="secondary"
-                  size="md"
-                  onClick={clearFilters}
-                  disabled={!hasFilters || isStreaming}
-                  className="w-full sm:w-auto"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    void submit();
+                  }}
+                  onClick={() => void submit()}
+                  loading={isStreaming}
+                  size="lg"
+                  className="sm:w-28"
                 >
-                  <X size={15} aria-hidden />
-                  {t("search.filters.clear")}
+                  {isStreaming ? t("search.searching") : t("search.button")}
                 </Button>
+                {isStreaming ? (
+                  <Button type="button" variant="secondary" size="lg" onClick={cancel}>
+                    <X size={16} aria-hidden />
+                    {t("search.cancel")}
+                  </Button>
+                ) : null}
               </div>
-            </fieldset>
-          </div>
+
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("search.pipeline")}>
+                  {MODES.map((m) => (
+                    <ToggleChip key={m} selected={mode === m} onClick={() => setMode(m)}>
+                      {t(MODE_LABEL[m])}
+                    </ToggleChip>
+                  ))}
+                </div>
+                <p className="text-xs text-muted">{t("search.pipeline")}</p>
+              </div>
+
+              <div className="rounded-md border border-border bg-background">
+                <button
+                  type="button"
+                  aria-expanded={advancedOpen || hasAdvancedSettings}
+                  aria-controls="search-advanced-conditions"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    setAdvancedOpen((open) => !open);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    setAdvancedOpen((open) => !open);
+                  }}
+                  className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  <SlidersHorizontal size={14} className="text-primary" aria-hidden />
+                  {t("search.filters.advanced")}
+                </button>
+                {advancedOpen || hasAdvancedSettings ? (
+                <fieldset id="search-advanced-conditions" className="space-y-4 border-t border-border p-3">
+                  <legend className="sr-only">{t("search.filters.title")}</legend>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <SelectField
+                      id="search-top-k"
+                      label={t("search.tuning.topK")}
+                      value={topK}
+                      options={TOP_K_SELECT_OPTIONS}
+                      helper={t("search.tuning.topKHelp")}
+                      onValueChange={changeTopK}
+                      className="[&_label]:text-xs"
+                      buttonClassName="bg-card"
+                    />
+
+                    <SelectField
+                      id="search-rerank-top-n"
+                      label={t("search.tuning.rerankTopN")}
+                      value={rerankTopN}
+                      options={rerankTopNOptions}
+                      helper={t("search.tuning.rerankTopNHelp")}
+                      onValueChange={setRerankTopN}
+                      className="[&_label]:text-xs"
+                      buttonClassName="bg-card"
+                    />
+                  </div>
+
+                  <div className="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+                    <SelectField
+                      id="search-content-kind"
+                      label={t("search.filters.contentKind")}
+                      value={contentKind}
+                      options={CONTENT_KIND_SELECT_OPTIONS}
+                      onValueChange={setContentKind}
+                      className="[&_label]:text-xs"
+                      buttonClassName="bg-card"
+                    />
+
+                    <div className="rounded-md border border-border bg-card">
+                      <button
+                        type="button"
+                        aria-expanded={sectionFiltersVisible}
+                        aria-controls="search-section-filters"
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          setSectionFiltersOpen((open) => !open);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          setSectionFiltersOpen((open) => !open);
+                        }}
+                        className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                      >
+                        <span>{t("search.filters.sectionGroup")}</span>
+                        <span className="text-muted" aria-hidden>{sectionFiltersVisible ? "−" : "+"}</span>
+                      </button>
+                      {sectionFiltersVisible ? (
+                        <div id="search-section-filters" className="space-y-3 border-t border-border p-3">
+                          <p className="text-xs leading-relaxed text-muted">
+                            {t("search.filters.sectionHelper")}
+                          </p>
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="space-y-1.5">
+                              <label htmlFor="search-section-title" className="text-xs font-medium text-foreground">
+                                {t("search.filters.sectionTitle")}
+                              </label>
+                              <input
+                                id="search-section-title"
+                                type="text"
+                                value={sectionTitle}
+                                onChange={(event) => setSectionTitle(event.target.value)}
+                                placeholder={t("search.filters.sectionTitlePlaceholder")}
+                                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                              />
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label htmlFor="search-section-path" className="text-xs font-medium text-foreground">
+                                {t("search.filters.sectionPath")}
+                              </label>
+                              <input
+                                id="search-section-path"
+                                type="text"
+                                value={sectionPath}
+                                onChange={(event) => setSectionPath(event.target.value)}
+                                placeholder={t("search.filters.sectionPathPlaceholder")}
+                                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="md"
+                      onClick={clearFilters}
+                      disabled={!hasAdvancedSettings || isStreaming}
+                      className="w-full sm:w-auto"
+                    >
+                      <X size={15} aria-hidden />
+                      {t("search.filters.clear")}
+                    </Button>
+                  </div>
+                </fieldset>
+                ) : null}
+              </div>
+            </CardContent>
+          </Card>
 
           {/* 状態別表示 */}
           {phase === "idle" ? (
@@ -438,6 +561,7 @@ export function SearchClient() {
                       traceId={run.traceId ?? meta?.trace_id ?? null}
                     />
                   ) : null}
+                  <ActiveFilterChips filters={appliedFilters} />
                   <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
                     {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
                     {isStreaming ? (
@@ -499,6 +623,15 @@ function maxScore(values: number[]): number {
     (max, value) => (Number.isFinite(value) && value > max ? value : max),
     0
   );
+}
+
+function clampRerankTopN(
+  current: RerankTopNOption,
+  topK: TopKOption
+): RerankTopNOption {
+  if (Number(current) <= Number(topK)) return current;
+  const allowed = RERANK_TOP_N_OPTIONS.filter((option) => Number(option) <= Number(topK));
+  return allowed[allowed.length - 1] ?? DEFAULT_RERANK_TOP_N;
 }
 
 function SearchRunPanel({
@@ -657,10 +790,64 @@ function shortTraceId(traceId: string | null): string {
   return traceId.length > 12 ? traceId.slice(0, 12) : traceId;
 }
 
+function ActiveFilterChips({ filters }: { filters: Record<string, string> }) {
+  const chips = activeFilterChips(filters);
+  if (!chips.length) return null;
+  return (
+    <div aria-label={t("search.filters.applied")} className="mb-3 space-y-1.5">
+      <p className="text-xs font-medium text-muted">{t("search.filters.applied")}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {chips.map((chip) => (
+          <span
+            key={chip.key}
+            className="max-w-full break-all rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium leading-snug text-foreground"
+          >
+            {chip.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function activeFilterChips(filters: Record<string, string>) {
+  return [
+    filters.content_kind
+      ? {
+          key: "content_kind",
+          label: t("search.filters.appliedContentKind", {
+            value: contentKindFilterLabel(filters.content_kind),
+          }),
+        }
+      : null,
+    filters.section_title
+      ? {
+          key: "section_title",
+          label: t("search.filters.appliedSectionTitle", { value: filters.section_title }),
+        }
+      : null,
+    filters.section_path
+      ? {
+          key: "section_path",
+          label: t("search.filters.appliedSectionPath", { value: filters.section_path }),
+        }
+      : null,
+  ].flatMap((chip) => (chip ? [chip] : []));
+}
+
+function contentKindFilterLabel(value: string): string {
+  return CONTENT_KIND_OPTIONS.includes(value as ContentKindFilter)
+    ? t(CONTENT_KIND_LABEL[value as ContentKindFilter])
+    : value;
+}
+
 function SearchExecutionMeta({ meta }: { meta: Meta }) {
   const diagnostics = meta.diagnostics ?? {};
   const items = searchExecutionItems(diagnostics);
   const keywordTerms = (diagnostics.keyword_terms ?? []).filter(Boolean);
+  const breakdown = retrievalBreakdownFromDiagnostics(diagnostics);
+  const candidates = diagnostics.retrieval_candidates ?? [];
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   return (
     <div className="mt-4 space-y-3 border-t border-border pt-3">
       <p className="tnum flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
@@ -686,24 +873,202 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
           </div>
         </div>
       ) : null}
-      {items.length ? (
-        <dl
-          aria-label={t("search.meta.execution")}
-          className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4"
-        >
-          {items.map((item) => (
-            <div
-              key={item.key}
-              className="min-w-0 rounded-md border border-border bg-background px-3 py-2"
-            >
-              <dt className="truncate text-[11px] font-medium text-muted">{item.label}</dt>
-              <dd className="tnum mt-0.5 text-sm font-semibold text-foreground">{item.value}</dd>
-            </div>
-          ))}
-        </dl>
+      <RetrievalFlow breakdown={breakdown} />
+      {items.length || candidates.length ? (
+        <div className="rounded-md border border-border bg-background">
+          <button
+            type="button"
+            aria-expanded={diagnosticsOpen}
+            aria-controls="search-diagnostics-panel"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              setDiagnosticsOpen((open) => !open);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              setDiagnosticsOpen((open) => !open);
+            }}
+            className="w-full cursor-pointer px-3 py-2 text-left text-xs font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            {t("search.meta.diagnostics")}
+          </button>
+          {diagnosticsOpen ? (
+          <div id="search-diagnostics-panel" className="space-y-3 border-t border-border p-3">
+            {items.length ? (
+              <section className="space-y-2">
+                <h4 className="text-xs font-medium text-muted">{t("search.meta.detailMetrics")}</h4>
+                <dl
+                  aria-label={t("search.meta.execution")}
+                  className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4"
+                >
+                  {items.map((item) => (
+                    <div
+                      key={item.key}
+                      className="min-w-0 rounded-md border border-border bg-card px-3 py-2"
+                    >
+                      <dt className="truncate text-[11px] font-medium text-muted">{item.label}</dt>
+                      <dd className="tnum mt-0.5 text-sm font-semibold text-foreground">{item.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            ) : null}
+            <RetrievalCandidateDetails candidates={candidates} />
+          </div>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
+}
+
+function RetrievalFlow({ breakdown }: { breakdown: NormalizedRetrievalBreakdown }) {
+  const steps = [
+    { key: "vector", label: t("search.meta.flow.vector"), value: breakdown.vector_count },
+    { key: "keyword", label: t("search.meta.flow.keyword"), value: breakdown.keyword_count },
+    { key: "overlap", label: t("search.meta.flow.overlap"), value: breakdown.overlap_count },
+    { key: "fused", label: t("search.meta.flow.fused"), value: breakdown.fused_count },
+    {
+      key: "rerankKept",
+      label: t("search.meta.flow.rerankKept"),
+      value: breakdown.rerank_kept_count,
+    },
+    { key: "citation", label: t("search.meta.flow.citation"), value: breakdown.citation_count },
+  ];
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-muted">{t("search.meta.flow")}</p>
+      <ol
+        aria-label={t("search.meta.flow")}
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-background px-3 py-2 text-xs"
+      >
+        {steps.map((step, index) => (
+          <li key={step.key} className="inline-flex items-center gap-2">
+            {index > 0 ? <span className="text-muted" aria-hidden>→</span> : null}
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+              <span className="text-muted">{step.label}</span>
+              <strong className="tnum text-sm text-foreground">{step.value}</strong>
+            </span>
+          </li>
+        ))}
+      </ol>
+      {breakdown.dropped_count > 0 ? (
+        <p className="tnum text-xs text-muted">
+          {t("search.meta.flow.dropped")}: {breakdown.dropped_count}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function RetrievalCandidateDetails({
+  candidates,
+}: {
+  candidates: NonNullable<SearchDiagnostics["retrieval_candidates"]>;
+}) {
+  return (
+    <section className="space-y-2">
+      <h4 className="text-xs font-medium text-muted">{t("search.meta.candidateDetails")}</h4>
+      {candidates.length ? (
+        <div role="table" aria-label={t("search.meta.candidateDetails")} className="space-y-1.5">
+          <div
+            role="row"
+            className="hidden grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_90px_90px_80px_90px_minmax(0,1fr)] gap-2 px-2 text-[11px] font-medium text-muted md:grid"
+          >
+            <span role="columnheader">{t("search.meta.candidate")}</span>
+            <span role="columnheader">{t("search.meta.source")}</span>
+            <span role="columnheader">{t("search.meta.vector")}</span>
+            <span role="columnheader">{t("search.meta.keyword")}</span>
+            <span role="columnheader">{t("search.meta.rrf")}</span>
+            <span role="columnheader">{t("search.meta.rerankScore")}</span>
+            <span role="columnheader">{t("search.meta.status")}</span>
+          </div>
+          {candidates.map((candidate) => (
+            <CandidateRow key={candidate.chunk_id} candidate={candidate} />
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted">{t("search.meta.noCandidates")}</p>
+      )}
+    </section>
+  );
+}
+
+function CandidateRow({
+  candidate,
+}: {
+  candidate: NonNullable<SearchDiagnostics["retrieval_candidates"]>[number];
+}) {
+  return (
+    <div
+      role="row"
+      className="grid gap-2 rounded-md border border-border bg-card p-2 text-xs md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_90px_90px_80px_90px_minmax(0,1fr)]"
+    >
+      <span role="cell" className="min-w-0">
+        <span className="block truncate font-medium text-foreground" title={candidate.file_name ?? candidate.document_id}>
+          {candidate.file_name ?? candidate.document_id}
+        </span>
+        <span className="block truncate text-[11px] text-muted" title={candidate.chunk_id}>
+          {candidate.chunk_id}
+        </span>
+      </span>
+      <span role="cell" className="flex flex-wrap gap-1">
+        {candidate.sources.map((source) => (
+          <span key={source} className="rounded-full bg-muted/10 px-2 py-0.5 text-[11px] font-medium text-muted">
+            {sourceLabel(source)}
+          </span>
+        ))}
+      </span>
+      <span role="cell" className="tnum text-foreground">{formatRankScore(candidate.vector_rank, candidate.vector_score)}</span>
+      <span role="cell" className="tnum text-foreground">{formatRankScore(candidate.keyword_rank, candidate.keyword_score)}</span>
+      <span role="cell" className="tnum text-foreground">{formatScore(candidate.rrf_score)}</span>
+      <span role="cell" className="tnum text-foreground">{formatRankScore(candidate.rerank_rank, candidate.rerank_score)}</span>
+      <span role="cell" className="min-w-0 text-foreground">
+        <span>{candidateStatusLabel(candidate.status)}</span>
+        {candidate.drop_reason ? (
+          <span className="ml-1 text-muted">({dropReasonLabel(candidate.drop_reason)})</span>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+interface NormalizedRetrievalBreakdown {
+  vector_count: number;
+  keyword_count: number;
+  overlap_count: number;
+  fused_count: number;
+  fusion_dropped_count: number;
+  rerank_input_count: number;
+  rerank_kept_count: number;
+  rerank_dropped_count: number;
+  evidence_count: number;
+  citation_count: number;
+  dropped_count: number;
+}
+
+function retrievalBreakdownFromDiagnostics(
+  diagnostics: Partial<SearchDiagnostics>
+): NormalizedRetrievalBreakdown {
+  const fallbackRetrieved = diagnostics.retrieved_count ?? 0;
+  const fallbackReranked = diagnostics.reranked_count ?? 0;
+  const fallbackCitations = diagnostics.citation_count ?? 0;
+  return {
+    vector_count: diagnostics.retrieval_breakdown?.vector_count ?? 0,
+    keyword_count: diagnostics.retrieval_breakdown?.keyword_count ?? 0,
+    overlap_count: diagnostics.retrieval_breakdown?.overlap_count ?? 0,
+    fused_count: diagnostics.retrieval_breakdown?.fused_count ?? fallbackRetrieved,
+    fusion_dropped_count: diagnostics.retrieval_breakdown?.fusion_dropped_count ?? 0,
+    rerank_input_count: diagnostics.retrieval_breakdown?.rerank_input_count ?? fallbackRetrieved,
+    rerank_kept_count: diagnostics.retrieval_breakdown?.rerank_kept_count ?? fallbackReranked,
+    rerank_dropped_count: diagnostics.retrieval_breakdown?.rerank_dropped_count ?? 0,
+    evidence_count: diagnostics.retrieval_breakdown?.evidence_count ?? 0,
+    citation_count: diagnostics.retrieval_breakdown?.citation_count ?? fallbackCitations,
+    dropped_count:
+      diagnostics.retrieval_breakdown?.dropped_count ??
+      Math.max(0, fallbackRetrieved - fallbackCitations),
+  };
 }
 
 function searchExecutionItems(diagnostics: Partial<SearchDiagnostics>) {
@@ -711,6 +1076,16 @@ function searchExecutionItems(diagnostics: Partial<SearchDiagnostics>) {
     { key: "retrieved", label: t("search.meta.retrieved"), value: diagnostics.retrieved_count },
     { key: "reranked", label: t("search.meta.reranked"), value: diagnostics.reranked_count },
     { key: "citations", label: t("search.meta.citations"), value: diagnostics.citation_count },
+    {
+      key: "fusionDropped",
+      label: t("search.meta.flow.fusionDropped"),
+      value: diagnostics.retrieval_breakdown?.fusion_dropped_count,
+    },
+    {
+      key: "rerankDropped",
+      label: t("search.meta.flow.rerankDropped"),
+      value: diagnostics.retrieval_breakdown?.rerank_dropped_count,
+    },
     {
       key: "adaptive",
       label: t("search.meta.adaptive"),
@@ -725,6 +1100,54 @@ function searchExecutionItems(diagnostics: Partial<SearchDiagnostics>) {
     { key: "neighbor", label: t("search.meta.neighbor"), value: diagnostics.context_expanded_count },
     { key: "compressed", label: t("search.meta.compressed"), value: diagnostics.context_compressed_count },
   ].flatMap((item) => (typeof item.value === "number" ? [{ ...item, value: item.value }] : []));
+}
+
+function sourceLabel(source: string): string {
+  switch (source) {
+    case "vector":
+      return t("search.meta.vector");
+    case "keyword":
+      return t("search.meta.keyword");
+    case "graph":
+      return "Graph";
+    case "agent_memory":
+      return "Memory";
+    default:
+      return source || "—";
+  }
+}
+
+function candidateStatusLabel(status: string): string {
+  switch (status) {
+    case "citation":
+      return t("search.meta.status.citation");
+    case "reranked":
+      return t("search.meta.status.reranked");
+    case "dropped":
+      return t("search.meta.status.dropped");
+    default:
+      return t("search.meta.status.retrieved");
+  }
+}
+
+function dropReasonLabel(reason: string): string {
+  switch (reason) {
+    case "rerank_out":
+      return t("search.meta.drop.rerank_out");
+    case "not_cited":
+      return t("search.meta.drop.not_cited");
+    default:
+      return reason;
+  }
+}
+
+function formatRankScore(rank: number | null, score: number | null): string {
+  const scoreText = formatScore(score);
+  return rank == null ? scoreText : `#${rank} / ${scoreText}`;
+}
+
+function formatScore(score: number | null): string {
+  return typeof score === "number" && Number.isFinite(score) ? score.toFixed(3) : "—";
 }
 
 function buildSearchFilters({
