@@ -22,14 +22,25 @@ def test_chunking_strategy_defaults_to_structure_aware() -> None:
     assert settings.rag_chunk_child_size == 320
     assert settings.rag_chunk_sentence_window_size == 3
     assert settings.rag_chunk_min_chars == 0
+    assert settings.rag_chunk_delimiter == "\\n\\n"
 
 
 def test_chunk_child_size_and_min_chars_must_be_smaller_than_chunk_size() -> None:
-    """child_size / min_chars が chunk_size 以上の誤設定は起動時に拒否する。"""
+    """適用 strategy では child_size / min_chars の誤設定を起動時に拒否する。"""
     with pytest.raises(ValidationError):
-        Settings(rag_chunk_size=800, rag_chunk_child_size=800)
+        Settings(
+            rag_chunking_strategy="hierarchical_parent_child",
+            rag_chunk_size=800,
+            rag_chunk_child_size=800,
+        )
     with pytest.raises(ValidationError):
         Settings(rag_chunk_size=300, rag_chunk_min_chars=300)
+    assert Settings(
+        rag_chunking_strategy="fixed_size",
+        rag_chunk_size=800,
+        rag_chunk_child_size=800,
+        rag_chunk_min_chars=800,
+    )
 
 
 def test_unknown_chunking_strategy_is_rejected() -> None:
@@ -183,6 +194,7 @@ def test_vllm_sidecar_service_url_defaults() -> None:
     """Dots/GLM 公式 vLLM sidecar の URL は Settings で管理する。"""
     settings = Settings()
 
+    assert settings.rag_parser_unlimited_ocr_service_url == "http://parser-unlimited-ocr:8000"
     assert settings.rag_parser_dots_ocr_vllm_service_url == "http://parser-dots-ocr-vllm:8000"
     assert settings.rag_parser_glm_ocr_vllm_service_url == "http://parser-glm-ocr-vllm:8080"
 
@@ -248,6 +260,7 @@ def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.Monk
         "RAG_PARSER_DOCLING_ENABLED",
         "RAG_PARSER_MARKER_ENABLED",
         "RAG_PARSER_UNSTRUCTURED_ENABLED",
+        "RAG_PARSER_UNLIMITED_OCR_ENABLED",
         "RAG_PARSER_MINERU_ENABLED",
         "RAG_PARSER_DOTS_OCR_ENABLED",
         "RAG_PARSER_GLM_OCR_ENABLED",
@@ -259,6 +272,7 @@ def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.Monk
     assert settings.rag_parser_docling_enabled is False
     assert settings.rag_parser_marker_enabled is False
     assert settings.rag_parser_unstructured_enabled is False
+    assert settings.rag_parser_unlimited_ocr_enabled is False
     assert settings.rag_parser_mineru_enabled is False
     assert settings.rag_parser_dots_ocr_enabled is False
     assert settings.rag_parser_glm_ocr_enabled is False

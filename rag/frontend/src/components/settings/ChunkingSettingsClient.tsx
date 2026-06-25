@@ -20,6 +20,13 @@ import { useChunkingSettings, useUpdateChunkingSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
 type ChunkingForm = ChunkingSettingsUpdate;
+type ChunkingParamField =
+  | "chunk_size"
+  | "overlap"
+  | "child_size"
+  | "sentence_window_size"
+  | "min_chars"
+  | "delimiter";
 
 const STRATEGY_ORDER: ChunkingStrategyName[] = [
   "structure_aware",
@@ -29,7 +36,19 @@ const STRATEGY_ORDER: ChunkingStrategyName[] = [
   "markdown_heading",
   "page_level",
   "fixed_size",
+  "fixed_delimiter",
 ];
+
+const STRATEGY_PARAM_FIELDS: Record<ChunkingStrategyName, ChunkingParamField[]> = {
+  structure_aware: ["chunk_size", "overlap", "min_chars"],
+  recursive_character: ["chunk_size", "overlap", "min_chars"],
+  sentence_window: ["sentence_window_size", "chunk_size", "overlap", "min_chars"],
+  hierarchical_parent_child: ["chunk_size", "overlap", "child_size", "min_chars"],
+  markdown_heading: ["chunk_size", "overlap", "min_chars"],
+  page_level: ["chunk_size", "overlap", "min_chars"],
+  fixed_size: ["chunk_size", "overlap"],
+  fixed_delimiter: ["delimiter"],
+};
 
 /** 文書分割方式の現在設定とパラメータを管理する設定画面。 */
 export function ChunkingSettingsClient() {
@@ -214,8 +233,8 @@ function OverviewCard({
             value={strategyLabel(form.strategy)}
           />
           <RuntimeFact
-            label={t("settings.chunking.params.chunkSize")}
-            value={String(form.chunk_size)}
+            label={t("settings.chunking.params.active")}
+            value={paramSummary(form)}
           />
           <RuntimeFact
             label={t("settings.chunking.source")}
@@ -272,6 +291,9 @@ function ParamsCard({
   validationError: string | null;
   onChange: (update: Partial<ChunkingForm>) => void;
 }) {
+  const fields = STRATEGY_PARAM_FIELDS[form.strategy];
+  const hasField = (field: ChunkingParamField) => fields.includes(field);
+
   return (
     <Card>
       <CardHeader>
@@ -281,57 +303,74 @@ function ParamsCard({
           </div>
           <div>
             <CardTitle>{t("settings.chunking.params.title")}</CardTitle>
-            <CardDescription>{t("settings.chunking.params.description")}</CardDescription>
+            <CardDescription>{paramsDescription(form.strategy)}</CardDescription>
           </div>
         </div>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <NumberField
-            label={t("settings.chunking.params.chunkSize")}
-            value={form.chunk_size}
-            min={200}
-            max={4000}
-            disabled={saving}
-            onChange={(value) => onChange({ chunk_size: value })}
-          />
-          <NumberField
-            label={t("settings.chunking.params.overlap")}
-            value={form.overlap}
-            min={0}
-            max={1000}
-            disabled={saving}
-            onChange={(value) => onChange({ overlap: value })}
-          />
-          <NumberField
-            label={t("settings.chunking.params.childSize")}
-            value={form.child_size}
-            min={80}
-            max={4000}
-            disabled={saving}
-            helper={t("settings.chunking.params.childSizeHint")}
-            applicable={form.strategy === "hierarchical_parent_child"}
-            onChange={(value) => onChange({ child_size: value })}
-          />
-          <NumberField
-            label={t("settings.chunking.params.sentenceWindowSize")}
-            value={form.sentence_window_size}
-            min={1}
-            max={20}
-            disabled={saving}
-            helper={t("settings.chunking.params.sentenceWindowHint")}
-            applicable={form.strategy === "sentence_window"}
-            onChange={(value) => onChange({ sentence_window_size: value })}
-          />
-          <NumberField
-            label={t("settings.chunking.params.minChars")}
-            value={form.min_chars}
-            min={0}
-            max={2000}
-            disabled={saving}
-            helper={t("settings.chunking.params.minCharsHint")}
-            onChange={(value) => onChange({ min_chars: value })}
-          />
+          {hasField("delimiter") ? (
+            <TextField
+              label={t("settings.chunking.params.delimiter")}
+              value={form.delimiter}
+              disabled={saving}
+              helper={t("settings.chunking.params.delimiterHint")}
+              onChange={(value) => onChange({ delimiter: value })}
+            />
+          ) : null}
+          {hasField("sentence_window_size") ? (
+            <NumberField
+              label={t("settings.chunking.params.sentenceWindowSize")}
+              value={form.sentence_window_size}
+              min={1}
+              max={20}
+              disabled={saving}
+              helper={t("settings.chunking.params.sentenceWindowHint")}
+              onChange={(value) => onChange({ sentence_window_size: value })}
+            />
+          ) : null}
+          {hasField("chunk_size") ? (
+            <NumberField
+              label={t("settings.chunking.params.chunkSize")}
+              value={form.chunk_size}
+              min={200}
+              max={4000}
+              disabled={saving}
+              onChange={(value) => onChange({ chunk_size: value })}
+            />
+          ) : null}
+          {hasField("overlap") ? (
+            <NumberField
+              label={t("settings.chunking.params.overlap")}
+              value={form.overlap}
+              min={0}
+              max={1000}
+              disabled={saving}
+              onChange={(value) => onChange({ overlap: value })}
+            />
+          ) : null}
+          {hasField("child_size") ? (
+            <NumberField
+              label={t("settings.chunking.params.childSize")}
+              value={form.child_size}
+              min={80}
+              max={4000}
+              disabled={saving}
+              helper={t("settings.chunking.params.childSizeHint")}
+              onChange={(value) => onChange({ child_size: value })}
+            />
+          ) : null}
+          {hasField("min_chars") ? (
+            <NumberField
+              label={t("settings.chunking.params.minChars")}
+              value={form.min_chars}
+              min={0}
+              max={2000}
+              disabled={saving}
+              helper={t("settings.chunking.params.minCharsHint")}
+              onChange={(value) => onChange({ min_chars: value })}
+            />
+          ) : null}
         </div>
         {validationError ? (
           <div className="mt-4">
@@ -343,6 +382,36 @@ function ParamsCard({
   );
 }
 
+function TextField({
+  label,
+  value,
+  disabled,
+  helper,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  disabled: boolean;
+  helper?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="space-y-1.5">
+      <span className="block text-sm font-medium text-foreground">{label}</span>
+      <input
+        type="text"
+        value={value}
+        maxLength={256}
+        aria-label={label}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+      />
+      {helper ? <span className="block text-xs text-muted">{helper}</span> : null}
+    </label>
+  );
+}
+
 function NumberField({
   label,
   value,
@@ -350,7 +419,6 @@ function NumberField({
   max,
   disabled,
   helper,
-  applicable = true,
   onChange,
 }: {
   label: string;
@@ -359,11 +427,10 @@ function NumberField({
   max: number;
   disabled: boolean;
   helper?: string;
-  applicable?: boolean;
   onChange: (value: number) => void;
 }) {
   return (
-    <label className={cn("space-y-1.5", !applicable && "opacity-60")}>
+    <label className="space-y-1.5">
       <span className="block text-sm font-medium text-foreground">{label}</span>
       <input
         type="number"
@@ -406,20 +473,86 @@ function strategyDescription(strategy: ChunkingStrategyName) {
   return t(`settings.chunking.strategy.${strategy}.description` as I18nKey);
 }
 
+function paramsDescription(strategy: ChunkingStrategyName) {
+  if (strategy === "fixed_delimiter") {
+    return t("settings.chunking.params.delimiterDescription");
+  }
+  if (strategy === "fixed_size") {
+    return t("settings.chunking.params.fixedSizeDescription");
+  }
+  return t("settings.chunking.params.description");
+}
+
+function paramLabel(field: ChunkingParamField) {
+  const keyByField: Record<ChunkingParamField, I18nKey> = {
+    chunk_size: "settings.chunking.params.chunkSize",
+    overlap: "settings.chunking.params.overlap",
+    child_size: "settings.chunking.params.childSize",
+    sentence_window_size: "settings.chunking.params.sentenceWindowSize",
+    min_chars: "settings.chunking.params.minChars",
+    delimiter: "settings.chunking.params.delimiter",
+  };
+  return t(keyByField[field]);
+}
+
+function paramValue(form: ChunkingForm, field: ChunkingParamField) {
+  return String(form[field]);
+}
+
+function paramSummary(form: ChunkingForm) {
+  return STRATEGY_PARAM_FIELDS[form.strategy]
+    .map((field) => `${paramLabel(field)}: ${paramValue(form, field)}`)
+    .join(" / ");
+}
+
 function validateForm(form: ChunkingForm): string | null {
-  if (form.overlap >= form.chunk_size) {
+  const fields = STRATEGY_PARAM_FIELDS[form.strategy];
+  const hasField = (field: ChunkingParamField) => fields.includes(field);
+  if (hasField("delimiter")) {
+    return form.delimiter.trim() ? null : t("settings.chunking.params.delimiter");
+  }
+  if (
+    hasField("chunk_size") &&
+    (!Number.isFinite(form.chunk_size) || form.chunk_size < 200 || form.chunk_size > 4000)
+  ) {
+    return t("settings.chunking.params.chunkSize");
+  }
+  if (
+    hasField("overlap") &&
+    (!Number.isFinite(form.overlap) || form.overlap < 0 || form.overlap > 1000)
+  ) {
+    return t("settings.chunking.params.overlap");
+  }
+  if (hasField("overlap") && form.overlap >= form.chunk_size) {
     return t("settings.chunking.params.overlap") + " < " + t("settings.chunking.params.chunkSize");
   }
-  if (form.child_size >= form.chunk_size) {
+  if (
+    hasField("child_size") &&
+    (!Number.isFinite(form.child_size) || form.child_size < 80 || form.child_size > 4000)
+  ) {
+    return t("settings.chunking.params.childSize");
+  }
+  if (hasField("child_size") && form.child_size >= form.chunk_size) {
     return (
       t("settings.chunking.params.childSize") + " < " + t("settings.chunking.params.chunkSize")
     );
   }
-  if (form.min_chars >= form.chunk_size) {
-    return t("settings.chunking.params.minChars") + " < " + t("settings.chunking.params.chunkSize");
+  if (
+    hasField("sentence_window_size") &&
+    (!Number.isFinite(form.sentence_window_size) ||
+      form.sentence_window_size < 1 ||
+      form.sentence_window_size > 20)
+  ) {
+    return t("settings.chunking.params.sentenceWindowSize");
   }
-  if (!Number.isFinite(form.chunk_size) || form.chunk_size < 200 || form.chunk_size > 4000) {
-    return t("settings.chunking.params.chunkSize");
+  if (
+    hasField("min_chars") &&
+    (!Number.isFinite(form.min_chars) || form.min_chars < 0 || form.min_chars > 2000)
+  ) {
+    return t("settings.chunking.params.minChars");
+  }
+  if (hasField("min_chars") && form.min_chars >= form.chunk_size) {
+    return t("settings.chunking.params.minChars") + " < " + t("settings.chunking.params.chunkSize");
   }
   return null;
 }
@@ -432,6 +565,7 @@ function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {
     child_size: settings.child_size,
     sentence_window_size: settings.sentence_window_size,
     min_chars: settings.min_chars,
+    delimiter: settings.delimiter || "\\n\\n",
   };
 }
 
@@ -443,5 +577,6 @@ function serializeForm(form: ChunkingForm) {
     child_size: form.child_size,
     sentence_window_size: form.sentence_window_size,
     min_chars: form.min_chars,
+    delimiter: form.delimiter,
   });
 }

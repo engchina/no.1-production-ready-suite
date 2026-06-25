@@ -1,9 +1,9 @@
 """pipeline ステージマイクロサービスへの HTTP 委譲クライアント。
 
-各 pipeline ステージを独立サービスとして呼ぶ。chunking は production-ready の必須ステージ
-として常に ``POST /run`` へ委譲し、未達・timeout・不正応答の場合は利用者向けエラーとして
-止める。他ステージは ``RAG_<STAGE>_SERVICE_ENABLED`` が真のときだけ委譲し、委譲後の失敗は
-in-process へ戻さず停止する。
+各 pipeline ステージを独立サービスとして呼ぶ。``RAG_<STAGE>_SERVICE_ENABLED`` が真のとき
+remote 委譲を試し、サービス未起動・未到達なら ``None`` を返して backend 側の
+``rag_pipeline_core`` 実装へ縮退する。remote が応答した後の HTTP error / 不正応答は、
+壊れたサービスを隠さないため処理停止する。
 
 確定スタックは不変。ロジックは backend と共有パッケージ ``rag_pipeline_core`` で同一。
 """
@@ -34,7 +34,6 @@ from rag_pipeline_core.stage import (
     VectorIndexStageResponse,
 )
 
-from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
 from app.rag.chunking import Chunk
 from app.services.catalog import resolve_service_base_url
@@ -72,7 +71,6 @@ class PipelineStageClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._timeout = float(getattr(settings, "rag_pipeline_stage_timeout_seconds", 120.0))
-        self._retry = retry_config_from_settings(settings)
 
     def _service_url(self, stage: str) -> str | None:
         field = _STAGE_URL_FIELDS.get(stage)
@@ -83,46 +81,58 @@ class PipelineStageClient:
 
     def is_enabled(self, stage: str) -> bool:
         """ステージが remote 委譲対象か(URL 設定 + enable フラグ)。"""
-        if stage == "chunking":
-            return self._service_url(stage) is not None
         field = _STAGE_ENABLED_FIELDS.get(stage)
         enabled = bool(getattr(self._settings, field, False)) if field else False
         return enabled and self._service_url(stage) is not None
 
-    def _post_run(
-        self, stage: str, request_json: str, *, required: bool = False
-    ) -> dict[str, object] | None:
-        """``POST /run`` を呼び JSON を返す。委譲不可なら None、失敗時は例外。"""
-        if not required and not self.is_enabled(stage):
+    def _post_run(self, stage: str, request_json: str) -> dict[str, object] | None:
+        """``POST /run`` を呼び JSON を返す。未設定・未到達なら None、壊れた応答は例外。"""
+        if not self.is_enabled(stage):
             return None
         url = self._service_url(stage)
         if url is None:
-            raise PipelineStageServiceError(stage, "unconfigured")
+            return None
         try:
             with httpx.Client(timeout=self._timeout) as client:
-                response = request_with_retry(
-                    client,
+                response = client.request(
                     "POST",
                     f"{url}/run",
-                    retry=self._retry,
-                    logger=logger,
-                    log_extra={"stage": stage, "service_url": url or ""},
                     content=request_json,
                     headers=_JSON_HEADERS,
                 )
                 response.raise_for_status()
                 payload: dict[str, object] = response.json()
                 return payload
-        except (httpx.HTTPError, ValueError) as exc:
+        except httpx.HTTPStatusError as exc:
             logger.warning(
-                "pipeline stage service call failed",
+                "pipeline stage service returned error",
                 extra={"stage": stage, "service_url": url, "error": str(exc)},
             )
-            raise PipelineStageServiceError(stage, "unreachable", service_url=url) from exc
+            raise PipelineStageServiceError(stage, "remote_error", service_url=url) from exc
+        except httpx.InvalidURL as exc:
+            logger.warning(
+                "pipeline stage service URL is invalid",
+                extra={"stage": stage, "service_url": url, "error": str(exc)},
+            )
+            raise PipelineStageServiceError(stage, "invalid_url", service_url=url) from exc
+        except httpx.RequestError as exc:
+            logger.info(
+                "pipeline stage service unavailable; falling back to in-process",
+                extra={"stage": stage, "service_url": url, "error": str(exc)},
+            )
+            return None
+        except ValueError as exc:
+            logger.warning(
+                "pipeline stage service returned invalid JSON",
+                extra={"stage": stage, "service_url": url, "error": str(exc)},
+            )
+            raise PipelineStageServiceError(stage, "invalid_response", service_url=url) from exc
 
-    def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk]:
-        """chunking ステージを必ず remote 実行する。失敗時は fallback しない。"""
-        payload = self._post_run("chunking", request.model_dump_json(), required=True)
+    def run_chunking(self, request: ChunkingStageRequest) -> list[Chunk] | None:
+        """chunking ステージを remote 実行する。未到達なら None。"""
+        payload = self._post_run("chunking", request.model_dump_json())
+        if payload is None:
+            return None
         try:
             parsed = ChunkingStageResponse.model_validate(payload)
         except ValueError as exc:
@@ -257,16 +267,22 @@ def _stage_error_message(stage: str, reason: str, *, service_url: str | None = N
     label = stage.replace("_", " ")
     service_id = f"pipeline-{stage.replace('_', '-')}"
     suffix = f" 接続先: {service_url}" if service_url else ""
+    if reason == "invalid_url":
+        return (
+            f"処理ステージ（{label}）サービスの接続先 URL が不正です。"
+            f"{service_id} の設定を確認してください。"
+            f"{suffix}"
+        )
     if reason == "invalid_response":
         return (
-            f"有効化された処理ステージ（{label}）から不正な応答を受信しました。"
-            f"別経路には切り替えずに処理を停止しました。サービス管理画面で {service_id} "
-            "のログを確認してから再実行してください。"
+            f"処理ステージ（{label}）サービスから不正な応答を受信しました。"
+            f"壊れた応答は fallback せずに停止しました。サービス管理画面で {service_id} "
+            "のログを確認してください。"
             f"{suffix}"
         )
     return (
-        f"有効化された処理ステージ（{label}）サービスに接続できないか、処理に失敗しました。"
-        f"別経路には切り替えずに処理を停止しました。サービス管理画面で {service_id} "
-        "の状態とログを確認してから再実行してください。"
+        f"処理ステージ（{label}）サービスがエラーを返しました。"
+        f"応答済みサービスの失敗は fallback せずに停止しました。サービス管理画面で {service_id} "
+        "の状態とログを確認してください。"
         f"{suffix}"
     )

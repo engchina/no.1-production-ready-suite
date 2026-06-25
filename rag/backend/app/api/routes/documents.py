@@ -303,12 +303,6 @@ async def _store_uploaded_document(
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if duplicate is not None:
-        await _assign_duplicate_canonical_to_knowledge_bases(
-            oracle=oracle,
-            canonical_document_id=duplicate.id,
-            knowledge_base_ids=[knowledge_base.id for knowledge_base in detail.knowledge_bases],
-        )
     return UploadResult(
         id=detail.id,
         file_name=detail.file_name,
@@ -319,28 +313,6 @@ async def _store_uploaded_document(
         knowledge_bases=detail.knowledge_bases,
         source_profile=source_profile,
     )
-
-
-async def _assign_duplicate_canonical_to_knowledge_bases(
-    *,
-    oracle: OracleClient,
-    canonical_document_id: str,
-    knowledge_base_ids: list[str],
-) -> None:
-    """重複 upload 時、検索対象の canonical document を選択 KB に追加する。"""
-    for knowledge_base_id in knowledge_base_ids:
-        try:
-            await oracle.assign_documents_to_knowledge_base(
-                knowledge_base_id,
-                [canonical_document_id],
-            )
-        except KeyError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail="重複元ドキュメントまたはナレッジベースが見つかりません。",
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("", response_model=ApiResponse[Page[DocumentSummary]])
@@ -771,6 +743,7 @@ def _parser_backend_drifted(observed_parser: str, effective_backend: str) -> boo
         "docling": {"docling", "docling_adapter"},
         "marker": {"marker", "marker_adapter"},
         "unstructured": {"unstructured", "unstructured_adapter"},
+        "unlimited_ocr": {"unlimited_ocr", "unlimited_ocr_adapter"},
         "mineru": {"mineru", "mineru_adapter"},
         "dots_ocr": {"dots_ocr", "dots_ocr_adapter"},
         "glm_ocr": {"glm_ocr", "glm_ocr_adapter"},
@@ -1867,6 +1840,9 @@ def _extraction_recipe_subset(settings: Settings) -> dict[str, object]:
         "parser_marker_enabled": bool(getattr(settings, "rag_parser_marker_enabled", False)),
         "parser_unstructured_enabled": bool(
             getattr(settings, "rag_parser_unstructured_enabled", False)
+        ),
+        "parser_unlimited_ocr_enabled": bool(
+            getattr(settings, "rag_parser_unlimited_ocr_enabled", False)
         ),
         "parser_mineru_enabled": bool(getattr(settings, "rag_parser_mineru_enabled", False)),
         "parser_dots_ocr_enabled": bool(getattr(settings, "rag_parser_dots_ocr_enabled", False)),

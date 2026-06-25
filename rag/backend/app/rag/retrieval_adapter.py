@@ -3,7 +3,8 @@
 strategy→検索挙動の静的解決は共有パッケージ ``rag_pipeline_core.retrieval`` を単一ソースとして
 使い、backend と retrieval マイクロサービスが同一結果を返す。`rag_retrieval_service_enabled` が
 真のとき静的解決を pipeline-retrieval サービスへ委譲する。無効時は in-process(同一ロジック)、
-有効時の未達/失敗は処理停止。mode/strategy は wire 中立の文字列で受け渡し backend で
+サービス未起動・未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は
+処理停止。mode/strategy は wire 中立の文字列で受け渡し backend で
 SearchMode/SearchStrategy へ写す。実 retrieval は Oracle 26ai 経路を backend が実行する。
 外部検索エンジンは導入しない。
 """
@@ -84,7 +85,7 @@ def resolve_retrieval_adapter(settings: Settings) -> RetrievalAdapterParams:
     """Settings から Retrieval アダプターの解決済みパラメータを作る。
 
     `rag_retrieval_service_enabled` のときは pipeline-retrieval サービスへ委譲する。
-    無効時は in-process(同一 rag_pipeline_core ロジック)、有効時の未達/失敗は停止する。
+    無効時と remote 未到達時は in-process(同一 rag_pipeline_core ロジック)へ縮退する。
     """
     strategy = normalize_retrieval_strategy(
         getattr(settings, "rag_retrieval_strategy", DEFAULT_RETRIEVAL_STRATEGY)

@@ -3,7 +3,8 @@
 policy→groundedness 厳格度 + audit_emphasis の静的解決は共有パッケージ
 ``rag_pipeline_core.guardrail`` を単一ソースとして使い、backend と guardrail マイクロサービスが
 同一結果を返す。`rag_guardrail_service_enabled` が真のとき静的解決を pipeline-guardrail サービスへ
-委譲する。無効時は in-process(同一ロジック)、有効時の未達/失敗は処理停止する。
+委譲する。無効時と remote 未到達時は in-process(同一ロジック)へ縮退する。応答済み remote の
+HTTP error / 不正応答は処理停止する。
 block_prompt_injection / PII マスク / max_query_chars は backend 設定由来のため解決後に
 上乗せする。OCI Generative AI Guardrails backend(app.clients.oci_guardrails)は別レイヤーで共存。
 外部安全 SaaS は導入しない。

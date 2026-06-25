@@ -2059,6 +2059,10 @@ def _parser_adapter_settings_candidate(
                 payload.unstructured_enabled,
                 base.rag_parser_unstructured_enabled,
             ),
+            "rag_parser_unlimited_ocr_enabled": _optional_bool(
+                payload.unlimited_ocr_enabled,
+                base.rag_parser_unlimited_ocr_enabled,
+            ),
             "rag_parser_mineru_enabled": _optional_bool(
                 payload.mineru_enabled,
                 base.rag_parser_mineru_enabled,
@@ -2081,6 +2085,7 @@ def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
     target.rag_parser_docling_enabled = source.rag_parser_docling_enabled
     target.rag_parser_marker_enabled = source.rag_parser_marker_enabled
     target.rag_parser_unstructured_enabled = source.rag_parser_unstructured_enabled
+    target.rag_parser_unlimited_ocr_enabled = source.rag_parser_unlimited_ocr_enabled
     target.rag_parser_mineru_enabled = source.rag_parser_mineru_enabled
     target.rag_parser_dots_ocr_enabled = source.rag_parser_dots_ocr_enabled
     target.rag_parser_glm_ocr_enabled = source.rag_parser_glm_ocr_enabled
@@ -2494,6 +2499,7 @@ def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
         child_size=runtime.child_size,
         sentence_window_size=runtime.sentence_window_size,
         min_chars=runtime.min_chars,
+        delimiter=runtime.delimiter,
         strategies=[
             ChunkingStrategyStatusData(
                 name=status.name,
@@ -2522,6 +2528,7 @@ def _chunking_settings_candidate(
             "rag_chunk_child_size": payload.child_size,
             "rag_chunk_sentence_window_size": payload.sentence_window_size,
             "rag_chunk_min_chars": payload.min_chars,
+            "rag_chunk_delimiter": payload.delimiter,
         }
     )
 
@@ -2534,6 +2541,7 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
     target.rag_chunk_child_size = source.rag_chunk_child_size
     target.rag_chunk_sentence_window_size = source.rag_chunk_sentence_window_size
     target.rag_chunk_min_chars = source.rag_chunk_min_chars
+    target.rag_chunk_delimiter = source.rag_chunk_delimiter
 
 
 def _persist_chunking_settings(settings: Settings) -> None:
@@ -2547,6 +2555,7 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNK_CHILD_SIZE": str(settings.rag_chunk_child_size),
             "RAG_CHUNK_SENTENCE_WINDOW_SIZE": str(settings.rag_chunk_sentence_window_size),
             "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
+            "RAG_CHUNK_DELIMITER": settings.rag_chunk_delimiter,
         },
         section_comment="# Chunking アダプター",
         error_detail="文書分割設定を backend/.env へ保存できませんでした。",
@@ -2563,6 +2572,9 @@ def _persist_parser_adapter_settings(settings: Settings) -> None:
             "RAG_PARSER_MARKER_ENABLED": _format_env_bool(settings.rag_parser_marker_enabled),
             "RAG_PARSER_UNSTRUCTURED_ENABLED": _format_env_bool(
                 settings.rag_parser_unstructured_enabled
+            ),
+            "RAG_PARSER_UNLIMITED_OCR_ENABLED": _format_env_bool(
+                settings.rag_parser_unlimited_ocr_enabled
             ),
             "RAG_PARSER_MINERU_ENABLED": _format_env_bool(settings.rag_parser_mineru_enabled),
             "RAG_PARSER_DOTS_OCR_ENABLED": _format_env_bool(settings.rag_parser_dots_ocr_enabled),

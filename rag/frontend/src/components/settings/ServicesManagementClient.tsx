@@ -43,11 +43,26 @@ import {
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
-type DisplayRuntimeStatus = ServiceRuntimeStatus | "loading" | "error";
+export type DisplayRuntimeStatus = ServiceRuntimeStatus | "loading" | "error";
 type DisplayServiceData = ServiceCatalogItemData & {
   status: DisplayRuntimeStatus;
   blocked_by: string[];
   statusReady: boolean;
+};
+
+const PROFILE_META: Record<ServiceProfile, { className: string; labelKey: I18nKey }> = {
+  cpu: { className: "bg-slate-100 text-slate-600", labelKey: "settings.services.profile.cpu" },
+  gpu: { className: "bg-violet-100 text-violet-700", labelKey: "settings.services.profile.gpu" },
+  oci: { className: "bg-sky-100 text-sky-700", labelKey: "settings.services.profile.oci" },
+};
+export const SERVICE_PROFILE_ORDER: ServiceProfile[] = ["cpu", "gpu", "oci"];
+const PROFILE_GROUP_META: Record<
+  ServiceProfile,
+  { suffixKey: I18nKey; noteKey: I18nKey | null }
+> = {
+  cpu: { suffixKey: "settings.services.cpuSuffix", noteKey: null },
+  gpu: { suffixKey: "settings.services.gpuSuffix", noteKey: "settings.services.gpuNote" },
+  oci: { suffixKey: "settings.services.ociSuffix", noteKey: "settings.services.ociNote" },
 };
 
 export function serviceExecutionPolicyLabelKey(policy: ServiceExecutionPolicy): I18nKey {
@@ -147,15 +162,10 @@ export function ServicesManagementClient() {
     { category: "agentic", labelKey: "settings.services.stage.agentic" },
   ];
   // プロファイル表示順と suffix/note。GPU/OCI は単独でも opt-in/要件を note で明示する。
-  const PROFILE_ORDER: {
-    profile: ServiceProfile;
-    suffixKey: I18nKey;
-    noteKey: I18nKey | null;
-  }[] = [
-    { profile: "cpu", suffixKey: "settings.services.cpuSuffix", noteKey: null },
-    { profile: "gpu", suffixKey: "settings.services.gpuSuffix", noteKey: "settings.services.gpuNote" },
-    { profile: "oci", suffixKey: "settings.services.ociSuffix", noteKey: "settings.services.ociNote" },
-  ];
+  const PROFILE_ORDER = SERVICE_PROFILE_ORDER.map((profile) => ({
+    profile,
+    ...PROFILE_GROUP_META[profile],
+  }));
   const stageGroups = PIPELINE_STAGE_ORDER.map(({ category, labelKey }) => {
     const label = t(labelKey);
     const groups = PROFILE_ORDER.map((p) => ({
@@ -665,6 +675,20 @@ function ControlBadge({ enabled }: { enabled: boolean }) {
   );
 }
 
+export function ServiceProfileBadge({ profile }: { profile: ServiceProfile }) {
+  const meta = PROFILE_META[profile];
+  return (
+    <span
+      className={cn(
+        "inline-flex rounded-sm px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap",
+        meta.className
+      )}
+    >
+      {t(meta.labelKey)}
+    </span>
+  );
+}
+
 const STATUS_META: Record<
   DisplayRuntimeStatus,
   { className: string; icon: LucideIcon; spin?: boolean }
@@ -679,7 +703,7 @@ const STATUS_META: Record<
 };
 
 /** 稼働状態バッジ(色だけに頼らずアイコン+日本語ラベル併記)。 */
-function ServiceStatusBadge({ status }: { status: DisplayRuntimeStatus }) {
+export function ServiceStatusBadge({ status }: { status: DisplayRuntimeStatus }) {
   const meta = STATUS_META[status];
   const Icon = meta.icon;
   return (

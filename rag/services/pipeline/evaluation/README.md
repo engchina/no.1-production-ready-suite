@@ -14,5 +14,7 @@ focus metrics へ解決するステージマイクロサービス。解決ロジ
 - `POST /run`(`EvaluationStageRequest{suite}` → `EvaluationStageResponse{thresholds, focus_metrics}`)。
 - `GET /health` → `StageHealth`。
 
-backend は `RAG_EVALUATION_SERVICE_ENABLED` 真かつ URL 設定時に suite→閾値解決を委譲し、未達/失敗時は
-in-process(同一ロジック)へ安全縮退する。閾値 dict は backend で `EvaluationThresholds` へ写す。
+backend は `RAG_EVALUATION_SERVICE_ENABLED` 真かつ URL 設定時に suite→閾値解決を委譲し、
+サービス未起動・未到達時は in-process(同一ロジック)へ安全縮退する。閾値 dict は backend で
+`EvaluationThresholds` へ写す。remote が応答した後の HTTP error / 不正応答は壊れたサービスとして
+停止する。

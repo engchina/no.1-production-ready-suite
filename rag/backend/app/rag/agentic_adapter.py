@@ -3,7 +3,8 @@
 profile→クエリ計画の挙動フラグの静的解決は共有パッケージ ``rag_pipeline_core.agentic`` を単一
 ソースとして使い、backend と agentic マイクロサービスが同一結果を返す。
 `rag_agentic_service_enabled` が真のとき静的解決を pipeline-agentic サービスへ委譲する。無効時は
-in-process(同一ロジック)、有効時の未達/失敗は処理停止する。max_subqueries は backend
+in-process(同一ロジック)、remote 未到達時も in-process へ縮退する。応答済み remote の
+HTTP error / 不正応答は処理停止する。max_subqueries は backend
 設定由来のため解決後に上乗せ。off 以外は OCI Enterprise AI への追加呼び出しを伴う opt-in。
 外部 LLM provider は導入しない。
 """

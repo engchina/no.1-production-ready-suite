@@ -17,5 +17,6 @@ backend が担う。
   surface(挙動の本実装は backend 側で段階導入)。
 - `GET /health` → `StageHealth`。
 
-backend は `RAG_GROUNDING_SERVICE_ENABLED` 真かつ URL 設定時に preset 解決を委譲し、未達/失敗時は
-in-process(同一ロジック)へ安全縮退する(custom は常に backend の legacy 設定)。
+backend は `RAG_GROUNDING_SERVICE_ENABLED` 真かつ URL 設定時に preset 解決を委譲し、
+サービス未起動・未到達時は in-process(同一ロジック)へ安全縮退する(custom は常に backend の
+legacy 設定)。remote が応答した後の HTTP error / 不正応答は壊れたサービスとして停止する。

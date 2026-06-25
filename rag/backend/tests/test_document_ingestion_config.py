@@ -127,6 +127,7 @@ def test_ingestion_config_reports_no_drift_when_matching(
         ("docling", "docling_adapter"),
         ("marker", "marker_adapter"),
         ("unstructured", "unstructured_adapter"),
+        ("unlimited_ocr", "unlimited_ocr_adapter"),
         ("mineru", "mineru_adapter"),
         ("dots_ocr", "dots_ocr_adapter"),
         ("glm_ocr", "glm_ocr_adapter"),

@@ -18,46 +18,21 @@ def _request() -> ChunkingStageRequest:
     return ChunkingStageRequest(extraction=StructuredExtraction(raw_text="本文。" * 10))
 
 
-def test_chunking_ignores_legacy_enabled_flag(monkeypatch: MonkeyPatch) -> None:
-    response_payload = ChunkingStageResponse(
-        chunks=[ChunkModel(text="remote", index=0, start_offset=0, end_offset=6, metadata={})]
-    ).model_dump()
-
-    class _FakeResponse:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return response_payload
-
-    class _FakeClient:
+def test_chunking_disabled_returns_none(monkeypatch: MonkeyPatch) -> None:
+    class _UnexpectedClient:
         def __init__(self, *a: Any, **k: Any) -> None:
-            pass
+            raise AssertionError("disabled chunking service must not be called")
 
-        def __enter__(self) -> _FakeClient:
-            return self
-
-        def __exit__(self, *a: Any) -> None:
-            return None
-
-        def request(self, method: str, *a: Any, **k: Any) -> _FakeResponse:
-            assert method == "POST"
-            return _FakeResponse()
-
-    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    monkeypatch.setattr(httpx, "Client", _UnexpectedClient)
     client = PipelineStageClient(
         Settings(rag_chunking_service_enabled=False, rag_chunking_service_url="http://svc:8000")
     )
-    assert client.run_chunking(_request())[0].text == "remote"
+    assert client.run_chunking(_request()) is None
 
 
-def test_chunking_without_url_raises() -> None:
+def test_chunking_without_url_returns_none() -> None:
     client = PipelineStageClient(Settings(rag_chunking_service_url=""))
-    with pytest.raises(PipelineStageServiceError) as exc:
-        client.run_chunking(_request())
-    assert exc.value.error_code == "chunking_service_unavailable"
+    assert client.run_chunking(_request()) is None
 
 
 def test_remote_success_returns_chunks(monkeypatch: MonkeyPatch) -> None:
@@ -101,7 +76,7 @@ def test_remote_success_returns_chunks(monkeypatch: MonkeyPatch) -> None:
     assert chunks[0].metadata["k"] == "v"
 
 
-def test_remote_failure_raises_when_enabled(monkeypatch: MonkeyPatch) -> None:
+def test_remote_connection_failure_returns_none(monkeypatch: MonkeyPatch) -> None:
     class _BoomClient:
         def __init__(self, *a: Any, **k: Any) -> None:
             pass
@@ -123,8 +98,18 @@ def test_remote_failure_raises_when_enabled(monkeypatch: MonkeyPatch) -> None:
     client = PipelineStageClient(
         Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
     )
-    with pytest.raises(PipelineStageServiceError, match="chunking"):
+    assert client.run_chunking(_request()) is None
+
+
+def test_remote_invalid_payload_raises_when_service_responds(monkeypatch: MonkeyPatch) -> None:
+    _fake_post(monkeypatch, {"chunks": [{"text": "missing indexes"}]})
+
+    client = PipelineStageClient(
+        Settings(rag_chunking_service_enabled=True, rag_chunking_service_url="http://svc:8000")
+    )
+    with pytest.raises(PipelineStageServiceError) as exc:
         client.run_chunking(_request())
+    assert exc.value.error_code == "chunking_service_unavailable"
 
 
 # --- vector_index / graphrag 委譲 -------------------------------------------
@@ -229,7 +214,39 @@ def test_vector_index_adapter_falls_back_when_disabled() -> None:
     from app.rag.vector_index_adapter import resolve_vector_index_adapter
 
     # 既定(service 無効)は in-process 解決(現行挙動)。
-    params = resolve_vector_index_adapter(Settings(rag_vector_index_profile="accurate"))
+    params = resolve_vector_index_adapter(
+        Settings(rag_vector_index_profile="accurate", rag_vector_index_service_enabled=False)
+    )
+    assert params.profile == "accurate" and params.target_accuracy == 98
+
+
+def test_vector_index_adapter_falls_back_when_service_unreachable(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
+    class _BoomClient:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            pass
+
+        def __enter__(self) -> _BoomClient:
+            return self
+
+        def __exit__(self, *a: Any) -> None:
+            return None
+
+        def request(self, method: str, *a: Any, **k: Any) -> Any:
+            assert method == "POST"
+            raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "Client", _BoomClient)
+    params = resolve_vector_index_adapter(
+        Settings(
+            rag_vector_index_profile="accurate",
+            rag_vector_index_service_enabled=True,
+            rag_vector_index_service_url="http://svc",
+        )
+    )
     assert params.profile == "accurate" and params.target_accuracy == 98
 
 

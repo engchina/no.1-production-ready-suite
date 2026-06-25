@@ -404,6 +404,9 @@ class UvProcessDriver:
         # backend の OCI 設定を env で渡し、UI/.env で設定した値を子プロセスへ届ける
         # (API キー等は OCI サービスにのみ渡す)。
         child_env = os.environ.copy()
+        # uv run --directory 先の project .venv を使わせる。backend の active venv は継承しない。
+        child_env.pop("VIRTUAL_ENV", None)
+        child_env.pop("VIRTUAL_ENV_PROMPT", None)
         if entry.profile == "oci":
             child_env.update(oci_service_env(settings))
         try:

@@ -61,6 +61,11 @@ def oci_service_env(settings: Settings) -> dict[str, str]:
             settings.oci_document_understanding_compartment_id
         ),
         "OCI_DOCUMENT_UNDERSTANDING_NAMESPACE": str(settings.oci_document_understanding_namespace),
+        "OCI_DOCUMENT_UNDERSTANDING_OBJECT_STORAGE_REGION": str(
+            settings.oci_document_understanding_object_storage_region
+            or settings.oci_region
+            or settings.object_storage_region
+        ),
         "OCI_DOCUMENT_UNDERSTANDING_INPUT_BUCKET": str(
             settings.oci_document_understanding_input_bucket
         ),

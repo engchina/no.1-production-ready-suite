@@ -10,9 +10,16 @@ ENV PYTHONUNBUFFERED=1 \
 # uv をインストール
 COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libaio1t64 \
+    && ln -s /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # 共有 contract package を repo 相対レイアウトで配置し、
-# backend pyproject の path source(../packages/rag_parser_core)を解決可能にする。
+# backend pyproject の path source を解決可能にする。
 COPY packages/rag_parser_core /build/packages/rag_parser_core
+COPY packages/rag_pipeline_core /build/packages/rag_pipeline_core
+COPY --from=backend_core . /no.1-production-ready-platform/packages/backend_core
 WORKDIR /build/backend
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project \

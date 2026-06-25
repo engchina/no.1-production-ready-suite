@@ -3,7 +3,8 @@
 preset→検索後処理段フラグの静的解決は共有パッケージ ``rag_pipeline_core.grounding`` を単一ソース
 として使い、backend と grounding マイクロサービスが同一結果を返す。`rag_grounding_service_enabled`
 が真のとき preset 解決を pipeline-grounding サービスへ委譲する。無効時は in-process(同一
-ロジック)、有効時の未達/失敗は処理停止する。`custom` は backend の legacy `rag_context_*`
+ロジック)、remote 未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は
+処理停止する。`custom` は backend の legacy `rag_context_*`
 設定をそのまま使う(後方互換)。CRAG 的 corrective(confidence-based)は
 verified_context/full_governed で surface する。
 """

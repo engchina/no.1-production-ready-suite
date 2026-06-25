@@ -8,7 +8,7 @@
 # 使い方:
 #   scripts/build-services.sh                  # 既定: 全サービスをビルド(CPU + GPU + 前処理)
 #   scripts/build-services.sh --cpu            # CPU parser のみ(docling/marker/unstructured)
-#   scripts/build-services.sh --gpu            # GPU parser のみ(mineru/dots-ocr/glm-ocr。GPU は実行時に必要)
+#   scripts/build-services.sh --gpu            # GPU parser のみ(unlimited-ocr/mineru/dots-ocr/glm-ocr。GPU は実行時に必要)
 #   scripts/build-services.sh --preprocess     # 前処理サービスのみ
 #   scripts/build-services.sh --cpu --preprocess  # 選択したグループのみ(組み合わせ可)
 #   scripts/build-services.sh parser-docling   # サービス名を直接指定(GPU 名は自動で --profile gpu)
@@ -21,7 +21,7 @@ cd "${ROOT_DIR}"
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.dev.yml)
 CPU_PARSERS=(parser-docling parser-marker parser-unstructured)
-GPU_PARSERS=(parser-mineru parser-dots-ocr parser-glm-ocr)
+GPU_PARSERS=(parser-unlimited-ocr parser-mineru parser-dots-ocr parser-glm-ocr)
 PREPROCESS=(
   preprocess-office-to-pdf
   preprocess-pdf-to-page-images
@@ -84,7 +84,7 @@ fi
 profile_args=()
 for t in "${targets[@]}"; do
   case "${t}" in
-    parser-mineru|parser-dots-ocr|parser-glm-ocr) profile_args=(--profile gpu) ;;
+    parser-unlimited-ocr|parser-mineru|parser-dots-ocr|parser-glm-ocr) profile_args=(--profile gpu) ;;
   esac
 done
 

@@ -1,6 +1,6 @@
 """parser マイクロサービスを呼ぶ HTTP クライアント。
 
-backend は外部 adapter(docling/marker/unstructured/mineru/dots_ocr)を同一プロセスで
+backend は外部 adapter(docling/marker/unstructured/unlimited_ocr/mineru/dots_ocr)を同一プロセスで
 import せず、各 parser サービスへ HTTP で委譲する。サービスは `StructuredExtraction` を
 返すため remap 忠実度を維持できる。接続失敗・timeout・retry 後の 5xx 時は通常 warning
 付き fallback(`extraction=None`)を返す。ユーザーが明示選択した backend は fail-fast にし、
@@ -30,6 +30,7 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
     "marker": "rag_parser_marker_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
+    "unlimited_ocr": "rag_parser_unlimited_ocr_service_url",
     "mineru": "rag_parser_mineru_service_url",
     "dots_ocr": "rag_parser_dots_ocr_service_url",
     "glm_ocr": "rag_parser_glm_ocr_service_url",
@@ -44,6 +45,7 @@ _SERVICE_LABELS: dict[str, str] = {
     "docling": "Docling",
     "marker": "Marker",
     "unstructured": "Unstructured",
+    "unlimited_ocr": "Unlimited-OCR",
     "mineru": "MinerU",
     "dots_ocr": "Dots.OCR",
     "glm_ocr": "GLM-OCR",

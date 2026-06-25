@@ -23,6 +23,7 @@ CHUNKING_STRATEGY_ORDER: tuple[ChunkingStrategyName, ...] = (
     "markdown_heading",
     "page_level",
     "fixed_size",
+    "fixed_delimiter",
 )
 
 
@@ -75,6 +76,11 @@ CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
         origin="ragflow_general_fixed",
         recommended_for=("text", "generic"),
     ),
+    "fixed_delimiter": ChunkingStrategySpec(
+        name="fixed_delimiter",
+        origin="fixed_delimiter_split",
+        recommended_for=("text", "custom_separator"),
+    ),
 }
 
 
@@ -88,6 +94,7 @@ class ChunkingStrategyParams:
     child_size: int
     sentence_window_size: int
     min_chars: int
+    delimiter: str
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,7 @@ class ChunkingRuntimeSettings:
     child_size: int
     sentence_window_size: int
     min_chars: int
+    delimiter: str
     strategies: tuple[ChunkingStrategyStatus, ...]
 
 
@@ -134,6 +142,7 @@ def resolve_chunking_params(settings: Settings) -> ChunkingStrategyParams:
         child_size=int(getattr(settings, "rag_chunk_child_size", 320)),
         sentence_window_size=int(getattr(settings, "rag_chunk_sentence_window_size", 3)),
         min_chars=int(getattr(settings, "rag_chunk_min_chars", 0)),
+        delimiter=str(getattr(settings, "rag_chunk_delimiter", "\\n\\n")).strip(),
     )
 
 
@@ -158,5 +167,6 @@ def chunking_runtime_settings(settings: Settings) -> ChunkingRuntimeSettings:
         child_size=params.child_size,
         sentence_window_size=params.sentence_window_size,
         min_chars=params.min_chars,
+        delimiter=params.delimiter,
         strategies=statuses,
     )

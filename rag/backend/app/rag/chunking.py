@@ -12,6 +12,7 @@ from rag_pipeline_core.chunking import (
     chunk_extraction,
     chunk_extraction_with_strategy,
     chunk_text,
+    decode_fixed_delimiter,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "chunk_extraction",
     "chunk_extraction_with_strategy",
     "chunk_text",
+    "decode_fixed_delimiter",
 ]

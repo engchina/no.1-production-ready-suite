@@ -23,12 +23,21 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
     "marker": "rag_parser_marker_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
+    "unlimited_ocr": "rag_parser_unlimited_ocr_service_url",
     "mineru": "rag_parser_mineru_service_url",
     "dots_ocr": "rag_parser_dots_ocr_service_url",
     "glm_ocr": "rag_parser_glm_ocr_service_url",
 }
 
-ParserAdapterName = Literal["docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"]
+ParserAdapterName = Literal[
+    "docling",
+    "marker",
+    "unstructured",
+    "unlimited_ocr",
+    "mineru",
+    "dots_ocr",
+    "glm_ocr",
+]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 
 
@@ -57,6 +66,13 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
         distribution_names=("unstructured",),
         install_package="unstructured[all-docs]==0.23.1",
     ),
+    # Unlimited-OCR は専用 pip package が無く、GPU サービス image で transformers から
+    # HF モデルをロードして実 OCR する。import 検出は実行時 transformers の有無で代理する。
+    "unlimited_ocr": ParserAdapterPackageSpec(
+        import_name="transformers",
+        distribution_names=("transformers",),
+        install_package="transformers (baidu/Unlimited-OCR via HuggingFace)",
+    ),
     # PoweRAG 由来の OCR/解析エンジン。未導入時は missing として安全に fallback する。
     "mineru": ParserAdapterPackageSpec(
         import_name="mineru",
@@ -81,6 +97,7 @@ ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
     "docling",
     "marker",
     "unstructured",
+    "unlimited_ocr",
     "mineru",
     "dots_ocr",
     "glm_ocr",
@@ -90,6 +107,7 @@ ADAPTER_BACKENDS: tuple[ParserAdapterBackend, ...] = (
     "docling",
     "marker",
     "unstructured",
+    "unlimited_ocr",
     "mineru",
     "dots_ocr",
     "glm_ocr",

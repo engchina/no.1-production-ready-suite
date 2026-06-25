@@ -34,7 +34,7 @@ from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import Settings, enterprise_ai_vision_model_id, get_settings
 from app.rag.asset_summary import summarize_assets
 from app.rag.audit import record_rag_ingestion_audit
-from app.rag.chunking import Chunk
+from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import resolve_chunking_params
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
@@ -213,6 +213,7 @@ class IngestionPipeline:
             "docling",
             "marker",
             "unstructured",
+            "unlimited_ocr",
             "mineru",
             "dots_ocr",
             "glm_ocr",
@@ -324,6 +325,11 @@ class IngestionPipeline:
                         unstructured_enabled=getattr(
                             self._settings,
                             "rag_parser_unstructured_enabled",
+                            False,
+                        ),
+                        unlimited_ocr_enabled=getattr(
+                            self._settings,
+                            "rag_parser_unlimited_ocr_enabled",
                             False,
                         ),
                         mineru_enabled=getattr(
@@ -867,8 +873,21 @@ class IngestionPipeline:
                 child_size=chunking_params.child_size,
                 sentence_window_size=chunking_params.sentence_window_size,
                 min_chars=chunking_params.min_chars,
+                delimiter=chunking_params.delimiter,
             )
-            return self._pipeline_stage.run_chunking(request)
+            remote_chunks = self._pipeline_stage.run_chunking(request)
+            if remote_chunks is not None:
+                return remote_chunks
+            return chunk_extraction_with_strategy(
+                extraction,
+                strategy=chunking_params.strategy,
+                chunk_size=chunking_params.chunk_size,
+                overlap=chunking_params.overlap,
+                child_size=chunking_params.child_size,
+                sentence_window_size=chunking_params.sentence_window_size,
+                min_chars=chunking_params.min_chars,
+                delimiter=chunking_params.delimiter,
+            )
 
         chunks = await _observe_cpu_ingestion_stage(
             trace_id,
@@ -2482,6 +2501,7 @@ def _parser_backend_label(backend: str) -> str:
         "docling": "Docling",
         "marker": "Marker",
         "unstructured": "Unstructured",
+        "unlimited_ocr": "Unlimited-OCR",
         "mineru": "MinerU",
         "dots_ocr": "Dots.OCR",
         "glm_ocr": "GLM-OCR",
@@ -2552,7 +2572,15 @@ def _uses_external_adapter_extraction(parser_result: ParserRegistryResult) -> bo
 
 
 def _is_external_adapter_backend(parser_backend: str) -> bool:
-    return parser_backend in {"docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"}
+    return parser_backend in {
+        "docling",
+        "marker",
+        "unstructured",
+        "unlimited_ocr",
+        "mineru",
+        "dots_ocr",
+        "glm_ocr",
+    }
 
 
 def _service_parser_backend(parser_backend: str) -> str | None:

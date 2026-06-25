@@ -37,6 +37,7 @@ _EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
     "rag_parser_docling_enabled",
     "rag_parser_marker_enabled",
     "rag_parser_unstructured_enabled",
+    "rag_parser_unlimited_ocr_enabled",
     "rag_parser_mineru_enabled",
     "rag_parser_dots_ocr_enabled",
     "rag_parser_glm_ocr_enabled",
@@ -52,6 +53,7 @@ _CHUNK_SET_FIELDS: tuple[str, ...] = (
     "rag_chunk_child_size",
     "rag_chunk_sentence_window_size",
     "rag_chunk_min_chars",
+    "rag_chunk_delimiter",
 )
 
 # 各派生層が「追加で」依存する軸(chunk_set_id に重ねて hash する)。

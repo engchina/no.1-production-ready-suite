@@ -13,5 +13,6 @@ target accuracy + HNSW 推奨ビルド値へ解決するステージマイクロ
 - `POST /run`(`VectorIndexStageRequest{profile, settings_target_accuracy}` → `VectorIndexStageResponse`)。
 - `GET /health` → `StageHealth`。
 
-backend は `RAG_VECTOR_INDEX_SERVICE_ENABLED` 真かつ URL 設定時に委譲し、未達/失敗時は in-process
-(同一ロジック)へ安全縮退する。
+backend は `RAG_VECTOR_INDEX_SERVICE_ENABLED` 真かつ URL 設定時に委譲し、サービス未起動・
+未到達時は in-process(同一ロジック)へ安全縮退する。remote が応答した後の HTTP error /
+不正応答は壊れたサービスとして停止する。

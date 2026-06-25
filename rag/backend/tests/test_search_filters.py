@@ -110,6 +110,15 @@ def test_retrieval_where_adds_serving_chunk_set_filter_for_kb_scope() -> None:
     assert any(name.startswith("filter_knowledge_base_id") for name in binds)
 
 
+def test_retrieval_where_allows_duplicate_kb_membership_to_reuse_canonical_chunks() -> None:
+    """KB 所属が duplicate 側だけでも canonical chunk を検索対象にできる。"""
+    sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
+    assert "dkb.document_id = d.document_id" in sql
+    assert "FROM rag_documents duplicate_d" in sql
+    assert "duplicate_d.document_id = dkb.document_id" in sql
+    assert "duplicate_d.duplicate_of_document_id = d.document_id" in sql
+
+
 def test_retrieval_where_omits_chunk_set_filter_without_kb_scope() -> None:
     """KB 未指定のグローバル検索では chunk_set フィルタを足さない(現行挙動と同一)。"""
     sql, _ = _oracle_retrieval_where({})

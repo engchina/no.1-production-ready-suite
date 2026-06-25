@@ -3,7 +3,8 @@
 profile→system prompt 変種の静的解決は共有パッケージ ``rag_pipeline_core.generation`` を単一
 ソースとして使い、backend と generation マイクロサービスが同一結果を返す。
 `rag_generation_service_enabled` が真のとき静的解決を pipeline-generation サービスへ委譲し、
-無効時は in-process(同一ロジック)、有効時の未達/失敗は処理停止する。custom(prompt version store)と
+無効時と remote 未到達時は in-process(同一ロジック)へ縮退する。応答済み remote の HTTP error /
+不正応答は処理停止する。custom(prompt version store)と
 業務ビュー persona override は backend 固有のため解決後に上乗せする。外部 provider なし。
 """
 

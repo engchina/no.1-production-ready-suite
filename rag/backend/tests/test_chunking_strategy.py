@@ -1,5 +1,8 @@
 """Chunking アダプター(分割戦略)のテスト。"""
 
+from pytest import MonkeyPatch
+from rag_pipeline_core import chunking as core_chunking
+
 from app.config import Settings
 from app.rag.chunking import CHUNKING_STRATEGIES, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import (
@@ -160,6 +163,41 @@ def test_min_chars_absorbs_small_chunks() -> None:
     assert all(chunk.metadata["text_chars"] == len(chunk.text) for chunk in with_absorb)
 
 
+def test_fixed_size_ignores_min_chars(monkeypatch: MonkeyPatch) -> None:
+    """fixed_size は chunk_size / overlap だけで決まり、min_chars 吸収を通さない。"""
+
+    def fake_fixed_size(*_: object, **__: object) -> list[core_chunking.Chunk]:
+        return [
+            core_chunking.Chunk(
+                text="十分な長さの固定長 chunk",
+                index=0,
+                start_offset=0,
+                end_offset=12,
+                metadata={"chunk_group_id": "g", "content_kind": "text"},
+            ),
+            core_chunking.Chunk(
+                text="短い",
+                index=1,
+                start_offset=13,
+                end_offset=15,
+                metadata={"chunk_group_id": "g", "content_kind": "text"},
+            ),
+        ]
+
+    monkeypatch.setattr(core_chunking, "_chunk_fixed_size", fake_fixed_size)
+
+    chunks = core_chunking.chunk_extraction_with_strategy(
+        _sample_extraction(),
+        strategy="fixed_size",
+        chunk_size=400,
+        overlap=0,
+        min_chars=200,
+    )
+
+    assert [chunk.text for chunk in chunks] == ["十分な長さの固定長 chunk", "短い"]
+    assert all(chunk.metadata["chunk_strategy"] == "fixed_size" for chunk in chunks)
+
+
 def test_resolve_chunking_params_reads_settings() -> None:
     """Settings から chunking パラメータを解決する。"""
     settings = Settings(
@@ -169,6 +207,7 @@ def test_resolve_chunking_params_reads_settings() -> None:
         rag_chunk_child_size=250,
         rag_chunk_sentence_window_size=2,
         rag_chunk_min_chars=30,
+        rag_chunk_delimiter="---",
     )
     params = resolve_chunking_params(settings)
     assert params.strategy == "recursive_character"
@@ -177,6 +216,7 @@ def test_resolve_chunking_params_reads_settings() -> None:
     assert params.child_size == 250
     assert params.sentence_window_size == 2
     assert params.min_chars == 30
+    assert params.delimiter == "---"
 
 
 def test_chunking_runtime_settings_orders_and_marks_selected() -> None:

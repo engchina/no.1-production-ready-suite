@@ -226,8 +226,10 @@ CHUNKING_STRATEGIES: tuple[str, ...] = (
     "markdown_heading",
     "page_level",
     "fixed_size",
+    "fixed_delimiter",
 )
 _DEFAULT_CHUNKING_STRATEGY = "structure_aware"
+_DEFAULT_FIXED_DELIMITER = "\\n\\n"
 
 
 def chunk_extraction_with_strategy(
@@ -239,6 +241,7 @@ def chunk_extraction_with_strategy(
     child_size: int = 320,
     sentence_window_size: int = 3,
     min_chars: int = 0,
+    delimiter: str = _DEFAULT_FIXED_DELIMITER,
 ) -> list[Chunk]:
     """選択された chunking 戦略(Chunking アダプター)で構造化抽出を分割する。
 
@@ -246,10 +249,11 @@ def chunk_extraction_with_strategy(
     本プロジェクトの `StructuredExtraction` に再マップし、chunks 段階で手動選択できるようにする。
     未知 / 既定の戦略は structure_aware へ安全に fallback する。
     """
-    _validate_chunk_settings(chunk_size, overlap)
     normalized_strategy = (
         strategy if strategy in CHUNKING_STRATEGIES else _DEFAULT_CHUNKING_STRATEGY
     )
+    if normalized_strategy != "fixed_delimiter":
+        _validate_chunk_settings(chunk_size, overlap)
     if normalized_strategy == "recursive_character":
         chunks = _chunk_recursive_character(extraction, chunk_size=chunk_size, overlap=overlap)
     elif normalized_strategy == "sentence_window":
@@ -272,10 +276,37 @@ def chunk_extraction_with_strategy(
         chunks = _chunk_page_level(extraction, chunk_size=chunk_size, overlap=overlap)
     elif normalized_strategy == "fixed_size":
         chunks = _chunk_fixed_size(extraction, chunk_size=chunk_size, overlap=overlap)
+    elif normalized_strategy == "fixed_delimiter":
+        chunks = _chunk_fixed_delimiter(extraction, delimiter=delimiter)
     else:
         chunks = chunk_extraction(extraction, chunk_size=chunk_size, overlap=overlap)
+    if normalized_strategy in {"fixed_delimiter", "fixed_size"}:
+        return _with_chunk_strategy_metadata(chunks, normalized_strategy)
     absorbed = _absorb_small_chunks(chunks, min_chars=min_chars, chunk_size=chunk_size)
     return _with_chunk_strategy_metadata(absorbed, normalized_strategy)
+
+
+def decode_fixed_delimiter(value: str) -> str:
+    """UI/env 向けの最小 escape 表現を実際の分割符へ戻す。"""
+    result: list[str] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char != "\\" or index + 1 >= len(value):
+            result.append(char)
+            index += 1
+            continue
+        escaped = value[index + 1]
+        if escaped == "n":
+            result.append("\n")
+        elif escaped == "t":
+            result.append("\t")
+        elif escaped == "\\":
+            result.append("\\")
+        else:
+            result.append(char + escaped)
+        index += 2
+    return "".join(result)
 
 
 def _chunk_recursive_character(
@@ -332,6 +363,44 @@ def _chunk_fixed_size(
         chunk_size=chunk_size,
         overlap=overlap,
     )
+
+
+def _chunk_fixed_delimiter(
+    extraction: StructuredExtraction,
+    *,
+    delimiter: str,
+) -> list[Chunk]:
+    """指定された固定分割符で全文を機械的に分割する。分割符自体は chunk に残さない。"""
+    source = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    resolved_delimiter = (
+        decode_fixed_delimiter(delimiter or _DEFAULT_FIXED_DELIMITER)
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+    if not source.strip() or not resolved_delimiter:
+        return []
+    metadata: ChunkMetadata = {
+        "chunk_template": TEXT_CHUNK_PROFILE,
+        "chunk_fixed_delimiter": True,
+    }
+    chunks: list[Chunk] = []
+    cursor = 0
+    for part in source.split(resolved_delimiter):
+        leading = len(part) - len(part.lstrip())
+        trimmed_length = len(part.rstrip())
+        piece = part.strip()
+        if piece:
+            chunks.append(
+                Chunk(
+                    text=piece,
+                    index=len(chunks),
+                    start_offset=cursor + leading,
+                    end_offset=cursor + trimmed_length,
+                    metadata=dict(metadata),
+                )
+            )
+        cursor += len(part) + len(resolved_delimiter)
+    return [_with_chunk_metadata(chunk) for chunk in chunks]
 
 
 def _chunk_markdown_heading(

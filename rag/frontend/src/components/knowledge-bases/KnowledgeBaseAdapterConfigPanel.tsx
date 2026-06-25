@@ -35,6 +35,7 @@ const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = [
   { value: "docling", label: "Docling" },
   { value: "marker", label: "Marker" },
   { value: "unstructured", label: "Unstructured" },
+  { value: "unlimited_ocr", label: "Unlimited-OCR" },
   { value: "mineru", label: "MinerU" },
   { value: "dots_ocr", label: "Dots.OCR" },
   { value: "glm_ocr", label: "GLM-OCR" },
@@ -52,6 +53,7 @@ const CHUNKING_OPTIONS: SelectFieldOption<ChunkingStrategyName>[] = [
   { value: "markdown_heading", label: t("settings.chunking.strategy.markdown_heading") },
   { value: "page_level", label: t("settings.chunking.strategy.page_level") },
   { value: "fixed_size", label: t("settings.chunking.strategy.fixed_size") },
+  { value: "fixed_delimiter", label: t("settings.chunking.strategy.fixed_delimiter") },
 ];
 const GRAPH_OPTIONS: SelectFieldOption<GraphProfileName>[] = [
   { value: "off", label: t("settings.graph.profile.off") },

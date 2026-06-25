@@ -44,6 +44,11 @@ _FEATURE_CLASS_BY_NAME: dict[str, str] = {
 }
 
 _DEFAULT_FEATURES = ("DOCUMENT_TEXT_EXTRACTION", "TABLE_EXTRACTION")
+_LANGUAGE_ALIASES = {
+    "JPN": "ja",
+    "JP": "ja",
+    "JA_JP": "ja-JP",
+}
 
 
 @dataclass(frozen=True)
@@ -59,7 +64,7 @@ class OciDocumentUnderstandingConfig:
     output_bucket: str = ""
     input_prefix: str = "document-understanding/input"
     output_prefix: str = "document-understanding/output"
-    language: str = "JPN"
+    language: str = "ja"
     features: Sequence[str] = field(default_factory=lambda: list(_DEFAULT_FEATURES))
     poll_interval_seconds: float = 5.0
     timeout_seconds: float = 600.0
@@ -124,7 +129,7 @@ class OciDocumentUnderstandingConfig:
             output_prefix=_get(
                 "OCI_DOCUMENT_UNDERSTANDING_OUTPUT_PREFIX", "document-understanding/output"
             ),
-            language=_get("OCI_DOCUMENT_UNDERSTANDING_LANGUAGE", "JPN"),
+            language=_get("OCI_DOCUMENT_UNDERSTANDING_LANGUAGE", "ja"),
             features=features,
             poll_interval_seconds=_float(
                 _get("OCI_DOCUMENT_UNDERSTANDING_POLL_INTERVAL_SECONDS"), 5.0
@@ -133,7 +138,10 @@ class OciDocumentUnderstandingConfig:
             oci_config_file=_get("OCI_CONFIG_FILE", "~/.oci/config"),
             oci_config_profile=_get("OCI_CONFIG_PROFILE", "DEFAULT"),
             oci_region=_get("OCI_REGION"),
-            object_storage_region=_get("OBJECT_STORAGE_REGION"),
+            object_storage_region=_get(
+                "OCI_DOCUMENT_UNDERSTANDING_OBJECT_STORAGE_REGION",
+                _get("OCI_REGION") or _get("OBJECT_STORAGE_REGION"),
+            ),
         )
 
 
@@ -248,7 +256,7 @@ class OciDocumentUnderstandingService:
             ),
             processor_config=models.GeneralProcessorConfig(
                 features=self._build_features(models),
-                language=self._config.language.strip() or "JPN",
+                language=_bcp47_language(self._config.language),
             ),
         )
         response = self._documents().create_processor_job(create_processor_job_details=details)
@@ -335,6 +343,7 @@ class OciDocumentUnderstandingService:
             oci_config,
             self._config.oci_config_file,
             self._config.oci_config_profile,
+            region=self._config.oci_region.strip() or None,
         )
         self._document_client = ai_document.AIServiceDocumentClient(config)
         return self._document_client
@@ -497,3 +506,18 @@ def _float(value: str, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bcp47_language(value: str) -> str:
+    raw = value.strip()
+    if not raw:
+        return "ja"
+    key = raw.replace("-", "_").upper()
+    if key in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[key]
+    parts = [part for part in raw.replace("_", "-").split("-") if part]
+    if not parts:
+        return "ja"
+    language = parts[0].lower()
+    subtags = [part.upper() if len(part) == 2 else part for part in parts[1:]]
+    return "-".join([language, *subtags])

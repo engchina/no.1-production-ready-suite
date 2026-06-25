@@ -48,7 +48,11 @@ def config_from_settings(settings: Settings) -> OciDocumentUnderstandingConfig:
         oci_config_file=settings.oci_config_file,
         oci_config_profile=settings.oci_config_profile,
         oci_region=settings.oci_region,
-        object_storage_region=settings.object_storage_region,
+        object_storage_region=(
+            settings.oci_document_understanding_object_storage_region
+            or settings.oci_region
+            or settings.object_storage_region
+        ),
     )
 
 

@@ -243,6 +243,9 @@ def test_fixed_size_strategy_registered() -> None:
     assert "fixed_size" in CHUNKING_STRATEGIES
     assert "fixed_size" in CHUNKING_STRATEGY_ORDER
     assert CHUNKING_STRATEGY_SPECS["fixed_size"].origin == "ragflow_general_fixed"
+    assert "fixed_delimiter" in CHUNKING_STRATEGIES
+    assert "fixed_delimiter" in CHUNKING_STRATEGY_ORDER
+    assert CHUNKING_STRATEGY_SPECS["fixed_delimiter"].origin == "fixed_delimiter_split"
 
 
 def test_fixed_size_chunking_is_deterministic_fixed_length() -> None:
@@ -260,6 +263,35 @@ def test_fixed_size_chunking_is_deterministic_fixed_length() -> None:
     assert all(len(chunk.text) == 300 for chunk in chunks[:-1])
     assert chunks[0].metadata.get("chunk_strategy") == "fixed_size"
     assert chunks[0].metadata.get("chunk_fixed_size") is True
+
+
+def test_fixed_delimiter_chunking_splits_without_separator() -> None:
+    extraction = StructuredExtraction(
+        raw_text="第1章\n本文1\n---SPLIT---\n\n第2章\n本文2\n---SPLIT---\n第3章",
+        document_type="ドキュメント",
+        summary="x",
+        elements=[],
+    )
+    chunks = chunk_extraction_with_strategy(
+        extraction,
+        strategy="fixed_delimiter",
+        delimiter="---SPLIT---",
+    )
+    assert [chunk.text for chunk in chunks] == ["第1章\n本文1", "第2章\n本文2", "第3章"]
+    assert all("---SPLIT---" not in chunk.text for chunk in chunks)
+    assert chunks[0].metadata.get("chunk_strategy") == "fixed_delimiter"
+    assert chunks[0].metadata.get("chunk_fixed_delimiter") is True
+    assert "chunk_size_compliance" not in chunks[0].metadata
+
+
+def test_fixed_delimiter_decodes_escape_sequences() -> None:
+    extraction = StructuredExtraction(raw_text="alpha\n\nbeta", elements=[])
+    chunks = chunk_extraction_with_strategy(
+        extraction,
+        strategy="fixed_delimiter",
+        delimiter="\\n\\n",
+    )
+    assert [chunk.text for chunk in chunks] == ["alpha", "beta"]
 
 
 def test_fixed_size_kb_override() -> None:

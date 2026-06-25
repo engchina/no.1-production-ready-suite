@@ -17,6 +17,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/auth/me", async (route) => {
     await route.fulfill({ json: authStatus });
   });
+  await mockParserServiceStatuses(page);
 });
 
 for (const viewport of [
@@ -39,12 +40,35 @@ for (const viewport of [
     await page.goto("/settings/parser-adapters");
 
     await expect(page.getByRole("heading", { name: "文書解析" })).toBeVisible();
-    await expect(page.getByText("Docling -> Marker", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("有効", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("未導入", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("パッケージ未導入", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("導入: pip install marker-pdf[full]==1.10.2")).toBeVisible();
-    await expect(page.getByText("使用エンジン選択外", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: /Docling.*CPU.*稼働中/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Marker.*CPU.*停止/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Unstructured.*CPU.*縮退/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Unlimited-OCR.*GPU.*停止/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /MinerU.*GPU.*停止/ })).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /Dots\.OCR.*GPU.*推論サーバー未起動/ })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /OCI Generative AI \(Vision\).*OCI.*稼働中/ })
+    ).toBeVisible();
+    const engineNames = (await page.getByRole("radio").allTextContents()).map((text) =>
+      text.replace(/\s+/g, " ").trim()
+    );
+    expect(engineNames[0]).toContain("Docling");
+    expect(engineNames[1]).toContain("Marker");
+    expect(engineNames[2]).toContain("Unstructured");
+    expect(engineNames[3]).toContain("Unlimited-OCR");
+    expect(engineNames[4]).toContain("MinerU");
+    expect(engineNames[5]).toContain("Dots.OCR");
+    expect(engineNames[6]).toContain("GLM-OCR");
+    expect(engineNames[7]).toContain("OCI Generative AI (Vision)");
+    expect(engineNames[8]).toContain("OCI Document Understanding");
+    await page.getByText("運用診断", { exact: true }).click();
+    await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
+    await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
+    await expect(page.getByText("未導入", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("パッケージ未導入", { exact: true })).toHaveCount(0);
     await expect(
       page.getByRole("radio", { name: /OCI Document Understanding/ })
     ).toBeVisible();
@@ -52,21 +76,17 @@ for (const viewport of [
       page.getByRole("radio", { name: /OCI Generative AI \(Vision\)/ })
     ).toBeVisible();
     await expect(page.getByText("未設定", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("OCI サービス", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("原本種別ごとの実行順")).toBeVisible();
-    await expect(page.getByText("PDF", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Docling -> Marker -> Unstructured")).toBeVisible();
-    await expect(page.getByText("音声は未対応")).toBeVisible();
-    await expect(page.getByText("標準解析を優先")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Schema remap 契約" })).toBeVisible();
-    await expect(page.getByText("Schema remap 契約は未実行です。")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "StructuredExtraction 互換性確認" })).toBeVisible();
+    await expect(page.getByText("StructuredExtraction 互換性確認は未実行です。")).toBeVisible();
     await page.getByRole("button", { name: "互換性を確認" }).click();
     await expect(page.getByText("失敗", { exact: true }).first()).toBeVisible();
     await expect(page.getByLabel("コード別サマリ")).toBeVisible();
     await expect(page.getByText("阻害理由", { exact: true })).toBeVisible();
     await expect(page.getByText("警告分布", { exact: true })).toBeVisible();
     await expect(page.getByText("理由分布", { exact: true })).toBeVisible();
-    await expect(page.getByText("未導入 / 阻害")).toBeVisible();
+    await expect(page.getByText("未確認 / 阻害")).toBeVisible();
+    await expect(page.getByText("未導入", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("パッケージ未導入", { exact: true })).toHaveCount(0);
     await expect(
       page.getByText("現在の設定の証跡", { exact: true }).nth(viewport.width >= 768 ? 0 : 1)
     ).toBeVisible();
@@ -229,7 +249,7 @@ test("文書解析設定取得に失敗したら再試行できる", async ({ pa
   await expectNoHorizontalOverflow(page);
 });
 
-test("文書解析設定は使用エンジンと有効化設定を保存できる", async ({ page }) => {
+test("文書解析設定は使用エンジンを保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.addInitScript(() => {
     window.localStorage.setItem(
@@ -244,48 +264,16 @@ test("文書解析設定は使用エンジンと有効化設定を保存でき�
       await route.fulfill({
         json: parserAdapterEnvelope({
           adapter_backend: "mineru",
-          effective_order: ["docling", "unstructured"],
+          effective_order: ["mineru"],
           config_source: "runtime",
           adapters: [
-            {
-              backend: "docling",
-              package_name: "docling",
-              import_name: "docling",
-              distribution_name: null,
-              install_package: "docling==2.103.0",
-              enabled: true,
-              selected: true,
-              installed: false,
-              status: "missing",
-              version: null,
-              warning_code: "adapter_package_missing",
-            },
-            {
-              backend: "marker",
-              package_name: "marker",
-              import_name: "marker",
-              distribution_name: null,
-              install_package: "marker-pdf[full]==1.10.2",
-              enabled: false,
-              selected: false,
-              installed: false,
-              status: "disabled",
-              version: null,
-              warning_code: null,
-            },
-            {
-              backend: "unstructured",
-              package_name: "unstructured",
-              import_name: "unstructured",
-              distribution_name: null,
-              install_package: "unstructured[all-docs]==0.18.32",
-              enabled: true,
-              selected: true,
-              installed: false,
-              status: "missing",
-              version: null,
-              warning_code: "adapter_package_missing",
-            },
+            disabledAdapter("docling"),
+            disabledAdapter("marker"),
+            disabledAdapter("unstructured"),
+            disabledAdapter("unlimited_ocr"),
+            { ...disabledAdapter("mineru"), enabled: true, selected: true, status: "active" },
+            disabledAdapter("dots_ocr"),
+            disabledAdapter("glm_ocr"),
           ],
         }),
       });
@@ -300,6 +288,10 @@ test("文書解析設定は使用エンジンと有効化設定を保存でき�
           disabledAdapter("docling"),
           disabledAdapter("marker"),
           disabledAdapter("unstructured"),
+          disabledAdapter("unlimited_ocr"),
+          disabledAdapter("mineru"),
+          disabledAdapter("dots_ocr"),
+          disabledAdapter("glm_ocr"),
         ],
       }),
     });
@@ -307,27 +299,28 @@ test("文書解析設定は使用エンジンと有効化設定を保存でき�
 
   await page.goto("/settings/parser-adapters");
 
-  // local は廃止。microservice エンジン(MinerU)を選択する。MinerU は有効化設定
-  // を直接変えないため、下の docling/unstructured トグル assert と干渉しない。
+  // local は廃止。microservice エンジン(MinerU)を選択する。
+  await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
   const mineruBackend = page.getByRole("radio", { name: /MinerU/ });
   await mineruBackend.focus();
   await expect(mineruBackend).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(mineruBackend).toHaveAttribute("aria-checked", "true");
 
-  await page.getByRole("switch", { name: "Docling 解析方式の有効化設定" }).click();
-  await page.getByRole("switch", { name: "Unstructured 解析方式の有効化設定" }).click();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("文書解析設定を保存しました。")).toBeVisible();
-  await expect(page.getByText("Docling -> Unstructured")).toBeVisible();
   expect(savedPayload).toEqual({
     adapter_backend: "mineru",
-    docling_enabled: true,
+    docling_enabled: false,
     marker_enabled: false,
-    unstructured_enabled: true,
+    unstructured_enabled: false,
+    unlimited_ocr_enabled: false,
+    mineru_enabled: true,
+    dots_ocr_enabled: false,
+    glm_ocr_enabled: false,
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -379,6 +372,58 @@ async function mockParserAdapters(page: Page) {
               version: null,
               warning_code: "adapter_flag_ignored_by_backend",
             },
+            {
+              backend: "unlimited_ocr",
+              package_name: "transformers",
+              import_name: "transformers",
+              distribution_name: null,
+              install_package: "transformers (baidu/Unlimited-OCR via HuggingFace)",
+              enabled: false,
+              selected: false,
+              installed: false,
+              status: "disabled",
+              version: null,
+              warning_code: null,
+            },
+            {
+              backend: "mineru",
+              package_name: "mineru",
+              import_name: "mineru",
+              distribution_name: null,
+              install_package: "mineru[core]==3.4.0",
+              enabled: false,
+              selected: false,
+              installed: false,
+              status: "disabled",
+              version: null,
+              warning_code: null,
+            },
+            {
+              backend: "dots_ocr",
+              package_name: "dots_ocr",
+              import_name: "dots_ocr",
+              distribution_name: null,
+              install_package: "git+https://github.com/rednote-hilab/dots.ocr.git",
+              enabled: false,
+              selected: false,
+              installed: false,
+              status: "disabled",
+              version: null,
+              warning_code: null,
+            },
+            {
+              backend: "glm_ocr",
+              package_name: "transformers",
+              import_name: "transformers",
+              distribution_name: null,
+              install_package: "transformers (zai-org/GLM-OCR via HuggingFace)",
+              enabled: false,
+              selected: false,
+              installed: false,
+              status: "disabled",
+              version: null,
+              warning_code: null,
+            },
           ],
       }),
     });
@@ -411,6 +456,7 @@ function parserAdapterEnvelope(data: object) {
         missing_source_kinds: [],
         backend_source_kinds: {
           docling: ["pdf", "image", "office", "html"],
+          unlimited_ocr: ["pdf", "image"],
           local: ["audio", "text", "unknown"],
         },
         route_evidence: sourceRoutes,
@@ -426,7 +472,7 @@ function defaultSourceRoutes() {
   return [
     {
       source_kind: "pdf",
-      candidate_order: ["docling", "marker", "unstructured"],
+      candidate_order: ["docling", "marker", "unstructured", "unlimited_ocr", "mineru", "glm_ocr"],
       attempted_order: ["docling", "marker"],
       active_order: ["docling"],
       selected_backend: "docling",
@@ -435,7 +481,15 @@ function defaultSourceRoutes() {
     },
     {
       source_kind: "image",
-      candidate_order: ["unstructured", "marker", "docling"],
+      candidate_order: [
+        "unstructured",
+        "marker",
+        "docling",
+        "dots_ocr",
+        "unlimited_ocr",
+        "mineru",
+        "glm_ocr",
+      ],
       attempted_order: ["docling"],
       active_order: ["docling"],
       selected_backend: "docling",
@@ -472,18 +526,90 @@ function defaultSourceRoutes() {
   ];
 }
 
-function disabledAdapter(backend: "docling" | "marker" | "unstructured") {
+async function mockParserServiceStatuses(page: Page) {
+  const statuses: Record<string, string> = {
+    "parser-docling": "running",
+    "parser-marker": "stopped",
+    "parser-unstructured": "degraded",
+    "parser-unlimited-ocr": "stopped",
+    "parser-mineru": "stopped",
+    "parser-dots-ocr": "dependency_stopped",
+    "parser-glm-ocr": "stopped",
+    "parser-oci-genai-vision": "running",
+    "parser-oci-document-understanding": "unconfigured",
+  };
+  await page.route("**/api/services/*/status", async (route) => {
+    const serviceId = decodeURIComponent(
+      route.request().url().match(/services\/([^/]+)\/status/)?.[1] ?? ""
+    );
+    const status = statuses[serviceId];
+    await route.fulfill({
+      status: status ? 200 : 404,
+      json: {
+        data: status
+          ? {
+              service_id: serviceId,
+              category: "parser",
+              profile: serviceProfileForId(serviceId),
+              label_key: "settings.services.item.parserDocling",
+              execution_policy: "selected_adapter",
+              configured: status !== "unconfigured",
+              depends_on: [],
+              status,
+              blocked_by: status === "dependency_stopped" ? [`${serviceId}-vllm`] : [],
+            }
+          : null,
+        error_messages: status ? [] : ["指定したサービスが見つかりません。"],
+        warning_messages: [],
+      },
+    });
+  });
+}
+
+function serviceProfileForId(serviceId: string) {
+  if (serviceId.includes("oci")) return "oci";
+  if (
+    serviceId.includes("mineru") ||
+    serviceId.includes("unlimited-ocr") ||
+    serviceId.includes("dots-ocr") ||
+    serviceId.includes("glm-ocr")
+  ) {
+    return "gpu";
+  }
+  return "cpu";
+}
+
+function disabledAdapter(
+  backend:
+    | "docling"
+    | "marker"
+    | "unstructured"
+    | "unlimited_ocr"
+    | "mineru"
+    | "dots_ocr"
+    | "glm_ocr"
+) {
   return {
     backend,
-    package_name: backend,
-    import_name: backend,
+    package_name:
+      backend === "unlimited_ocr" || backend === "glm_ocr" ? "transformers" : backend,
+    import_name:
+      backend === "unlimited_ocr" || backend === "glm_ocr" ? "transformers" : backend,
     distribution_name: null,
     install_package:
       backend === "marker"
         ? "marker-pdf[full]==1.10.2"
         : backend === "unstructured"
           ? "unstructured[all-docs]==0.18.32"
-          : "docling==2.103.0",
+          : backend === "unlimited_ocr"
+            ? "transformers (baidu/Unlimited-OCR via HuggingFace)"
+            : backend === "mineru"
+              ? "mineru[core]==3.4.0"
+              : backend === "dots_ocr"
+                ? "git+https://github.com/rednote-hilab/dots.ocr.git"
+                : backend === "glm_ocr"
+                  ? "transformers (zai-org/GLM-OCR via HuggingFace)"
+                  : "docling==2.103.0",
     enabled: false,
     selected: false,
     installed: false,

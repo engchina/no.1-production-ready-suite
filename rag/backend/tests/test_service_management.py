@@ -6,6 +6,7 @@ import asyncio
 import os
 import signal
 import subprocess
+from pathlib import Path
 from typing import Any, Literal
 
 import pytest
@@ -57,6 +58,7 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
     assert {"preprocess", "parser", "chunking"} <= categories
     gpu_ids = {entry.service_id for entry in SERVICE_CATALOG if entry.profile == "gpu"}
     assert gpu_ids == {
+        "parser-unlimited-ocr",
         "parser-mineru",
         "parser-dots-ocr",
         "parser-dots-ocr-vllm",
@@ -74,11 +76,20 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
 
 def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
     by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
-    assert by_id["pipeline-chunking"].execution_policy == "required_no_fallback"
+    assert by_id["pipeline-chunking"].execution_policy == "in_process_when_disabled"
     assert by_id["pipeline-retrieval"].execution_policy == "in_process_when_disabled"
     assert by_id["pipeline-generation"].execution_policy == "in_process_when_disabled"
     assert by_id["parser-docling"].execution_policy == "selected_adapter"
     assert by_id["preprocess-office-to-pdf"].execution_policy == "selected_adapter"
+
+
+def test_compose_uses_shared_oci_config_volume() -> None:
+    """production compose は共有 oci-config volume を OCI service へ mount する。"""
+    compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    text = compose.read_text(encoding="utf-8")
+    assert text.count("oci-config:/home/appuser/.oci") == 4
+    assert "~/.oci:/home/appuser/.oci:ro" not in text
+    assert "\n  oci-config:" in text
 
 
 def test_get_catalog_entry_allowlist() -> None:
@@ -495,7 +506,7 @@ def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     assert dots["blocked_by"] == ["parser-dots-ocr-vllm"]
     assert dots["execution_policy"] == "selected_adapter"
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
-    assert chunking["execution_policy"] == "required_no_fallback"
+    assert chunking["execution_policy"] == "in_process_when_disabled"
     retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
     assert retrieval["execution_policy"] == "in_process_when_disabled"
 
@@ -535,7 +546,7 @@ def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) ->
     assert dots["depends_on"] == ["parser-dots-ocr-vllm"]
     assert dots["execution_policy"] == "selected_adapter"
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
-    assert chunking["execution_policy"] == "required_no_fallback"
+    assert chunking["execution_policy"] == "in_process_when_disabled"
     retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
     assert retrieval["execution_policy"] == "in_process_when_disabled"
 
@@ -739,9 +750,15 @@ def test_parser_client_service_url_dev_resolves_localhost(monkeypatch: MonkeyPat
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
+    monkeypatch.setattr(
+        settings,
+        "rag_parser_unlimited_ocr_service_url",
+        "http://parser-unlimited-ocr:8000",
+    )
     monkeypatch.setattr(settings, "rag_parser_mineru_service_url", "http://parser-mineru:8000")
     client = ParserServiceClient(settings)
     assert client.service_url("docling") == "http://127.0.0.1:18020"
+    assert client.service_url("unlimited_ocr") == "http://127.0.0.1:18029"
     assert client.service_url("mineru") == "http://127.0.0.1:18023"
 
 
@@ -830,6 +847,8 @@ def test_uv_driver_start_writes_pidfile_and_argv(monkeypatch: MonkeyPatch, tmp_p
 
     monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("VIRTUAL_ENV", "/u01/workspace/no.1-production-ready-rag/backend/.venv")
+    monkeypatch.setenv("VIRTUAL_ENV_PROMPT", "backend")
     # 起動後検証: 待機を 0 にし、spawn したプロセスは生存しているものとみなす。
     monkeypatch.setattr(control_module, "_START_VERIFY_DELAY_SECONDS", 0)
     monkeypatch.setattr(control_module, "_pid_alive", lambda _pid: True)
@@ -847,6 +866,9 @@ def test_uv_driver_start_writes_pidfile_and_argv(monkeypatch: MonkeyPatch, tmp_p
         str(entry.dev_port),
     ]
     assert captured["kwargs"]["start_new_session"] is True
+    child_env = captured["kwargs"]["env"]
+    assert "VIRTUAL_ENV" not in child_env
+    assert "VIRTUAL_ENV_PROMPT" not in child_env
     pidfile = tmp_path / f"{entry.service_id}.pid"
     assert pidfile.read_text() == "4321"
 

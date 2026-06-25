@@ -2452,6 +2452,8 @@ def _chunk_size_compliance_violation(chunk: Chunk) -> str | None:
     text_sha256 = _string_value(chunk.metadata.get("text_sha256"))
     if len(text_sha256) != 64 or text_sha256 != hashlib.sha256(text.encode("utf-8")).hexdigest():
         return "chunk_text_sha256_mismatch"
+    if chunk.metadata.get("chunk_fixed_delimiter") is True:
+        return None
     target = _positive_int(chunk.metadata.get("chunk_size_target"))
     limit = _positive_int(chunk.metadata.get("chunk_size_limit"))
     if target <= 0 or limit < target:
@@ -3277,7 +3279,7 @@ def _staging_required_evidence(check: str, reason: str) -> tuple[str, ...]:
         )
     if check in {"knowledge_base_membership", "searchable_canonical"}:
         return (
-            "canonical document is linked to target knowledge base",
+            "duplicate KB membership routes to canonical chunks",
             "duplicate upload records duplicate/alias metadata",
             "search scoped to target knowledge base returns canonical chunks",
         )

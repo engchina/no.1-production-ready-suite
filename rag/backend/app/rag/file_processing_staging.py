@@ -592,10 +592,6 @@ async def _run_duplicate_staging_case(
         duplicate_of_document_id=canonical_evidence.document_id,
         knowledge_base_ids=[knowledge_base_id],
     )
-    await oracle.assign_documents_to_knowledge_base(
-        knowledge_base_id,
-        [canonical_evidence.document_id],
-    )
     document_ids.append(duplicate_detail.id)
     object_uris.append(duplicate_uri)
     search_response = await search.run(
@@ -1206,9 +1202,9 @@ def _duplicate_kb_membership_passed(evidence: _StagingEvidence) -> tuple[bool, s
     if evidence.duplicate_of_document_id != evidence.document_id:
         return False, "duplicate_alias_missing"
     if not evidence.knowledge_base_search_hit:
-        return False, "canonical_not_searchable_in_kb"
+        return False, "duplicate_alias_not_searchable_in_kb"
     if not evidence.knowledge_base_search_traceable:
-        return False, "canonical_search_citation_traceability_missing"
+        return False, "duplicate_alias_citation_traceability_missing"
     return True, None
 
 

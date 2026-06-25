@@ -39,6 +39,7 @@ class ChunkingStageRequest(BaseModel):
     child_size: int = 320
     sentence_window_size: int = 3
     min_chars: int = 0
+    delimiter: str = "\\n\\n"
 
 
 class ChunkingStageResponse(BaseModel):

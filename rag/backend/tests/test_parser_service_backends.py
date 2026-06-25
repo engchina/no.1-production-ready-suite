@@ -123,7 +123,7 @@ class _FakeDocumentClient:
     def __init__(self, states: list[str]) -> None:
         self._states = states
         self._poll = 0
-        self.created: list[object] = []
+        self.created: list[Any] = []
 
     def create_processor_job(self, create_processor_job_details: object) -> _FakeResponse:
         self.created.append(create_processor_job_details)
@@ -170,10 +170,11 @@ class _FakeStorageClient:
 def _du_settings() -> Settings:
     return Settings.model_construct(
         oci_compartment_id="ocid1.compartment.oc1..test",
-        oci_region="ap-osaka-1",
+        oci_region="us-chicago-1",
         oci_config_file="~/.oci/config",
         oci_config_profile="DEFAULT",
         object_storage_region="ap-osaka-1",
+        oci_document_understanding_object_storage_region="",
         oci_document_understanding_namespace="ns",
         oci_document_understanding_input_bucket="in-bucket",
         oci_document_understanding_output_bucket="out-bucket",
@@ -202,6 +203,114 @@ async def test_du_client_analyze_runs_async_job_and_remaps() -> None:
     assert "請求書" in extraction.raw_text
     assert document_client.created  # job が作成された
     assert storage_client.put_calls  # 入力が put された
+    processor_config = document_client.created[0].processor_config
+    assert processor_config.language == "ja"
+    assert [feature.feature_type for feature in processor_config.features] == [
+        "TEXT_EXTRACTION",
+        "TABLE_EXTRACTION",
+    ]
+
+
+def test_du_client_uses_region_override_when_building_document_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Document Understanding client は OCI_REGION で endpoint 用 region を上書きする。"""
+    captured: dict[str, object] = {}
+    fake_config_module = object()
+
+    class _FakeAiDocumentModule:
+        class AIServiceDocumentClient:
+            def __init__(self, config: dict[str, object]) -> None:
+                captured["client_config"] = config
+
+    def _fake_import_module(name: str) -> object:
+        if name == "oci.config":
+            return fake_config_module
+        if name == "oci.ai_document":
+            return _FakeAiDocumentModule
+        raise AssertionError(name)
+
+    def _fake_load_config(
+        oci_config_module: object,
+        config_file: str,
+        profile: str,
+        *,
+        region: str | None = None,
+    ) -> dict[str, object]:
+        captured["oci_config_module"] = oci_config_module
+        captured["config_file"] = config_file
+        captured["profile"] = profile
+        captured["region"] = region
+        return {"region": region}
+
+    monkeypatch.setattr(
+        "rag_parser_core.oci_document_understanding.importlib.import_module",
+        _fake_import_module,
+    )
+    monkeypatch.setattr(
+        "rag_parser_core.oci_document_understanding.load_oci_config_without_prompt",
+        _fake_load_config,
+    )
+
+    client = OciDocumentUnderstandingClient(_du_settings())
+    client._documents()
+
+    assert captured["oci_config_module"] is fake_config_module
+    assert captured["config_file"] == "~/.oci/config"
+    assert captured["profile"] == "DEFAULT"
+    assert captured["region"] == "us-chicago-1"
+    assert captured["client_config"] == {"region": "us-chicago-1"}
+
+
+def test_du_client_uses_du_region_for_object_storage_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DU 入出力 Object Storage は明示 override が無ければ OCI_REGION に揃える。"""
+    captured: dict[str, object] = {}
+    fake_config_module = object()
+
+    class _FakeObjectStorageModule:
+        class ObjectStorageClient:
+            def __init__(self, config: dict[str, object]) -> None:
+                captured["client_config"] = config
+
+    def _fake_import_module(name: str) -> object:
+        if name == "oci.config":
+            return fake_config_module
+        if name == "oci.object_storage":
+            return _FakeObjectStorageModule
+        raise AssertionError(name)
+
+    def _fake_load_config(
+        oci_config_module: object,
+        config_file: str,
+        profile: str,
+        *,
+        region: str | None = None,
+    ) -> dict[str, object]:
+        captured["oci_config_module"] = oci_config_module
+        captured["config_file"] = config_file
+        captured["profile"] = profile
+        captured["region"] = region
+        return {"region": region}
+
+    monkeypatch.setattr(
+        "rag_parser_core.oci_document_understanding.importlib.import_module",
+        _fake_import_module,
+    )
+    monkeypatch.setattr(
+        "rag_parser_core.oci_document_understanding.load_oci_config_without_prompt",
+        _fake_load_config,
+    )
+
+    client = OciDocumentUnderstandingClient(_du_settings())
+    client._storage()
+
+    assert captured["oci_config_module"] is fake_config_module
+    assert captured["config_file"] == "~/.oci/config"
+    assert captured["profile"] == "DEFAULT"
+    assert captured["region"] == "us-chicago-1"
+    assert captured["client_config"] == {"region": "us-chicago-1"}
 
 
 async def test_du_client_analyze_returns_none_when_unconfigured() -> None:

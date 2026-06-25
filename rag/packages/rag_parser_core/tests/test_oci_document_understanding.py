@@ -45,6 +45,8 @@ def _du_result_json() -> dict[str, object]:
 def test_config_from_env_resolves_fallbacks() -> None:
     env = {
         "OCI_COMPARTMENT_ID": "ocid1.compartment.oc1..fallback",
+        "OCI_REGION": "us-chicago-1",
+        "OBJECT_STORAGE_REGION": "ap-osaka-1",
         "OBJECT_STORAGE_NAMESPACE": "ns-default",
         "OBJECT_STORAGE_BUCKET": "bucket-default",
         "OCI_DOCUMENT_UNDERSTANDING_LANGUAGE": "JPN",
@@ -58,8 +60,20 @@ def test_config_from_env_resolves_fallbacks() -> None:
     assert config.resolve_input_bucket() == "bucket-default"
     assert config.resolve_output_bucket() == "bucket-default"
     assert config.is_configured() is True
+    assert config.object_storage_region == "us-chicago-1"
     assert list(config.features) == ["DOCUMENT_TEXT_EXTRACTION"]
     assert config.poll_interval_seconds == 0.5
+
+
+def test_config_from_env_allows_du_object_storage_region_override() -> None:
+    config = OciDocumentUnderstandingConfig.from_env(
+        {
+            "OCI_REGION": "us-chicago-1",
+            "OBJECT_STORAGE_REGION": "ap-osaka-1",
+            "OCI_DOCUMENT_UNDERSTANDING_OBJECT_STORAGE_REGION": "eu-frankfurt-1",
+        }
+    )
+    assert config.object_storage_region == "eu-frankfurt-1"
 
 
 def test_config_from_env_unconfigured() -> None:

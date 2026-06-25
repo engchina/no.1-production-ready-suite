@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
 from rag_parser_core.asr import TranscriptSegment, build_transcript_extraction
 
+import app.main as main_module
 from app.transcribe import transcribe
 
 
@@ -54,3 +58,41 @@ def test_build_transcript_extraction_skips_empty_segments() -> None:
     )
     assert len(extraction.elements) == 1
     assert extraction.elements[0].text == "有効"
+
+
+def test_parse_runs_transcribe_in_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    used_worker = False
+
+    async def fake_to_thread(func, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal used_worker
+        used_worker = True
+        return func(*args, **kwargs)
+
+    def fake_transcribe(
+        audio_bytes: bytes,
+        *,
+        suffix: str = ".bin",
+    ) -> tuple[str, list[TranscriptSegment], str | None]:
+        assert audio_bytes == b"fake-audio"
+        assert suffix == ".mp3"
+        return "hello", [TranscriptSegment("hello", 0.0, 1.0)], "en"
+
+    monkeypatch.setattr(main_module.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(main_module, "transcribe", fake_transcribe)
+
+    class FakeUpload:
+        filename = "a.mp3"
+
+        async def read(self) -> bytes:
+            return b"fake-audio"
+
+    response = asyncio.run(
+        main_module.parse(
+            FakeUpload(),  # type: ignore[arg-type]
+            content_type="audio/mpeg",
+        )
+    )
+
+    assert response.extraction is not None
+    assert response.extraction.raw_text == "hello"
+    assert used_worker is True

@@ -1,6 +1,6 @@
 """parser マイクロサービス共通の FastAPI app factory。
 
-各 parser サービス(docling/marker/unstructured/mineru/dots_ocr)は本 factory を
+各 parser サービス(docling/marker/unstructured/unlimited_ocr/mineru/dots_ocr)は本 factory を
 使って同一の HTTP 契約(`POST /parse` / `GET /health`)を公開する。fastapi は
 optional extra `service` でのみ要求し、core の依存(pydantic + charset-normalizer)は
 軽量に保つ。
@@ -8,6 +8,7 @@ optional extra `service` でのみ要求し、core の依存(pydantic + charset-
 
 from __future__ import annotations
 
+import asyncio
 import importlib.metadata
 import importlib.util
 import json
@@ -85,14 +86,14 @@ def create_parse_app(
 ) -> FastAPI:
     """1 parser サービス用の FastAPI app を生成する。
 
-    backend: adapter 名(docling/marker/unstructured/mineru/dots_ocr)。
+    backend: adapter 名(docling/marker/unstructured/unlimited_ocr/mineru/dots_ocr)。
     import_name / distribution_names: readiness 表示の version 検出に使う。
     runtime_health: package 導入以外に必要な外部 runtime(vLLM 等)の疎通確認。
     """
     app = FastAPI(title=title or f"parser-{backend}")
 
     @app.get("/health", response_model=ParseHealth)
-    def health() -> ParseHealth:
+    async def health() -> ParseHealth:
         installed, version = _detect_version(import_name, distribution_names)
         runtime_ready = True
         if installed and runtime_health is not None:
@@ -106,8 +107,8 @@ def create_parse_app(
 
     # readiness は HEAD/GET いずれでも疎通確認できるよう alias を用意。
     @app.get("/api/ready", response_model=ParseHealth)
-    def ready() -> ParseHealth:
-        return health()
+    async def ready() -> ParseHealth:
+        return await health()
 
     @app.post("/parse", response_model=ParseResponse)
     async def parse(
@@ -120,7 +121,8 @@ def create_parse_app(
         effective_content_type = content_type or (
             profile.content_type if profile is not None else ""
         )
-        result: ParserRegistryResult = run_external_adapter(
+        result: ParserRegistryResult = await asyncio.to_thread(
+            run_external_adapter,
             backend,
             source_bytes,
             profile,
@@ -146,7 +148,7 @@ def create_service_parse_app(
     app = FastAPI(title=title or f"parser-{backend}")
 
     @app.get("/health", response_model=ParseHealth)
-    def health() -> ParseHealth:
+    async def health() -> ParseHealth:
         configured = is_configured() if is_configured is not None else True
         return ParseHealth(
             status="ok" if configured else "degraded",
@@ -156,8 +158,8 @@ def create_service_parse_app(
         )
 
     @app.get("/api/ready", response_model=ParseHealth)
-    def ready() -> ParseHealth:
-        return health()
+    async def ready() -> ParseHealth:
+        return await health()
 
     @app.post("/parse", response_model=ParseResponse)
     async def parse_endpoint(

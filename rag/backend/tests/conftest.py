@@ -43,34 +43,6 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     _reset_runtime_settings(get_settings(), tmp_path)
 
 
-@pytest.fixture(autouse=True)
-def stub_chunking_stage_service(
-    request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """アプリテストでは chunking microservice 応答を stub し、runtime fallback は使わない。"""
-    if request.node.path.name == "test_pipeline_stage_client.py":
-        return
-
-    from rag_pipeline_core.stage import ChunkingStageRequest
-
-    from app.clients.pipeline_stage import PipelineStageClient
-    from app.rag.chunking import Chunk, chunk_extraction_with_strategy
-
-    def run_chunking(self: PipelineStageClient, payload: ChunkingStageRequest) -> list[Chunk]:
-        return chunk_extraction_with_strategy(
-            payload.extraction,
-            strategy=payload.strategy,
-            chunk_size=payload.chunk_size,
-            overlap=payload.overlap,
-            child_size=payload.child_size,
-            sentence_window_size=payload.sentence_window_size,
-            min_chars=payload.min_chars,
-        )
-
-    monkeypatch.setattr(PipelineStageClient, "run_chunking", run_chunking)
-
-
 @pytest.fixture
 def oracle_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """実 Oracle 26ai を使う統合テスト用。未到達なら skip し、作成行を後始末する。
@@ -162,6 +134,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.rag_parser_docling_enabled = False
     settings.rag_parser_marker_enabled = False
     settings.rag_parser_unstructured_enabled = False
+    settings.rag_parser_unlimited_ocr_enabled = False
     settings.rag_parser_mineru_enabled = False
     settings.rag_parser_dots_ocr_enabled = False
     settings.rag_parser_glm_ocr_enabled = False
@@ -170,6 +143,15 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_genai_rerank_model = "cohere.rerank-v4.0-fast"
     settings.rag_agentic_profile = "off"
     settings.rag_agentic_max_subqueries = 3
+    settings.rag_chunking_service_enabled = False
+    settings.rag_vector_index_service_enabled = False
+    settings.rag_graph_service_enabled = False
+    settings.rag_generation_service_enabled = False
+    settings.rag_guardrail_service_enabled = False
+    settings.rag_agentic_service_enabled = False
+    settings.rag_grounding_service_enabled = False
+    settings.rag_evaluation_service_enabled = False
+    settings.rag_retrieval_service_enabled = False
     settings.rag_pdf_segmentation_enabled = True
     settings.rag_pdf_max_pages_per_segment = 10
     settings.rag_pdf_max_segments = 300

@@ -3,7 +3,7 @@
 決定論ロジックは共有パッケージ ``rag_pipeline_core.graph`` を単一ソースとして使い、backend と
 graphrag マイクロサービスが同一結果を返す。`rag_graph_service_enabled` が真のとき profile 解決を
 pipeline-graphrag サービスへ委譲する。無効時は in-process(同一ロジック)、有効時の
-未達/失敗は処理停止する。
+未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は処理停止する。
 legacy `rag_graph_enabled=True` は full 相当(後方互換)。Temporal GraphRAG は
 `rag_graph_temporal_enabled`(full のとき timestamp 付与)。外部グラフ DB は導入しない。
 """
@@ -109,7 +109,7 @@ def resolve_graph_adapter(settings: Settings) -> GraphAdapterParams:
     """Settings から GraphRAG アダプターの解決済みパラメータを作る。
 
     `rag_graph_service_enabled` のときは pipeline-graphrag サービスへ委譲する。
-    無効時は in-process(同一 rag_pipeline_core ロジック)、有効時の未達/失敗は停止する。
+    無効時と remote 未到達時は in-process(同一 rag_pipeline_core ロジック)へ縮退する。
     """
     profile = normalize_graph_profile(getattr(settings, "rag_graph_profile", DEFAULT_GRAPH_PROFILE))
     legacy_enabled = bool(getattr(settings, "rag_graph_enabled", False))

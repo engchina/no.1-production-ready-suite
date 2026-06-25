@@ -1,7 +1,7 @@
-"""MinerU / Dots.OCR の remap 層を fake SDK module で決定論検証する。
+"""GPU OCR の remap 層を fake SDK module で決定論検証する。
 
-GPU は CI 非搭載のため、実 OCR(GPU シーム `_run_mineru` / `_run_dots_ocr`)が呼ぶ SDK を
-fake module へ差し替え、出力(markdown / 要素)が `StructuredExtraction` へ正しく
+GPU は CI 非搭載のため、実 OCR(GPU シーム)が呼ぶ SDK を fake module へ差し替え、
+出力(markdown / 要素)が `StructuredExtraction` へ正しく
 再マップされることだけを検証する。実 GPU 実行は手動 integration で確認する。
 """
 
@@ -34,6 +34,7 @@ def _pdf_profile() -> SourceProfile:
 @pytest.mark.parametrize(
     ("backend", "module_name", "entry"),
     [
+        ("unlimited_ocr", "unlimited_ocr", "parse"),
         ("mineru", "mineru", "parse_document"),
         ("dots_ocr", "dots_ocr", "parse"),
         ("glm_ocr", "glm_ocr", "parse"),
@@ -335,6 +336,59 @@ def test_glm_ocr_pipeline_requires_cuda(monkeypatch: pytest.MonkeyPatch) -> None
         registry._load_glm_ocr_pipeline("test/glm-ocr")
 
 
+def test_unlimited_ocr_pipeline_uses_dtype_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry._UNLIMITED_OCR_PIPELINE_CACHE.clear()
+    captured: dict[str, object] = {}
+
+    class FakeModel:
+        device: object | None = None
+
+        def eval(self) -> FakeModel:
+            return self
+
+        def to(self, device: object) -> FakeModel:
+            self.device = device
+            return self
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model_id: str, **kwargs: object) -> object:
+            captured["tokenizer_model_id"] = model_id
+            captured["tokenizer_kwargs"] = kwargs
+            return object()
+
+    class FakeAutoModel:
+        @staticmethod
+        def from_pretrained(model_id: str, **kwargs: object) -> FakeModel:
+            captured["model_id"] = model_id
+            captured["model_kwargs"] = kwargs
+            return FakeModel()
+
+    fake_torch = types.SimpleNamespace(
+        bfloat16="bfloat16",
+        float16="float16",
+        float32="float32",
+        cuda=types.SimpleNamespace(is_available=lambda: True),
+        device=lambda value: f"device:{value}",
+    )
+    fake_transformers = types.SimpleNamespace(
+        AutoTokenizer=FakeAutoTokenizer,
+        AutoModel=FakeAutoModel,
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    _tokenizer, model = registry._load_unlimited_ocr_pipeline("test/unlimited-ocr")
+
+    model_kwargs = captured["model_kwargs"]
+    assert isinstance(model_kwargs, dict)
+    assert model_kwargs["dtype"] == "bfloat16"
+    assert "torch_dtype" not in model_kwargs
+    assert model.device == "device:cuda:0"
+
+
 def test_glm_ocr_without_wrapper_uses_transformers_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -391,6 +445,37 @@ def test_glm_ocr_without_wrapper_uses_transformers_fallback(
     assert result.fallback_used is False
     assert result.extraction is not None
     assert "OCR" in result.extraction.raw_text
+
+
+def test_unlimited_ocr_without_wrapper_uses_transformers_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry._UNLIMITED_OCR_PIPELINE_CACHE.clear()
+    sys.modules.pop("unlimited_ocr", None)
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png")
+    empty_cache_calls: list[str] = []
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(empty_cache=lambda: empty_cache_calls.append("empty"))
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    registry._UNLIMITED_OCR_PIPELINE_CACHE["test"] = (object(), object())
+
+    class FakeModel:
+        def infer(self, _image_path: str, output_path: str, **_kwargs: object) -> None:
+            Path(output_path, "source.md").write_text("# Unlimited OCR\n", encoding="utf-8")
+
+    monkeypatch.setattr(registry, "_module_available", lambda name: name == "transformers")
+    monkeypatch.setattr(
+        registry,
+        "_load_unlimited_ocr_pipeline",
+        lambda _model_id: (object(), FakeModel()),
+    )
+
+    assert registry._run_unlimited_ocr_transformers(source) == "# Unlimited OCR\n"
+    assert registry._UNLIMITED_OCR_PIPELINE_CACHE == {}
+    assert empty_cache_calls == ["empty"]
 
 
 def test_glm_ocr_vllm_posts_image_and_reads_chat_completion(

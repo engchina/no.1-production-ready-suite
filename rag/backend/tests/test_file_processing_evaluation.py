@@ -1113,11 +1113,22 @@ def test_chunk_size_compliance_requires_hash_target_and_bounded_chunks() -> None
             "chunk_size_overflow_reason": "atomic_block",
         },
     )
-
-    assert evaluation_module._check_chunk_size_compliance([valid, justified_table]) == (
-        "passed",
-        "ok",
+    delimiter_chunk = Chunk(
+        text="長い本文" * 60,
+        index=3,
+        start_offset=0,
+        end_offset=len("長い本文" * 60),
+        metadata={
+            "content_kind": "text",
+            "chunk_fixed_delimiter": True,
+            "text_chars": len("長い本文" * 60),
+            "text_sha256": sha256(("長い本文" * 60).encode()).hexdigest(),
+        },
     )
+
+    assert evaluation_module._check_chunk_size_compliance(
+        [valid, justified_table, delimiter_chunk]
+    ) == ("passed", "ok")
     assert evaluation_module._check_chunk_size_compliance([oversized]) == (
         "failure",
         "chunk_size_limit_exceeded",

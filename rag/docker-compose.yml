@@ -1,13 +1,14 @@
 # parser は独立マイクロサービス化している(services/parsers/<name>)。
 # backend / ingestion-worker は重い parser 依存を持たず、取込時に各 parser サービスへ
 # HTTP 委譲する(未達時は local / Enterprise AI VLM へ安全に fallback)。
-# CPU parser(docling/marker/unstructured)は既定起動、GPU parser(mineru/dots_ocr)は
+# CPU parser(docling/marker/unstructured)は既定起動、GPU parser(unlimited_ocr/mineru/dots_ocr/glm_ocr)は
 # `--profile gpu` で opt-in する。
 
 x-parser-service-urls: &parser-service-urls
   RAG_PARSER_DOCLING_SERVICE_URL: http://parser-docling:8000
   RAG_PARSER_MARKER_SERVICE_URL: http://parser-marker:8000
   RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000
+  RAG_PARSER_UNLIMITED_OCR_SERVICE_URL: http://parser-unlimited-ocr:8000
   RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
   RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
   RAG_PARSER_DOTS_OCR_VLLM_SERVICE_URL: http://parser-dots-ocr-vllm:8000
@@ -27,6 +28,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      additional_contexts:
+        backend_core: ../no.1-production-ready-platform/packages/backend_core
     env_file:
       - path: ./backend/.env
         required: false
@@ -34,8 +37,9 @@ services:
       <<: *parser-service-urls
       # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
       ENVIRONMENT: prod
+      LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
       LOCAL_STORAGE_DIR: /u01/production-ready-rag
-      MODEL_SETTINGS_FILE: model-settings.json
+      MODEL_SETTINGS_FILE: /u01/production-ready-rag/model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-60}
@@ -58,9 +62,10 @@ services:
     # backend へマウントする(既定はコメントアウト=可視化のみで socket 非公開)。
     #   - /var/run/docker.sock:/var/run/docker.sock
     #   - ./docker-compose.yml:/app/docker-compose.yml:ro
-    # OCI 設定 / Oracle wallet をマウント
+    # OCI 設定は権限調整済みの named volume に一度だけ seed して使う。
     volumes:
-      - ~/.oci:/home/appuser/.oci:ro
+      - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
+      - oci-config:/home/appuser/.oci
       - backend-local-storage:/u01/production-ready-rag
     healthcheck:
       test:
@@ -76,14 +81,17 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      additional_contexts:
+        backend_core: ../no.1-production-ready-platform/packages/backend_core
     env_file:
       - path: ./backend/.env
         required: false
     environment:
       <<: *parser-service-urls
       ENVIRONMENT: prod
+      LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
       LOCAL_STORAGE_DIR: /u01/production-ready-rag
-      MODEL_SETTINGS_FILE: model-settings.json
+      MODEL_SETTINGS_FILE: /u01/production-ready-rag/model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
       INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
       INGESTION_QUEUE_WORKER_CONCURRENCY: ${INGESTION_QUEUE_WORKER_CONCURRENCY:-2}
@@ -96,8 +104,11 @@ services:
       - sh
       - -c
       - "exec uv run --no-sync python -m app.rag.ingestion_worker"
+    healthcheck:
+      disable: true
     volumes:
-      - ~/.oci:/home/appuser/.oci:ro
+      - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
+      - oci-config:/home/appuser/.oci
       - backend-local-storage:/u01/production-ready-rag
 
   # ---- 前処理マイクロサービス(CPU・既定起動、1 変換 = 1 独立サービス)----
@@ -164,6 +175,27 @@ services:
     restart: unless-stopped
 
   # ---- parser マイクロサービス(GPU・`--profile gpu` で opt-in)----
+  parser-unlimited-ocr:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: services/parsers/unlimited_ocr/Dockerfile
+    environment:
+      UNLIMITED_OCR_MODEL_ID: ${UNLIMITED_OCR_MODEL_ID:-baidu/Unlimited-OCR}
+      UNLIMITED_OCR_DEVICE: ${UNLIMITED_OCR_DEVICE:-cuda:0}
+      UNLIMITED_OCR_TORCH_DTYPE: ${UNLIMITED_OCR_TORCH_DTYPE:-bfloat16}
+      UNLIMITED_OCR_DPI: ${UNLIMITED_OCR_DPI:-300}
+    restart: unless-stopped
+    volumes:
+      - hf-cache:/home/appuser/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
   parser-mineru:
     profiles: ["gpu"]
     build:
@@ -302,7 +334,7 @@ services:
     environment:
       OCI_CONFIG_FILE: /home/appuser/.oci/config
     volumes:
-      - ~/.oci:/home/appuser/.oci:ro
+      - oci-config:/home/appuser/.oci
 
   parser-oci-document-understanding:
     profiles: ["oci"]
@@ -316,7 +348,7 @@ services:
     environment:
       OCI_CONFIG_FILE: /home/appuser/.oci/config
     volumes:
-      - ~/.oci:/home/appuser/.oci:ro
+      - oci-config:/home/appuser/.oci
 
   # ---- pipeline ステージのプラグイン(マイクロサービス)----
   pipeline-chunking:
@@ -385,4 +417,5 @@ services:
 
 volumes:
   backend-local-storage:
+  oci-config:
   hf-cache:

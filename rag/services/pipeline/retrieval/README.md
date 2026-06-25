@@ -17,8 +17,9 @@ backend が実行**し、本サービスは戦略の「決定」のみを担う(
   mode/strategy は wire 中立の文字列で受け渡し、backend が SearchMode/SearchStrategy へ写す。
 - `GET /health` → `StageHealth`。
 
-backend は `RAG_RETRIEVAL_SERVICE_ENABLED` 真かつ URL 設定時に strategy 解決を委譲し、未達/失敗時は
-in-process(同一ロジック)へ安全縮退する。
+backend は `RAG_RETRIEVAL_SERVICE_ENABLED` 真かつ URL 設定時に strategy 解決を委譲し、
+サービス未起動・未到達時は in-process(同一ロジック)へ安全縮退する。remote が応答した後の
+HTTP error / 不正応答は壊れたサービスとして停止する。
 
 ## 新戦略(段階導入予定)
 

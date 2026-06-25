@@ -44,6 +44,8 @@ describe("source profile labels", () => {
   });
 
   it("parser backend labels hide external adapter implementation names", () => {
+    expect(parserBackendLabel("unlimited_ocr_adapter")).toBe("Unlimited-OCR");
+    expect(isSameParserBackend("unlimited_ocr_adapter", "unlimited_ocr")).toBe(true);
     expect(parserBackendLabel("mineru_adapter")).toBe("MinerU");
     expect(isSameParserBackend("mineru_adapter", "mineru")).toBe(true);
   });

@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from app.config import ParserAdapterBackend
 from app.rag.parser_adapter_readiness import (
@@ -29,7 +29,14 @@ from app.rag.parser_adapter_routing import (
 # 含める(schema の ParserAdapterScoreBackendName と一致)。採点対象集合は ADAPTER_SCORE_BACKENDS で
 # 別途 CPU/local に限定する。
 ParserAdapterScoreBackend = Literal[
-    "local", "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
+    "local",
+    "docling",
+    "marker",
+    "unstructured",
+    "unlimited_ocr",
+    "mineru",
+    "dots_ocr",
+    "glm_ocr",
 ]
 ParserAdapterScoreStatus = Literal[
     "recommended",
@@ -321,8 +328,8 @@ def _attempted_source_order(
 ) -> tuple[ParserAdapterScoreBackend, ...]:
     if runtime.adapter_backend == "local":
         return ()
-    if runtime.adapter_backend in {"docling", "marker", "unstructured"}:
-        return (runtime.adapter_backend,) if runtime.adapter_backend in candidate_order else ()
+    if runtime.adapter_backend in candidate_order:
+        return (cast(ParserAdapterScoreBackend, runtime.adapter_backend),)
     return ()
 
 
@@ -366,7 +373,11 @@ def _source_route_warning_codes(
     if source_kind == "audio":
         warning_codes.append("unsupported_audio")
         warning_codes.append("audio_transcription_not_configured")
-    if runtime.adapter_backend in {"docling", "marker", "unstructured"} and not attempted_order:
+    if (
+        runtime.adapter_backend in adapter_by_backend
+        and candidate_order
+        and not attempted_order
+    ):
         warning_codes.append(f"{runtime.adapter_backend}_adapter_source_unsupported")
     for backend in candidate_order:
         adapter = adapter_by_backend.get(backend)

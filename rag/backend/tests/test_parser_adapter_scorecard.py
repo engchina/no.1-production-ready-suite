@@ -248,6 +248,7 @@ def test_source_routes_follow_selected_adapter_support(
         "docling",
         "marker",
         "unstructured",
+        "unlimited_ocr",
         "mineru",
         "glm_ocr",
     )
@@ -258,6 +259,7 @@ def test_source_routes_follow_selected_adapter_support(
         "marker",
         "docling",
         "dots_ocr",
+        "unlimited_ocr",
         "mineru",
         "glm_ocr",
     )

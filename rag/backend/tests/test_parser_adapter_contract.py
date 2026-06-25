@@ -1,13 +1,12 @@
 """parser adapter compatibility matrix のテスト。"""
 
 import json
-import sys
 from dataclasses import asdict
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 from pytest import MonkeyPatch
+from rag_parser_core import registry as parser_registry
 
 from app.config import Settings
 from app.rag import parser_adapter_contract as parser_adapter_contract_module
@@ -144,27 +143,7 @@ def test_strict_compatibility_matrix_requires_backend_schema_remap_evidence(
 def test_compatibility_matrix_runs_installed_adapter_remap(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """runtime に package があれば parse_with_registry 経由で schema remap を検証する。"""
-    unstructured_module = ModuleType("unstructured")
-    unstructured_module.__dict__["__version__"] = "7.8.9"
-    partition_package = ModuleType("unstructured.partition")
-    auto_module = ModuleType("unstructured.partition.auto")
-
-    class FakeElement:
-        id = "compatibility-element-1"
-        category = "NarrativeText"
-        text = "非機密 artifact には入れない本文"
-        metadata = SimpleNamespace(page_number=1)
-
-    def partition(*, filename: str, content_type: str) -> list[object]:
-        assert filename.endswith(".pdf")
-        assert content_type == "application/pdf"
-        return [FakeElement()]
-
-    auto_module.__dict__["partition"] = partition
-    monkeypatch.setitem(sys.modules, "unstructured", unstructured_module)
-    monkeypatch.setitem(sys.modules, "unstructured.partition", partition_package)
-    monkeypatch.setitem(sys.modules, "unstructured.partition.auto", auto_module)
+    """runtime に package があれば parser service runner 経由で schema remap を検証する。"""
     monkeypatch.setattr(
         parser_adapter_readiness,
         "_package_info",
@@ -173,6 +152,43 @@ def test_compatibility_matrix_runs_installed_adapter_remap(
             "7.8.9" if import_name == "unstructured" else None,
             import_name if import_name == "unstructured" else None,
         ),
+    )
+
+    def parser_service_runner(
+        _self: object,
+        backend: str,
+        _source_bytes: bytes,
+        _source_profile: object,
+        content_type: str,
+        *,
+        fail_fast: bool = False,
+    ) -> ParserRegistryResult:
+        assert backend == "unstructured"
+        assert content_type == "application/pdf"
+        assert fail_fast is False
+        return ParserRegistryResult(
+            extraction=StructuredExtraction(
+                raw_text="artifact には raw_text を出さない",
+                pages=[ExtractionPage(page_number=1, element_ids=["compatibility-element-1"])],
+                elements=[
+                    DocumentElement(
+                        kind="text",
+                        text="非機密 artifact には入れない本文",
+                        element_id="compatibility-element-1",
+                        source_parser="unstructured_adapter",
+                        page_number=1,
+                    )
+                ],
+            ),
+            parser_backend="unstructured",
+            parser_version="7.8.9",
+            template="pdf_layout",
+        )
+
+    monkeypatch.setattr(
+        parser_adapter_contract_module.ParserServiceClient,
+        "runner",
+        parser_service_runner,
     )
 
     matrix = run_parser_adapter_compatibility_matrix(
@@ -194,6 +210,131 @@ def test_compatibility_matrix_runs_installed_adapter_remap(
     assert case.element_count == 1
     assert "schema_remap_contract_ok" in case.reason_codes
     assert "非機密 artifact" not in json.dumps(asdict(matrix), ensure_ascii=False)
+
+
+def test_compatibility_matrix_uses_parser_service_runner_for_unlimited_ocr(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """GPU OCR adapter は backend in-process ではなく parser service runner で検証する。"""
+    fixture_root = tmp_path / "fixtures"
+    fixture_root.mkdir()
+    (fixture_root / "scan.pdf").write_bytes(b"%PDF-1.7 scanned")
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda import_name, _distribution_names: (
+            import_name == "transformers",
+            "4.57.1" if import_name == "transformers" else None,
+            import_name if import_name == "transformers" else None,
+        ),
+    )
+    calls: list[str] = []
+
+    def parser_service_runner(
+        _self: object,
+        backend: str,
+        source_bytes: bytes,
+        source_profile: Any,
+        content_type: str,
+        *,
+        fail_fast: bool = False,
+    ) -> ParserRegistryResult:
+        calls.append(backend)
+        assert source_bytes == b"%PDF-1.7 scanned"
+        assert source_profile.sanitized_file_name == "scan.pdf"
+        assert content_type == "application/pdf"
+        assert fail_fast is False
+        return ParserRegistryResult(
+            extraction=StructuredExtraction(
+                raw_text="artifact には raw_text を出さない",
+                elements=[
+                    DocumentElement(
+                        kind="text",
+                        text="非機密 artifact には入れない本文",
+                        element_id="unlimited-ocr-el-1",
+                        source_parser="unlimited_ocr_adapter",
+                        page_number=1,
+                    )
+                ],
+            ),
+            parser_backend="unlimited_ocr",
+            parser_version="unlimited_ocr:test",
+            template="ocr_page",
+        )
+
+    monkeypatch.setattr(
+        parser_adapter_contract_module.ParserServiceClient,
+        "runner",
+        parser_service_runner,
+    )
+
+    matrix = run_parser_adapter_compatibility_matrix(
+        Settings(
+            rag_parser_adapter_backend="unlimited_ocr",
+            rag_parser_unlimited_ocr_enabled=True,
+        ),
+        fixture_root=fixture_root,
+        fixture_specs=(
+            ParserAdapterFixtureSpec(
+                source_kind="pdf",
+                file_name="scan.pdf",
+                content_type="application/pdf",
+            ),
+        ),
+        backends=["unlimited_ocr"],
+    )
+
+    assert calls == ["unlimited_ocr"]
+    assert matrix.passed is True
+    assert matrix.cases[0].status == "passed"
+
+
+def test_compatibility_matrix_unlimited_ocr_unconfigured_service_falls_back(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """service 未設定時は GPU OCR を in-process 起動せず service fallback として記録する。"""
+    fixture_root = tmp_path / "fixtures"
+    fixture_root.mkdir()
+    (fixture_root / "scan.pdf").write_bytes(b"%PDF-1.7 scanned")
+    monkeypatch.setattr(
+        parser_adapter_readiness,
+        "_package_info",
+        lambda import_name, _distribution_names: (
+            import_name == "transformers",
+            "4.57.1" if import_name == "transformers" else None,
+            import_name if import_name == "transformers" else None,
+        ),
+    )
+    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "transformers")
+    monkeypatch.setattr(
+        parser_registry,
+        "_run_unlimited_ocr_transformers",
+        lambda _path: (_ for _ in ()).throw(AssertionError("in-process OCR must not run")),
+    )
+
+    matrix = run_parser_adapter_compatibility_matrix(
+        Settings(
+            rag_parser_adapter_backend="unlimited_ocr",
+            rag_parser_unlimited_ocr_enabled=True,
+            rag_parser_unlimited_ocr_service_url="",
+        ),
+        fixture_root=fixture_root,
+        fixture_specs=(
+            ParserAdapterFixtureSpec(
+                source_kind="pdf",
+                file_name="scan.pdf",
+                content_type="application/pdf",
+            ),
+        ),
+        backends=["unlimited_ocr"],
+    )
+
+    case = matrix.cases[0]
+    assert matrix.passed is False
+    assert case.status == "fallback"
+    assert case.warning_codes == ("unlimited_ocr_adapter_service_unconfigured",)
 
 
 def test_compatibility_matrix_uses_manifest_fixtures_for_real_remap(

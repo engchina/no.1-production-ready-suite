@@ -19,6 +19,7 @@ ParserAdapterBackend = Literal[
     "docling",
     "marker",
     "unstructured",
+    "unlimited_ocr",
     "mineru",
     "dots_ocr",
     "glm_ocr",
@@ -50,7 +51,16 @@ ChunkingStrategy = Literal[
     "markdown_heading",
     "page_level",
     "fixed_size",
+    "fixed_delimiter",
 ]
+CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
+    "structure_aware",
+    "recursive_character",
+    "sentence_window",
+    "hierarchical_parent_child",
+    "markdown_heading",
+    "page_level",
+}
 RetrievalStrategy = Literal[
     "hybrid_rrf",
     "vector",
@@ -472,8 +482,15 @@ class Settings(BaseSettings):
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
             "sentence_window は文単位、hierarchical_parent_child は親子、"
             "markdown_heading は章節単位、page_level はページ単位、"
-            "fixed_size は章節・文境界を無視した純粋な固定長分割。"
+            "fixed_size は章節・文境界を無視した純粋な固定長分割、"
+            "fixed_delimiter は指定文字列での固定分割。"
         ),
+    )
+    rag_chunk_delimiter: str = Field(
+        default="\\n\\n",
+        min_length=1,
+        max_length=256,
+        description="fixed_delimiter 戦略で使う分割符。\\n / \\t / \\\\ の escape 表現を許可する。",
     )
     rag_chunk_child_size: int = Field(
         default=320,
@@ -917,6 +934,13 @@ class Settings(BaseSettings):
             "Unstructured adapter を feature flag で有効化する。未導入時は安全に fallback する。"
         ),
     )
+    rag_parser_unlimited_ocr_enabled: bool = Field(
+        default=False,
+        description=(
+            "Unlimited-OCR adapter(HuggingFace baidu/Unlimited-OCR)を feature flag で有効化する。"
+            "未導入時は安全に fallback する。GPU parser マイクロサービスで実 OCR を行う。"
+        ),
+    )
     rag_parser_mineru_enabled: bool = Field(
         default=False,
         description=(
@@ -949,6 +973,10 @@ class Settings(BaseSettings):
     rag_parser_unstructured_service_url: str = Field(
         default="http://parser-unstructured:8000",
         description="Unstructured parser マイクロサービスの base URL。",
+    )
+    rag_parser_unlimited_ocr_service_url: str = Field(
+        default="http://parser-unlimited-ocr:8000",
+        description="Unlimited-OCR(GPU)parser マイクロサービスの base URL。",
     )
     rag_parser_mineru_service_url: str = Field(
         default="http://parser-mineru:8000",
@@ -1023,22 +1051,23 @@ class Settings(BaseSettings):
         description="HTTP マイクロサービス retry の最大待機秒数。",
     )
     # --- pipeline ステージのプラグイン(マイクロサービス)化 ---
-    # chunking は必須マイクロサービスとして remote 委譲し、失敗時も in-process へ縮退しない。
-    # その他の opt-in stage は無効時だけ backend in-process。明示有効化後の未達/timeout は停止する。
+    # 各 stage は remote サービスが使える場合だけ委譲し、未起動・未到達なら同一
+    # rag_pipeline_core 実装を backend in-process で実行する。応答済みサービスの HTTP error /
+    # 不正応答は壊れた remote として停止し、静かに隠さない。
     rag_pipeline_stage_timeout_seconds: float = Field(
         default=120.0,
         gt=0,
         description=(
             "pipeline ステージサービス呼び出しの HTTP timeout(秒)。"
-            "chunking は超過・接続失敗時に処理を止め、その他の opt-in stage も明示有効化後は "
-            "接続失敗で停止する。無効時だけ backend in-process を使う。"
+            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
+            "応答済みサービスの HTTP error / 不正応答は停止する。"
         ),
     )
     rag_chunking_service_enabled: bool = Field(
         default=True,
         description=(
-            "互換用の legacy 設定。chunking ステージは常に chunking マイクロサービスへ HTTP "
-            "委譲し、未達/失敗時も backend in-process へ縮退しない。"
+            "chunking ステージの remote 委譲を許可する。ON でもサービス未起動・未到達時は "
+            "backend in-process の同一実装へ縮退する。OFF は常に in-process。"
         ),
     )
     rag_chunking_service_url: str = Field(
@@ -1046,10 +1075,10 @@ class Settings(BaseSettings):
         description="chunking ステージマイクロサービスの base URL。",
     )
     rag_vector_index_service_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "vector_index プロファイル解決を vector_index マイクロサービスへ委譲する。OFF(既定)は "
-            "in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
+            "vector_index プロファイル解決の remote 委譲を許可する。サービス未起動・未到達時は "
+            "backend in-process の同一実装へ縮退する。OFF は常に in-process。"
         ),
     )
     rag_vector_index_service_url: str = Field(
@@ -1057,10 +1086,10 @@ class Settings(BaseSettings):
         description="vector_index ステージマイクロサービスの base URL。",
     )
     rag_graph_service_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "graphrag プロファイル解決を graphrag マイクロサービスへ委譲する。OFF(既定)は "
-            "in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
+            "graphrag プロファイル解決の remote 委譲を許可する。サービス未起動・未到達時は "
+            "backend in-process の同一実装へ縮退する。OFF は常に in-process。"
         ),
     )
     rag_graph_service_url: str = Field(
@@ -1068,10 +1097,10 @@ class Settings(BaseSettings):
         description="graphrag ステージマイクロサービスの base URL。",
     )
     rag_generation_service_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "generation の system prompt 解決を generation マイクロサービスへ委譲する。OFF(既定)は "
-            "in-process(現行挙動)。ON で未達/失敗時は処理を停止する。custom/persona override は "
+            "generation の system prompt 解決の remote 委譲を許可する。サービス未起動・未到達時は "
+            "backend in-process の同一実装へ縮退する。custom/persona override は "
             "backend 側で上乗せする。"
         ),
     )
@@ -1080,10 +1109,11 @@ class Settings(BaseSettings):
         description="generation ステージマイクロサービスの base URL。",
     )
     rag_guardrail_service_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "guardrail の policy 解決(groundedness 閾値 + 監査強調)を guardrail マイクロサービスへ"
-            "委譲する。OFF(既定)は in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
+            "guardrail の policy 解決(groundedness 閾値 + 監査強調)の remote 委譲を許可する。"
+            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
+            "OFF は常に in-process。"
             "OCI Generative AI Guardrails backend(rag_guardrail_backend)とは別レイヤーで共存。"
         ),
     )
@@ -1092,10 +1122,11 @@ class Settings(BaseSettings):
         description="guardrail ステージマイクロサービスの base URL。",
     )
     rag_agentic_service_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "agentic の profile 解決(クエリ計画の挙動フラグ)を agentic マイクロサービスへ委譲する。"
-            "OFF(既定)は in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
+            "agentic の profile 解決(クエリ計画の挙動フラグ)の remote 委譲を許可する。"
+            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
+            "OFF は常に in-process。"
             "実 LLM クエリ計画は backend が OCI Enterprise AI で行う。"
         ),
     )
@@ -1104,10 +1135,11 @@ class Settings(BaseSettings):
         description="agentic ステージマイクロサービスの base URL。",
     )
     rag_grounding_service_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "grounding の preset 解決(検索後処理段フラグ)を grounding マイクロサービスへ委譲する。"
-            "OFF(既定)は in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
+            "grounding の preset 解決(検索後処理段フラグ)の remote 委譲を許可する。"
+            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
+            "OFF は常に in-process。"
             "custom preset は backend の legacy rag_context_* 設定をそのまま使う。"
         ),
     )
@@ -1116,10 +1148,10 @@ class Settings(BaseSettings):
         description="grounding ステージマイクロサービスの base URL。",
     )
     rag_evaluation_service_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "evaluation の suite→閾値解決を evaluation マイクロサービスへ委譲する。OFF(既定)は "
-            "in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
+            "evaluation の suite→閾値解決の remote 委譲を許可する。サービス未起動・未到達時は "
+            "backend in-process の同一実装へ縮退する。OFF は常に in-process。"
         ),
     )
     rag_evaluation_service_url: str = Field(
@@ -1127,10 +1159,11 @@ class Settings(BaseSettings):
         description="evaluation ステージマイクロサービスの base URL。",
     )
     rag_retrieval_service_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "retrieval の strategy 解決(検索挙動フラグ)を retrieval マイクロサービスへ委譲する。"
-            "OFF(既定)は in-process(現行挙動)。ON で未達/失敗時は処理を停止する。"
+            "retrieval の strategy 解決(検索挙動フラグ)の remote 委譲を許可する。"
+            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
+            "OFF は常に in-process。"
             "実 retrieval(Oracle 26ai 経路)は backend が実行する。"
         ),
     )
@@ -1224,6 +1257,13 @@ class Settings(BaseSettings):
             "DU 入出力 Object Storage の namespace。空のときは object_storage_namespace を使う。"
         ),
     )
+    oci_document_understanding_object_storage_region: str = Field(
+        default="",
+        description=(
+            "DU 入出力 Object Storage の region。空のときは OCI_REGION、"
+            "さらに空なら object_storage_region を使う。"
+        ),
+    )
     oci_document_understanding_input_bucket: str = Field(
         default="",
         description=(
@@ -1245,9 +1285,9 @@ class Settings(BaseSettings):
         description="DU 結果 JSON の Object Storage key prefix。",
     )
     oci_document_understanding_language: str = Field(
-        default="JPN",
+        default="ja",
         max_length=8,
-        description="DU の言語ヒント(ISO 639-2、日本語は JPN)。",
+        description="DU の言語ヒント(BCP 47。日本語は ja / ja-JP)。",
     )
     oci_document_understanding_features: list[str] = Field(
         default_factory=lambda: ["DOCUMENT_TEXT_EXTRACTION", "TABLE_EXTRACTION"],
@@ -1388,11 +1428,22 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_rag_chunk_settings(self) -> Self:
         """chunk size と各 chunking 戦略パラメータの整合性を起動時に検証する。"""
+        self.rag_chunk_delimiter = self.rag_chunk_delimiter.strip()
+        if not self.rag_chunk_delimiter:
+            raise ValueError("RAG_CHUNK_DELIMITER を入力してください。")
+        if self.rag_chunking_strategy == "fixed_delimiter":
+            return self
         if self.rag_chunk_overlap >= self.rag_chunk_size:
             raise ValueError("RAG_CHUNK_OVERLAP は RAG_CHUNK_SIZE より小さくしてください。")
-        if self.rag_chunk_child_size >= self.rag_chunk_size:
+        if (
+            self.rag_chunking_strategy == "hierarchical_parent_child"
+            and self.rag_chunk_child_size >= self.rag_chunk_size
+        ):
             raise ValueError("RAG_CHUNK_CHILD_SIZE は RAG_CHUNK_SIZE より小さくしてください。")
-        if self.rag_chunk_min_chars >= self.rag_chunk_size:
+        if (
+            self.rag_chunking_strategy in CHUNKING_STRATEGIES_WITH_MIN_CHARS
+            and self.rag_chunk_min_chars >= self.rag_chunk_size
+        ):
             raise ValueError("RAG_CHUNK_MIN_CHARS は RAG_CHUNK_SIZE より小さくしてください。")
         return self
 

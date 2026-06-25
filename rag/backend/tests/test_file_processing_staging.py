@@ -243,6 +243,7 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
         "docling",
         "marker",
         "unstructured",
+        "unlimited_ocr",
         "mineru",
         "glm_ocr",
     )
@@ -343,6 +344,7 @@ async def test_file_processing_staging_runner_closes_pending_gates_with_evidence
         "glm_ocr",
         "marker",
         "mineru",
+        "unlimited_ocr",
         "unstructured",
     ]
     assert trend_route_by_kind["pdf"]["selected_backend"] == "local"
@@ -1188,7 +1190,7 @@ async def test_file_processing_staging_runner_requires_traceable_search_citation
     assert threshold_by_metric["page_hit_accuracy"].status == "failed"
     assert any(gate.failure_code == "search_citation_traceability_missing" for gate in failed_gates)
     assert any(
-        gate.failure_code == "canonical_search_citation_traceability_missing"
+        gate.failure_code == "duplicate_alias_citation_traceability_missing"
         for gate in failed_gates
     )
 
@@ -1506,6 +1508,7 @@ def test_file_processing_staging_cli_preflight_only_reports_safe_config_gap(
         "docling",
         "marker",
         "unstructured",
+        "unlimited_ocr",
         "mineru",
         "glm_ocr",
     ]
@@ -1820,6 +1823,7 @@ def test_report_payload_source_routes_are_contract_aware(
         "docling",
         "marker",
         "unstructured",
+        "unlimited_ocr",
         "mineru",
         "glm_ocr",
     )
@@ -3683,7 +3687,11 @@ class FakeSearch:
 
     async def run(self, request: SearchRequest) -> SearchResponse:
         knowledge_base_id = request.knowledge_base_ids[0]
-        document_ids = self.oracle.knowledge_base_documents.get(knowledge_base_id, set())
+        document_ids = set(self.oracle.knowledge_base_documents.get(knowledge_base_id, set()))
+        for document_id in list(document_ids):
+            document = self.oracle.documents.get(document_id)
+            if document is not None and document.duplicate_of_document_id is not None:
+                document_ids.add(document.duplicate_of_document_id)
         document_filter = request.filters.get("document_id")
         if document_filter:
             document_ids = {document_filter} & document_ids

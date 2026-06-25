@@ -47,6 +47,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_marker_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unlimited_ocr_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_glm_ocr_enabled", False)
@@ -80,6 +81,8 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["marker"]["warning_code"] == "adapter_flag_ignored_by_backend"
     assert by_backend["unstructured"]["install_package"] == "unstructured[all-docs]==0.23.1"
     assert by_backend["unstructured"]["status"] == "disabled"
+    assert by_backend["unlimited_ocr"]["install_package"].startswith("transformers")
+    assert by_backend["unlimited_ocr"]["status"] == "disabled"
     assert by_backend["mineru"]["install_package"] == "mineru[core]==3.4.0"
     assert by_backend["mineru"]["status"] == "disabled"
     assert by_backend["dots_ocr"]["status"] == "disabled"
@@ -94,6 +97,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
         "docling",
         "marker",
         "unstructured",
+        "unlimited_ocr",
         "mineru",
         "glm_ocr",
     ]
@@ -340,6 +344,7 @@ def test_update_parser_adapter_settings_persists_gpu_flags_and_preserves_omitted
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
+    monkeypatch.setattr(settings, "rag_parser_unlimited_ocr_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_mineru_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_dots_ocr_enabled", True)
     monkeypatch.setattr(settings, "rag_parser_glm_ocr_enabled", False)
@@ -365,6 +370,7 @@ def test_update_parser_adapter_settings_persists_gpu_flags_and_preserves_omitted
         "/api/settings/parser-adapters",
         json={
             "adapter_backend": "mineru",
+            "unlimited_ocr_enabled": True,
             "mineru_enabled": True,
             "dots_ocr_enabled": False,
             "glm_ocr_enabled": True,
@@ -377,17 +383,20 @@ def test_update_parser_adapter_settings_persists_gpu_flags_and_preserves_omitted
     assert body["effective_order"] == ["mineru"]
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
     assert by_backend["docling"]["enabled"] is True
+    assert by_backend["unlimited_ocr"]["enabled"] is True
     assert by_backend["mineru"]["enabled"] is True
     assert by_backend["dots_ocr"]["enabled"] is False
     assert by_backend["glm_ocr"]["enabled"] is True
     assert settings.rag_parser_adapter_backend == "mineru"
     assert settings.rag_parser_docling_enabled is True
+    assert settings.rag_parser_unlimited_ocr_enabled is True
     assert settings.rag_parser_mineru_enabled is True
     assert settings.rag_parser_dots_ocr_enabled is False
     assert settings.rag_parser_glm_ocr_enabled is True
     persisted = env_file.read_text(encoding="utf-8")
     assert "RAG_PARSER_ADAPTER_BACKEND=mineru" in persisted
     assert "RAG_PARSER_DOCLING_ENABLED=true" in persisted
+    assert "RAG_PARSER_UNLIMITED_OCR_ENABLED=true" in persisted
     assert "RAG_PARSER_MINERU_ENABLED=true" in persisted
     assert "RAG_PARSER_DOTS_OCR_ENABLED=false" in persisted
     assert "RAG_PARSER_GLM_OCR_ENABLED=true" in persisted
@@ -500,6 +509,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     monkeypatch.setattr(settings, "rag_chunk_child_size", 280)
     monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 4)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 50)
+    monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n---\\n")
 
     resp = client.get("/api/settings/chunking")
 
@@ -511,6 +521,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
     assert body["child_size"] == 280
     assert body["sentence_window_size"] == 4
     assert body["min_chars"] == 50
+    assert body["delimiter"] == "\\n---\\n"
     assert body["config_source"] == "runtime"
     names = [item["name"] for item in body["strategies"]]
     assert names == [
@@ -521,6 +532,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
         "markdown_heading",
         "page_level",
         "fixed_size",
+        "fixed_delimiter",
     ]
     selected = [item["name"] for item in body["strategies"] if item["selected"]]
     assert selected == ["sentence_window"]
@@ -538,6 +550,7 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
     monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 3)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
+    monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     resp = client.patch(
@@ -549,6 +562,7 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
             "child_size": 300,
             "sentence_window_size": 5,
             "min_chars": 40,
+            "delimiter": "---",
         },
     )
 
@@ -560,11 +574,13 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     assert settings.rag_chunk_size == 1000
     assert settings.rag_chunk_child_size == 300
     assert settings.rag_chunk_min_chars == 40
+    assert settings.rag_chunk_delimiter == "---"
     persisted = env_file.read_text(encoding="utf-8")
     assert "RAG_CHUNKING_STRATEGY=hierarchical_parent_child" in persisted
     assert "RAG_CHUNK_SIZE=1000" in persisted
     assert "RAG_CHUNK_CHILD_SIZE=300" in persisted
     assert "RAG_CHUNK_MIN_CHARS=40" in persisted
+    assert "RAG_CHUNK_DELIMITER=---" in persisted
 
 
 def test_update_chunking_settings_rejects_unknown_strategy() -> None:
@@ -597,6 +613,87 @@ def test_update_chunking_settings_rejects_overlap_not_smaller_than_size() -> Non
     )
 
     assert resp.status_code == 422
+
+
+def test_update_chunking_settings_ignores_non_applicable_bounds_for_fixed_size(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """固定長は child_size / min_chars の cross-field bounds を使わない。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_chunking_strategy", "structure_aware")
+    monkeypatch.setattr(settings, "rag_chunk_size", 800)
+    monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
+    monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
+    monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 3)
+    monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
+    monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
+    _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "fixed_size",
+            "chunk_size": 400,
+            "overlap": 120,
+            "child_size": 400,
+            "sentence_window_size": 3,
+            "min_chars": 400,
+            "delimiter": "\\n\\n",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert settings.rag_chunking_strategy == "fixed_size"
+
+
+def test_update_chunking_settings_rejects_child_size_for_parent_child() -> None:
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "hierarchical_parent_child",
+            "chunk_size": 400,
+            "overlap": 120,
+            "child_size": 400,
+            "sentence_window_size": 3,
+            "min_chars": 0,
+            "delimiter": "\\n\\n",
+        },
+    )
+
+    assert resp.status_code == 422
+
+
+def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_chunking_strategy", "structure_aware")
+    monkeypatch.setattr(settings, "rag_chunk_size", 800)
+    monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
+    monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
+    monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 3)
+    monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
+    monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "fixed_delimiter",
+            "chunk_size": 400,
+            "overlap": 400,
+            "child_size": 400,
+            "sentence_window_size": 3,
+            "min_chars": 400,
+            "delimiter": "---",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert settings.rag_chunking_strategy == "fixed_delimiter"
+    assert "RAG_CHUNK_DELIMITER=---" in env_file.read_text(encoding="utf-8")
 
 
 def test_retrieval_settings_reports_runtime_strategy(monkeypatch: MonkeyPatch) -> None:

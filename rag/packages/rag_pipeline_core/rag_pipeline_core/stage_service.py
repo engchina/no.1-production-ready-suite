@@ -277,6 +277,7 @@ def create_chunking_app(
             child_size=request.child_size,
             sentence_window_size=request.sentence_window_size,
             min_chars=request.min_chars,
+            delimiter=request.delimiter,
         )
         return ChunkingStageResponse.from_chunks(list(chunks))
 

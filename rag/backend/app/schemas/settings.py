@@ -31,10 +31,17 @@ DatabaseConnectionTestStatus = Literal["success", "failed"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 ParserAdapterBackendName = Literal[
-    "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
+    "docling", "marker", "unstructured", "unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"
 ]
 ParserAdapterScoreBackendName = Literal[
-    "local", "docling", "marker", "unstructured", "mineru", "dots_ocr", "glm_ocr"
+    "local",
+    "docling",
+    "marker",
+    "unstructured",
+    "unlimited_ocr",
+    "mineru",
+    "dots_ocr",
+    "glm_ocr",
 ]
 ParserAdapterStatus = Literal["active", "available", "disabled", "ignored", "missing"]
 ParserAdapterContractStatus = Literal[
@@ -56,6 +63,15 @@ ParserAdapterScoreStatus = Literal[
     "ignored",
     "missing",
 ]
+
+_CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
+    "structure_aware",
+    "recursive_character",
+    "sentence_window",
+    "hierarchical_parent_child",
+    "markdown_heading",
+    "page_level",
+}
 
 
 class EnterpriseAiModelEntrySettings(BaseModel):
@@ -519,6 +535,7 @@ class ParserAdapterSettingsUpdate(BaseModel):
     docling_enabled: bool | None = None
     marker_enabled: bool | None = None
     unstructured_enabled: bool | None = None
+    unlimited_ocr_enabled: bool | None = None
     mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None
     glm_ocr_enabled: bool | None = None
@@ -585,6 +602,7 @@ class ChunkingSettingsData(BaseModel):
     child_size: int
     sentence_window_size: int
     min_chars: int
+    delimiter: str
     strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
@@ -598,15 +616,33 @@ class ChunkingSettingsUpdate(BaseModel):
     child_size: int = Field(default=320, ge=80, le=4000)
     sentence_window_size: int = Field(default=3, ge=1, le=20)
     min_chars: int = Field(default=0, ge=0, le=2000)
+    delimiter: str = Field(default="\\n\\n", min_length=1, max_length=256)
+
+    @field_validator("delimiter")
+    @classmethod
+    def normalize_delimiter(cls, value: str) -> str:
+        """分割符の前後空白を設定値へ混入させない。"""
+        delimiter = value.strip()
+        if not delimiter:
+            raise ValueError("delimiter を入力してください。")
+        return delimiter
 
     @model_validator(mode="after")
     def validate_chunk_bounds(self) -> "ChunkingSettingsUpdate":
         """chunk size と各パラメータの整合性を保存前に検証する。"""
+        if self.strategy == "fixed_delimiter":
+            return self
         if self.overlap >= self.chunk_size:
             raise ValueError("overlap は chunk_size より小さくしてください。")
-        if self.child_size >= self.chunk_size:
+        if (
+            self.strategy == "hierarchical_parent_child"
+            and self.child_size >= self.chunk_size
+        ):
             raise ValueError("child_size は chunk_size より小さくしてください。")
-        if self.min_chars >= self.chunk_size:
+        if (
+            self.strategy in _CHUNKING_STRATEGIES_WITH_MIN_CHARS
+            and self.min_chars >= self.chunk_size
+        ):
             raise ValueError("min_chars は chunk_size より小さくしてください。")
         return self
 

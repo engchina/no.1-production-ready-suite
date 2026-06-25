@@ -149,6 +149,52 @@ class FakeWorkspaceOracle:
             self.knowledge_base_assignments.add((knowledge_base_id, document_id))
         return object()
 
+    async def list_documents(
+        self,
+        status: FileStatus | None = None,
+        query: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        knowledge_base_id: str | None = None,
+    ) -> list[DocumentSummary]:
+        documents = list(self.documents.values())
+        if status is not None:
+            documents = [document for document in documents if document.status == status]
+        if query:
+            normalized_query = query.casefold()
+            documents = [
+                document
+                for document in documents
+                if normalized_query in document.file_name.casefold()
+                or (
+                    document.category_name is not None
+                    and normalized_query in document.category_name.casefold()
+                )
+            ]
+        if knowledge_base_id:
+            documents = [
+                document
+                for document in documents
+                if any(ref.id == knowledge_base_id for ref in document.knowledge_bases)
+            ]
+        documents = sorted(documents, key=lambda document: document.uploaded_at, reverse=True)
+        sliced = documents[offset : offset + limit] if limit is not None else documents[offset:]
+        return [DocumentSummary.model_validate(document.model_dump()) for document in sliced]
+
+    async def count_documents(
+        self,
+        status: FileStatus | None = None,
+        query: str | None = None,
+        knowledge_base_id: str | None = None,
+    ) -> int:
+        return len(
+            await self.list_documents(
+                status=status,
+                query=query,
+                knowledge_base_id=knowledge_base_id,
+            )
+        )
+
     async def list_document_chunks(self, document_id: str) -> list[DocumentChunkView]:
         return list(self.chunks.get(document_id, []))
 
@@ -490,6 +536,39 @@ def test_document_upload_returns_assigned_knowledge_bases() -> None:
         {"id": "kb-1", "name": "KB kb-1"},
         {"id": "kb-2", "name": "KB kb-2"},
     ]
+
+
+def test_duplicate_upload_keeps_direct_knowledge_base_memberships(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """重複 upload は重複元 document の KB 所属を増やさない。"""
+    body = b"%PDF-1.7\nsame manager profile"
+    original = client.post(
+        "/api/documents/upload",
+        data={"knowledge_base_ids": "kb-2"},
+        files={"file": ("私の上司.pdf", body, "application/pdf")},
+    )
+    duplicate = client.post(
+        "/api/documents/upload",
+        data={"knowledge_base_ids": "kb-1"},
+        files={"file": ("私の上司.pdf", body, "application/pdf")},
+    )
+
+    assert original.status_code == 200
+    assert duplicate.status_code == 200
+    original_id = original.json()["data"]["id"]
+    duplicate_id = duplicate.json()["data"]["id"]
+
+    original_detail = client.get(f"/api/documents/{original_id}").json()["data"]
+    duplicate_detail = client.get(f"/api/documents/{duplicate_id}").json()["data"]
+    assert [ref["id"] for ref in original_detail["knowledge_bases"]] == ["kb-2"]
+    assert [ref["id"] for ref in duplicate_detail["knowledge_bases"]] == ["kb-1"]
+
+    listed = client.get("/api/documents").json()["data"]["items"]
+    listed_by_id = {document["id"]: document for document in listed}
+    assert [ref["id"] for ref in listed_by_id[original_id]["knowledge_bases"]] == ["kb-2"]
+    assert [ref["id"] for ref in listed_by_id[duplicate_id]["knowledge_bases"]] == ["kb-1"]
+    assert ("kb-1", original_id) not in fake_document_dependencies.knowledge_base_assignments
 
 
 def test_document_upload_returns_source_profile() -> None:

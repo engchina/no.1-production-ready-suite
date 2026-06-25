@@ -594,6 +594,19 @@ describe("api.request envelope", () => {
           warning_code: null,
         },
         {
+          backend: "unlimited_ocr",
+          package_name: "transformers",
+          import_name: "transformers",
+          distribution_name: null,
+          install_package: "transformers (baidu/Unlimited-OCR via HuggingFace)",
+          enabled: false,
+          selected: false,
+          installed: false,
+          status: "disabled",
+          version: null,
+          warning_code: null,
+        },
+        {
           backend: "mineru",
           package_name: "mineru",
           import_name: "mineru",
@@ -658,7 +671,14 @@ describe("api.request envelope", () => {
       source_routes: [
         {
           source_kind: "pdf",
-          candidate_order: ["docling", "marker", "unstructured", "mineru", "glm_ocr"],
+          candidate_order: [
+            "docling",
+            "marker",
+            "unstructured",
+            "unlimited_ocr",
+            "mineru",
+            "glm_ocr",
+          ],
           attempted_order: ["docling"],
           active_order: ["docling"],
           selected_backend: "docling",
@@ -690,6 +710,7 @@ describe("api.request envelope", () => {
     expect(result.adapter_backend).toBe("docling");
     expect(result.effective_order).toEqual(["docling"]);
     expect(result.adapters[1].warning_code).toBe("adapter_flag_ignored_by_backend");
+    expect(result.adapters.map((adapter) => adapter.backend)).toContain("unlimited_ocr");
     expect(result.adapters.map((adapter) => adapter.backend)).toContain("mineru");
     expect(result.service_backends[0].backend).toBe("oci_genai_vision");
     expect(result.source_routes[0].candidate_order).toContain("mineru");
@@ -798,6 +819,7 @@ describe("api.request envelope", () => {
       docling_enabled: true,
       marker_enabled: false,
       unstructured_enabled: true,
+      unlimited_ocr_enabled: false,
       mineru_enabled: false,
       dots_ocr_enabled: false,
       glm_ocr_enabled: false,
@@ -846,6 +868,19 @@ describe("api.request envelope", () => {
           warning_code: "adapter_flag_ignored_by_backend",
         },
         {
+          backend: "unlimited_ocr",
+          package_name: "transformers",
+          import_name: "transformers",
+          distribution_name: null,
+          install_package: "transformers (baidu/Unlimited-OCR via HuggingFace)",
+          enabled: false,
+          selected: false,
+          installed: false,
+          status: "disabled",
+          version: null,
+          warning_code: null,
+        },
+        {
           backend: "dots_ocr",
           package_name: "dots_ocr",
           import_name: "dots_ocr",
@@ -890,7 +925,7 @@ describe("api.request envelope", () => {
     const result = await api.updateParserAdapterSettings(requestPayload);
 
     expect(result.effective_order).toEqual(["docling"]);
-    expect(result.adapters[result.adapters.length - 1]?.backend).toBe("dots_ocr");
+    expect(result.adapters.map((adapter) => adapter.backend)).toContain("unlimited_ocr");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/parser-adapters",
       expect.objectContaining({

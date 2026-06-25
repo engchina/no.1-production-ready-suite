@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import gc
 import html
 import importlib
 import importlib.util
@@ -61,6 +62,9 @@ EXTERNAL_ADAPTER_PACKAGES = {
     # では transformers で HF からモデルをロードして実 OCR する(_run_glm_ocr のフォールバック)。
     # core は依存を増やさず(transformers は実行時 import)、未導入環境では安全に fallback する。
     "glm_ocr": "glm_ocr",
+    # Unlimited-OCR(HuggingFace baidu/Unlimited-OCR)。専用 pip package は無く、GPU サービス
+    # image で transformers からモデルをロードして実 OCR する。
+    "unlimited_ocr": "unlimited_ocr",
 }
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 # service 系 backend。外部 package / parser microservice ではなく、backend が OCI
@@ -636,6 +640,7 @@ def parse_with_registry(
     mineru_enabled: bool = False,
     dots_ocr_enabled: bool = False,
     glm_ocr_enabled: bool = False,
+    unlimited_ocr_enabled: bool = False,
     external_adapter_runner: ExternalAdapterRunner | None = None,
 ) -> ParserRegistryResult:
     """source profile に基づき、ローカル parser で処理できる場合は抽出する。
@@ -700,6 +705,7 @@ def parse_with_registry(
         mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
         glm_ocr_enabled=glm_ocr_enabled,
+        unlimited_ocr_enabled=unlimited_ocr_enabled,
     )
     adapter_fallback_used = bool(adapter_warnings)
     for backend in _requested_external_adapters(
@@ -712,6 +718,7 @@ def parse_with_registry(
         mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
         glm_ocr_enabled=glm_ocr_enabled,
+        unlimited_ocr_enabled=unlimited_ocr_enabled,
     ):
         runner = external_adapter_runner or _default_external_adapter_runner
         adapter_result = runner(
@@ -790,6 +797,7 @@ def _requested_external_adapters(
     mineru_enabled: bool,
     dots_ocr_enabled: bool,
     glm_ocr_enabled: bool,
+    unlimited_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
     if normalized in EXTERNAL_ADAPTER_PACKAGES:
@@ -801,6 +809,7 @@ def _requested_external_adapters(
             mineru_enabled=mineru_enabled,
             dots_ocr_enabled=dots_ocr_enabled,
             glm_ocr_enabled=glm_ocr_enabled,
+            unlimited_ocr_enabled=unlimited_ocr_enabled,
         ) and _external_adapter_supports_source(
             normalized,
             source_profile=source_profile,
@@ -822,6 +831,7 @@ def _external_adapter_disabled_warnings(
     mineru_enabled: bool,
     dots_ocr_enabled: bool,
     glm_ocr_enabled: bool,
+    unlimited_ocr_enabled: bool,
 ) -> tuple[str, ...]:
     normalized = adapter_backend.strip().casefold()
     if normalized not in EXTERNAL_ADAPTER_PACKAGES:
@@ -834,6 +844,7 @@ def _external_adapter_disabled_warnings(
         mineru_enabled=mineru_enabled,
         dots_ocr_enabled=dots_ocr_enabled,
         glm_ocr_enabled=glm_ocr_enabled,
+        unlimited_ocr_enabled=unlimited_ocr_enabled,
     ):
         if _external_adapter_supports_source(
             normalized,
@@ -954,6 +965,13 @@ def _external_adapter_supports_source(
             or normalized_content_type.startswith("image/")
             or extension in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp"}
         )
+    if backend == "unlimited_ocr":
+        return (
+            modality in {SourceModality.PDF, SourceModality.IMAGE}
+            or normalized_content_type == "application/pdf"
+            or normalized_content_type.startswith("image/")
+            or extension in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        )
     return False
 
 
@@ -1010,11 +1028,13 @@ def _external_adapter_flag_enabled(
     mineru_enabled: bool,
     dots_ocr_enabled: bool,
     glm_ocr_enabled: bool,
+    unlimited_ocr_enabled: bool,
 ) -> bool:
     return {
         "docling": docling_enabled,
         "marker": marker_enabled,
         "unstructured": unstructured_enabled,
+        "unlimited_ocr": unlimited_ocr_enabled,
         "mineru": mineru_enabled,
         "dots_ocr": dots_ocr_enabled,
         "glm_ocr": glm_ocr_enabled,
@@ -1030,7 +1050,7 @@ def run_external_adapter(
     """単一の外部 adapter を同一プロセス内で実行する公開 API。
 
     parser マイクロサービスはこの関数を呼んで、その image に導入済みの adapter
-    (docling/marker/unstructured/mineru/dots_ocr)で parse し、結果を
+    (docling/marker/unstructured/unlimited_ocr/mineru/dots_ocr)で parse し、結果を
     `ParseResponse` として返す。package 未導入なら `*_adapter_package_missing`、
     parse 失敗なら `*_adapter_failed` の fallback を返す。
     """
@@ -1104,6 +1124,12 @@ def _external_adapter_result(
                 source_profile=source_profile,
                 content_type=content_type,
             )
+        if backend == "unlimited_ocr":
+            return _unlimited_ocr_adapter_result(
+                source_bytes,
+                source_profile=source_profile,
+                content_type=content_type,
+            )
     except Exception:
         return _adapter_fallback_result(backend, f"{backend}_adapter_failed")
     return _adapter_fallback_result(backend, f"{backend}_adapter_unsupported")
@@ -1112,13 +1138,13 @@ def _external_adapter_result(
 def _external_adapter_package_available(backend: str) -> bool:
     """adapter の実行に必要な import があるか確認する。
 
-    GLM-OCR は専用 pip package が無く、`glm_ocr` wrapper が無い場合は transformers
-    fallback で実行するため、`transformers` があれば利用可能とみなす。
+    GLM-OCR / Unlimited-OCR は専用 pip package が無く、wrapper が無い場合は
+    transformers fallback で実行するため、`transformers` があれば利用可能とみなす。
     """
     package = EXTERNAL_ADAPTER_PACKAGES[backend]
     if _module_available(package):
         return True
-    if backend == "glm_ocr":
+    if backend in {"glm_ocr", "unlimited_ocr"}:
         return _module_available("transformers")
     return False
 
@@ -1814,6 +1840,17 @@ def _run_glm_ocr(path: Path) -> object:
     raise RuntimeError("glm_ocr_invalid_runtime: set GLM_OCR_RUNTIME to vllm or transformers")
 
 
+def _run_unlimited_ocr(path: Path) -> object:
+    """Unlimited-OCR(GPU)で 1 ファイルを OCR して markdown を得る(GPU 統合シーム)。"""
+    if _module_available("unlimited_ocr"):
+        module = importlib.import_module("unlimited_ocr")
+        for attr in ("parse", "ocr", "to_markdown", "convert", "infer", "run"):
+            candidate = getattr(module, attr, None)
+            if callable(candidate):
+                return candidate(str(path))
+    return _run_unlimited_ocr_transformers(path)
+
+
 def _run_glm_ocr_vllm(path: Path) -> object:
     """公式 self-host(vLLM OpenAI-compatible)で GLM-OCR を実行する。"""
     base_url = os.environ.get(
@@ -1939,6 +1976,7 @@ def _run_glm_ocr_transformers(path: Path) -> object:
 
 
 _GLM_OCR_PIPELINE_CACHE: dict[str, tuple[object, object]] = {}
+_UNLIMITED_OCR_PIPELINE_CACHE: dict[str, tuple[object, object]] = {}
 
 
 def _load_glm_ocr_pipeline(model_id: str) -> tuple[object, object]:
@@ -1968,6 +2006,144 @@ def _load_glm_ocr_pipeline(model_id: str) -> tuple[object, object]:
     model.eval()
     _GLM_OCR_PIPELINE_CACHE[model_id] = (processor, model)
     return processor, model
+
+
+def _run_unlimited_ocr_transformers(path: Path) -> object:
+    """transformers で HuggingFace の Unlimited-OCR モデルをロードし OCR する。"""
+    model_id = (
+        os.environ.get("UNLIMITED_OCR_MODEL_ID", "baidu/Unlimited-OCR").strip()
+        or "baidu/Unlimited-OCR"
+    )
+    tokenizer: object | None = None
+    model: object | None = None
+    try:
+        tokenizer, model = _load_unlimited_ocr_pipeline(model_id)
+        model_runner = cast(Any, model)
+        with tempfile.TemporaryDirectory(prefix="unlimited-ocr-output-") as output_dir:
+            output_path = Path(output_dir)
+            if path.suffix.lower() == ".pdf":
+                with tempfile.TemporaryDirectory(prefix="unlimited-ocr-pages-") as page_dir:
+                    image_files = _unlimited_ocr_pdf_to_images(
+                        path,
+                        Path(page_dir),
+                        dpi=int(os.environ.get("UNLIMITED_OCR_DPI", "300")),
+                    )
+                    result = model_runner.infer_multi(
+                        tokenizer,
+                        prompt=os.environ.get(
+                            "UNLIMITED_OCR_MULTI_PROMPT",
+                            "<image>Multi page parsing.",
+                        ),
+                        image_files=image_files,
+                        output_path=str(output_path),
+                        image_size=int(os.environ.get("UNLIMITED_OCR_PDF_IMAGE_SIZE", "1024")),
+                        max_length=int(os.environ.get("UNLIMITED_OCR_MAX_LENGTH", "32768")),
+                        no_repeat_ngram_size=int(
+                            os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")
+                        ),
+                        ngram_window=int(
+                            os.environ.get("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", "1024")
+                        ),
+                        save_results=True,
+                    )
+            else:
+                base_size, image_size, crop_mode = _unlimited_ocr_image_config()
+                result = model_runner.infer(
+                    tokenizer,
+                    prompt=os.environ.get("UNLIMITED_OCR_PROMPT", "<image>document parsing."),
+                    image_file=str(path),
+                    output_path=str(output_path),
+                    base_size=base_size,
+                    image_size=image_size,
+                    crop_mode=crop_mode,
+                    max_length=int(os.environ.get("UNLIMITED_OCR_MAX_LENGTH", "32768")),
+                    no_repeat_ngram_size=int(
+                        os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")
+                    ),
+                    ngram_window=int(os.environ.get("UNLIMITED_OCR_NGRAM_WINDOW", "128")),
+                    save_results=True,
+                )
+            return _unlimited_ocr_output_text(result, output_path)
+    finally:
+        tokenizer = None
+        model = None
+        _release_unlimited_ocr_gpu_cache()
+
+
+def _load_unlimited_ocr_pipeline(model_id: str) -> tuple[object, object]:
+    """Unlimited-OCR の tokenizer/model を遅延ロードしてプロセス内キャッシュする。"""
+    cached = _UNLIMITED_OCR_PIPELINE_CACHE.get(model_id)
+    if cached is not None:
+        return cached
+    torch = importlib.import_module("torch")
+    device_name = os.environ.get("UNLIMITED_OCR_DEVICE", "cuda:0").strip() or "cuda:0"
+    if device_name.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError("unlimited_ocr_cuda_unavailable: Unlimited-OCR requires a CUDA GPU")
+    dtype = _torch_dtype(
+        torch,
+        os.environ.get("UNLIMITED_OCR_TORCH_DTYPE", "bfloat16"),
+        error_prefix="unlimited_ocr",
+    )
+    transformers = importlib.import_module("transformers")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    model = transformers.AutoModel.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        use_safetensors=True,
+        dtype=dtype,
+    )
+    model = model.eval()
+    model.to(torch.device(device_name))
+    _UNLIMITED_OCR_PIPELINE_CACHE[model_id] = (tokenizer, model)
+    return tokenizer, model
+
+
+def _release_unlimited_ocr_gpu_cache() -> None:
+    """Unlimited-OCR は 1 request 後に GPU を空ける。"""
+    _UNLIMITED_OCR_PIPELINE_CACHE.clear()
+    gc.collect()
+    try:
+        torch = importlib.import_module("torch")
+    except Exception:
+        return
+    empty_cache = getattr(getattr(torch, "cuda", None), "empty_cache", None)
+    if callable(empty_cache):
+        empty_cache()
+
+
+def _unlimited_ocr_image_config() -> tuple[int, int, bool]:
+    mode = os.environ.get("UNLIMITED_OCR_IMAGE_MODE", "gundam").strip().casefold()
+    if mode == "base":
+        return 1024, 1024, False
+    return 1024, 640, True
+
+
+def _unlimited_ocr_pdf_to_images(path: Path, output_dir: Path, *, dpi: int) -> list[str]:
+    fitz = importlib.import_module("fitz")
+    doc = fitz.open(str(path))
+    try:
+        matrix = fitz.Matrix(dpi / 72, dpi / 72)
+        image_files: list[str] = []
+        for index, page in enumerate(doc):
+            image_path = output_dir / f"page_{index + 1:04d}.png"
+            page.get_pixmap(matrix=matrix).save(str(image_path))
+            image_files.append(str(image_path))
+        return image_files
+    finally:
+        doc.close()
+
+
+def _unlimited_ocr_output_text(result: object, output_dir: Path) -> object:
+    for suffix in ("*.md", "*.txt"):
+        texts = [
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in sorted(output_dir.rglob(suffix))
+            if path.is_file()
+        ]
+        text = "\n\n".join(item for item in texts if item.strip())
+        if text.strip():
+            return text
+    return result
 
 
 def _torch_dtype(torch: Any, dtype_name: str | None, *, error_prefix: str) -> object:
@@ -2000,7 +2176,7 @@ def _ocr_engine_adapter_result(
     content_type: str,
     runner: Callable[[Path], object],
 ) -> ParserRegistryResult:
-    """MinerU / Dots.OCR の document/markdown 出力を共通抽出 schema へ再マップする。
+    """GPU OCR engine の document/markdown 出力を共通抽出 schema へ再マップする。
 
     GPU 上の実 OCR 実行(`runner`)以外は docling/marker と同じ汎用 remap を再利用するため、
     fixture(fake module)で remap 層だけを決定論テストできる。
@@ -2115,6 +2291,22 @@ def _glm_ocr_adapter_result(
         source_profile=source_profile,
         content_type=content_type,
         runner=_run_glm_ocr,
+    )
+
+
+def _unlimited_ocr_adapter_result(
+    source_bytes: bytes,
+    *,
+    source_profile: SourceProfile | None,
+    content_type: str,
+) -> ParserRegistryResult:
+    """Unlimited-OCR(GPU)の OCR 結果を共通抽出 schema へ再マップする。"""
+    return _ocr_engine_adapter_result(
+        "unlimited_ocr",
+        source_bytes,
+        source_profile=source_profile,
+        content_type=content_type,
+        runner=_run_unlimited_ocr,
     )
 
 

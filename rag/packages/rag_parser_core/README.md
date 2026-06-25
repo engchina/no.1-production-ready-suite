@@ -1,6 +1,6 @@
 # rag-parser-core
 
-backend と parser マイクロサービス(docling / marker / unstructured / mineru / dots_ocr / glm_ocr)が
+backend と parser マイクロサービス(docling / marker / unstructured / unlimited_ocr / mineru / dots_ocr / glm_ocr)が
 共有する **parser 契約**パッケージ。
 
 - `extraction` — `StructuredExtraction` ほか抽出スキーマ(全 parser の共通出力契約)

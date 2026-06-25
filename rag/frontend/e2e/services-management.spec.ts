@@ -70,6 +70,17 @@ function defaultServices(): ServiceRow[] {
       blocked_by: [],
     },
     {
+      service_id: "parser-unlimited-ocr",
+      category: "parser",
+      profile: "gpu",
+      label_key: "settings.services.item.parserUnlimitedOcr",
+      execution_policy: "selected_adapter",
+      status: "stopped",
+      configured: true,
+      depends_on: [],
+      blocked_by: [],
+    },
+    {
       service_id: "parser-mineru",
       category: "parser",
       profile: "gpu",
@@ -151,7 +162,7 @@ function defaultServices(): ServiceRow[] {
       category: "chunking",
       profile: "cpu",
       label_key: "settings.services.item.pipelineChunking",
-      execution_policy: "required_no_fallback",
+      execution_policy: "in_process_when_disabled",
       status: "stopped",
       configured: true,
       depends_on: [],
@@ -302,10 +313,11 @@ for (const viewport of [
     await expect(
       page.getByRole("heading", { name: "文書分割", exact: true })
     ).toBeVisible();
-    await expect(page.getByText("必須 / fallbackなし")).toBeVisible();
     await expect(page.getByText("選択時のみ使用").first()).toBeVisible();
     await expect(page.getByText("既定は backend 内処理")).toBeVisible();
-    await expect(page.getByText("文書分割サービス停止中 / 取込不可")).toBeVisible();
+    await expect(
+      page.getByText("停止中です。backend 内処理で継続します", { exact: false }).first()
+    ).toBeVisible();
     await expect(
       page.getByText("既定検索は backend 内処理で継続します", { exact: false })
     ).toBeVisible();

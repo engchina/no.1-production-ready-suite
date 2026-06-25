@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
+import rag_parser_core.preprocess_service as preprocess_service_module
 from rag_parser_core.preprocess import (
     ConvertHealth,
     ConvertOutcome,
@@ -105,6 +107,44 @@ def test_convert_endpoint_roundtrip_with_stub_converter() -> None:
     parsed = ConvertResponse.model_validate(response.json())
     assert parsed.converted is True
     assert parsed.derived_bytes() == b"%PDF stub DOCX"
+
+
+def test_convert_runs_converter_in_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    used_worker = False
+
+    async def fake_to_thread(func, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal used_worker
+        used_worker = True
+        return func(*args, **kwargs)
+
+    def _converter(
+        source_bytes: bytes,
+        content_type: str,
+        preprocess_profile: str,
+        source_profile: SourceProfile | None,
+    ) -> ConvertOutcome:
+        return ConvertOutcome(
+            converted=True,
+            converter_name="stub",
+            converter_version="v1",
+            derived_bytes=source_bytes,
+            derived_content_type=content_type,
+        )
+
+    def _health() -> ConvertHealth:
+        return ConvertHealth(status="ok", supported_profiles=["csv_to_json"])
+
+    monkeypatch.setattr(preprocess_service_module.asyncio, "to_thread", fake_to_thread)
+    app = create_preprocess_app(converter=_converter, health_probe=_health)
+
+    response = TestClient(app).post(
+        "/convert",
+        files={"file": ("a.csv", b"a,b", "text/csv")},
+        data={"content_type": "text/csv", "preprocess_profile": "csv_to_json"},
+    )
+
+    assert response.status_code == 200
+    assert used_worker is True
 
 
 def test_parser_artifacts_accepts_nested_source_derivation_roundtrip() -> None:

@@ -16,5 +16,6 @@
   (query-type aware routing の入口。現状は query_rewrite と同じ LLM 計画経路)。
 - `GET /health` → `StageHealth`。
 
-backend は `RAG_AGENTIC_SERVICE_ENABLED` 真かつ URL 設定時に静的解決を委譲し、未達/失敗時は
-in-process(同一ロジック)へ安全縮退する。
+backend は `RAG_AGENTIC_SERVICE_ENABLED` 真かつ URL 設定時に静的解決を委譲し、
+サービス未起動・未到達時は in-process(同一ロジック)へ安全縮退する。remote が応答した後の
+HTTP error / 不正応答は壊れたサービスとして停止する。

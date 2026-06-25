@@ -141,6 +141,47 @@ def test_parse_roundtrips_structured_extraction(client: TestClient) -> None:
     assert forwarded.modality == SourceModality.PDF
 
 
+def test_parse_runs_external_adapter_in_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    used_worker = False
+
+    async def fake_to_thread(func, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal used_worker
+        used_worker = True
+        return func(*args, **kwargs)
+
+    def fake_run(
+        backend: str,
+        source_bytes: bytes,
+        source_profile: SourceProfile | None,
+        content_type: str,
+    ) -> ParserRegistryResult:
+        return ParserRegistryResult(
+            extraction=_stub_extraction(),
+            parser_backend=backend,
+            parser_version=f"{backend}_adapter_v1",
+            template="structure_aware",
+        )
+
+    monkeypatch.setattr(service_module.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(service_module, "run_external_adapter", fake_run)
+    app = create_parse_app(
+        backend="unlimited_ocr",
+        import_name="pydantic",
+        distribution_names=("pydantic",),
+    )
+
+    response = TestClient(app).post(
+        "/parse",
+        files={"file": ("a.png", b"abc", "image/png")},
+        data={"content_type": "image/png"},
+    )
+
+    assert response.status_code == 200
+    assert used_worker is True
+
+
 def test_parse_result_to_registry_result_preserves_fallback() -> None:
     response = ParseResponse(
         extraction=None,

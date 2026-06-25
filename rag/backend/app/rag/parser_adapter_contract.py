@@ -1,8 +1,8 @@
 """Parser adapter の runtime compatibility matrix。
 
-Docling / Marker / Unstructured がインストールされている場合だけ、実際に
+Docling / Marker / Unstructured などの parser service が利用できる場合だけ、実際に
 `parse_with_registry` を通して本プロジェクト schema へ remap できるかを確認する。
-外部サービスや LLM/VLM は呼ばず、出力 artifact には本文を含めない。
+外部 adapter 実行は parser マイクロサービス境界へ委譲し、出力 artifact には本文を含めない。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from app.clients.parser_service import ParserServiceClient
 from app.config import Settings
 from app.rag.parser_adapter_readiness import (
     ADAPTER_ORDER,
@@ -27,7 +28,7 @@ from app.rag.parser_adapter_routing import (
     adapter_order_for_source_kind,
     normalize_source_kind,
 )
-from app.rag.parsers import parse_with_registry
+from app.rag.parsers import ExternalAdapterRunner, parse_with_registry
 from app.rag.source_profile import build_source_profile
 from app.schemas.extraction import StructuredExtraction
 
@@ -166,6 +167,7 @@ def run_parser_adapter_compatibility_matrix(
     )
     resolved_backends = _normalized_backends(backends)
     runtime = parser_adapter_runtime_settings(settings)
+    external_adapter_runner = ParserServiceClient(settings).runner
     adapter_by_backend = {adapter.backend: adapter for adapter in runtime.adapters}
     cases = tuple(
         _compatibility_case(
@@ -174,6 +176,7 @@ def run_parser_adapter_compatibility_matrix(
             adapter=adapter_by_backend[backend],
             fixture=fixture,
             require_routed=require_routed,
+            external_adapter_runner=external_adapter_runner,
         )
         for backend in resolved_backends
         for fixture in resolved_fixture_specs
@@ -517,6 +520,7 @@ def _compatibility_case(
     adapter: ParserAdapterRuntimeStatus,
     fixture: ParserAdapterFixtureSpec,
     require_routed: bool,
+    external_adapter_runner: ExternalAdapterRunner,
 ) -> ParserAdapterCompatibilityCase:
     source_kind = fixture.source_kind
     blocking = adapter.selected
@@ -563,6 +567,11 @@ def _compatibility_case(
         docling_enabled=adapter.backend == "docling",
         marker_enabled=adapter.backend == "marker",
         unstructured_enabled=adapter.backend == "unstructured",
+        unlimited_ocr_enabled=adapter.backend == "unlimited_ocr",
+        mineru_enabled=adapter.backend == "mineru",
+        dots_ocr_enabled=adapter.backend == "dots_ocr",
+        glm_ocr_enabled=adapter.backend == "glm_ocr",
+        external_adapter_runner=external_adapter_runner,
     )
     if result.extraction is None or result.parser_backend != adapter.backend:
         return _compatibility_case_result(

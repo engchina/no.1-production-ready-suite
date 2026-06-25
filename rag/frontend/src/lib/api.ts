@@ -113,6 +113,7 @@ export type ParserAdapterBackend =
   | "docling"
   | "marker"
   | "unstructured"
+  | "unlimited_ocr"
   | "mineru"
   | "dots_ocr"
   | "glm_ocr"
@@ -125,6 +126,7 @@ export type ParserAdapterBackendName =
   | "docling"
   | "marker"
   | "unstructured"
+  | "unlimited_ocr"
   | "mineru"
   | "dots_ocr"
   | "glm_ocr";
@@ -1309,6 +1311,7 @@ export interface ParserAdapterSettingsUpdate {
   docling_enabled?: boolean;
   marker_enabled?: boolean;
   unstructured_enabled?: boolean;
+  unlimited_ocr_enabled?: boolean;
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
   glm_ocr_enabled?: boolean;
@@ -1322,7 +1325,8 @@ export type ChunkingStrategyName =
   | "hierarchical_parent_child"
   | "markdown_heading"
   | "page_level"
-  | "fixed_size";
+  | "fixed_size"
+  | "fixed_delimiter";
 
 // --- 設定: 前処理(Preprocess)アダプター ---
 export type PreprocessProfileName =
@@ -1442,6 +1446,7 @@ export interface ChunkingSettingsData {
   child_size: number;
   sentence_window_size: number;
   min_chars: number;
+  delimiter: string;
   strategies: ChunkingStrategyStatusData[];
   config_source: "runtime";
 }
@@ -1453,6 +1458,7 @@ export interface ChunkingSettingsUpdate {
   child_size: number;
   sentence_window_size: number;
   min_chars: number;
+  delimiter: string;
 }
 
 // --- 設定: Retrieval アダプター ---

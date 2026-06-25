@@ -1,9 +1,8 @@
 """Retrieval アダプター(検索戦略)のテスト。"""
 
-import pytest
 from pytest import MonkeyPatch
 
-from app.clients.pipeline_stage import PipelineStageClient, PipelineStageServiceError
+from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings
 from app.rag.retrieval_adapter import (
     RETRIEVAL_STRATEGY_ORDER,
@@ -85,22 +84,19 @@ def test_disabled_retrieval_service_uses_in_process_resolution(
     assert params.mode_override == SearchMode.KEYWORD
 
 
-def test_enabled_retrieval_service_failure_does_not_fallback(
+def test_enabled_retrieval_service_unreachable_falls_back(
     monkeypatch: MonkeyPatch,
 ) -> None:
     def unavailable(self: PipelineStageClient, request: object) -> object:
-        raise PipelineStageServiceError(
-            "retrieval",
-            "unreachable",
-            service_url="http://svc",
-        )
+        return None
 
     monkeypatch.setattr(PipelineStageClient, "run_retrieval", unavailable)
 
-    with pytest.raises(PipelineStageServiceError, match="retrieval"):
-        resolve_retrieval_adapter(
-            Settings(
-                rag_retrieval_service_enabled=True,
-                rag_retrieval_service_url="http://svc",
-            )
+    params = resolve_retrieval_adapter(
+        Settings(
+            rag_retrieval_strategy="keyword",
+            rag_retrieval_service_enabled=True,
+            rag_retrieval_service_url="http://svc",
         )
+    )
+    assert params.mode_override == SearchMode.KEYWORD

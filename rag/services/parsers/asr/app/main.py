@@ -11,6 +11,7 @@ service backend(`app.clients.oci_speech`)が担い、本サービスはその fa
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from typing import Annotated
 
@@ -63,7 +64,9 @@ async def parse(
     source_bytes = await file.read()
     suffix = _suffix_for(file.filename)
     try:
-        text, segments, language = transcribe(source_bytes, suffix=suffix)
+        text, segments, language = await asyncio.to_thread(
+            transcribe, source_bytes, suffix=suffix
+        )
     except Exception:  # noqa: BLE001 - 転写失敗は backend を fallback させる
         return ParseResponse(
             extraction=None,

@@ -3,7 +3,8 @@
 suite→CI gate 用閾値の静的解決は共有パッケージ ``rag_pipeline_core.evaluation`` を単一ソースとして
 使い、backend と evaluation マイクロサービスが同一結果を返す。`rag_evaluation_service_enabled` が
 真のとき設定由来の解決を pipeline-evaluation サービスへ委譲する。無効時は in-process(同一
-ロジック)、有効時の未達/失敗は処理停止する。閾値 dict は backend で `EvaluationThresholds`
+ロジック)、remote 未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は
+処理停止する。閾値 dict は backend で `EvaluationThresholds`
 へ写す。外部評価 SaaS / LLM-as-judge は導入しない(決定論指標のみ)。
 """
 
@@ -77,7 +78,7 @@ def resolve_evaluation_adapter(settings: Settings) -> EvaluationAdapterParams:
     """Settings から Evaluation アダプターの解決済みパラメータを作る。
 
     `rag_evaluation_service_enabled` のときは pipeline-evaluation サービスへ委譲する。
-    無効時は in-process(同一 rag_pipeline_core ロジック)、有効時の未達/失敗は停止する。
+    無効時と remote 未到達時は in-process(同一 rag_pipeline_core ロジック)へ縮退する。
     """
     suite = normalize_evaluation_suite(
         getattr(settings, "rag_evaluation_suite", DEFAULT_EVALUATION_SUITE)

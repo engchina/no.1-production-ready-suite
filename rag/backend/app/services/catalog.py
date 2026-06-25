@@ -172,6 +172,16 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         dev_runner="docker",
     ),
     ServiceCatalogEntry(
+        service_id="parser-unlimited-ocr",
+        category="parser",
+        profile="gpu",
+        url_field="rag_parser_unlimited_ocr_service_url",
+        label_key="settings.services.item.parserUnlimitedOcr",
+        working_dir="services/parsers/unlimited_ocr",
+        dev_port=18029,
+        dev_runner="docker",
+    ),
+    ServiceCatalogEntry(
         service_id="parser-mineru",
         category="parser",
         profile="gpu",
@@ -265,7 +275,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/chunking",
         dev_port=18030,
         dev_runner="uv",
-        execution_policy="required_no_fallback",
+        execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
         service_id="pipeline-vector-index",

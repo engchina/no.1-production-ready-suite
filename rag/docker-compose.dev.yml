@@ -6,7 +6,7 @@
 #
 # サービス管理画面(dev)は内部で次を実行する:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d <service_id>
-# GPU(mineru/dots_ocr)は base 側の profiles:["gpu"] を継承するため --profile gpu が併用される。
+# GPU(unlimited_ocr/mineru/dots_ocr)は base 側の profiles:["gpu"] を継承するため --profile gpu が併用される。
 # vLLM sidecar は catalog の dev_port(18124/18125)へ公開し、ホスト backend から /health を見る。
 #
 # 軽量な前処理(preprocess-*)は dev ではホストの uv プロセスで起動するため、ここでは公開しない。
@@ -22,6 +22,10 @@ services:
   parser-unstructured:
     ports:
       - "127.0.0.1:18022:8000"
+
+  parser-unlimited-ocr:
+    ports:
+      - "127.0.0.1:18029:8000"
 
   parser-mineru:
     ports:

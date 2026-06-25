@@ -17,7 +17,7 @@ from app.clients.oci_enterprise_ai import (
 )
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient, reset_local_store
-from app.clients.pipeline_stage import PipelineStageClient, PipelineStageServiceError
+from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings, get_settings
 from app.main import app
 from app.rag.ingestion import INGESTION_INTERNAL_ERROR_MESSAGE, IngestionPipeline
@@ -1234,14 +1234,14 @@ def test_ingest_marks_document_error_when_local_extraction_is_empty(
     assert audit_event["vector_count"] == 0
 
 
-def test_ingest_fails_when_chunking_service_is_unavailable(
+def test_ingest_falls_back_when_chunking_service_is_unavailable(
     monkeypatch: MonkeyPatch,
     caplog: LogCaptureFixture,
 ) -> None:
-    """chunking service 停止時は in-process fallback せず FAILED job にする。"""
+    """chunking service 停止時は backend in-process の同一実装へ縮退する。"""
 
-    def unavailable(self: PipelineStageClient, request: object) -> list[object]:
-        raise PipelineStageServiceError("chunking", "unreachable", service_url="http://svc")
+    def unavailable(self: PipelineStageClient, request: object) -> None:
+        return None
 
     monkeypatch.setattr(PipelineStageClient, "run_chunking", unavailable)
     upload_resp = client.post(
@@ -1254,18 +1254,17 @@ def test_ingest_fails_when_chunking_service_is_unavailable(
     with caplog.at_level(logging.INFO, logger="app.audit"):
         job = _run_ingestion_and_get_job(document_id)
 
-    assert job["status"] == "FAILED"
-    assert "pipeline-chunking" in job["error_message"]
+    assert job["status"] == "SUCCEEDED"
     stored = asyncio.run(OracleClient().get_document(document_id))
     assert stored is not None
-    assert stored.status == FileStatus.ERROR
-    assert "pipeline-chunking" in (stored.error_message or "")
+    assert stored.status == FileStatus.INDEXED
+    assert stored.error_message in {None, ""}
     audit_record = next(
         record for record in caplog.records if record.message == "rag_ingestion_audit"
     )
     audit_event = cast(Any, audit_record).audit_event
-    assert audit_event["outcome"] == "error"
-    assert audit_event["error_type"] == "PipelineStageServiceError"
+    assert audit_event["outcome"] == "success"
+    assert audit_event["chunk_count"] > 0
 
 
 def test_ingest_returns_504_when_enterprise_ai_times_out(

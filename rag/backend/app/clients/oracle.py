@@ -6998,12 +6998,24 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                 FROM rag_document_knowledge_bases dkb
                 JOIN rag_knowledge_bases kb
                   ON kb.knowledge_base_id = dkb.knowledge_base_id
-                WHERE dkb.document_id = d.document_id
+                WHERE (
+                    dkb.document_id = d.document_id
+                    OR EXISTS (
+                        SELECT 1
+                        FROM rag_documents duplicate_d
+                        WHERE duplicate_d.document_id = dkb.document_id
+                          AND duplicate_d.duplicate_of_document_id = d.document_id
+                          AND {duplicate_document_access_sql}
+                    )
+                )
                   AND kb.status = 'ACTIVE'
                   AND {knowledge_base_access_sql}
                   {knowledge_base_filter_sql}
             )
             """.format(
+                duplicate_document_access_sql=_oracle_access_predicate_sql(
+                    alias="duplicate_d"
+                ),
                 knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
                 knowledge_base_filter_sql=knowledge_base_filter_sql,
             )
