@@ -1,5 +1,6 @@
 """文書プレビュー（原本配信）と抽出本文表示用 API のテスト。"""
 
+import hashlib
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
     DocumentExtractionExportFormat,
+    DocumentPreprocessArtifact,
     DocumentSummary,
     FileStatus,
     IngestionJob,
@@ -214,11 +216,15 @@ class FakeWorkspaceOracle:
         *,
         status: FileStatus = FileStatus.UPLOADED,
         error_message: str | None = None,
+        clear_preprocess_artifact: bool = False,
     ) -> DocumentDetail:
         detail = self.documents[document_id]
         updated = detail.model_copy(
             update={
                 "status": status,
+                "preprocess_artifact": None
+                if clear_preprocess_artifact
+                else detail.preprocess_artifact,
                 "extraction": {},
                 "error_message": error_message,
                 "indexed_at": None,
@@ -227,6 +233,16 @@ class FakeWorkspaceOracle:
         self.documents[document_id] = updated
         self.chunks.pop(document_id, None)
         self.ingestion_segments.pop(document_id, None)
+        return updated
+
+    async def save_preprocess_artifact(
+        self,
+        document_id: str,
+        artifact: DocumentPreprocessArtifact | None,
+    ) -> DocumentDetail:
+        detail = self.documents[document_id]
+        updated = detail.model_copy(update={"preprocess_artifact": artifact})
+        self.documents[document_id] = updated
         return updated
 
     async def reset_document_chunk_outputs(
@@ -407,11 +423,30 @@ class FakeWorkspaceIngestionPipeline:
         content_type: str = "application/octet-stream",
         source_profile: object | None = None,
         chunk_set_id: str | None = None,
+        original_object_storage_path: str | None = None,
+        prepared_artifact: DocumentPreprocessArtifact | None = None,
         cancel_checker: object | None = None,
     ) -> DocumentDetail:
-        _ = prompt, content_type, source_profile, chunk_set_id, cancel_checker
+        _ = prompt, source_profile, chunk_set_id, cancel_checker
         detail = await self._oracle.get_document(document_id)
         assert detail is not None
+        if prepared_artifact is None:
+            await self._oracle.save_preprocess_artifact(
+                document_id,
+                DocumentPreprocessArtifact(
+                    derivation_id="fake-passthrough",
+                    profile="none",
+                    converted=False,
+                    source_content_type=detail.content_type,
+                    source_sha256=detail.content_sha256,
+                    object_storage_path=original_object_storage_path,
+                    content_type=content_type,
+                    sha256=hashlib.sha256(image_bytes).hexdigest(),
+                    file_name=f"{detail.file_name.rsplit('.', 1)[0]}__prepared.txt",
+                ),
+            )
+            detail = await self._oracle.get_document(document_id)
+            assert detail is not None
         raw_text = image_bytes.decode("utf-8", errors="replace")
         self._oracle.documents[document_id] = detail.model_copy(
             update={
@@ -952,6 +987,92 @@ def test_document_approve_chunked_queues_index_phase(
     assert fake_document_dependencies.documents[document_id].status == FileStatus.CHUNKED
 
 
+def test_document_ingestion_config_returns_effective_preprocess_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """取込設定 API はファイル準備方式も返す。"""
+    monkeypatch.setattr(
+        documents_route,
+        "get_settings",
+        lambda: Settings(rag_preprocess_profile="passthrough"),
+    )
+    document_id = _upload("config-policy.txt", b"config text", "text/plain")
+
+    resp = client.get(f"/api/documents/{document_id}/ingestion-config")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["effective_preprocess_profile"] == "passthrough"
+
+
+def test_preprocess_auto_advance_waits_for_manual_review_by_default(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PREPROCESS 完了後は既定では REVIEW に留まり、Chunk は自動投入しない。"""
+    monkeypatch.setattr(
+        documents_route,
+        "get_settings",
+        lambda: Settings(rag_auto_chunk_after_extract_enabled=False),
+    )
+    document_id = _upload("manual-review.txt", b"review text", "text/plain")
+    detail = fake_document_dependencies.documents[document_id].model_copy(
+        update={
+            "status": FileStatus.REVIEW,
+            "extraction": {"document_type": "text", "raw_text": "review text"},
+        }
+    )
+    fake_document_dependencies.documents[document_id] = detail
+    job = IngestionJob(
+        id="job-preprocess",
+        document_id=document_id,
+        status=IngestionJobStatus.RUNNING,
+        phase=IngestionJobPhase.PREPROCESS,
+        parser_profile="local_text_structure",
+        queued_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
+    )
+
+    anyio.run(documents_route._enqueue_auto_advance_job, job, detail)
+
+    assert fake_document_dependencies.ingestion_jobs == {}
+
+
+def test_preprocess_auto_advance_queues_chunk_when_enabled(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """設定有効時だけ PREPROCESS 完了後に CHUNK job を自動投入する。"""
+    monkeypatch.setattr(
+        documents_route,
+        "get_settings",
+        lambda: Settings(rag_auto_chunk_after_extract_enabled=True),
+    )
+    document_id = _upload("auto-review.txt", b"review text", "text/plain")
+    detail = fake_document_dependencies.documents[document_id].model_copy(
+        update={
+            "status": FileStatus.REVIEW,
+            "extraction": {"document_type": "text", "raw_text": "review text"},
+        }
+    )
+    fake_document_dependencies.documents[document_id] = detail
+    job = IngestionJob(
+        id="job-preprocess",
+        document_id=document_id,
+        status=IngestionJobStatus.RUNNING,
+        phase=IngestionJobPhase.PREPROCESS,
+        parser_profile="local_text_structure",
+        queued_at=datetime.now(UTC),
+        started_at=datetime.now(UTC),
+    )
+
+    anyio.run(documents_route._enqueue_auto_advance_job, job, detail)
+
+    jobs = list(fake_document_dependencies.ingestion_jobs.values())
+    assert len(jobs) == 1
+    assert jobs[0].phase == IngestionJobPhase.CHUNK
+    assert jobs[0].status == IngestionJobStatus.QUEUED
+
+
 def test_document_chunk_reprocess_resets_downstream_only(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
@@ -1255,6 +1376,126 @@ def test_retry_ingestion_job_creates_new_job_for_failed_document(
     assert original_job.json()["data"]["status"] == "FAILED"
 
 
+def test_preprocess_reprocess_clears_prepared_artifact_and_outputs(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """PREPROCESS 再処理は処理後ファイル情報と抽出/Chunk を削除して原本からやり直す。"""
+    document_id = _upload("policy.txt", b"original-body", "text/plain")
+    prepared_path = anyio.run(
+        ObjectStorageClient().put,
+        f"artifacts/canonical/{document_id}/old-prepared.txt",
+        b"old-prepared",
+        "text/plain",
+    )
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "preprocess_artifact": DocumentPreprocessArtifact(
+                derivation_id="old",
+                profile="text_normalize",
+                converted=True,
+                object_storage_path=prepared_path,
+                content_type="text/plain",
+                file_name="policy__prepared.txt",
+            ),
+            "extraction": {"raw_text": "old extraction"},
+            "indexed_at": datetime.now(UTC),
+        }
+    )
+    fake_document_dependencies.chunks[document_id] = [
+        DocumentChunkView(
+            document_id=document_id,
+            chunk_id="chunk-old",
+            chunk_index=0,
+            text="old",
+        )
+    ]
+
+    resp = client.post(
+        f"/api/documents/{document_id}/ingestion-jobs",
+        params={"force": "true", "phase": "PREPROCESS"},
+    )
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["phase"] == "PREPROCESS"
+    assert fake_document_dependencies.documents[document_id].preprocess_artifact is None
+    assert fake_document_dependencies.documents[document_id].extraction == {}
+    assert document_id not in fake_document_dependencies.chunks
+
+    anyio.run(documents_route._run_ingestion_job, job["id"])
+
+    updated = fake_document_dependencies.documents[document_id]
+    assert updated.status == FileStatus.INDEXED
+    assert updated.preprocess_artifact is not None
+    assert updated.preprocess_artifact.object_storage_path == updated.object_storage_path
+    assert updated.extraction["raw_text"] == "original-body"
+
+
+def test_extract_reprocess_uses_existing_prepared_artifact(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """EXTRACT 再処理は原本へ戻らず、保存済みの処理後ファイルを抽出入力にする。"""
+    document_id = _upload("policy.txt", b"original-body", "text/plain")
+    prepared_body = b"prepared-body"
+    prepared_path = anyio.run(
+        ObjectStorageClient().put,
+        f"artifacts/canonical/{document_id}/prepared.txt",
+        prepared_body,
+        "text/plain",
+    )
+    detail = fake_document_dependencies.documents[document_id]
+    artifact = DocumentPreprocessArtifact(
+        derivation_id="prepared",
+        profile="text_normalize",
+        converted=True,
+        object_storage_path=prepared_path,
+        content_type="text/plain",
+        sha256=hashlib.sha256(prepared_body).hexdigest(),
+        file_name="policy__prepared.txt",
+    )
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.INDEXED,
+            "preprocess_artifact": artifact,
+            "extraction": {"raw_text": "old extraction"},
+            "indexed_at": datetime.now(UTC),
+        }
+    )
+
+    resp = client.post(
+        f"/api/documents/{document_id}/ingestion-jobs",
+        params={"force": "true", "phase": "EXTRACT"},
+    )
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["phase"] == "EXTRACT"
+    assert fake_document_dependencies.documents[document_id].preprocess_artifact == artifact
+
+    anyio.run(documents_route._run_ingestion_job, job["id"])
+
+    updated = fake_document_dependencies.documents[document_id]
+    assert updated.preprocess_artifact == artifact
+    assert updated.extraction["raw_text"] == "prepared-body"
+
+
+def test_extract_reprocess_requires_prepared_artifact() -> None:
+    """処理後ファイルが欠けている EXTRACT 再処理は原本へ黙って戻らない。"""
+    document_id = _upload("policy.txt", b"original-body", "text/plain")
+
+    resp = client.post(
+        f"/api/documents/{document_id}/ingestion-jobs",
+        params={"force": "true", "phase": "EXTRACT"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["error_messages"] == [
+        "処理後ファイルが見つかりません。ファイル準備から再処理してください。"
+    ]
+
+
 def test_retry_failed_chunk_job_requeues_from_error(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
@@ -1505,9 +1746,10 @@ def test_running_ingestion_job_does_not_overwrite_cancelled_status(
         document_id: str,
         *,
         force: bool = False,
+        use_prepared_artifact: bool = False,
         cancel_checker: object | None = None,
     ) -> DocumentDetail:
-        _ = force, cancel_checker
+        _ = force, use_prepared_artifact, cancel_checker
         job = fake_document_dependencies.ingestion_jobs[queued_job.id]
         fake_document_dependencies.ingestion_jobs[queued_job.id] = job.model_copy(
             update={
@@ -1611,6 +1853,59 @@ def test_document_content_prefers_stored_content_type_without_extension() -> Non
     assert resp.content == body
     assert resp.headers["content-type"].startswith("text/plain")
     assert "filename*=UTF-8''policy" in resp.headers["content-disposition"]
+
+
+def test_document_content_returns_prepared_artifact(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """処理後ファイル配信は preprocess_artifact の path / filename / content-type を使う。"""
+    document_id = _upload("私の上司.docx", b"office-body", "application/octet-stream")
+    prepared_body = b"%PDF-1.7\nprepared"
+    prepared_path = anyio.run(
+        ObjectStorageClient().put,
+        f"artifacts/canonical/{document_id}/prepared.pdf",
+        prepared_body,
+        "application/pdf",
+    )
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "preprocess_artifact": DocumentPreprocessArtifact(
+                derivation_id="der-1",
+                profile="office_pdf",
+                converted=True,
+                object_storage_path=prepared_path,
+                content_type="application/pdf",
+                sha256="dummy",
+                file_name="私の上司__prepared.pdf",
+            )
+        }
+    )
+
+    resp = client.get(
+        f"/api/documents/{document_id}/content"
+        "?variant=prepared&disposition=attachment"
+    )
+
+    assert resp.status_code == 200
+    assert resp.content == prepared_body
+    assert resp.headers["content-type"].startswith("application/pdf")
+    assert resp.headers["content-disposition"].startswith("attachment;")
+    assert "%E7%A7%81%E3%81%AE%E4%B8%8A%E5%8F%B8__prepared.pdf" in resp.headers[
+        "content-disposition"
+    ]
+
+
+def test_document_content_prepared_missing_returns_404() -> None:
+    """処理後ファイルが無い場合、原本へ黙って戻さない。"""
+    document_id = _upload("policy.txt", b"body", "text/plain")
+
+    resp = client.get(f"/api/documents/{document_id}/content?variant=prepared")
+
+    assert resp.status_code == 404
+    assert resp.json()["error_messages"] == [
+        "処理後ファイルが見つかりません。ファイル準備から再処理してください。"
+    ]
 
 
 def test_document_content_sets_utf8_charset_for_text() -> None:
@@ -1867,6 +2162,12 @@ def test_delete_document_removes_extraction_artifacts(
         b'{"raw_text":"redacted segment"}',
         "application/json",
     )
+    prepared_artifact_path = anyio.run(
+        ObjectStorageClient().put,
+        f"artifacts/canonical/{document_id}/prepared.pdf",
+        b"%PDF-1.7\nprepared",
+        "application/pdf",
+    )
     duplicate_segment_artifact_path = full_artifact_path
     original_path = fake_document_dependencies.documents[document_id].object_storage_path
     assert original_path is not None
@@ -1875,6 +2176,14 @@ def test_delete_document_removes_extraction_artifacts(
     ].model_copy(
         update={
             "status": FileStatus.INDEXED,
+            "preprocess_artifact": DocumentPreprocessArtifact(
+                derivation_id="der-delete",
+                profile="office_pdf",
+                converted=True,
+                object_storage_path=prepared_artifact_path,
+                content_type="application/pdf",
+                file_name="policy__prepared.pdf",
+            ),
             "extraction": {"parser_artifacts": {"extraction_artifact_path": full_artifact_path}},
         }
     )
@@ -1904,12 +2213,14 @@ def test_delete_document_removes_extraction_artifacts(
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["object_deleted"] is True
-    assert data["artifact_deleted_count"] == 2
+    assert data["artifact_deleted_count"] == 3
     assert data["artifact_delete_failed_count"] == 0
     with pytest.raises(FileNotFoundError):
         anyio.run(ObjectStorageClient().get, full_artifact_path)
     with pytest.raises(FileNotFoundError):
         anyio.run(ObjectStorageClient().get, segment_artifact_path)
+    with pytest.raises(FileNotFoundError):
+        anyio.run(ObjectStorageClient().get, prepared_artifact_path)
     with pytest.raises(FileNotFoundError):
         anyio.run(ObjectStorageClient().get, original_path)
 

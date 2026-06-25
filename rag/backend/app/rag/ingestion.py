@@ -77,6 +77,7 @@ from app.rag.variant_keys import compute_extraction_recipe_id
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
+    DocumentPreprocessArtifact,
     FileStatus,
     IngestionSegment,
     SourceProfile,
@@ -252,6 +253,8 @@ class IngestionPipeline:
         source_profile: SourceProfile | None = None,
         chunk_set_id: str | None = None,
         record_outcome: bool = True,
+        original_object_storage_path: str | None = None,
+        prepared_artifact: DocumentPreprocessArtifact | None = None,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """1 ドキュメントを取込し、ベクトル索引まで行う。"""
@@ -261,19 +264,39 @@ class IngestionPipeline:
             source_profile=source_profile,
             base_prompt=prompt,
         )
-        await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
+        if prepared_artifact is None:
+            await self._oracle.update_document_status(document_id, FileStatus.PREPROCESSING)
+        else:
+            await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
         checkpoint_segments: list[IngestionSegment] = []
         try:
             await _raise_if_cancelled(cancel_checker)
-            # 前処理(Preprocess): parse の前に原本を一度だけ canonical な中間物へ変換し、
-            # 派生系譜(SourceDerivation)を残す。passthrough(既定)は原本そのまま。
-            parse_bytes, parse_content_type, source_derivation = await self._preprocess_source(
-                trace_id=trace_id,
-                document_id=document_id,
-                source_bytes=image_bytes,
-                content_type=content_type,
-                source_profile=source_profile,
-            )
+            if prepared_artifact is None:
+                # 前処理(Preprocess): parse の前に原本を一度だけ canonical な中間物へ変換し、
+                # 派生系譜(SourceDerivation)を残す。passthrough(既定)は原本そのまま。
+                parse_bytes, parse_content_type, source_derivation = await self._preprocess_source(
+                    trace_id=trace_id,
+                    document_id=document_id,
+                    source_bytes=image_bytes,
+                    content_type=content_type,
+                    source_profile=source_profile,
+                )
+                await self._save_preprocess_artifact(
+                    document_id=document_id,
+                    source_derivation=source_derivation,
+                    original_file_name=source_profile.original_file_name
+                    if source_profile is not None
+                    else "document",
+                    original_object_storage_path=original_object_storage_path,
+                    fallback_content_type=parse_content_type,
+                )
+                await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
+            else:
+                parse_bytes = image_bytes
+                parse_content_type = prepared_artifact.content_type or content_type
+                source_derivation = _source_derivation_from_preprocess_artifact(
+                    prepared_artifact
+                )
             await _raise_if_cancelled(cancel_checker)
             try:
                 parser_result = await _observe_cpu_ingestion_stage(
@@ -539,9 +562,15 @@ class IngestionPipeline:
         if not source_sha256:
             return
         try:
-            extraction_recipe_id = compute_extraction_recipe_id(source_sha256, self._settings)
+            preprocess_profile = _source_derivation_profile(extraction)
+            recipe_settings = (
+                self._settings.model_copy(update={"rag_preprocess_profile": preprocess_profile})
+                if preprocess_profile
+                else self._settings
+            )
+            extraction_recipe_id = compute_extraction_recipe_id(source_sha256, recipe_settings)
             recipe = {
-                "rag_preprocess_profile": self._settings.rag_preprocess_profile,
+                "rag_preprocess_profile": recipe_settings.rag_preprocess_profile,
                 "rag_parser_adapter_backend": self._settings.rag_parser_adapter_backend,
             }
             await self._oracle.upsert_document_extraction_artifact(
@@ -1081,6 +1110,45 @@ class IngestionPipeline:
             warnings=list(outcome.warnings),
         )
         return derived_bytes, derived_content_type, derivation
+
+    async def _save_preprocess_artifact(
+        self,
+        *,
+        document_id: str,
+        source_derivation: SourceDerivation,
+        original_file_name: str,
+        original_object_storage_path: str | None,
+        fallback_content_type: str,
+    ) -> None:
+        save_artifact = getattr(self._oracle, "save_preprocess_artifact", None)
+        if not callable(save_artifact):
+            return
+        content_type = (
+            source_derivation.derived_content_type
+            or source_derivation.source_content_type
+            or fallback_content_type
+            or "application/octet-stream"
+        )
+        artifact = DocumentPreprocessArtifact(
+            derivation_id=source_derivation.derivation_id,
+            profile=source_derivation.preprocess_profile,
+            converted=source_derivation.converted,
+            converter_name=source_derivation.converter_name,
+            converter_version=source_derivation.converter_version,
+            source_content_type=source_derivation.source_content_type,
+            source_sha256=source_derivation.source_sha256,
+            object_storage_path=(
+                source_derivation.derived_object_path
+                if source_derivation.converted
+                else original_object_storage_path
+            ),
+            content_type=content_type,
+            sha256=source_derivation.derived_sha256 or source_derivation.source_sha256,
+            file_name=_prepared_artifact_file_name(original_file_name, content_type),
+            page_map={str(key): int(value) for key, value in source_derivation.page_map.items()},
+            warnings=list(source_derivation.warnings),
+        )
+        await save_artifact(document_id, artifact)
 
     async def _cache_canonical_artifact(
         self,
@@ -2585,6 +2653,16 @@ def _source_derivation_id(extraction: StructuredExtraction) -> str | None:
     return None
 
 
+def _source_derivation_profile(extraction: StructuredExtraction) -> str | None:
+    """抽出 metadata からファイル準備 profile を取り出す。"""
+    derivation = extraction.parser_artifacts.get("source_derivation")
+    if isinstance(derivation, Mapping):
+        value = derivation.get("preprocess_profile")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _chunks_with_source_derivation(chunks: list[Chunk], derivation_id: str | None) -> list[Chunk]:
     """各 chunk metadata へ派生系譜 ID を付与する(chunk → 派生原本 → 原本の追跡)。"""
     if not derivation_id:
@@ -2631,7 +2709,10 @@ def _canonical_artifact_extension(content_type: str) -> str:
     normalized = (content_type or "").split(";", 1)[0].strip().casefold()
     mapping = {
         "application/pdf": ".pdf",
+        "application/json": ".json",
+        "application/csv": ".csv",
         "text/plain": ".txt",
+        "text/csv": ".csv",
         "text/markdown": ".md",
         "text/html": ".html",
         "image/png": ".png",
@@ -2639,6 +2720,34 @@ def _canonical_artifact_extension(content_type: str) -> str:
         "application/zip": ".zip",
     }
     return mapping.get(normalized, ".bin")
+
+
+def _prepared_artifact_file_name(original_file_name: str, content_type: str) -> str:
+    raw_name = (original_file_name or "document").replace("\\", "/").rsplit("/", 1)[-1]
+    raw_name = re.sub(r"[\x00-\x1f\x7f]+", "_", raw_name).strip(" .") or "document"
+    base = raw_name.rsplit(".", 1)[0] if "." in raw_name else raw_name
+    base = (base[:220]).rstrip(" .") or "document"
+    return f"{base}__prepared{_canonical_artifact_extension(content_type)}"
+
+
+def _source_derivation_from_preprocess_artifact(
+    artifact: DocumentPreprocessArtifact,
+) -> SourceDerivation:
+    return SourceDerivation(
+        derivation_id=artifact.derivation_id,
+        preprocess_profile=artifact.profile,
+        converted=artifact.converted,
+        converter_name=artifact.converter_name
+        or ("preprocess" if artifact.converted else "passthrough"),
+        converter_version=artifact.converter_version or "v1",
+        source_content_type=artifact.source_content_type,
+        source_sha256=artifact.source_sha256,
+        derived_object_path=artifact.object_storage_path if artifact.converted else None,
+        derived_content_type=artifact.content_type,
+        derived_sha256=artifact.sha256,
+        page_map={str(key): int(value) for key, value in artifact.page_map.items()},
+        warnings=list(artifact.warnings),
+    )
 
 
 def _source_parser_name(

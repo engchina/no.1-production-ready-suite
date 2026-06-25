@@ -35,7 +35,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260625_001"
+MIGRATION_ARTIFACT_VERSION = "20260625_002"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -229,6 +229,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260625_001_chunks_text_world_lexer",
             table_name="rag_chunks",
             sql=_chunks_text_world_lexer_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260625_002_preprocess_artifact",
+            table_name="rag_documents",
+            sql=_documents_preprocess_artifact_migration_sql(),
         ),
     ]
 
@@ -539,7 +544,7 @@ BEGIN
     EXECUTE IMMEDIATE
         'ALTER TABLE rag_documents ADD CONSTRAINT '
         || 'rag_documents_status_ck CHECK '
-        || '(status IN (''UPLOADED'', ''INGESTING'', ''REVIEW'', '
+        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''INGESTING'', ''REVIEW'', '
         || '''CHUNKING'', ''CHUNKED'', ''INDEXING'', ''INDEXED'', ''ERROR''))';
 END;
 /
@@ -547,7 +552,7 @@ END;
 
 
 def _ingestion_jobs_phase_migration_sql() -> str:
-    """rag_ingestion_jobs に phase 列と EXTRACT/CHUNK/INDEX 制約を追加・更新する。"""
+    """rag_ingestion_jobs に phase 列と PREPROCESS/EXTRACT/CHUNK/INDEX 制約を追加・更新する。"""
     return """
 DECLARE
     v_column_count NUMBER;
@@ -562,7 +567,7 @@ BEGIN
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE
             'ALTER TABLE rag_ingestion_jobs ADD '
-            || '(phase VARCHAR2(16) DEFAULT ''EXTRACT'' NOT NULL)';
+            || '(phase VARCHAR2(16) DEFAULT ''PREPROCESS'' NOT NULL)';
     END IF;
 
     SELECT COUNT(*)
@@ -580,7 +585,46 @@ BEGIN
     EXECUTE IMMEDIATE
         'ALTER TABLE rag_ingestion_jobs ADD CONSTRAINT '
         || 'rag_ingestion_jobs_phase_ck CHECK '
-        || '(phase IN (''EXTRACT'', ''CHUNK'', ''INDEX''))';
+        || '(phase IN (''PREPROCESS'', ''EXTRACT'', ''CHUNK'', ''INDEX''))';
+END;
+/
+""".strip()
+
+
+def _documents_preprocess_artifact_migration_sql() -> str:
+    """rag_documents にファイル準備 artifact JSON と PREPROCESSING 状態を追加する。"""
+    return """
+DECLARE
+    v_column_count NUMBER;
+    v_constraint_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND column_name = 'PREPROCESS_ARTIFACT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_documents ADD (preprocess_artifact JSON)';
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND constraint_name = 'RAG_DOCUMENTS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_documents DROP CONSTRAINT rag_documents_status_ck';
+    END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_documents ADD CONSTRAINT '
+        || 'rag_documents_status_ck CHECK '
+        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''INGESTING'', ''REVIEW'', '
+        || '''CHUNKING'', ''CHUNKED'', ''INDEXING'', ''INDEXED'', ''ERROR''))';
 END;
 /
 """.strip()

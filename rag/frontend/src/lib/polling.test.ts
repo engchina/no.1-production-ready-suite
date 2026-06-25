@@ -27,6 +27,7 @@ describe("documentsHaveActiveWork", () => {
   });
 
   it("取込/Chunk/索引中があれば true", () => {
+    expect(documentsHaveActiveWork([doc("INDEXED"), doc("PREPROCESSING")])).toBe(true);
     expect(documentsHaveActiveWork([doc("INDEXED"), doc("INGESTING")])).toBe(true);
     expect(documentsHaveActiveWork([doc("CHUNKING")])).toBe(true);
     expect(documentsHaveActiveWork([doc("INDEXING")])).toBe(true);
@@ -45,7 +46,12 @@ describe("documentsHaveActiveWork", () => {
   });
 
   it("DOCUMENT_ACTIVE_STATUSES は実行中ステータスのみ", () => {
-    expect([...DOCUMENT_ACTIVE_STATUSES].sort()).toEqual(["CHUNKING", "INDEXING", "INGESTING"]);
+    expect([...DOCUMENT_ACTIVE_STATUSES].sort()).toEqual([
+      "CHUNKING",
+      "INDEXING",
+      "INGESTING",
+      "PREPROCESSING",
+    ]);
   });
 });
 
@@ -107,6 +113,7 @@ describe("ingestionSegmentHasActiveWork", () => {
 
 describe("documentWorkspaceShouldRefresh", () => {
   it("取込/索引中の文書では true", () => {
+    expect(documentWorkspaceShouldRefresh({ documentStatus: "PREPROCESSING" })).toBe(true);
     expect(documentWorkspaceShouldRefresh({ documentStatus: "INGESTING" })).toBe(true);
     expect(documentWorkspaceShouldRefresh({ documentStatus: "INDEXING" })).toBe(true);
   });

@@ -157,6 +157,61 @@ test("PDF 原本プレビューは左サイドバーを初期表示しない", a
   await expectNoHorizontalOverflow(page);
 });
 
+test("原本プレビューで処理前/処理後を切り替え、ファイル準備から再処理できる", async ({
+  page,
+}) => {
+  const state = await mockDocumentWorkspace(page, { preparedArtifact: true });
+
+  await page.goto("/documents/doc-1");
+
+  const previewPanel = page
+    .getByRole("heading", { name: "原本プレビュー" })
+    .locator("xpath=ancestor::section[1]");
+  await expect(previewPanel.getByRole("button", { name: "処理前" })).toBeVisible();
+  await expect(previewPanel.getByRole("button", { name: "処理後" })).toBeEnabled();
+  await expect(previewPanel.getByText("経費申請")).toBeVisible();
+  await expect(previewPanel.getByRole("link", { name: "ダウンロード" })).toHaveAttribute(
+    "href",
+    /\/api\/documents\/doc-1\/content\?disposition=attachment$/
+  );
+
+  await previewPanel.getByRole("button", { name: "処理後" }).click();
+
+  await expect(previewPanel.getByText("準備後ファイル")).toBeVisible();
+  await expect(previewPanel.getByRole("link", { name: "ダウンロード" })).toHaveAttribute(
+    "href",
+    /\/api\/documents\/doc-1\/content\?variant=prepared&disposition=attachment$/
+  );
+
+  await page.getByRole("button", { name: "ファイル準備から再処理" }).click();
+  await page.getByRole("button", { name: "再処理する" }).click();
+
+  expect(state.enqueueRequest).toEqual({
+    method: "POST",
+    path: "/api/documents/doc-1/ingestion-jobs",
+    force: "true",
+    phase: "PREPROCESS",
+  });
+  await expectNoPageOverflow(page);
+});
+
+test("変換なしではファイル準備 step を skip として表示し、REVIEW で人手確認する", async ({
+  page,
+}) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "REVIEW",
+    preprocessProfile: "passthrough",
+  });
+
+  await page.goto("/documents/doc-1");
+
+  const preprocessStep = page.getByText("ファイル準備").locator("xpath=ancestor::span[1]");
+  await expect(preprocessStep.getByText("skip")).toBeVisible();
+  await expect(page.getByText("抽出確認")).toBeVisible();
+  await expect(page.getByRole("button", { name: "抽出から再処理" })).toBeDisabled();
+  await expectNoPageOverflow(page);
+});
+
 test("chunk 取得失敗時は workspace 内にエラー状態を表示する", async ({ page }) => {
   await mockDocumentWorkspace(page, { chunksError: true });
 
@@ -483,17 +538,45 @@ async function mockDocumentWorkspace(
     documentStatus?: string;
     duplicate?: boolean;
     progressScenario?: "pdf17" | "source";
+    preparedArtifact?: boolean;
+    preprocessProfile?: "passthrough" | "text_normalize";
   } = {}
 ) {
   const state: {
     retryRequest: { method: string; path: string } | null;
-    enqueueRequest: { method: string; path: string; force: string | null } | null;
+    enqueueRequest: {
+      method: string;
+      path: string;
+      force: string | null;
+      phase: string | null;
+    } | null;
     enqueued: boolean;
   } = {
     retryRequest: null,
     enqueueRequest: null,
     enqueued: false,
   };
+  await page.route("**/api/documents/doc-1/ingestion-config", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          document_id: "doc-1",
+          is_indexed: (options.documentStatus ?? "INDEXED") === "INDEXED",
+          owning_knowledge_base: null,
+          effective_preprocess_profile: options.preprocessProfile ?? "text_normalize",
+          effective_chunking_strategy: "recursive",
+          effective_parser_adapter_backend: "local",
+          observed_chunking_strategy: "recursive",
+          observed_parser_backend: "local_partition",
+          chunking_drift: false,
+          parser_drift: false,
+          config_drift: false,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
   await page.route("**/api/documents/doc-1", async (route) => {
     await route.fulfill({
       json: {
@@ -506,6 +589,7 @@ async function mockDocumentWorkspace(
               ? "ERROR"
               : "INDEXED"),
           duplicate: options.duplicate,
+          preparedArtifact: options.preparedArtifact,
         }),
         error_messages: [],
         warning_messages: [],
@@ -533,6 +617,7 @@ async function mockDocumentWorkspace(
         method: route.request().method(),
         path: url.pathname,
         force: url.searchParams.get("force"),
+        phase: url.searchParams.get("phase"),
       };
       state.enqueued = true;
       await route.fulfill({
@@ -575,6 +660,15 @@ async function mockDocumentWorkspace(
     });
   });
   await page.route("**/api/documents/doc-1/content", async (route) => {
+    const variant = new URL(route.request().url()).searchParams.get("variant");
+    if (variant === "prepared") {
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+        body: "準備後ファイル\n交通費は1000円です。",
+      });
+      return;
+    }
     if (options.imagePreview) {
       await route.fulfill({
         status: 200,
@@ -910,6 +1004,7 @@ function documentDetail(
     imagePreview?: boolean;
     pdfPreview?: boolean;
     status?: string;
+    preparedArtifact?: boolean;
   } = {}
 ) {
   const fileName = options.pdfPreview
@@ -946,6 +1041,23 @@ function documentDetail(
     uploaded_at: "2026-06-15T00:00:00Z",
     indexed_at: "2026-06-15T00:00:03Z",
     object_storage_path: `local://${fileName}`,
+    preprocess_artifact: options.preparedArtifact
+      ? {
+          derivation_id: "prepared-1",
+          profile: "text_normalize",
+          converted: true,
+          converter_name: "text_normalize",
+          converter_version: "v1",
+          source_content_type: contentType,
+          source_sha256: "a".repeat(64),
+          object_storage_path: "local://policy__prepared.txt",
+          content_type: "text/plain",
+          sha256: "b".repeat(64),
+          file_name: "policy__prepared.txt",
+          page_map: {},
+          warnings: [],
+        }
+      : null,
     extraction: {
       raw_text: "経費申請\n交通費は1000円です。",
       document_type: "規程",

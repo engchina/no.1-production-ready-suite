@@ -4,6 +4,7 @@ import {
   Braces,
   Check,
   Clock3,
+  Download,
   FileSearch,
   FileText,
   GitBranch,
@@ -34,6 +35,7 @@ import { FormStatus } from "@/components/ui/form-status";
 import { ErrorState } from "@/components/StateViews";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  api,
   ApiError,
   type DocumentApproveRequest,
   type DocumentElement,
@@ -42,6 +44,7 @@ import {
   type ExtractionTable,
   type ExtractionTableCell,
   type IngestionJob,
+  type IngestionJobPhase,
   type IngestionSegment,
   type KnowledgeBaseRef,
   type SourceProfile,
@@ -54,6 +57,7 @@ import {
   useDocumentChunks,
   useDocumentChunkSets,
   useDocumentExtractionExport,
+  useDocumentIngestionConfig,
   useDocumentIngestionJobs,
   useDocumentIngestionSegments,
   useDocumentKnowledgeBases,
@@ -294,6 +298,7 @@ export function DocumentWorkspace({
   const query = useDocument(documentId);
   const chunksQuery = useDocumentChunks(documentId);
   const chunkSetsQuery = useDocumentChunkSets(documentId);
+  const ingestionConfigQuery = useDocumentIngestionConfig(documentId);
   const documentJobsQuery = useDocumentIngestionJobs(documentId);
   const segmentsQuery = useDocumentIngestionSegments(documentId);
   const [exportFormat, setExportFormat] =
@@ -314,6 +319,7 @@ export function DocumentWorkspace({
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   const [selectedTableCellKey, setSelectedTableCellKey] = useState<string | null>(null);
+  const [previewVariant, setPreviewVariant] = useState<"original" | "prepared">("original");
   const [previewFocusSource, setPreviewFocusSource] =
     useState<"chunk" | "element" | "table_cell">("chunk");
   const [focusRequest, setFocusRequest] = useState<WorkspaceFocusRequest | null>(null);
@@ -399,7 +405,7 @@ export function DocumentWorkspace({
     [query.data?.extraction]
   );
   const latestChunkSet = chunkSetsQuery.data?.[chunkSetsQuery.data.length - 1] ?? null;
-  const handleReprocessPhase = async (phase: "EXTRACT" | "CHUNK" | "INDEX") => {
+  const handleReprocessPhase = async (phase: IngestionJobPhase) => {
     const confirmed = await confirm({
       title: t(`flow.reprocess.${phase}.title` as I18nKey),
       description: t(`flow.reprocess.${phase}.description` as I18nKey),
@@ -423,6 +429,11 @@ export function DocumentWorkspace({
   const refetchDocumentJobs = documentJobsQuery.refetch;
   const refetchSegments = segmentsQuery.refetch;
   const refetchExtractionExport = extractionExportQuery.refetch;
+  useEffect(() => {
+    if (!query.data?.preprocess_artifact && previewVariant === "prepared") {
+      setPreviewVariant("original");
+    }
+  }, [previewVariant, query.data?.preprocess_artifact]);
   const selectedChunk = useMemo(
     () => chunksQuery.data?.find((chunk) => chunk.chunk_id === selectedChunkId) ?? null,
     [chunksQuery.data, selectedChunkId]
@@ -743,6 +754,24 @@ export function DocumentWorkspace({
 
   const doc = query.data;
   const sourceProfile = doc.source_profile ?? initialSourceProfile;
+  const preparedArtifact = doc.preprocess_artifact;
+  const hasPreparedArtifact = Boolean(preparedArtifact?.object_storage_path);
+  const preprocessStepSkipped =
+    ingestionConfigQuery.data?.effective_preprocess_profile === "passthrough" ||
+    (preparedArtifact?.profile === "passthrough" && preparedArtifact.converted === false) ||
+    (parsedExtraction.sourceDerivation?.preprocessProfile === "passthrough" &&
+      parsedExtraction.sourceDerivation.converted === false);
+  const selectedPreviewVariant = previewVariant === "prepared" && hasPreparedArtifact
+    ? "prepared"
+    : "original";
+  const selectedPreviewFileName =
+    selectedPreviewVariant === "prepared" ? preparedArtifact?.file_name ?? doc.file_name : doc.file_name;
+  const selectedPreviewSourceProfile =
+    selectedPreviewVariant === "original" ? sourceProfile : null;
+  const selectedPreviewDownloadUrl = api.documentContentUrl(documentId, {
+    ...(selectedPreviewVariant === "prepared" ? { variant: selectedPreviewVariant } : {}),
+    disposition: "attachment",
+  });
   const duplicateSource = doc.duplicate_source;
   const duplicateMessage = duplicateSource
     ? t("upload.duplicateDetail", {
@@ -781,7 +810,10 @@ export function DocumentWorkspace({
           </Banner>
         ) : null}
 
-        <FlowStepper status={doc.status} />
+        <FlowStepper
+          status={doc.status}
+          skippedSteps={preprocessStepSkipped ? ["PREPROCESSING"] : []}
+        />
         {latestChunkSet ? (
           <dl className="grid grid-cols-2 gap-3 rounded-md border border-border bg-background p-3 text-sm sm:grid-cols-4">
             <div>
@@ -916,11 +948,48 @@ export function DocumentWorkspace({
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)]">
           <section>
-            <h3 className="mb-2 text-sm font-semibold text-foreground">{t("flow.preview")}</h3>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-foreground">{t("flow.preview")}</h3>
+              <div className="flex items-center gap-2">
+                <div
+                  role="group"
+                  aria-label={t("flow.preview")}
+                  className="inline-flex rounded-md border border-border bg-background p-0.5"
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={selectedPreviewVariant === "original" ? "secondary" : "ghost"}
+                    onClick={() => setPreviewVariant("original")}
+                  >
+                    {t("flow.preview.before")}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={selectedPreviewVariant === "prepared" ? "secondary" : "ghost"}
+                    onClick={() => setPreviewVariant("prepared")}
+                    disabled={!hasPreparedArtifact}
+                    title={!hasPreparedArtifact ? t("flow.preview.preparedUnavailable") : undefined}
+                  >
+                    {t("flow.preview.after")}
+                  </Button>
+                </div>
+                <a
+                  href={selectedPreviewDownloadUrl}
+                  download={selectedPreviewFileName}
+                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  <Download size={14} aria-hidden />
+                  {t("flow.preview.download")}
+                </a>
+              </div>
+            </div>
             <DocumentPreview
               documentId={documentId}
-              fileName={doc.file_name}
-              sourceProfile={sourceProfile}
+              fileName={selectedPreviewFileName}
+              variant={selectedPreviewVariant}
+              sourceProfile={selectedPreviewSourceProfile}
               focusPage={effectiveFocusPage}
               focusBbox={effectiveFocusBbox}
               focusBboxMode={effectiveFocusBboxMode}
@@ -1133,8 +1202,18 @@ export function DocumentWorkspace({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => void handleReprocessPhase("EXTRACT")}
+                onClick={() => void handleReprocessPhase("PREPROCESS")}
                 disabled={enqueueIngestion.isPending}
+              >
+                <RotateCcw size={15} aria-hidden />
+                {t("flow.reprocess.preprocess")}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void handleReprocessPhase("EXTRACT")}
+                disabled={enqueueIngestion.isPending || !hasPreparedArtifact}
+                title={!hasPreparedArtifact ? t("flow.preview.preparedUnavailable") : undefined}
               >
                 <RotateCcw size={15} aria-hidden />
                 {t("flow.reprocess.extract")}
@@ -1197,7 +1276,9 @@ function IngestionJobsPanel({
   const latest = jobs[0];
   const active = ingestionJobIsActive(latest.status);
   const progressSummary =
-    latest.phase === "EXTRACT" ? resolveIngestionProgressSummary(segments) : null;
+    latest.phase === "PREPROCESS" || latest.phase === "EXTRACT"
+      ? resolveIngestionProgressSummary(segments)
+      : null;
 
   return (
     <section className="rounded-md border border-border bg-background p-4">
@@ -1548,6 +1629,7 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
 function jobPhaseKey(phase: IngestionJob["phase"]): I18nKey {
   if (phase === "INDEX") return "flow.jobs.phase.index";
   if (phase === "CHUNK") return "flow.jobs.phase.chunk";
+  if (phase === "PREPROCESS") return "flow.jobs.phase.preprocess";
   return "flow.jobs.phase.extract";
 }
 

@@ -52,6 +52,7 @@ from app.schemas.common import JsonValue
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
+    DocumentPreprocessArtifact,
     DocumentStats,
     DocumentSummary,
     FileStatus,
@@ -83,6 +84,7 @@ ORACLE_TEXT_STOP_WORDS = (
     "が",
     "を",
     "に",
+    "へ",
     "で",
     "と",
     "も",
@@ -146,22 +148,7 @@ ORACLE_TEXT_OPERATOR_TERMS = {
     "stem",
     "within",
 }
-JAPANESE_QUERY_STOP_TERMS = {
-    "か",
-    "が",
-    "です",
-    "で",
-    "と",
-    "に",
-    "の",
-    "は",
-    "へ",
-    "ます",
-    "も",
-    "を",
-    "なん",
-    "んで",
-}
+JAPANESE_QUERY_STOP_TERMS = set(ORACLE_TEXT_STOP_WORDS)
 SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
 type MetadataValue = JsonValue
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
@@ -241,6 +228,7 @@ class StoredDocument:
     status: FileStatus
     uploaded_at: datetime
     object_storage_path: str | None = None
+    preprocess_artifact: dict[str, object] | None = None
     content_type: str | None = None
     file_size_bytes: int | None = None
     content_sha256: str | None = None
@@ -1749,18 +1737,28 @@ class OracleClient:
             error_message=error_message,
         )
 
+    async def save_preprocess_artifact(
+        self,
+        document_id: str,
+        artifact: DocumentPreprocessArtifact | None,
+    ) -> DocumentDetail:
+        """ファイル準備の出力ファイル情報を保存する。"""
+        return await self._save_preprocess_artifact_with_oracle(document_id, artifact)
+
     async def reset_document_ingestion_outputs(
         self,
         document_id: str,
         *,
         status: FileStatus = FileStatus.UPLOADED,
         error_message: str | None = None,
+        clear_preprocess_artifact: bool = False,
     ) -> DocumentDetail:
         """再取込前に旧抽出・索引・checkpoint と派生状態を破棄する。"""
         return await self._reset_document_ingestion_outputs_with_oracle(
             document_id=document_id,
             status=status,
             error_message=error_message,
+            clear_preprocess_artifact=clear_preprocess_artifact,
         )
 
     async def reset_document_chunk_outputs(
@@ -4098,16 +4096,18 @@ class OracleClient:
     ) -> list[IngestionJob]:
         """stale RUNNING job を QUEUED/FAILED へ戻し、固着した文書状態も復旧する。
 
-        サブプロセスがクラッシュした場合、job は RUNNING、文書は INGESTING/CHUNKING/INDEXING
-        のまま残る。job だけ QUEUED へ戻しても文書が INGESTING のままだと、再投入された
-        job が取込中ガード(409)で必ず失敗し、永久に固着する。これを防ぐため:
+        サブプロセスがクラッシュした場合、job は RUNNING、文書は
+        PREPROCESSING/INGESTING/CHUNKING/INDEXING のまま残る。job だけ QUEUED へ
+        戻しても文書が INGESTING のままだと、再投入された job が取込中ガード(409)で
+        必ず失敗し、永久に固着する。これを防ぐため:
 
         - job を再キューする際は、文書も再実行可能な状態(EXTRACT→UPLOADED /
           INDEX→REVIEW)へ戻す。
         - 試行上限超過で job を失敗させる際は、文書も ERROR へ戻す。
-        - QUEUED/RUNNING の job が一つも無いのに INGESTING/CHUNKING/INDEXING で取り残された
-          文書(過去のデッドロックで FAILED になった job しか持たない等)は ERROR へ
-          戻し、利用者が再試行できるようにする。
+        - QUEUED/RUNNING の job が一つも無いのに
+          PREPROCESSING/INGESTING/CHUNKING/INDEXING で取り残された文書(過去の
+          デッドロックで FAILED になった job しか持たない等)は ERROR へ戻し、
+          利用者が再試行できるようにする。
         """
         now = datetime.now(UTC)
         stale_error_message = "取込ジョブが規定回数を超えて停止しました。"
@@ -4212,7 +4212,7 @@ class OracleClient:
                     error_message=None,
                 )
 
-            # QUEUED/RUNNING の job が無いのに INGESTING/CHUNKING/INDEXING で取り残された文書を
+            # QUEUED/RUNNING の job が無いのに active status で取り残された文書を
             # ERROR へ戻す(過去のデッドロックで固着した文書の自己復旧)。
             orphan_rows = _fetch_all(
                 connection,
@@ -4220,7 +4220,7 @@ class OracleClient:
                     """
                 SELECT d.document_id
                 FROM rag_documents d
-                WHERE d.status IN ('INGESTING', 'CHUNKING', 'INDEXING')
+                WHERE d.status IN ('PREPROCESSING', 'INGESTING', 'CHUNKING', 'INDEXING')
                   AND {document_access_sql}
                   AND NOT EXISTS (
                       SELECT 1
@@ -4257,7 +4257,7 @@ class OracleClient:
     ) -> None:
         """recovery トランザクション内で固着文書の状態を復旧する。
 
-        INGESTING/CHUNKING/INDEXING に取り残された文書だけを対象にする。
+        PREPROCESSING/INGESTING/CHUNKING/INDEXING に取り残された文書だけを対象にする。
         ERROR へ戻す場合も段階レビュー用の抽出/chunk 成果物は保持する。
         """
         _execute(
@@ -4268,7 +4268,7 @@ class OracleClient:
             SET status = :status,
                 error_message = :error_message
             WHERE document_id = :document_id
-              AND status IN ('INGESTING', 'CHUNKING', 'INDEXING')
+              AND status IN ('PREPROCESSING', 'INGESTING', 'CHUNKING', 'INDEXING')
               AND {access_predicate}
             """,
                 access_predicate=_oracle_access_predicate_sql(),
@@ -4551,6 +4551,7 @@ class OracleClient:
                 tenant_id_hash,
                 category_name,
                 object_storage_path,
+                preprocess_artifact,
                 content_type,
                 file_size_bytes,
                 content_sha256,
@@ -4939,12 +4940,57 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    async def _save_preprocess_artifact_with_oracle(
+        self,
+        document_id: str,
+        artifact: DocumentPreprocessArtifact | None,
+    ) -> DocumentDetail:
+        """Oracle document table へファイル準備出力情報を保存する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET preprocess_artifact = :preprocess_artifact
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind(
+                    {
+                        "document_id": document_id,
+                        "preprocess_artifact": (
+                            _json_dumps(artifact.model_dump(mode="json"))
+                            if artifact is not None
+                            else None
+                        ),
+                    }
+                ),
+            )
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
+
+        return await self._run_transaction(operation)
+
     async def _reset_document_ingestion_outputs_with_oracle(
         self,
         *,
         document_id: str,
         status: FileStatus,
         error_message: str | None,
+        clear_preprocess_artifact: bool,
     ) -> DocumentDetail:
         """同一文書の再取込開始時に、旧実体化結果を transaction 内で初期化する。"""
 
@@ -5052,6 +5098,9 @@ class OracleClient:
                 ),
                 _with_tenant_bind({"document_id": document_id}),
             )
+            preprocess_reset_sql = (
+                "preprocess_artifact = NULL," if clear_preprocess_artifact else ""
+            )
             _execute(
                 connection,
                 _render_sql(
@@ -5060,11 +5109,12 @@ class OracleClient:
                 SET
                     status = :status,
                     error_message = :error_message,
+                    __PREPROCESS_RESET__
                     extraction = NULL,
                     indexed_at = NULL
                 WHERE document_id = :document_id
                   AND {access_predicate}
-                """,
+                """.replace("__PREPROCESS_RESET__", preprocess_reset_sql),
                     access_predicate=_oracle_access_predicate_sql(),
                 ),
                 _with_tenant_bind(
@@ -6502,6 +6552,7 @@ def _select_document(
             tenant_id_hash,
             category_name,
             object_storage_path,
+            preprocess_artifact,
             content_type,
             file_size_bytes,
             content_sha256,
@@ -7424,6 +7475,7 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         status=_file_status(row["status"]),
         uploaded_at=_datetime_value(row.get("uploaded_at")),
         object_storage_path=_optional_str(row.get("object_storage_path")),
+        preprocess_artifact=_json_loads(row.get("preprocess_artifact")) or None,
         content_type=_optional_str(row.get("content_type")),
         file_size_bytes=_optional_int(row.get("file_size_bytes")),
         content_sha256=_optional_str(row.get("content_sha256")),
@@ -7805,7 +7857,7 @@ def _ingestion_job_status(value: object) -> IngestionJobStatus:
 def _ingestion_job_phase(value: object) -> IngestionJobPhase:
     if isinstance(value, IngestionJobPhase):
         return value
-    return IngestionJobPhase(str(value or IngestionJobPhase.EXTRACT.value))
+    return IngestionJobPhase(str(value or IngestionJobPhase.PREPROCESS.value))
 
 
 def _restore_status_for_job_phase(phase: IngestionJobPhase) -> FileStatus:
@@ -8219,7 +8271,7 @@ CREATE TABLE {table_name} (
     document_id      VARCHAR2(64) NOT NULL,
     tenant_id_hash   CHAR(64),
     status           VARCHAR2(32) NOT NULL,
-    phase            VARCHAR2(16) DEFAULT 'EXTRACT' NOT NULL,
+    phase            VARCHAR2(16) DEFAULT 'PREPROCESS' NOT NULL,
     parser_profile   VARCHAR2(80) NOT NULL,
     quality_warnings JSON,
     skip_reason      VARCHAR2(256),
@@ -8232,7 +8284,7 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED')),
     CONSTRAINT {table_name}_phase_ck
-        CHECK (phase IN ('EXTRACT', 'CHUNK', 'INDEX')),
+        CHECK (phase IN ('PREPROCESS', 'EXTRACT', 'CHUNK', 'INDEX')),
     CONSTRAINT {table_name}_attempts_ck
         CHECK (attempt_count >= 0 AND max_attempts >= 1),
     CONSTRAINT {table_name}_document_fk
@@ -8533,6 +8585,7 @@ CREATE TABLE {table_name} (
     tenant_id_hash           CHAR(64),
     category_name            VARCHAR2(256),
     object_storage_path      VARCHAR2(1024),
+    preprocess_artifact      JSON,
     content_type             VARCHAR2(255),
     file_size_bytes          NUMBER(19),
     content_sha256           CHAR(64),
@@ -8543,7 +8596,7 @@ CREATE TABLE {table_name} (
     indexed_at               TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN (
-            'UPLOADED', 'INGESTING', 'REVIEW', 'CHUNKING', 'CHUNKED',
+            'UPLOADED', 'PREPROCESSING', 'INGESTING', 'REVIEW', 'CHUNKING', 'CHUNKED',
             'INDEXING', 'INDEXED', 'ERROR'
         )),
     CONSTRAINT {table_name}_duplicate_fk
@@ -9334,6 +9387,11 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         uploaded_at=document.uploaded_at,
         indexed_at=document.indexed_at,
         object_storage_path=document.object_storage_path,
+        preprocess_artifact=(
+            DocumentPreprocessArtifact.model_validate(document.preprocess_artifact)
+            if document.preprocess_artifact
+            else None
+        ),
         extraction=document.extraction,
         error_message=document.error_message,
         source_profile=build_source_profile(

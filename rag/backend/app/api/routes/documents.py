@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from html import escape
 from pathlib import PurePath
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -522,7 +522,7 @@ async def enqueue_document_ingestion_job(
     http_request: Request,
     document_id: str,
     force: bool = Query(default=False),
-    phase: Annotated[IngestionJobPhase, Query()] = IngestionJobPhase.EXTRACT,
+    phase: Annotated[IngestionJobPhase, Query()] = IngestionJobPhase.PREPROCESS,
 ) -> ApiResponse[IngestionJob]:
     """保存済みドキュメントを取込 job としてキュー投入する。"""
     enforce_rate_limit("ingest", http_request)
@@ -834,6 +834,7 @@ async def get_document_ingestion_config(
             owning_knowledge_base=(
                 KnowledgeBaseRef(id=owning.id, name=owning.name) if owning is not None else None
             ),
+            effective_preprocess_profile=effective_settings.rag_preprocess_profile,
             effective_chunking_strategy=effective_settings.rag_chunking_strategy,
             effective_parser_adapter_backend=effective_settings.rag_parser_adapter_backend,
             observed_chunking_strategy=observed_strategy,
@@ -1349,10 +1350,48 @@ async def _load_source_bytes(
     return data, source_profile
 
 
+async def _load_prepared_source_bytes(
+    oracle: OracleClient,
+    document_id: str,
+    detail: DocumentDetail,
+) -> tuple[bytes, SourceProfile]:
+    """保存済みファイル準備 artifact を取得する。欠落時は原本へ戻さない。"""
+    artifact = detail.preprocess_artifact
+    if artifact is None or not artifact.object_storage_path:
+        raise HTTPException(
+            status_code=409,
+            detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+        )
+    try:
+        data = await ObjectStorageClient().get(artifact.object_storage_path)
+    except FileNotFoundError as exc:
+        await oracle.update_document_status(
+            document_id,
+            FileStatus.ERROR,
+            "処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+        ) from exc
+    except ValueError as exc:
+        await oracle.update_document_status(document_id, FileStatus.ERROR, str(exc))
+        raise HTTPException(status_code=400, detail="処理後ファイルの参照パスが不正です。") from exc
+
+    if artifact.sha256 and _sha256_hex(data) != artifact.sha256:
+        message = "処理後ファイルの SHA-256 がファイル準備時と一致しません。"
+        await oracle.update_document_status(document_id, FileStatus.ERROR, message)
+        raise HTTPException(status_code=409, detail=message)
+
+    source_profile = _source_profile_for_detail(detail)
+    return data, source_profile
+
+
 async def _ingest_existing_document(
     document_id: str,
     *,
     force: bool = False,
+    use_prepared_artifact: bool = False,
     cancel_checker: Callable[[], Awaitable[bool]] | None = None,
 ) -> DocumentDetail:
     """保存済み原本を検証して取込パイプラインへ渡す。"""
@@ -1360,11 +1399,27 @@ async def _ingest_existing_document(
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status in (FileStatus.INGESTING, FileStatus.CHUNKING, FileStatus.INDEXING):
+    if detail.status in (
+        FileStatus.PREPROCESSING,
+        FileStatus.INGESTING,
+        FileStatus.CHUNKING,
+        FileStatus.INDEXING,
+    ):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
     if detail.status == FileStatus.INDEXED and not force:
         return detail
-    data, source_profile = await _load_source_bytes(oracle, document_id, detail)
+    if use_prepared_artifact:
+        data, source_profile = await _load_prepared_source_bytes(oracle, document_id, detail)
+        ingest_content_type = (
+            detail.preprocess_artifact.content_type
+            if detail.preprocess_artifact is not None and detail.preprocess_artifact.content_type
+            else "application/octet-stream"
+        )
+        prepared_artifact = detail.preprocess_artifact
+    else:
+        data, source_profile = await _load_source_bytes(oracle, document_id, detail)
+        ingest_content_type = detail.content_type or "application/octet-stream"
+        prepared_artifact = None
     global_settings = get_settings()
     plan, configs = await _materialization_plan_for_document(
         oracle,
@@ -1372,7 +1427,6 @@ async def _ingest_existing_document(
         global_settings=global_settings,
     )
     ingest_prompt = "ドキュメントを日本語で OCR し、本文テキストを抽出してください。"
-    ingest_content_type = detail.content_type or "application/octet-stream"
     if plan is None or not plan.chunk_sets:
         # owning KB(最古割当)の取込上書きをスナップショットとして適用する。
         effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
@@ -1385,6 +1439,8 @@ async def _ingest_existing_document(
             content_type=ingest_content_type,
             source_profile=source_profile,
             chunk_set_id=chunk_set_id,
+            original_object_storage_path=detail.object_storage_path,
+            prepared_artifact=prepared_artifact,
             cancel_checker=cancel_checker,
         )
         await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
@@ -1413,6 +1469,8 @@ async def _ingest_existing_document(
                     source_profile=source_profile,
                     chunk_set_id=chunk_set_id,
                     record_outcome=record_outcome,
+                    original_object_storage_path=detail.object_storage_path,
+                    prepared_artifact=prepared_artifact,
                     cancel_checker=cancel_checker,
                 )
                 if result.status == FileStatus.REVIEW:
@@ -2022,14 +2080,19 @@ async def _enqueue_ingestion_job_for_document(
     document_id: str,
     *,
     force: bool,
-    phase: IngestionJobPhase = IngestionJobPhase.EXTRACT,
+    phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS,
 ) -> IngestionJob:
     """既存ドキュメントを job 化し、必要ならバックグラウンド実行へ渡す。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status in (FileStatus.INGESTING, FileStatus.CHUNKING, FileStatus.INDEXING):
+    if detail.status in (
+        FileStatus.PREPROCESSING,
+        FileStatus.INGESTING,
+        FileStatus.CHUNKING,
+        FileStatus.INDEXING,
+    ):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
 
     source_profile = _source_profile_for_detail(detail)
@@ -2041,6 +2104,7 @@ async def _enqueue_ingestion_job_for_document(
             quality_warnings=source_profile.quality_warnings,
             status=IngestionJobStatus.SKIPPED,
             skip_reason="duplicate_content",
+            phase=phase,
         )
     if source_profile.unsupported_reason and not force:
         return await _create_ingestion_job_record(
@@ -2050,12 +2114,12 @@ async def _enqueue_ingestion_job_for_document(
             quality_warnings=source_profile.quality_warnings,
             status=IngestionJobStatus.SKIPPED,
             skip_reason=source_profile.unsupported_reason,
+            phase=phase,
         )
     if phase == IngestionJobPhase.CHUNK:
         return await _enqueue_chunk_phase_job_for_document(document_id, force=force)
     if phase == IngestionJobPhase.INDEX:
         return await _enqueue_index_phase_job_for_document(document_id, force=force)
-
     if detail.status == FileStatus.INDEXED and not force:
         return await _create_ingestion_job_record(
             oracle=oracle,
@@ -2064,14 +2128,34 @@ async def _enqueue_ingestion_job_for_document(
             quality_warnings=source_profile.quality_warnings,
             status=IngestionJobStatus.SKIPPED,
             skip_reason="already_indexed",
+            phase=phase,
         )
+    if (
+        phase == IngestionJobPhase.EXTRACT
+        and (
+            detail.preprocess_artifact is None
+            or not detail.preprocess_artifact.object_storage_path
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+        )
+    if phase == IngestionJobPhase.PREPROCESS:
+        await _reset_document_outputs_for_extract(
+            oracle,
+            document_id,
+            clear_preprocess_artifact=True,
+        )
+    else:
+        await _reset_document_outputs_for_extract(oracle, document_id)
 
-    await _reset_document_outputs_for_extract(oracle, document_id)
     job = await _create_ingestion_job_record(
         oracle=oracle,
         document_id=document_id,
         parser_profile=source_profile.parser_profile,
         quality_warnings=source_profile.quality_warnings,
+        phase=phase,
     )
     _dispatch_ingestion_job(job.id, force=force)
     return job
@@ -2158,7 +2242,12 @@ async def _enqueue_failed_segment_retry_job_for_document(
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status in (FileStatus.INGESTING, FileStatus.CHUNKING, FileStatus.INDEXING):
+    if detail.status in (
+        FileStatus.PREPROCESSING,
+        FileStatus.INGESTING,
+        FileStatus.CHUNKING,
+        FileStatus.INDEXING,
+    ):
         raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
     segments = await oracle.list_ingestion_segments(document_id)
     if not any(segment.status == "FAILED" for segment in segments):
@@ -2205,7 +2294,7 @@ async def _create_ingestion_job_record(
     parser_profile: str,
     quality_warnings: list[str],
     status: IngestionJobStatus = IngestionJobStatus.QUEUED,
-    phase: IngestionJobPhase = IngestionJobPhase.EXTRACT,
+    phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS,
     skip_reason: str | None = None,
 ) -> IngestionJob:
     """取込 job を永続化する。"""
@@ -2229,11 +2318,17 @@ async def _create_ingestion_job_record(
 async def _reset_document_outputs_for_extract(
     oracle: OracleClient,
     document_id: str,
+    *,
+    clear_preprocess_artifact: bool = False,
 ) -> None:
     """EXTRACT 再投入前に旧抽出・checkpoint・派生結果を初期化する。"""
     reset_outputs = getattr(oracle, "reset_document_ingestion_outputs", None)
     if callable(reset_outputs):
-        await reset_outputs(document_id, status=FileStatus.UPLOADED)
+        await reset_outputs(
+            document_id,
+            status=FileStatus.UPLOADED,
+            clear_preprocess_artifact=clear_preprocess_artifact,
+        )
         return
     await oracle.update_document_status(document_id, FileStatus.UPLOADED)
 
@@ -2311,7 +2406,7 @@ def _planned_parser_backend_for_unmaterialized_extract(
         return None
     if (
         latest_job is not None
-        and latest_job.phase == IngestionJobPhase.EXTRACT
+        and latest_job.phase in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
         and latest_job.status
         in {
             IngestionJobStatus.QUEUED,
@@ -2320,7 +2415,12 @@ def _planned_parser_backend_for_unmaterialized_extract(
         }
     ):
         return planned
-    if detail.status in {FileStatus.UPLOADED, FileStatus.INGESTING, FileStatus.ERROR}:
+    if detail.status in {
+        FileStatus.UPLOADED,
+        FileStatus.PREPROCESSING,
+        FileStatus.INGESTING,
+        FileStatus.ERROR,
+    }:
         return planned
     return None
 
@@ -2799,6 +2899,8 @@ async def _document_artifact_paths(
     paths: list[str] = []
     if extraction_artifact_path := _extraction_artifact_path(detail.extraction):
         paths.append(extraction_artifact_path)
+    if detail.preprocess_artifact is not None and detail.preprocess_artifact.object_storage_path:
+        paths.append(detail.preprocess_artifact.object_storage_path)
     try:
         segments = await oracle.list_ingestion_segments(detail.id)
     except Exception:
@@ -2862,11 +2964,34 @@ async def _run_ingestion_job(
                 job.document_id,
                 cancel_checker=is_cancelled,
             )
-        else:
+        elif job.phase == IngestionJobPhase.EXTRACT:
+            current_detail = await oracle.get_document(job.document_id)
+            if (
+                current_detail is None
+                or current_detail.preprocess_artifact is None
+                or not current_detail.preprocess_artifact.object_storage_path
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+                )
             await _reset_document_outputs_for_extract(oracle, job.document_id)
             detail = await _ingest_existing_document(
                 job.document_id,
                 force=True,
+                use_prepared_artifact=True,
+                cancel_checker=is_cancelled,
+            )
+        else:
+            await _reset_document_outputs_for_extract(
+                oracle,
+                job.document_id,
+                clear_preprocess_artifact=True,
+            )
+            detail = await _ingest_existing_document(
+                job.document_id,
+                force=True,
+                use_prepared_artifact=False,
                 cancel_checker=is_cancelled,
             )
         await _enqueue_auto_advance_job(job, detail)
@@ -2955,7 +3080,7 @@ async def _enqueue_auto_advance_job(job: IngestionJob, detail: DocumentDetail) -
         oracle = OracleClient()
         settings, _owning = await _resolve_ingestion_settings(oracle, job.document_id)
         if (
-            job.phase == IngestionJobPhase.EXTRACT
+            job.phase in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
             and detail.status == FileStatus.REVIEW
             and settings.rag_auto_chunk_after_extract_enabled
         ):
@@ -3034,25 +3159,47 @@ async def recover_and_drain_ingestion_jobs(
 
 
 @router.get("/{document_id}/content")
-async def document_content(document_id: str) -> Response:
-    """原本ファイルを返す（文書プレビュー用）。"""
+async def document_content(
+    document_id: str,
+    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
+    disposition: Annotated[Literal["inline", "attachment"], Query()] = "inline",
+) -> Response:
+    """原本またはファイル準備後 artifact を返す（文書プレビュー/ダウンロード用）。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if variant == "prepared":
+        artifact = detail.preprocess_artifact
+        if artifact is None or not artifact.object_storage_path:
+            raise HTTPException(
+                status_code=404,
+                detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+            )
+        path = artifact.object_storage_path
+        file_name = artifact.file_name
+        content_type = artifact.content_type or _document_media_type(detail)
+        not_found_message = "処理後ファイルが見つかりません。"
+        bad_path_message = "処理後ファイルの参照パスが不正です。"
+    else:
+        path = detail.object_storage_path
+        file_name = detail.file_name
+        content_type = _document_media_type(detail)
+        not_found_message = "原本ファイルが見つかりません。"
+        bad_path_message = "原本ファイルの参照パスが不正です。"
     try:
-        data = await ObjectStorageClient().get(detail.object_storage_path)
+        data = await ObjectStorageClient().get(path)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="原本ファイルが見つかりません。") from exc
+        raise HTTPException(status_code=404, detail=not_found_message) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="原本ファイルの参照パスが不正です。") from exc
+        raise HTTPException(status_code=400, detail=bad_path_message) from exc
 
     return Response(
         content=data,
-        media_type=_content_type_header(_document_media_type(detail), data),
+        media_type=_content_type_header(content_type, data),
         headers={
-            # 非 ASCII ファイル名は RFC 5987 でエンコードして inline 表示する
-            "Content-Disposition": f"inline; filename*=UTF-8''{quote(detail.file_name)}",
+            # 非 ASCII ファイル名は RFC 5987 でエンコードする
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(file_name)}",
             # MIME sniffing による取り違えを防ぐ
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, max-age=60",

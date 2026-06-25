@@ -25,6 +25,7 @@ class FileStatus(StrEnum):
     """
 
     UPLOADED = "UPLOADED"
+    PREPROCESSING = "PREPROCESSING"
     INGESTING = "INGESTING"
     REVIEW = "REVIEW"
     CHUNKING = "CHUNKING"
@@ -62,6 +63,7 @@ class IngestionJobPhase(StrEnum):
     INDEX は承認済み chunk から embedding→索引を行う後段。
     """
 
+    PREPROCESS = "PREPROCESS"
     EXTRACT = "EXTRACT"
     CHUNK = "CHUNK"
     INDEX = "INDEX"
@@ -73,7 +75,7 @@ class IngestionJob(BaseModel):
     id: str
     document_id: str
     status: IngestionJobStatus
-    phase: IngestionJobPhase = IngestionJobPhase.EXTRACT
+    phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS
     parser_profile: str
     quality_warnings: list[str] = Field(default_factory=list)
     skip_reason: str | None = None
@@ -112,10 +114,29 @@ class DuplicateDocumentRef(BaseModel):
     indexed_at: datetime | None = None
 
 
+class DocumentPreprocessArtifact(BaseModel):
+    """ファイル準備で生成・選択された抽出入力ファイル。"""
+
+    derivation_id: str
+    profile: str
+    converted: bool = False
+    converter_name: str | None = None
+    converter_version: str | None = None
+    source_content_type: str | None = None
+    source_sha256: str | None = None
+    object_storage_path: str | None = None
+    content_type: str | None = None
+    sha256: str | None = None
+    file_name: str
+    page_map: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class DocumentDetail(DocumentSummary):
     """詳細表示用。VLM/LLM の抽出本文とメタデータを含む。"""
 
     object_storage_path: str | None = None
+    preprocess_artifact: DocumentPreprocessArtifact | None = None
     extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
     duplicate_source: DuplicateDocumentRef | None = None
@@ -132,6 +153,7 @@ class DocumentIngestionConfigData(BaseModel):
     is_indexed: bool = False
     owning_knowledge_base: KnowledgeBaseRef | None = None
     # owning KB の現行設定を重ねた「これから取り込むなら」の有効値。
+    effective_preprocess_profile: str
     effective_chunking_strategy: str
     effective_parser_adapter_backend: str
     # 実際に取込時へ刻まれた値(INDEXED 済みのときのみ観測できる)。

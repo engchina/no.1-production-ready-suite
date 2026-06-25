@@ -561,7 +561,10 @@ async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
         and "NOT EXISTS" in call.statement
         and call.statement.strip().startswith("SELECT")
     )
-    assert "d.status IN ('INGESTING', 'CHUNKING', 'INDEXING')" in orphan_select.statement
+    assert (
+        "d.status IN ('PREPROCESSING', 'INGESTING', 'CHUNKING', 'INDEXING')"
+        in orphan_select.statement
+    )
     assert not any("DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls)
     document_update = next(
         call
@@ -570,7 +573,10 @@ async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
         and call.parameters.get("document_id") == "doc-stuck"
     )
     assert document_update.parameters["status"] == "ERROR"
-    assert "status IN ('INGESTING', 'CHUNKING', 'INDEXING')" in document_update.statement
+    assert (
+        "status IN ('PREPROCESSING', 'INGESTING', 'CHUNKING', 'INDEXING')"
+        in document_update.statement
+    )
     assert pool.connection.commits == 1
 
 
@@ -1858,7 +1864,9 @@ def test_oracle_text_terms_extracts_safe_display_keywords() -> None:
 
 def test_oracle_text_terms_filters_japanese_particles_and_english_stopwords() -> None:
     """日本語助詞と英語 stopword は UI/Oracle Text query に出さない。"""
+    assert oracle_module.JAPANESE_QUERY_STOP_TERMS == set(oracle_module.ORACLE_TEXT_STOP_WORDS)
     assert oracle_text_terms("私の上司の興味はなんですか") == ["上司", "興味"]
+    assert oracle_text_terms("申請へ承認") == ["申請", "承認"]
     assert oracle_text_terms("what is the expense policy and who approves it") == [
         "expense",
         "policy",
@@ -2060,7 +2068,7 @@ def test_oracle_document_schema_includes_ingestion_metadata_columns() -> None:
     assert "duplicate_of_document_id VARCHAR2(64)" in ddl
     assert "rag_documents_content_sha256_idx" in ddl
     assert "rag_documents_tenant_status_uploaded_idx" in ddl
-    assert "'UPLOADED', 'INGESTING', 'REVIEW', 'CHUNKING', 'CHUNKED'," in ddl
+    assert "'UPLOADED', 'PREPROCESSING', 'INGESTING', 'REVIEW', 'CHUNKING', 'CHUNKED'," in ddl
     assert "'INDEXING', 'INDEXED', 'ERROR'" in ddl
 
 
@@ -2087,12 +2095,12 @@ def test_oracle_ingestion_job_schema_includes_queue_table() -> None:
     assert "quality_warnings JSON" in ddl
     assert "attempt_count    NUMBER(5) DEFAULT 0 NOT NULL" in ddl
     assert "max_attempts     NUMBER(5) DEFAULT 3 NOT NULL" in ddl
-    assert "phase            VARCHAR2(16) DEFAULT 'EXTRACT' NOT NULL" in ddl
+    assert "phase            VARCHAR2(16) DEFAULT 'PREPROCESS' NOT NULL" in ddl
     assert (
         "CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SKIPPED', 'CANCELLED'))"
         in ddl
     )
-    assert "CHECK (phase IN ('EXTRACT', 'CHUNK', 'INDEX'))" in ddl
+    assert "CHECK (phase IN ('PREPROCESS', 'EXTRACT', 'CHUNK', 'INDEX'))" in ddl
     assert "CHECK (attempt_count >= 0 AND max_attempts >= 1)" in ddl
     assert "REFERENCES rag_documents (document_id)" in ddl
     assert "ON rag_ingestion_jobs (tenant_id_hash, status, queued_at DESC)" in ddl
@@ -2128,6 +2136,7 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     assert "CTX_DDL.CREATE_STOPLIST('RAG_TEXT_STOPLIST', 'BASIC_STOPLIST')" in ddl
     assert "ADD_STOPWORD('RAG_TEXT_STOPLIST', p_word)" in ddl
     assert "add_stopword('の')" in ddl
+    assert "add_stopword('へ')" in ddl
     assert (
         "PARAMETERS ('LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)')"
         in ddl

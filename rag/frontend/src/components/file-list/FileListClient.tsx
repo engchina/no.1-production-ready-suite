@@ -40,6 +40,7 @@ const LIMIT = 20;
 const FILTERS: (FileStatus | "ALL")[] = [
   "ALL",
   "UPLOADED",
+  "PREPROCESSING",
   "INGESTING",
   "REVIEW",
   "CHUNKING",

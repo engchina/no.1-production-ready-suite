@@ -8,6 +8,7 @@ export type { FileStatus };
 /** RAG のファイル処理状態 → 共有バッジの汎用 variant マッピング。 */
 const STATUS_VARIANT: Record<FileStatus, StatusVariant> = {
   UPLOADED: "neutral",
+  PREPROCESSING: "pending",
   INGESTING: "pending",
   REVIEW: "info",
   CHUNKING: "pending",

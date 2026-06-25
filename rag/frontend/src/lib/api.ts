@@ -31,6 +31,7 @@ export type JsonValue =
 
 export type FileStatus =
   | "UPLOADED"
+  | "PREPROCESSING"
   | "INGESTING"
   | "REVIEW"
   | "CHUNKING"
@@ -288,7 +289,7 @@ export interface SourceProfile {
   quality_warnings: string[];
 }
 
-export type IngestionJobPhase = "EXTRACT" | "CHUNK" | "INDEX";
+export type IngestionJobPhase = "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
 
 export interface DocumentElementTextEdit {
   element_id: string;
@@ -345,6 +346,22 @@ export interface DuplicateDocumentRef {
   status: FileStatus;
   uploaded_at: string;
   indexed_at: string | null;
+}
+
+export interface DocumentPreprocessArtifact {
+  derivation_id: string;
+  profile: string;
+  converted: boolean;
+  converter_name: string | null;
+  converter_version: string | null;
+  source_content_type: string | null;
+  source_sha256: string | null;
+  object_storage_path: string | null;
+  content_type: string | null;
+  sha256: string | null;
+  file_name: string;
+  page_map: Record<string, number>;
+  warnings: string[];
 }
 
 export interface DocumentElement {
@@ -417,6 +434,7 @@ export interface StructuredExtraction {
 
 export interface DocumentDetail extends DocumentSummary {
   object_storage_path: string | null;
+  preprocess_artifact: DocumentPreprocessArtifact | null;
   extraction: Record<string, unknown>;
   error_message: string | null;
   duplicate_source: DuplicateDocumentRef | null;
@@ -685,6 +703,7 @@ export interface DocumentIngestionConfigData {
   document_id: string;
   is_indexed: boolean;
   owning_knowledge_base: KnowledgeBaseRef | null;
+  effective_preprocess_profile: PreprocessProfileName;
   effective_chunking_strategy: string;
   effective_parser_adapter_backend: string;
   observed_chunking_strategy: string | null;
@@ -1989,7 +2008,7 @@ export const api = {
       body: form,
     });
   },
-  ingestDocument: (id: string, force = false, phase: IngestionJobPhase = "EXTRACT") =>
+  ingestDocument: (id: string, force = false, phase: IngestionJobPhase = "PREPROCESS") =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
       { method: "POST" }
@@ -1997,7 +2016,7 @@ export const api = {
   enqueueDocumentIngestionJob: (
     id: string,
     force = false,
-    phase: IngestionJobPhase = "EXTRACT"
+    phase: IngestionJobPhase = "PREPROCESS"
   ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
@@ -2048,8 +2067,20 @@ export const api = {
     request<IngestionJob>(`/api/documents/ingestion-jobs/${encodeURIComponent(id)}/cancel`, {
       method: "POST",
     }),
-  /** 原本ファイルの配信 URL（プレビュー用）。 */
-  documentContentUrl: (id: string) => `/api/documents/${encodeURIComponent(id)}/content`,
+  /** 原本/処理後ファイルの配信 URL（プレビュー/ダウンロード用）。 */
+  documentContentUrl: (
+    id: string,
+    options: {
+      variant?: "original" | "prepared";
+      disposition?: "inline" | "attachment";
+    } = {}
+  ) => {
+    const search = new URLSearchParams();
+    if (options.variant) search.set("variant", options.variant);
+    if (options.disposition) search.set("disposition", options.disposition);
+    const qs = search.toString();
+    return `/api/documents/${encodeURIComponent(id)}/content${qs ? `?${qs}` : ""}`;
+  },
 
   // ナレッジベース
   listKnowledgeBases: (params: {

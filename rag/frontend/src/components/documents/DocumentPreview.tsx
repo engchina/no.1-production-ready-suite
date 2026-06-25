@@ -18,6 +18,7 @@ import { charsetFromContentType, decodeText } from "@/lib/text-decode";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type Kind = SourcePreviewKind;
+type DocumentContentVariant = "original" | "prepared";
 
 function kindOf(fileName: string, sourceProfile?: SourceProfile | null): Kind {
   if (sourceProfile?.preview_kind) return sourceProfile.preview_kind;
@@ -42,6 +43,7 @@ export function pdfPreviewUrl(url: string, focusPage?: number | null): string {
 export function DocumentPreview({
   documentId,
   fileName,
+  variant = "original",
   sourceProfile = null,
   focusPage = null,
   focusBbox = null,
@@ -51,6 +53,7 @@ export function DocumentPreview({
 }: {
   documentId: string;
   fileName: string;
+  variant?: DocumentContentVariant;
   sourceProfile?: SourceProfile | null;
   focusPage?: number | null;
   focusBbox?: number[] | null;
@@ -58,7 +61,14 @@ export function DocumentPreview({
   focusBboxUnit?: BboxOverlayUnit | null;
   focusPageSize?: BboxPageSize | null;
 }) {
-  const url = api.documentContentUrl(documentId);
+  const url =
+    variant === "prepared"
+      ? api.documentContentUrl(documentId, { variant })
+      : api.documentContentUrl(documentId);
+  const downloadUrl = api.documentContentUrl(documentId, {
+    ...(variant === "prepared" ? { variant } : {}),
+    disposition: "attachment",
+  });
   const kind = kindOf(fileName, sourceProfile);
 
   if (kind === "image") {
@@ -109,10 +119,14 @@ export function DocumentPreview({
   }
 
   if (kind === "office") {
-    return <UnsupportedPreview fileName={fileName} url={url} message={t("preview.office")} />;
+    return (
+      <UnsupportedPreview fileName={fileName} url={downloadUrl} message={t("preview.office")} />
+    );
   }
 
-  return <UnsupportedPreview fileName={fileName} url={url} message={t("preview.unsupported")} />;
+  return (
+    <UnsupportedPreview fileName={fileName} url={downloadUrl} message={t("preview.unsupported")} />
+  );
 }
 
 function ImagePreview({

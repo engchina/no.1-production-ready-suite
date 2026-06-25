@@ -136,12 +136,19 @@ const DOCUMENT_EXTRACTION_EXPORT_FORMATS: DocumentExtractionExportFormat[] = [
   "chunks",
 ];
 
-function clearDocumentProcessingCache(qc: QueryClient, documentId: string) {
+function clearDocumentProcessingCache(
+  qc: QueryClient,
+  documentId: string,
+  options: { clearPreprocessArtifact?: boolean } = {}
+) {
   qc.setQueryData<DocumentDetail | undefined>(queryKeys.document(documentId), (current) =>
     current
       ? {
           ...current,
           status: "UPLOADED",
+          preprocess_artifact: options.clearPreprocessArtifact
+            ? null
+            : current.preprocess_artifact,
           extraction: {},
           error_message: null,
           indexed_at: null,
@@ -177,6 +184,7 @@ function invalidateDocumentProcessingQueries(qc: QueryClient, documentId: string
 
 /** 取込/索引が進行中で一覧を再取得すべき文書状態。 */
 export const DOCUMENT_ACTIVE_STATUSES: ReadonlySet<FileStatus> = new Set<FileStatus>([
+  "PREPROCESSING",
   "INGESTING",
   "CHUNKING",
   "INDEXING",
@@ -676,8 +684,10 @@ export function useIngestDocument() {
       phase?: IngestionJobPhase;
     }) => api.enqueueDocumentIngestionJob(id, force, phase),
     onSuccess: (job) => {
-      if (job.phase === "EXTRACT" && job.status === "QUEUED") {
-        clearDocumentProcessingCache(qc, job.document_id);
+      if ((job.phase === "PREPROCESS" || job.phase === "EXTRACT") && job.status === "QUEUED") {
+        clearDocumentProcessingCache(qc, job.document_id, {
+          clearPreprocessArtifact: job.phase === "PREPROCESS",
+        });
       }
       invalidateDocumentProcessingQueries(qc, job.document_id);
     },
@@ -698,8 +708,10 @@ export function useEnqueueDocumentIngestionJob() {
       phase?: IngestionJobPhase;
     }) => api.enqueueDocumentIngestionJob(id, force, phase),
     onSuccess: (job) => {
-      if (job.phase === "EXTRACT" && job.status === "QUEUED") {
-        clearDocumentProcessingCache(qc, job.document_id);
+      if ((job.phase === "PREPROCESS" || job.phase === "EXTRACT") && job.status === "QUEUED") {
+        clearDocumentProcessingCache(qc, job.document_id, {
+          clearPreprocessArtifact: job.phase === "PREPROCESS",
+        });
       }
       invalidateDocumentProcessingQueries(qc, job.document_id);
     },
