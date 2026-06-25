@@ -81,6 +81,7 @@ def test_stream_search_api_uses_realtime_deltas_without_duplicate_answer(
     assert '{"text": "120000 円です。"}' in response.text
     assert '{"text": "承認条件は 120000 円です。"}' not in response.text
     assert "event: metadata" in response.text
+    assert '"keyword_terms": ["承認条件"]' in response.text
     assert "event: citations" in response.text
     assert "event: done" in response.text
 
@@ -296,7 +297,11 @@ class RealtimeStreamingPipeline:
             citations=[],
             trace_id=trace_id,
             elapsed_ms=1.0,
-            diagnostics=build_search_diagnostics(request, settings=get_settings()),
+            diagnostics=build_search_diagnostics(
+                request,
+                settings=get_settings(),
+                keyword_terms=["承認条件"],
+            ),
         )
 
 

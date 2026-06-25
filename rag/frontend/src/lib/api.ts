@@ -725,6 +725,7 @@ export interface SearchDiagnostics {
   mode: string;
   retrieval_strategy: string;
   route_reason: string;
+  keyword_terms: string[];
   graph_hit_count: number;
   fallback_reason: string | null;
   stream_stage_timings: Record<string, number>;

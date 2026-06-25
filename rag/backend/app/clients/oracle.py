@@ -70,6 +70,98 @@ from app.schemas.knowledge_base import (
 from app.schemas.search import RetrievedChunk, SearchMode
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
+ASCII_TOKEN_PATTERN = re.compile(r"^[a-z0-9_]+$", re.IGNORECASE)
+KANJI_RUN_PATTERN = re.compile(r"[一-龯々]+")
+KATAKANA_RUN_PATTERN = re.compile(r"[ァ-ンー]+")
+ORACLE_TEXT_MAX_TERMS = 12  # ponytail: safety cap, tune with retrieval evals if needed.
+ORACLE_TEXT_LEXER_PREFERENCE = "RAG_TEXT_WORLD_LEXER"
+ORACLE_TEXT_STOPLIST = "RAG_TEXT_STOPLIST"
+ORACLE_TEXT_LEXER = "WORLD_LEXER"
+ORACLE_TEXT_STOP_WORDS = (
+    "の",
+    "は",
+    "が",
+    "を",
+    "に",
+    "で",
+    "と",
+    "も",
+    "か",
+    "です",
+    "ます",
+    "なん",
+    "んで",
+)
+ENGLISH_QUERY_STOP_TERMS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "at",
+    "be",
+    "by",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "for",
+    "from",
+    "how",
+    "in",
+    "is",
+    "it",
+    "near",
+    "of",
+    "on",
+    "or",
+    "please",
+    "should",
+    "the",
+    "to",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+    "would",
+}
+ORACLE_TEXT_OPERATOR_TERMS = {
+    "about",
+    "accum",
+    "and",
+    "equiv",
+    "fuzzy",
+    "haspath",
+    "inpath",
+    "minus",
+    "near",
+    "not",
+    "or",
+    "soundex",
+    "stem",
+    "within",
+}
+JAPANESE_QUERY_STOP_TERMS = {
+    "か",
+    "が",
+    "です",
+    "で",
+    "と",
+    "に",
+    "の",
+    "は",
+    "へ",
+    "ます",
+    "も",
+    "を",
+    "なん",
+    "んで",
+}
 SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
 type MetadataValue = JsonValue
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
@@ -2249,8 +2341,11 @@ class OracleClient:
         self, query: str, top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
         """Oracle Text で keyword chunk を取得する。"""
+        text_query = _oracle_text_query(query)
+        if text_query is None:
+            return []
         where_sql, binds = _oracle_retrieval_where(filters)
-        binds.update({"query": query, "top_k": top_k})
+        binds.update({"query": text_query, "top_k": top_k})
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -8187,6 +8282,8 @@ CREATE INDEX {table_name}_tenant_status_idx
 def oracle_vector_schema_sql(table_name: str = "rag_chunks") -> str:
     """Oracle 26ai VECTOR(1536, FLOAT32) + HNSW index の DDL 例を返す。"""
     return f"""
+{oracle_text_preferences_sql()}
+
 CREATE TABLE {table_name} (
     chunk_id        VARCHAR2(128) PRIMARY KEY,
     document_id     VARCHAR2(64) NOT NULL,
@@ -8212,7 +8309,8 @@ CREATE VECTOR INDEX {table_name}_embedding_hnsw_idx
 
 CREATE INDEX {table_name}_text_idx
     ON {table_name} (chunk_text)
-    INDEXTYPE IS CTXSYS.CONTEXT;
+    INDEXTYPE IS CTXSYS.CONTEXT
+    {oracle_text_index_parameters_sql()};
 
 CREATE INDEX {table_name}_tenant_document_idx
     ON {table_name} (tenant_id_hash, document_id, chunk_index);
@@ -8220,6 +8318,64 @@ CREATE INDEX {table_name}_tenant_document_idx
 CREATE INDEX {table_name}_chunk_set_idx
     ON {table_name} (chunk_set_id, chunk_index);
 """.strip()
+
+
+def oracle_text_preferences_sql(
+    *,
+    lexer_preference: str = ORACLE_TEXT_LEXER_PREFERENCE,
+    lexer: str = ORACLE_TEXT_LEXER,
+    stoplist: str = ORACLE_TEXT_STOPLIST,
+) -> str:
+    """Oracle Text 用 lexer / stoplist preference を冪等に用意する DDL。"""
+    stopword_calls = "\n".join(
+        f"    add_stopword('{word}');" for word in ORACLE_TEXT_STOP_WORDS
+    )
+    return f"""
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM ctx_user_preferences
+    WHERE pre_name = '{lexer_preference}'
+      AND pre_class = 'LEXER';
+
+    IF v_count = 0 THEN
+        CTX_DDL.CREATE_PREFERENCE('{lexer_preference}', '{lexer}');
+    END IF;
+END;
+/
+
+DECLARE
+    v_count NUMBER;
+    PROCEDURE add_stopword(p_word VARCHAR2) IS
+    BEGIN
+        CTX_DDL.ADD_STOPWORD('{stoplist}', p_word);
+    EXCEPTION
+        WHEN OTHERS THEN
+            NULL;
+    END;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM ctx_user_stoplists
+    WHERE spl_name = '{stoplist}';
+
+    IF v_count = 0 THEN
+        CTX_DDL.CREATE_STOPLIST('{stoplist}', 'BASIC_STOPLIST');
+    END IF;
+
+{stopword_calls}
+END;
+/
+""".strip()
+
+
+def oracle_text_index_parameters_sql(
+    *,
+    lexer_preference: str = ORACLE_TEXT_LEXER_PREFERENCE,
+    stoplist: str = ORACLE_TEXT_STOPLIST,
+) -> str:
+    """Oracle Text index の multilingual query 用 parameter 句を返す。"""
+    return f"PARAMETERS ('LEXER {lexer_preference} STOPLIST {stoplist} SYNC (ON COMMIT)')"
 
 
 def oracle_chunk_set_schema_sql() -> str:
@@ -9263,6 +9419,59 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
 
 def _tokens(text: str) -> list[str]:
     return [match.group(0).lower() for match in TOKEN_PATTERN.finditer(text)]
+
+
+def oracle_text_terms(query: str) -> list[str]:
+    # ponytail: lightweight terms; move to Oracle Text lexer/morphology if CJK recall still misses.
+    terms: list[str] = []
+    for match in TOKEN_PATTERN.finditer(query):
+        raw_token = match.group(0).strip()
+        token = raw_token.casefold()
+        if len(token) < 2:
+            continue
+        if ASCII_TOKEN_PATTERN.fullmatch(raw_token):
+            term = _english_query_term(raw_token, token)
+            if term is not None:
+                terms.append(term)
+            continue
+        terms.extend(_japanese_query_terms(token))
+    return _unique_optional_sequence(terms)[:ORACLE_TEXT_MAX_TERMS]
+
+
+def _oracle_text_query(query: str) -> str | None:
+    unique_terms = oracle_text_terms(query)
+    if not unique_terms:
+        return None
+    return " ACCUM ".join(f"{{{term}}}" for term in unique_terms)
+
+
+def _english_query_term(raw_token: str, token: str) -> str | None:
+    if token in ORACLE_TEXT_OPERATOR_TERMS:
+        return None
+    if token in ENGLISH_QUERY_STOP_TERMS and not raw_token.isupper():
+        return None
+    return token
+
+
+def _japanese_query_terms(token: str) -> list[str]:
+    terms: list[str] = []
+    for run in KANJI_RUN_PATTERN.findall(token):
+        if len(run) < 2 or run in JAPANESE_QUERY_STOP_TERMS:
+            continue
+        terms.append(run)
+        terms.extend(_kanji_compound_terms(run))
+    for run in KATAKANA_RUN_PATTERN.findall(token):
+        if len(run) >= 2 and run not in JAPANESE_QUERY_STOP_TERMS:
+            terms.append(run)
+    return terms
+
+
+def _kanji_compound_terms(value: str) -> list[str]:
+    if len(value) == 3:
+        return [value[:2]]
+    if len(value) >= 4:
+        return [value[:2], value[-2:]]
+    return []
 
 
 def _keyword_score(query_tokens: list[str], document_tokens: list[str]) -> float:

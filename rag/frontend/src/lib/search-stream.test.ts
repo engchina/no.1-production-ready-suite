@@ -14,6 +14,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("streamSearch", () => {
   it("metadata/delta/citations/done を順に解析する", async () => {
     const body = [
+      `event: stage\ndata: ${JSON.stringify({ trace_id: "t1", stage: "embedding", outcome: "started", elapsed_ms: 0, attributes: { input_count: 1 } })}\n\n`,
       `event: metadata\ndata: ${JSON.stringify({ trace_id: "t1", elapsed_ms: 12, guardrail_warnings: [], diagnostics: {} })}\n\n`,
       `event: delta\ndata: ${JSON.stringify({ text: "請求" })}\n\n`,
       `event: delta\ndata: ${JSON.stringify({ text: "金額" })}\n\n`,
@@ -26,9 +27,11 @@ describe("streamSearch", () => {
     let citationCount = 0;
     let done = false;
     let traceId = "";
+    let stageName = "";
     await streamSearch(
       { query: "請求金額" },
       {
+        onStage: (stage) => (stageName = stage.stage),
         onMetadata: (m) => (traceId = m.trace_id),
         onDelta: (text) => (answer += text),
         onCitations: (c) => (citationCount = c.length),
@@ -37,6 +40,7 @@ describe("streamSearch", () => {
     );
 
     expect(traceId).toBe("t1");
+    expect(stageName).toBe("embedding");
     expect(answer).toBe("請求金額");
     expect(citationCount).toBe(1);
     expect(done).toBe(true);

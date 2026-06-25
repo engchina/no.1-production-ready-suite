@@ -1,11 +1,20 @@
 /**
  * RAG 検索の SSE ストリーミングクライアント（POST /api/search/stream）。
- * バックエンドは metadata -> delta(複数) -> citations -> done のイベントを送る。
+ * バックエンドは stage(複数) / metadata / delta(複数) / citations / done のイベントを送る。
  */
 
 import { ApiError, type RetrievedChunk, type SearchDiagnostics, type SearchRequestBody } from "./api";
 
+export interface SearchStageEvent {
+  trace_id: string;
+  stage: string;
+  outcome: "started" | "success" | "error" | "cancelled";
+  elapsed_ms: number;
+  attributes: Record<string, unknown>;
+}
+
 export interface SearchStreamHandlers {
+  onStage?: (stage: SearchStageEvent) => void;
   onMetadata?: (meta: {
     trace_id: string;
     elapsed_ms: number;
@@ -85,6 +94,9 @@ function dispatchEvent(block: string, handlers: SearchStreamHandlers): void {
   }
 
   switch (event) {
+    case "stage":
+      handlers.onStage?.(payload as SearchStageEvent);
+      break;
     case "metadata":
       handlers.onMetadata?.(payload as Parameters<NonNullable<SearchStreamHandlers["onMetadata"]>>[0]);
       break;

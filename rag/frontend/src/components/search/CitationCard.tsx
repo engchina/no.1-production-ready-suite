@@ -27,12 +27,14 @@ export function CitationCard({
   chunk,
   index,
   traceId,
+  scoreMaxima,
 }: {
   chunk: RetrievedChunk;
   index: number;
   traceId?: string | null;
+  scoreMaxima?: CitationScoreMaxima;
 }) {
-  const score = chunk.rerank_score ?? chunk.score;
+  const maxima = scoreMaxima ?? { score: chunk.score, rerankScore: chunk.rerank_score ?? 0 };
   const chips = citationMetadataChips(chunk.metadata);
   const variantId = variantIdFromChunkId(chunk.chunk_id);
   const previewUrl = citationPreviewUrl(chunk);
@@ -64,7 +66,7 @@ export function CitationCard({
 
   return (
     <li className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
             {index + 1}
@@ -76,9 +78,7 @@ export function CitationCard({
             </span>
           </span>
         </div>
-        <span className="tnum shrink-0 rounded bg-background px-2 py-0.5 text-xs text-muted">
-          {score.toFixed(3)}
-        </span>
+        <CitationScoreMeters chunk={chunk} maxima={maxima} />
       </div>
       <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
         {chunk.text}
@@ -154,6 +154,89 @@ export function CitationCard({
       </div>
     </li>
   );
+}
+
+export interface CitationScoreMaxima {
+  score: number;
+  rerankScore: number;
+}
+
+function CitationScoreMeters({
+  chunk,
+  maxima,
+}: {
+  chunk: RetrievedChunk;
+  maxima: CitationScoreMaxima;
+}) {
+  return (
+    <div className="w-full space-y-1.5 rounded-md bg-background px-2.5 py-2 sm:w-56">
+      <ScoreMeter
+        label={t("search.citation.score.retrieval")}
+        value={chunk.score}
+        max={maxima.score}
+        tone="primary"
+      />
+      <ScoreMeter
+        label={t("search.citation.score.rerank")}
+        value={chunk.rerank_score}
+        max={maxima.rerankScore}
+        tone="success"
+      />
+    </div>
+  );
+}
+
+function ScoreMeter({
+  label,
+  value,
+  max,
+  tone,
+}: {
+  label: string;
+  value: number | null;
+  max: number;
+  tone: "primary" | "success";
+}) {
+  const valueText = formatScoreValue(value);
+  const ariaMax = Number.isFinite(max) && max > 0 ? max : 1;
+  const ariaNow = value == null || !Number.isFinite(value) ? 0 : Math.min(Math.max(value, 0), ariaMax);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="font-medium text-muted">{label}</span>
+        <span className="tnum shrink-0 text-foreground">{valueText}</span>
+      </div>
+      <div
+        role="meter"
+        aria-label={t("search.citation.score.meter", { label, value: valueText })}
+        aria-valuemin={0}
+        aria-valuemax={ariaMax}
+        aria-valuenow={ariaNow}
+        aria-valuetext={valueText}
+        className="h-1.5 overflow-hidden rounded-full bg-muted/20"
+      >
+        <div
+          className={cn(
+            "h-full rounded-full",
+            tone === "primary" ? "bg-primary" : "bg-success"
+          )}
+          style={{ width: `${scoreMeterPercent(value, max)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function formatScoreValue(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return t("search.citation.score.rerankMissing");
+  return value.toFixed(3);
+}
+
+export function scoreMeterPercent(value: number | null, max: number): number {
+  if (value == null || !Number.isFinite(value) || !Number.isFinite(max) || value <= 0 || max <= 0) {
+    return 0;
+  }
+  return Math.min(100, (value / max) * 100);
 }
 
 export function citationPreviewUrl(chunk: RetrievedChunk): string {

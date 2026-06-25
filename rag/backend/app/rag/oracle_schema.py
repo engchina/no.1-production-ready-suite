@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from app.clients.oracle import (
+    ORACLE_TEXT_LEXER,
     oracle_agent_memory_schema_sql,
     oracle_business_view_schema_sql,
     oracle_chunk_set_schema_sql,
@@ -27,12 +28,14 @@ from app.clients.oracle import (
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
     oracle_search_audit_schema_sql,
+    oracle_text_index_parameters_sql,
+    oracle_text_preferences_sql,
     oracle_vector_schema_sql,
 )
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260623_001"
+MIGRATION_ARTIFACT_VERSION = "20260625_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -221,6 +224,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260623_001_nullable_chunk_embeddings",
             table_name="rag_chunks",
             sql=_nullable_chunk_embeddings_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260625_001_chunks_text_world_lexer",
+            table_name="rag_chunks",
+            sql=_chunks_text_world_lexer_migration_sql(),
         ),
     ]
 
@@ -1112,6 +1120,55 @@ BEGIN
 EXCEPTION
     WHEN NO_DATA_FOUND THEN
         NULL;
+END;
+/
+""".strip()
+
+
+def _chunks_text_world_lexer_migration_sql() -> str:
+    """rag_chunks の Oracle Text index を多言語向け WORLD_LEXER で再構築する。"""
+    parameters = oracle_text_index_parameters_sql().replace("'", "''")
+    return f"""
+{oracle_text_preferences_sql()}
+
+DECLARE
+    v_table_count NUMBER;
+    v_index_count NUMBER;
+    v_target_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_CHUNKS';
+
+    IF v_table_count > 0 THEN
+        SELECT COUNT(*) INTO v_index_count
+        FROM user_indexes
+        WHERE index_name = 'RAG_CHUNKS_TEXT_IDX';
+
+        IF v_index_count > 0 THEN
+            SELECT COUNT(*) INTO v_target_count
+            FROM ctx_user_index_objects o
+            JOIN ctx_user_indexes i
+              ON i.idx_name = o.ixo_index_name
+            WHERE o.ixo_index_name = 'RAG_CHUNKS_TEXT_IDX'
+              AND o.ixo_class = 'LEXER'
+              AND o.ixo_object = '{ORACLE_TEXT_LEXER}'
+              AND i.idx_sync_type = 'ON COMMIT';
+
+            IF v_target_count = 0 THEN
+                EXECUTE IMMEDIATE 'DROP INDEX rag_chunks_text_idx';
+                v_index_count := 0;
+            END IF;
+        END IF;
+
+        IF v_index_count = 0 THEN
+            EXECUTE IMMEDIATE
+                'CREATE INDEX rag_chunks_text_idx '
+                || 'ON rag_chunks (chunk_text) '
+                || 'INDEXTYPE IS CTXSYS.CONTEXT '
+                || '{parameters}';
+        END IF;
+    END IF;
 END;
 /
 """.strip()

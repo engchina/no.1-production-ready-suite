@@ -10,7 +10,7 @@ from time import perf_counter
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, oracle_text_terms
 from app.config import Settings, enterprise_ai_default_model_id, get_settings
 from app.rag.agentic_adapter import resolve_agentic_adapter
 from app.rag.audit import AuditOutcome, record_rag_search_audit
@@ -185,6 +185,7 @@ class RagPipeline:
         agent_memory_writeback_count = 0
         agent_memory_writeback_status = "skipped"
         query_variant_count = 1
+        keyword_terms: list[str] = []
         business_context: BusinessContextPack = build_business_context_pack(request)
         retrieval_plan: RetrievalPlan | None = None
         context_pack: ContextPack | None = None
@@ -209,6 +210,7 @@ class RagPipeline:
             settings=self._settings,
             query=query_guardrail.sanitized_text,
         )
+        keyword_terms = oracle_text_terms(query_guardrail.sanitized_text)
         runtime_retrieval_strategy = resolved_strategy.strategy.value
         runtime_fallback_reason = resolved_strategy.fallback_reason
         runtime_graph_hit_count = resolved_strategy.graph_hit_count
@@ -232,6 +234,7 @@ class RagPipeline:
                 crag_fallback_triggered=crag_fallback_triggered,
                 hyde_generated=hyde_generated,
                 route_reason=resolved_strategy.route_reason,
+                keyword_terms=keyword_terms,
                 fallback_reason="gap_stop_scope_unresolved",
                 business_context=business_context.diagnostics(),
                 gap_stopped=True,
@@ -290,21 +293,23 @@ class RagPipeline:
                 resolved_strategy=resolved_strategy,
                 query_variant_count=query_variant_count,
             )
-            vectors = await _observe_stage(
-                trace_id,
-                request.mode.value,
-                "embedding",
-                self._genai.embed(query_variants, input_type="SEARCH_QUERY"),
-                attributes={
-                    "model": self._settings.oci_genai_embedding_model,
-                    "input_type": "SEARCH_QUERY",
-                    "input_count": query_variant_count,
-                    "query_variant_count": query_variant_count,
-                },
-                result_attributes=lambda vectors: {"output_count": len(vectors)},
-                progress_callback=progress_callback,
-                stage_timings=stream_stage_timings,
-            )
+            vectors: list[list[float]] = []
+            if resolved_strategy.mode != SearchMode.KEYWORD:
+                vectors = await _observe_stage(
+                    trace_id,
+                    request.mode.value,
+                    "embedding",
+                    self._genai.embed(query_variants, input_type="SEARCH_QUERY"),
+                    attributes={
+                        "model": self._settings.oci_genai_embedding_model,
+                        "input_type": "SEARCH_QUERY",
+                        "input_count": query_variant_count,
+                        "query_variant_count": query_variant_count,
+                    },
+                    result_attributes=lambda vectors: {"output_count": len(vectors)},
+                    progress_callback=progress_callback,
+                    stage_timings=stream_stage_timings,
+                )
             error_stage = "retrieval"
             retrieval_result = await _observe_stage(
                 trace_id,
@@ -367,6 +372,7 @@ class RagPipeline:
                     settings=self._settings,
                     retrieval_strategy=runtime_retrieval_strategy,
                     route_reason=resolved_strategy.route_reason,
+                    keyword_terms=keyword_terms,
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
@@ -673,6 +679,7 @@ class RagPipeline:
                     settings=self._settings,
                     retrieval_strategy=runtime_retrieval_strategy,
                     route_reason=resolved_strategy.route_reason,
+                    keyword_terms=keyword_terms,
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
@@ -751,6 +758,7 @@ class RagPipeline:
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
+                keyword_terms=keyword_terms,
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
@@ -878,6 +886,7 @@ class RagPipeline:
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 route_reason=resolved_strategy.route_reason,
+                keyword_terms=keyword_terms,
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
@@ -1282,10 +1291,26 @@ class RagPipeline:
         mode: SearchMode,
     ) -> list[RetrievedChunk]:
         """query expansion variants で検索し、chunk 単位で融合する。"""
-        if len(query_variants) != len(vectors):
-            raise ValueError("query variants と query embeddings の件数が一致しません。")
         if not query_variants:
             return []
+        if mode == SearchMode.KEYWORD:
+            if len(query_variants) == 1:
+                return await self._oracle.keyword_search(
+                    query_variants[0], request.top_k, request.filters
+                )
+            variant_hits = await asyncio.gather(
+                *[
+                    self._oracle.keyword_search(query, request.top_k, request.filters)
+                    for query in query_variants
+                ]
+            )
+            return _fuse_query_variant_hits(
+                variant_hits,
+                top_k=request.top_k,
+                rrf_k=self._settings.rag_rrf_k,
+            )
+        if len(query_variants) != len(vectors):
+            raise ValueError("query variants と query embeddings の件数が一致しません。")
         if len(query_variants) == 1:
             return await self._oracle.hybrid_search(
                 query=query_variants[0],

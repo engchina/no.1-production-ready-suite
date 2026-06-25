@@ -310,6 +310,53 @@ async def test_pipeline_reranks_vector_search_results_with_oci_genai() -> None:
     assert response.diagnostics.reranked_count == 2
 
 
+async def test_pipeline_keyword_mode_skips_initial_embedding_and_reports_terms() -> None:
+    """keyword-only 検索は初期 embedding を呼ばず、表示用 keyword terms を診断へ残す。"""
+    observed: list[SearchStageProgress] = []
+    oracle = KeywordOnlyOracleClient()
+
+    async def capture_progress(progress: SearchStageProgress) -> None:
+        observed.append(progress)
+
+    pipeline = RagPipeline(
+        genai=KeywordNoEmbeddingGenAiClient(),
+        oracle=oracle,
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_context_window_chars=2000,
+            rag_query_expansion_enabled=False,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="社内規程の申請フローは？",
+            mode=SearchMode.KEYWORD,
+            top_k=1,
+            rerank_top_n=1,
+        ),
+        progress_callback=capture_progress,
+    )
+
+    assert oracle.queries == ["社内規程の申請フローは？"]
+    assert [event.stage for event in observed if event.outcome == "success"] == [
+        "retrieval",
+        "rerank",
+        "generation",
+    ]
+    assert "embedding" not in response.diagnostics.stream_stage_timings
+    assert response.diagnostics.mode == "keyword"
+    assert response.diagnostics.keyword_terms == [
+        "社内規程",
+        "社内",
+        "規程",
+        "申請",
+        "フロー",
+    ]
+    assert response.diagnostics.retrieved_count == 1
+    assert response.diagnostics.reranked_count == 1
+
+
 async def test_pipeline_returns_only_citations_in_generation_context(
     caplog: LogCaptureFixture,
 ) -> None:
@@ -1169,6 +1216,7 @@ async def test_pipeline_reports_stage_progress_and_diagnostic_timings() -> None:
         "rerank",
         "generation",
     }
+    assert "承認" in response.diagnostics.keyword_terms
     assert all(value >= 0.0 for value in response.diagnostics.stream_stage_timings.values())
     assert {event.trace_id for event in observed} == {"trace-progress"}
     assert "INV-SECRET" not in str([event.attributes for event in observed])
@@ -1312,6 +1360,21 @@ class ExplodingEmbeddingClient(OciGenAiClient):
         input_type: str = "SEARCH_DOCUMENT",
     ) -> list[list[float]]:
         raise RuntimeError("embedding unavailable")
+
+
+class KeywordNoEmbeddingGenAiClient(OciGenAiClient):
+    """keyword-only 検索で embedding が呼ばれないことを検証する。"""
+
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        input_type: str = "SEARCH_DOCUMENT",
+    ) -> list[list[float]]:
+        raise AssertionError("keyword-only retrieval should not embed")
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        return [(index, 1.0 - (index * 0.01)) for index, _ in enumerate(documents[:top_n])]
 
 
 class StubGenAiClient(OciGenAiClient):
@@ -1469,6 +1532,33 @@ class StubOracleClient(OracleClient):
                 file_name="policy.txt",
             )
         ]
+
+
+class KeywordOnlyOracleClient(OracleClient):
+    """keyword_search だけで候補を返す Oracle fake。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.queries: list[str] = []
+
+    async def keyword_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del filters
+        self.queries.append(query)
+        return [
+            RetrievedChunk(
+                document_id="doc-keyword",
+                chunk_id="doc-keyword:0",
+                text="社内規程の申請フローでは、承認条件は 120000 円です。",
+                score=0.88,
+                file_name="keyword.txt",
+                metadata={"chunk_index": 0, "retrieval_mode": "keyword"},
+            )
+        ][:top_k]
 
 
 class MemoryWritebackOracleClient(OracleClient):

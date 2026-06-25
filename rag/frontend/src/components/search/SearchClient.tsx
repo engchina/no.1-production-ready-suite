@@ -1,17 +1,18 @@
 "use client";
 
 import {
+  Clock3,
   Plus,
   Search as SearchIcon,
   SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { BusinessViewPickerGrid } from "@/components/business-views/BusinessViewPickerGrid";
-import { CitationCard } from "./CitationCard";
+import { CitationCard, type CitationScoreMaxima } from "./CitationCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
@@ -26,10 +27,11 @@ import {
   type SearchDiagnostics,
   type SearchMode,
 } from "@/lib/api";
-import { streamSearch } from "@/lib/search-stream";
-import { t } from "@/lib/i18n";
+import { streamSearch, type SearchStageEvent } from "@/lib/search-stream";
+import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
+import { formatDateTime } from "@/lib/format";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
 
@@ -38,6 +40,14 @@ interface Meta {
   elapsed_ms: number;
   guardrail_warnings: string[];
   diagnostics: Partial<SearchDiagnostics> | null;
+}
+
+interface SearchRun {
+  startedAtMs: number;
+  startedAtIso: string;
+  endedAtMs: number | null;
+  traceId: string | null;
+  stages: SearchStageEvent[];
 }
 
 const MODES: SearchMode[] = ["hybrid", "vector", "keyword"];
@@ -75,6 +85,24 @@ const CONTENT_KIND_SELECT_OPTIONS = CONTENT_KIND_OPTIONS.map((option) => ({
   value: option,
   label: t(CONTENT_KIND_LABEL[option]),
 })) satisfies SelectFieldOption<ContentKindFilter>[];
+const STAGE_LABEL: Record<string, I18nKey> = {
+  agentic_multi_hop: "search.stage.agentic",
+  agentic_planning: "search.stage.agentic",
+  answer_guardrail: "search.stage.answerGuardrail",
+  business_fit_weighting: "search.stage.businessFit",
+  context_adaptive_expansion: "search.stage.context",
+  context_compression: "search.stage.context",
+  context_dependency_promotion: "search.stage.context",
+  context_diversity: "search.stage.context",
+  context_expansion: "search.stage.context",
+  context_group_expansion: "search.stage.context",
+  corrective_retrieval: "search.stage.corrective",
+  crag_corrective: "search.stage.corrective",
+  embedding: "search.stage.embedding",
+  generation: "search.stage.generation",
+  rerank: "search.stage.rerank",
+  retrieval: "search.stage.retrieval",
+};
 
 /** RAG 検索画面。回答を SSE でストリーミング表示する。 */
 export function SearchClient() {
@@ -90,12 +118,22 @@ export function SearchClient() {
   const [sectionPath, setSectionPath] = useState("");
   const [businessViewIds, setBusinessViewIds] = useState<string[]>([]);
   const [scopeError, setScopeError] = useState("");
+  const [run, setRun] = useState<SearchRun | null>(null);
+  const [elapsedNowMs, setElapsedNowMs] = useState(Date.now());
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
   const businessViews = businessViewsQuery.data?.items ?? [];
   const hasFilters =
     Boolean(contentKind) || Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
+  const runStartedAtMs = run?.startedAtMs;
+
+  useEffect(() => {
+    if (phase !== "streaming" || runStartedAtMs == null) return;
+    setElapsedNowMs(Date.now());
+    const timer = window.setInterval(() => setElapsedNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [phase, runStartedAtMs]);
 
   const submit = async () => {
     const trimmed = query.trim();
@@ -109,12 +147,21 @@ export function SearchClient() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const startedAtMs = Date.now();
 
     setPhase("streaming");
     setAnswer("");
     setCitations([]);
     setMeta(null);
     setErrorText("");
+    setElapsedNowMs(startedAtMs);
+    setRun({
+      startedAtMs,
+      startedAtIso: new Date(startedAtMs).toISOString(),
+      endedAtMs: null,
+      traceId: null,
+      stages: [],
+    });
 
     try {
       const filters = buildSearchFilters({ contentKind, sectionTitle, sectionPath });
@@ -128,16 +175,36 @@ export function SearchClient() {
           ...(Object.keys(filters).length ? { filters } : {}),
         },
         {
-          onMetadata: (m) =>
+          onStage: (stage) =>
+            setRun((current) =>
+              current
+                ? {
+                    ...current,
+                    traceId: stage.trace_id || current.traceId,
+                    stages: [...current.stages, stage],
+                  }
+                : current
+            ),
+          onMetadata: (m) => {
             setMeta({
               trace_id: m.trace_id,
               elapsed_ms: m.elapsed_ms,
               guardrail_warnings: m.guardrail_warnings,
               diagnostics: m.diagnostics ?? null,
-            }),
+            });
+            setRun((current) =>
+              current
+                ? {
+                    ...current,
+                    traceId: current.traceId ?? m.trace_id,
+                  }
+                : current
+            );
+          },
           onDelta: (text) => setAnswer((prev) => prev + text),
           onCitations: (list) => setCitations(list),
           onDone: () => {
+            finishRun();
             setPhase("done");
             abortRef.current = null;
           },
@@ -150,6 +217,7 @@ export function SearchClient() {
       setErrorText(
         error instanceof ApiError ? error.message : "検索に失敗しました。再度お試しください。"
       );
+      finishRun();
       setPhase("error");
     } finally {
       if (abortRef.current === controller) {
@@ -161,8 +229,14 @@ export function SearchClient() {
   const cancel = () => {
     abortRef.current?.abort();
     abortRef.current = null;
+    finishRun();
     setPhase("cancelled");
     setErrorText("");
+  };
+  const finishRun = () => {
+    setRun((current) =>
+      current && current.endedAtMs == null ? { ...current, endedAtMs: Date.now() } : current
+    );
   };
   const clearFilters = () => {
     setContentKind("");
@@ -172,6 +246,7 @@ export function SearchClient() {
 
   const noResults = phase === "done" && citations.length === 0;
   const isStreaming = phase === "streaming";
+  const citationScoreMaxima = scoreMaximaForCitations(citations);
 
   return (
     <div>
@@ -355,6 +430,14 @@ export function SearchClient() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
+                  {run ? (
+                    <SearchRunPanel
+                      run={run}
+                      phase={phase}
+                      nowMs={elapsedNowMs}
+                      traceId={run.traceId ?? meta?.trace_id ?? null}
+                    />
+                  ) : null}
                   <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
                     {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
                     {isStreaming ? (
@@ -386,6 +469,7 @@ export function SearchClient() {
                         chunk={chunk}
                         index={i}
                         traceId={meta?.trace_id}
+                        scoreMaxima={citationScoreMaxima}
                       />
                     ))}
                   </ul>
@@ -401,9 +485,182 @@ export function SearchClient() {
   );
 }
 
+function scoreMaximaForCitations(citations: RetrievedChunk[]): CitationScoreMaxima {
+  return {
+    score: maxScore(citations.map((chunk) => chunk.score)),
+    rerankScore: maxScore(
+      citations.flatMap((chunk) => (chunk.rerank_score == null ? [] : [chunk.rerank_score]))
+    ),
+  };
+}
+
+function maxScore(values: number[]): number {
+  return values.reduce(
+    (max, value) => (Number.isFinite(value) && value > max ? value : max),
+    0
+  );
+}
+
+function SearchRunPanel({
+  run,
+  phase,
+  nowMs,
+  traceId,
+}: {
+  run: SearchRun;
+  phase: Phase;
+  nowMs: number;
+  traceId: string | null;
+}) {
+  const completedStages = run.stages.filter((stage) => stage.outcome !== "started");
+  return (
+    <section
+      aria-label={t("search.run.title")}
+      className="mb-4 space-y-3 border-b border-border pb-3"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Clock3 size={15} className="text-primary" aria-hidden />
+          {t("search.run.title")}
+        </h3>
+        <span className={runStatusClass(phase)}>{runStatusLabel(phase)}</span>
+      </div>
+      <dl className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
+        <SearchRunMetric label={t("search.run.startedAt")} value={formatDateTime(run.startedAtIso)} />
+        <SearchRunMetric
+          label={t("search.run.elapsed")}
+          value={formatSearchElapsed(run, nowMs)}
+          testId="search-run-elapsed"
+        />
+        <SearchRunMetric label={t("search.run.currentStage")} value={currentStageLabel(run, phase)} />
+        <SearchRunMetric label={t("search.run.trace")} value={shortTraceId(traceId)} />
+      </dl>
+      {completedStages.length ? (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted">{t("search.run.stages")}</p>
+          <div className="flex flex-wrap gap-1.5">
+            {completedStages.map((stage, index) => (
+              <span
+                key={`${stage.stage}-${stage.outcome}-${index}`}
+                className={stageChipClass(stage.outcome)}
+                title={stageOutcomeLabel(stage.outcome)}
+              >
+                <span>{stageLabel(stage.stage)}</span>
+                <span className="tnum">{Math.round(stage.elapsed_ms)} ms</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function SearchRunMetric({
+  label,
+  value,
+  testId,
+}: {
+  label: string;
+  value: string;
+  testId?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-muted">{label}</dt>
+      <dd data-testid={testId} className="tnum mt-0.5 truncate font-medium text-foreground">
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function currentStageLabel(run: SearchRun, phase: Phase): string {
+  if (phase === "done") return t("search.run.stage.done");
+  if (phase === "cancelled") return t("search.run.stage.cancelled");
+  if (phase === "error") return t("search.run.stage.error");
+  const latest = run.stages[run.stages.length - 1];
+  return latest ? stageLabel(latest.stage) : t("search.stage.waiting");
+}
+
+function stageLabel(stage: string): string {
+  return t(STAGE_LABEL[stage] ?? "search.stage.processing");
+}
+
+function runStatusLabel(phase: Phase): string {
+  switch (phase) {
+    case "done":
+      return t("search.run.status.done");
+    case "cancelled":
+      return t("search.run.status.cancelled");
+    case "error":
+      return t("search.run.status.error");
+    default:
+      return t("search.run.status.streaming");
+  }
+}
+
+function runStatusClass(phase: Phase): string {
+  const base = "rounded-full px-2 py-0.5 text-xs font-medium";
+  switch (phase) {
+    case "done":
+      return `${base} bg-success-bg text-success`;
+    case "error":
+      return `${base} bg-danger-bg text-danger`;
+    case "cancelled":
+      return `${base} bg-warning-bg text-warning`;
+    default:
+      return `${base} bg-info-bg text-info`;
+  }
+}
+
+function stageOutcomeLabel(outcome: SearchStageEvent["outcome"]): string {
+  switch (outcome) {
+    case "success":
+      return t("search.run.outcome.success");
+    case "error":
+      return t("search.run.outcome.error");
+    case "cancelled":
+      return t("search.run.outcome.cancelled");
+    default:
+      return t("search.run.outcome.started");
+  }
+}
+
+function stageChipClass(outcome: SearchStageEvent["outcome"]): string {
+  const base = "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs";
+  switch (outcome) {
+    case "success":
+      return `${base} bg-success-bg text-success`;
+    case "error":
+    case "cancelled":
+      return `${base} bg-danger-bg text-danger`;
+    default:
+      return `${base} bg-muted/10 text-muted`;
+  }
+}
+
+function formatSearchElapsed(run: SearchRun, nowMs: number): string {
+  const end = run.endedAtMs ?? nowMs;
+  if (!Number.isFinite(end) || end < run.startedAtMs) return "—";
+  const seconds = Math.max(0, Math.round((end - run.startedAtMs) / 1000));
+  if (seconds < 60) return t("search.run.elapsedSeconds", { seconds });
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest
+    ? t("search.run.elapsedMinutesSeconds", { minutes, seconds: rest })
+    : t("search.run.elapsedMinutes", { minutes });
+}
+
+function shortTraceId(traceId: string | null): string {
+  if (!traceId) return "—";
+  return traceId.length > 12 ? traceId.slice(0, 12) : traceId;
+}
+
 function SearchExecutionMeta({ meta }: { meta: Meta }) {
   const diagnostics = meta.diagnostics ?? {};
   const items = searchExecutionItems(diagnostics);
+  const keywordTerms = (diagnostics.keyword_terms ?? []).filter(Boolean);
   return (
     <div className="mt-4 space-y-3 border-t border-border pt-3">
       <p className="tnum flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
@@ -414,6 +671,21 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
           {t("search.meta.trace")}: {meta.trace_id.slice(0, 12)}
         </span>
       </p>
+      {keywordTerms.length ? (
+        <div aria-label={t("search.meta.keywords")} className="space-y-1.5">
+          <p className="text-xs font-medium text-muted">{t("search.meta.keywords")}</p>
+          <div className="flex flex-wrap gap-1.5">
+            {keywordTerms.map((term, index) => (
+              <span
+                key={`${term}-${index}`}
+                className="max-w-full break-all rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium leading-snug text-foreground"
+              >
+                {term}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {items.length ? (
         <dl
           aria-label={t("search.meta.execution")}

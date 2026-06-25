@@ -29,6 +29,7 @@ from app.clients.oracle import (
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
     oracle_search_audit_schema_sql,
+    oracle_text_terms,
     oracle_vector_schema_sql,
     reset_local_store,
 )
@@ -1845,6 +1846,106 @@ async def test_oci_retrieval_applies_multiple_knowledge_base_filters() -> None:
     assert call.parameters["filter_knowledge_base_id_1"] == "kb-2"
 
 
+def test_oracle_text_terms_extracts_safe_display_keywords() -> None:
+    """表示用 keyword terms は自然文から安全な短い語だけを返す。"""
+    terms = oracle_text_terms("社内規程の申請フローは？")
+
+    assert terms == ["社内規程", "社内", "規程", "申請", "フロー"]
+    assert "？" not in "".join(terms)
+    assert not {"の申", "請フ", "ーは"} & set(terms)
+    assert len(terms) <= 12
+
+
+def test_oracle_text_terms_filters_japanese_particles_and_english_stopwords() -> None:
+    """日本語助詞と英語 stopword は UI/Oracle Text query に出さない。"""
+    assert oracle_text_terms("私の上司の興味はなんですか") == ["上司", "興味"]
+    assert oracle_text_terms("what is the expense policy and who approves it") == [
+        "expense",
+        "policy",
+        "approves",
+    ]
+    assert oracle_text_terms("IT policy for HR") == ["it", "policy", "hr"]
+
+
+async def test_oci_keyword_search_normalizes_natural_language_query() -> None:
+    """自然文 keyword query は Oracle Text 用の安全な term expression に変換する。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    raw_query = "社内規程の申請フローは？"
+
+    hits = await client.keyword_search(raw_query, top_k=3)
+
+    assert hits == []
+    call = pool.connection.calls[0]
+    text_query = call.parameters["query"]
+    assert isinstance(text_query, str)
+    assert text_query != raw_query
+    assert "？" not in text_query
+    assert "{社内規程}" in text_query
+    assert "{社内}" in text_query
+    assert "{規程}" in text_query
+    assert "{フロー}" in text_query
+    assert " ACCUM " in text_query
+    assert "CONTAINS(c.chunk_text, :query, 1) > 0" in call.statement
+
+
+async def test_oci_keyword_search_escapes_oracle_text_special_syntax() -> None:
+    """Oracle Text の演算子/記号は literal term 化して query syntax にしない。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.keyword_search('policy - NEAR(oracle?) OR "x"', top_k=3)
+
+    text_query = pool.connection.calls[0].parameters["query"]
+    assert isinstance(text_query, str)
+    assert "{policy}" in text_query
+    assert "{oracle}" in text_query
+    assert "{near}" not in text_query
+    assert "{or}" not in text_query
+    assert all(char not in text_query for char in '-?()"')
+
+
+async def test_oci_keyword_search_empty_normalized_query_skips_database() -> None:
+    """検索語にできない入力は DB に投げず空結果にする。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    hits = await client.keyword_search("？！--", top_k=3)
+
+    assert hits == []
+    assert pool.acquire_calls == 0
+    assert pool.connection.calls == []
+
+    hits = await client.keyword_search("の んで です what is the", top_k=3)
+
+    assert hits == []
+    assert pool.acquire_calls == 0
+    assert pool.connection.calls == []
+
+
+async def test_oci_hybrid_search_uses_normalized_keyword_query() -> None:
+    """hybrid 内の keyword branch も同じ Oracle Text query normalization を通る。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    raw_query = "社内規程の申請フローは？"
+
+    hits = await client.hybrid_search(
+        query=raw_query,
+        embedding=[1.0, 0.0, 0.0],
+        top_k=3,
+        mode=SearchMode.HYBRID,
+    )
+
+    assert hits == []
+    keyword_call = next(call for call in pool.connection.calls if "CONTAINS" in call.statement)
+    text_query = keyword_call.parameters["query"]
+    assert isinstance(text_query, str)
+    assert text_query != raw_query
+    assert "{社内規程}" in text_query
+    assert "{社内}" in text_query
+    assert "？" not in text_query
+
+
 async def test_oracle_agent_memory_search_applies_hashed_scope_predicates() -> None:
     """Agent Memory search SQL は raw ID ではなく hash scope の bind だけで絞り込む。"""
     pool = FakeOraclePool()
@@ -2023,6 +2124,14 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     assert "TYPE HNSW" in ddl
     assert "NEIGHBORS 32" in ddl
     assert "EFCONSTRUCTION 500" in ddl
+    assert "CTX_DDL.CREATE_PREFERENCE('RAG_TEXT_WORLD_LEXER', 'WORLD_LEXER')" in ddl
+    assert "CTX_DDL.CREATE_STOPLIST('RAG_TEXT_STOPLIST', 'BASIC_STOPLIST')" in ddl
+    assert "ADD_STOPWORD('RAG_TEXT_STOPLIST', p_word)" in ddl
+    assert "add_stopword('の')" in ddl
+    assert (
+        "PARAMETERS ('LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)')"
+        in ddl
+    )
     assert "rag_chunks_tenant_document_idx" in ddl
     assert "ON rag_chunks (tenant_id_hash, document_id, chunk_index)" in ddl
     assert "INDEXTYPE IS CTXSYS.CONTEXT" in ddl

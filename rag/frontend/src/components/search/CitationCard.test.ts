@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RetrievedChunk } from "@/lib/api";
-import { citationPreviewUrl, variantIdFromChunkId } from "./CitationCard";
+import { citationPreviewUrl, scoreMeterPercent, variantIdFromChunkId } from "./CitationCard";
 
 describe("variantIdFromChunkId", () => {
   it("document:chunk_set:index 形式から chunk_set(variant)id を取り出す", () => {
@@ -10,6 +10,20 @@ describe("variantIdFromChunkId", () => {
 
   it("chunk_set タグの無い document:index は variant 無し(null)", () => {
     expect(variantIdFromChunkId("doc-1:7")).toBeNull();
+  });
+});
+
+describe("scoreMeterPercent", () => {
+  it("最大値に対する相対幅を返す", () => {
+    expect(scoreMeterPercent(0.5, 1)).toBe(50);
+  });
+
+  it("null / 0 / 負値 / 最大値超過を安全に丸める", () => {
+    expect(scoreMeterPercent(null, 1)).toBe(0);
+    expect(scoreMeterPercent(0, 1)).toBe(0);
+    expect(scoreMeterPercent(-0.1, 1)).toBe(0);
+    expect(scoreMeterPercent(0.5, 0)).toBe(0);
+    expect(scoreMeterPercent(1.5, 1)).toBe(100);
   });
 });
 

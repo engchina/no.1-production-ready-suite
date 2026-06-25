@@ -28,6 +28,12 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "embedding       VECTOR(1536, FLOAT32)" in sql
     assert "chunk_set_id    VARCHAR2(64)" in sql
     assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in sql
+    assert "CTX_DDL.CREATE_PREFERENCE('RAG_TEXT_WORLD_LEXER', 'WORLD_LEXER')" in sql
+    assert "CTX_DDL.CREATE_STOPLIST('RAG_TEXT_STOPLIST', 'BASIC_STOPLIST')" in sql
+    assert (
+        "PARAMETERS ('LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST SYNC (ON COMMIT)')"
+        in sql
+    )
     assert "CREATE INDEX rag_chunks_chunk_set_idx" in sql
     assert "TYPE HNSW" in sql
     assert "WITH TARGET ACCURACY 95" in sql
@@ -185,7 +191,21 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "ALTER TABLE rag_chunk_sets ADD (extraction_id VARCHAR2(64))" in sql
     assert "-- migration: 20260623_001_nullable_chunk_embeddings" in sql
     assert "ALTER TABLE rag_chunks MODIFY (embedding NULL)" in sql
-    assert len(statements) == 18
+    assert "-- migration: 20260625_001_chunks_text_world_lexer" in sql
+    assert "CTX_DDL.CREATE_PREFERENCE('RAG_TEXT_WORLD_LEXER', 'WORLD_LEXER')" in sql
+    assert "CTX_DDL.CREATE_STOPLIST('RAG_TEXT_STOPLIST', 'BASIC_STOPLIST')" in sql
+    assert "DROP INDEX rag_chunks_text_idx" in sql
+    assert "FROM ctx_user_index_objects" in sql
+    assert "ixo_object = 'WORLD_LEXER'" in sql
+    assert "'CREATE INDEX rag_chunks_text_idx '" in sql
+    assert "|| 'ON rag_chunks (chunk_text) '" in sql
+    assert "|| 'INDEXTYPE IS CTXSYS.CONTEXT '" in sql
+    assert (
+        "|| 'PARAMETERS (''LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST "
+        "SYNC (ON COMMIT)'')'"
+        in sql
+    )
+    assert len(statements) == 21
     assert all(statement.startswith(("-- migration:", "DECLARE")) for statement in statements)
 
 
@@ -198,7 +218,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260623_001"
+    assert manifest["migration_artifact_version"] == "20260625_001"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -218,6 +238,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260621_001_chunk_sets",
         "20260621_002_document_extractions",
         "20260623_001_nullable_chunk_embeddings",
+        "20260625_001_chunks_text_world_lexer",
     ]
 
 
