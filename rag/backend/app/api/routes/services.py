@@ -24,6 +24,7 @@ from app.schemas.service_management import (
 from app.services.catalog import (
     SERVICE_CATALOG,
     ServiceCatalogEntry,
+    dependents_of,
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
@@ -176,8 +177,38 @@ async def get_service_logs(
     )
 
 
+async def _control_targets(
+    settings: Settings, entry: ServiceCatalogEntry, action: ServiceAction
+) -> list[ServiceCatalogEntry]:
+    """連鎖して制御する対象を順序付きで解決する。
+
+    親(parser)と専用の推論サーバー(vLLM)を 1 操作で扱うため、``depends_on`` を辿る。
+
+    - start: 依存(vLLM)を先に、本体を後に。``up -d`` は冪等なので稼働中でも害は無い。
+    - stop: 本体を先に停止し、その後 他に稼働中の利用元が無い専用依存も停止(GPU 解放)。
+    - restart: 本体のみ(UI に restart 操作は無い)。
+    """
+    deps = [d for sid in entry.depends_on if (d := get_catalog_entry(sid)) is not None]
+    # ponytail: depends_on は現状 1 段(vLLM は depends_on 空)。多段化するなら topological sort へ。
+    if action == "start":
+        return [*deps, entry]
+    if action == "stop" and deps:
+        statuses = await probe_service_statuses(settings)
+        also_stop = [
+            d
+            for d in deps
+            if not any(
+                statuses.get(other) == "running"
+                for other in dependents_of(d.service_id)
+                if other != entry.service_id
+            )
+        ]
+        return [entry, *also_stop]
+    return [entry]
+
+
 async def _control(service_id: str, action: ServiceAction) -> ApiResponse[ServiceControlResultData]:
-    """共通の起動/停止ハンドラ(flag 確認 → allowlist 照合 → 実行 → 再プローブ)。"""
+    """共通の起動/停止ハンドラ(flag 確認 → allowlist 照合 → 連鎖実行 → 再プローブ)。"""
     settings = get_settings()
     if not _control_enabled(settings):
         raise HTTPException(
@@ -190,23 +221,23 @@ async def _control(service_id: str, action: ServiceAction) -> ApiResponse[Servic
             status_code=status.HTTP_404_NOT_FOUND,
             detail="指定したサービスが見つかりません。",
         )
-    try:
-        await _control_client.control(settings, entry, action)
-    except ServiceControlError as exc:
-        logger.warning(
-            "service_control_failed",
-            extra={
-                "service_id": service_id,
-                "action": action,
-                "exit_code": exc.result.exit_code,
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=exc.result.detail or "サービスの操作に失敗しました。",
-        ) from exc
-    # 通常は操作対象 1 件のみ再プローブする。依存を持つサービスは全体ステータスを見直し、
-    # 依存未起動なら dependency_stopped として返す。
+    for target in await _control_targets(settings, entry, action):
+        try:
+            await _control_client.control(settings, target, action)
+        except ServiceControlError as exc:
+            logger.warning(
+                "service_control_failed",
+                extra={
+                    "service_id": target.service_id,
+                    "action": action,
+                    "exit_code": exc.result.exit_code,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=exc.result.detail or "サービスの操作に失敗しました。",
+            ) from exc
+    # 依存を持つ親は全体ステータスを見直し、依存未起動なら dependency_stopped として返す。
     if entry.depends_on:
         new_status = (await probe_service_statuses(settings))[entry.service_id]
     else:

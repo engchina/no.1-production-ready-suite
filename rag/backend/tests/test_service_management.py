@@ -18,6 +18,7 @@ from app.services import control as control_module
 from app.services.catalog import (
     SERVICE_CATALOG,
     ServiceCatalogEntry,
+    dependents_of,
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
@@ -641,6 +642,113 @@ def test_control_success_returns_updated_status(monkeypatch: MonkeyPatch) -> Non
     assert data["service_id"] == "parser-docling"
     assert data["action"] == "start"
     assert data["status"] == "running"
+
+
+def test_dependents_of_resolves_reverse_dependency() -> None:
+    assert dependents_of("parser-dots-ocr-vllm") == ("parser-dots-ocr",)
+    assert dependents_of("parser-glm-ocr-vllm") == ("parser-glm-ocr",)
+    assert dependents_of("parser-docling") == ()
+
+
+def _spy_control(monkeypatch: MonkeyPatch) -> list[tuple[str, str]]:
+    """ServiceControlClient.control を記録のみのスパイへ差し替え、(service_id, action) 列を返す。"""
+    calls: list[tuple[str, str]] = []
+
+    async def fake_control(
+        _self: Any,
+        _settings: Any,
+        entry: ServiceCatalogEntry,
+        action: Literal["start", "stop", "restart"],
+    ) -> ControlResult:
+        calls.append((entry.service_id, action))
+        return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
+
+    monkeypatch.setattr(ServiceControlClient, "control", fake_control)
+    return calls
+
+
+def test_start_cascades_dependency_before_parent(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    calls = _spy_control(monkeypatch)
+
+    async def fake_probe_statuses(_settings: Any) -> dict[str, str]:
+        return {e.service_id: "running" for e in SERVICE_CATALOG}
+
+    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe_statuses)
+    resp = client.post("/api/services/parser-dots-ocr/start")
+    assert resp.status_code == 200
+    # 依存(vLLM)を先に、本体を後に起動する。
+    assert calls == [("parser-dots-ocr-vllm", "start"), ("parser-dots-ocr", "start")]
+
+
+def test_stop_cascades_dependency_after_parent(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    calls = _spy_control(monkeypatch)
+
+    async def fake_probe_statuses(_settings: Any) -> dict[str, str]:
+        return {e.service_id: "running" for e in SERVICE_CATALOG}
+
+    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe_statuses)
+    resp = client.post("/api/services/parser-dots-ocr/stop")
+    assert resp.status_code == 200
+    # 本体を先に停止し、専用 vLLM も停止する(他に利用元なし)。
+    assert calls == [("parser-dots-ocr", "stop"), ("parser-dots-ocr-vllm", "stop")]
+
+
+def test_stop_keeps_shared_inference_server_running(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    calls = _spy_control(monkeypatch)
+
+    # 合成: vLLM を別の親も利用しており、その親が稼働中なら vLLM は残す。
+    monkeypatch.setattr(
+        "app.api.routes.services.dependents_of",
+        lambda sid: ("parser-dots-ocr", "parser-other") if sid == "parser-dots-ocr-vllm" else (),
+    )
+
+    async def fake_probe_statuses(_settings: Any) -> dict[str, str]:
+        statuses = {e.service_id: "stopped" for e in SERVICE_CATALOG}
+        statuses["parser-other"] = "running"
+        return statuses
+
+    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe_statuses)
+    resp = client.post("/api/services/parser-dots-ocr/stop")
+    assert resp.status_code == 200
+    # vLLM は別の稼働中利用元があるため停止対象に含めない。
+    assert calls == [("parser-dots-ocr", "stop")]
+
+
+def test_start_dependency_failure_aborts_parent(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    calls: list[tuple[str, str]] = []
+
+    async def fake_control(
+        _self: Any,
+        _settings: Any,
+        entry: ServiceCatalogEntry,
+        action: Literal["start", "stop", "restart"],
+    ) -> ControlResult:
+        calls.append((entry.service_id, action))
+        if entry.service_id == "parser-dots-ocr-vllm":
+            raise ServiceControlError(
+                ControlResult(
+                    ok=False,
+                    action=action,
+                    service_id=entry.service_id,
+                    exit_code=1,
+                    detail="vllm boot failed",
+                )
+            )
+        return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
+
+    monkeypatch.setattr(ServiceControlClient, "control", fake_control)
+    resp = client.post("/api/services/parser-dots-ocr/start")
+    assert resp.status_code == 502
+    # 依存(vLLM)起動に失敗した時点で中断し、本体 parser は起動しない。
+    assert calls == [("parser-dots-ocr-vllm", "start")]
 
 
 def test_control_failure_returns_502(monkeypatch: MonkeyPatch) -> None:

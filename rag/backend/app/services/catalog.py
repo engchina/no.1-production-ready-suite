@@ -380,6 +380,15 @@ def get_catalog_entry(service_id: str) -> ServiceCatalogEntry | None:
     return _CATALOG_BY_ID.get(service_id)
 
 
+def dependents_of(service_id: str) -> tuple[str, ...]:
+    """service_id を depends_on に含むサービス id を返す(逆依存)。
+
+    親(parser)を停止する際、専用の推論サーバー(vLLM)を一緒に停止してよいか
+    ——他に稼働中の利用元が無いか——を判定するために使う。現状は 1:1 専用。
+    """
+    return tuple(e.service_id for e in SERVICE_CATALOG if service_id in e.depends_on)
+
+
 def is_dev_mode(settings: Settings) -> bool:
     """local 環境が dev(uv プロセス起動)か判定する。
 

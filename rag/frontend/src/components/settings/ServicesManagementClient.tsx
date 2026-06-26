@@ -9,6 +9,7 @@ import {
   CircleSlash,
   Clipboard,
   Container,
+  CornerDownRight,
   MinusCircle,
   Play,
   RefreshCw,
@@ -177,11 +178,23 @@ export function ServicesManagementClient() {
 
   async function act(service: DisplayServiceData, action: "start" | "stop") {
     if (action === "stop") {
+      // 専用の推論サーバー(vLLM)を持つ親は停止が連鎖するため、確認文で明示する。
+      const servers = service.depends_on
+        .map((id) => serviceById.get(id))
+        .filter((s): s is DisplayServiceData => s !== undefined)
+        .map((s) => serviceLabel(s));
+      const description =
+        servers.length > 0
+          ? t("settings.services.confirm.stop.descriptionWithServers", {
+              service: serviceLabel(service),
+              servers: servers.join(", "),
+            })
+          : t("settings.services.confirm.stop.description", {
+              service: serviceLabel(service),
+            });
       const ok = await confirm({
         title: t("settings.services.confirm.stop.title"),
-        description: t("settings.services.confirm.stop.description", {
-          service: serviceLabel(service),
-        }),
+        description,
         confirmLabel: t("settings.services.confirm.stop.confirm"),
         cancelLabel: t("settings.services.confirm.cancel"),
         tone: "danger",
@@ -405,6 +418,11 @@ function ServiceRow({
   const startPending = pending === `${service.service_id}:start`;
   const stopPending = pending === `${service.service_id}:stop`;
   const anyPending = pending !== null;
+  // この行が別サービス(親 parser)の depends_on に含まれるなら、起動/停止は親へ集約する。
+  const parent = [...serviceById.values()].find((s) =>
+    s.depends_on.includes(service.service_id)
+  );
+  const managed = parent !== undefined;
   const inferenceServerSummary = service.depends_on.map((id) => {
     const inferenceServer = serviceById.get(id);
     const label = inferenceServer ? serviceLabel(inferenceServer) : id;
@@ -412,10 +430,6 @@ function ServiceRow({
       ? t(`settings.services.status.${inferenceServer.status}` as I18nKey)
       : t("settings.services.status.unconfigured");
     return `${label}(${status})`;
-  });
-  const blockedInferenceServers = service.blocked_by.map((id) => {
-    const inferenceServer = serviceById.get(id);
-    return inferenceServer ? serviceLabel(inferenceServer) : id;
   });
   let controlHint: string | undefined;
   if (!controlEnabled) {
@@ -425,10 +439,7 @@ function ServiceRow({
   } else if (statusError) {
     controlHint = t("settings.services.statusLoadErrorHint");
   } else if (dependencyStopped) {
-    controlHint = t("settings.services.inferenceServerRequired", {
-      service: serviceLabel(service),
-      servers: blockedInferenceServers.join(", "),
-    });
+    controlHint = t("settings.services.inferenceServerStopped");
   } else if (stoppedHintKey) {
     controlHint = t(stoppedHintKey);
   }
@@ -436,39 +447,50 @@ function ServiceRow({
   const logsPanelId = `service-logs-${service.service_id}`;
 
   return (
-    <li className="py-3">
+    <li className={cn("py-3", managed && "border-l-2 border-border pl-3 sm:pl-4")}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
+            {managed ? (
+              <CornerDownRight size={14} className="shrink-0 text-muted" aria-hidden />
+            ) : null}
             <p className="text-sm font-semibold text-foreground">{serviceLabel(service)}</p>
             <ServiceExecutionPolicyBadge policy={service.execution_policy} />
           </div>
           <p className="font-mono text-xs text-muted">{service.service_id}</p>
-          {stoppedHintKey ? (
-            <p
-              className={cn(
-                "mt-1 flex items-center gap-1 text-xs",
-                required ? "font-medium text-rose-700" : "text-muted"
-              )}
-            >
-              {required ? <AlertTriangle size={13} aria-hidden /> : null}
-              {t(stoppedHintKey)}
-            </p>
-          ) : null}
-          {inferenceServerSummary.length > 0 ? (
+          {managed ? (
             <p className="mt-1 text-xs text-muted">
-              {t("settings.services.inferenceServers")}:{" "}
-              {inferenceServerSummary.join(", ")}
-            </p>
-          ) : null}
-          {blockedInferenceServers.length > 0 ? (
-            <p className="mt-1 text-xs font-medium text-amber-700">
-              {t("settings.services.inferenceServerRequired", {
-                service: serviceLabel(service),
-                servers: blockedInferenceServers.join(", "),
+              {t("settings.services.managedByParent", {
+                parent: parent ? serviceLabel(parent) : "",
               })}
             </p>
-          ) : null}
+          ) : (
+            <>
+              {stoppedHintKey ? (
+                <p
+                  className={cn(
+                    "mt-1 flex items-center gap-1 text-xs",
+                    required ? "font-medium text-rose-700" : "text-muted"
+                  )}
+                >
+                  {required ? <AlertTriangle size={13} aria-hidden /> : null}
+                  {t(stoppedHintKey)}
+                </p>
+              ) : null}
+              {inferenceServerSummary.length > 0 ? (
+                <p className="mt-1 text-xs text-muted">
+                  {t("settings.services.inferenceServers")}:{" "}
+                  {inferenceServerSummary.join(", ")}
+                </p>
+              ) : null}
+              {dependencyStopped ? (
+                <p className="mt-1 flex items-center gap-1 text-xs font-medium text-amber-700">
+                  <AlertTriangle size={13} aria-hidden />
+                  {t("settings.services.inferenceServerStopped")}
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ServiceStatusBadge status={service.status} />
@@ -491,42 +513,45 @@ function ServiceRow({
               aria-hidden
             />
           </Button>
-          <div className="flex gap-2" title={controlHint}>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={startPending}
-              disabled={
-                !controlEnabled ||
-                !service.statusReady ||
-                running ||
-                dependencyStopped ||
-                (anyPending && !startPending)
-              }
-              onClick={() => onAct(service, "start")}
-              aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
-            >
-              <Play size={14} aria-hidden />
-              {startPending
-                ? t("settings.services.action.starting")
-                : t("settings.services.action.start")}
-            </Button>
-            <Button
-              type="button"
-              variant="danger"
-              size="sm"
-              loading={stopPending}
-              disabled={!controlEnabled || !service.statusReady || stopped || (anyPending && !stopPending)}
-              onClick={() => onAct(service, "stop")}
-              aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
-            >
-              <Square size={14} aria-hidden />
-              {stopPending
-                ? t("settings.services.action.stopping")
-                : t("settings.services.action.stop")}
-            </Button>
-          </div>
+          {managed ? null : (
+            <div className="flex gap-2" title={controlHint}>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={startPending}
+                disabled={
+                  !controlEnabled ||
+                  !service.statusReady ||
+                  running ||
+                  (anyPending && !startPending)
+                }
+                onClick={() => onAct(service, "start")}
+                aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
+              >
+                <Play size={14} aria-hidden />
+                {startPending
+                  ? t("settings.services.action.starting")
+                  : t("settings.services.action.start")}
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                loading={stopPending}
+                disabled={
+                  !controlEnabled || !service.statusReady || stopped || (anyPending && !stopPending)
+                }
+                onClick={() => onAct(service, "stop")}
+                aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
+              >
+                <Square size={14} aria-hidden />
+                {stopPending
+                  ? t("settings.services.action.stopping")
+                  : t("settings.services.action.stop")}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
       {logsOpen ? (

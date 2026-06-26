@@ -314,12 +314,9 @@ for (const viewport of [
       page.getByRole("heading", { name: "文書分割", exact: true })
     ).toBeVisible();
     await expect(page.getByText("選択時のみ使用").first()).toBeVisible();
-    await expect(page.getByText("既定は backend 内処理")).toBeVisible();
+    await expect(page.getByText("既定は backend 内処理").first()).toBeVisible();
     await expect(
       page.getByText("停止中です。backend 内処理で継続します", { exact: false }).first()
-    ).toBeVisible();
-    await expect(
-      page.getByText("既定検索は backend 内処理で継続します", { exact: false })
     ).toBeVisible();
     await expect(
       page.getByText("取込/解析設定でこのサービスを選択した場合のみ", { exact: false }).first()
@@ -335,20 +332,21 @@ for (const viewport of [
       page.getByText("使用する推論サーバー: Dots.OCR vLLM(停止)")
     ).toBeVisible();
     await expect(
-      page.getByText("Dots.OCR を使用するには Dots.OCR vLLM を起動してください")
-    ).toBeVisible();
-    await expect(
       page.getByText("使用する推論サーバー: GLM-OCR vLLM(停止)")
     ).toBeVisible();
+    // 依存停止は「起動」で復帰できる旨を案内(親の起動が vLLM も連鎖起動する)。
     await expect(
-      page.getByText("GLM-OCR を使用するには GLM-OCR vLLM を起動してください")
+      page.getByText("推論サーバーが停止しています。「起動」で復帰します。").first()
     ).toBeVisible();
+    // vLLM 行は親へ集約: 個別の起動/停止ボタンは無く、連動表示のみ。
+    await expect(page.getByText("起動/停止は Dots.OCR に連動します")).toBeVisible();
+    await expect(page.getByText("起動/停止は GLM-OCR に連動します")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Dots.OCR 起動" })
-    ).toBeDisabled();
+      page.getByRole("button", { name: "Dots.OCR vLLM 起動" })
+    ).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "GLM-OCR 起動" })
-    ).toBeDisabled();
+      page.getByRole("button", { name: "GLM-OCR vLLM 起動" })
+    ).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   });
 }
@@ -406,9 +404,14 @@ test("dev モードは uv バッジと有効化された制御を表示する", 
   await expect(
     page.getByRole("button", { name: "Docling 起動" })
   ).toBeEnabled();
+  // 依存停止(vLLM 未起動)でも親の「起動」は押せる(連鎖起動で復帰)。
   await expect(
     page.getByRole("button", { name: "Dots.OCR 起動" })
-  ).toBeDisabled();
+  ).toBeEnabled();
+  // vLLM は親へ集約され個別の起動ボタンを持たない。
+  await expect(
+    page.getByRole("button", { name: "Dots.OCR vLLM 起動" })
+  ).toHaveCount(0);
 });
 
 test("制御有効時は確認ダイアログを経て停止できる", async ({ page }) => {
@@ -423,6 +426,27 @@ test("制御有効時は確認ダイアログを経て停止できる", async ({
   await page.getByRole("button", { name: "停止する" }).click();
   await expect(page.getByText("Office→PDF を停止しました。")).toBeVisible();
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`親サービスの停止確認は連鎖停止を明示する (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockServices(page, { controlEnabled: true });
+
+    await page.goto("/settings/services");
+
+    // Dots.OCR は dependency_stopped(本体稼働)なので停止可能。停止は vLLM へ連鎖する。
+    await page.getByRole("button", { name: "Dots.OCR 停止" }).click();
+    await expect(page.getByRole("heading", { name: "サービスを停止しますか?" })).toBeVisible();
+    await expect(
+      page.getByText("専用の推論サーバー(Dots.OCR vLLM)も同時に停止します", { exact: false })
+    ).toBeVisible();
+    await page.getByRole("button", { name: "停止する" }).click();
+    await expect(page.getByText("Dots.OCR を停止しました。")).toBeVisible();
+  });
+}
 
 test("制御有効時は確認なしで起動できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });

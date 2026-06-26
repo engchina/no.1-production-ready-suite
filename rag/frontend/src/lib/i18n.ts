@@ -434,8 +434,9 @@ export const ja = {
   "settings.services.statusLoadingHint": "状態確認中です。",
   "settings.services.statusLoadErrorHint": "状態を取得できませんでした。更新してください。",
   "settings.services.inferenceServers": "使用する推論サーバー",
-  "settings.services.inferenceServerRequired":
-    "{service} を使用するには {servers} を起動してください",
+  "settings.services.inferenceServerStopped":
+    "推論サーバーが停止しています。「起動」で復帰します。",
+  "settings.services.managedByParent": "起動/停止は {parent} に連動します",
   "settings.services.requiredService": "必須サービス",
   "settings.services.executionPolicy.requiredNoFallback": "必須 / fallbackなし",
   "settings.services.executionPolicy.inProcessWhenDisabled": "既定は backend 内処理",
@@ -466,6 +467,8 @@ export const ja = {
   "settings.services.confirm.stop.title": "サービスを停止しますか?",
   "settings.services.confirm.stop.description":
     "{service} を停止します。このサービスを必須とする処理段階は利用できなくなります。",
+  "settings.services.confirm.stop.descriptionWithServers":
+    "{service} を停止します。専用の推論サーバー({servers})も同時に停止します。このサービスを必須とする処理段階は利用できなくなります。",
   "settings.services.confirm.stop.confirm": "停止する",
   "settings.services.confirm.cancel": "キャンセル",
   "settings.services.toast.started": "{service} を起動しました。",
