@@ -16,7 +16,10 @@ import importlib
 import importlib.util
 import inspect
 import json
+import logging
+import multiprocessing
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -63,6 +66,8 @@ from rag_parser_core.source import (
 # registry を読み込まずに型を参照できるようにする。本モジュール固有の定数のみ残す。
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
 AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1102,6 +1107,16 @@ def _external_adapter_result(
                 content_type=content_type,
             )
     except Exception:
+        logger.exception(
+            "external parser adapter failed",
+            extra={
+                "parser_backend": backend,
+                "content_type": content_type,
+                "source_bytes": len(source_bytes),
+                "source_sha256": source_profile.content_sha256 if source_profile else None,
+                "source_modality": source_profile.modality.value if source_profile else None,
+            },
+        )
         return _adapter_fallback_result(backend, f"{backend}_adapter_failed")
     return _adapter_fallback_result(backend, f"{backend}_adapter_unsupported")
 
@@ -1110,13 +1125,22 @@ def _external_adapter_package_available(backend: str) -> bool:
     """adapter の実行に必要な import があるか確認する。
 
     GLM-OCR / Unlimited-OCR は専用 pip package が無く、wrapper が無い場合は
-    transformers fallback で実行するため、`transformers` があれば利用可能とみなす。
+    実行 runtime の軽い import を確認する。
     """
     package = EXTERNAL_ADAPTER_PACKAGES[backend]
     if _module_available(package):
         return True
-    if backend in {"glm_ocr", "unlimited_ocr"}:
+    if backend == "glm_ocr":
         return _module_available("transformers")
+    if backend == "unlimited_ocr":
+        runtime = os.environ.get("UNLIMITED_OCR_RUNTIME", "sglang").strip().lower() or "sglang"
+        if runtime in {"sglang", "official_sglang"}:
+            return _module_available("sglang") or bool(
+                os.environ.get("UNLIMITED_OCR_CUSTOM_LOGIT_PROCESSOR", "").strip()
+            )
+        if runtime in {"transformers", "hf", "local_transformers"}:
+            return _module_available("transformers")
+        return True
     return False
 
 
@@ -1583,10 +1607,10 @@ _DOTS_OCR_PARSER_CACHE: dict[str, object] = {}
 def _load_dots_ocr_vllm_parser() -> object:
     """Dots.OCR 公式推奨の vLLM server 向け parser を遅延ロードする。"""
     protocol = os.environ.get("DOTS_OCR_PROTOCOL", "http").strip() or "http"
-    ip = os.environ.get("DOTS_OCR_IP", "parser-dots-ocr-vllm").strip()
+    ip = os.environ.get("DOTS_OCR_IP", "127.0.0.1").strip()
     if not ip:
-        ip = "parser-dots-ocr-vllm"
-    port = int(os.environ.get("DOTS_OCR_PORT", "8000"))
+        ip = "127.0.0.1"
+    port = int(os.environ.get("DOTS_OCR_PORT", "8080"))
     model_name = os.environ.get("DOTS_OCR_MODEL_NAME", "model").strip() or "model"
     cache_key = "|".join((protocol, ip, str(port), model_name))
     cached = _DOTS_OCR_VLLM_PARSER_CACHE.get(cache_key)
@@ -1819,13 +1843,20 @@ def _run_unlimited_ocr(path: Path) -> object:
             candidate = getattr(module, attr, None)
             if callable(candidate):
                 return candidate(str(path))
-    return _run_unlimited_ocr_transformers(path)
+    runtime = os.environ.get("UNLIMITED_OCR_RUNTIME", "sglang").strip().lower() or "sglang"
+    if runtime in {"sglang", "official_sglang"}:
+        return _run_unlimited_ocr_sglang(path)
+    if runtime in {"transformers", "hf", "local_transformers"}:
+        return _run_unlimited_ocr_transformers(path)
+    raise RuntimeError(
+        "unlimited_ocr_invalid_runtime: set UNLIMITED_OCR_RUNTIME to sglang or transformers"
+    )
 
 
 def _run_glm_ocr_vllm(path: Path) -> object:
     """公式 self-host(vLLM OpenAI-compatible)で GLM-OCR を実行する。"""
     base_url = os.environ.get(
-        "GLM_OCR_VLLM_BASE_URL", "http://parser-glm-ocr-vllm:8080/v1"
+        "GLM_OCR_VLLM_BASE_URL", "http://127.0.0.1:8080/v1"
     ).rstrip("/")
     model_name = os.environ.get("GLM_OCR_VLLM_MODEL", "glm-ocr").strip() or "glm-ocr"
     prompt = os.environ.get("GLM_OCR_PROMPT", "Text Recognition:").strip()
@@ -1980,6 +2011,226 @@ def _load_glm_ocr_pipeline(model_id: str) -> tuple[object, object]:
 
 def _run_unlimited_ocr_transformers(path: Path) -> object:
     """transformers で HuggingFace の Unlimited-OCR モデルをロードし OCR する。"""
+    if path.suffix.lower() == ".pdf":
+        return _run_unlimited_ocr_pdf_with_timeout(path)
+    return _run_unlimited_ocr_transformers_in_process(path)
+
+
+def _run_unlimited_ocr_sglang(path: Path) -> object:
+    """公式 SGLang OpenAI-compatible endpoint で Unlimited-OCR を実行する。"""
+    image_files: list[str]
+    if path.suffix.lower() == ".pdf":
+        with tempfile.TemporaryDirectory(prefix="unlimited-ocr-sglang-pages-") as page_dir:
+            image_files = _unlimited_ocr_pdf_to_images(
+                path,
+                Path(page_dir),
+                dpi=int(os.environ.get("UNLIMITED_OCR_DPI", "300")),
+            )
+            return _run_unlimited_ocr_sglang_pdf_batches(
+                image_files,
+            )
+    return _run_unlimited_ocr_sglang_images(
+        [str(path)],
+        image_mode=os.environ.get("UNLIMITED_OCR_IMAGE_MODE", "gundam").strip() or "gundam",
+        ngram_window=_env_int("UNLIMITED_OCR_NGRAM_WINDOW", 128),
+        prompt=os.environ.get("UNLIMITED_OCR_PROMPT", "document parsing."),
+    )
+
+
+def _run_unlimited_ocr_sglang_images(
+    image_files: Sequence[str],
+    *,
+    image_mode: str,
+    ngram_window: int,
+    prompt: str,
+) -> str:
+    payload = _unlimited_ocr_sglang_payload(
+        prompt=prompt,
+        image_files=image_files,
+        image_mode=image_mode,
+        ngram_window=ngram_window,
+    )
+    base_url = os.environ.get(
+        "UNLIMITED_OCR_SGLANG_BASE_URL",
+        "http://127.0.0.1:10000/v1",
+    ).rstrip("/")
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    timeout = _env_float("UNLIMITED_OCR_SGLANG_TIMEOUT_SECONDS", 1200.0)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return _streaming_chat_completion_text(response)
+
+
+def _run_unlimited_ocr_sglang_pdf_batches(image_files: Sequence[str]) -> str:
+    batch_size = _env_int("UNLIMITED_OCR_PDF_BATCH_SIZE", 2)
+    texts: list[str] = []
+    for index in range(0, len(image_files), batch_size):
+        batch = image_files[index : index + batch_size]
+        text = _run_unlimited_ocr_sglang_images(
+            batch,
+            image_mode="base",
+            ngram_window=_env_int("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", 1024),
+            prompt=os.environ.get("UNLIMITED_OCR_MULTI_PROMPT", "Multi page parsing."),
+        )
+        if text.strip():
+            texts.append(text.strip())
+    return "\n\n".join(texts)
+
+
+def _unlimited_ocr_sglang_payload(
+    *,
+    prompt: str,
+    image_files: Sequence[str],
+    image_mode: str,
+    ngram_window: int,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "model": os.environ.get("UNLIMITED_OCR_SGLANG_MODEL", "Unlimited-OCR").strip()
+        or "Unlimited-OCR",
+        "messages": [
+            {"role": "user", "content": _unlimited_ocr_sglang_content(prompt, image_files)}
+        ],
+        "temperature": float(os.environ.get("UNLIMITED_OCR_TEMPERATURE", "0")),
+        "skip_special_tokens": False,
+        "images_config": {"image_mode": image_mode},
+        "stream": True,
+    }
+    processor = _unlimited_ocr_no_repeat_processor()
+    if processor:
+        payload["custom_logit_processor"] = processor
+        payload["custom_params"] = {
+            "ngram_size": _env_int("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", 35),
+            "window_size": ngram_window,
+        }
+    return payload
+
+
+def _unlimited_ocr_sglang_content(
+    prompt: str,
+    image_files: Sequence[str],
+) -> list[dict[str, object]]:
+    return [
+        {"type": "text", "text": prompt},
+        *(_encoded_image_content(Path(image_file)) for image_file in image_files),
+    ]
+
+
+def _encoded_image_content(path: Path) -> dict[str, object]:
+    content_type = _content_type_for_path(path)
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{encoded}"}}
+
+
+def _unlimited_ocr_no_repeat_processor() -> str | None:
+    override = os.environ.get("UNLIMITED_OCR_CUSTOM_LOGIT_PROCESSOR", "").strip()
+    if override:
+        return override
+    try:
+        processor_module = importlib.import_module("sglang.srt.sampling.custom_logit_processor")
+    except Exception:
+        return None
+    processor = getattr(processor_module, "DeepseekOCRNoRepeatNGramLogitProcessor", None)
+    to_str = getattr(processor, "to_str", None)
+    return to_str() if callable(to_str) else None
+
+
+def _streaming_chat_completion_text(response: Any) -> str:
+    chunks: list[str] = []
+    for raw_line in response:
+        line = (
+            raw_line.decode("utf-8", errors="replace")
+            if isinstance(raw_line, bytes)
+            else str(raw_line)
+        )
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if data == "[DONE]":
+            break
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        choices = event.get("choices")
+        if not isinstance(choices, Sequence) or not choices:
+            continue
+        first = choices[0]
+        if not isinstance(first, Mapping):
+            continue
+        delta = first.get("delta")
+        if not isinstance(delta, Mapping):
+            continue
+        content = delta.get("content")
+        if isinstance(content, str):
+            chunks.append(content)
+    return "".join(chunks)
+
+
+def _run_unlimited_ocr_pdf_with_timeout(path: Path) -> object:
+    timeout_seconds = _env_float("UNLIMITED_OCR_PDF_TIMEOUT_SECONDS", 1200.0)
+    with tempfile.TemporaryDirectory(prefix="unlimited-ocr-child-result-") as result_dir:
+        result_path = Path(result_dir) / "result.txt"
+        result_queue: Any = multiprocessing.Queue(maxsize=1)
+        process = multiprocessing.Process(
+            target=_run_unlimited_ocr_pdf_child,
+            args=(str(path), str(result_path), result_queue),
+            daemon=True,
+        )
+        process.start()
+        process.join(timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join(10)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            _release_unlimited_ocr_gpu_cache()
+            result_queue.close()
+            result_queue.join_thread()
+            raise TimeoutError(f"unlimited_ocr_pdf_timeout: exceeded {timeout_seconds:g}s")
+        try:
+            status, payload = result_queue.get(timeout=1)
+        except queue.Empty as exc:
+            raise RuntimeError(
+                f"unlimited_ocr_pdf_subprocess_failed: exit_code={process.exitcode}"
+            ) from exc
+        finally:
+            result_queue.close()
+            result_queue.join_thread()
+        if status == "ok":
+            return result_path.read_text(encoding="utf-8", errors="replace")
+        if isinstance(payload, tuple) and len(payload) == 2:
+            error_type, message = payload
+            raise RuntimeError(f"unlimited_ocr_pdf_failed: {error_type}: {message}")
+        raise RuntimeError("unlimited_ocr_pdf_failed")
+
+
+def _run_unlimited_ocr_pdf_child(
+    path_value: str,
+    result_path_value: str,
+    result_queue: Any,
+) -> None:
+    try:
+        result = _run_unlimited_ocr_transformers_in_process(Path(path_value))
+        Path(result_path_value).write_text(
+            _adapter_text_value(result),
+            encoding="utf-8",
+        )
+        result_queue.put(("ok", None))
+    except BaseException as exc:  # noqa: BLE001 - child boundary serializes failures
+        logger.exception("unlimited_ocr_pdf_child_failed")
+        result_queue.put(("error", (type(exc).__name__, str(exc))))
+    finally:
+        _release_unlimited_ocr_gpu_cache()
+
+
+def _run_unlimited_ocr_transformers_in_process(path: Path) -> object:
+    """実 OCR 本体。PDF は caller 側で timeout 用 subprocess に隔離される。"""
     model_id = (
         os.environ.get("UNLIMITED_OCR_MODEL_ID", "baidu/Unlimited-OCR").strip()
         or "baidu/Unlimited-OCR"
@@ -1998,23 +2249,11 @@ def _run_unlimited_ocr_transformers(path: Path) -> object:
                         Path(page_dir),
                         dpi=int(os.environ.get("UNLIMITED_OCR_DPI", "300")),
                     )
-                    result = model_runner.infer_multi(
+                    result = _run_unlimited_ocr_pdf_batches(
+                        model_runner,
                         tokenizer,
-                        prompt=os.environ.get(
-                            "UNLIMITED_OCR_MULTI_PROMPT",
-                            "<image>Multi page parsing.",
-                        ),
-                        image_files=image_files,
-                        output_path=str(output_path),
-                        image_size=int(os.environ.get("UNLIMITED_OCR_PDF_IMAGE_SIZE", "1024")),
-                        max_length=int(os.environ.get("UNLIMITED_OCR_MAX_LENGTH", "32768")),
-                        no_repeat_ngram_size=int(
-                            os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")
-                        ),
-                        ngram_window=int(
-                            os.environ.get("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", "1024")
-                        ),
-                        save_results=True,
+                        image_files,
+                        output_path,
                     )
             else:
                 base_size, image_size, crop_mode = _unlimited_ocr_image_config()
@@ -2038,6 +2277,38 @@ def _run_unlimited_ocr_transformers(path: Path) -> object:
         tokenizer = None
         model = None
         _release_unlimited_ocr_gpu_cache()
+
+
+def _run_unlimited_ocr_pdf_batches(
+    model_runner: Any,
+    tokenizer: object,
+    image_files: Sequence[str],
+    output_path: Path,
+) -> str:
+    batch_size = _env_int("UNLIMITED_OCR_PDF_BATCH_SIZE", 2)
+    texts: list[str] = []
+    for index in range(0, len(image_files), batch_size):
+        batch = list(image_files[index : index + batch_size])
+        batch_output_path = output_path / f"batch_{index // batch_size + 1:04d}"
+        batch_output_path.mkdir(parents=True, exist_ok=True)
+        batch_result = model_runner.infer_multi(
+            tokenizer,
+            prompt=os.environ.get(
+                "UNLIMITED_OCR_MULTI_PROMPT",
+                "<image>Multi page parsing.",
+            ),
+            image_files=batch,
+            output_path=str(batch_output_path),
+            image_size=int(os.environ.get("UNLIMITED_OCR_PDF_IMAGE_SIZE", "1024")),
+            max_length=int(os.environ.get("UNLIMITED_OCR_MAX_LENGTH", "32768")),
+            no_repeat_ngram_size=int(os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")),
+            ngram_window=int(os.environ.get("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", "1024")),
+            save_results=True,
+        )
+        text = _adapter_text_value(_unlimited_ocr_output_text(batch_result, batch_output_path))
+        if text.strip():
+            texts.append(text.strip())
+    return "\n\n".join(texts)
 
 
 def _load_unlimited_ocr_pipeline(model_id: str) -> tuple[object, object]:
@@ -2079,6 +2350,20 @@ def _release_unlimited_ocr_gpu_cache() -> None:
     empty_cache = getattr(getattr(torch, "cuda", None), "empty_cache", None)
     if callable(empty_cache):
         empty_cache()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return max(1.0, float(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
 
 
 def _unlimited_ocr_image_config() -> tuple[int, int, bool]:

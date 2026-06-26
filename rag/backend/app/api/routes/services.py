@@ -4,7 +4,6 @@
 での起動/停止(POST)を提供する。制御はカタログ allowlist + feature flag で二重に保護する。
 """
 
-import asyncio
 import logging
 from typing import Annotated
 
@@ -24,7 +23,6 @@ from app.schemas.service_management import (
 from app.services.catalog import (
     SERVICE_CATALOG,
     ServiceCatalogEntry,
-    dependents_of,
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
@@ -36,7 +34,7 @@ from app.services.control import (
     ServiceLogsError,
     read_service_logs,
 )
-from app.services.status import blocked_dependencies, probe_service_status, probe_service_statuses
+from app.services.status import probe_service_status, probe_service_statuses
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -57,7 +55,6 @@ def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCata
         profile=entry.profile,
         label_key=entry.label_key,
         execution_policy=entry.execution_policy,
-        depends_on=list(entry.depends_on),
         configured=bool(service_health_url(settings, entry)),
     )
 
@@ -79,8 +76,6 @@ async def list_services() -> ApiResponse[ServiceListData]:
             label_key=entry.label_key,
             execution_policy=entry.execution_policy,
             status=statuses[entry.service_id],
-            depends_on=list(entry.depends_on),
-            blocked_by=list(blocked_dependencies(statuses, entry)),
             configured=bool(service_health_url(settings, entry)),
         )
         for entry in SERVICE_CATALOG
@@ -109,7 +104,7 @@ async def list_service_catalog() -> ApiResponse[ServiceCatalogData]:
 
 @router.get("/{service_id}/status", response_model=ApiResponse[ServiceStatusData])
 async def get_service_status(service_id: str) -> ApiResponse[ServiceStatusData]:
-    """1 サービスの稼働状態を返す。依存サービスがある場合のみ併せて確認する。"""
+    """1 サービスの稼働状態を返す。"""
     settings = get_settings()
     entry = get_catalog_entry(service_id)
     if entry is None:
@@ -117,28 +112,11 @@ async def get_service_status(service_id: str) -> ApiResponse[ServiceStatusData]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="指定したサービスが見つかりません。",
         )
-    related_entries = [entry]
-    for dependency_id in entry.depends_on:
-        dependency_entry = get_catalog_entry(dependency_id)
-        if dependency_entry is not None:
-            related_entries.append(dependency_entry)
-    results = await asyncio.gather(
-        *(probe_service_status(settings, related_entry) for related_entry in related_entries)
-    )
-    statuses = {
-        related_entry.service_id: result
-        for related_entry, result in zip(related_entries, results, strict=True)
-    }
-    blocked_by = blocked_dependencies(statuses, entry)
-    service_status = statuses[entry.service_id]
-    if blocked_by and service_status in {"running", "degraded"}:
-        service_status = "dependency_stopped"
-        statuses[entry.service_id] = service_status
+    service_status = await probe_service_status(settings, entry)
     return ApiResponse(
         data=ServiceStatusData(
             **_catalog_item(settings, entry).model_dump(),
             status=service_status,
-            blocked_by=list(blocked_by),
         )
     )
 
@@ -177,38 +155,8 @@ async def get_service_logs(
     )
 
 
-async def _control_targets(
-    settings: Settings, entry: ServiceCatalogEntry, action: ServiceAction
-) -> list[ServiceCatalogEntry]:
-    """連鎖して制御する対象を順序付きで解決する。
-
-    親(parser)と専用の推論サーバー(vLLM)を 1 操作で扱うため、``depends_on`` を辿る。
-
-    - start: 依存(vLLM)を先に、本体を後に。``up -d`` は冪等なので稼働中でも害は無い。
-    - stop: 本体を先に停止し、その後 他に稼働中の利用元が無い専用依存も停止(GPU 解放)。
-    - restart: 本体のみ(UI に restart 操作は無い)。
-    """
-    deps = [d for sid in entry.depends_on if (d := get_catalog_entry(sid)) is not None]
-    # ponytail: depends_on は現状 1 段(vLLM は depends_on 空)。多段化するなら topological sort へ。
-    if action == "start":
-        return [*deps, entry]
-    if action == "stop" and deps:
-        statuses = await probe_service_statuses(settings)
-        also_stop = [
-            d
-            for d in deps
-            if not any(
-                statuses.get(other) == "running"
-                for other in dependents_of(d.service_id)
-                if other != entry.service_id
-            )
-        ]
-        return [entry, *also_stop]
-    return [entry]
-
-
 async def _control(service_id: str, action: ServiceAction) -> ApiResponse[ServiceControlResultData]:
-    """共通の起動/停止ハンドラ(flag 確認 → allowlist 照合 → 連鎖実行 → 再プローブ)。"""
+    """共通の起動/停止ハンドラ(flag 確認 → allowlist 照合 → 実行 → 再プローブ)。"""
     settings = get_settings()
     if not _control_enabled(settings):
         raise HTTPException(
@@ -221,27 +169,22 @@ async def _control(service_id: str, action: ServiceAction) -> ApiResponse[Servic
             status_code=status.HTTP_404_NOT_FOUND,
             detail="指定したサービスが見つかりません。",
         )
-    for target in await _control_targets(settings, entry, action):
-        try:
-            await _control_client.control(settings, target, action)
-        except ServiceControlError as exc:
-            logger.warning(
-                "service_control_failed",
-                extra={
-                    "service_id": target.service_id,
-                    "action": action,
-                    "exit_code": exc.result.exit_code,
-                },
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=exc.result.detail or "サービスの操作に失敗しました。",
-            ) from exc
-    # 依存を持つ親は全体ステータスを見直し、依存未起動なら dependency_stopped として返す。
-    if entry.depends_on:
-        new_status = (await probe_service_statuses(settings))[entry.service_id]
-    else:
-        new_status = await probe_service_status(settings, entry)
+    try:
+        await _control_client.control(settings, entry, action)
+    except ServiceControlError as exc:
+        logger.warning(
+            "service_control_failed",
+            extra={
+                "service_id": entry.service_id,
+                "action": action,
+                "exit_code": exc.result.exit_code,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=exc.result.detail or "サービスの操作に失敗しました。",
+        ) from exc
+    new_status = await probe_service_status(settings, entry)
     return ApiResponse(
         data=ServiceControlResultData(
             service_id=service_id,

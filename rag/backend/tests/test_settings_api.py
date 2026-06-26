@@ -81,7 +81,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["marker"]["warning_code"] == "adapter_flag_ignored_by_backend"
     assert by_backend["unstructured"]["install_package"] == "unstructured[all-docs]==0.23.1"
     assert by_backend["unstructured"]["status"] == "disabled"
-    assert by_backend["unlimited_ocr"]["install_package"].startswith("transformers")
+    assert by_backend["unlimited_ocr"]["install_package"].startswith("sglang")
     assert by_backend["unlimited_ocr"]["status"] == "disabled"
     assert by_backend["mineru"]["install_package"] == "mineru[core]==3.4.0"
     assert by_backend["mineru"]["status"] == "disabled"

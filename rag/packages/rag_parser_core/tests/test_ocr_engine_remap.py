@@ -8,9 +8,13 @@ GPU は CI 非搭載のため、実 OCR(GPU シーム)が呼ぶ SDK を fake mod
 from __future__ import annotations
 
 import json
+import logging
 import sys
+import time
 import types
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -203,7 +207,8 @@ def test_dots_ocr_vllm_parser_reads_generated_markdown(
     class FakeDotsOCRParser:
         def __init__(self, **kwargs: object) -> None:
             assert kwargs["use_hf"] is False
-            assert kwargs["ip"] == "parser-dots-ocr-vllm"
+            # vLLM をイメージへ内包したため既定は同一コンテナ内 localhost。
+            assert kwargs["ip"] == "127.0.0.1"
             assert kwargs["model_name"] == "model"
 
         def parse_file(
@@ -389,6 +394,20 @@ def test_unlimited_ocr_pipeline_uses_dtype_keyword(
     assert model.device == "device:cuda:0"
 
 
+def test_unlimited_ocr_without_wrapper_uses_sglang_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sys.modules.pop("unlimited_ocr", None)
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png")
+    monkeypatch.delenv("UNLIMITED_OCR_RUNTIME", raising=False)
+    monkeypatch.setattr(registry, "_module_available", lambda _name: False)
+    monkeypatch.setattr(registry, "_run_unlimited_ocr_sglang", lambda path: f"sglang:{path.name}")
+
+    assert registry._run_unlimited_ocr(source) == "sglang:source.png"
+
+
 def test_glm_ocr_without_wrapper_uses_transformers_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -453,6 +472,7 @@ def test_unlimited_ocr_without_wrapper_uses_transformers_fallback(
 ) -> None:
     registry._UNLIMITED_OCR_PIPELINE_CACHE.clear()
     sys.modules.pop("unlimited_ocr", None)
+    monkeypatch.setenv("UNLIMITED_OCR_RUNTIME", "transformers")
     source = tmp_path / "source.png"
     source.write_bytes(b"png")
     empty_cache_calls: list[str] = []
@@ -476,6 +496,223 @@ def test_unlimited_ocr_without_wrapper_uses_transformers_fallback(
     assert registry._run_unlimited_ocr_transformers(source) == "# Unlimited OCR\n"
     assert registry._UNLIMITED_OCR_PIPELINE_CACHE == {}
     assert empty_cache_calls == ["empty"]
+
+
+def test_unlimited_ocr_sglang_posts_images_and_reads_stream(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png")
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def __iter__(self) -> object:
+            return iter(
+                [
+                    b'data: {"choices":[{"delta":{"content":"# OCR"}}]}\n',
+                    b'data: {"choices":[{"delta":{"content":" result"}}]}\n',
+                    b"data: [DONE]\n",
+                ]
+            )
+
+    def fake_urlopen(request: object, timeout: float) -> FakeResponse:
+        typed_request = cast(Any, request)
+        captured["timeout"] = timeout
+        captured["url"] = typed_request.full_url
+        data = typed_request.data
+        assert isinstance(data, bytes)
+        captured["payload"] = json.loads(data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setenv("UNLIMITED_OCR_CUSTOM_LOGIT_PROCESSOR", "processor")
+    monkeypatch.setattr(registry.urllib.request, "urlopen", fake_urlopen)
+
+    result = registry._run_unlimited_ocr_sglang(source)
+
+    assert result == "# OCR result"
+    assert captured["url"] == "http://127.0.0.1:10000/v1/chat/completions"
+    assert captured["timeout"] == 1200.0
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["model"] == "Unlimited-OCR"
+    assert payload["images_config"] == {"image_mode": "gundam"}
+    assert payload["custom_logit_processor"] == "processor"
+    assert payload["custom_params"] == {"ngram_size": 35, "window_size": 128}
+    messages = payload["messages"]
+    assert isinstance(messages, list)
+    content = messages[0]["content"]
+    assert content[0] == {"type": "text", "text": "document parsing."}
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_unlimited_ocr_sglang_pdf_batches_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF")
+    calls: list[list[str]] = []
+    monkeypatch.setenv("UNLIMITED_OCR_PDF_BATCH_SIZE", "2")
+    monkeypatch.setattr(
+        registry,
+        "_unlimited_ocr_pdf_to_images",
+        lambda _path, _output_dir, dpi: [f"page-{index}.png" for index in range(1, 6)],
+    )
+
+    def fake_sglang_images(
+        image_files: Sequence[str],
+        *,
+        image_mode: str,
+        ngram_window: int,
+        prompt: str,
+    ) -> str:
+        assert image_mode == "base"
+        assert ngram_window == 1024
+        assert prompt == "Multi page parsing."
+        batch = list(image_files)
+        calls.append(batch)
+        return " / ".join(batch)
+
+    monkeypatch.setattr(registry, "_run_unlimited_ocr_sglang_images", fake_sglang_images)
+
+    result = registry._run_unlimited_ocr_sglang(source)
+
+    assert calls == [
+        ["page-1.png", "page-2.png"],
+        ["page-3.png", "page-4.png"],
+        ["page-5.png"],
+    ]
+    assert result == "page-1.png / page-2.png\n\npage-3.png / page-4.png\n\npage-5.png"
+
+
+def test_unlimited_ocr_pdf_batches_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    registry._UNLIMITED_OCR_PIPELINE_CACHE.clear()
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF")
+    calls: list[list[str]] = []
+    empty_cache_calls: list[str] = []
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(empty_cache=lambda: empty_cache_calls.append("empty"))
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setenv("UNLIMITED_OCR_PDF_BATCH_SIZE", "2")
+    monkeypatch.setattr(
+        registry,
+        "_unlimited_ocr_pdf_to_images",
+        lambda _path, _output_dir, dpi: [f"page-{index}.png" for index in range(1, 6)],
+    )
+
+    class FakeModel:
+        def infer_multi(
+            self,
+            _tokenizer: object,
+            *,
+            image_files: list[str],
+            output_path: str,
+            **_kwargs: object,
+        ) -> None:
+            calls.append(image_files)
+            Path(output_path, "result.md").write_text(
+                " / ".join(image_files),
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(
+        registry,
+        "_load_unlimited_ocr_pipeline",
+        lambda _model_id: (object(), FakeModel()),
+    )
+
+    result = registry._run_unlimited_ocr_transformers_in_process(source)
+
+    assert calls == [
+        ["page-1.png", "page-2.png"],
+        ["page-3.png", "page-4.png"],
+        ["page-5.png"],
+    ]
+    assert result == "page-1.png / page-2.png\n\npage-3.png / page-4.png\n\npage-5.png"
+    assert empty_cache_calls == ["empty"]
+
+
+def test_external_adapter_failure_logs_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(registry, "_external_adapter_package_available", lambda _backend: True)
+    monkeypatch.setattr(
+        registry,
+        "_unlimited_ocr_adapter_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="rag_parser_core.registry"):
+        result = _external_adapter_result(
+            "unlimited_ocr",
+            source_bytes=b"%PDF",
+            source_profile=_pdf_profile(),
+            content_type="application/pdf",
+        )
+
+    assert result.extraction is None
+    assert result.warnings == ("unlimited_ocr_adapter_failed",)
+    record = next(
+        item for item in caplog.records if item.message == "external parser adapter failed"
+    )
+    assert record.exc_info is not None
+    assert record.__dict__["source_sha256"] == "0" * 64
+
+
+def test_unlimited_ocr_pdf_timeout_wrapper_reads_child_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF")
+
+    monkeypatch.setenv("UNLIMITED_OCR_PDF_TIMEOUT_SECONDS", "5")
+    monkeypatch.setattr(
+        registry,
+        "_run_unlimited_ocr_transformers_in_process",
+        lambda _path: "child result",
+    )
+
+    assert registry._run_unlimited_ocr_pdf_with_timeout(source) == "child result"
+
+
+def test_unlimited_ocr_pdf_timeout_releases_parent_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF")
+    release_calls: list[str] = []
+
+    def slow_ocr(_path: Path) -> str:
+        time.sleep(30)
+        return "too late"
+
+    monkeypatch.setenv("UNLIMITED_OCR_PDF_TIMEOUT_SECONDS", "1")
+    monkeypatch.setattr(registry, "_run_unlimited_ocr_transformers_in_process", slow_ocr)
+    monkeypatch.setattr(
+        registry,
+        "_release_unlimited_ocr_gpu_cache",
+        lambda: release_calls.append("release"),
+    )
+
+    with pytest.raises(TimeoutError, match="unlimited_ocr_pdf_timeout"):
+        registry._run_unlimited_ocr_pdf_with_timeout(source)
+
+    assert release_calls == ["release"]
 
 
 def test_glm_ocr_vllm_posts_image_and_reads_chat_completion(

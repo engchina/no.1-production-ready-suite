@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from pytest import MonkeyPatch
 from rag_parser_core import registry as parser_registry
+from rag_parser_core.result import ParserRegistryResult
 
 from app.config import Settings
 from app.rag import parser_adapter_contract as parser_adapter_contract_module
@@ -21,7 +22,6 @@ from app.rag.parser_adapter_contract import (
     parser_adapter_fixture_specs_from_manifest,
     run_parser_adapter_compatibility_matrix,
 )
-from rag_parser_core.result import ParserRegistryResult
 from app.schemas.extraction import DocumentElement, ExtractionPage, StructuredExtraction
 
 
@@ -224,9 +224,9 @@ def test_compatibility_matrix_uses_parser_service_runner_for_unlimited_ocr(
         parser_adapter_readiness,
         "_package_info",
         lambda import_name, _distribution_names: (
-            import_name == "transformers",
-            "4.57.1" if import_name == "transformers" else None,
-            import_name if import_name == "transformers" else None,
+            import_name == "sglang",
+            "0.4.0" if import_name == "sglang" else None,
+            import_name if import_name == "sglang" else None,
         ),
     )
     calls: list[str] = []
@@ -302,15 +302,15 @@ def test_compatibility_matrix_unlimited_ocr_unconfigured_service_falls_back(
         parser_adapter_readiness,
         "_package_info",
         lambda import_name, _distribution_names: (
-            import_name == "transformers",
-            "4.57.1" if import_name == "transformers" else None,
-            import_name if import_name == "transformers" else None,
+            import_name == "sglang",
+            "0.4.0" if import_name == "sglang" else None,
+            import_name if import_name == "sglang" else None,
         ),
     )
-    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "transformers")
+    monkeypatch.setattr(parser_registry, "_module_available", lambda name: name == "sglang")
     monkeypatch.setattr(
         parser_registry,
-        "_run_unlimited_ocr_transformers",
+        "_run_unlimited_ocr_sglang",
         lambda _path: (_ for _ in ()).throw(AssertionError("in-process OCR must not run")),
     )
 

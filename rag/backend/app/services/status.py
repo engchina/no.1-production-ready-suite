@@ -1,7 +1,7 @@
 """サービス稼働状態プローブ。
 
 各マイクロサービスの ``GET /health`` を bounded timeout で並列に問い合わせ、稼働状態を
-``running / degraded / stopped / dependency_stopped / unconfigured`` に正規化する。
+``running / degraded / stopped / unconfigured`` に正規化する。
 ``parser_adapter_readiness._probe_service_health`` の best-effort パターンを async 化したもの。
 """
 
@@ -25,13 +25,11 @@ logger = logging.getLogger(__name__)
 # - running: /health が status=ok(正常稼働)
 # - degraded: 到達したが status!=ok(例: LibreOffice 未導入)
 # - stopped: 接続拒否/timeout(コンテナ停止と解釈)
-# - dependency_stopped: 本体は到達可能だが依存サービスが未稼働
 # - unconfigured: URL 未設定
 ServiceRuntimeStatus = Literal[
     "running",
     "degraded",
     "stopped",
-    "dependency_stopped",
     "unconfigured",
 ]
 
@@ -62,23 +60,10 @@ async def probe_service_status(
 
 
 async def probe_service_statuses(settings: Settings) -> dict[str, ServiceRuntimeStatus]:
-    """全カタログサービスの稼働状態を問い合わせ、依存未稼働も反映して返す。"""
+    """全カタログサービスの稼働状態を問い合わせて返す。"""
     results = await asyncio.gather(
         *(probe_service_status(settings, entry) for entry in SERVICE_CATALOG)
     )
-    statuses: dict[str, ServiceRuntimeStatus] = {
+    return {
         entry.service_id: status for entry, status in zip(SERVICE_CATALOG, results, strict=True)
     }
-    for entry in SERVICE_CATALOG:
-        if not blocked_dependencies(statuses, entry):
-            continue
-        if statuses[entry.service_id] in {"running", "degraded"}:
-            statuses[entry.service_id] = "dependency_stopped"
-    return statuses
-
-
-def blocked_dependencies(
-    statuses: dict[str, ServiceRuntimeStatus], entry: ServiceCatalogEntry
-) -> tuple[str, ...]:
-    """entry の依存サービスのうち running でない service_id を返す。"""
-    return tuple(dep for dep in entry.depends_on if statuses.get(dep) != "running")

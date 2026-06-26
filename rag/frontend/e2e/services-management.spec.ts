@@ -12,12 +12,7 @@ const authStatus = {
   warning_messages: [],
 };
 
-type ServiceStatus =
-  | "running"
-  | "degraded"
-  | "stopped"
-  | "dependency_stopped"
-  | "unconfigured";
+type ServiceStatus = "running" | "degraded" | "stopped" | "unconfigured";
 
 interface ServiceRow {
   service_id: string;
@@ -41,8 +36,6 @@ interface ServiceRow {
     | "selected_adapter";
   status: ServiceStatus;
   configured: boolean;
-  depends_on: string[];
-  blocked_by: string[];
 }
 
 function defaultServices(): ServiceRow[] {
@@ -55,8 +48,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "selected_adapter",
       status: "running",
       configured: true,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "parser-docling",
@@ -66,8 +57,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "parser-unlimited-ocr",
@@ -77,8 +66,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "parser-mineru",
@@ -88,8 +75,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "parser-dots-ocr",
@@ -97,21 +82,8 @@ function defaultServices(): ServiceRow[] {
       profile: "gpu",
       label_key: "settings.services.item.parserDotsOcr",
       execution_policy: "selected_adapter",
-      status: "dependency_stopped",
-      configured: true,
-      depends_on: ["parser-dots-ocr-vllm"],
-      blocked_by: ["parser-dots-ocr-vllm"],
-    },
-    {
-      service_id: "parser-dots-ocr-vllm",
-      category: "parser",
-      profile: "gpu",
-      label_key: "settings.services.item.parserDotsOcrVllm",
-      execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "parser-glm-ocr",
@@ -119,21 +91,8 @@ function defaultServices(): ServiceRow[] {
       profile: "gpu",
       label_key: "settings.services.item.parserGlmOcr",
       execution_policy: "selected_adapter",
-      status: "dependency_stopped",
-      configured: true,
-      depends_on: ["parser-glm-ocr-vllm"],
-      blocked_by: ["parser-glm-ocr-vllm"],
-    },
-    {
-      service_id: "parser-glm-ocr-vllm",
-      category: "parser",
-      profile: "gpu",
-      label_key: "settings.services.item.parserGlmOcrVllm",
-      execution_policy: "selected_adapter",
       status: "stopped",
       configured: true,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "parser-oci-genai-vision",
@@ -143,8 +102,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "selected_adapter",
       status: "stopped",
       configured: false,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "parser-oci-document-understanding",
@@ -154,8 +111,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "selected_adapter",
       status: "unconfigured",
       configured: false,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "pipeline-chunking",
@@ -165,8 +120,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "in_process_when_disabled",
       status: "stopped",
       configured: true,
-      depends_on: [],
-      blocked_by: [],
     },
     {
       service_id: "pipeline-retrieval",
@@ -176,8 +129,6 @@ function defaultServices(): ServiceRow[] {
       execution_policy: "in_process_when_disabled",
       status: "stopped",
       configured: true,
-      depends_on: [],
-      blocked_by: [],
     },
   ];
 }
@@ -203,7 +154,6 @@ async function mockServices(
       label_key: service.label_key,
       execution_policy: service.execution_policy,
       configured: service.configured,
-      depends_on: service.depends_on,
     }));
     await route.fulfill({
       json: {
@@ -327,26 +277,6 @@ for (const viewport of [
     // 稼働状態バッジ。
     await expect(page.getByText("稼働中").first()).toBeVisible();
     await expect(page.getByText("停止").first()).toBeVisible();
-    await expect(page.getByText("推論サーバー未起動").first()).toBeVisible();
-    await expect(
-      page.getByText("使用する推論サーバー: Dots.OCR vLLM(停止)")
-    ).toBeVisible();
-    await expect(
-      page.getByText("使用する推論サーバー: GLM-OCR vLLM(停止)")
-    ).toBeVisible();
-    // 依存停止は「起動」で復帰できる旨を案内(親の起動が vLLM も連鎖起動する)。
-    await expect(
-      page.getByText("推論サーバーが停止しています。「起動」で復帰します。").first()
-    ).toBeVisible();
-    // vLLM 行は親へ集約: 個別の起動/停止ボタンは無く、連動表示のみ。
-    await expect(page.getByText("起動/停止は Dots.OCR に連動します")).toBeVisible();
-    await expect(page.getByText("起動/停止は GLM-OCR に連動します")).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Dots.OCR vLLM 起動" })
-    ).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: "GLM-OCR vLLM 起動" })
-    ).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
   });
 }
@@ -404,14 +334,9 @@ test("dev モードは uv バッジと有効化された制御を表示する", 
   await expect(
     page.getByRole("button", { name: "Docling 起動" })
   ).toBeEnabled();
-  // 依存停止(vLLM 未起動)でも親の「起動」は押せる(連鎖起動で復帰)。
   await expect(
     page.getByRole("button", { name: "Dots.OCR 起動" })
   ).toBeEnabled();
-  // vLLM は親へ集約され個別の起動ボタンを持たない。
-  await expect(
-    page.getByRole("button", { name: "Dots.OCR vLLM 起動" })
-  ).toHaveCount(0);
 });
 
 test("制御有効時は確認ダイアログを経て停止できる", async ({ page }) => {
@@ -426,27 +351,6 @@ test("制御有効時は確認ダイアログを経て停止できる", async ({
   await page.getByRole("button", { name: "停止する" }).click();
   await expect(page.getByText("Office→PDF を停止しました。")).toBeVisible();
 });
-
-for (const viewport of [
-  { name: "desktop", width: 1280, height: 760 },
-  { name: "mobile", width: 375, height: 812 },
-]) {
-  test(`親サービスの停止確認は連鎖停止を明示する (${viewport.name})`, async ({ page }) => {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockServices(page, { controlEnabled: true });
-
-    await page.goto("/settings/services");
-
-    // Dots.OCR は dependency_stopped(本体稼働)なので停止可能。停止は vLLM へ連鎖する。
-    await page.getByRole("button", { name: "Dots.OCR 停止" }).click();
-    await expect(page.getByRole("heading", { name: "サービスを停止しますか?" })).toBeVisible();
-    await expect(
-      page.getByText("専用の推論サーバー(Dots.OCR vLLM)も同時に停止します", { exact: false })
-    ).toBeVisible();
-    await page.getByRole("button", { name: "停止する" }).click();
-    await expect(page.getByText("Dots.OCR を停止しました。")).toBeVisible();
-  });
-}
 
 test("制御有効時は確認なしで起動できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });

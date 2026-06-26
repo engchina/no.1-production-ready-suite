@@ -5,6 +5,7 @@ description = "Unlimited-OCR (GPU) parser microservice (independent dependency b
 requires-python = ">=3.12"
 dependencies = [
     "rag-parser-core[service]",
+    "sglang>=0.4",
     "transformers>=4.57.1,<5",
     "accelerate>=1.0",
     "pymupdf>=1.27",

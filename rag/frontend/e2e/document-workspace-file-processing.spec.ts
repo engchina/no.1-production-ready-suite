@@ -438,6 +438,50 @@ test("文書 workspace はこの文書の取込 job と時間線を表示する"
   await expectNoHorizontalOverflow(page);
 });
 
+test("失敗した取込 job は取込中 banner を残さず原因を表示する", async ({ page }) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "INGESTING",
+    latestJobStatus: "FAILED",
+    pdfPreview: true,
+  });
+
+  await page.goto("/documents/doc-1");
+
+  await expect(page.getByText("取込ジョブの状態を更新しています。")).toHaveCount(0);
+  const panel = page
+    .getByRole("heading", { name: "この文書の取込ジョブ" })
+    .locator("xpath=ancestor::section[1]");
+  await expect(panel.getByText("失敗", { exact: true })).toBeVisible();
+  await expect(panel.getByText("原因")).toBeVisible();
+  await expect(panel.getByText("取込処理に失敗しました。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("同じ取込エラー原因は job パネルだけに表示する", async ({ page }) => {
+  const message =
+    "選択した文書解析サービス（Unlimited-OCR）で解析処理が失敗しました。エラーコード: unlimited_ocr_adapter_failed";
+  await mockDocumentWorkspace(page, {
+    documentStatus: "ERROR",
+    latestJobStatus: "FAILED",
+    segmentError: true,
+    sharedErrorMessage: message,
+  });
+
+  await page.goto("/documents/doc-1");
+
+  await expect(page.getByText(message)).toHaveCount(1);
+  const jobPanel = page
+    .getByRole("heading", { name: "この文書の取込ジョブ" })
+    .locator("xpath=ancestor::section[1]");
+  await expect(jobPanel.getByText(message)).toBeVisible();
+  const segmentPanel = page
+    .getByRole("heading", { name: "取込セグメント" })
+    .locator("xpath=ancestor::section[1]");
+  await expect(segmentPanel.getByText("enterprise_ai_response_validation_error")).toBeVisible();
+  await expect(segmentPanel.getByRole("button", { name: "失敗 segment を再試行" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 test("PDF 抽出中はページ単位の進捗を表示する", async ({ page }) => {
   await mockDocumentWorkspace(page, {
     documentStatus: "INGESTING",
@@ -540,6 +584,7 @@ async function mockDocumentWorkspace(
     progressScenario?: "pdf17" | "source";
     preparedArtifact?: boolean;
     preprocessProfile?: "passthrough" | "text_normalize";
+    sharedErrorMessage?: string;
   } = {}
 ) {
   const state: {
@@ -590,6 +635,7 @@ async function mockDocumentWorkspace(
               : "INDEXED"),
           duplicate: options.duplicate,
           preparedArtifact: options.preparedArtifact,
+          errorMessage: options.sharedErrorMessage,
         }),
         error_messages: [],
         warning_messages: [],
@@ -634,6 +680,7 @@ async function mockDocumentWorkspace(
         data: [
           ingestionJob(options.latestJobStatus ?? "SUCCEEDED", {
             startedAt: options.latestJobStartedAt,
+            errorMessage: options.sharedErrorMessage,
           }),
         ],
         error_messages: [],
@@ -659,7 +706,7 @@ async function mockDocumentWorkspace(
       },
     });
   });
-  await page.route("**/api/documents/doc-1/content", async (route) => {
+  await page.route("**/api/documents/doc-1/content**", async (route) => {
     const variant = new URL(route.request().url()).searchParams.get("variant");
     if (variant === "prepared") {
       await route.fulfill({
@@ -771,6 +818,15 @@ async function mockDocumentWorkspace(
       },
     });
   });
+  await page.route("**/api/documents/doc-1/chunk-sets", async (route) => {
+    await route.fulfill({
+      json: {
+        data: [],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
   await page.route("**/api/documents/doc-1/extraction-export**", async (route) => {
     const url = new URL(route.request().url());
     const format = url.searchParams.get("format") ?? "markdown";
@@ -808,6 +864,7 @@ async function mockDocumentWorkspace(
       artifact_path: null,
       error_code: "enterprise_ai_response_validation_error",
       error_message:
+        options.sharedErrorMessage ??
         "OCI Enterprise AI VLM response が StructuredExtraction schema と一致しません。失敗項目: confidence: less_than_equal。",
     };
     await route.fulfill({
@@ -976,7 +1033,12 @@ function retrySegmentsJob() {
 
 function ingestionJob(
   status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED",
-  options: { queuedAt?: string; startedAt?: string; finishedAt?: string } = {}
+  options: {
+    queuedAt?: string;
+    startedAt?: string;
+    finishedAt?: string;
+    errorMessage?: string;
+  } = {}
 ) {
   return {
     id: status === "RUNNING" ? "job-running-0001" : "job-retry-segments",
@@ -986,7 +1048,7 @@ function ingestionJob(
     parser_profile: "enterprise_ai_pdf_layout",
     quality_warnings: [],
     skip_reason: null,
-    error_message: status === "FAILED" ? "取込処理に失敗しました。" : null,
+    error_message: status === "FAILED" ? options.errorMessage ?? "取込処理に失敗しました。" : null,
     attempt_count: status === "QUEUED" ? 0 : 1,
     max_attempts: 3,
     queued_at: options.queuedAt ?? "2026-06-15T00:00:05Z",
@@ -1005,6 +1067,7 @@ function documentDetail(
     pdfPreview?: boolean;
     status?: string;
     preparedArtifact?: boolean;
+    errorMessage?: string;
   } = {}
 ) {
   const fileName = options.pdfPreview
@@ -1155,7 +1218,7 @@ function documentDetail(
       assets: [],
       parser_artifacts: { parser_backend: "local_partition" },
     },
-    error_message: null,
+    error_message: options.errorMessage ?? null,
     duplicate_source: options.duplicate
       ? {
           id: "doc-original",

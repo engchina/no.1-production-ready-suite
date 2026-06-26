@@ -265,6 +265,31 @@ async def test_subprocess_runner_times_out_and_terminates_child(
     assert process.terminated is True
 
 
+async def test_process_isolation_runner_uses_job_subprocess_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """process isolation は parser HTTP timeout ではなく job 全体 timeout を使う。"""
+    captured: dict[str, float | None] = {}
+
+    async def fake_run(job_id: str, *, timeout_seconds: float | None = None) -> None:
+        assert job_id == "job-subprocess-timeout"
+        captured["timeout_seconds"] = timeout_seconds
+
+    monkeypatch.setattr(ingestion_worker, "run_ingestion_job_subprocess", fake_run)
+    settings = get_settings().model_copy(
+        update={
+            "ingestion_queue_process_isolation_enabled": True,
+            "ingestion_job_subprocess_timeout_seconds": 42.0,
+            "rag_parser_service_timeout_seconds": 1.0,
+        }
+    )
+
+    runner = ingestion_worker._job_runner_for_settings(settings)
+    await runner("job-subprocess-timeout")
+
+    assert captured == {"timeout_seconds": 42.0}
+
+
 async def test_worker_marks_running_job_failed_when_runner_crashes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

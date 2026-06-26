@@ -63,7 +63,7 @@ def _job_runner_for_settings(settings: Settings) -> JobRunner:
     if settings.ingestion_queue_process_isolation_enabled:
         return lambda job_id: run_ingestion_job_subprocess(
             job_id,
-            timeout_seconds=settings.rag_parser_service_timeout_seconds,
+            timeout_seconds=settings.ingestion_job_subprocess_timeout_seconds,
         )
     return _default_job_runner
 

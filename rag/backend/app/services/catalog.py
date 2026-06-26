@@ -33,9 +33,6 @@ ServiceCategory = Literal[
 # cpu/gpu はローカル ML 依存の重さで分ける。oci は OCI クラウドサービスを呼ぶ薄い
 # プロキシ microservice(GPU 不要・OCI 認証はメイン設定を継承)。
 ServiceProfile = Literal["cpu", "gpu", "oci"]
-# dev(ホスト)での起動方式。軽量な前処理は uv プロセス、重い ML 依存の parser は
-# (dev でも)docker compose で起動する。prod は常に docker。
-DevRunner = Literal["uv", "docker"]
 ServiceExecutionPolicy = Literal[
     "required_no_fallback",
     "in_process_when_disabled",
@@ -50,11 +47,9 @@ class ServiceCatalogEntry:
     - ``service_id``: docker compose の service 名(allowlist の鍵)。
     - ``url_field``: base URL を持つ Settings フィールド名(prod の /health 問い合わせ用)。
     - ``label_key``: フロントの i18n キー(表示名)。
-    - ``working_dir``: リポジトリ root からの相対パス(dev の ``uv run --directory`` 起動先)。
-    - ``dev_port``: dev で localhost に bind / 公開するポート(uv プロセス、または docker の公開先)。
-    - ``dev_runner``: dev での起動方式(``uv``=ホストプロセス / ``docker``=コンテナ)。
+    - ``working_dir``: リポジトリ root からのサービス実装の相対パス。
+    - ``dev_port``: dev で ``docker-compose.dev.yml`` が localhost に公開するポート。
     - ``execution_policy``: 停止時・未使用時の runtime 契約。UI/API で fallback 境界を明示する。
-    - ``depends_on``: 稼働に必要な別サービス。未起動なら画面/API でブロック状態として見せる。
     """
 
     service_id: str
@@ -64,9 +59,7 @@ class ServiceCatalogEntry:
     label_key: str
     working_dir: str
     dev_port: int
-    dev_runner: DevRunner
     execution_policy: ServiceExecutionPolicy = "selected_adapter"
-    depends_on: tuple[str, ...] = ()
 
 
 # パイプライン順に並べる(前処理 → Parser CPU → Parser GPU)。
@@ -79,7 +72,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessOfficeToPdf",
         working_dir="services/preprocess/office_to_pdf",
         dev_port=18010,
-        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-pdf-to-page-images",
@@ -89,7 +81,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessPdfToPageImages",
         working_dir="services/preprocess/pdf_to_page_images",
         dev_port=18011,
-        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-csv-to-json",
@@ -99,7 +90,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessCsvToJson",
         working_dir="services/preprocess/csv_to_json",
         dev_port=18012,
-        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-excel-to-json",
@@ -109,7 +99,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessExcelToJson",
         working_dir="services/preprocess/excel_to_json",
         dev_port=18013,
-        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-url-to-markdown",
@@ -119,7 +108,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessUrlToMarkdown",
         working_dir="services/preprocess/url_to_markdown",
         dev_port=18014,
-        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-image-enhance",
@@ -129,7 +117,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessImageEnhance",
         working_dir="services/preprocess/image_enhance",
         dev_port=18015,
-        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="preprocess-pii-redact",
@@ -139,7 +126,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.preprocessPiiRedact",
         working_dir="services/preprocess/pii_redact",
         dev_port=18016,
-        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="parser-docling",
@@ -149,7 +135,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserDocling",
         working_dir="services/parsers/docling",
         dev_port=18020,
-        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-marker",
@@ -159,7 +144,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserMarker",
         working_dir="services/parsers/marker",
         dev_port=18021,
-        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-unstructured",
@@ -169,7 +153,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserUnstructured",
         working_dir="services/parsers/unstructured",
         dev_port=18022,
-        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-unlimited-ocr",
@@ -179,7 +162,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserUnlimitedOcr",
         working_dir="services/parsers/unlimited_ocr",
         dev_port=18029,
-        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-mineru",
@@ -189,7 +171,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserMineru",
         working_dir="services/parsers/mineru",
         dev_port=18023,
-        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-dots-ocr",
@@ -199,18 +180,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserDotsOcr",
         working_dir="services/parsers/dots_ocr",
         dev_port=18024,
-        dev_runner="docker",
-        depends_on=("parser-dots-ocr-vllm",),
-    ),
-    ServiceCatalogEntry(
-        service_id="parser-dots-ocr-vllm",
-        category="parser",
-        profile="gpu",
-        url_field="rag_parser_dots_ocr_vllm_service_url",
-        label_key="settings.services.item.parserDotsOcrVllm",
-        working_dir="services/parsers/dots_ocr",
-        dev_port=18124,
-        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-glm-ocr",
@@ -220,18 +189,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserGlmOcr",
         working_dir="services/parsers/glm_ocr",
         dev_port=18025,
-        dev_runner="docker",
-        depends_on=("parser-glm-ocr-vllm",),
-    ),
-    ServiceCatalogEntry(
-        service_id="parser-glm-ocr-vllm",
-        category="parser",
-        profile="gpu",
-        url_field="rag_parser_glm_ocr_vllm_service_url",
-        label_key="settings.services.item.parserGlmOcrVllm",
-        working_dir="services/parsers/glm_ocr",
-        dev_port=18125,
-        dev_runner="docker",
     ),
     ServiceCatalogEntry(
         service_id="parser-asr",
@@ -241,10 +198,9 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserAsr",
         working_dir="services/parsers/asr",
         dev_port=18026,
-        dev_runner="docker",
     ),
     # ---- parser マイクロサービス(OCI クラウド・OCI 認証はメイン設定を継承)----
-    # OCI を呼ぶだけの軽量プロキシなので dev は uv プロセス(host の ~/.oci・env を継承)。
+    # OCI を呼ぶだけの軽量プロキシ。dev も docker で起動し、OCI 認証はメイン設定を env で継承する。
     ServiceCatalogEntry(
         service_id="parser-oci-genai-vision",
         category="parser",
@@ -253,7 +209,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserOciGenaiVision",
         working_dir="services/parsers/oci_genai_vision",
         dev_port=18027,
-        dev_runner="uv",
     ),
     ServiceCatalogEntry(
         service_id="parser-oci-document-understanding",
@@ -263,7 +218,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserOciDocumentUnderstanding",
         working_dir="services/parsers/oci_document_understanding",
         dev_port=18028,
-        dev_runner="uv",
     ),
     # ---- pipeline ステージのプラグイン(マイクロサービス)----
     ServiceCatalogEntry(
@@ -274,7 +228,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineChunking",
         working_dir="services/pipeline/chunking",
         dev_port=18030,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
@@ -285,7 +238,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineVectorIndex",
         working_dir="services/pipeline/vector_index",
         dev_port=18031,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
@@ -296,7 +248,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineGraphrag",
         working_dir="services/pipeline/graphrag",
         dev_port=18032,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
@@ -307,7 +258,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineGeneration",
         working_dir="services/pipeline/generation",
         dev_port=18033,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
@@ -318,7 +268,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineGuardrail",
         working_dir="services/pipeline/guardrail",
         dev_port=18034,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
@@ -329,7 +278,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineAgentic",
         working_dir="services/pipeline/agentic",
         dev_port=18035,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
@@ -340,7 +288,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineGrounding",
         working_dir="services/pipeline/grounding",
         dev_port=18036,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
@@ -351,7 +298,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineEvaluation",
         working_dir="services/pipeline/evaluation",
         dev_port=18037,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
     ServiceCatalogEntry(
@@ -362,7 +308,6 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.pipelineRetrieval",
         working_dir="services/pipeline/retrieval",
         dev_port=18038,
-        dev_runner="uv",
         execution_policy="in_process_when_disabled",
     ),
 )
@@ -378,15 +323,6 @@ _CATALOG_BY_URL_FIELD: dict[str, ServiceCatalogEntry] = {
 def get_catalog_entry(service_id: str) -> ServiceCatalogEntry | None:
     """service_id に対応するカタログエントリを返す(allowlist 照合)。未知なら None。"""
     return _CATALOG_BY_ID.get(service_id)
-
-
-def dependents_of(service_id: str) -> tuple[str, ...]:
-    """service_id を depends_on に含むサービス id を返す(逆依存)。
-
-    親(parser)を停止する際、専用の推論サーバー(vLLM)を一緒に停止してよいか
-    ——他に稼働中の利用元が無いか——を判定するために使う。現状は 1:1 専用。
-    """
-    return tuple(e.service_id for e in SERVICE_CATALOG if service_id in e.depends_on)
 
 
 def is_dev_mode(settings: Settings) -> bool:

@@ -38,8 +38,8 @@ EXTERNAL_ADAPTER_PACKAGES = {
     # GLM-OCR(HuggingFace zai-org/GLM-OCR)。専用 pip package は無く、GPU サービス image
     # では transformers で HF からモデルをロードして実 OCR する(_run_glm_ocr のフォールバック)。
     "glm_ocr": "glm_ocr",
-    # Unlimited-OCR(HuggingFace baidu/Unlimited-OCR)。専用 pip package は無く、GPU サービス
-    # image で transformers からモデルをロードして実 OCR する。
+    # Unlimited-OCR(HuggingFace baidu/Unlimited-OCR)。既定は SGLang runtime、
+    # UNLIMITED_OCR_RUNTIME=transformers の時だけ直ロードへ退避する。
     "unlimited_ocr": "unlimited_ocr",
 }
 

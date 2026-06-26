@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import signal
-import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,11 +11,9 @@ from pytest import MonkeyPatch
 
 from app.config import get_settings
 from app.main import app
-from app.services import control as control_module
 from app.services.catalog import (
     SERVICE_CATALOG,
     ServiceCatalogEntry,
-    dependents_of,
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
@@ -29,7 +24,6 @@ from app.services.control import (
     ServiceControlClient,
     ServiceControlError,
     ServiceLogsResult,
-    UvProcessDriver,
     _compose_args,
     _compose_logs_args,
     read_service_logs,
@@ -62,17 +56,13 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
         "parser-unlimited-ocr",
         "parser-mineru",
         "parser-dots-ocr",
-        "parser-dots-ocr-vllm",
         "parser-glm-ocr",
-        "parser-glm-ocr-vllm",
         "parser-asr",
     }
-    dots = get_catalog_entry("parser-dots-ocr")
-    glm = get_catalog_entry("parser-glm-ocr")
-    assert dots is not None
-    assert glm is not None
-    assert dots.depends_on == ("parser-dots-ocr-vllm",)
-    assert glm.depends_on == ("parser-glm-ocr-vllm",)
+    # OCR 系 parser は推論サーバー(SGLang/vLLM)をイメージへ内包する単一サービス。
+    assert get_catalog_entry("parser-unlimited-ocr") is not None
+    assert get_catalog_entry("parser-dots-ocr") is not None
+    assert get_catalog_entry("parser-glm-ocr") is not None
 
 
 def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
@@ -210,30 +200,6 @@ def test_probe_unconfigured_when_url_blank(monkeypatch: MonkeyPatch) -> None:
     assert statuses["parser-docling"] == "unconfigured"
 
 
-def test_probe_marks_wrapper_dependency_stopped(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    _patch_probe_httpx(monkeypatch)
-
-    dots_entry = get_catalog_entry("parser-dots-ocr")
-    dots_vllm_entry = get_catalog_entry("parser-dots-ocr-vllm")
-    assert dots_entry is not None
-    assert dots_vllm_entry is not None
-    dots = service_health_url(settings, dots_entry)
-    dots_vllm = service_health_url(settings, dots_vllm_entry)
-    _FakeAsyncClient.routes = {
-        dots: _FakeResponse({"status": "ok"}),
-    }
-    _FakeAsyncClient.raise_on_connect = {dots_vllm}
-    try:
-        statuses = asyncio.run(probe_service_statuses(settings))
-    finally:
-        _FakeAsyncClient.routes = {}
-        _FakeAsyncClient.raise_on_connect = set()
-
-    assert statuses["parser-dots-ocr-vllm"] == "stopped"
-    assert statuses["parser-dots-ocr"] == "dependency_stopped"
-
-
 # --- 制御層 -----------------------------------------------------------------
 
 
@@ -271,19 +237,50 @@ def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
         "parser-mineru",
     ]
 
-    dots_vllm = get_catalog_entry("parser-dots-ocr-vllm")
-    assert dots_vllm is not None
-    assert _compose_args(settings, dots_vllm, "start") == [
+    unlimited = get_catalog_entry("parser-unlimited-ocr")
+    assert unlimited is not None
+    assert _compose_args(settings, unlimited, "start") == [
         "docker",
         "compose",
         "--profile",
         "gpu",
         "--profile",
-        "gpu-vllm",
+        "unlimited-ocr",
         "up",
         "-d",
         "--no-build",
-        "parser-dots-ocr-vllm",
+        "parser-unlimited-ocr",
+    ]
+
+    # OCR 系 parser は推論サーバー内包の単一サービスなので gpu-vllm profile は付かない。
+    dots = get_catalog_entry("parser-dots-ocr")
+    assert dots is not None
+    assert _compose_args(settings, dots, "start") == [
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "--profile",
+        "dots-ocr",
+        "up",
+        "-d",
+        "--no-build",
+        "parser-dots-ocr",
+    ]
+
+    glm = get_catalog_entry("parser-glm-ocr")
+    assert glm is not None
+    assert _compose_args(settings, glm, "start") == [
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "--profile",
+        "glm-ocr",
+        "up",
+        "-d",
+        "--no-build",
+        "parser-glm-ocr",
     ]
 
 
@@ -375,7 +372,7 @@ def test_friendly_compose_error_maps_missing_image(monkeypatch: MonkeyPatch) -> 
     assert docling is not None
     raw = (
         "Error response from daemon: No such image: "
-        "no1-production-ready-rag-parser-docling:latest"
+        "no1-production-ready-rag-parser-docling:dev-local"
     )
     friendly = _friendly_compose_error(raw, settings, docling)
     assert "未ビルド" in friendly
@@ -464,24 +461,6 @@ def test_read_service_logs_docker_success(monkeypatch: MonkeyPatch) -> None:
     assert captured["kwargs"]["cwd"] is None
 
 
-def test_read_service_logs_uv_uses_runtime_log(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "environment", "dev")
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
-    (tmp_path / f"{entry.service_id}.log").write_text("line1\nline2\nline3\n")
-
-    result = asyncio.run(read_service_logs(settings, entry, 2))
-
-    assert result == ServiceLogsResult(
-        service_id="preprocess-csv-to-json",
-        source="uv",
-        lines=2,
-        content="line2\nline3",
-    )
-
-
 # --- API --------------------------------------------------------------------
 
 
@@ -503,8 +482,6 @@ def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     assert len(data["services"]) == len(SERVICE_CATALOG)
     assert {s["service_id"] for s in data["services"]} == {e.service_id for e in SERVICE_CATALOG}
     dots = next(s for s in data["services"] if s["service_id"] == "parser-dots-ocr")
-    assert dots["depends_on"] == ["parser-dots-ocr-vllm"]
-    assert dots["blocked_by"] == ["parser-dots-ocr-vllm"]
     assert dots["execution_policy"] == "selected_adapter"
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
     assert chunking["execution_policy"] == "in_process_when_disabled"
@@ -544,7 +521,6 @@ def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) ->
     assert len(data["services"]) == len(SERVICE_CATALOG)
     assert "status" not in data["services"][0]
     dots = next(s for s in data["services"] if s["service_id"] == "parser-dots-ocr")
-    assert dots["depends_on"] == ["parser-dots-ocr-vllm"]
     assert dots["execution_policy"] == "selected_adapter"
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
     assert chunking["execution_policy"] == "in_process_when_disabled"
@@ -552,27 +528,20 @@ def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) ->
     assert retrieval["execution_policy"] == "in_process_when_disabled"
 
 
-def test_get_service_status_checks_only_service_and_dependencies(
-    monkeypatch: MonkeyPatch,
-) -> None:
+def test_get_service_status_probes_only_target(monkeypatch: MonkeyPatch) -> None:
     seen: list[str] = []
 
     async def fake_probe(_settings: Any, entry: ServiceCatalogEntry) -> str:
         seen.append(entry.service_id)
-        if entry.service_id == "parser-dots-ocr":
-            return "running"
-        if entry.service_id == "parser-dots-ocr-vllm":
-            return "stopped"
-        raise AssertionError(f"unexpected probe: {entry.service_id}")
+        return "running"
 
     monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
     resp = client.get("/api/services/parser-dots-ocr/status")
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["service_id"] == "parser-dots-ocr"
-    assert data["status"] == "dependency_stopped"
-    assert data["blocked_by"] == ["parser-dots-ocr-vllm"]
-    assert seen == ["parser-dots-ocr", "parser-dots-ocr-vllm"]
+    assert data["status"] == "running"
+    assert seen == ["parser-dots-ocr"]
 
 
 def test_get_service_logs_returns_tail(monkeypatch: MonkeyPatch) -> None:
@@ -644,12 +613,6 @@ def test_control_success_returns_updated_status(monkeypatch: MonkeyPatch) -> Non
     assert data["status"] == "running"
 
 
-def test_dependents_of_resolves_reverse_dependency() -> None:
-    assert dependents_of("parser-dots-ocr-vllm") == ("parser-dots-ocr",)
-    assert dependents_of("parser-glm-ocr-vllm") == ("parser-glm-ocr",)
-    assert dependents_of("parser-docling") == ()
-
-
 def _spy_control(monkeypatch: MonkeyPatch) -> list[tuple[str, str]]:
     """ServiceControlClient.control を記録のみのスパイへ差し替え、(service_id, action) 列を返す。"""
     calls: list[tuple[str, str]] = []
@@ -667,88 +630,19 @@ def _spy_control(monkeypatch: MonkeyPatch) -> list[tuple[str, str]]:
     return calls
 
 
-def test_start_cascades_dependency_before_parent(monkeypatch: MonkeyPatch) -> None:
+def test_control_acts_on_single_service(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_service_control_enabled", True)
     calls = _spy_control(monkeypatch)
 
-    async def fake_probe_statuses(_settings: Any) -> dict[str, str]:
-        return {e.service_id: "running" for e in SERVICE_CATALOG}
+    async def fake_probe(_settings: Any, entry: ServiceCatalogEntry) -> str:
+        return "running"
 
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe_statuses)
+    monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
     resp = client.post("/api/services/parser-dots-ocr/start")
     assert resp.status_code == 200
-    # 依存(vLLM)を先に、本体を後に起動する。
-    assert calls == [("parser-dots-ocr-vllm", "start"), ("parser-dots-ocr", "start")]
-
-
-def test_stop_cascades_dependency_after_parent(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
-    calls = _spy_control(monkeypatch)
-
-    async def fake_probe_statuses(_settings: Any) -> dict[str, str]:
-        return {e.service_id: "running" for e in SERVICE_CATALOG}
-
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe_statuses)
-    resp = client.post("/api/services/parser-dots-ocr/stop")
-    assert resp.status_code == 200
-    # 本体を先に停止し、専用 vLLM も停止する(他に利用元なし)。
-    assert calls == [("parser-dots-ocr", "stop"), ("parser-dots-ocr-vllm", "stop")]
-
-
-def test_stop_keeps_shared_inference_server_running(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
-    calls = _spy_control(monkeypatch)
-
-    # 合成: vLLM を別の親も利用しており、その親が稼働中なら vLLM は残す。
-    monkeypatch.setattr(
-        "app.api.routes.services.dependents_of",
-        lambda sid: ("parser-dots-ocr", "parser-other") if sid == "parser-dots-ocr-vllm" else (),
-    )
-
-    async def fake_probe_statuses(_settings: Any) -> dict[str, str]:
-        statuses = {e.service_id: "stopped" for e in SERVICE_CATALOG}
-        statuses["parser-other"] = "running"
-        return statuses
-
-    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe_statuses)
-    resp = client.post("/api/services/parser-dots-ocr/stop")
-    assert resp.status_code == 200
-    # vLLM は別の稼働中利用元があるため停止対象に含めない。
-    assert calls == [("parser-dots-ocr", "stop")]
-
-
-def test_start_dependency_failure_aborts_parent(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
-    calls: list[tuple[str, str]] = []
-
-    async def fake_control(
-        _self: Any,
-        _settings: Any,
-        entry: ServiceCatalogEntry,
-        action: Literal["start", "stop", "restart"],
-    ) -> ControlResult:
-        calls.append((entry.service_id, action))
-        if entry.service_id == "parser-dots-ocr-vllm":
-            raise ServiceControlError(
-                ControlResult(
-                    ok=False,
-                    action=action,
-                    service_id=entry.service_id,
-                    exit_code=1,
-                    detail="vllm boot failed",
-                )
-            )
-        return ControlResult(ok=True, action=action, service_id=entry.service_id, exit_code=0)
-
-    monkeypatch.setattr(ServiceControlClient, "control", fake_control)
-    resp = client.post("/api/services/parser-dots-ocr/start")
-    assert resp.status_code == 502
-    # 依存(vLLM)起動に失敗した時点で中断し、本体 parser は起動しない。
-    assert calls == [("parser-dots-ocr-vllm", "start")]
+    # 各 OCR parser は推論サーバー内包の単一サービス。連鎖制御は無く本体のみ操作する。
+    assert calls == [("parser-dots-ocr", "start")]
 
 
 def test_control_failure_returns_502(monkeypatch: MonkeyPatch) -> None:
@@ -812,11 +706,18 @@ def test_resolve_service_base_url_dev_rewrites_docker_default(monkeypatch: Monke
     # docker 既定(host == compose service 名)→ dev_port へ書き換え(画面プローブと一致)。
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
     monkeypatch.setattr(
+        settings, "rag_parser_unlimited_ocr_service_url", "http://parser-unlimited-ocr:8000"
+    )
+    monkeypatch.setattr(
         settings, "rag_preprocess_csv_to_json_service_url", "http://preprocess-csv-to-json:8000"
     )
     assert (
         resolve_service_base_url(settings, "rag_parser_docling_service_url")
         == "http://127.0.0.1:18020"
+    )
+    assert (
+        resolve_service_base_url(settings, "rag_parser_unlimited_ocr_service_url")
+        == "http://127.0.0.1:18029"
     )
     assert (
         resolve_service_base_url(settings, "rag_preprocess_csv_to_json_service_url")
@@ -909,166 +810,25 @@ class _RecordingDriver:
 
 def test_control_client_selects_driver_by_mode_and_runner() -> None:
     settings = get_settings()
-    preprocess = get_catalog_entry("preprocess-csv-to-json")  # dev_runner=uv
-    parser = get_catalog_entry("parser-docling")  # dev_runner=docker
-    assert preprocess is not None and parser is not None
+    parser = get_catalog_entry("parser-docling")
+    assert parser is not None
 
     object.__setattr__(settings, "environment", "dev")
     try:
-        # dev + uv runner(前処理)→ uv driver
-        docker, uv = _RecordingDriver(), _RecordingDriver()
-        c = ServiceControlClient(docker_driver=docker, uv_driver=uv)  # type: ignore[arg-type]
-        asyncio.run(c.control(settings, preprocess, "start"))
-        assert uv.calls == ["start"] and docker.calls == []
-
-        # dev + docker runner(parser)→ docker driver(ホスト巨大 sync を避ける)
-        docker, uv = _RecordingDriver(), _RecordingDriver()
-        c = ServiceControlClient(docker_driver=docker, uv_driver=uv)  # type: ignore[arg-type]
+        # dev は docker compose driver(override でポート公開)
+        docker = _RecordingDriver()
+        c = ServiceControlClient(docker_driver=docker)  # type: ignore[arg-type]
         asyncio.run(c.control(settings, parser, "start"))
-        assert docker.calls == ["start"] and uv.calls == []
+        assert docker.calls == ["start"]
 
-        # prod は runner に関わらず docker driver
+        # prod も docker driver
         object.__setattr__(settings, "environment", "prod")
-        docker, uv = _RecordingDriver(), _RecordingDriver()
-        c = ServiceControlClient(docker_driver=docker, uv_driver=uv)  # type: ignore[arg-type]
-        asyncio.run(c.control(settings, preprocess, "stop"))
-        assert docker.calls == ["stop"] and uv.calls == []
+        docker = _RecordingDriver()
+        c = ServiceControlClient(docker_driver=docker)  # type: ignore[arg-type]
+        asyncio.run(c.control(settings, parser, "stop"))
+        assert docker.calls == ["stop"]
     finally:
         object.__setattr__(settings, "environment", "dev")
-
-
-class _FakePopen:
-    def __init__(self, pid: int = 4321) -> None:
-        self.pid = pid
-
-
-def test_uv_driver_start_writes_pidfile_and_argv(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
-    settings = get_settings()
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    captured: dict[str, Any] = {}
-
-    def fake_popen(argv: list[str], **kwargs: Any) -> _FakePopen:
-        captured["argv"] = argv
-        captured["kwargs"] = kwargs
-        return _FakePopen(pid=4321)
-
-    monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    monkeypatch.setenv("VIRTUAL_ENV", "/u01/workspace/no.1-production-ready-rag/backend/.venv")
-    monkeypatch.setenv("VIRTUAL_ENV_PROMPT", "backend")
-    # 起動後検証: 待機を 0 にし、spawn したプロセスは生存しているものとみなす。
-    monkeypatch.setattr(control_module, "_START_VERIFY_DELAY_SECONDS", 0)
-    monkeypatch.setattr(control_module, "_pid_alive", lambda _pid: True)
-
-    result = asyncio.run(UvProcessDriver().run(settings, entry, "start"))
-    assert result.ok is True
-    argv = captured["argv"]
-    assert argv[:3] == ["uv", "run", "--directory"]
-    assert argv[-6:] == [
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(entry.dev_port),
-    ]
-    assert captured["kwargs"]["start_new_session"] is True
-    child_env = captured["kwargs"]["env"]
-    assert "VIRTUAL_ENV" not in child_env
-    assert "VIRTUAL_ENV_PROMPT" not in child_env
-    pidfile = tmp_path / f"{entry.service_id}.pid"
-    assert pidfile.read_text() == "4321"
-
-
-def test_uv_driver_start_idempotent_when_alive(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
-    settings = get_settings()
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    # 当該サービスのプロセスが生存しているので、再 start は spawn せず ok を返す。
-    (tmp_path / f"{entry.service_id}.pid").write_text(str(os.getpid()))
-    monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
-    # pid 同一性照合は「当該サービス」とみなす(cmdline 照合は別テストで検証)。
-    monkeypatch.setattr(control_module, "_pid_is_service", lambda _pid, _entry: True)
-
-    def boom(*_a: Any, **_k: Any) -> None:  # pragma: no cover - 呼ばれてはいけない
-        raise AssertionError("既に起動済みなら Popen は呼ばない")
-
-    monkeypatch.setattr(subprocess, "Popen", boom)
-    result = asyncio.run(UvProcessDriver().run(settings, entry, "start"))
-    assert result.ok is True
-
-
-def test_uv_driver_stop_signals_and_clears_pidfile(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
-    settings = get_settings()
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    pidfile = tmp_path / f"{entry.service_id}.pid"
-    pidfile.write_text("999999")
-    monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
-
-    # 生存判定: 初回 True(→SIGTERM)、以降 False(ループ即終了・SIGKILL なし)。
-    alive = iter([True, False, False])
-    monkeypatch.setattr(control_module, "_pid_alive", lambda _pid: next(alive))
-    monkeypatch.setattr(os, "getpgid", lambda pid: pid)
-    signals: list[int] = []
-    monkeypatch.setattr(os, "killpg", lambda _pgid, sig: signals.append(sig))
-
-    result = asyncio.run(UvProcessDriver().run(settings, entry, "stop"))
-    assert result.ok is True
-    assert signals == [signal.SIGTERM]
-    assert not pidfile.exists()
-
-
-def test_uv_driver_stop_noop_without_pidfile(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
-    settings = get_settings()
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
-    result = asyncio.run(UvProcessDriver().run(settings, entry, "stop"))
-    assert result.ok is True
-
-
-def test_pid_is_service_rejects_reused_pid(monkeypatch: MonkeyPatch) -> None:
-    """生存していても cmdline が当該サービスでなければ False(PID 再利用対策)。"""
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    monkeypatch.setattr(control_module, "_pid_alive", lambda _pid: True)
-
-    # 無関係なプロセスの cmdline → False。
-    monkeypatch.setattr(control_module, "_proc_cmdline", lambda _pid: "/usr/bin/some-other-daemon")
-    assert control_module._pid_is_service(12345, entry) is False
-
-    # 当該サービスの uvicorn(--port が一致)→ True。
-    matching = f"uv run --directory x uvicorn app.main:app --host 127.0.0.1 --port {entry.dev_port}"
-    monkeypatch.setattr(control_module, "_proc_cmdline", lambda _pid: matching)
-    assert control_module._pid_is_service(12345, entry) is True
-
-    # /proc 不可(非 Linux)は生存判定にフォールバック。
-    monkeypatch.setattr(control_module, "_proc_cmdline", lambda _pid: None)
-    assert control_module._pid_is_service(12345, entry) is True
-
-
-def test_uv_driver_start_detects_immediate_exit(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
-    """spawn 直後に即死したら start は失敗を返し、ログ末尾を添える。"""
-    settings = get_settings()
-    entry = get_catalog_entry("preprocess-csv-to-json")
-    assert entry is not None
-    monkeypatch.setattr(control_module, "_runtime_dir", lambda: tmp_path)
-    monkeypatch.setattr(control_module, "_START_VERIFY_DELAY_SECONDS", 0)
-    monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: _FakePopen(pid=4321))
-    # 起動済み判定は False(新規 spawn させる)、検証時の生存判定も False(即死)。
-    monkeypatch.setattr(control_module, "_pid_is_service", lambda _pid, _entry: False)
-    monkeypatch.setattr(control_module, "_pid_alive", lambda _pid: False)
-    # ログ末尾が detail に載ること。
-    (tmp_path / f"{entry.service_id}.log").write_text("ERROR: address already in use")
-
-    result = asyncio.run(UvProcessDriver().run(settings, entry, "start"))
-    assert result.ok is False
-    assert "起動直後にプロセスが終了" in (result.detail or "")
-    assert "address already in use" in (result.detail or "")
-    # 即死後は pidfile を残さない。
-    assert not (tmp_path / f"{entry.service_id}.pid").exists()
 
 
 def test_control_client_serializes_same_service() -> None:

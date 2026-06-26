@@ -944,6 +944,43 @@ def test_document_ingestion_job_endpoint_queues_existing_document() -> None:
     assert job_detail.json()["data"]["status"] == "SUCCEEDED"
 
 
+def test_unlimited_ocr_failure_marks_job_failed_and_document_error(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    message = "選択した文書解析サービス（Unlimited-OCR）の応答がタイムアウトしました。"
+
+    class UnlimitedOcrFailure(RuntimeError):
+        safe_for_user = True
+
+    class FailingUnlimitedOcrPipeline(FakeWorkspaceIngestionPipeline):
+        async def ingest(
+            self,
+            document_id: str,
+            *_args: object,
+            **_kwargs: object,
+        ) -> DocumentDetail:
+            await self._oracle.update_document_status(document_id, FileStatus.ERROR, message)
+            raise UnlimitedOcrFailure(message)
+
+    monkeypatch.setattr(documents_route, "IngestionPipeline", FailingUnlimitedOcrPipeline)
+    document_id = _upload("scan.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+
+    anyio.run(documents_route._run_ingestion_job, job["id"])
+
+    job_detail = client.get(f"/api/documents/ingestion-jobs/{job['id']}")
+    assert job_detail.status_code == 200
+    failed_job = job_detail.json()["data"]
+    assert failed_job["status"] == "FAILED"
+    assert failed_job["error_message"] == message
+    stored = fake_document_dependencies.documents[document_id]
+    assert stored.status == FileStatus.ERROR
+    assert stored.error_message == message
+
+
 def test_document_ingestion_job_endpoint_skips_duplicate_document() -> None:
     """重複文書の手動 job 投入も重複索引を作らず skipped にする。"""
     body = "重複本文".encode()

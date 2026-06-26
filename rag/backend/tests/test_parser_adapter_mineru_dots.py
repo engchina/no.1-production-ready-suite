@@ -98,7 +98,7 @@ def test_uninstalled_adapter_falls_back_safely() -> None:
     assert "mineru_adapter_package_missing" in result.warnings
 
 
-def test_unlimited_ocr_missing_transformers_falls_back_safely(
+def test_unlimited_ocr_missing_sglang_falls_back_safely(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """Unlimited-OCR 実行依存が無ければ package_missing fallback を返す。"""

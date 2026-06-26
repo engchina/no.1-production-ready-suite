@@ -10,7 +10,7 @@ from app.services.catalog import ServiceCategory, ServiceExecutionPolicy, Servic
 from app.services.status import ServiceRuntimeStatus
 
 DeploymentMode = Literal["dev", "prod"]
-ServiceLogsSource = Literal["docker", "uv"]
+ServiceLogsSource = Literal["docker"]
 
 
 class ServiceCatalogItemData(BaseModel):
@@ -23,10 +23,6 @@ class ServiceCatalogItemData(BaseModel):
     execution_policy: ServiceExecutionPolicy = Field(
         description="停止時・未使用時の runtime 契約。fallback 境界の UI 表示に使う。",
     )
-    depends_on: list[str] = Field(
-        default_factory=list,
-        description="このサービスの稼働に必要な依存サービス ID。",
-    )
     configured: bool = Field(
         description="base URL が設定済みか(未設定なら status=unconfigured)。",
     )
@@ -36,10 +32,6 @@ class ServiceStatusData(ServiceCatalogItemData):
     """1 マイクロサービスの非機密ステータス。"""
 
     status: ServiceRuntimeStatus
-    blocked_by: list[str] = Field(
-        default_factory=list,
-        description="未稼働のためこのサービスをブロックしている依存サービス ID。",
-    )
 
 
 class ServiceCatalogData(BaseModel):

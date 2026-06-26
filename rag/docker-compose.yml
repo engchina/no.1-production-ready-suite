@@ -5,7 +5,7 @@
 # `--profile gpu` で opt-in する。
 # 注意: 各 GPU parser は GPU を 1 枚ずつ予約する。`--profile gpu` は全 GPU parser を起動するため
 # 複数 GPU ホスト向け。単一 GPU では engine 個別 profile(`--profile mineru` 等)で 1 つだけ起動する。
-# dots-ocr / glm-ocr は vLLM sidecar が必要で、個別 profile は parser+sidecar を束ねて起動する。
+# unlimited-ocr / dots-ocr / glm-ocr は推論サーバー(SGLang/vLLM)を同一イメージへ内包する単一サービス。
 
 x-parser-service-urls: &parser-service-urls
   RAG_PARSER_DOCLING_SERVICE_URL: http://parser-docling:8000
@@ -14,9 +14,7 @@ x-parser-service-urls: &parser-service-urls
   RAG_PARSER_UNLIMITED_OCR_SERVICE_URL: http://parser-unlimited-ocr:8000
   RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
   RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
-  RAG_PARSER_DOTS_OCR_VLLM_SERVICE_URL: http://parser-dots-ocr-vllm:8000
   RAG_PARSER_GLM_OCR_SERVICE_URL: http://parser-glm-ocr:8000
-  RAG_PARSER_GLM_OCR_VLLM_SERVICE_URL: http://parser-glm-ocr-vllm:8080
   # OCI クラウド parser(薄いプロキシ・`--profile oci` で opt-in)。
   RAG_PARSER_OCI_GENAI_VISION_SERVICE_URL: http://parser-oci-genai-vision:8000
   RAG_PARSER_OCI_DOCUMENT_UNDERSTANDING_SERVICE_URL: http://parser-oci-document-understanding:8000
@@ -46,6 +44,7 @@ services:
       OCI_CONFIG_FILE: /home/appuser/.oci/config
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-60}
+      RAG_PARSER_SERVICE_TIMEOUT_SECONDS: ${RAG_PARSER_SERVICE_TIMEOUT_SECONDS:-1230}
       # 取込は専用ワーカーへ切り出す。API プロセスはキュー投入のみ行い、
       # event loop を取込処理で塞がない。
       INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
@@ -99,6 +98,7 @@ services:
       INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
       INGESTION_QUEUE_WORKER_CONCURRENCY: ${INGESTION_QUEUE_WORKER_CONCURRENCY:-2}
       INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED: "false"
+      RAG_PARSER_SERVICE_TIMEOUT_SECONDS: ${RAG_PARSER_SERVICE_TIMEOUT_SECONDS:-1230}
       # 前処理マイクロサービスへの委譲を有効化(profile は既定 passthrough のまま)。
       RAG_PREPROCESS_ENABLED: "true"
     # 取込キューを消費する専用ワーカープロセス。水平スケールは replicas を増やす
@@ -184,13 +184,25 @@ services:
       context: .
       dockerfile: services/parsers/unlimited_ocr/Dockerfile
     environment:
+      UNLIMITED_OCR_RUNTIME: ${UNLIMITED_OCR_RUNTIME:-sglang}
       UNLIMITED_OCR_MODEL_ID: ${UNLIMITED_OCR_MODEL_ID:-baidu/Unlimited-OCR}
+      UNLIMITED_OCR_SGLANG_MODEL: ${UNLIMITED_OCR_SGLANG_MODEL:-Unlimited-OCR}
+      UNLIMITED_OCR_SGLANG_ATTENTION_BACKEND: ${UNLIMITED_OCR_SGLANG_ATTENTION_BACKEND:-flashinfer}
+      UNLIMITED_OCR_SGLANG_MEM_FRACTION_STATIC: ${UNLIMITED_OCR_SGLANG_MEM_FRACTION_STATIC:-0.8}
+      UNLIMITED_OCR_SGLANG_TIMEOUT_SECONDS: ${UNLIMITED_OCR_SGLANG_TIMEOUT_SECONDS:-1200}
       UNLIMITED_OCR_DEVICE: ${UNLIMITED_OCR_DEVICE:-cuda:0}
       UNLIMITED_OCR_TORCH_DTYPE: ${UNLIMITED_OCR_TORCH_DTYPE:-bfloat16}
       UNLIMITED_OCR_DPI: ${UNLIMITED_OCR_DPI:-300}
+      UNLIMITED_OCR_PDF_BATCH_SIZE: ${UNLIMITED_OCR_PDF_BATCH_SIZE:-2}
+      UNLIMITED_OCR_PDF_TIMEOUT_SECONDS: ${UNLIMITED_OCR_PDF_TIMEOUT_SECONDS:-1200}
+      HF_HUB_DOWNLOAD_TIMEOUT: ${HF_HUB_DOWNLOAD_TIMEOUT:-120}
+      HF_HUB_ETAG_TIMEOUT: ${HF_HUB_ETAG_TIMEOUT:-30}
+      GUNICORN_TIMEOUT: ${UNLIMITED_OCR_GUNICORN_TIMEOUT:-1260}
     restart: unless-stopped
+    ipc: host
+    shm_size: "32g"
     volumes:
-      - hf-cache:/home/appuser/.cache/huggingface
+      - hf-cache:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -217,47 +229,20 @@ services:
               capabilities: ["gpu"]
 
   parser-dots-ocr:
-    # `dots-ocr` profile は parser + vLLM sidecar を束ねて起動する(単一 GPU 向け)。
+    # Dots.OCR は vLLM(OpenAI 互換)と parser FastAPI を **単一イメージ/単一コンテナ**で
+    # 起動する(従来の parser + vLLM sidecar の 2 サービスを統合)。parser は localhost の
+    # vLLM(イメージ既定の DOTS_OCR_IP/PORT)へ OCR を委譲する。
     profiles: ["gpu", "dots-ocr"]
     build:
       context: .
       dockerfile: services/parsers/dots_ocr/Dockerfile
-    environment:
-      DOTS_OCR_RUNTIME: ${DOTS_OCR_RUNTIME:-vllm}
-      DOTS_OCR_PROTOCOL: http
-      DOTS_OCR_IP: parser-dots-ocr-vllm
-      DOTS_OCR_PORT: "8000"
-      DOTS_OCR_MODEL_NAME: model
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: ["gpu"]
-
-  # Dots.mOCR 公式推奨の vLLM server。必要時だけ
-  # `docker compose --profile gpu --profile gpu-vllm up parser-dots-ocr-vllm parser-dots-ocr`
-  # で起動する。
-  parser-dots-ocr-vllm:
-    profiles: ["gpu-vllm", "dots-ocr"]
-    image: vllm/vllm-openai:latest
+    # vLLM の共有メモリ要件(--shm-size 相当)。
     ipc: host
-    command:
-      - --model
-      - rednote-hilab/dots.mocr
-      - --served-model-name
-      - model
-      - --trust-remote-code
-      - --chat-template-content-format
-      - string
-      - --tensor-parallel-size
-      - "1"
-      - --gpu-memory-utilization
-      - ${DOTS_OCR_GPU_MEMORY_UTILIZATION:-0.90}
+    environment:
+      DOTS_OCR_GPU_MEMORY_UTILIZATION: ${DOTS_OCR_GPU_MEMORY_UTILIZATION:-0.90}
     volumes:
       - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
     deploy:
       resources:
         reservations:
@@ -267,44 +252,20 @@ services:
               capabilities: ["gpu"]
 
   parser-glm-ocr:
-    # `glm-ocr` profile は parser + vLLM sidecar を束ねて起動する(単一 GPU 向け)。
+    # GLM-OCR は vLLM(OpenAI 互換)と parser FastAPI を **単一イメージ/単一コンテナ**で
+    # 起動する(従来の parser + vLLM sidecar の 2 サービスを統合)。GLM_OCR_VLLM_BASE_URL は
+    # イメージ既定の localhost を使う。
     profiles: ["gpu", "glm-ocr"]
     build:
       context: .
       dockerfile: services/parsers/glm_ocr/Dockerfile
-    environment:
-      GLM_OCR_RUNTIME: ${GLM_OCR_RUNTIME:-vllm}
-      GLM_OCR_VLLM_BASE_URL: http://parser-glm-ocr-vllm:8080/v1
-      GLM_OCR_VLLM_MODEL: glm-ocr
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: ["gpu"]
-
-  # GLM-OCR 公式 self-host(vLLM OpenAI-compatible) endpoint。
-  # Dots と同時常駐させると 16GB GPU では重いため、必要時だけ `gpu-vllm` profile で起動する。
-  parser-glm-ocr-vllm:
-    profiles: ["gpu-vllm", "glm-ocr"]
-    image: vllm/vllm-openai:latest
+    # vLLM の共有メモリ要件(--shm-size 相当)。
     ipc: host
-    command:
-      - --model
-      - zai-org/GLM-OCR
-      - --served-model-name
-      - glm-ocr
-      - --trust-remote-code
-      - --port
-      - "8080"
-      - --tensor-parallel-size
-      - "1"
-      - --gpu-memory-utilization
-      - ${GLM_OCR_GPU_MEMORY_UTILIZATION:-0.90}
+    environment:
+      GLM_OCR_GPU_MEMORY_UTILIZATION: ${GLM_OCR_GPU_MEMORY_UTILIZATION:-0.90}
     volumes:
       - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
     deploy:
       resources:
         reservations:

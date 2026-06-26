@@ -1377,7 +1377,6 @@ export type ServiceRuntimeStatus =
   | "running"
   | "degraded"
   | "stopped"
-  | "dependency_stopped"
   | "unconfigured";
 export type ServiceExecutionPolicy =
   | "required_no_fallback"
@@ -1391,13 +1390,11 @@ export interface ServiceCatalogItemData {
   profile: ServiceProfile;
   label_key: string;
   execution_policy: ServiceExecutionPolicy;
-  depends_on: string[];
   configured: boolean;
 }
 
 export interface ServiceStatusData extends ServiceCatalogItemData {
   status: ServiceRuntimeStatus;
-  blocked_by: string[];
 }
 
 export type DeploymentMode = "dev" | "prod";
@@ -1420,7 +1417,7 @@ export interface ServiceControlResultData {
   status: ServiceRuntimeStatus;
 }
 
-export type ServiceLogsSource = "docker" | "uv";
+export type ServiceLogsSource = "docker";
 
 export interface ServiceLogsData {
   service_id: string;

@@ -8,10 +8,10 @@
 | `docling` | CPU | ✅ | PDF/Office/HTML/画像 |
 | `marker` | CPU | ✅ | PDF/画像(LLM 補正は無効) |
 | `unstructured` | CPU | ✅ | 多形式 partition |
-| `unlimited_ocr` | **GPU** | `--profile gpu` | 実 OCR(HuggingFace baidu/Unlimited-OCR / transformers) |
+| `unlimited_ocr` | **GPU** | `--profile gpu` | 実 OCR(HuggingFace baidu/Unlimited-OCR / SGLang runtime 内包) |
 | `mineru` | **GPU** | `--profile gpu` | 実 OCR/レイアウト解析 |
-| `dots_ocr` | **GPU** | `--profile gpu` | 実 OCR(GitHub install) |
-| `glm_ocr` | **GPU** | `--profile gpu` | 実 OCR(HuggingFace zai-org/GLM-OCR / transformers) |
+| `dots_ocr` | **GPU** | `--profile gpu` | 実 OCR(GitHub rednote-hilab/dots.ocr / vLLM runtime 内包) |
+| `glm_ocr` | **GPU** | `--profile gpu` | 実 OCR(HuggingFace zai-org/GLM-OCR / vLLM runtime 内包) |
 | `asr` | **GPU** | `--profile gpu` | 音声/動画の文字起こし(faster-whisper)。OCI AI Speech の fallback |
 
 ## 共通 HTTP 契約(`rag_parser_core`)

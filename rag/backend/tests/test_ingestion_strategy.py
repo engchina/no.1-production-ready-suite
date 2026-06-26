@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 from pypdf import PdfReader
+from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.oci_enterprise_ai import (
     EnterpriseAiIncompleteResponseError,
@@ -22,7 +23,6 @@ from app.rag.ingestion import (
     IngestionUserError,
 )
 from app.rag.ingestion_quality import build_ingestion_quality_report
-from rag_parser_core.result import ParserRegistryResult
 from app.schemas.document import (
     DocumentDetail,
     FileStatus,

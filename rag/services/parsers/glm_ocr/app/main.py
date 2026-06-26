@@ -43,7 +43,7 @@ def _vllm_runtime_ready() -> bool:
     if runtime not in {"vllm", "official_vllm"}:
         return _cuda_ready()
     base_url = os.environ.get(
-        "GLM_OCR_VLLM_BASE_URL", "http://parser-glm-ocr-vllm:8080/v1"
+        "GLM_OCR_VLLM_BASE_URL", "http://127.0.0.1:8080/v1"
     ).strip()
     root_url = base_url.rstrip("/")
     if root_url.endswith("/v1"):

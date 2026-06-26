@@ -191,12 +191,11 @@ def test_http_service_retry_defaults_to_five_attempts_and_is_bounded() -> None:
 
 
 def test_vllm_sidecar_service_url_defaults() -> None:
-    """Dots/GLM 公式 vLLM sidecar の URL は Settings で管理する。"""
+    """外部 parser / sidecar の URL は Settings で管理する。"""
     settings = Settings()
 
     assert settings.rag_parser_unlimited_ocr_service_url == "http://parser-unlimited-ocr:8000"
-    assert settings.rag_parser_dots_ocr_vllm_service_url == "http://parser-dots-ocr-vllm:8000"
-    assert settings.rag_parser_glm_ocr_vllm_service_url == "http://parser-glm-ocr-vllm:8080"
+    assert settings.rag_parser_dots_ocr_service_url == "http://parser-dots-ocr:8000"
 
 
 def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:
@@ -243,6 +242,7 @@ def test_ingestion_queue_defaults_keep_api_process_non_blocking(
         "INGESTION_QUEUE_INPROCESS_WORKER_ENABLED",
         "INGESTION_QUEUE_PROCESS_ISOLATION_ENABLED",
         "INGESTION_QUEUE_STALE_RUNNING_SECONDS",
+        "INGESTION_JOB_SUBPROCESS_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
@@ -251,6 +251,7 @@ def test_ingestion_queue_defaults_keep_api_process_non_blocking(
     assert settings.ingestion_queue_inprocess_worker_enabled is True
     assert settings.ingestion_queue_process_isolation_enabled is True
     assert settings.ingestion_queue_stale_running_seconds == 300.0
+    assert settings.ingestion_job_subprocess_timeout_seconds == 1200.0
 
 
 def test_parser_adapter_default_is_unstructured(monkeypatch: pytest.MonkeyPatch) -> None:

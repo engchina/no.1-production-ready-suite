@@ -1,7 +1,7 @@
 """サービス起動/停止の制御層。
 
 driver 抽象で実環境を切り替えられるようにしつつ、今回は ``DockerComposeDriver``
-(ローカル開発)のみ実装する。将来 OKE/Container Instances 用 driver を足せる。
+(dev/prod とも docker compose)のみ実装する。将来 OKE/Container Instances 用 driver を足せる。
 
 セキュリティ要件:
 - ``rag_service_control_enabled`` が False の間は呼び出し側が 409 で拒否する(本層は実行しない)。
@@ -13,32 +13,22 @@ driver 抽象で実環境を切り替えられるようにしつつ、今回は 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
-import os
 import shlex
-import signal
-import subprocess
-import time
-from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from app.config import Settings
 from app.services.catalog import ServiceCatalogEntry, is_dev_mode
-from app.services.service_env import oci_service_env
 
 logger = logging.getLogger(__name__)
 
 ServiceAction = Literal["start", "stop", "restart"]
-ServiceLogsSource = Literal["docker", "uv"]
+ServiceLogsSource = Literal["docker"]
 
 # backend/app/services/control.py → parents[3] = リポジトリ root(services/<…> を解決する基点)。
 REPO_ROOT = Path(__file__).resolve().parents[3]
-
-# uv プロセス起動直後に「即死していないか」を確認するまでの待機秒数。
-_START_VERIFY_DELAY_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -139,8 +129,15 @@ def _compose_profile_args(entry: ServiceCatalogEntry) -> list[str]:
     profiles: list[str] = []
     if entry.profile == "gpu":
         profiles.append("gpu")
-    if entry.service_id.endswith("-vllm"):
-        profiles.append("gpu-vllm")
+        # OCR 系 GPU は engine 別 profile で個別に enable する(vLLM はイメージ内包)。
+        for prefix, engine_profile in (
+            ("parser-unlimited-ocr", "unlimited-ocr"),
+            ("parser-dots-ocr", "dots-ocr"),
+            ("parser-glm-ocr", "glm-ocr"),
+        ):
+            if entry.service_id.startswith(prefix):
+                profiles.append(engine_profile)
+                break
     return [arg for profile in profiles for arg in ("--profile", profile)]
 
 
@@ -166,7 +163,7 @@ def _friendly_compose_error(detail: str, settings: Settings, entry: ServiceCatal
 
 
 class DockerComposeDriver:
-    """``docker compose`` CLI を subprocess で叩く driver(parser 系 / prod 全般)。"""
+    """``docker compose`` CLI を subprocess で叩く driver(dev/prod とも)。"""
 
     async def run(
         self,
@@ -232,259 +229,16 @@ class _suppress_process_cleanup:
         return True
 
 
-def _runtime_dir() -> Path:
-    """dev プロセスの pidfile / logfile 置き場(``<repo_root>/.run/services``)。"""
-    path = REPO_ROOT / ".run" / "services"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _read_log_tail(logfile: Path, max_chars: int = 600) -> str:
-    """起動失敗時の原因提示用に、ログファイル末尾を返す(取得不可は空文字)。"""
-    try:
-        text = logfile.read_text("utf-8", "replace").strip()
-    except OSError:
-        return ""
-    return text[-max_chars:]
-
-
-def _read_log_tail_lines(logfile: Path, lines: int) -> str:
-    """ログファイル末尾を行数指定で読む(ファイル欠如は空文字)。"""
-    try:
-        with logfile.open("r", encoding="utf-8", errors="replace") as handle:
-            return "".join(deque(handle, maxlen=lines)).strip()
-    except OSError:
-        return ""
-
-
-def _read_pid(pidfile: Path) -> int | None:
-    """pidfile から pid を読む。欠如/不正は None。"""
-    try:
-        return int(pidfile.read_text().strip())
-    except (OSError, ValueError):
-        return None
-
-
-def _pid_alive(pid: int) -> bool:
-    """pid のプロセスが生存しているか(signal 0 で確認)。"""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _proc_cmdline(pid: int) -> str | None:
-    """``/proc/<pid>/cmdline`` を空白区切り文字列で返す(取得不可・非 Linux は None)。"""
-    try:
-        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
-    except OSError:
-        return None
-    return raw.replace(b"\x00", b" ").decode("utf-8", "replace")
-
-
-def _pid_is_service(pid: int, entry: ServiceCatalogEntry) -> bool:
-    """pid が生存し、かつ当該サービスの uvicorn プロセスであることを確認する。
-
-    pidfile の PID が OS により無関係なプロセスへ再利用された場合に、誤って稼働中と
-    判定したり無関係なプロセスグループを kill するのを防ぐ。``/proc`` が無い環境では
-    cmdline 照合を諦め、生存判定にフォールバックする(従来挙動)。
-    """
-    if not _pid_alive(pid):
-        return False
-    cmdline = _proc_cmdline(pid)
-    if cmdline is None:
-        return True
-    return "uvicorn" in cmdline and f"--port {entry.dev_port}" in cmdline
-
-
-class UvProcessDriver:
-    """``uv run uvicorn`` でサービスをホスト上の detached プロセスとして起動/停止する driver。
-
-    dev(ENVIRONMENT != production)向け。各サービスを ``catalog`` の ``working_dir`` /
-    ``dev_port`` に従い ``127.0.0.1`` で起動し、pid を ``.run/services/<id>.pid`` に記録する。
-    起動ログは同ディレクトリの ``<id>.log`` へ追記する。
-    """
-
-    async def run(
-        self,
-        settings: Settings,
-        entry: ServiceCatalogEntry,
-        action: ServiceAction,
-    ) -> ControlResult:
-        if action == "start":
-            return await self._start_and_verify(settings, entry)
-        if action == "stop":
-            return self._stop(settings, entry)
-        stop_result = self._stop(settings, entry)
-        if not stop_result.ok:
-            return stop_result
-        return await self._start_and_verify(settings, entry)
-
-    async def _start_and_verify(
-        self, settings: Settings, entry: ServiceCatalogEntry
-    ) -> ControlResult:
-        """起動を試み、新規 spawn 時は短時間後に生存を確認する。
-
-        ポート競合や import エラーで即死した場合、``start`` 段階で失敗を返し、ログ末尾を
-        添えて原因を提示する(冪等な「既に起動済み」では検証しない)。
-        """
-        result, spawned = self._start(settings, entry)
-        if not result.ok or not spawned:
-            return result
-        await asyncio.sleep(_START_VERIFY_DELAY_SECONDS)
-        runtime = _runtime_dir()
-        pidfile = runtime / f"{entry.service_id}.pid"
-        pid = _read_pid(pidfile)
-        if pid is not None and _pid_alive(pid):
-            return result
-        pidfile.unlink(missing_ok=True)
-        tail = _read_log_tail(runtime / f"{entry.service_id}.log")
-        detail = "起動直後にプロセスが終了しました(ポート競合や依存エラーの可能性)。"
-        if tail:
-            detail = f"{detail}\n{tail}"
-        return ControlResult(ok=False, action="start", service_id=entry.service_id, detail=detail)
-
-    def _start(self, settings: Settings, entry: ServiceCatalogEntry) -> tuple[ControlResult, bool]:
-        """起動処理本体。``(結果, 新規 spawn したか)`` を返す。"""
-        runtime = _runtime_dir()
-        pidfile = runtime / f"{entry.service_id}.pid"
-        existing = _read_pid(pidfile)
-        if existing is not None and _pid_is_service(existing, entry):
-            # 既に起動済み: 冪等に成功扱い(spawn していない)。
-            return (
-                ControlResult(ok=True, action="start", service_id=entry.service_id, exit_code=0),
-                False,
-            )
-
-        workdir = REPO_ROOT / entry.working_dir
-        if not workdir.is_dir():
-            return (
-                ControlResult(
-                    ok=False,
-                    action="start",
-                    service_id=entry.service_id,
-                    detail=f"サービスのディレクトリが見つかりません: {entry.working_dir}",
-                ),
-                False,
-            )
-        argv = [
-            "uv",
-            "run",
-            "--directory",
-            str(workdir),
-            "uvicorn",
-            "app.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(entry.dev_port),
-        ]
-        logfile = runtime / f"{entry.service_id}.log"
-        logger.info(
-            "service_control_exec",
-            extra={"service_id": entry.service_id, "action": "start", "argv": argv},
-        )
-        try:
-            log = logfile.open("ab")
-        except OSError as exc:
-            return (
-                ControlResult(
-                    ok=False,
-                    action="start",
-                    service_id=entry.service_id,
-                    detail=f"ログファイルを開けません: {exc}",
-                ),
-                False,
-            )
-        # microservice は os.environ(from_env)から設定を読むが、backend の有効設定は
-        # Settings(.env + UI 上書き)で os.environ に載らない。profile=oci のサービスには
-        # backend の OCI 設定を env で渡し、UI/.env で設定した値を子プロセスへ届ける
-        # (API キー等は OCI サービスにのみ渡す)。
-        child_env = os.environ.copy()
-        # uv run --directory 先の project .venv を使わせる。backend の active venv は継承しない。
-        child_env.pop("VIRTUAL_ENV", None)
-        child_env.pop("VIRTUAL_ENV_PROMPT", None)
-        if entry.profile == "oci":
-            child_env.update(oci_service_env(settings))
-        try:
-            # start_new_session=True で独立プロセスグループにし、backend と寿命を切り離す。
-            process = subprocess.Popen(  # noqa: S603 - argv は固定 + allowlist 済みエントリのみ
-                argv,
-                cwd=str(REPO_ROOT),
-                env=child_env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except FileNotFoundError as exc:
-            return (
-                ControlResult(
-                    ok=False,
-                    action="start",
-                    service_id=entry.service_id,
-                    detail=f"uv コマンドが見つかりません: {exc}",
-                ),
-                False,
-            )
-        finally:
-            log.close()
-        pidfile.write_text(str(process.pid))
-        return (
-            ControlResult(ok=True, action="start", service_id=entry.service_id, exit_code=0),
-            True,
-        )
-
-    def _stop(self, settings: Settings, entry: ServiceCatalogEntry) -> ControlResult:
-        runtime = _runtime_dir()
-        pidfile = runtime / f"{entry.service_id}.pid"
-        pid = _read_pid(pidfile)
-        # PID 再利用対策: 生存していても当該サービスでなければ kill せず noop 成功扱い。
-        if pid is None or not _pid_is_service(pid, entry):
-            pidfile.unlink(missing_ok=True)
-            return ControlResult(ok=True, action="stop", service_id=entry.service_id, exit_code=0)
-        logger.info(
-            "service_control_exec",
-            extra={"service_id": entry.service_id, "action": "stop", "pid": pid},
-        )
-        timeout = float(settings.rag_service_control_timeout_seconds)
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pidfile.unlink(missing_ok=True)
-            return ControlResult(ok=True, action="stop", service_id=entry.service_id, exit_code=0)
-        deadline = time.monotonic() + timeout
-        while _pid_alive(pid) and time.monotonic() < deadline:
-            time.sleep(0.1)
-        if _pid_alive(pid):
-            # graceful 終了しなければ強制終了する。
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
-        pidfile.unlink(missing_ok=True)
-        return ControlResult(ok=True, action="stop", service_id=entry.service_id, exit_code=0)
-
-
 class ServiceControlClient:
-    """カタログ allowlist と feature flag を front に、mode 別 driver へ委譲する。
+    """カタログ allowlist と feature flag を front に、``DockerComposeDriver`` へ委譲する。
 
-    driver の選択は mode と **エントリ単位の ``dev_runner``** で決まる:
-    - prod: 常に ``DockerComposeDriver``。
-    - dev かつ ``dev_runner == "uv"``(軽量な前処理): ``UvProcessDriver``(ホストプロセス)。
-    - dev かつ ``dev_runner == "docker"``(重い ML 依存の parser): ``DockerComposeDriver``
-      (dev override でポート公開)。host への巨大依存 sync を避ける。
+    dev は ``docker-compose.dev.yml`` を重ねてポートを localhost へ公開し、prod は base
+    compose のみ。いずれも docker compose で起動/停止する。
     """
 
-    def __init__(
-        self,
-        docker_driver: DockerComposeDriver | None = None,
-        uv_driver: UvProcessDriver | None = None,
-    ) -> None:
+    def __init__(self, docker_driver: DockerComposeDriver | None = None) -> None:
         self._docker_driver = docker_driver or DockerComposeDriver()
-        self._uv_driver = uv_driver or UvProcessDriver()
-        # サービス単位の直列化ロック(同一サービスへの同時 start で二重 spawn/孤児化を防ぐ)。
+        # サービス単位の直列化ロック(同一サービスへの同時 start で二重操作を防ぐ)。
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _lock_for(self, service_id: str) -> asyncio.Lock:
@@ -501,13 +255,9 @@ class ServiceControlClient:
         action: ServiceAction,
     ) -> ControlResult:
         """allowlist 済みエントリに対し action を実行する。失敗は例外で送出する。"""
-        use_uv = is_dev_mode(settings) and entry.dev_runner == "uv"
-        driver: UvProcessDriver | DockerComposeDriver = (
-            self._uv_driver if use_uv else self._docker_driver
-        )
         # 同一サービスへの操作は直列化する(並行 start の race を回避)。
         async with self._lock_for(entry.service_id):
-            result = await driver.run(settings, entry, action)
+            result = await self._docker_driver.run(settings, entry, action)
         if not result.ok:
             raise ServiceControlError(result)
         return result
@@ -518,16 +268,7 @@ async def read_service_logs(
     entry: ServiceCatalogEntry,
     lines: int,
 ) -> ServiceLogsResult:
-    """allowlist 済みサービスのログ末尾を返す。docker は compose、dev uv は .run を読む。"""
-    if is_dev_mode(settings) and entry.dev_runner == "uv":
-        content = _read_log_tail_lines(_runtime_dir() / f"{entry.service_id}.log", lines)
-        return ServiceLogsResult(
-            service_id=entry.service_id,
-            source="uv",
-            lines=lines,
-            content=content,
-        )
-
+    """allowlist 済みサービスのログ末尾を ``docker compose logs`` から返す。"""
     args = _compose_logs_args(settings, entry, lines)
     cwd = str(REPO_ROOT) if is_dev_mode(settings) else None
     timeout = float(settings.rag_service_control_timeout_seconds)

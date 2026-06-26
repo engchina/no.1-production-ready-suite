@@ -595,10 +595,10 @@ describe("api.request envelope", () => {
         },
         {
           backend: "unlimited_ocr",
-          package_name: "transformers",
-          import_name: "transformers",
+          package_name: "sglang",
+          import_name: "sglang",
           distribution_name: null,
-          install_package: "transformers (baidu/Unlimited-OCR via HuggingFace)",
+          install_package: "sglang + lmsysorg/sglang sidecar (baidu/Unlimited-OCR)",
           enabled: false,
           selected: false,
           installed: false,
@@ -869,10 +869,10 @@ describe("api.request envelope", () => {
         },
         {
           backend: "unlimited_ocr",
-          package_name: "transformers",
-          import_name: "transformers",
+          package_name: "sglang",
+          import_name: "sglang",
           distribution_name: null,
-          install_package: "transformers (baidu/Unlimited-OCR via HuggingFace)",
+          install_package: "sglang + lmsysorg/sglang sidecar (baidu/Unlimited-OCR)",
           enabled: false,
           selected: false,
           installed: false,
@@ -1203,7 +1203,6 @@ describe("api.services", () => {
               profile: "cpu",
               label_key: "settings.services.item.parserDocling",
               execution_policy: "selected_adapter",
-              depends_on: [],
               configured: true,
             },
           ],
@@ -1230,9 +1229,7 @@ describe("api.services", () => {
           profile: "gpu",
           label_key: "settings.services.item.parserDotsOcr",
           execution_policy: "selected_adapter",
-          status: "dependency_stopped",
-          depends_on: ["parser-dots-ocr-vllm"],
-          blocked_by: ["parser-dots-ocr-vllm"],
+          status: "running",
           configured: true,
         },
         error_messages: [],
@@ -1243,7 +1240,7 @@ describe("api.services", () => {
 
     const result = await api.getServiceStatus("parser-dots-ocr");
 
-    expect(result.status).toBe("dependency_stopped");
+    expect(result.status).toBe("running");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/services/parser-dots-ocr/status",
       expect.anything()

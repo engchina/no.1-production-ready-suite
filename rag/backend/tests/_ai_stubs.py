@@ -9,10 +9,10 @@ OCI クライアントを決定論スタブへ差し替える。embedding は全
 from __future__ import annotations
 
 import pytest
+from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
-from rag_parser_core.result import ParserRegistryResult
 from app.schemas.document import SourceProfile
 from app.schemas.extraction import StructuredExtraction
 
@@ -119,7 +119,8 @@ def patch_ai_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.rag.ingestion.OciGenAiClient", DeterministicGenAi)
     monkeypatch.setattr("app.rag.pipeline.OciEnterpriseAiClient", DeterministicEnterpriseAi)
     monkeypatch.setattr("app.rag.pipeline.OciGenAiClient", DeterministicGenAi)
-    # 解析は parser マイクロサービスへ委譲する。実サービス未起動でも取込できるよう runner を差し替え。
+    # 解析は parser マイクロサービスへ委譲する。
+    # 実サービス未起動でも取込できるよう runner を差し替え。
     monkeypatch.setattr(
         "app.clients.parser_service.ParserServiceClient.runner",
         _stub_parser_runner,

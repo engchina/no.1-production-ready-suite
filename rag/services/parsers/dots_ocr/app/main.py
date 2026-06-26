@@ -39,8 +39,8 @@ def _vllm_runtime_ready() -> bool:
     if runtime not in {"vllm", "official_vllm"}:
         return _cuda_ready()
     protocol = os.environ.get("DOTS_OCR_PROTOCOL", "http").strip() or "http"
-    host = os.environ.get("DOTS_OCR_IP", "parser-dots-ocr-vllm").strip()
-    port = os.environ.get("DOTS_OCR_PORT", "8000").strip() or "8000"
+    host = os.environ.get("DOTS_OCR_IP", "127.0.0.1").strip()
+    port = os.environ.get("DOTS_OCR_PORT", "8080").strip() or "8080"
     timeout = float(os.environ.get("DOTS_OCR_HEALTH_TIMEOUT_SECONDS", "3"))
     return _http_health_ready(f"{protocol}://{host}:{port}/health", timeout)
 

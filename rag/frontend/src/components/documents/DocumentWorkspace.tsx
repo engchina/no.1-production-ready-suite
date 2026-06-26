@@ -24,6 +24,19 @@ import { useSearchParams } from "react-router-dom";
 import { DocumentPreview } from "./DocumentPreview";
 import { IngestionConfigDriftBanner } from "@/components/knowledge-bases/IngestionConfigDriftBanner";
 import { DocumentExtraction } from "./DocumentExtraction";
+import {
+  type IngestionParserDisplay,
+  type IngestionProgressSummary,
+  type ProgressUnit,
+  ingestConflictBannerIsStale,
+  resolveIngestionParserDisplay,
+  resolveIngestionProgressSummary,
+  shouldShowProcessingWatchBanner,
+} from "./DocumentWorkspace.logic";
+import {
+  normalizeIngestionErrorMessage,
+  resolveIngestionErrorDisplayPlan,
+} from "./ingestion-error-display";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { FlowStepper } from "@/components/upload/FlowStepper";
@@ -102,24 +115,6 @@ import { cn } from "@/lib/utils";
 
 const DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS = 4000;
 
-type IngestionParserDisplay = {
-  backend: string | null;
-  profile: string | null;
-  source: "segment" | "extraction" | "pending" | "unavailable";
-};
-
-type ProgressUnit = "page" | "slide" | "sheet";
-
-type IngestionProgressSummary =
-  | {
-      kind: "determinate";
-      unit: ProgressUnit;
-      completed: number;
-      failed: number;
-      total: number;
-    }
-  | { kind: "indeterminate" };
-
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
 }
@@ -177,98 +172,6 @@ function findTableCellByKey(
     }
   }
   return null;
-}
-
-export function resolveIngestionParserDisplay({
-  segments,
-  extractionBackend,
-  extractionProfile,
-  loading,
-}: {
-  segments: Pick<IngestionSegment, "status" | "parser_backend" | "parser_profile">[];
-  extractionBackend?: string | null;
-  extractionProfile?: string | null;
-  loading?: boolean;
-}): IngestionParserDisplay {
-  const segment = selectDisplaySegment(segments);
-  if (segment) {
-    return {
-      backend: segment.parser_backend,
-      profile: segment.parser_profile,
-      source: "segment",
-    };
-  }
-  if (extractionBackend || extractionProfile) {
-    return {
-      backend: extractionBackend ?? null,
-      profile: extractionProfile ?? null,
-      source: "extraction",
-    };
-  }
-  return {
-    backend: null,
-    profile: null,
-    source: loading ? "pending" : "unavailable",
-  };
-}
-
-function selectDisplaySegment(
-  segments: Pick<IngestionSegment, "status" | "parser_backend" | "parser_profile">[]
-): Pick<IngestionSegment, "status" | "parser_backend" | "parser_profile"> | null {
-  return (
-    segments.find((segment) => segment.status === "RUNNING") ??
-    segments.find((segment) => segment.status === "QUEUED") ??
-    segments.find((segment) => segment.status === "FAILED") ??
-    segments.find((segment) => segment.status === "SUCCEEDED") ??
-    segments[0] ??
-    null
-  );
-}
-
-export function resolveIngestionProgressSummary(
-  segments: Pick<
-    IngestionSegment,
-    "status" | "progress_unit" | "progress_start" | "progress_end"
-  >[]
-): IngestionProgressSummary | null {
-  if (!segments.length) return null;
-  const unit = segments.find(isDeterminateSegment)?.progress_unit as ProgressUnit | undefined;
-  if (!unit) return { kind: "indeterminate" };
-  const scoped = segments.filter(
-    (segment) => segment.progress_unit === unit && isDeterminateSegment(segment)
-  );
-  const total = scoped.reduce((sum, segment) => sum + segmentSpan(segment), 0);
-  if (total <= 0) return { kind: "indeterminate" };
-  return {
-    kind: "determinate",
-    unit,
-    completed: scoped
-      .filter((segment) => segment.status === "SUCCEEDED")
-      .reduce((sum, segment) => sum + segmentSpan(segment), 0),
-    failed: scoped
-      .filter((segment) => segment.status === "FAILED")
-      .reduce((sum, segment) => sum + segmentSpan(segment), 0),
-    total,
-  };
-}
-
-function isDeterminateSegment(
-  segment: Pick<IngestionSegment, "progress_unit" | "progress_start" | "progress_end">
-): boolean {
-  return (
-    (segment.progress_unit === "page" ||
-      segment.progress_unit === "slide" ||
-      segment.progress_unit === "sheet") &&
-    segment.progress_start != null &&
-    segment.progress_end != null
-  );
-}
-
-function segmentSpan(
-  segment: Pick<IngestionSegment, "progress_start" | "progress_end">
-): number {
-  if (segment.progress_start == null || segment.progress_end == null) return 0;
-  return Math.max(0, segment.progress_end - segment.progress_start + 1);
 }
 
 type WorkspaceFocusRequest = {
@@ -377,6 +280,14 @@ export function DocumentWorkspace({
   const queuedIngestionJobStatus = queuedJob.data?.status ?? enqueueIngestion.data?.status;
   const approvedIngestionJobStatus = approvedJob.data?.status ?? approveDocument.data?.status;
   const retriedSegmentJobStatus = retriedSegmentJob.data?.status ?? retryFailedSegments.data?.status;
+  const queuedJobErrorMessage =
+    queuedJob.data?.status === "FAILED"
+      ? queuedJob.data.error_message ?? t("flow.ingestFailed")
+      : null;
+  const retriedSegmentJobErrorMessage =
+    retriedSegmentJob.data?.status === "FAILED"
+      ? retriedSegmentJob.data.error_message ?? t("flow.ingestFailed")
+      : null;
   const activeSubmittedJob = [
     latestDocumentJob?.status,
     queuedIngestionJobStatus,
@@ -395,6 +306,23 @@ export function DocumentWorkspace({
     ],
     segmentStatuses: segmentsQuery.data?.map((segment) => segment.status) ?? [],
   });
+  const ingestionErrorDisplays = useMemo(
+    () =>
+      resolveIngestionErrorDisplayPlan({
+        latestJobErrorMessage: latestDocumentJob?.error_message,
+        segments: segmentsQuery.data ?? [],
+        documentErrorMessage: query.data?.error_message,
+        queuedJobErrorMessage,
+        retriedSegmentJobErrorMessage,
+      }),
+    [
+      latestDocumentJob?.error_message,
+      segmentsQuery.data,
+      query.data?.error_message,
+      queuedJobErrorMessage,
+      retriedSegmentJobErrorMessage,
+    ]
+  );
   const approveErrorText = approveDocument.isError
     ? errorMessage(approveDocument.error, t("flow.approveFailed"))
     : "";
@@ -434,6 +362,14 @@ export function DocumentWorkspace({
       setPreviewVariant("original");
     }
   }, [previewVariant, query.data?.preprocess_artifact]);
+  const resetEnqueueIngestion = enqueueIngestion.reset;
+  useEffect(() => {
+    const errorStatus =
+      enqueueIngestion.error instanceof ApiError ? enqueueIngestion.error.status : null;
+    if (ingestConflictBannerIsStale({ errorStatus, hasActiveJob: activeSubmittedJob })) {
+      resetEnqueueIngestion();
+    }
+  }, [enqueueIngestion.error, activeSubmittedJob, resetEnqueueIngestion]);
   const selectedChunk = useMemo(
     () => chunksQuery.data?.find((chunk) => chunk.chunk_id === selectedChunkId) ?? null,
     [chunksQuery.data, selectedChunkId]
@@ -840,8 +776,11 @@ export function DocumentWorkspace({
             </div>
           </dl>
         ) : null}
-        {watchProcessing &&
-        !["REVIEW", "CHUNKED", "INDEXED", "ERROR"].includes(doc.status) ? (
+        {shouldShowProcessingWatchBanner({
+          watchProcessing,
+          documentStatus: doc.status,
+          latestJobStatus: latestDocumentJob?.status,
+        }) ? (
           <Banner severity="info">{t("upload.ingestion.watch")}</Banner>
         ) : null}
         <IngestionConfigDriftBanner documentId={documentId} />
@@ -896,6 +835,7 @@ export function DocumentWorkspace({
           loading={segmentsQuery.isPending}
           error={segmentsQuery.isError}
           retrying={retryFailedSegments.isPending}
+          visibleErrorSegmentIds={ingestionErrorDisplays.segmentIds}
           onRetryFailedSegments={() =>
             retryFailedSegments.mutate(
               documentId,
@@ -908,7 +848,9 @@ export function DocumentWorkspace({
           }
         />
 
-        {doc.error_message ? <Banner severity="danger">{doc.error_message}</Banner> : null}
+        {ingestionErrorDisplays.documentMessage ? (
+          <Banner severity="danger">{ingestionErrorDisplays.documentMessage}</Banner>
+        ) : null}
         {enqueueIngestion.isError ? (
           <Banner severity="danger">
             {errorMessage(enqueueIngestion.error, t("flow.ingestFailed"))}
@@ -924,10 +866,8 @@ export function DocumentWorkspace({
             }
           />
         ) : null}
-        {queuedJob.data?.status === "FAILED" ? (
-          <Banner severity="danger">
-            {queuedJob.data.error_message ?? t("flow.ingestFailed")}
-          </Banner>
+        {ingestionErrorDisplays.queuedJobMessage ? (
+          <Banner severity="danger">{ingestionErrorDisplays.queuedJobMessage}</Banner>
         ) : null}
         {retryFailedSegments.isError ? (
           <Banner severity="danger">
@@ -940,10 +880,8 @@ export function DocumentWorkspace({
             message={t("flow.segments.retryQueued")}
           />
         ) : null}
-        {retriedSegmentJob.data?.status === "FAILED" ? (
-          <Banner severity="danger">
-            {retriedSegmentJob.data.error_message ?? t("flow.ingestFailed")}
-          </Banner>
+        {ingestionErrorDisplays.retriedSegmentJobMessage ? (
+          <Banner severity="danger">{ingestionErrorDisplays.retriedSegmentJobMessage}</Banner>
         ) : null}
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)]">
@@ -1275,6 +1213,7 @@ function IngestionJobsPanel({
 
   const latest = jobs[0];
   const active = ingestionJobIsActive(latest.status);
+  const latestErrorMessage = normalizeIngestionErrorMessage(latest.error_message);
   const progressSummary =
     latest.phase === "PREPROCESS" || latest.phase === "EXTRACT"
       ? resolveIngestionProgressSummary(segments)
@@ -1325,10 +1264,10 @@ function IngestionJobsPanel({
           <p className="mt-3 text-xs leading-relaxed text-info">{t("flow.jobs.activeHint")}</p>
         ) : null}
         {progressSummary ? <IngestionProgressSummaryView summary={progressSummary} /> : null}
-        {latest.error_message ? (
+        {latestErrorMessage ? (
           <div className="mt-3 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
             <p className="font-medium text-danger">{t("flow.jobs.errorReason")}</p>
-            <p className="mt-1 break-words text-danger/90">{latest.error_message}</p>
+            <p className="mt-1 break-words text-danger/90">{latestErrorMessage}</p>
           </div>
         ) : null}
       </div>
@@ -1429,12 +1368,14 @@ function IngestionSegmentsPanel({
   loading,
   error,
   retrying,
+  visibleErrorSegmentIds,
   onRetryFailedSegments,
 }: {
   segments: IngestionSegment[];
   loading: boolean;
   error: boolean;
   retrying: boolean;
+  visibleErrorSegmentIds: ReadonlySet<string>;
   onRetryFailedSegments: () => void;
 }) {
   if (loading) return <Skeleton className="h-24 w-full rounded-md" />;
@@ -1478,44 +1419,49 @@ function IngestionSegmentsPanel({
         aria-label={t("flow.segments.title")}
         className="bounded-scroll-area mt-3 grid grid-cols-1 gap-2 rounded-md border border-border bg-card/40 p-2 lg:grid-cols-2"
       >
-        {segments.map((segment) => (
-          <li
-            key={segment.segment_id}
-            className="rounded-md border border-border bg-background p-3 text-sm"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={segmentStatusClass(segment.status)}>
-                {segmentStatusLabel(segment.status)}
-              </span>
-              <span className="tnum text-xs text-muted">
-                {segmentProgressLabel(segment)}
-              </span>
-              {segment.error_code ? (
-                <span
-                  className="inline-flex items-center gap-1 rounded-full bg-warning-bg px-2 py-0.5 text-xs text-warning"
-                  title={t("flow.segments.errorCode", { code: segment.error_code })}
-                >
-                  <TriangleAlert size={12} aria-hidden />
-                  {segment.error_code}
+        {segments.map((segment) => {
+          const segmentErrorMessage = visibleErrorSegmentIds.has(segment.segment_id)
+            ? normalizeIngestionErrorMessage(segment.error_message)
+            : null;
+          return (
+            <li
+              key={segment.segment_id}
+              className="rounded-md border border-border bg-background p-3 text-sm"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={segmentStatusClass(segment.status)}>
+                  {segmentStatusLabel(segment.status)}
                 </span>
-              ) : null}
-            </div>
-            <p className="mt-2 break-all text-xs text-muted">
-              {segment.parser_backend} / {segment.parser_profile}
-            </p>
-            {segment.status === "FAILED" && segment.error_message ? (
-              <div className="mt-2 space-y-1 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
-                <p className="font-medium text-danger">{t("flow.segments.errorReason")}</p>
-                <p className="break-words text-danger/90">{segment.error_message}</p>
+                <span className="tnum text-xs text-muted">
+                  {segmentProgressLabel(segment)}
+                </span>
+                {segment.error_code ? (
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full bg-warning-bg px-2 py-0.5 text-xs text-warning"
+                    title={t("flow.segments.errorCode", { code: segment.error_code })}
+                  >
+                    <TriangleAlert size={12} aria-hidden />
+                    {segment.error_code}
+                  </span>
+                ) : null}
               </div>
-            ) : null}
-            {segment.status === "FAILED" ? (
-              <p className="mt-2 text-xs leading-relaxed text-muted">
-                {t("flow.segments.errorRecovery")}
+              <p className="mt-2 break-all text-xs text-muted">
+                {segment.parser_backend} / {segment.parser_profile}
               </p>
-            ) : null}
-          </li>
-        ))}
+              {segmentErrorMessage ? (
+                <div className="mt-2 space-y-1 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
+                  <p className="font-medium text-danger">{t("flow.segments.errorReason")}</p>
+                  <p className="break-words text-danger/90">{segmentErrorMessage}</p>
+                </div>
+              ) : null}
+              {segment.status === "FAILED" ? (
+                <p className="mt-2 text-xs leading-relaxed text-muted">
+                  {t("flow.segments.errorRecovery")}
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
       </ol>
     </section>
   );

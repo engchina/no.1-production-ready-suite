@@ -44,10 +44,12 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /Docling.*CPU.*稼働中/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Marker.*CPU.*停止/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Unstructured.*CPU.*縮退/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /Unlimited-OCR.*GPU.*停止/ })).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /Unlimited-OCR.*GPU.*停止/ })
+    ).toBeVisible();
     await expect(page.getByRole("radio", { name: /MinerU.*GPU.*停止/ })).toBeVisible();
     await expect(
-      page.getByRole("radio", { name: /Dots\.OCR.*GPU.*推論サーバー未起動/ })
+      page.getByRole("radio", { name: /Dots\.OCR.*GPU.*停止/ })
     ).toBeVisible();
     await expect(
       page.getByRole("radio", { name: /OCI Generative AI \(Vision\).*OCI.*稼働中/ })
@@ -374,10 +376,11 @@ async function mockParserAdapters(page: Page) {
             },
             {
               backend: "unlimited_ocr",
-              package_name: "transformers",
-              import_name: "transformers",
+              package_name: "sglang",
+              import_name: "sglang",
               distribution_name: null,
-              install_package: "transformers (baidu/Unlimited-OCR via HuggingFace)",
+              install_package:
+                "parser-unlimited-ocr image (official SGLang wheel + baidu/Unlimited-OCR)",
               enabled: false,
               selected: false,
               installed: false,
@@ -533,7 +536,7 @@ async function mockParserServiceStatuses(page: Page) {
     "parser-unstructured": "degraded",
     "parser-unlimited-ocr": "stopped",
     "parser-mineru": "stopped",
-    "parser-dots-ocr": "dependency_stopped",
+    "parser-dots-ocr": "stopped",
     "parser-glm-ocr": "stopped",
     "parser-oci-genai-vision": "running",
     "parser-oci-document-understanding": "unconfigured",
@@ -554,9 +557,7 @@ async function mockParserServiceStatuses(page: Page) {
               label_key: "settings.services.item.parserDocling",
               execution_policy: "selected_adapter",
               configured: status !== "unconfigured",
-              depends_on: [],
               status,
-              blocked_by: status === "dependency_stopped" ? [`${serviceId}-vllm`] : [],
             }
           : null,
         error_messages: status ? [] : ["指定したサービスが見つかりません。"],
@@ -592,9 +593,9 @@ function disabledAdapter(
   return {
     backend,
     package_name:
-      backend === "unlimited_ocr" || backend === "glm_ocr" ? "transformers" : backend,
+      backend === "unlimited_ocr" ? "sglang" : backend === "glm_ocr" ? "transformers" : backend,
     import_name:
-      backend === "unlimited_ocr" || backend === "glm_ocr" ? "transformers" : backend,
+      backend === "unlimited_ocr" ? "sglang" : backend === "glm_ocr" ? "transformers" : backend,
     distribution_name: null,
     install_package:
       backend === "marker"
@@ -602,7 +603,7 @@ function disabledAdapter(
         : backend === "unstructured"
           ? "unstructured[all-docs]==0.18.32"
           : backend === "unlimited_ocr"
-            ? "transformers (baidu/Unlimited-OCR via HuggingFace)"
+            ? "parser-unlimited-ocr image (official SGLang wheel + baidu/Unlimited-OCR)"
             : backend === "mineru"
               ? "mineru[core]==3.4.0"
               : backend === "dots_ocr"

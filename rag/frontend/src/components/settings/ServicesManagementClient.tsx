@@ -9,7 +9,6 @@ import {
   CircleSlash,
   Clipboard,
   Container,
-  CornerDownRight,
   MinusCircle,
   Play,
   RefreshCw,
@@ -47,7 +46,6 @@ import { cn } from "@/lib/utils";
 export type DisplayRuntimeStatus = ServiceRuntimeStatus | "loading" | "error";
 type DisplayServiceData = ServiceCatalogItemData & {
   status: DisplayRuntimeStatus;
-  blocked_by: string[];
   statusReady: boolean;
 };
 
@@ -140,13 +138,11 @@ export function ServicesManagementClient() {
     return {
       ...service,
       status: statusQuery?.isError ? "error" : "loading",
-      blocked_by: [],
       statusReady: false,
     };
   });
   const controlEnabled = data.control_enabled;
   const deploymentMode = data.deployment_mode;
-  const serviceById = new Map(displayServices.map((service) => [service.service_id, service]));
   // サービス管理ページのセクションは検索・回答フロー順(サイドナビと一致)で表示する。
   // 各ステージは CPU/GPU/OCI のうち存在するプロファイルごとにグループを分けて表示する。
   const PIPELINE_STAGE_ORDER: { category: string; labelKey: I18nKey }[] = [
@@ -178,23 +174,11 @@ export function ServicesManagementClient() {
 
   async function act(service: DisplayServiceData, action: "start" | "stop") {
     if (action === "stop") {
-      // 専用の推論サーバー(vLLM)を持つ親は停止が連鎖するため、確認文で明示する。
-      const servers = service.depends_on
-        .map((id) => serviceById.get(id))
-        .filter((s): s is DisplayServiceData => s !== undefined)
-        .map((s) => serviceLabel(s));
-      const description =
-        servers.length > 0
-          ? t("settings.services.confirm.stop.descriptionWithServers", {
-              service: serviceLabel(service),
-              servers: servers.join(", "),
-            })
-          : t("settings.services.confirm.stop.description", {
-              service: serviceLabel(service),
-            });
       const ok = await confirm({
         title: t("settings.services.confirm.stop.title"),
-        description,
+        description: t("settings.services.confirm.stop.description", {
+          service: serviceLabel(service),
+        }),
         confirmLabel: t("settings.services.confirm.stop.confirm"),
         cancelLabel: t("settings.services.confirm.cancel"),
         tone: "danger",
@@ -331,7 +315,6 @@ export function ServicesManagementClient() {
                 pending={pending}
                 logsServiceId={logsServiceId}
                 logsQuery={logsQuery}
-                serviceById={serviceById}
                 onAct={act}
                 onToggleLogs={toggleLogs}
               />
@@ -351,7 +334,6 @@ function ServiceGroup({
   pending,
   logsServiceId,
   logsQuery,
-  serviceById,
   onAct,
   onToggleLogs,
 }: {
@@ -362,7 +344,6 @@ function ServiceGroup({
   pending: string | null;
   logsServiceId: string | null;
   logsQuery: UseQueryResult<ServiceLogsData>;
-  serviceById: Map<string, DisplayServiceData>;
   onAct: (service: DisplayServiceData, action: "start" | "stop") => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
@@ -383,7 +364,6 @@ function ServiceGroup({
               pending={pending}
               logsOpen={logsServiceId === service.service_id}
               logsQuery={logsQuery}
-              serviceById={serviceById}
               onAct={onAct}
               onToggleLogs={onToggleLogs}
             />
@@ -400,7 +380,6 @@ function ServiceRow({
   pending,
   logsOpen,
   logsQuery,
-  serviceById,
   onAct,
   onToggleLogs,
 }: {
@@ -409,33 +388,19 @@ function ServiceRow({
   pending: string | null;
   logsOpen: boolean;
   logsQuery: UseQueryResult<ServiceLogsData>;
-  serviceById: Map<string, DisplayServiceData>;
   onAct: (service: DisplayServiceData, action: "start" | "stop") => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
   const running = service.status === "running";
   const stopped = service.status === "stopped";
-  const dependencyStopped = service.status === "dependency_stopped";
   const statusLoading = service.status === "loading";
   const statusError = service.status === "error";
   const required = service.execution_policy === "required_no_fallback";
   const stoppedHintKey = stopped ? serviceStoppedHintKey(service.execution_policy) : null;
   const startPending = pending === `${service.service_id}:start`;
   const stopPending = pending === `${service.service_id}:stop`;
-  const anyPending = pending !== null;
-  // この行が別サービス(親 parser)の depends_on に含まれるなら、起動/停止は親へ集約する。
-  const parent = [...serviceById.values()].find((s) =>
-    s.depends_on.includes(service.service_id)
-  );
-  const managed = parent !== undefined;
-  const inferenceServerSummary = service.depends_on.map((id) => {
-    const inferenceServer = serviceById.get(id);
-    const label = inferenceServer ? serviceLabel(inferenceServer) : id;
-    const status = inferenceServer
-      ? t(`settings.services.status.${inferenceServer.status}` as I18nKey)
-      : t("settings.services.status.unconfigured");
-    return `${label}(${status})`;
-  });
+  // ponytail: このサービス自身の操作中だけ自分の起動/停止を排他する(他サービスのボタンは無関係)
+  const thisPending = startPending || stopPending;
   let controlHint: string | undefined;
   if (!controlEnabled) {
     controlHint = t("settings.services.controlDisabled.hint");
@@ -443,8 +408,6 @@ function ServiceRow({
     controlHint = t("settings.services.statusLoadingHint");
   } else if (statusError) {
     controlHint = t("settings.services.statusLoadErrorHint");
-  } else if (dependencyStopped) {
-    controlHint = t("settings.services.inferenceServerStopped");
   } else if (stoppedHintKey) {
     controlHint = t(stoppedHintKey);
   }
@@ -452,50 +415,25 @@ function ServiceRow({
   const logsPanelId = `service-logs-${service.service_id}`;
 
   return (
-    <li className={cn("py-3", managed && "border-l-2 border-border pl-3 sm:pl-4")}>
+    <li className="py-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            {managed ? (
-              <CornerDownRight size={14} className="shrink-0 text-muted" aria-hidden />
-            ) : null}
             <p className="text-sm font-semibold text-foreground">{serviceLabel(service)}</p>
             <ServiceExecutionPolicyBadge policy={service.execution_policy} />
           </div>
           <p className="font-mono text-xs text-muted">{service.service_id}</p>
-          {managed ? (
-            <p className="mt-1 text-xs text-muted">
-              {t("settings.services.managedByParent", {
-                parent: parent ? serviceLabel(parent) : "",
-              })}
+          {stoppedHintKey ? (
+            <p
+              className={cn(
+                "mt-1 flex items-center gap-1 text-xs",
+                required ? "font-medium text-rose-700" : "text-muted"
+              )}
+            >
+              {required ? <AlertTriangle size={13} aria-hidden /> : null}
+              {t(stoppedHintKey)}
             </p>
-          ) : (
-            <>
-              {stoppedHintKey ? (
-                <p
-                  className={cn(
-                    "mt-1 flex items-center gap-1 text-xs",
-                    required ? "font-medium text-rose-700" : "text-muted"
-                  )}
-                >
-                  {required ? <AlertTriangle size={13} aria-hidden /> : null}
-                  {t(stoppedHintKey)}
-                </p>
-              ) : null}
-              {inferenceServerSummary.length > 0 ? (
-                <p className="mt-1 text-xs text-muted">
-                  {t("settings.services.inferenceServers")}:{" "}
-                  {inferenceServerSummary.join(", ")}
-                </p>
-              ) : null}
-              {dependencyStopped ? (
-                <p className="mt-1 flex items-center gap-1 text-xs font-medium text-amber-700">
-                  <AlertTriangle size={13} aria-hidden />
-                  {t("settings.services.inferenceServerStopped")}
-                </p>
-              ) : null}
-            </>
-          )}
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ServiceStatusBadge status={service.status} />
@@ -518,45 +456,43 @@ function ServiceRow({
               aria-hidden
             />
           </Button>
-          {managed ? null : (
-            <div className="flex gap-2" title={controlHint}>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={startPending}
-                disabled={
-                  !controlEnabled ||
-                  !service.statusReady ||
-                  running ||
-                  (anyPending && !startPending)
-                }
-                onClick={() => onAct(service, "start")}
-                aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
-              >
-                <Play size={14} aria-hidden />
-                {startPending
-                  ? t("settings.services.action.starting")
-                  : t("settings.services.action.start")}
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                size="sm"
-                loading={stopPending}
-                disabled={
-                  !controlEnabled || !service.statusReady || stopped || (anyPending && !stopPending)
-                }
-                onClick={() => onAct(service, "stop")}
-                aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
-              >
-                <Square size={14} aria-hidden />
-                {stopPending
-                  ? t("settings.services.action.stopping")
-                  : t("settings.services.action.stop")}
-              </Button>
-            </div>
-          )}
+          <div className="flex gap-2" title={controlHint}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={startPending}
+              disabled={
+                !controlEnabled ||
+                !service.statusReady ||
+                running ||
+                (thisPending && !startPending)
+              }
+              onClick={() => onAct(service, "start")}
+              aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
+            >
+              <Play size={14} aria-hidden />
+              {startPending
+                ? t("settings.services.action.starting")
+                : t("settings.services.action.start")}
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              loading={stopPending}
+              disabled={
+                !controlEnabled || !service.statusReady || stopped || (thisPending && !stopPending)
+              }
+              onClick={() => onAct(service, "stop")}
+              aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
+            >
+              <Square size={14} aria-hidden />
+              {stopPending
+                ? t("settings.services.action.stopping")
+                : t("settings.services.action.stop")}
+            </Button>
+          </div>
         </div>
       </div>
       {logsOpen ? (
@@ -593,10 +529,7 @@ function ServiceLogPanel({
   logsQuery: UseQueryResult<ServiceLogsData>;
 }) {
   const content = logsQuery.data?.content ?? "";
-  const sourceKey =
-    logsQuery.data?.source === "uv"
-      ? "settings.services.logs.source.uv"
-      : "settings.services.logs.source.docker";
+  const sourceKey = "settings.services.logs.source.docker";
 
   async function copyLogs() {
     try {
@@ -726,7 +659,6 @@ const STATUS_META: Record<
   running: { className: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
   degraded: { className: "bg-amber-100 text-amber-700", icon: AlertTriangle },
   stopped: { className: "bg-slate-100 text-slate-600", icon: CircleSlash },
-  dependency_stopped: { className: "bg-amber-100 text-amber-700", icon: AlertTriangle },
   unconfigured: { className: "bg-slate-100 text-slate-500", icon: MinusCircle },
   loading: { className: "bg-slate-100 text-slate-600", icon: RefreshCw, spin: true },
   error: { className: "bg-rose-100 text-rose-700", icon: AlertTriangle },

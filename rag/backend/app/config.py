@@ -474,6 +474,16 @@ class Settings(BaseSettings):
             "API プロセスから隔離する。専用 worker container では False にして直接実行できる。"
         ),
     )
+    ingestion_job_subprocess_timeout_seconds: float = Field(
+        default=1200.0,
+        gt=0.0,
+        le=86400.0,
+        description=(
+            "process isolation 時の 1 取込 job 全体 timeout(秒)。"
+            "GPU/OCR parser の初回モデルロードや Hugging Face cache warmup を含めるため、"
+            "parser HTTP timeout とは分けて長めにする。"
+        ),
+    )
 
     # --- RAG ---
     rag_chunk_size: int = Field(default=800, ge=200, le=4000)
@@ -988,19 +998,11 @@ class Settings(BaseSettings):
     )
     rag_parser_dots_ocr_service_url: str = Field(
         default="http://parser-dots-ocr:8000",
-        description="Dots.OCR(GPU)parser マイクロサービスの base URL。",
-    )
-    rag_parser_dots_ocr_vllm_service_url: str = Field(
-        default="http://parser-dots-ocr-vllm:8000",
-        description="Dots.OCR 公式 vLLM sidecar の base URL。",
+        description="Dots.OCR(GPU)parser マイクロサービスの base URL(vLLM をイメージへ内包)。",
     )
     rag_parser_glm_ocr_service_url: str = Field(
         default="http://parser-glm-ocr:8000",
-        description="GLM-OCR(GPU)parser マイクロサービスの base URL。",
-    )
-    rag_parser_glm_ocr_vllm_service_url: str = Field(
-        default="http://parser-glm-ocr-vllm:8080",
-        description="GLM-OCR 公式 vLLM sidecar の base URL。",
+        description="GLM-OCR(GPU)parser マイクロサービスの base URL(vLLM をイメージへ内包)。",
     )
     rag_parser_asr_enabled: bool = Field(
         default=True,

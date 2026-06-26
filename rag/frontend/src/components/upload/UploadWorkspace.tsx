@@ -176,7 +176,6 @@ function UploadIngestionJobNotice({ job }: { job: IngestionJob | null | undefine
         {job.skip_reason ? (
           <span className="text-muted">{uploadSkipReasonLabel(job.skip_reason)}</span>
         ) : null}
-        {job.error_message ? <span className="text-danger">{job.error_message}</span> : null}
       </div>
     </Banner>
   );

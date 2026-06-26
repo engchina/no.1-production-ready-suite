@@ -66,12 +66,11 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
         distribution_names=("unstructured",),
         install_package="unstructured[all-docs]==0.23.1",
     ),
-    # Unlimited-OCR は専用 pip package が無く、GPU サービス image で transformers から
-    # HF モデルをロードして実 OCR する。import 検出は実行時 transformers の有無で代理する。
+    # Unlimited-OCR は parser image 内の公式 SGLang runtime を使う。
     "unlimited_ocr": ParserAdapterPackageSpec(
-        import_name="transformers",
-        distribution_names=("transformers",),
-        install_package="transformers (baidu/Unlimited-OCR via HuggingFace)",
+        import_name="sglang",
+        distribution_names=("sglang",),
+        install_package="parser-unlimited-ocr image (official SGLang wheel + baidu/Unlimited-OCR)",
     ),
     # PoweRAG 由来の OCR/解析エンジン。未導入時は missing として安全に fallback する。
     "mineru": ParserAdapterPackageSpec(
