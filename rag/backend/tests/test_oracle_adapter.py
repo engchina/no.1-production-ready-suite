@@ -971,6 +971,10 @@ async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitte
     assert "COALESCE(:extraction_json, t.extraction_json)" not in call.statement
     assert "t.extraction_json" not in matched_update
     assert call.parameters["extraction_json"] is None
+    assert call.parameters["recipe_subset"] == {"rag_parser_adapter_backend": "mineru"}
+    assert call.input_sizes["extraction_json"] == oracle_module._json_input_sizes(
+        "extraction_json"
+    )["extraction_json"]
 
 
 async def test_upsert_extraction_artifact_updates_payload_when_provided() -> None:
@@ -992,7 +996,32 @@ async def test_upsert_extraction_artifact_updates_payload_when_provided() -> Non
         1,
     )[0]
     assert "t.extraction_json = :extraction_json" in matched_update
-    assert call.parameters["extraction_json"] == '{"elements":[{"text":"本文"}]}'
+    assert call.parameters["extraction_json"] == {"elements": [{"text": "本文"}]}
+    assert call.input_sizes["extraction_json"] == oracle_module._json_input_sizes(
+        "extraction_json"
+    )["extraction_json"]
+
+
+async def test_upsert_extraction_artifact_binds_large_payload_as_json() -> None:
+    """大きい抽出 payload も VARCHAR2 ではなく JSON bind で渡す。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    large_text = "x" * 40000
+
+    await client.upsert_document_extraction_artifact(
+        document_id="doc-1",
+        extraction_recipe_id="ex-1",
+        source_sha256="a" * 64,
+        extraction={"elements": [{"text": large_text}]},
+        status="materialized",
+    )
+
+    call = pool.connection.calls[0]
+    assert len(json.dumps(call.parameters["extraction_json"])) > 32767
+    assert call.parameters["extraction_json"] == {"elements": [{"text": large_text}]}
+    assert call.input_sizes["extraction_json"] == oracle_module._json_input_sizes(
+        "extraction_json"
+    )["extraction_json"]
 
 
 async def test_oracle_replace_document_graph_index_replaces_document_scope() -> None:
@@ -1864,7 +1893,7 @@ def test_oracle_text_terms_extracts_safe_display_keywords() -> None:
 
 def test_oracle_text_terms_filters_japanese_particles_and_english_stopwords() -> None:
     """日本語助詞と英語 stopword は UI/Oracle Text query に出さない。"""
-    assert oracle_module.JAPANESE_QUERY_STOP_TERMS == set(oracle_module.ORACLE_TEXT_STOP_WORDS)
+    assert set(oracle_module.ORACLE_TEXT_STOP_WORDS) == oracle_module.JAPANESE_QUERY_STOP_TERMS
     assert oracle_text_terms("私の上司の興味はなんですか") == ["上司", "興味"]
     assert oracle_text_terms("申請へ承認") == ["申請", "承認"]
     assert oracle_text_terms("what is the expense policy and who approves it") == [
@@ -2705,6 +2734,7 @@ class SqlCall:
 
     statement: str
     parameters: dict[str, object]
+    input_sizes: dict[str, object]
 
 
 @dataclass
@@ -2797,11 +2827,17 @@ class FakeOracleCursor:
 
     def __init__(self, connection: FakeOracleConnection) -> None:
         self._connection = connection
+        self._input_sizes: dict[str, object] = {}
         self._rows: list[dict[str, object]] = []
         self.closed = False
 
+    def setinputsizes(self, **kwargs: object) -> None:
+        self._input_sizes.update(kwargs)
+
     def execute(self, statement: str, parameters: Mapping[str, object] | None = None) -> None:
-        self._connection.calls.append(SqlCall(statement, dict(parameters or {})))
+        self._connection.calls.append(
+            SqlCall(statement, dict(parameters or {}), dict(self._input_sizes))
+        )
         if self._connection.missing_ingestion_job_max_attempts and (
             "j.max_attempts" in statement
             or ("INSERT INTO rag_ingestion_jobs" in statement and "max_attempts" in statement)

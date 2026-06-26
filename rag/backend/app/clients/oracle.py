@@ -177,6 +177,9 @@ class OracleCursorProtocol(Protocol):
 
     description: Sequence[Sequence[Any]] | None
 
+    def setinputsizes(self, **kwargs: object) -> Any:
+        """bind 型を明示する。"""
+
     def execute(self, statement: str, parameters: Mapping[str, object] | None = None) -> Any:
         """SQL を実行する。"""
 
@@ -674,9 +677,9 @@ class OracleClient:
             "extraction_recipe_id": extraction_id,
             "document_id": document_id,
             "tenant_id_hash": tenant,
-            "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
-            "extraction_json": _json_dumps(extraction.to_document_payload()),
-            "metrics_json": _json_dumps(quality) if quality is not None else None,
+            "recipe_subset": _json_bind(recipe_subset),
+            "extraction_json": _json_bind(extraction.to_document_payload()),
+            "metrics_json": _json_bind(quality),
             "status": normalized_status,
         }
 
@@ -705,6 +708,11 @@ class OracleClient:
                             :extraction_json, :metrics_json, :status)
                 """,
                 binds,
+                input_sizes=_json_input_sizes(
+                    "recipe_subset",
+                    "extraction_json",
+                    "metrics_json",
+                ),
             )
 
         await self._run_transaction(operation)
@@ -766,7 +774,7 @@ class OracleClient:
         """
         binds = {
             "document_id": document_id,
-            "extraction_json": _json_dumps(extraction.to_document_payload()),
+            "extraction_json": _json_bind(extraction.to_document_payload()),
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -778,6 +786,7 @@ class OracleClient:
                 WHERE document_id = :document_id
                 """,
                 binds,
+                input_sizes=_json_input_sizes("extraction_json"),
             )
 
         await self._run_transaction(operation)
@@ -965,11 +974,11 @@ class OracleClient:
             "extraction_recipe_id": extraction_recipe_id,
             "source_sha256": source_sha256,
             "tenant_id_hash": tenant,
-            "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
-            "extraction_json": _json_dumps(extraction) if extraction is not None else None,
+            "recipe_subset": _json_bind(recipe_subset),
+            "extraction_json": _json_bind(extraction),
             "status": status,
             "reason": reason,
-            "metrics_json": _json_dumps(metrics) if metrics is not None else None,
+            "metrics_json": _json_bind(metrics),
         }
 
         extraction_update = (
@@ -1005,6 +1014,11 @@ class OracleClient:
                      :recipe_subset, :extraction_json, :status, :reason, :metrics_json)
                 """,
                 binds,
+                input_sizes=_json_input_sizes(
+                    "recipe_subset",
+                    "extraction_json",
+                    "metrics_json",
+                ),
             )
 
         await self._run_transaction(operation)
@@ -6004,10 +6018,16 @@ def _execute(
     connection: OracleConnectionProtocol,
     statement: str,
     binds: Mapping[str, object],
+    *,
+    input_sizes: Mapping[str, object] | None = None,
 ) -> None:
     cursor = connection.cursor()
     try:
         normalized = _normalize_sql(statement)
+        if input_sizes:
+            filtered_input_sizes = _binds_for_sql(normalized, input_sizes)
+            if filtered_input_sizes:
+                cursor.setinputsizes(**filtered_input_sizes)
         cursor.execute(normalized, _binds_for_sql(normalized, binds))
     finally:
         cursor.close()
@@ -7781,6 +7801,17 @@ def _json_default(value: object) -> object:
 
 def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+
+
+def _json_bind(value: object | None) -> object | None:
+    if value is None:
+        return None
+    return json.loads(_json_dumps(value))
+
+
+def _json_input_sizes(*names: str) -> dict[str, object]:
+    oracledb = importlib.import_module("oracledb")
+    return {name: oracledb.DB_TYPE_JSON for name in names}
 
 
 def _legacy_extraction_status(status: str) -> str:
