@@ -18,6 +18,7 @@ from app.schemas.service_management import (
     ServiceControlResultData,
     ServiceListData,
     ServiceLogsData,
+    ServiceModelCacheData,
     ServiceStatusData,
 )
 from app.services.catalog import (
@@ -26,6 +27,7 @@ from app.services.catalog import (
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
+    service_model_cache_host_path,
 )
 from app.services.control import (
     ServiceAction,
@@ -47,6 +49,14 @@ def _control_enabled(settings: Settings) -> bool:
     return is_dev_mode(settings) or bool(settings.rag_service_control_enabled)
 
 
+def _model_cache(settings: Settings, entry: ServiceCatalogEntry) -> ServiceModelCacheData | None:
+    """モデル DL を行うサービスのマウント情報(読み取り専用)を作る。"""
+    host_path = service_model_cache_host_path(settings, entry)
+    if entry.model_cache_path is None or host_path is None:
+        return None
+    return ServiceModelCacheData(container_path=entry.model_cache_path, host_path=host_path)
+
+
 def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCatalogItemData:
     """稼働状態を問い合わせず、カタログ情報だけを返す。"""
     return ServiceCatalogItemData(
@@ -56,6 +66,7 @@ def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCata
         label_key=entry.label_key,
         execution_policy=entry.execution_policy,
         configured=bool(service_health_url(settings, entry)),
+        model_cache=_model_cache(settings, entry),
     )
 
 
@@ -70,13 +81,8 @@ async def list_services() -> ApiResponse[ServiceListData]:
     statuses = await probe_service_statuses(settings)
     services = [
         ServiceStatusData(
-            service_id=entry.service_id,
-            category=entry.category,
-            profile=entry.profile,
-            label_key=entry.label_key,
-            execution_policy=entry.execution_policy,
+            **_catalog_item(settings, entry).model_dump(),
             status=statuses[entry.service_id],
-            configured=bool(service_health_url(settings, entry)),
         )
         for entry in SERVICE_CATALOG
     ]
@@ -210,3 +216,15 @@ async def stop_service(service_id: str) -> ApiResponse[ServiceControlResultData]
 async def restart_service(service_id: str) -> ApiResponse[ServiceControlResultData]:
     """サービスを再起動する(docker compose restart)。"""
     return await _control(service_id, "restart")
+
+
+@router.post("/{service_id}/build", response_model=ApiResponse[ServiceControlResultData])
+async def build_service(service_id: str) -> ApiResponse[ServiceControlResultData]:
+    """サービスのイメージをビルドする(docker compose build)。長時間になりうる。"""
+    return await _control(service_id, "build")
+
+
+@router.post("/{service_id}/remove", response_model=ApiResponse[ServiceControlResultData])
+async def remove_service(service_id: str) -> ApiResponse[ServiceControlResultData]:
+    """サービスのコンテナを削除する(docker compose rm -f -s)。"""
+    return await _control(service_id, "remove")

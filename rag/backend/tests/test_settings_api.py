@@ -81,7 +81,9 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["marker"]["warning_code"] == "adapter_flag_ignored_by_backend"
     assert by_backend["unstructured"]["install_package"] == "unstructured[all-docs]==0.23.1"
     assert by_backend["unstructured"]["status"] == "disabled"
-    assert by_backend["unlimited_ocr"]["install_package"].startswith("sglang")
+    # unlimited_ocr は pip ではなく image 内包(公式 SGLang wheel + baidu/Unlimited-OCR)で配信する。
+    unlimited_pkg = by_backend["unlimited_ocr"]["install_package"]
+    assert "image" in unlimited_pkg and "SGLang" in unlimited_pkg
     assert by_backend["unlimited_ocr"]["status"] == "disabled"
     assert by_backend["mineru"]["install_package"] == "mineru[core]==3.4.0"
     assert by_backend["mineru"]["status"] == "disabled"
@@ -3096,6 +3098,84 @@ def _payload() -> dict[str, Any]:
             "rerank_model": "cohere.rerank-v4.0-fast",
         },
     }
+
+
+def test_get_huggingface_settings_masks_token(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "huggingface_download_dir", "/u01/models/huggingface")
+    monkeypatch.setattr(settings, "huggingface_endpoint", "https://hf-mirror.com")
+    monkeypatch.setattr(settings, "huggingface_token", "hf_secret")
+
+    body = client.get("/api/settings/huggingface").json()["data"]
+
+    assert body["download_dir"] == "/u01/models/huggingface"
+    assert body["endpoint"] == "https://hf-mirror.com"
+    assert body["token_configured"] is True
+    # token 実値はレスポンスに含めない。
+    assert "token" not in body
+    assert body["config_source"] == "runtime"
+
+
+def test_update_huggingface_settings_persists_env_and_mutates_runtime(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "huggingface_token", "")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch(
+        "/api/settings/huggingface",
+        json={
+            "download_dir": "/u01/models/huggingface",
+            "endpoint": "https://hf-mirror.com",
+            "token": "hf_new",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["download_dir"] == "/u01/models/huggingface"
+    assert body["endpoint"] == "https://hf-mirror.com"
+    assert body["token_configured"] is True
+    assert settings.huggingface_token == "hf_new"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "HUGGINGFACE_DOWNLOAD_DIR=/u01/models/huggingface" in env_text
+    assert "HF_TOKEN=hf_new" in env_text
+    assert "HF_ENDPOINT=https://hf-mirror.com" in env_text
+
+
+def test_update_huggingface_settings_keeps_token_when_blank(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "huggingface_token", "hf_existing")
+    _settings_env_file(monkeypatch, tmp_path)
+
+    # token 未指定なら既存値を保持し、clear_token で削除する。
+    resp = client.patch(
+        "/api/settings/huggingface",
+        json={"download_dir": "/u01/models/huggingface", "endpoint": ""},
+    )
+    assert resp.status_code == 200
+    assert settings.huggingface_token == "hf_existing"
+
+    resp = client.patch(
+        "/api/settings/huggingface",
+        json={"download_dir": "/u01/models/huggingface", "endpoint": "", "clear_token": True},
+    )
+    assert resp.status_code == 200
+    assert settings.huggingface_token == ""
+    assert resp.json()["data"]["token_configured"] is False
+
+
+def test_update_huggingface_settings_rejects_relative_dir() -> None:
+    resp = client.patch(
+        "/api/settings/huggingface",
+        json={"download_dir": "models/huggingface", "endpoint": ""},
+    )
+    assert resp.status_code == 422
 
 
 def _wallet_zip(entries: dict[str, str] | None = None) -> bytes:

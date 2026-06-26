@@ -16,6 +16,7 @@ import {
   type AdbSettingsUpdate,
   type DashboardActivity,
   type DatabaseSettingsUpdate,
+  type HuggingFaceSettingsUpdate,
   type DocumentApproveRequest,
   type DocumentDetail,
   type DocumentSummary,
@@ -110,6 +111,7 @@ export const queryKeys = {
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
   adbInfo: ["settings", "database", "adb"] as const,
+  huggingfaceSettings: ["settings", "huggingface"] as const,
   uploadStorageSettings: ["settings", "upload-storage"] as const,
   parserAdapterSettings: ["settings", "parser-adapters"] as const,
   parserAdapterContract: ["settings", "parser-adapters", "contract"] as const,
@@ -859,6 +861,27 @@ export function useUpdateDatabaseSettings() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** HuggingFace モデルダウンロード設定。 */
+export function useHuggingFaceSettings() {
+  return useQuery({
+    queryKey: queryKeys.huggingfaceSettings,
+    queryFn: api.getHuggingFaceSettings,
+  });
+}
+
+/** HuggingFace 設定のランタイム保存(マウント先 host_path が変わるためサービス一覧も無効化)。 */
+export function useUpdateHuggingFaceSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: HuggingFaceSettingsUpdate) => api.updateHuggingFaceSettings(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.huggingfaceSettings });
+      qc.invalidateQueries({ queryKey: queryKeys.services });
+      qc.invalidateQueries({ queryKey: queryKeys.serviceCatalog });
     },
   });
 }

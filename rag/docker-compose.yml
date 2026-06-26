@@ -24,6 +24,20 @@ x-parser-service-urls: &parser-service-urls
   RAG_PREPROCESS_CSV_TO_JSON_SERVICE_URL: http://preprocess-csv-to-json:8000
   RAG_PREPROCESS_EXCEL_TO_JSON_SERVICE_URL: http://preprocess-excel-to-json:8000
 
+# HuggingFace の DL ミラー/認証を各モデル parser へ供給する。
+# - build 時(焼き込み)はミラーのみ渡す。token は image 履歴へ残さないため build-arg にしない
+#   (gated モデルの焼き込みが必要なら BuildKit secret を使う)。
+# - runtime(実行時 DL)は token + ミラーの両方を env で渡す。
+# 値は backend のサービス制御が subprocess env で注入する(空なら公式 hub・匿名 DL)。
+# HF_ENDPOINT は空文字を渡すと huggingface_hub がそれをリテラル endpoint として採用し、
+# scheme 無し URL(httpx.UnsupportedProtocol)で DL が失敗する。未設定/空のときは公式 hub を
+# 既定にする(`:-` は空も未設定扱い)。ミラー利用時はその値で上書きされる。
+x-hf-build-args: &hf-build-args
+  HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+x-hf-env: &hf-env
+  HF_TOKEN: ${HF_TOKEN:-}
+  HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+
 services:
   backend:
     build:
@@ -163,12 +177,16 @@ services:
     build:
       context: .
       dockerfile: services/parsers/docling/Dockerfile
+      args: *hf-build-args
+    environment: *hf-env
     restart: unless-stopped
 
   parser-marker:
     build:
       context: .
       dockerfile: services/parsers/marker/Dockerfile
+      args: *hf-build-args
+    environment: *hf-env
     restart: unless-stopped
 
   parser-unstructured:
@@ -183,7 +201,9 @@ services:
     build:
       context: .
       dockerfile: services/parsers/unlimited_ocr/Dockerfile
+      args: *hf-build-args
     environment:
+      <<: *hf-env
       UNLIMITED_OCR_RUNTIME: ${UNLIMITED_OCR_RUNTIME:-sglang}
       UNLIMITED_OCR_MODEL_ID: ${UNLIMITED_OCR_MODEL_ID:-baidu/Unlimited-OCR}
       UNLIMITED_OCR_SGLANG_MODEL: ${UNLIMITED_OCR_SGLANG_MODEL:-Unlimited-OCR}
@@ -201,8 +221,6 @@ services:
     restart: unless-stopped
     ipc: host
     shm_size: "32g"
-    volumes:
-      - hf-cache:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -216,10 +234,9 @@ services:
     build:
       context: .
       dockerfile: services/parsers/mineru/Dockerfile
+      args: *hf-build-args
+    environment: *hf-env
     restart: unless-stopped
-    # MinerU はプロセス内でモデルをロードするため、再生成のたびの再 DL を避けて cache を永続化する。
-    volumes:
-      - hf-cache:/home/appuser/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -236,12 +253,12 @@ services:
     build:
       context: .
       dockerfile: services/parsers/dots_ocr/Dockerfile
+      args: *hf-build-args
     # vLLM の共有メモリ要件(--shm-size 相当)。
     ipc: host
     environment:
-      DOTS_OCR_GPU_MEMORY_UTILIZATION: ${DOTS_OCR_GPU_MEMORY_UTILIZATION:-0.90}
-    volumes:
-      - hf-cache:/root/.cache/huggingface
+      <<: *hf-env
+      DOTS_OCR_GPU_MEMORY_UTILIZATION: ${DOTS_OCR_GPU_MEMORY_UTILIZATION:-0.9}
     restart: unless-stopped
     deploy:
       resources:
@@ -259,12 +276,12 @@ services:
     build:
       context: .
       dockerfile: services/parsers/glm_ocr/Dockerfile
+      args: *hf-build-args
     # vLLM の共有メモリ要件(--shm-size 相当)。
     ipc: host
     environment:
-      GLM_OCR_GPU_MEMORY_UTILIZATION: ${GLM_OCR_GPU_MEMORY_UTILIZATION:-0.90}
-    volumes:
-      - hf-cache:/root/.cache/huggingface
+      <<: *hf-env
+      GLM_OCR_GPU_MEMORY_UTILIZATION: ${GLM_OCR_GPU_MEMORY_UTILIZATION:-0.9}
     restart: unless-stopped
     deploy:
       resources:
@@ -279,6 +296,8 @@ services:
     build:
       context: .
       dockerfile: services/parsers/asr/Dockerfile
+      args: *hf-build-args
+    environment: *hf-env
     restart: unless-stopped
     deploy:
       resources:
@@ -387,4 +406,3 @@ services:
 volumes:
   backend-local-storage:
   oci-config:
-  hf-cache:

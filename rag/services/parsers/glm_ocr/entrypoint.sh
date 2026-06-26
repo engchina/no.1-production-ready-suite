@@ -12,7 +12,7 @@ set -eu
 
 : "${GLM_OCR_MODEL:=zai-org/GLM-OCR}"
 : "${GLM_OCR_SERVED_MODEL_NAME:=glm-ocr}"
-: "${GLM_OCR_GPU_MEMORY_UTILIZATION:=0.90}"
+: "${GLM_OCR_GPU_MEMORY_UTILIZATION:=0.9}"
 : "${GLM_OCR_TENSOR_PARALLEL_SIZE:=1}"
 # 追加チューニング(例: 投機的デコード `--speculative-config.method mtp ...`)は
 # GLM_OCR_VLLM_EXTRA_ARGS で渡す(再ビルド不要の calibration knob)。

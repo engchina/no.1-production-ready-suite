@@ -310,6 +310,41 @@ class DatabaseSettingsUpdate(BaseModel):
         return value.strip()
 
 
+class HuggingFaceSettingsData(BaseModel):
+    """HuggingFace モデルダウンロード設定の表示用データ(token 実値は返さない)。"""
+
+    download_dir: str
+    endpoint: str
+    token_configured: bool
+    config_source: Literal["runtime"]
+
+
+class HuggingFaceSettingsUpdate(BaseModel):
+    """HuggingFace 設定の更新 payload。
+
+    token は未指定または空文字なら既存値を保持する。clear_token が true の場合だけ削除する。
+    """
+
+    download_dir: str = Field(default="", max_length=1024)
+    endpoint: str = Field(default="", max_length=512)
+    token: str | None = Field(default=None, max_length=4096)
+    clear_token: bool = False
+
+    @field_validator("download_dir", "endpoint")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        """前後空白を設定値へ混入させない。"""
+        return value.strip()
+
+    @field_validator("download_dir")
+    @classmethod
+    def validate_absolute_dir(cls, value: str) -> str:
+        """ダウンロードディレクトリは bind マウントの基点になるため絶対パスに限定する。"""
+        if value and not value.startswith("/"):
+            raise ValueError("ダウンロードディレクトリは絶対パス(/ 始まり)で入力してください。")
+        return value
+
+
 class UploadStorageSettingsData(BaseModel):
     """アップロード原本保存先の表示用データ。"""
 
@@ -634,10 +669,7 @@ class ChunkingSettingsUpdate(BaseModel):
             return self
         if self.overlap >= self.chunk_size:
             raise ValueError("overlap は chunk_size より小さくしてください。")
-        if (
-            self.strategy == "hierarchical_parent_child"
-            and self.child_size >= self.chunk_size
-        ):
+        if self.strategy == "hierarchical_parent_child" and self.child_size >= self.chunk_size:
             raise ValueError("child_size は chunk_size より小さくしてください。")
         if (
             self.strategy in _CHUNKING_STRATEGIES_WITH_MIN_CHARS

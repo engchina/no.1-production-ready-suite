@@ -1141,6 +1141,21 @@ export interface DatabaseConnectionTestResult {
   error_type: string | null;
 }
 
+// --- 設定: HuggingFace モデルダウンロード ---
+export interface HuggingFaceSettingsData {
+  download_dir: string;
+  endpoint: string;
+  token_configured: boolean;
+  config_source: "runtime";
+}
+
+export interface HuggingFaceSettingsUpdate {
+  download_dir: string;
+  endpoint: string;
+  token?: string;
+  clear_token?: boolean;
+}
+
 // --- 設定: アップロード保存先 ---
 export interface UploadStorageSettingsData {
   backend: UploadStorageBackend;
@@ -1382,7 +1397,13 @@ export type ServiceExecutionPolicy =
   | "required_no_fallback"
   | "in_process_when_disabled"
   | "selected_adapter";
-export type ServiceAction = "start" | "stop" | "restart";
+export type ServiceAction = "start" | "stop" | "restart" | "build" | "remove";
+
+export interface ServiceModelCacheData {
+  container_path: string;
+  host_path: string;
+  editable: false;
+}
 
 export interface ServiceCatalogItemData {
   service_id: string;
@@ -1391,6 +1412,7 @@ export interface ServiceCatalogItemData {
   label_key: string;
   execution_policy: ServiceExecutionPolicy;
   configured: boolean;
+  model_cache: ServiceModelCacheData | null;
 }
 
 export interface ServiceStatusData extends ServiceCatalogItemData {
@@ -2212,6 +2234,16 @@ export const api = {
     request<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
   startAdb: () => request<AdbInfoData>("/api/settings/database/adb/start", { method: "POST" }),
   stopAdb: () => request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
+
+  // 設定: HuggingFace モデルダウンロード
+  getHuggingFaceSettings: () =>
+    request<HuggingFaceSettingsData>("/api/settings/huggingface"),
+  updateHuggingFaceSettings: (body: HuggingFaceSettingsUpdate) =>
+    request<HuggingFaceSettingsData>("/api/settings/huggingface", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 
   // 設定: アップロード保存先
   getUploadStorageSettings: () =>

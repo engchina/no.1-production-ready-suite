@@ -2,6 +2,7 @@ import {
   Database,
   FlaskConical,
   FileSearch,
+  HardDriveDownload,
   FileStack,
   Library,
   Cloud,
@@ -166,6 +167,12 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsDatabase",
         sidebarLabelKey: "nav.settingsDatabase.sidebar",
         icon: Database,
+      },
+      {
+        href: APP_ROUTES.settingsHuggingface,
+        labelKey: "nav.settingsHuggingface",
+        sidebarLabelKey: "nav.settingsHuggingface.sidebar",
+        icon: HardDriveDownload,
       },
       {
         href: APP_ROUTES.settingsServices,

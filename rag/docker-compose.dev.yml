@@ -9,6 +9,15 @@
 # GPU(unlimited_ocr/mineru/dots_ocr/glm_ocr/asr)は base 側の profiles:["gpu"] を継承するため
 # --profile gpu が併用される。oci parser は profiles:["oci"]。
 # 推論サーバー(SGLang/vLLM)は各 parser イメージへ内包するため、別建ての sidecar ポート公開は不要。
+#
+# モデルは dev では **イメージへ焼き込まず**(BAKE_MODELS=0)、host の
+# ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/<service_id> を各コンテナの ~/.cache へ
+# bind マウントして共有・永続化する(初回 DL は HuggingFace 設定の token/ミラーで実施)。
+# host サブディレクトリは backend のサービス制御が start 前に mkdir する。
+x-dev-no-bake: &dev-no-bake
+  args:
+    BAKE_MODELS: "0"
+
 services:
   # ---- 前処理(preprocess)----
   preprocess-office-to-pdf:
@@ -41,10 +50,16 @@ services:
 
   # ---- 解析(parser CPU)----
   parser-docling:
+    build: *dev-no-bake
+    volumes:
+      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-docling:/home/appuser/.cache
     ports:
       - "127.0.0.1:18020:8000"
 
   parser-marker:
+    build: *dev-no-bake
+    volumes:
+      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-marker:/home/appuser/.cache
     ports:
       - "127.0.0.1:18021:8000"
 
@@ -54,22 +69,37 @@ services:
 
   # ---- 解析(parser GPU)----
   parser-unlimited-ocr:
+    build: *dev-no-bake
+    volumes:
+      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-unlimited-ocr:/root/.cache
     ports:
       - "127.0.0.1:18029:8000"
 
   parser-mineru:
+    build: *dev-no-bake
+    volumes:
+      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-mineru:/home/appuser/.cache
     ports:
       - "127.0.0.1:18023:8000"
 
   parser-dots-ocr:
+    build: *dev-no-bake
+    volumes:
+      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-dots-ocr:/root/.cache
     ports:
       - "127.0.0.1:18024:8000"
 
   parser-glm-ocr:
+    build: *dev-no-bake
+    volumes:
+      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-glm-ocr:/root/.cache
     ports:
       - "127.0.0.1:18025:8000"
 
   parser-asr:
+    build: *dev-no-bake
+    volumes:
+      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-asr:/home/appuser/.cache
     ports:
       - "127.0.0.1:18026:8000"
 

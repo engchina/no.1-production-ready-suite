@@ -12,7 +12,7 @@ set -eu
 
 : "${DOTS_OCR_MODEL:=rednote-hilab/dots.mocr}"
 : "${DOTS_OCR_SERVED_MODEL_NAME:=model}"
-: "${DOTS_OCR_GPU_MEMORY_UTILIZATION:=0.90}"
+: "${DOTS_OCR_GPU_MEMORY_UTILIZATION:=0.9}"
 : "${DOTS_OCR_TENSOR_PARALLEL_SIZE:=1}"
 # 追加チューニングは DOTS_OCR_VLLM_EXTRA_ARGS で渡す(再ビルド不要の calibration knob)。
 : "${DOTS_OCR_VLLM_EXTRA_ARGS:=}"

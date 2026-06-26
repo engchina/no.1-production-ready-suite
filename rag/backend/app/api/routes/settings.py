@@ -123,6 +123,8 @@ from app.schemas.settings import (
     GuardrailPolicyStatusData,
     GuardrailSettingsData,
     GuardrailSettingsUpdate,
+    HuggingFaceSettingsData,
+    HuggingFaceSettingsUpdate,
     ModelSettingsCheckStatus,
     ModelSettingsData,
     ModelSettingsPayload,
@@ -324,6 +326,24 @@ async def update_database_settings(
     _apply_database_settings(settings, candidate)
     close_oracle_pool()
     return ApiResponse(data=_database_settings_data(settings))
+
+
+@router.get("/huggingface", response_model=ApiResponse[HuggingFaceSettingsData])
+async def get_huggingface_settings() -> ApiResponse[HuggingFaceSettingsData]:
+    """HuggingFace モデルダウンロード設定を返す。token 実値は返さない。"""
+    return ApiResponse(data=_huggingface_settings_data(get_settings()))
+
+
+@router.patch("/huggingface", response_model=ApiResponse[HuggingFaceSettingsData])
+async def update_huggingface_settings(
+    payload: HuggingFaceSettingsUpdate,
+) -> ApiResponse[HuggingFaceSettingsData]:
+    """HuggingFace 設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = _huggingface_settings_candidate(settings, payload)
+    _persist_huggingface_settings(candidate)
+    _apply_huggingface_settings(settings, candidate)
+    return ApiResponse(data=_huggingface_settings_data(settings))
 
 
 @router.post("/database/wallet", response_model=ApiResponse[DatabaseSettingsData])
@@ -1462,6 +1482,54 @@ def _persist_database_settings(settings: Settings) -> None:
         values,
         section_comment="# Oracle 26ai",
         error_detail="Oracle 26ai 接続設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _huggingface_settings_data(settings: Settings) -> HuggingFaceSettingsData:
+    """Settings から HuggingFace 設定の表示用データを作る(token 実値は返さない)。"""
+    return HuggingFaceSettingsData(
+        download_dir=settings.huggingface_download_dir,
+        endpoint=settings.huggingface_endpoint,
+        token_configured=bool(settings.huggingface_token.strip()),
+        config_source="runtime",
+    )
+
+
+def _huggingface_settings_candidate(
+    base: Settings,
+    payload: HuggingFaceSettingsUpdate,
+) -> Settings:
+    """更新 payload を適用した一時 Settings を作る。download_dir 空は既定を保持する。"""
+    updates = {
+        "huggingface_download_dir": payload.download_dir or base.huggingface_download_dir,
+        "huggingface_endpoint": payload.endpoint,
+        "huggingface_token": _secret_value(
+            current=base.huggingface_token,
+            update=payload.token,
+            clear=payload.clear_token,
+        ),
+    }
+    return base.model_copy(update=updates)
+
+
+def _apply_huggingface_settings(target: Settings, source: Settings) -> None:
+    """HuggingFace 関連設定だけ現在プロセスへ反映する。"""
+    target.huggingface_download_dir = source.huggingface_download_dir
+    target.huggingface_endpoint = source.huggingface_endpoint
+    target.huggingface_token = source.huggingface_token
+
+
+def _persist_huggingface_settings(settings: Settings) -> None:
+    """HuggingFace 設定を backend/.env へ永続化する(env キーは標準名)。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "HUGGINGFACE_DOWNLOAD_DIR": settings.huggingface_download_dir,
+            "HF_TOKEN": settings.huggingface_token,
+            "HF_ENDPOINT": settings.huggingface_endpoint,
+        },
+        section_comment="# HuggingFace モデルダウンロード",
+        error_detail="HuggingFace 設定を backend/.env へ保存できませんでした。",
     )
 
 

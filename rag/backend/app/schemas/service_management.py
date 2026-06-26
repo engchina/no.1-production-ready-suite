@@ -13,6 +13,19 @@ DeploymentMode = Literal["dev", "prod"]
 ServiceLogsSource = Literal["docker"]
 
 
+class ServiceModelCacheData(BaseModel):
+    """モデル DL を行うサービスのキャッシュマウント情報(dev・読み取り専用表示)。"""
+
+    container_path: str = Field(description="コンテナ内 HF キャッシュ実体パス。")
+    host_path: str = Field(
+        description="host のマウント元 <download_dir>/<service_id>。dev で bind される。",
+    )
+    editable: Literal[False] = Field(
+        default=False,
+        description="マウント先は固定。UI からは編集不可(download_dir 設定でのみ変わる)。",
+    )
+
+
 class ServiceCatalogItemData(BaseModel):
     """1 マイクロサービスの非機密カタログ情報(稼働プローブなし)。"""
 
@@ -25,6 +38,10 @@ class ServiceCatalogItemData(BaseModel):
     )
     configured: bool = Field(
         description="base URL が設定済みか(未設定なら status=unconfigured)。",
+    )
+    model_cache: ServiceModelCacheData | None = Field(
+        default=None,
+        description="モデル DL を行うサービスのキャッシュマウント情報。なければ None。",
     )
 
 

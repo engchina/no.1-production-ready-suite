@@ -284,11 +284,11 @@ describe("api.request envelope", () => {
     await api.listIngestionJobs({ status: "FAILED", limit: 10, offset: 20 });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/documents/doc-1/ingestion-jobs?force=true&phase=EXTRACT"
+      "/api/documents/doc-1/ingestion-jobs?force=true&phase=PREPROCESS"
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
     expect(fetchMock.mock.calls[1][0]).toBe(
-      "/api/documents/doc-2/ingestion-jobs?phase=EXTRACT"
+      "/api/documents/doc-2/ingestion-jobs?phase=PREPROCESS"
     );
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "POST" });
     expect(fetchMock.mock.calls[2][0]).toBe("/api/documents/ingestion-jobs/job-1");

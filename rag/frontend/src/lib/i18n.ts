@@ -103,6 +103,8 @@ export const ja = {
   "nav.settingsModel.sidebar": "モデル",
   "nav.settingsDatabase": "データベース設定",
   "nav.settingsDatabase.sidebar": "データベース",
+  "nav.settingsHuggingface": "HuggingFace 設定",
+  "nav.settingsHuggingface.sidebar": "HuggingFace",
   "nav.settingsServices": "サービス管理",
   "nav.settingsServices.sidebar": "サービス",
   "nav.settingsPrompts": "プロンプト設定",
@@ -383,18 +385,24 @@ export const ja = {
     "前処理 / Parser / pipeline マイクロサービスの稼働状態を確認し、起動・停止します。",
   "settings.services.overview.title": "マイクロサービス",
   "settings.services.overview.description":
-    "各サービスの /health を定期的に確認して稼働状態を表示します。起動/停止は配備モード(dev=uv プロセス / prod=docker)に従います。",
+    "各サービスの /health を確認して稼働状態を表示します。起動/停止は docker compose で行います。",
   "settings.services.controlEnabled": "起動/停止",
   "settings.services.controlEnabled.on": "有効",
   "settings.services.controlEnabled.off": "無効(可視化のみ)",
   "settings.services.controlDisabled.hint":
     "起動/停止は無効です。有効化するには rag_service_control_enabled=true を設定してください。",
-  "settings.services.mode.dev": "開発 (uv)",
+  "settings.services.mode.dev": "開発 (docker)",
   "settings.services.mode.prod": "本番 (docker)",
   "settings.services.mode.dev.hint":
-    "開発モード(ENVIRONMENT=dev)です。前処理は uv 管理のローカル Python プロセス、Parser(重い ML 依存)は docker compose で起動します。Parser は初回にイメージ build が走るため、事前ビルドを推奨します。",
+    "開発モード(ENVIRONMENT=dev)。Parser は初回起動時にイメージ build が走るため、事前ビルドを推奨します。",
   "settings.services.mode.prod.hint":
     "本番モード(ENVIRONMENT=prod)です。起動/停止は docker compose を呼びます。",
+  "settings.services.commands.title": "実行コマンド",
+  "settings.services.commands.description":
+    "起動前に推奨するビルド/準備コマンド。ホストのリポジトリ root で実行します。",
+  "settings.services.commands.buildAll.label": "CPU サービスを事前ビルド(前処理 / Parser CPU / pipeline)",
+  "settings.services.commands.buildGpu.label": "GPU parser を事前ビルド(例: GLM-OCR)",
+  "settings.services.commands.copy": "コピー",
   "settings.services.refresh": "更新",
   "settings.services.refreshing": "更新中",
   "settings.services.lastUpdated": "最終更新: {time}",
@@ -429,6 +437,10 @@ export const ja = {
   "settings.services.status.unconfigured": "未設定",
   "settings.services.status.loading": "確認中",
   "settings.services.status.error": "取得失敗",
+  "settings.services.modelCache.label": "モデルキャッシュ",
+  "settings.services.modelCache.readonly": "変更不可",
+  "settings.services.modelCache.hint":
+    "HuggingFace 設定のダウンロードディレクトリ配下に host マウントされます(編集はそちらで)。",
   "settings.services.statusLoadingHint": "状態確認中です。",
   "settings.services.statusLoadErrorHint": "状態を取得できませんでした。更新してください。",
   "settings.services.requiredService": "必須サービス",
@@ -444,6 +456,10 @@ export const ja = {
   "settings.services.action.stop": "停止",
   "settings.services.action.starting": "起動中",
   "settings.services.action.stopping": "停止中",
+  "settings.services.action.build": "ビルド",
+  "settings.services.action.building": "ビルド中",
+  "settings.services.action.remove": "削除",
+  "settings.services.action.removing": "削除中",
   "settings.services.action.logs": "ログ",
   "settings.services.action.hideLogs": "ログを閉じる",
   "settings.services.logs.title": "{service} のログ",
@@ -459,9 +475,15 @@ export const ja = {
   "settings.services.confirm.stop.description":
     "{service} を停止します。このサービスを必須とする処理段階は利用できなくなります。",
   "settings.services.confirm.stop.confirm": "停止する",
+  "settings.services.confirm.remove.title": "コンテナを削除しますか?",
+  "settings.services.confirm.remove.description":
+    "{service} のコンテナを削除します(稼働中なら停止してから削除)。イメージは残るため、再起動で再生成できます。",
+  "settings.services.confirm.remove.confirm": "削除する",
   "settings.services.confirm.cancel": "キャンセル",
   "settings.services.toast.started": "{service} を起動しました。",
   "settings.services.toast.stopped": "{service} を停止しました。",
+  "settings.services.toast.built": "{service} のイメージをビルドしました。",
+  "settings.services.toast.removed": "{service} のコンテナを削除しました。",
   "settings.services.toast.failed": "{service} の操作に失敗しました。",
   "settings.services.item.preprocessOfficeToPdf": "Office→PDF",
   "settings.services.item.preprocessPdfToPageImages": "PDF→画像PDF",
@@ -1082,6 +1104,54 @@ export const ja = {
   "settings.model.validation.payloadTemplate":
     "Payload template は JSON object で入力してください。",
 
+  "settings.huggingface.subtitle":
+    "parser のモデルダウンロード先・認証 token・ミラー endpoint を設定します。",
+  "settings.huggingface.loadError": "HuggingFace 設定の取得に失敗しました。",
+  "settings.huggingface.saveError":
+    "HuggingFace 設定の保存に失敗しました。入力値とサーバー側 .env の書き込み権限を確認してください。",
+  "settings.huggingface.cardTitle": "HuggingFace モデルダウンロード",
+  "settings.huggingface.field.downloadDir": "ダウンロードディレクトリ",
+  "settings.huggingface.placeholder.downloadDir": "/u01/models/huggingface",
+  "settings.huggingface.helper.downloadDir":
+    "dev では各サービスのモデルキャッシュを、このディレクトリ配下のサービス別フォルダに host マウントします。絶対パスで入力してください。",
+  "settings.huggingface.helper.downloadDirSetup":
+    "host マウント前に、ディレクトリを作成して書き込み権限を付与してください。下のコマンドをそのままコピーして実行できます。",
+  "settings.huggingface.actions.copyCommand": "コマンドをコピー",
+  "settings.huggingface.field.endpoint": "ミラー endpoint(任意)",
+  "settings.huggingface.placeholder.endpoint": "https://hf-mirror.com",
+  "settings.huggingface.helper.endpoint":
+    "公式 huggingface.co へ到達しづらい環境ではミラーを指定します。空欄なら公式 hub を使います。",
+  "settings.huggingface.field.token": "ダウンロード token(任意)",
+  "settings.huggingface.placeholder.token": "hf_********************",
+  "settings.huggingface.placeholder.tokenSaved": "保存済み(変更する場合だけ入力)",
+  "settings.huggingface.helper.token":
+    "gated モデルや rate limit 緩和のための HuggingFace アクセス token。各 parser コンテナへ env で渡します。",
+  "settings.huggingface.helper.tokenSaved": "token は保存済みです。変更する場合だけ入力してください。",
+  "settings.huggingface.secrets.saved": "保存済み",
+  "settings.huggingface.secrets.clearToken": "保存済み token を削除する",
+  "settings.huggingface.secrets.show": "token を表示",
+  "settings.huggingface.secrets.hide": "token を隠す",
+  "settings.huggingface.validation.absolutePath":
+    "ダウンロードディレクトリは絶対パス(/ 始まり)で入力してください。",
+  "settings.huggingface.actions.save": "保存する",
+  "settings.huggingface.actions.saving": "保存中…",
+  "settings.huggingface.actions.saved": "保存しました",
+  "settings.huggingface.hint":
+    "保存した値は backend/.env に書き込まれ、dev のサービス起動時に各 parser へ供給されます。既存コンテナは再作成で反映されます。",
+  "settings.huggingface.env.description": "保存される backend/.env のプレビュー(token はマスク)。",
+  "settings.huggingface.ops.description": "保存後の挙動。",
+  "settings.huggingface.ops.persist":
+    "値は backend の .env に保存します(キー: HUGGINGFACE_DOWNLOAD_DIR / HF_TOKEN / HF_ENDPOINT)。",
+  "settings.huggingface.ops.mount":
+    "dev はダウンロードディレクトリ配下のサービス別フォルダを、各 parser の ~/.cache へ host マウントします。",
+  "settings.huggingface.ops.bake": "prod・配布イメージはモデルを焼き込み済みのため、この設定は実行時 DL/認証にのみ使います。",
+  "settings.huggingface.status.title": "ダウンロード設定の状態",
+  "settings.huggingface.status.description": "現在の token / ミラーの設定状況。",
+  "settings.huggingface.status.token": "認証 token",
+  "settings.huggingface.status.tokenConfigured": "設定済み",
+  "settings.huggingface.status.tokenNotConfigured": "未設定(匿名 DL)",
+  "settings.huggingface.status.endpoint": "ミラー endpoint",
+  "settings.huggingface.status.endpointDefault": "公式 hub",
   "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
   "settings.database.loading": "データベース設定を読み込んでいます。",
   "settings.database.loadError": "データベース設定の取得に失敗しました。",

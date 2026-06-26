@@ -220,6 +220,21 @@ async function mockServices(
       },
     });
   });
+  for (const action of ["build", "remove"] as const) {
+    await page.route(`**/api/services/*/${action}`, async (route) => {
+      const id =
+        route.request().url().match(new RegExp(`services/([^/]+)/${action}`))?.[1] ?? "";
+      const target = state.services.find((s) => s.service_id === decodeURIComponent(id));
+      if (action === "remove" && target) target.status = "stopped";
+      await route.fulfill({
+        json: {
+          data: { service_id: id, action, status: target?.status ?? "stopped" },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+    });
+  }
 }
 
 test.beforeEach(async ({ page }) => {
@@ -320,13 +335,13 @@ test("制御無効時(prod)は起動/停止ボタンが disabled", async ({ page
   ).toBeDisabled();
 });
 
-test("dev モードは uv バッジと有効化された制御を表示する", async ({ page }) => {
+test("dev モードは docker バッジと有効化された制御を表示する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
 
   await page.goto("/settings/services");
 
-  await expect(page.getByText("開発 (uv)")).toBeVisible();
+  await expect(page.getByText("開発 (docker)")).toBeVisible();
   await expect(
     page.getByText("開発モード", { exact: false })
   ).toBeVisible();
@@ -337,6 +352,43 @@ test("dev モードは uv バッジと有効化された制御を表示する", 
   await expect(
     page.getByRole("button", { name: "Dots.OCR 起動" })
   ).toBeEnabled();
+});
+
+test("各サービスにビルドとコンテナ削除のボタンがあり操作できる", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+
+  await page.goto("/settings/services");
+
+  // ビルドは確認なしで実行 → トースト。
+  await page.getByRole("button", { name: "Docling ビルド" }).click();
+  await expect(page.getByText("Docling のイメージをビルドしました。")).toBeVisible();
+
+  // 削除は破壊的なので確認ダイアログを経て実行 → トースト。
+  await page.getByRole("button", { name: "Docling 削除" }).click();
+  await page.getByRole("button", { name: "削除する" }).click();
+  await expect(page.getByText("Docling のコンテナを削除しました。")).toBeVisible();
+});
+
+test("実行コマンドは既定で折りたたまれ、展開すると dev のビルドコマンドを表示する", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+
+  await page.goto("/settings/services");
+
+  const devBuild = "docker compose -f docker-compose.yml -f docker-compose.dev.yml build";
+  // 既定では閉じている(コマンドは描画されない)。
+  await expect(page.getByText(devBuild, { exact: false })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "実行コマンド" }).click();
+
+  // 展開すると dev の override 付きビルドコマンドが見える。
+  await expect(page.getByText(devBuild, { exact: false }).first()).toBeVisible();
+  await expect(
+    page.getByText("--profile gpu build parser-glm-ocr", { exact: false }).first()
+  ).toBeVisible();
 });
 
 test("制御有効時は確認ダイアログを経て停止できる", async ({ page }) => {

@@ -39,6 +39,18 @@ RUN git clone --depth 1 https://github.com/rednote-hilab/dots.ocr.git /opt/dots.
     && cp -R /opt/dots.ocr/dots_ocr/model/. "$pkg/model"/ \
     && rm -rf /opt/dots.ocr
 
+# モデルをビルド時に取得してイメージへ焼き込む(prod・配布向け。実行時 DL を排除)。
+# dev は `--build-arg BAKE_MODELS=0` で省き host マウントのキャッシュを使う。
+# 別モデルは `--build-arg DOTS_OCR_MODEL=...`、ミラーは HF_ENDPOINT build-arg、token は runtime env のみ(image 履歴へ残さない)。
+ARG DOTS_OCR_MODEL=rednote-hilab/dots.mocr
+ENV DOTS_OCR_MODEL=${DOTS_OCR_MODEL}
+ARG BAKE_MODELS=1
+ARG HF_ENDPOINT=
+RUN if [ "$BAKE_MODELS" = "1" ]; then \
+        HF_ENDPOINT="$HF_ENDPOINT" \
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('${DOTS_OCR_MODEL}')"; \
+    fi
+
 WORKDIR /app
 COPY services/parsers/dots_ocr/app ./app
 COPY services/parsers/dots_ocr/entrypoint.sh /usr/local/bin/dots-ocr-entrypoint.sh

@@ -257,6 +257,17 @@ class Settings(BaseSettings):
         default=DEFAULT_MODEL_SETTINGS_FILE,
         description="UI から保存したモデル設定 JSON。存在する場合は .env より優先する。",
     )
+
+    # --- HuggingFace モデルダウンロード(dev は各 parser へ host マウントする基点)---
+    huggingface_download_dir: str = Field(
+        default="/u01/models/huggingface",
+        description="parser のモデルキャッシュを host マウントする基点。各サービスは "
+        "<dir>/<service_id>/ に mount する。",
+    )
+    # env キーは標準名(HF_TOKEN/HF_ENDPOINT)に合わせ、compose からも同じ値を参照できるようにする。
+    huggingface_token: str = Field(default="", validation_alias="HF_TOKEN")
+    huggingface_endpoint: str = Field(default="", validation_alias="HF_ENDPOINT")
+
     # CORS 許可オリジン（フロントエンド）
     cors_origins: list[str] = Field(default=["http://localhost:3000"])
 
@@ -1239,6 +1250,11 @@ class Settings(BaseSettings):
         gt=0,
         description="サービス起動/停止 subprocess の timeout(秒)。超過は失敗として構造化返却する。",
     )
+    rag_service_build_timeout_seconds: float = Field(
+        default=1800.0,
+        gt=0,
+        description="サービス build subprocess の timeout(秒)。build は長いため別枠で長めに取る。",
+    )
     rag_service_status_probe_timeout_seconds: float = Field(
         default=5.0,
         gt=0,
@@ -1414,6 +1430,20 @@ class Settings(BaseSettings):
     def normalize_model_settings_file(cls, value: str) -> str:
         """空指定は backend/.env と同じ階層の既定ファイルへ戻す。"""
         return value.strip() or DEFAULT_MODEL_SETTINGS_FILE
+
+    @field_validator("huggingface_endpoint")
+    @classmethod
+    def normalize_huggingface_endpoint(cls, value: str) -> str:
+        """ミラー URL に scheme を補う。
+
+        ``hf-mirror.com`` のように scheme なしで設定されると、HF hub の DL が
+        ``httpx.UnsupportedProtocol``(URL missing 'http(s)://')で失敗する。
+        scheme 省略時は ``https://`` を補う。空は空のまま(公式 hub 既定)。
+        """
+        endpoint = value.strip()
+        if endpoint and "://" not in endpoint:
+            return f"https://{endpoint}"
+        return endpoint
 
     @field_validator("rag_parser_adapter_backend", mode="before")
     @classmethod

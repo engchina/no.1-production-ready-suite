@@ -10,6 +10,8 @@ dependencies = [
     "transformers>=4.46",
     "accelerate>=1.0",
     "pillow>=10.0",
+    # PDF 入力をページ画像へラスタライズするため(GLM-OCR は画像入力前提)。
+    "pymupdf>=1.27",
     # RTX 50xx(sm_120) は古い cu124 wheel だと非対応警告が出るため、
     # CUDA 13 系 wheel を解決できるバージョンを下限にする。
     "torch>=2.12.1",

@@ -26,6 +26,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { SearchClient } from "@/components/search/SearchClient";
 import { ErrorState } from "@/components/StateViews";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
+import { HuggingFaceSettingsClient } from "@/components/settings/HuggingFaceSettingsClient";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
@@ -104,6 +105,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsAgentic} element={<SettingsAgenticRoute />} />
         <Route path={APP_ROUTES.settingsModel} element={<ModelSettingsClient />} />
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
+        <Route path={APP_ROUTES.settingsHuggingface} element={<SettingsHuggingfaceRoute />} />
         <Route path={APP_ROUTES.settingsServices} element={<SettingsServicesRoute />} />
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
       </Route>
@@ -475,6 +477,18 @@ function SettingsDatabaseRoute() {
     <div>
       <PageHeader title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
       <DatabaseSettingsClient />
+    </div>
+  );
+}
+
+function SettingsHuggingfaceRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsHuggingface")}
+        subtitle={t("settings.huggingface.subtitle")}
+      />
+      <HuggingFaceSettingsClient />
     </div>
   );
 }

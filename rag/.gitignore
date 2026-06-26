@@ -240,6 +240,7 @@ next-env.d.ts
 
 # Frontend build and test artifacts
 *.tsbuildinfo
+test-results/
 frontend/test-results/
 frontend/playwright-report/
 frontend/.vite/

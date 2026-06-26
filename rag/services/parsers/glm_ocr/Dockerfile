@@ -16,8 +16,23 @@ ENV PYTHONUNBUFFERED=1 \
 
 # parser app の HTTP サーバ依存(FastAPI/gunicorn 等)だけを base の Python へ追加する。
 # torch / transformers / vLLM は base イメージに同梱済みなので再インストールしない。
+# pymupdf は PDF 入力をページ画像へラスタライズするため(GLM-OCR は画像入力前提)。
+RUN pip install --no-cache-dir "pymupdf==1.27.2.2"
 COPY packages/rag_parser_core /opt/rag_parser_core
 RUN pip install --no-cache-dir "/opt/rag_parser_core[service]"
+
+# モデルをビルド時に取得してイメージへ焼き込む(prod・配布向け。実行時 DL を排除)。
+# dev は `--build-arg BAKE_MODELS=0` で焼き込みを省き、host マウントのキャッシュを使う。
+# 別モデルは `--build-arg GLM_OCR_MODEL=...`、ミラーは `--build-arg HF_ENDPOINT=...`。
+# token は runtime env のみ(build-arg にすると image 履歴へ残るため。gated モデル焼き込みは BuildKit secret 推奨)。
+ARG GLM_OCR_MODEL=zai-org/GLM-OCR
+ENV GLM_OCR_MODEL=${GLM_OCR_MODEL}
+ARG BAKE_MODELS=1
+ARG HF_ENDPOINT=
+RUN if [ "$BAKE_MODELS" = "1" ]; then \
+        HF_ENDPOINT="$HF_ENDPOINT" \
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('${GLM_OCR_MODEL}')"; \
+    fi
 
 WORKDIR /app
 COPY services/parsers/glm_ocr/app ./app

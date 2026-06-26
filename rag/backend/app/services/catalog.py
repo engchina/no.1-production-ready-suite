@@ -50,6 +50,10 @@ class ServiceCatalogEntry:
     - ``working_dir``: リポジトリ root からのサービス実装の相対パス。
     - ``dev_port``: dev で ``docker-compose.dev.yml`` が localhost に公開するポート。
     - ``execution_policy``: 停止時・未使用時の runtime 契約。UI/API で fallback 境界を明示する。
+    - ``model_cache_path``: モデル DL を行うサービスのコンテナ内キャッシュ親(``~/.cache``)。
+      HF・docling・mineru など tool 別キャッシュをまとめて含めるため ``huggingface`` ではなく
+      ``.cache`` 親を指す。dev では host の ``<huggingface_download_dir>/<service_id>`` を
+      ここへ bind マウントする。None のサービスはモデル DL なし(マウント対象外)。
     """
 
     service_id: str
@@ -60,6 +64,7 @@ class ServiceCatalogEntry:
     working_dir: str
     dev_port: int
     execution_policy: ServiceExecutionPolicy = "selected_adapter"
+    model_cache_path: str | None = None
 
 
 # パイプライン順に並べる(前処理 → Parser CPU → Parser GPU)。
@@ -135,6 +140,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserDocling",
         working_dir="services/parsers/docling",
         dev_port=18020,
+        model_cache_path="/home/appuser/.cache",
     ),
     ServiceCatalogEntry(
         service_id="parser-marker",
@@ -144,6 +150,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserMarker",
         working_dir="services/parsers/marker",
         dev_port=18021,
+        model_cache_path="/home/appuser/.cache",
     ),
     ServiceCatalogEntry(
         service_id="parser-unstructured",
@@ -162,6 +169,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserUnlimitedOcr",
         working_dir="services/parsers/unlimited_ocr",
         dev_port=18029,
+        model_cache_path="/root/.cache",
     ),
     ServiceCatalogEntry(
         service_id="parser-mineru",
@@ -171,6 +179,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserMineru",
         working_dir="services/parsers/mineru",
         dev_port=18023,
+        model_cache_path="/home/appuser/.cache",
     ),
     ServiceCatalogEntry(
         service_id="parser-dots-ocr",
@@ -180,6 +189,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserDotsOcr",
         working_dir="services/parsers/dots_ocr",
         dev_port=18024,
+        model_cache_path="/root/.cache",
     ),
     ServiceCatalogEntry(
         service_id="parser-glm-ocr",
@@ -189,6 +199,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserGlmOcr",
         working_dir="services/parsers/glm_ocr",
         dev_port=18025,
+        model_cache_path="/root/.cache",
     ),
     ServiceCatalogEntry(
         service_id="parser-asr",
@@ -198,6 +209,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         label_key="settings.services.item.parserAsr",
         working_dir="services/parsers/asr",
         dev_port=18026,
+        model_cache_path="/home/appuser/.cache",
     ),
     # ---- parser マイクロサービス(OCI クラウド・OCI 認証はメイン設定を継承)----
     # OCI を呼ぶだけの軽量プロキシ。dev も docker で起動し、OCI 認証はメイン設定を env で継承する。
@@ -326,11 +338,11 @@ def get_catalog_entry(service_id: str) -> ServiceCatalogEntry | None:
 
 
 def is_dev_mode(settings: Settings) -> bool:
-    """local 環境が dev(uv プロセス起動)か判定する。
+    """local 環境が dev か判定する。
 
     ``ENVIRONMENT`` を流用し、``prod``/``production`` 以外は dev とみなす
-    (readiness の production 判定と整合)。dev では各サービスをホスト上の
-    ``uv`` プロセスとして起動/停止し、prod では docker compose を使う。
+    (readiness の production 判定と整合)。dev/prod とも docker compose で起動/停止し、
+    dev のみ ``docker-compose.dev.yml`` を重ねてコンテナのポートを localhost へ公開する。
     """
     return settings.environment.strip().lower() not in {"prod", "production"}
 
@@ -340,8 +352,8 @@ def resolve_service_base_url(settings: Settings, url_field: str) -> str:
 
     dev では docker compose の service 名(``parser-docling`` 等)をホストから解決できない。
     そこで **設定が docker 既定(host が compose service 名)のときだけ** catalog の
-    ``dev_port`` から ``http://127.0.0.1:<port>`` に書き換える(uv はホストで bind、docker は
-    ``docker-compose.dev.yml`` で同ポートを公開)。空欄(=未設定)や明示上書き(localhost 等)は
+    ``dev_port`` から ``http://127.0.0.1:<port>`` に書き換える(``docker-compose.dev.yml`` で
+    コンテナの同ポートを localhost へ公開)。空欄(=未設定)や明示上書き(localhost 等)は
     そのまま尊重する。prod は常に設定値そのまま。
 
     稼働プローブ(/health)と取込の HTTP 委譲(/parse・/convert)で **同じ解決**を使い、
@@ -361,3 +373,17 @@ def resolve_service_base_url(settings: Settings, url_field: str) -> str:
 def service_health_url(settings: Settings, entry: ServiceCatalogEntry) -> str:
     """エントリの /health base URL を返す(dev は 127.0.0.1:<dev_port>、prod は url_field)。"""
     return resolve_service_base_url(settings, entry.url_field)
+
+
+def service_model_cache_host_path(settings: Settings, entry: ServiceCatalogEntry) -> str | None:
+    """モデル DL を行うサービスの host マウント先 ``<download_dir>/<service_id>`` を返す。
+
+    ``model_cache_path`` 未設定(モデル DL なし)のサービスは None。download_dir 末尾の
+    スラッシュは正規化する。
+    """
+    if entry.model_cache_path is None:
+        return None
+    base = settings.huggingface_download_dir.strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}/{entry.service_id}"

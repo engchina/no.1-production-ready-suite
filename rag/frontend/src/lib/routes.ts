@@ -24,6 +24,7 @@ export const APP_ROUTES = {
   settingsAgentic: "/settings/agentic",
   settingsModel: "/settings/model",
   settingsDatabase: "/settings/database",
+  settingsHuggingface: "/settings/huggingface",
   settingsServices: "/settings/services",
   settingsPrompts: "/settings/prompts",
 } as const;

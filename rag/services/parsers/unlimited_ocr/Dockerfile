@@ -20,6 +20,18 @@ RUN python3 -m pip install --no-cache-dir --force-reinstall --no-deps \
 COPY packages/rag_parser_core /opt/rag_parser_core
 RUN pip install --no-cache-dir "/opt/rag_parser_core[service]"
 
+# モデルをビルド時に取得してイメージへ焼き込む(prod・配布向け。実行時 DL を排除)。
+# dev は `--build-arg BAKE_MODELS=0` で省き host マウントのキャッシュを使う。
+# 別モデルは `--build-arg UNLIMITED_OCR_MODEL_ID=...`、ミラーは HF_ENDPOINT build-arg、token は runtime env のみ(image 履歴へ残さない)。
+ARG UNLIMITED_OCR_MODEL_ID=baidu/Unlimited-OCR
+ENV UNLIMITED_OCR_MODEL_ID=${UNLIMITED_OCR_MODEL_ID}
+ARG BAKE_MODELS=1
+ARG HF_ENDPOINT=
+RUN if [ "$BAKE_MODELS" = "1" ]; then \
+        HF_ENDPOINT="$HF_ENDPOINT" \
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('${UNLIMITED_OCR_MODEL_ID}')"; \
+    fi
+
 WORKDIR /app
 COPY services/parsers/unlimited_ocr/app ./app
 COPY services/parsers/unlimited_ocr/entrypoint.sh /usr/local/bin/unlimited-ocr-entrypoint.sh

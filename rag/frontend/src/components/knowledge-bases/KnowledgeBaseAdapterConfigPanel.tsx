@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RotateCcw, Save, SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -472,6 +472,11 @@ function AdapterSelectRow<T extends string>({
   onChange,
 }: AdapterSelectRowProps<T>) {
   const overriding = value !== null;
+  // 上書きに切り替えた時の初期値。本セッションで選んだ直近値 > グローバル既定 > 既定フォールバック。
+  const lastOverride = useRef<T>(value ?? effectiveValue ?? defaultOnOverride);
+  useEffect(() => {
+    if (value !== null) lastOverride.current = value;
+  }, [value]);
   // 継承時は解決済み値のラベルを引いて「実際に効く値」を見せる(値が無ければ汎用文言)。
   const resolvedLabel =
     effectiveValue !== null
@@ -493,7 +498,7 @@ function AdapterSelectRow<T extends string>({
             selected={overriding}
             disabled={disabled}
             onClick={() => {
-              if (!overriding) onChange(defaultOnOverride);
+              if (!overriding) onChange(lastOverride.current ?? effectiveValue ?? defaultOnOverride);
             }}
           >
             {t("knowledgeBases.adapter.override")}
@@ -539,6 +544,11 @@ function AdapterToggleRow({
   onChange,
 }: AdapterToggleRowProps) {
   const overriding = value !== null;
+  // 上書きに切り替えた時の初期値。本セッションで選んだ直近値 > グローバル既定 > 有効。
+  const lastOverride = useRef<boolean>(value ?? effectiveValue ?? true);
+  useEffect(() => {
+    if (value !== null) lastOverride.current = value;
+  }, [value]);
   const resolvedLabel = effectiveValue !== null ? boolLabel(effectiveValue) : null;
   return (
     <div className="space-y-2 rounded-lg border border-border bg-card p-3">
@@ -554,7 +564,7 @@ function AdapterToggleRow({
             selected={overriding}
             disabled={disabled}
             onClick={() => {
-              if (!overriding) onChange(true);
+              if (!overriding) onChange(lastOverride.current);
             }}
           >
             {t("knowledgeBases.adapter.override")}

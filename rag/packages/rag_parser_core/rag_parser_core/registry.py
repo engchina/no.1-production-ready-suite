@@ -1829,10 +1829,29 @@ def _run_glm_ocr(path: Path) -> object:
                 return candidate(str(path))
     runtime = os.environ.get("GLM_OCR_RUNTIME", "vllm").strip().lower() or "vllm"
     if runtime in {"vllm", "official_vllm"}:
-        return _run_glm_ocr_vllm(path)
-    if runtime in {"transformers", "hf", "local_transformers"}:
-        return _run_glm_ocr_transformers(path)
-    raise RuntimeError("glm_ocr_invalid_runtime: set GLM_OCR_RUNTIME to vllm or transformers")
+        runner = _run_glm_ocr_vllm
+    elif runtime in {"transformers", "hf", "local_transformers"}:
+        runner = _run_glm_ocr_transformers
+    else:
+        raise RuntimeError("glm_ocr_invalid_runtime: set GLM_OCR_RUNTIME to vllm or transformers")
+    # GLM-OCR は画像入力前提。PDF はページ画像へラスタライズしてから OCR する
+    # (dots_ocr / unlimited_ocr と同じ扱い)。
+    if path.suffix.lower() == ".pdf":
+        return _run_glm_ocr_pdf(path, runner)
+    return runner(path)
+
+
+def _run_glm_ocr_pdf(path: Path, runner: Callable[[Path], object]) -> str:
+    """PDF をページ画像へラスタライズし、各ページを画像 OCR して連結する。"""
+    dpi = int(os.environ.get("GLM_OCR_DPI", "300"))
+    texts: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="glm-ocr-pages-") as page_dir:
+        for image_file in _unlimited_ocr_pdf_to_images(path, Path(page_dir), dpi=dpi):
+            rendered = runner(Path(image_file))
+            text = rendered if isinstance(rendered, str) else str(rendered)
+            if text.strip():
+                texts.append(text.strip())
+    return "\n\n".join(texts)
 
 
 def _run_unlimited_ocr(path: Path) -> object:

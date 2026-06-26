@@ -4,17 +4,22 @@ import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   ChevronDown,
   CircleSlash,
   Clipboard,
   Container,
+  HardDriveDownload,
+  Hammer,
   MinusCircle,
   Play,
   RefreshCw,
   Server,
+  SlidersHorizontal,
   Square,
   TerminalSquare,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -30,6 +35,7 @@ import {
   type ServiceCatalogItemData,
   type ServiceExecutionPolicy,
   type ServiceLogsData,
+  type ServiceModelCacheData,
   type ServiceProfile,
   type ServiceRuntimeStatus,
 } from "@/lib/api";
@@ -172,14 +178,18 @@ export function ServicesManagementClient() {
     return { category, label, groups };
   });
 
-  async function act(service: DisplayServiceData, action: "start" | "stop") {
-    if (action === "stop") {
+  async function act(
+    service: DisplayServiceData,
+    action: "start" | "stop" | "build" | "remove"
+  ) {
+    if (action === "stop" || action === "remove") {
+      const key = action === "stop" ? "stop" : "remove";
       const ok = await confirm({
-        title: t("settings.services.confirm.stop.title"),
-        description: t("settings.services.confirm.stop.description", {
+        title: t(`settings.services.confirm.${key}.title` as I18nKey),
+        description: t(`settings.services.confirm.${key}.description` as I18nKey, {
           service: serviceLabel(service),
         }),
-        confirmLabel: t("settings.services.confirm.stop.confirm"),
+        confirmLabel: t(`settings.services.confirm.${key}.confirm` as I18nKey),
         cancelLabel: t("settings.services.confirm.cancel"),
         tone: "danger",
       });
@@ -190,14 +200,15 @@ export function ServicesManagementClient() {
       { serviceId: service.service_id, action },
       {
         onSuccess: () => {
-          toast.success(
-            t(
-              action === "start"
-                ? "settings.services.toast.started"
-                : "settings.services.toast.stopped",
-              { service: serviceLabel(service) }
-            )
-          );
+          const toastKey: I18nKey =
+            action === "start"
+              ? "settings.services.toast.started"
+              : action === "build"
+                ? "settings.services.toast.built"
+                : action === "remove"
+                  ? "settings.services.toast.removed"
+                  : "settings.services.toast.stopped";
+          toast.success(t(toastKey, { service: serviceLabel(service) }));
         },
         onError: (error) => {
           toast.error(
@@ -282,6 +293,7 @@ export function ServicesManagementClient() {
           ) : (
             <FormStatus tone="info" message={t("settings.services.controlDisabled.hint")} />
           )}
+          <ServiceCommandsDisclosure mode={deploymentMode} />
           {lastUpdatedText ? (
             <p className="text-xs tabular-nums text-muted">
               {t("settings.services.lastUpdated", { time: lastUpdatedText })}
@@ -326,6 +338,89 @@ export function ServicesManagementClient() {
   );
 }
 
+/** 起動前に推奨するビルド/準備コマンドを、RAG 検索の詳細条件と同じ折りたたみで提示する(既定で閉じる)。 */
+function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
+  const [open, setOpen] = useState(false);
+  // dev は override を重ねた compose、prod は base のみ(control.py の build hint と一致)。
+  const files = mode === "dev" ? "-f docker-compose.yml -f docker-compose.dev.yml " : "";
+  const commands = [
+    {
+      label: t("settings.services.commands.buildAll.label"),
+      command: `docker compose ${files}build`,
+    },
+    {
+      label: t("settings.services.commands.buildGpu.label"),
+      command: `docker compose ${files}--profile gpu build parser-glm-ocr`,
+    },
+  ];
+  return (
+    <div className="rounded-md border border-border bg-background">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="service-commands"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          setOpen((value) => !value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          setOpen((value) => !value);
+        }}
+        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <SlidersHorizontal size={14} className="text-primary" aria-hidden />
+        {t("settings.services.commands.title")}
+      </button>
+      {open ? (
+        <div id="service-commands" className="space-y-2 border-t border-border p-3">
+          <p className="text-xs leading-relaxed text-muted">
+            {t("settings.services.commands.description")}
+          </p>
+          {commands.map((entry) => (
+            <CommandRow key={entry.label} label={entry.label} command={entry.command} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** ラベル付きコマンドを等幅表示し、ワンクリックでクリップボードへコピーする行。 */
+function CommandRow({ label, command }: { label: string; command: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard 不可環境では手動選択にフォールバック */
+    }
+  }
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium text-foreground">{label}</p>
+      <div className="flex items-stretch gap-2">
+        <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-border bg-card px-3 py-2 font-mono text-xs text-foreground">
+          {command}
+        </code>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="shrink-0 whitespace-nowrap"
+          onClick={() => void copy()}
+        >
+          {copied ? <Check size={14} aria-hidden /> : <Clipboard size={14} aria-hidden />}
+          {copied ? t("settings.preview.copy.copied") : t("settings.services.commands.copy")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ServiceGroup({
   title,
   note,
@@ -344,7 +439,7 @@ function ServiceGroup({
   pending: string | null;
   logsServiceId: string | null;
   logsQuery: UseQueryResult<ServiceLogsData>;
-  onAct: (service: DisplayServiceData, action: "start" | "stop") => void;
+  onAct: (service: DisplayServiceData, action: "start" | "stop" | "build" | "remove") => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
   if (services.length === 0) return null;
@@ -388,7 +483,7 @@ function ServiceRow({
   pending: string | null;
   logsOpen: boolean;
   logsQuery: UseQueryResult<ServiceLogsData>;
-  onAct: (service: DisplayServiceData, action: "start" | "stop") => void;
+  onAct: (service: DisplayServiceData, action: "start" | "stop" | "build" | "remove") => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
   const running = service.status === "running";
@@ -399,8 +494,10 @@ function ServiceRow({
   const stoppedHintKey = stopped ? serviceStoppedHintKey(service.execution_policy) : null;
   const startPending = pending === `${service.service_id}:start`;
   const stopPending = pending === `${service.service_id}:stop`;
-  // ponytail: このサービス自身の操作中だけ自分の起動/停止を排他する(他サービスのボタンは無関係)
-  const thisPending = startPending || stopPending;
+  const buildPending = pending === `${service.service_id}:build`;
+  const removePending = pending === `${service.service_id}:remove`;
+  // ponytail: このサービス自身の操作中だけ自分の起動/停止/build/削除を排他する(他サービスは無関係)
+  const thisPending = startPending || stopPending || buildPending || removePending;
   let controlHint: string | undefined;
   if (!controlEnabled) {
     controlHint = t("settings.services.controlDisabled.hint");
@@ -423,6 +520,7 @@ function ServiceRow({
             <ServiceExecutionPolicyBadge policy={service.execution_policy} />
           </div>
           <p className="font-mono text-xs text-muted">{service.service_id}</p>
+          {service.model_cache ? <ServiceModelCacheRow cache={service.model_cache} /> : null}
           {stoppedHintKey ? (
             <p
               className={cn(
@@ -456,7 +554,21 @@ function ServiceRow({
               aria-hidden
             />
           </Button>
-          <div className="flex gap-2" title={controlHint}>
+          <div className="flex flex-wrap justify-end gap-2" title={controlHint}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={buildPending}
+              disabled={!controlEnabled || (thisPending && !buildPending)}
+              onClick={() => onAct(service, "build")}
+              aria-label={`${serviceLabel(service)} ${t("settings.services.action.build")}`}
+            >
+              <Hammer size={14} aria-hidden />
+              {buildPending
+                ? t("settings.services.action.building")
+                : t("settings.services.action.build")}
+            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -491,6 +603,21 @@ function ServiceRow({
               {stopPending
                 ? t("settings.services.action.stopping")
                 : t("settings.services.action.stop")}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="text-danger hover:bg-danger-bg/40"
+              loading={removePending}
+              disabled={!controlEnabled || (thisPending && !removePending)}
+              onClick={() => onAct(service, "remove")}
+              aria-label={`${serviceLabel(service)} ${t("settings.services.action.remove")}`}
+            >
+              <Trash2 size={14} aria-hidden />
+              {removePending
+                ? t("settings.services.action.removing")
+                : t("settings.services.action.remove")}
             </Button>
           </div>
         </div>
@@ -605,7 +732,7 @@ function ServiceLogPanel({
   );
 }
 
-/** 配備モード(dev=uv プロセス / prod=docker)を示すバッジ(色だけに頼らずアイコン+ラベル併記)。 */
+/** 配備モード(dev/prod とも docker compose。dev は dev override でポート公開)を示すバッジ(色だけに頼らずアイコン+ラベル併記)。 */
 function ModeBadge({ mode }: { mode: DeploymentMode }) {
   const Icon = mode === "dev" ? TerminalSquare : Container;
   return (
@@ -683,6 +810,25 @@ export function ServiceStatusBadge({ status }: { status: DisplayRuntimeStatus })
 
 function serviceLabel(service: ServiceCatalogItemData): string {
   return t(service.label_key as I18nKey);
+}
+
+/** モデルキャッシュの host マウント先(読み取り専用)を表示する行。 */
+function ServiceModelCacheRow({ cache }: { cache: ServiceModelCacheData }) {
+  return (
+    <p
+      className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted"
+      title={t("settings.services.modelCache.hint")}
+    >
+      <HardDriveDownload size={13} aria-hidden />
+      <span className="text-muted">{t("settings.services.modelCache.label")}:</span>
+      <span className="font-mono break-all text-foreground">{cache.host_path}</span>
+      <span aria-hidden>→</span>
+      <span className="font-mono break-all text-foreground">{cache.container_path}</span>
+      <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+        {t("settings.services.modelCache.readonly")}
+      </span>
+    </p>
+  );
 }
 
 export default ServicesManagementClient;

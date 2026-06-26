@@ -17,6 +17,7 @@ from app.services.catalog import (
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
+    service_model_cache_host_path,
 )
 from app.services.control import (
     ControlResult,
@@ -25,6 +26,7 @@ from app.services.control import (
     ServiceControlError,
     ServiceLogsResult,
     _compose_args,
+    _compose_env,
     _compose_logs_args,
     read_service_logs,
 )
@@ -72,6 +74,71 @@ def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
     assert by_id["pipeline-generation"].execution_policy == "in_process_when_disabled"
     assert by_id["parser-docling"].execution_policy == "selected_adapter"
     assert by_id["preprocess-office-to-pdf"].execution_policy == "selected_adapter"
+
+
+def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
+    """モデル DL を行う 7 parser だけ model_cache_path を持ち、root/appuser でパスが分かれる。"""
+    by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
+    root_cache = {"parser-unlimited-ocr", "parser-dots-ocr", "parser-glm-ocr"}
+    appuser_cache = {"parser-mineru", "parser-marker", "parser-docling", "parser-asr"}
+    for service_id in root_cache:
+        assert by_id[service_id].model_cache_path == "/root/.cache"
+    for service_id in appuser_cache:
+        assert by_id[service_id].model_cache_path == "/home/appuser/.cache"
+    # それ以外(OCI proxy / pipeline / preprocess / unstructured)はモデル DL なし。
+    with_cache = {e.service_id for e in SERVICE_CATALOG if e.model_cache_path is not None}
+    assert with_cache == root_cache | appuser_cache
+
+
+def test_service_model_cache_host_path_is_download_dir_per_service() -> None:
+    settings = get_settings()
+    settings = settings.model_copy(update={"huggingface_download_dir": "/u01/models/huggingface/"})
+    glm = get_catalog_entry("parser-glm-ocr")
+    assert glm is not None
+    # 末尾スラッシュは正規化し、<download_dir>/<service_id> を返す。
+    assert service_model_cache_host_path(settings, glm) == "/u01/models/huggingface/parser-glm-ocr"
+    # model_cache_path 未設定(モデル DL なし)のサービスは None。
+    chunking = get_catalog_entry("pipeline-chunking")
+    assert chunking is not None
+    assert service_model_cache_host_path(settings, chunking) is None
+
+
+def test_compose_env_injects_huggingface_settings() -> None:
+    settings = get_settings()
+    settings = settings.model_copy(
+        update={
+            "huggingface_download_dir": "/u01/models/huggingface",
+            "huggingface_token": "hf_secret",
+            "huggingface_endpoint": "https://hf-mirror.com",
+        }
+    )
+    env = _compose_env(settings)
+    assert env["HF_DOWNLOAD_DIR"] == "/u01/models/huggingface"
+    assert env["HF_TOKEN"] == "hf_secret"
+    assert env["HF_ENDPOINT"] == "https://hf-mirror.com"
+    # os.environ を継承していること(PATH などが残る)。
+    assert "PATH" in env
+
+
+def test_list_services_exposes_model_cache_mount(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "dev")
+    monkeypatch.setattr(settings, "huggingface_download_dir", "/u01/models/huggingface")
+
+    async def fake_probe(_settings: Any) -> dict[str, str]:
+        return {entry.service_id: "stopped" for entry in SERVICE_CATALOG}
+
+    monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe)
+    data = client.get("/api/services").json()["data"]
+    glm = next(s for s in data["services"] if s["service_id"] == "parser-glm-ocr")
+    assert glm["model_cache"] == {
+        "container_path": "/root/.cache",
+        "host_path": "/u01/models/huggingface/parser-glm-ocr",
+        "editable": False,
+    }
+    # モデル DL なしのサービスは model_cache=None。
+    chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
+    assert chunking["model_cache"] is None
 
 
 def test_compose_uses_shared_oci_config_volume() -> None:
@@ -304,6 +371,69 @@ def test_compose_args_cpu_start_and_stop(monkeypatch: MonkeyPatch) -> None:
         "stop",
         "parser-docling",
     ]
+
+
+def test_compose_args_build_and_remove(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    docling = get_catalog_entry("parser-docling")
+    assert docling is not None
+    # build はイメージ生成。明示アクションで実行する。
+    assert _compose_args(settings, docling, "build") == [
+        "docker",
+        "compose",
+        "build",
+        "parser-docling",
+    ]
+    # remove はコンテナ削除(稼働中なら停止してから force 削除)。
+    assert _compose_args(settings, docling, "remove") == [
+        "docker",
+        "compose",
+        "rm",
+        "-f",
+        "-s",
+        "parser-docling",
+    ]
+    # GPU サービスの build/remove も profile gate を越える。
+    glm = get_catalog_entry("parser-glm-ocr")
+    assert glm is not None
+    assert _compose_args(settings, glm, "build") == [
+        "docker",
+        "compose",
+        "--profile",
+        "gpu",
+        "--profile",
+        "glm-ocr",
+        "build",
+        "parser-glm-ocr",
+    ]
+
+
+def test_build_uses_longer_build_timeout(monkeypatch: MonkeyPatch) -> None:
+    """build は専用の長い timeout を、その他は通常 timeout を使う。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    monkeypatch.setattr(settings, "rag_service_control_timeout_seconds", 60.0)
+    monkeypatch.setattr(settings, "rag_service_build_timeout_seconds", 1800.0)
+    docling = get_catalog_entry("parser-docling")
+    assert docling is not None
+
+    async def fake_exec(*_args: Any, **_kwargs: Any) -> _FakeProcess:
+        return _FakeProcess(returncode=0)
+
+    used: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def spy_wait_for(awaitable: Any, timeout: float) -> Any:
+        used.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(asyncio, "wait_for", spy_wait_for)
+    driver = DockerComposeDriver()
+    asyncio.run(driver.run(settings, docling, "build"))
+    asyncio.run(driver.run(settings, docling, "stop"))
+    assert used == [1800.0, 60.0]
 
 
 def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
@@ -643,6 +773,32 @@ def test_control_acts_on_single_service(monkeypatch: MonkeyPatch) -> None:
     assert resp.status_code == 200
     # 各 OCR parser は推論サーバー内包の単一サービス。連鎖制御は無く本体のみ操作する。
     assert calls == [("parser-dots-ocr", "start")]
+
+
+def test_control_build_and_remove_endpoints(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_service_control_enabled", True)
+    calls = _spy_control(monkeypatch)
+
+    async def fake_probe(_settings: Any, entry: ServiceCatalogEntry) -> str:
+        return "stopped"
+
+    monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
+    build = client.post("/api/services/parser-docling/build")
+    remove = client.post("/api/services/parser-docling/remove")
+    assert build.status_code == 200
+    assert remove.status_code == 200
+    assert build.json()["data"]["action"] == "build"
+    assert remove.json()["data"]["action"] == "remove"
+    assert calls == [("parser-docling", "build"), ("parser-docling", "remove")]
+
+
+def test_build_remove_blocked_when_control_disabled(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "prod")
+    monkeypatch.setattr(settings, "rag_service_control_enabled", False)
+    assert client.post("/api/services/parser-docling/build").status_code == 409
+    assert client.post("/api/services/parser-docling/remove").status_code == 409
 
 
 def test_control_failure_returns_502(monkeypatch: MonkeyPatch) -> None:

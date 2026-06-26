@@ -14,17 +14,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from app.config import Settings
-from app.services.catalog import ServiceCatalogEntry, is_dev_mode
+from app.services.catalog import (
+    ServiceCatalogEntry,
+    is_dev_mode,
+    service_model_cache_host_path,
+)
 
 logger = logging.getLogger(__name__)
 
-ServiceAction = Literal["start", "stop", "restart"]
+ServiceAction = Literal["start", "stop", "restart", "build", "remove"]
 ServiceLogsSource = Literal["docker"]
 
 # backend/app/services/control.py → parents[3] = リポジトリ root(services/<…> を解決する基点)。
@@ -87,13 +92,19 @@ def _compose_args(
     )
     profile_args = _compose_profile_args(entry)
     if action == "start":
-        # --no-build: 数 GB のイメージ build を制御 HTTP リクエスト内で走らせない。
+        # --no-build: 数 GB の build を start では走らせない(明示の build アクションで行う)。
         # 未ビルドなら compose が即エラーを返し、ユーザに事前 build を促す(timeout 回避)。
         return [*base, *file_args, *profile_args, "up", "-d", "--no-build", entry.service_id]
     if action == "stop":
         # GPU サービスは profile gate に隠れるため stop でも --profile gpu を付ける
         # (付けても既存コンテナを止めるだけで無害)。
         return [*base, *file_args, *profile_args, "stop", entry.service_id]
+    if action == "build":
+        # 明示的なイメージ build。長時間になるため呼び出し側は build 用 timeout を使う。
+        return [*base, *file_args, *profile_args, "build", entry.service_id]
+    if action == "remove":
+        # コンテナ削除。-s で稼働中なら停止してから、-f で確認なしに削除する。
+        return [*base, *file_args, *profile_args, "rm", "-f", "-s", entry.service_id]
     # restart も build しない(既存イメージを使う)。
     return [*base, *file_args, *profile_args, "restart", entry.service_id]
 
@@ -122,6 +133,36 @@ def _compose_logs_args(
         str(lines),
         entry.service_id,
     ]
+
+
+def _compose_env(settings: Settings) -> dict[str, str]:
+    """compose subprocess へ渡す環境変数。
+
+    HuggingFace 設定を docker-compose の ``${HF_DOWNLOAD_DIR}`` / ``${HF_TOKEN}`` /
+    ``${HF_ENDPOINT}`` substitution へ供給する(dev の host マウント基点と DL 認証/ミラー)。
+    ``os.environ`` を継承しつつ上書きする。
+    """
+    env = dict(os.environ)
+    env["HF_DOWNLOAD_DIR"] = settings.huggingface_download_dir
+    env["HF_TOKEN"] = settings.huggingface_token
+    env["HF_ENDPOINT"] = settings.huggingface_endpoint
+    return env
+
+
+def _ensure_model_cache_dir(settings: Settings, entry: ServiceCatalogEntry) -> None:
+    """start 前に host のモデルキャッシュ用サブディレクトリを用意する。
+
+    bind マウント先が存在しないと docker が root 所有で作成し、コンテナ内 appuser が
+    書き込めず DL が失敗する。backend(host プロセス)側で先に作っておく。
+    """
+    host_path = service_model_cache_host_path(settings, entry)
+    if host_path is None:
+        return
+    try:
+        Path(host_path).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # 作成失敗は致命ではない(compose 側で再試行/エラーになる)。warning に留める。
+        logger.warning("model_cache_dir_create_failed", extra={"path": host_path})
 
 
 def _compose_profile_args(entry: ServiceCatalogEntry) -> list[str]:
@@ -175,7 +216,14 @@ class DockerComposeDriver:
         # dev はホストのリポジトリ root から compose ファイル群を解決する。
         # prod(コンテナ)は cwd を変えず、マウント済み compose を既定の cwd から解決する。
         cwd = str(REPO_ROOT) if is_dev_mode(settings) else None
-        timeout = float(settings.rag_service_control_timeout_seconds)
+        # build はイメージ生成で長時間になるため別枠の長い timeout を使う。
+        timeout = float(
+            settings.rag_service_build_timeout_seconds
+            if action == "build"
+            else settings.rag_service_control_timeout_seconds
+        )
+        if action in ("start", "restart"):
+            _ensure_model_cache_dir(settings, entry)
         logger.info(
             "service_control_exec",
             extra={"service_id": entry.service_id, "action": action, "argv": args},
@@ -184,6 +232,7 @@ class DockerComposeDriver:
             process = await asyncio.create_subprocess_exec(
                 *args,
                 cwd=cwd,
+                env=_compose_env(settings),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -276,6 +325,7 @@ async def read_service_logs(
         process = await asyncio.create_subprocess_exec(
             *args,
             cwd=cwd,
+            env=_compose_env(settings),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
