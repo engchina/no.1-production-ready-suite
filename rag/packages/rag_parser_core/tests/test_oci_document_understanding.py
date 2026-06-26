@@ -19,17 +19,42 @@ from rag_parser_core.service import create_service_parse_app
 from rag_parser_core.source import SourceModality, SourceProfile
 
 
+def _polygon(x1: float, y1: float, x2: float, y2: float) -> dict[str, object]:
+    """DU の normalizedVertices(0..1)形式の boundingPolygon を作る。"""
+    return {
+        "normalizedVertices": [
+            {"x": x1, "y": y1},
+            {"x": x2, "y": y1},
+            {"x": x2, "y": y2},
+            {"x": x1, "y": y2},
+        ]
+    }
+
+
 def _du_result_json() -> dict[str, object]:
     return {
         "pages": [
             {
                 "pageNumber": 1,
-                "lines": [{"text": "請求書"}, {"text": "合計 1,200 円"}],
+                "dimensions": {"width": 2480, "height": 3508},
+                "lines": [
+                    {"text": "請求書", "boundingPolygon": _polygon(0.1, 0.05, 0.4, 0.1)},
+                    {"text": "合計 1,200 円", "boundingPolygon": _polygon(0.1, 0.2, 0.6, 0.25)},
+                ],
                 "words": [{"confidence": 0.9}],
                 "tables": [
                     {
                         "headerRows": [
-                            {"cells": [{"text": "品目", "rowIndex": 0, "columnIndex": 0}]}
+                            {
+                                "cells": [
+                                    {
+                                        "text": "品目",
+                                        "rowIndex": 0,
+                                        "columnIndex": 0,
+                                        "boundingPolygon": _polygon(0.1, 0.3, 0.3, 0.35),
+                                    }
+                                ]
+                            }
                         ],
                         "bodyRows": [
                             {"cells": [{"text": "1,200", "rowIndex": 1, "columnIndex": 1}]}
@@ -165,3 +190,48 @@ def test_remap_payload_validates_as_structured_extraction(payload: dict[str, obj
     )
     assert extraction.document_type == "INVOICE"
     assert extraction.tables and extraction.tables[0].cells
+
+
+def test_remap_maps_bounding_polygon_to_bbox() -> None:
+    """DU の boundingPolygon を element / cell の bbox(xyxy・ratio)へ写す。"""
+    extraction = StructuredExtraction.model_validate(
+        document_understanding_result_to_payload(_du_result_json())
+    )
+    # ページ寸法は ExtractionPage に残る。
+    assert extraction.pages[0].width == 2480
+    assert extraction.pages[0].height == 3508
+    # line → bbox 付き element(polygon→xyxy 集約、ratio)。
+    bbox_elements = [element for element in extraction.elements if element.bbox]
+    assert bbox_elements, "line bbox が element に載っていない"
+    first = bbox_elements[0]
+    assert first.bbox == [0.1, 0.05, 0.4, 0.1]
+    assert first.metadata["bbox_coordinate_mode"] == "xyxy"
+    assert first.metadata["bbox_unit"] == "ratio"
+    assert first.metadata["bbox_source"] == "line"
+    # table cell → bbox。
+    cells_with_bbox = [
+        cell for table in extraction.tables for cell in table.cells if cell.bbox
+    ]
+    assert cells_with_bbox and cells_with_bbox[0].bbox == [0.1, 0.3, 0.3, 0.35]
+
+
+def test_remap_omits_bbox_metadata_for_invalid_polygon() -> None:
+    """有効な bbox に正規化できない polygon では bbox も lineage metadata も付けない。"""
+    payload = {
+        "pages": [
+            {
+                "pageNumber": 1,
+                # 頂点 1 点 → 2 値しか無く xyxy へ正規化できない。
+                "lines": [
+                    {"text": "x", "boundingPolygon": {"normalizedVertices": [{"x": 0.1, "y": 0.1}]}}
+                ],
+            }
+        ]
+    }
+    extraction = StructuredExtraction.model_validate(
+        document_understanding_result_to_payload(payload)
+    )
+    element = extraction.elements[0]
+    assert element.bbox is None
+    assert "bbox_coordinate_mode" not in element.metadata
+    assert "bbox_unit" not in element.metadata

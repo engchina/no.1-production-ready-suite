@@ -967,6 +967,36 @@ def _bbox_json(value: list[float] | None) -> str | None:
     return json.dumps([round(float(item), 6) for item in value], separators=(",", ":"))
 
 
+def _parse_bbox_json(value: str | None) -> list[float] | None:
+    """chunk metadata 用の bbox JSON 文字列を [x1,y1,x2,y2] へ戻す。"""
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, list) or len(parsed) < 4:
+        return None
+    try:
+        return [float(parsed[index]) for index in range(4)]
+    except (TypeError, ValueError):
+        return None
+
+
+def _union_bbox(boxes: list[list[float]]) -> list[float] | None:
+    """同一座標系の xyxy bbox 群を囲む最小矩形 [x1,y1,x2,y2] を返す。"""
+    valid = [box for box in boxes if len(box) >= 4]
+    if not valid:
+        return None
+    x1 = min(box[0] for box in valid)
+    y1 = min(box[1] for box in valid)
+    x2 = max(box[2] for box in valid)
+    y2 = max(box[3] for box in valid)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return [x1, y1, x2, y2]
+
+
 def _bbox_coordinate_mode(metadata: ChunkMetadata) -> str | None:
     """metadata から明示 bbox coordinate mode を低 cardinality に寄せる。"""
     for key in BBOX_COORDINATE_MODE_KEYS:
@@ -1733,6 +1763,7 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
     link_urls = _ordered_unique([url for span in group for url in span.link_urls])
     link_texts = _ordered_unique([text for span in group for text in span.link_texts])
     bboxes = {span.bbox_json for span in group if span.bbox_json}
+    bbox_coords = [coords for span in group if (coords := _parse_bbox_json(span.bbox_json))]
     bbox_modes = {span.bbox_coordinate_mode for span in group if span.bbox_coordinate_mode}
     bbox_units = {span.bbox_unit for span in group if span.bbox_unit}
     page_widths = {span.page_width for span in group if span.page_width is not None}
@@ -1801,7 +1832,22 @@ def _span_group_metadata(group: list[_ElementSpan]) -> ChunkMetadata:
         metadata["link_urls"] = "\n".join(link_urls)[:1000]
     if link_texts:
         metadata["link_texts"] = "\n".join(link_texts)[:1000]
-    if len(bboxes) == 1:
+    # 同一ページ・同一 unit・xyxy の多要素チャンクは union bbox で領域を表す。
+    # 跨頁 / unit 混在 / xywh は union が無意味なので bbox を出さず element_ids+page 範囲に委ねる。
+    single_mode = next(iter(bbox_modes)) if len(bbox_modes) == 1 else None
+    if bbox_coords and len(pages) == 1 and len(bbox_units) == 1 and single_mode == "xyxy":
+        union = _union_bbox(bbox_coords)
+        if union is not None:
+            metadata["bbox"] = _bbox_json(union)
+            metadata["bbox_coordinate_mode"] = "xyxy"
+            metadata["bbox_unit"] = next(iter(bbox_units))
+            if len(page_widths) == 1:
+                metadata["page_width"] = next(iter(page_widths))
+            if len(page_heights) == 1:
+                metadata["page_height"] = next(iter(page_heights))
+            if len(page_rotations) == 1:
+                metadata["page_rotation"] = next(iter(page_rotations))
+    elif len(bboxes) == 1 and len(pages) <= 1:
         metadata["bbox"] = next(iter(bboxes))
         if len(bbox_modes) == 1:
             metadata["bbox_coordinate_mode"] = next(iter(bbox_modes))

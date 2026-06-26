@@ -25,6 +25,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from rag_parser_core.extraction import normalize_bbox
 from rag_parser_core.oci_auth import load_oci_config_without_prompt
 
 logger = logging.getLogger(__name__)
@@ -391,38 +392,61 @@ def document_understanding_result_to_payload(
     pages_raw = _as_sequence(result.get("pages"))
     page_texts: list[str] = []
     pages_payload: list[dict[str, object]] = []
+    elements_payload: list[dict[str, object]] = []
     tables_payload: list[dict[str, object]] = []
     confidences: list[float] = []
     table_counter = 0
+    order = 0
 
     for index, page in enumerate(pages_raw):
         if not isinstance(page, Mapping):
             continue
         page_number = _as_int(page.get("pageNumber"), default=index + 1)
-        lines = _as_sequence(page.get("lines"))
-        line_texts = [
-            str(line.get("text", "")).strip()
-            for line in lines
-            if isinstance(line, Mapping) and str(line.get("text", "")).strip()
-        ]
-        if line_texts:
-            page_texts.append("\n".join(line_texts))
-        for word in _as_sequence(page.get("words")):
-            if isinstance(word, Mapping):
-                conf = word.get("confidence")
-                if isinstance(conf, int | float):
-                    confidences.append(float(conf))
 
         dimensions = page.get("dimensions")
+        page_width: float | None = None
+        page_height: float | None = None
         page_entry: dict[str, object] = {"page_number": page_number}
         if isinstance(dimensions, Mapping):
             width = dimensions.get("width")
             height = dimensions.get("height")
             if isinstance(width, int | float) and width > 0:
-                page_entry["width"] = float(width)
+                page_width = float(width)
+                page_entry["width"] = page_width
             if isinstance(height, int | float) and height > 0:
-                page_entry["height"] = float(height)
+                page_height = float(height)
+                page_entry["height"] = page_height
         pages_payload.append(page_entry)
+
+        line_texts: list[str] = []
+        for line in _as_sequence(page.get("lines")):
+            if not isinstance(line, Mapping):
+                continue
+            text = str(line.get("text", "")).strip()
+            if not text:
+                continue
+            line_texts.append(text)
+            element: dict[str, object] = {
+                "kind": "text",
+                "text": text,
+                "order": order,
+                "page_number": page_number,
+            }
+            # 有効な bbox に正規化できた時だけ lineage metadata を付ける(孤立 metadata を作らない)。
+            bbox = normalize_bbox(_bounding_polygon(line))
+            if bbox is not None:
+                element["bbox"] = bbox
+                element["metadata"] = _bbox_lineage("ratio", page_width, page_height, "line")
+            elements_payload.append(element)
+            order += 1
+        if line_texts:
+            page_texts.append("\n".join(line_texts))
+
+        for word in _as_sequence(page.get("words")):
+            if isinstance(word, Mapping):
+                conf = word.get("confidence")
+                if isinstance(conf, int | float):
+                    confidences.append(float(conf))
 
         for table in _as_sequence(page.get("tables")):
             if not isinstance(table, Mapping):
@@ -444,6 +468,7 @@ def document_understanding_result_to_payload(
         "document_type": _detected_document_type(result),
         "confidence": confidence,
         "warnings": [],
+        "elements": elements_payload,
         "pages": pages_payload,
         "tables": tables_payload,
         "parser_artifacts": {
@@ -452,6 +477,40 @@ def document_understanding_result_to_payload(
         },
     }
     return payload
+
+
+def _bounding_polygon(obj: Mapping[str, object]) -> list[object] | None:
+    """DU の ``boundingPolygon.normalizedVertices``(0..1, ratio)を頂点列として返す。
+
+    OCI Document Understanding は正規化頂点のみを出す。xyxy 集約は schema validator に委ねる。
+    絶対座標 variant は DU が出さないため扱わない(必要が確認できたら別途追加)。
+    """
+    polygon = obj.get("boundingPolygon")
+    if not isinstance(polygon, Mapping):
+        return None
+    normalized = polygon.get("normalizedVertices")
+    if isinstance(normalized, list) and normalized:
+        return normalized
+    return None
+
+
+def _bbox_lineage(
+    unit: str,
+    page_width: float | None,
+    page_height: float | None,
+    source: str,
+) -> dict[str, object]:
+    """citation→preview 用の bbox lineage metadata を組む。"""
+    metadata: dict[str, object] = {
+        "bbox_coordinate_mode": "xyxy",
+        "bbox_unit": unit,
+        "bbox_source": source,
+    }
+    if page_width is not None:
+        metadata["page_width"] = page_width
+    if page_height is not None:
+        metadata["page_height"] = page_height
+    return metadata
 
 
 def _remap_table_cells(table: Mapping[str, object]) -> list[dict[str, object]]:
@@ -474,6 +533,14 @@ def _remap_table_cells(table: Mapping[str, object]) -> list[dict[str, object]]:
                     "row_span": max(_as_int(cell.get("rowSpan"), default=1), 1),
                     "col_span": max(_as_int(cell.get("columnSpan"), default=1), 1),
                 }
+                bbox = normalize_bbox(_bounding_polygon(cell))
+                if bbox is not None:
+                    cell_payload["bbox"] = bbox
+                    cell_payload["metadata"] = {
+                        "bbox_coordinate_mode": "xyxy",
+                        "bbox_unit": "ratio",
+                        "bbox_source": "cell",
+                    }
                 cells.append(cell_payload)
     return cells
 

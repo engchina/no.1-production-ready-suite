@@ -185,6 +185,82 @@ def test_chunk_extraction_preserves_bbox_coordinate_metadata() -> None:
     assert table_chunk.metadata["bbox_unit"] == "percent"
 
 
+def test_chunk_extraction_unions_same_page_bbox() -> None:
+    """同一ページ・xyxy・ratio の多要素チャンクは union bbox を持つ。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="text",
+                text="一行目の本文です。",
+                page_number=1,
+                bbox=[0.1, 0.05, 0.4, 0.1],
+                metadata={"bbox_coordinate_mode": "xyxy", "bbox_unit": "ratio"},
+            ),
+            DocumentElement(
+                kind="text",
+                text="二行目の本文です。",
+                page_number=1,
+                bbox=[0.1, 0.2, 0.6, 0.25],
+                metadata={"bbox_coordinate_mode": "xyxy", "bbox_unit": "ratio"},
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=200, overlap=0)
+
+    chunk = next(c for c in chunks if "一行目" in c.text and "二行目" in c.text)
+    assert json.loads(chunk.metadata["bbox"]) == [0.1, 0.05, 0.6, 0.25]
+    assert chunk.metadata["bbox_coordinate_mode"] == "xyxy"
+    assert chunk.metadata["bbox_unit"] == "ratio"
+    assert chunk.metadata.get("element_ids")
+
+
+def test_union_and_parse_bbox_helpers() -> None:
+    """union/parse の境界分岐(退化・不正 JSON)を直接押さえる。"""
+    from rag_pipeline_core.chunking import _parse_bbox_json, _union_bbox
+
+    assert _union_bbox([[0.1, 0.05, 0.4, 0.1], [0.1, 0.2, 0.6, 0.25]]) == [0.1, 0.05, 0.6, 0.25]
+    assert _union_bbox([[0.5, 0.5, 0.5, 0.5]]) is None  # 面積 0 は None
+    assert _union_bbox([]) is None
+    assert _parse_bbox_json("[1,2,3,4]") == [1.0, 2.0, 3.0, 4.0]
+    assert _parse_bbox_json("[1,2]") is None  # 4 値未満
+    assert _parse_bbox_json("not json") is None
+    assert _parse_bbox_json(None) is None
+
+
+def test_chunk_extraction_omits_bbox_across_pages() -> None:
+    """跨頁チャンクは union が無意味なので bbox を出さず element_ids+page 範囲に委ねる。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="text",
+                text="ページ1の本文。",
+                page_number=1,
+                element_id="e1",
+                bbox=[0.1, 0.1, 0.2, 0.2],
+                metadata={"bbox_coordinate_mode": "xyxy", "bbox_unit": "ratio"},
+            ),
+            DocumentElement(
+                kind="text",
+                text="ページ2の本文。",
+                page_number=2,
+                element_id="e2",
+                bbox=[0.1, 0.1, 0.2, 0.2],
+                metadata={"bbox_coordinate_mode": "xyxy", "bbox_unit": "ratio"},
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction(extraction, chunk_size=200, overlap=0)
+
+    for chunk in chunks:
+        page_start = chunk.metadata.get("page_start")
+        page_end = chunk.metadata.get("page_end")
+        if page_start is not None and page_end is not None and page_start != page_end:
+            assert "bbox" not in chunk.metadata
+            assert chunk.metadata.get("element_ids")
+
+
 def test_chunk_extraction_does_not_overlap_across_sections() -> None:
     """章節が変わるところでは overlap で前章末尾を混ぜない。"""
     extraction = StructuredExtraction(
