@@ -19,7 +19,6 @@ import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: PreprocessProfileName[] = [
   "passthrough",
-  "text_normalize",
   "office_to_pdf",
   "pdf_to_page_images",
   "csv_to_json",

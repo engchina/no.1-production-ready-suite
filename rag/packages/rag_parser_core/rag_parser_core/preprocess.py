@@ -30,7 +30,6 @@ from rag_parser_core.source import SourceProfile
 # 前処理マイクロサービス(`services/preprocess/<name>`)へ HTTP 委譲する。
 PREPROCESS_PROFILES: tuple[str, ...] = (
     "passthrough",
-    "text_normalize",
     "office_to_pdf",
     "pdf_to_page_images",
     "csv_to_json",

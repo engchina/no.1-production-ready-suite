@@ -11,7 +11,6 @@ from rag_parser_core.preprocess import (
 from app.clients.preprocess_service import (
     PreprocessServiceClient,
     PreprocessServiceError,
-    normalize_text_bytes,
 )
 from app.config import Settings
 from app.rag.chunking import CHUNKING_STRATEGIES, chunk_extraction_with_strategy
@@ -96,32 +95,20 @@ def test_service_profiles_unavailable_without_service() -> None:
     snapshot = preprocess_runtime_settings(Settings(rag_preprocess_enabled=False))
     by_name = {status.name: status for status in snapshot.profiles}
     assert by_name["office_to_pdf"].available is False
-    assert by_name["text_normalize"].available is True
 
 
 def test_resolve_preprocess_profile_normalizes() -> None:
+    # 廃止済み text_normalize は passthrough(no-op)へ正規化される。
     assert resolve_preprocess_profile(Settings(rag_preprocess_profile="text_normalize")) == (
-        "text_normalize"
+        "passthrough"
     )
 
 
-# --- in-process text_normalize ---
+# --- 前処理プロファイル委譲(text_normalize は廃止し passthrough へ寄せる)---
 
 
-def test_normalize_text_bytes_nfkc_and_whitespace() -> None:
-    derived, warnings = normalize_text_bytes(
-        "ＡＢＣ　ｔｅｓｔ\r\n\r\n\r\n\r\n末尾  ".encode(),
-        "text/plain",
-    )
-    text = derived.decode("utf-8")
-    assert text.startswith("ABC test")  # 全角→半角(NFKC)
-    assert "\r" not in text
-    assert "\n\n\n\n" not in text  # 連続空行は 2 行(改行 3 連)までに圧縮
-    assert text.endswith("末尾")  # 行末空白を除去
-    assert isinstance(warnings, list)
-
-
-def test_client_text_normalize_in_process() -> None:
+def test_client_text_normalize_legacy_maps_to_passthrough() -> None:
+    # 廃止済み text_normalize は in-process 実装を持たず passthrough(no-op)になる。
     client = PreprocessServiceClient(Settings(rag_preprocess_profile="text_normalize"))
     outcome = client.convert(
         "ＡＢＣ".encode(),
@@ -129,9 +116,7 @@ def test_client_text_normalize_in_process() -> None:
         source_profile=_text_profile(),
         profile="text_normalize",
     )
-    assert outcome.converted is True
-    assert outcome.converter_name == "text_normalize"
-    assert outcome.derived_bytes == b"ABC"
+    assert outcome.converted is False
 
 
 def test_client_passthrough_for_binary_text_normalize() -> None:

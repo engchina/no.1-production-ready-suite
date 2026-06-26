@@ -1331,7 +1331,6 @@ export type ChunkingStrategyName =
 // --- 設定: 前処理(Preprocess)アダプター ---
 export type PreprocessProfileName =
   | "passthrough"
-  | "text_normalize"
   | "office_to_pdf"
   | "pdf_to_page_images"
   | "csv_to_json"

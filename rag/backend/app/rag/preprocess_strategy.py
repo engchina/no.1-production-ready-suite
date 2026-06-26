@@ -2,9 +2,10 @@
 
 `chunking_strategy.py` / `parser_adapter_readiness.py` と同型で、選択された変換
 プリセットと利用可能なプリセット一覧を非機密 runtime snapshot として返す。実際の
-変換は in-process(`text_normalize`)または前処理マイクロサービス(`office_to_pdf` /
-`pdf_to_page_images`)へ委譲する。確定スタックは不変で、外部変換物は本プロジェクトの
-`SourceDerivation`(派生系譜)へ決定論的に再マップする。
+変換はすべて前処理マイクロサービス(`office_to_pdf` / `pdf_to_page_images` など)へ
+委譲する(in-process 変換・local fallback は持たない)。`passthrough` のみ no-op。
+確定スタックは不変で、外部変換物は本プロジェクトの `SourceDerivation`(派生系譜)へ
+決定論的に再マップする。
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ PreprocessProfileName = PreprocessProfile
 DEFAULT_PREPROCESS_PROFILE: PreprocessProfileName = "passthrough"
 PREPROCESS_PROFILE_ORDER: tuple[PreprocessProfileName, ...] = (
     "passthrough",
-    "text_normalize",
     "office_to_pdf",
     "pdf_to_page_images",
     "csv_to_json",
@@ -48,12 +48,6 @@ PREPROCESS_PROFILE_SPECS: dict[PreprocessProfileName, PreprocessProfileSpec] = {
         name="passthrough",
         origin="baseline_no_conversion",
         recommended_for=("any",),
-        in_process=True,
-    ),
-    "text_normalize": PreprocessProfileSpec(
-        name="text_normalize",
-        origin="unstructured_text_cleaning",
-        recommended_for=("text", "html", "email"),
         in_process=True,
     ),
     "office_to_pdf": PreprocessProfileSpec(

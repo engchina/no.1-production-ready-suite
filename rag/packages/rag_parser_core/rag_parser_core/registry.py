@@ -46,53 +46,23 @@ from rag_parser_core.extraction import (
     ExtractionTableCell,
     StructuredExtraction,
 )
-from rag_parser_core.source import SourceModality, SourceProfile
-
-LOCAL_PARSER_VERSION = "local_partition_v1"
-TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
-EXTERNAL_ADAPTER_PACKAGES = {
-    "docling": "docling",
-    "marker": "marker",
-    "unstructured": "unstructured",
-    # PoweRAG 由来。未導入時は package_missing、導入のみで未実装なら adapter_unsupported を
-    # 返して安全に fallback する(実 OCR は OCI Enterprise AI VLM へ再マップ)。
-    "mineru": "mineru",
-    "dots_ocr": "dots_ocr",
-    # GLM-OCR(HuggingFace zai-org/GLM-OCR)。専用 pip package は無く、GPU サービス image
-    # では transformers で HF からモデルをロードして実 OCR する(_run_glm_ocr のフォールバック)。
-    # core は依存を増やさず(transformers は実行時 import)、未導入環境では安全に fallback する。
-    "glm_ocr": "glm_ocr",
-    # Unlimited-OCR(HuggingFace baidu/Unlimited-OCR)。専用 pip package は無く、GPU サービス
-    # image で transformers からモデルをロードして実 OCR する。
-    "unlimited_ocr": "unlimited_ocr",
-}
-AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
-# service 系 backend。外部 package / parser microservice ではなく、backend が OCI
-# クラウドサービス(Enterprise AI VLM / Document Understanding)を直接呼ぶ。core は
-# 決定論・非 network を保つため、ここでは実行せず sentinel(extraction=None)を返し、
-# 実際の呼び出しは backend(ingestion)側へ委譲する。
-# oci_genai_vision = OCI Generative AI(Vision)。enterprise_ai_vlm は後方互換エイリアス。
-SERVICE_ADAPTER_BACKENDS = frozenset(
-    {"oci_genai_vision", "enterprise_ai_vlm", "oci_document_understanding"}
+from rag_parser_core.result import (
+    EXTERNAL_ADAPTER_PACKAGES,
+    LOCAL_PARSER_VERSION,
+    SERVICE_ADAPTER_BACKENDS,
+    ExternalAdapterRunner,
+    ParserRegistryResult,
+)
+from rag_parser_core.source import (
+    SourceModality,
+    SourceProfile,
+    template_for_source_profile,
 )
 
-# 外部 adapter 実行の注入点。backend は HTTP runner を、service/test は in-process を渡す。
-ExternalAdapterRunner = Callable[
-    [str, bytes, "SourceProfile | None", str], "ParserRegistryResult"
-]
-
-
-@dataclass(frozen=True)
-class ParserRegistryResult:
-    """parser registry の結果。None extraction は Enterprise AI fallback を意味する。"""
-
-    extraction: StructuredExtraction | None
-    parser_backend: str
-    parser_version: str = LOCAL_PARSER_VERSION
-    fallback_used: bool = False
-    template: str = "enterprise_ai_fallback"
-    warnings: tuple[str, ...] = ()
-    unsupported_reason: str | None = None
+# 共有 contract 型・定数は result.py(軽量)へ移設済み。registry は実装専用とし、backend が
+# registry を読み込まずに型を参照できるようにする。本モジュール固有の定数のみ残す。
+TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
+AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 
 
 @dataclass(frozen=True)
@@ -6462,26 +6432,4 @@ def _xml_local_name(tag: object) -> str:
     return text
 
 
-def template_for_source_profile(source_profile: SourceProfile | None) -> str:
-    """chunk metadata 用の既定 template 名。"""
-    if source_profile is None:
-        return "enterprise_ai_fallback"
-    extension = source_profile.extension or ""
-    if source_profile.modality == SourceModality.PDF:
-        return "pdf_layout"
-    if source_profile.modality == SourceModality.IMAGE:
-        return "ocr_page"
-    if source_profile.modality == SourceModality.HTML:
-        return "html_semantic"
-    if source_profile.modality == SourceModality.EMAIL:
-        return "email_thread"
-    if extension == ".docx":
-        return "office_document"
-    if extension == ".pptx":
-        return "office_slide"
-    if extension == ".xlsx":
-        return "office_sheet"
-    if source_profile.modality == SourceModality.TEXT:
-        name = PurePath(source_profile.sanitized_file_name).suffix.lower()
-        return "markdown_by_heading" if name in {".md", ".markdown"} else "text_blocks"
-    return "enterprise_ai_fallback"
+# template_for_source_profile は rag_parser_core.source へ移設済み(上で re-import)。

@@ -39,7 +39,8 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "ファイル準備方式" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /原本をそのまま解析/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /文字コード→UTF-8/ })).toBeVisible();
+    // text_normalize は廃止(in-process 正規化撤去)。radio として出ないことを確認する。
+    await expect(page.getByRole("radio", { name: /文字コード→UTF-8/ })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /Office を PDF へ変換/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /CSV をヘッダ列キー/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Excel\(\.xls\/\.xlsx\)/ })).toBeVisible();
@@ -107,7 +108,6 @@ function preprocessEnvelope(overrides: PreprocessOverrides = {}) {
     requires_service: boolean;
   }[] = [
     { name: "passthrough", origin: "baseline_no_conversion", recommended_for: ["any"], in_process: true, requires_service: false },
-    { name: "text_normalize", origin: "unstructured_text_cleaning", recommended_for: ["text"], in_process: true, requires_service: false },
     { name: "office_to_pdf", origin: "libreoffice_headless", recommended_for: ["office"], in_process: false, requires_service: true },
     { name: "pdf_to_page_images", origin: "no1_pdfparser_page_images", recommended_for: ["pdf"], in_process: false, requires_service: true },
     { name: "csv_to_json", origin: "no1_csv2json_records", recommended_for: ["csv"], in_process: false, requires_service: true },

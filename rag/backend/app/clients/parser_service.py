@@ -16,8 +16,7 @@ import logging
 from collections.abc import Mapping
 
 import httpx
-from rag_parser_core.registry import ParserRegistryResult
-from rag_parser_core.result import ParseResponse
+from rag_parser_core.result import ParseResponse, ParserRegistryResult
 
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings

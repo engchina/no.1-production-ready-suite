@@ -21,7 +21,7 @@ from app.rag.parser_adapter_contract import (
     parser_adapter_fixture_specs_from_manifest,
     run_parser_adapter_compatibility_matrix,
 )
-from app.rag.parsers import ParserRegistryResult
+from rag_parser_core.result import ParserRegistryResult
 from app.schemas.extraction import DocumentElement, ExtractionPage, StructuredExtraction
 
 
@@ -416,8 +416,7 @@ def test_compatibility_matrix_uses_manifest_fixtures_for_real_remap(
         )
 
     monkeypatch.setattr(
-        parser_adapter_contract_module,
-        "parse_with_registry",
+        "rag_parser_core.registry.parse_with_registry",
         parse_manifest_fixture,
     )
 
@@ -497,8 +496,7 @@ def test_compatibility_matrix_requires_real_package_version_evidence(
         )
 
     monkeypatch.setattr(
-        parser_adapter_contract_module,
-        "parse_with_registry",
+        "rag_parser_core.registry.parse_with_registry",
         parse_html_fixture,
     )
 
@@ -591,8 +589,7 @@ def test_strict_manifest_requires_schema_remap_fixture_for_each_routed_source(
         )
 
     monkeypatch.setattr(
-        parser_adapter_contract_module,
-        "parse_with_registry",
+        "rag_parser_core.registry.parse_with_registry",
         parse_html_fixture,
     )
 
@@ -725,8 +722,7 @@ def test_compatibility_matrix_requires_pdf_page_lineage(
         )
 
     monkeypatch.setattr(
-        parser_adapter_contract_module,
-        "parse_with_registry",
+        "rag_parser_core.registry.parse_with_registry",
         parse_without_page_lineage,
     )
 
@@ -792,8 +788,7 @@ def test_compatibility_matrix_accepts_docx_heading_lineage(
         )
 
     monkeypatch.setattr(
-        parser_adapter_contract_module,
-        "parse_with_registry",
+        "rag_parser_core.registry.parse_with_registry",
         parse_docx_heading_lineage,
     )
 
@@ -855,8 +850,7 @@ def test_compatibility_matrix_accepts_office_pages_lineage(
         )
 
     monkeypatch.setattr(
-        parser_adapter_contract_module,
-        "parse_with_registry",
+        "rag_parser_core.registry.parse_with_registry",
         parse_pptx_pages_lineage,
     )
 

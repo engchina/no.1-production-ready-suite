@@ -253,8 +253,8 @@ def test_ingestion_queue_defaults_keep_api_process_non_blocking(
     assert settings.ingestion_queue_stale_running_seconds == 300.0
 
 
-def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.MonkeyPatch) -> None:
-    """外部 parser adapter は既定で任意依存のまま無効にする。"""
+def test_parser_adapter_default_is_unstructured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """既定 backend は Unstructured(simple 形式の catch-all)。補助 adapter は任意依存で無効。"""
     for key in (
         "RAG_PARSER_ADAPTER_BACKEND",
         "RAG_PARSER_DOCLING_ENABLED",
@@ -268,15 +268,21 @@ def test_parser_adapter_flags_default_to_local_optional(monkeypatch: pytest.Monk
         monkeypatch.delenv(key, raising=False)
     settings = Settings(_env_file=None)
 
-    assert settings.rag_parser_adapter_backend == "local"
+    assert settings.rag_parser_adapter_backend == "unstructured"
     assert settings.rag_parser_docling_enabled is False
     assert settings.rag_parser_marker_enabled is False
-    assert settings.rag_parser_unstructured_enabled is False
+    assert settings.rag_parser_unstructured_enabled is True
     assert settings.rag_parser_unlimited_ocr_enabled is False
     assert settings.rag_parser_mineru_enabled is False
     assert settings.rag_parser_dots_ocr_enabled is False
     assert settings.rag_parser_glm_ocr_enabled is False
-    assert Settings(rag_parser_adapter_backend="auto").rag_parser_adapter_backend == "local"
+    # auto(旧既定)は新既定 unstructured へ。local_partition は baseline 値 local へ。
+    # local は正規化せず baseline 値として残す(runtime は ingestion で unstructured へマップ)。
+    assert Settings(rag_parser_adapter_backend="auto").rag_parser_adapter_backend == "unstructured"
+    assert Settings(rag_parser_adapter_backend="local").rag_parser_adapter_backend == "local"
+    assert (
+        Settings(rag_parser_adapter_backend="local_partition").rag_parser_adapter_backend == "local"
+    )
     assert Settings(rag_parser_adapter_backend="docling").rag_parser_adapter_backend == "docling"
     assert Settings(rag_parser_docling_enabled=True).rag_parser_docling_enabled is True
 

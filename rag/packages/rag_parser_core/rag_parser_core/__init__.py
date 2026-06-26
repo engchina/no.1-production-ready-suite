@@ -2,11 +2,13 @@
 
 - schema: `extraction`(StructuredExtraction 系)/ `source`(SourceProfile 系)
 - `routing`: source kind 別 adapter 優先順
-- `registry`: ローカル parser + 外部 adapter remap(`parse_with_registry`)
-- `result`: HTTP 契約(`ParseResponse` / `ParseHealth`)
+- `result`: HTTP 契約 + 共有 contract 型(`ParseResponse` / `ParserRegistryResult` / 各 backend 集合)
+- `registry`: ローカル parser + 外部 adapter remap(`parse_with_registry`)= 解析実体
 
-外部 parser 依存(docling/marker/...)は registry が遅延 import する任意依存であり、
-本 package 自体の依存は pydantic + charset-normalizer のみに保つ。
+`registry`(解析実体)は **eager import しない**。backend は型・契約(result/source)だけを軽量に
+参照し、解析コードを load・実行しない。解析実体が必要な service / offline ツールは
+`from rag_parser_core.registry import parse_with_registry` を明示 import する。
+外部 parser 依存(docling/marker/...)は registry が遅延 import する任意依存。
 """
 
 from rag_parser_core.preprocess import (
@@ -19,11 +21,7 @@ from rag_parser_core.preprocess import (
     normalize_preprocess_profile,
     supported_profiles_from,
 )
-from rag_parser_core.registry import (
-    ParserRegistryResult,
-    parse_with_registry,
-)
-from rag_parser_core.result import ParseHealth, ParseResponse
+from rag_parser_core.result import ParseHealth, ParseResponse, ParserRegistryResult
 
 __all__ = [
     "DEFAULT_PREPROCESS_PROFILE",
@@ -36,6 +34,5 @@ __all__ = [
     "ParserRegistryResult",
     "SourceDerivation",
     "normalize_preprocess_profile",
-    "parse_with_registry",
     "supported_profiles_from",
 ]

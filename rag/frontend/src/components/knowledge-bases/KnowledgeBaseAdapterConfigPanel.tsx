@@ -24,7 +24,6 @@ import { cn } from "@/lib/utils";
 /** 各カテゴリ選択肢。グローバル設定画面の表示名と整合させる。 */
 const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = [
   { value: "passthrough", label: t("settings.preprocess.profile.passthrough") },
-  { value: "text_normalize", label: t("settings.preprocess.profile.text_normalize") },
   { value: "office_to_pdf", label: t("settings.preprocess.profile.office_to_pdf") },
   { value: "pdf_to_page_images", label: t("settings.preprocess.profile.pdf_to_page_images") },
   { value: "csv_to_json", label: t("settings.preprocess.profile.csv_to_json") },
@@ -292,7 +291,7 @@ export function KnowledgeBaseAdapterConfigPanel({
             effectiveValue={effectiveConfig?.ingestion.preprocess_profile ?? null}
             options={PREPROCESS_OPTIONS}
             disabled={disabled}
-            defaultOnOverride="text_normalize"
+            defaultOnOverride="office_to_pdf"
             onChange={(value) => updateIngestion({ preprocess_profile: value })}
           />
           <AdapterSelectRow

@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from rag_parser_core.result import ExternalAdapterRunner
+
 from app.clients.parser_service import ParserServiceClient
 from app.config import Settings
 from app.rag.parser_adapter_readiness import (
@@ -28,7 +30,6 @@ from app.rag.parser_adapter_routing import (
     adapter_order_for_source_kind,
     normalize_source_kind,
 )
-from app.rag.parsers import ExternalAdapterRunner, parse_with_registry
 from app.rag.source_profile import build_source_profile
 from app.schemas.extraction import StructuredExtraction
 
@@ -552,6 +553,10 @@ def _compatibility_case(
             blocking=blocking,
             reason_codes=("fixture_missing",),
         )
+    # registry(解析実体)は contract 検証時のみ遅延 import する。module import で
+    # app.main グラフへ registry を持ち込まないため(backend は解析コードを load しない)。
+    from rag_parser_core.registry import parse_with_registry
+
     result = parse_with_registry(
         data,
         source_profile=build_source_profile(

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TypeGuard
 
 from pydantic import ValidationError
+from rag_parser_core.source import template_for_source_profile
 
 from app.rag.chunking import Chunk, chunk_extraction
 from app.rag.ingestion_quality import (
@@ -19,11 +20,6 @@ from app.rag.ingestion_quality import (
     build_ingestion_quality_report,
 )
 from app.rag.parser_adapter_routing import normalize_source_kind
-from app.rag.parsers import (
-    parse_openxml_office_segment_extractions,
-    parse_with_registry,
-    template_for_source_profile,
-)
 from app.rag.source_profile import build_source_profile
 from app.schemas.extraction import DocumentElement, IngestionQualityReport, StructuredExtraction
 from app.schemas.search import RetrievedChunk
@@ -1073,6 +1069,13 @@ def _run_file_processing_case_contract(
         content_sha256=digest,
         data=data,
     )
+    # registry(解析実体)は評価実行時のみ遅延 import する(module import で app.main へ
+    # registry を持ち込まないため。backend は通常経路で解析コードを load しない)。
+    from rag_parser_core.registry import (
+        parse_openxml_office_segment_extractions,
+        parse_with_registry,
+    )
+
     parser_result = parse_with_registry(
         data,
         source_profile=source_profile,

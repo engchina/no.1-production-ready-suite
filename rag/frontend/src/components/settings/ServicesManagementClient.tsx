@@ -61,7 +61,7 @@ const PROFILE_GROUP_META: Record<
   ServiceProfile,
   { suffixKey: I18nKey; noteKey: I18nKey | null }
 > = {
-  cpu: { suffixKey: "settings.services.cpuSuffix", noteKey: null },
+  cpu: { suffixKey: "settings.services.cpuSuffix", noteKey: "settings.services.cpuNote" },
   gpu: { suffixKey: "settings.services.gpuSuffix", noteKey: "settings.services.gpuNote" },
   oci: { suffixKey: "settings.services.ociSuffix", noteKey: "settings.services.ociNote" },
 };
@@ -320,7 +320,12 @@ export function ServicesManagementClient() {
                     ? t(g.suffixKey, { stage: stage.label })
                     : stage.label
                 }
-                note={g.noteKey ? t(g.noteKey) : undefined}
+                note={
+                  // CPU note(Unstructured 既定)は解析(parser)ステージのみ。前処理 CPU には出さない。
+                  g.noteKey && (g.profile !== "cpu" || stage.category === "parser")
+                    ? t(g.noteKey)
+                    : undefined
+                }
                 services={g.services}
                 controlEnabled={controlEnabled}
                 pending={pending}

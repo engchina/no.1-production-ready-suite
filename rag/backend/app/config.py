@@ -15,6 +15,10 @@ AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
 ParserAdapterBackend = Literal[
+    # 廃止済みの in-process baseline。validator は local を正規化せず保持する(advanced
+    # diagnostics の scorecard/staging golden gate が「常時利用可能な baseline」概念として
+    # 参照するため)。runtime では ingestion._partition_source が local を既定 unstructured
+    # サービスへマップし、in-process 解析は実行しない。
     "local",
     "docling",
     "marker",
@@ -34,7 +38,6 @@ ParserAdapterBackend = Literal[
 ]
 PreprocessProfile = Literal[
     "passthrough",
-    "text_normalize",
     "office_to_pdf",
     "pdf_to_page_images",
     "csv_to_json",
@@ -852,8 +855,7 @@ class Settings(BaseSettings):
         default="passthrough",
         description=(
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
-            "passthrough(既定)は変換せず現行挙動と一致。text_normalize は文字コード/"
-            "Unicode/空白を正規化(in-process)。office_to_pdf は Office→PDF、"
+            "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Office→PDF、"
             "pdf_to_page_images は PDF→ページ画像、csv_to_json は CSV→構造化 JSON、"
             "excel_to_json は Excel(.xls/.xlsx)→構造化 JSON、url_to_markdown は "
             "URL→クリーン Markdown(trafilatura、外部 SaaS 非使用)、image_enhance は "
@@ -912,10 +914,11 @@ class Settings(BaseSettings):
         description="前処理で生成した正規化原本(canonical source)の Object Storage key prefix。",
     )
     rag_parser_adapter_backend: ParserAdapterBackend = Field(
-        default="local",
+        default="unstructured",
         description=(
-            "文書解析 backend の明示選択。local は標準 parser のみ、"
-            "Docling/Marker/Unstructured 等は対応 parser サービスを直接指定する。"
+            "文書解析 backend の明示選択。既定は Unstructured(simple 形式の catch-all)。"
+            "Docling/Marker/各 OCR/OCI Vision/Document Understanding は対応 parser "
+            "マイクロサービスへ HTTP 委譲する。in-process 解析・local fallback は持たない。"
         ),
     )
     rag_parser_docling_enabled: bool = Field(
@@ -929,9 +932,10 @@ class Settings(BaseSettings):
         description="Marker adapter を feature flag で有効化する。未導入時は安全に fallback する。",
     )
     rag_parser_unstructured_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Unstructured adapter を feature flag で有効化する。未導入時は安全に fallback する。"
+            "Unstructured adapter を有効化する。既定 backend(simple 形式の catch-all)のため "
+            "既定で True。取込時は parser-unstructured マイクロサービスの常時起動が前提。"
         ),
     )
     rag_parser_unlimited_ocr_enabled: bool = Field(
@@ -1412,9 +1416,27 @@ class Settings(BaseSettings):
     @field_validator("rag_parser_adapter_backend", mode="before")
     @classmethod
     def normalize_legacy_parser_adapter_backend(cls, value: object) -> object:
-        """廃止済み旧値は起動互換のため local へ寄せる。"""
-        if str(value).strip().casefold() == "auto":
+        """旧値の正規化。
+
+        - ``auto``(旧既定)→ 新既定 ``unstructured``。
+        - ``local_partition``(結果タグ別名)→ baseline 値 ``local``。
+        - ``local`` は **正規化しない**。advanced diagnostics(scorecard/staging golden gate)が
+          「常時利用可能な baseline」概念として扱う。runtime では ingestion._partition_source が
+          ``local`` を既定 ``unstructured`` サービスへマップし、in-process 解析は実行しない。
+        """
+        normalized = str(value).strip().casefold()
+        if normalized == "auto":
+            return "unstructured"
+        if normalized == "local_partition":
             return "local"
+        return value
+
+    @field_validator("rag_preprocess_profile", mode="before")
+    @classmethod
+    def normalize_legacy_preprocess_profile(cls, value: object) -> object:
+        """廃止済み text_normalize は起動互換のため passthrough(no-op)へ寄せる。"""
+        if str(value).strip().casefold() == "text_normalize":
+            return "passthrough"
         return value
 
     @field_validator("oci_enterprise_ai_vlm_input_mode", mode="before")

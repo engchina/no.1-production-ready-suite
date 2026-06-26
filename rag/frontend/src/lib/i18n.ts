@@ -146,8 +146,8 @@ export const ja = {
   "settings.parserAdapters.overview.description":
     "文書解析に使うエンジンを選び、現在の可用性だけを確認します。",
   "settings.parserAdapters.backend": "使用エンジン",
-  "settings.parserAdapters.backend.local": "Local",
-  "settings.parserAdapters.backend.local.description": "標準解析のみ",
+  "settings.parserAdapters.backend.local": "Local(廃止)",
+  "settings.parserAdapters.backend.local.description": "旧 in-process 解析。既定の Unstructured へ正規化",
   "settings.parserAdapters.backend.docling.description": "Docling を優先",
   "settings.parserAdapters.backend.marker.description": "Marker を優先",
   "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
@@ -166,7 +166,7 @@ export const ja = {
   "settings.parserAdapters.backend.oci_document_understanding.description":
     "OCI Document Understanding の非同期 job で日本語 OCR/表抽出",
   "settings.parserAdapters.legacyBackendNotice":
-    "外部エンジン未選択(内蔵フォールバックで解析)。下から解析方式を選ぶと上書きされます。",
+    "旧『local』設定です。未選択時は既定の Unstructured で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
   "settings.parserAdapters.serviceBackend.note":
     "「OCI サービス」は Python package ではなく OCI クラウドサービスを直接呼びます。未設定のときは選択しても安全に既存フロー(ローカル / Enterprise AI VLM)へ縮退します。",
@@ -360,9 +360,6 @@ export const ja = {
   "settings.preprocess.profile.passthrough": "変換なし",
   "settings.preprocess.profile.passthrough.description":
     "原本をそのまま解析(既定・現行挙動と一致)",
-  "settings.preprocess.profile.text_normalize": "テキスト正規化",
-  "settings.preprocess.profile.text_normalize.description":
-    "文字コード→UTF-8 + Unicode NFKC + 空白正規化(in-process)",
   "settings.preprocess.profile.office_to_pdf": "Office→PDF",
   "settings.preprocess.profile.office_to_pdf.description":
     "Office を PDF へ変換してから解析(LibreOffice・サービス)",
@@ -421,6 +418,8 @@ export const ja = {
   "settings.services.column.service": "サービス",
   "settings.services.column.status": "状態",
   "settings.services.column.actions": "操作",
+  "settings.services.cpuNote":
+    "Unstructured は既定の解析エンジン(simple 形式の catch-all)です。取込時は常時起動してください。Docling / Marker は明示選択した場合のみ使用します。",
   "settings.services.gpuNote": "GPU 構成(docker compose --profile gpu で opt-in)。",
   "settings.services.ociNote":
     "OCI クラウドサービスを呼ぶ軽量プロキシ(OCI 認証はメイン設定を継承・GPU 不要)。起動/停止はこのプロキシに対して行います。「縮退」は OCI 設定不足が原因です — Vision は「システム設定 › モデル」、Document Understanding は「OCI 認証」+「Object Storage」で設定すると稼働中になります。",

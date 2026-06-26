@@ -9,11 +9,18 @@ import zipfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import PurePath
 from time import perf_counter
 from uuid import uuid4
 
 from pydantic import ValidationError
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
+from rag_parser_core.result import (
+    EXTERNAL_ADAPTER_PACKAGES,
+    SERVICE_ADAPTER_BACKENDS,
+    ParserRegistryResult,
+)
+from rag_parser_core.source import SourceModality, template_for_source_profile
 from rag_pipeline_core.raptor import build_raptor_summaries
 from rag_pipeline_core.stage import ChunkingStageRequest
 
@@ -31,7 +38,7 @@ from app.clients.oracle import OracleClient
 from app.clients.parser_service import ParserServiceClient, ParserServiceUnavailableError
 from app.clients.pipeline_stage import PipelineStageClient
 from app.clients.preprocess_service import PreprocessServiceClient
-from app.config import Settings, enterprise_ai_vision_model_id, get_settings
+from app.config import Settings, get_settings
 from app.rag.asset_summary import summarize_assets
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
@@ -60,16 +67,6 @@ from app.rag.observability import (
     record_ingestion,
     record_ingestion_stage,
     record_trace_span,
-)
-from app.rag.parsers import (
-    EXTERNAL_ADAPTER_PACKAGES,
-    SERVICE_ADAPTER_BACKENDS,
-    OfficeSegmentExtraction,
-    OfficeSegmentFailure,
-    ParserRegistryResult,
-    parse_openxml_office_segment_extractions,
-    parse_with_registry,
-    template_for_source_profile,
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import resolve_preprocess_profile
@@ -198,32 +195,65 @@ class IngestionPipeline:
         # 音声/動画の文字起こし。失敗時は別経路へ切り替えず取込を止める。
         self._speech = speech or OciSpeechClient(settings=self._settings)
 
-    def _external_adapter_runner(
+    def _partition_source(
         self,
-        backend: str,
-        source_bytes: bytes,
+        *,
+        parse_bytes: bytes,
         source_profile: SourceProfile | None,
         content_type: str,
     ) -> ParserRegistryResult:
-        """明示選択された外部 parser adapter は未達時に取込を止める。"""
-        selected_backend = (
-            str(getattr(self._settings, "rag_parser_adapter_backend", "local")).strip().casefold()
+        """選択 parser backend を parser マイクロサービスへ HTTP 委譲する。
+
+        in-process 解析・local fallback は一切持たない。
+        - 非対応形式(outlook .msg / TIFF / 旧 Office バイナリ)は profiling 済みの
+          ``source_profile.unsupported_reason`` を sentinel として返す。
+        - 音声/動画は sentinel を返し、ingestion 本体が転写経路へ振り分ける。
+        - OCI service backend(Vision / Document Understanding)も sentinel を返し、
+          ``_extract_with_service_backend`` が直接 HTTP 呼び出しする。
+        - それ以外(既定 ``unstructured`` 含む)は runner を fail-fast で実行する。
+          抽出が空なら ``ParserServiceUnavailableError`` を送出し、別経路へ縮退しない。
+        """
+        unsupported_reason = (
+            source_profile.unsupported_reason if source_profile is not None else None
         )
-        fail_fast = selected_backend == backend and backend in {
-            "docling",
-            "marker",
-            "unstructured",
-            "unlimited_ocr",
-            "mineru",
-            "dots_ocr",
-            "glm_ocr",
-        }
+        if unsupported_reason:
+            return ParserRegistryResult(
+                extraction=None,
+                parser_backend="unsupported",
+                template=f"unsupported_{unsupported_reason}",
+                warnings=(unsupported_reason,),
+                unsupported_reason=unsupported_reason,
+            )
+        if _is_audio_source(source_profile, content_type):
+            return ParserRegistryResult(
+                extraction=None,
+                parser_backend="unsupported",
+                template="unsupported_audio",
+                warnings=("unsupported_audio",),
+                unsupported_reason="audio_transcription_not_configured",
+            )
+        backend = (
+            str(getattr(self._settings, "rag_parser_adapter_backend", "unstructured"))
+            .strip()
+            .casefold()
+            or "unstructured"
+        )
+        # 廃止済み baseline 値 local / local_partition は既定 unstructured サービスへマップする
+        # (in-process 解析は実行しない)。診断側は設定値 local をそのまま baseline として扱う。
+        if backend in {"local", "local_partition"}:
+            backend = "unstructured"
+        if backend in SERVICE_ADAPTER_BACKENDS:
+            return ParserRegistryResult(
+                extraction=None,
+                parser_backend=backend,
+                template="enterprise_ai_fallback",
+            )
         return self._parser_service.runner(
             backend,
-            source_bytes,
+            parse_bytes,
             source_profile,
             content_type,
-            fail_fast=fail_fast,
+            fail_fast=True,
         )
 
     def _raise_if_selected_parser_was_not_used(
@@ -303,51 +333,10 @@ class IngestionPipeline:
                 parser_result = await _observe_cpu_ingestion_stage(
                     trace_id,
                     "source_partition",
-                    lambda: parse_with_registry(
-                        parse_bytes,
+                    lambda: self._partition_source(
+                        parse_bytes=parse_bytes,
                         source_profile=source_profile,
                         content_type=parse_content_type,
-                        adapter_backend=getattr(
-                            self._settings,
-                            "rag_parser_adapter_backend",
-                            "local",
-                        ),
-                        docling_enabled=getattr(
-                            self._settings,
-                            "rag_parser_docling_enabled",
-                            False,
-                        ),
-                        marker_enabled=getattr(
-                            self._settings,
-                            "rag_parser_marker_enabled",
-                            False,
-                        ),
-                        unstructured_enabled=getattr(
-                            self._settings,
-                            "rag_parser_unstructured_enabled",
-                            False,
-                        ),
-                        unlimited_ocr_enabled=getattr(
-                            self._settings,
-                            "rag_parser_unlimited_ocr_enabled",
-                            False,
-                        ),
-                        mineru_enabled=getattr(
-                            self._settings,
-                            "rag_parser_mineru_enabled",
-                            False,
-                        ),
-                        dots_ocr_enabled=getattr(
-                            self._settings,
-                            "rag_parser_dots_ocr_enabled",
-                            False,
-                        ),
-                        glm_ocr_enabled=getattr(
-                            self._settings,
-                            "rag_parser_glm_ocr_enabled",
-                            False,
-                        ),
-                        external_adapter_runner=self._external_adapter_runner,
                     ),
                     attributes={
                         "content_type": _observability_content_type(parse_content_type),
@@ -411,43 +400,32 @@ class IngestionPipeline:
                         checkpoint_segments=checkpoint_segments,
                         cancel_checker=cancel_checker,
                     )
+                if extraction is None:
+                    # 後段失敗からの再開: cached full extraction artifact があれば再利用して復旧する
+                    # (local fallback ではなく resume 最適化)。
+                    # ponytail: 再利用でも解析サービスは _partition_source で先に呼ばれる。再開時の
+                    # 再解析を完全に避けたい場合は cache 判定を parse 前へ移す。V1 では許容する。
+                    cached_extraction = await self._load_cached_full_extraction(checkpoint_segments)
+                    if cached_extraction is not None:
+                        extraction = cached_extraction
                 if extraction is not None:
                     pass
-                elif parser_result.extraction is not None and _is_external_adapter_backend(
-                    parser_result.parser_backend
-                ):
+                elif parser_result.extraction is not None:
+                    # 既定 unstructured を含む parser マイクロサービスの抽出をそのまま使う。
                     extraction = parser_result.extraction
                 else:
-                    office_extraction = await self._extract_local_office_segments(
-                        document_id=document_id,
-                        trace_id=trace_id,
-                        source_bytes=parse_bytes,
-                        source_profile=source_profile,
-                        checkpoint_segments=checkpoint_segments,
-                        cancel_checker=cancel_checker,
-                    )
-                    if office_extraction is not None:
-                        extraction = office_extraction
-                    elif parser_result.extraction is not None:
-                        extraction = parser_result.extraction
-                    else:
-                        cached_extraction = await self._load_cached_full_extraction(
-                            checkpoint_segments
+                    # local fallback / Office セグメント / 暗黙 VLM-OCR は持たない。
+                    # service backend は _extract_with_service_backend が抽出か例外を必ず返すため、
+                    # ここへ到達するのは設計上ありえない。防御的に fail-fast する。
+                    raise IngestionUserError(
+                        _unsupported_parser_message(parser_result)
+                        if parser_result.unsupported_reason
+                        else (
+                            "選択した解析エンジンで抽出できませんでした。"
+                            "別経路へ縮退せず取込を停止しました。"
+                            "解析サービスの稼働と設定を確認してから再実行してください。"
                         )
-                        if cached_extraction is not None:
-                            extraction = cached_extraction
-                        else:
-                            extracted = await self._extract_with_vlm(
-                                trace_id=trace_id,
-                                document_id=document_id,
-                                source_bytes=parse_bytes,
-                                prompt=strategy.prompt,
-                                content_type=parse_content_type,
-                                parser_profile=strategy.parser_profile,
-                                checkpoint_segments=checkpoint_segments,
-                                cancel_checker=cancel_checker,
-                            )
-                            extraction = _validate_structured_extraction_payload(extracted)
+                    )
             except EnterpriseAiTimeoutError as exc:
                 raise IngestionTimeoutError(str(exc)) from exc
             except EnterpriseAiIncompleteResponseError as exc:
@@ -1591,133 +1569,6 @@ class IngestionPipeline:
         }
         return extraction.model_copy(update={"parser_artifacts": parser_artifacts})
 
-    async def _extract_local_office_segments(
-        self,
-        *,
-        document_id: str,
-        trace_id: str,
-        source_bytes: bytes,
-        source_profile: SourceProfile | None,
-        checkpoint_segments: Sequence[IngestionSegment],
-        cancel_checker: Callable[[], Awaitable[bool]] | None,
-    ) -> StructuredExtraction | None:
-        """OpenXML Office を slide/sheet checkpoint 単位で抽出・cache する。"""
-        if not _has_office_checkpoint_segments(checkpoint_segments):
-            return None
-        parse_result = await asyncio.to_thread(
-            parse_openxml_office_segment_extractions,
-            source_bytes,
-            source_profile=source_profile,
-        )
-        office_segments = parse_result.segments
-        failures = parse_result.failures
-        if not office_segments:
-            if failures:
-                await self._mark_office_segment_failures(
-                    failures,
-                    checkpoint_segments=checkpoint_segments,
-                )
-                raise IngestionUserError("Office の一部 segment を解析できませんでした。")
-            return None
-        retry_targets = _failed_retry_segments(checkpoint_segments)
-        available_ranges = {
-            (_office_segment_page(segment).page_start, _office_segment_page(segment).page_end)
-            for segment in office_segments
-        }
-        reusable_ranges = _successful_checkpoint_ranges(
-            checkpoint_segments,
-            available_ranges=available_ranges,
-        )
-        if retry_targets:
-            target_segments = _office_segments_for_retry(office_segments, retry_targets)
-        elif reusable_ranges:
-            target_segments = [
-                segment
-                for segment in office_segments
-                if (segment.number, segment.number) not in reusable_ranges
-            ]
-        else:
-            target_segments = list(office_segments)
-        page_like_targets = [_office_segment_page(segment) for segment in target_segments]
-        cached_segments = await self._load_cached_segment_extractions(
-            checkpoint_segments,
-            target_segments=page_like_targets,
-            available_ranges=available_ranges,
-        )
-        segment_extractions = list(cached_segments.cached)
-        target_segments = _append_office_segments_for_ranges(
-            target_segments,
-            office_segments,
-            cached_segments.missing_ranges,
-        )
-        if retry_targets:
-            retry_ranges = {
-                (target.page_start, target.page_end)
-                for target in retry_targets
-                if target.page_start is not None and target.page_end is not None
-            }
-            target_failures = _office_failures_for_ranges(failures, retry_ranges)
-        elif reusable_ranges:
-            target_failure_ranges = {
-                (failure.number, failure.number)
-                for failure in failures
-                if (failure.number, failure.number) not in reusable_ranges
-            } | cached_segments.missing_ranges
-            target_failures = _office_failures_for_ranges(failures, target_failure_ranges)
-        else:
-            target_failures = list(failures)
-        for office_segment in target_segments:
-            await _raise_if_cancelled(cancel_checker)
-            page_segment = _office_segment_page(office_segment)
-            checkpoint = _checkpoint_for_pdf_segment(checkpoint_segments, page_segment)
-            await self._mark_segment_running(checkpoint)
-            segment_artifact_path = await self._cache_segment_extraction_artifact(
-                document_id=document_id,
-                trace_id=trace_id,
-                segment=checkpoint,
-                extraction=office_segment.extraction,
-            )
-            await self._mark_segment_succeeded(
-                checkpoint,
-                artifact_path=segment_artifact_path,
-            )
-            segment_extractions.append(
-                _SegmentExtraction(
-                    segment=page_segment,
-                    extraction=office_segment.extraction,
-                )
-            )
-        if target_failures:
-            await self._mark_office_segment_failures(
-                target_failures,
-                checkpoint_segments=checkpoint_segments,
-            )
-            raise IngestionUserError("Office の一部 segment を解析できませんでした。")
-        merged = _merge_segment_extractions(
-            segment_extractions,
-            warning_code="office_segmented_extraction",
-        )
-        return _extraction_with_segment_cache_miss_context(
-            merged,
-            missing_ranges=cached_segments.missing_ranges,
-        )
-
-    async def _mark_office_segment_failures(
-        self,
-        failures: Sequence[OfficeSegmentFailure],
-        *,
-        checkpoint_segments: Sequence[IngestionSegment],
-    ) -> None:
-        for failure in failures:
-            checkpoint = _checkpoint_for_office_failure(checkpoint_segments, failure)
-            await self._mark_segment_running(checkpoint)
-            await self._mark_segment_failed(
-                checkpoint,
-                status="FAILED",
-                error_code=failure.error_code,
-                error_message=f"{failure.segment_kind} {failure.number} を解析できませんでした。",
-            )
-
     async def _mark_segments_succeeded(
         self,
         segments: Sequence[IngestionSegment],
@@ -1991,245 +1842,6 @@ class IngestionPipeline:
         raise IngestionUserError(
             "音声文字起こしに失敗しました。別経路には切り替えずに取込を停止しました。"
             "OCI Speech の設定、Object Storage、対象ファイル形式を確認してから再実行してください。"
-        )
-
-    async def _extract_with_document_understanding(
-        self,
-        *,
-        trace_id: str,
-        document_id: str,
-        source_bytes: bytes,
-        content_type: str,
-        parser_profile: str,
-        checkpoint_segments: Sequence[IngestionSegment],
-        cancel_checker: Callable[[], Awaitable[bool]] | None,
-    ) -> dict[str, object] | None:
-        """OCI Document Understanding(非同期 job)で抽出する。失敗/未設定は None。"""
-        _ = (trace_id, parser_profile, checkpoint_segments)
-        await _raise_if_cancelled(cancel_checker)
-        payload = await self._document_understanding.analyze(
-            source_bytes,
-            content_type=content_type,
-            document_id=document_id,
-        )
-        await _raise_if_cancelled(cancel_checker)
-        return payload
-
-    async def _extract_with_vlm(
-        self,
-        *,
-        trace_id: str,
-        document_id: str,
-        source_bytes: bytes,
-        prompt: str,
-        content_type: str,
-        parser_profile: str,
-        checkpoint_segments: Sequence[IngestionSegment] = (),
-        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-    ) -> dict[str, object]:
-        """必要なら PDF を segment に分けて VLM 抽出する。"""
-        segments = await asyncio.to_thread(
-            _pdf_segments_for_ingestion,
-            source_bytes,
-            content_type=content_type,
-            max_pages_per_segment=self._settings.rag_pdf_max_pages_per_segment,
-            max_segments=self._settings.rag_pdf_max_segments,
-            enabled=self._settings.rag_pdf_segmentation_enabled,
-        )
-        retry_targets = _failed_retry_segments(checkpoint_segments)
-        if not segments or (len(segments) == 1 and segments[0].page_count <= 1):
-            await _raise_if_cancelled(cancel_checker)
-            checkpoint = _checkpoint_for_source(checkpoint_segments)
-            await self._mark_segment_running(checkpoint)
-            try:
-                result = await self._extract_single_vlm_input(
-                    trace_id=trace_id,
-                    source_bytes=source_bytes,
-                    prompt=prompt,
-                    content_type=content_type,
-                    parser_profile=parser_profile,
-                    stage="vlm_extraction",
-                    extra_attributes={"pdf_segmented": False},
-                )
-            except Exception as exc:
-                await self._mark_segment_failed(checkpoint, error=exc)
-                raise
-            await self._mark_segment_succeeded(checkpoint)
-            return result
-
-        segment_extractions: list[_SegmentExtraction] = []
-        available_ranges = {(segment.page_start, segment.page_end) for segment in segments}
-        reusable_ranges = _successful_checkpoint_ranges(
-            checkpoint_segments,
-            available_ranges=available_ranges,
-        )
-        if retry_targets:
-            target_segments = _pdf_segments_for_retry(segments, retry_targets)
-        elif reusable_ranges:
-            target_segments = [
-                segment
-                for segment in segments
-                if (segment.page_start, segment.page_end) not in reusable_ranges
-            ]
-        else:
-            target_segments = list(segments)
-        cached_segments = await self._load_cached_segment_extractions(
-            checkpoint_segments,
-            target_segments=target_segments,
-            available_ranges=available_ranges,
-        )
-        segment_extractions.extend(cached_segments.cached)
-        target_segments = _append_pdf_segments_for_ranges(
-            target_segments,
-            segments,
-            cached_segments.missing_ranges,
-        )
-        for segment in target_segments:
-            await _raise_if_cancelled(cancel_checker)
-            checkpoint = _checkpoint_for_pdf_segment(checkpoint_segments, segment)
-            segment_extractions.extend(
-                await self._extract_pdf_segment(
-                    trace_id=trace_id,
-                    document_id=document_id,
-                    segment=segment,
-                    prompt=prompt,
-                    parser_profile=parser_profile,
-                    original_source_bytes=len(source_bytes),
-                    segment_total=len(segments),
-                    checkpoint_segment=checkpoint,
-                    cancel_checker=cancel_checker,
-                )
-            )
-        merged = _merge_pdf_segment_extractions(segment_extractions)
-        merged = _extraction_with_segment_cache_miss_context(
-            merged,
-            missing_ranges=cached_segments.missing_ranges,
-        )
-        return merged.to_document_payload()
-
-    async def _extract_pdf_segment(
-        self,
-        *,
-        trace_id: str,
-        document_id: str,
-        segment: PdfPageSegment,
-        prompt: str,
-        parser_profile: str,
-        original_source_bytes: int,
-        segment_total: int,
-        checkpoint_segment: IngestionSegment | None = None,
-        cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-    ) -> list[_SegmentExtraction]:
-        """PDF segment を抽出し、出力上限に当たった場合は単ページへ分割して再試行する。"""
-        segment_prompt = _pdf_segment_prompt(prompt, segment)
-        try:
-            await _raise_if_cancelled(cancel_checker)
-            await self._mark_segment_running(checkpoint_segment)
-            extracted = await self._extract_single_vlm_input(
-                trace_id=trace_id,
-                source_bytes=segment.content,
-                prompt=segment_prompt,
-                content_type="application/pdf",
-                parser_profile=parser_profile,
-                stage="vlm_extraction",
-                extra_attributes={
-                    "pdf_segmented": True,
-                    "pdf_segment_index": segment.index,
-                    "pdf_segment_total": segment_total,
-                    "pdf_page_start": segment.page_start,
-                    "pdf_page_end": segment.page_end,
-                    "pdf_page_count": segment.page_count,
-                    "source_bytes": original_source_bytes,
-                    "segment_bytes": len(segment.content),
-                },
-            )
-            segment_extraction = _validate_structured_extraction_payload(extracted)
-            segment_artifact_path = await self._cache_segment_extraction_artifact(
-                document_id=document_id,
-                trace_id=trace_id,
-                segment=checkpoint_segment,
-                extraction=segment_extraction,
-            )
-            await self._mark_segment_succeeded(
-                checkpoint_segment,
-                artifact_path=segment_artifact_path,
-            )
-            return [
-                _SegmentExtraction(
-                    segment=segment,
-                    extraction=segment_extraction,
-                )
-            ]
-        except EnterpriseAiIncompleteResponseError:
-            if segment.page_count <= 1:
-                await self._mark_segment_failed(
-                    checkpoint_segment,
-                    status="FAILED",
-                    error_code="enterprise_ai_incomplete_response",
-                    error_message="Enterprise AI の出力が上限に達しました。",
-                )
-                raise
-            page_segments = await asyncio.to_thread(
-                split_pdf_page_segments,
-                segment.content,
-                max_pages_per_segment=1,
-                page_number_offset=segment.page_start - 1,
-            )
-            if len(page_segments) <= 1:
-                raise
-            results: list[_SegmentExtraction] = []
-            for page_segment in page_segments:
-                await _raise_if_cancelled(cancel_checker)
-                results.extend(
-                    await self._extract_pdf_segment(
-                        trace_id=trace_id,
-                        document_id=document_id,
-                        segment=page_segment,
-                        prompt=prompt,
-                        parser_profile=parser_profile,
-                        original_source_bytes=original_source_bytes,
-                        segment_total=segment_total,
-                        checkpoint_segment=None,
-                        cancel_checker=cancel_checker,
-                    )
-                )
-            await self._mark_segment_succeeded(checkpoint_segment)
-            return results
-        except Exception as exc:
-            await self._mark_segment_failed(checkpoint_segment, error=exc)
-            raise
-
-    async def _extract_single_vlm_input(
-        self,
-        *,
-        trace_id: str,
-        source_bytes: bytes,
-        prompt: str,
-        content_type: str,
-        parser_profile: str,
-        stage: str,
-        extra_attributes: Mapping[str, object] | None = None,
-    ) -> dict[str, object]:
-        """単一入力を VLM に渡し、trace span を記録する。"""
-        attributes = {
-            "model": enterprise_ai_vision_model_id(self._settings),
-            "source_bytes": len(source_bytes),
-            "content_type": _observability_content_type(content_type),
-            "parser_profile": parser_profile,
-            "prompt_chars": len(prompt),
-        }
-        attributes.update(extra_attributes or {})
-        return await _observe_ingestion_stage(
-            trace_id,
-            stage,
-            self._vlm.extract_with_vlm(
-                source_bytes,
-                prompt,
-                mime_type=content_type,
-                parser_profile=parser_profile,
-            ),
-            attributes=attributes,
-            result_attributes=_vlm_result_attributes,
         )
 
     async def _save_index(
@@ -2569,6 +2181,24 @@ def _uses_external_adapter_extraction(parser_result: ParserRegistryResult) -> bo
     return parser_result.extraction is not None and _is_external_adapter_backend(
         parser_result.parser_backend
     )
+
+
+_AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
+
+
+def _is_audio_source(source_profile: SourceProfile | None, content_type: str) -> bool:
+    """音声/動画ソースかどうか(転写経路へ振り分けるための軽量判定)。"""
+    if source_profile is not None and source_profile.modality == SourceModality.AUDIO:
+        return True
+    normalized = (
+        content_type or (source_profile.content_type if source_profile is not None else "")
+    ).strip().casefold()
+    if normalized.startswith("audio/"):
+        return True
+    extension = (source_profile.extension if source_profile is not None else None) or ""
+    if not extension and source_profile is not None:
+        extension = PurePath(source_profile.sanitized_file_name).suffix
+    return extension.strip().casefold() in _AUDIO_EXTENSIONS
 
 
 def _is_external_adapter_backend(parser_backend: str) -> bool:
@@ -3038,64 +2668,6 @@ def _append_pdf_segments_for_ranges(
     return result
 
 
-def _office_segments_for_retry(
-    segments: Sequence[OfficeSegmentExtraction],
-    retry_targets: Sequence[IngestionSegment],
-) -> list[OfficeSegmentExtraction]:
-    """failed checkpoint があれば該当 slide/sheet だけ返す。"""
-    if not retry_targets:
-        return list(segments)
-    numbers = {
-        target.page_start
-        for target in retry_targets
-        if target.page_start is not None and target.page_start == target.page_end
-    }
-    return [segment for segment in segments if segment.number in numbers]
-
-
-def _append_office_segments_for_ranges(
-    selected_segments: Sequence[OfficeSegmentExtraction],
-    all_segments: Sequence[OfficeSegmentExtraction],
-    ranges: set[tuple[int, int]],
-) -> list[OfficeSegmentExtraction]:
-    """cache miss した Office segment を再処理対象へ追加する。"""
-    result = list(selected_segments)
-    seen = {(segment.number, segment.number) for segment in result}
-    for segment in all_segments:
-        segment_range = (segment.number, segment.number)
-        if segment_range not in ranges or segment_range in seen:
-            continue
-        result.append(segment)
-        seen.add(segment_range)
-    return result
-
-
-def _office_failures_for_ranges(
-    failures: Sequence[OfficeSegmentFailure],
-    target_ranges: set[tuple[int, int]],
-) -> list[OfficeSegmentFailure]:
-    """本回で実処理する Office segment の failure だけ返す。"""
-    return [failure for failure in failures if (failure.number, failure.number) in target_ranges]
-
-
-def _has_office_checkpoint_segments(
-    checkpoint_segments: Sequence[IngestionSegment],
-) -> bool:
-    return any(
-        segment.segment_id.rsplit(":", 1)[-1].startswith(("slide", "sheet"))
-        for segment in checkpoint_segments
-    )
-
-
-def _office_segment_page(segment: OfficeSegmentExtraction) -> PdfPageSegment:
-    return PdfPageSegment(
-        index=segment.number - 1,
-        page_start=segment.number,
-        page_end=segment.number,
-        content=b"",
-    )
-
-
 def _extraction_with_artifact_cache_metadata(
     extraction: StructuredExtraction,
     *,
@@ -3188,20 +2760,6 @@ def _checkpoint_for_pdf_segment(
             for segment in checkpoint_segments
             if segment.page_start == pdf_segment.page_start
             and segment.page_end == pdf_segment.page_end
-        ),
-        None,
-    )
-
-
-def _checkpoint_for_office_failure(
-    checkpoint_segments: Sequence[IngestionSegment],
-    failure: OfficeSegmentFailure,
-) -> IngestionSegment | None:
-    return next(
-        (
-            segment
-            for segment in checkpoint_segments
-            if segment.page_start == failure.number and segment.page_end == failure.number
         ),
         None,
     )

@@ -130,10 +130,10 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_enterprise_ai_max_retries = 3
     settings.oci_enterprise_ai_llm_max_output_tokens = 1200
     settings.oci_enterprise_ai_vlm_max_output_tokens = 65536
-    settings.rag_parser_adapter_backend = "local"
+    settings.rag_parser_adapter_backend = "unstructured"
     settings.rag_parser_docling_enabled = False
     settings.rag_parser_marker_enabled = False
-    settings.rag_parser_unstructured_enabled = False
+    settings.rag_parser_unstructured_enabled = True
     settings.rag_parser_unlimited_ocr_enabled = False
     settings.rag_parser_mineru_enabled = False
     settings.rag_parser_dots_ocr_enabled = False

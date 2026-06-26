@@ -12,6 +12,8 @@ import pytest
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
+from rag_parser_core.result import ParserRegistryResult
+from app.schemas.document import SourceProfile
 from app.schemas.extraction import StructuredExtraction
 
 
@@ -80,9 +82,45 @@ class DeterministicGenAi(OciGenAiClient):
         return [(index, 1.0 - index * 1e-3) for index in range(count)]
 
 
+def _stub_parser_runner(
+    self: object,
+    backend: str,
+    source_bytes: bytes,
+    source_profile: SourceProfile | None,
+    content_type: str,
+    *,
+    fail_fast: bool = False,
+) -> ParserRegistryResult:
+    """parser マイクロサービス委譲(`ParserServiceClient.runner`)の決定論スタブ。
+
+    in-process 解析は撤去済みのため、統合テストでは実サービスを起動せず本スタブで代替する。
+    text 原本を decode して raw_text のみの抽出を返し、element/page は raw_text から推定させる
+    (旧 in-process local partition / VLM スタブと同じ抽出形)。
+    """
+    _ = self, source_profile, content_type, fail_fast
+    text = _decode(source_bytes)
+    extraction = StructuredExtraction(
+        raw_text=text,
+        document_type=_guess_document_type(text),
+        confidence=0.62 if text else 0.0,
+        warnings=[] if text else ["スタブ抽出ではテキストを取得できませんでした。"],
+    )
+    return ParserRegistryResult(
+        extraction=extraction,
+        parser_backend=backend,
+        parser_version=f"{backend}_stub",
+        template="text_blocks",
+    )
+
+
 def patch_ai_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     """取込・検索パイプラインが既定構築する OCI クライアントを差し替える。"""
     monkeypatch.setattr("app.rag.ingestion.OciEnterpriseAiClient", DeterministicEnterpriseAi)
     monkeypatch.setattr("app.rag.ingestion.OciGenAiClient", DeterministicGenAi)
     monkeypatch.setattr("app.rag.pipeline.OciEnterpriseAiClient", DeterministicEnterpriseAi)
     monkeypatch.setattr("app.rag.pipeline.OciGenAiClient", DeterministicGenAi)
+    # 解析は parser マイクロサービスへ委譲する。実サービス未起動でも取込できるよう runner を差し替え。
+    monkeypatch.setattr(
+        "app.clients.parser_service.ParserServiceClient.runner",
+        _stub_parser_runner,
+    )

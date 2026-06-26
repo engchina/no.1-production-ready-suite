@@ -377,20 +377,8 @@ def _service_success_result(backend: str, extraction: StructuredExtraction) -> P
 async def test_service_backend_enterprise_ai_vlm_stops_when_microservice_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """microservice 未到達時、enterprise_ai_vlm 明示は in-process VLM へ縮退しない。"""
+    """microservice 未到達時、enterprise_ai_vlm 明示は別経路へ縮退せず取込を止める。"""
     pipeline = _routing_pipeline()
-    calls: dict[str, bool] = {}
-
-    async def _fake_vlm(**kwargs: Any) -> dict[str, object]:
-        calls["vlm"] = True
-        return {"raw_text": "vlm extracted"}
-
-    async def _fake_du(**kwargs: Any) -> dict[str, object] | None:
-        calls["du"] = True
-        return None
-
-    monkeypatch.setattr(pipeline, "_extract_with_vlm", _fake_vlm)
-    monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
     monkeypatch.setattr(
         pipeline._parser_service,
         "run_service_backend",
@@ -409,23 +397,14 @@ async def test_service_backend_enterprise_ai_vlm_stops_when_microservice_fails(
             checkpoint_segments=(),
             cancel_checker=None,
         )
-    assert "vlm" not in calls
-    assert "du" not in calls
 
 
 async def test_service_backend_vlm_uses_microservice_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """microservice が抽出を返したら in-process VLM(分割)を呼ばずにそれを使う。"""
+    """microservice が抽出を返したらそれを使う(Vision service backend)。"""
     pipeline = _routing_pipeline()
-    calls: dict[str, bool] = {}
     extraction = StructuredExtraction(raw_text="microservice vlm", document_type="ドキュメント")
-
-    async def _fake_vlm(**kwargs: Any) -> dict[str, object]:
-        calls["vlm"] = True
-        return {"raw_text": "in-process"}
-
-    monkeypatch.setattr(pipeline, "_extract_with_vlm", _fake_vlm)
     monkeypatch.setattr(
         pipeline._parser_service,
         "run_service_backend",
@@ -445,26 +424,13 @@ async def test_service_backend_vlm_uses_microservice_when_available(
     )
     assert isinstance(result, StructuredExtraction)
     assert result.raw_text == "microservice vlm"
-    assert "vlm" not in calls  # in-process VLM は呼ばれない
 
 
 async def test_service_backend_du_stops_when_microservice_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """microservice 未到達時、DU 明示は in-process DU/VLM へ縮退しない。"""
+    """microservice 未到達時、DU 明示は別経路へ縮退せず取込を止める。"""
     pipeline = _routing_pipeline()
-    calls: dict[str, bool] = {}
-
-    async def _fake_vlm(**kwargs: Any) -> dict[str, object]:
-        calls["vlm"] = True
-        return {"raw_text": "vlm"}
-
-    async def _fake_du(**kwargs: Any) -> dict[str, object] | None:
-        calls["du"] = True
-        return None
-
-    monkeypatch.setattr(pipeline, "_extract_with_vlm", _fake_vlm)
-    monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
     monkeypatch.setattr(
         pipeline._parser_service,
         "run_service_backend",
@@ -483,20 +449,13 @@ async def test_service_backend_du_stops_when_microservice_fails(
             checkpoint_segments=(),
             cancel_checker=None,
         )
-    assert "du" not in calls
-    assert "vlm" not in calls
 
 
 async def test_service_backend_du_does_not_use_in_process_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """microservice 未到達なら in-process DU が成功可能でも縮退しない。"""
+    """microservice 未到達なら DU は別経路へ縮退せず取込を止める(in-process fallback 無し)。"""
     pipeline = _routing_pipeline()
-
-    async def _fake_du(**kwargs: Any) -> dict[str, object] | None:
-        return document_understanding_result_to_payload(_du_result_json())
-
-    monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
     monkeypatch.setattr(
         pipeline._parser_service,
         "run_service_backend",
@@ -520,18 +479,11 @@ async def test_service_backend_du_does_not_use_in_process_fallback(
 async def test_service_backend_du_uses_microservice_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """microservice が抽出を返したら in-process DU を呼ばずにそれを使う。"""
+    """microservice が抽出を返したらそれを使う(Document Understanding service backend)。"""
     pipeline = _routing_pipeline()
-    calls: dict[str, bool] = {}
     extraction = StructuredExtraction.model_validate(
         document_understanding_result_to_payload(_du_result_json())
     )
-
-    async def _fake_du(**kwargs: Any) -> dict[str, object] | None:
-        calls["du"] = True
-        return None
-
-    monkeypatch.setattr(pipeline, "_extract_with_document_understanding", _fake_du)
     monkeypatch.setattr(
         pipeline._parser_service,
         "run_service_backend",
@@ -551,4 +503,3 @@ async def test_service_backend_du_uses_microservice_when_available(
     )
     assert isinstance(result, StructuredExtraction)
     assert "請求書" in result.raw_text
-    assert "du" not in calls  # in-process DU は呼ばれない

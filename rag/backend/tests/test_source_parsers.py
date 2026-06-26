@@ -11,7 +11,10 @@ import pytest
 
 from app.rag.chunking import chunk_extraction
 from app.rag.ingestion_quality import build_ingestion_quality_report
-from app.rag.parsers import parse_openxml_office_segment_extractions, parse_with_registry
+from rag_parser_core.registry import (
+    parse_openxml_office_segment_extractions,
+    parse_with_registry,
+)
 from app.rag.source_profile import build_source_profile
 from app.schemas.document import SourceModality
 from app.schemas.extraction import ExtractionAsset, ExtractionTableCell
