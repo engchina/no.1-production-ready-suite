@@ -161,9 +161,7 @@ def test_runner_fail_fast_raises_when_service_returns_fallback(
     assert exc_info.value.backend == "mineru"
     assert exc_info.value.reason == "adapter_failed"
     assert exc_info.value.warning_code == "mineru_adapter_failed"
-    assert "選択した文書解析サービス（MinerU）で解析処理が失敗しました" in str(
-        exc_info.value
-    )
+    assert "選択した文書解析サービス（MinerU）で解析処理が失敗しました" in str(exc_info.value)
 
 
 def test_runner_retries_retryable_status_then_returns_success(

@@ -99,9 +99,7 @@ class MaterializationPlan:
         }.get(layer)
         if not kb_ids or layer_map is None:
             return ()
-        return tuple(
-            sorted(layer_id for layer_id, owners in layer_map.items() if owners & kb_ids)
-        )
+        return tuple(sorted(layer_id for layer_id, owners in layer_map.items() if owners & kb_ids))
 
 
 @dataclass(frozen=True)

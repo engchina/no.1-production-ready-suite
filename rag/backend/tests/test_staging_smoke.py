@@ -287,6 +287,7 @@ def _complete_oci_settings(**overrides: Any) -> Settings:
         "oracle_user": "rag_user",
         "oracle_password": "oracle-password",
         "oracle_dsn": "adb.example.com/rag",
+        "object_storage_region": "ap-osaka-1",
         "object_storage_namespace": "namespace",
         "object_storage_bucket": "bucket",
         "upload_storage_backend": "oci",

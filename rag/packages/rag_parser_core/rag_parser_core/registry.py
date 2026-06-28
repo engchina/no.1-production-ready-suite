@@ -50,11 +50,17 @@ from rag_parser_core.extraction import (
     StructuredExtraction,
 )
 from rag_parser_core.result import (
-    EXTERNAL_ADAPTER_PACKAGES,
+    EXTERNAL_ADAPTER_PACKAGES as EXTERNAL_ADAPTER_PACKAGES,
+)
+from rag_parser_core.result import (
     LOCAL_PARSER_VERSION,
-    SERVICE_ADAPTER_BACKENDS,
     ExternalAdapterRunner,
-    ParserRegistryResult,
+)
+from rag_parser_core.result import (
+    SERVICE_ADAPTER_BACKENDS as SERVICE_ADAPTER_BACKENDS,
+)
+from rag_parser_core.result import (
+    ParserRegistryResult as ParserRegistryResult,
 )
 from rag_parser_core.source import (
     SourceModality,
@@ -283,7 +289,11 @@ class _TextHTMLParser(HTMLParser):
         if self._table_depth == 0 and normalized == "a":
             self._flush_link()
             return
-        if self._table_depth == 0 and normalized in {"pre", "code"} and self._code_depth > 0:
+        if (
+            self._table_depth == 0
+            and normalized in {"pre", "code"}
+            and self._code_depth > 0
+        ):
             self._code_depth -= 1
             if self._code_depth == 0:
                 self._flush_block()
@@ -311,7 +321,12 @@ class _TextHTMLParser(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if self._code_depth > 0:
-            code = html.unescape(data).replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+            code = (
+                html.unescape(data)
+                .replace("\r\n", "\n")
+                .replace("\r", "\n")
+                .strip("\n")
+            )
             if code.strip():
                 self._parts.append(code)
                 self._current_tag = "code"
@@ -359,7 +374,9 @@ class _TextHTMLParser(HTMLParser):
                     tag=self._current_tag or "text",
                     text=text,
                     links=tuple(self._block_links),
-                    code_language=self._code_language if self._current_tag == "code" else None,
+                    code_language=(
+                        self._code_language if self._current_tag == "code" else None
+                    ),
                 )
             )
         self._buffer = []
@@ -439,7 +456,9 @@ class _TextHTMLParser(HTMLParser):
     def _flush_table_row(self) -> None:
         if self._table_row is None:
             return
-        if self._table_rows is not None and any(cell.text.strip() for cell in self._table_row):
+        if self._table_rows is not None and any(
+            cell.text.strip() for cell in self._table_row
+        ):
             self._table_rows.append(self._table_row)
         self._table_row = None
 
@@ -490,7 +509,9 @@ def _html_safe_src(attrs: Sequence[tuple[str, str | None]]) -> str | None:
     return _html_safe_url_attr(attrs, "src")
 
 
-def _html_safe_url_attr(attrs: Sequence[tuple[str, str | None]], name: str) -> str | None:
+def _html_safe_url_attr(
+    attrs: Sequence[tuple[str, str | None]], name: str
+) -> str | None:
     for key, value in attrs:
         if key.strip().casefold() != name or value is None:
             continue
@@ -625,7 +646,11 @@ def parse_with_registry(
     マイクロサービスを呼ぶ HTTP runner を注入する。None の場合は同一プロセス内で
     optional package を import する既定挙動(`_external_adapter_result`)を使う。
     """
-    modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
+    modality = (
+        source_profile.modality
+        if source_profile is not None
+        else SourceModality.UNKNOWN
+    )
     if _is_audio_source(source_profile, content_type):
         return ParserRegistryResult(
             extraction=None,
@@ -709,7 +734,9 @@ def parse_with_registry(
                 adapter_fallback_used=adapter_fallback_used,
             )
         adapter_fallback_used = adapter_fallback_used or adapter_result.fallback_used
-        adapter_warnings = tuple(dict.fromkeys([*adapter_warnings, *adapter_result.warnings]))
+        adapter_warnings = tuple(
+            dict.fromkeys([*adapter_warnings, *adapter_result.warnings])
+        )
 
     if modality == SourceModality.TEXT:
         return _with_adapter_fallback_context(
@@ -837,10 +864,15 @@ def _external_adapter_supports_source(
     source_profile: SourceProfile | None,
     content_type: str,
 ) -> bool:
-    modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
+    modality = (
+        source_profile.modality
+        if source_profile is not None
+        else SourceModality.UNKNOWN
+    )
     extension = _source_extension(source_profile)
     normalized_content_type = _normalized_content_type_for_parser(
-        content_type or (source_profile.content_type if source_profile is not None else "")
+        content_type
+        or (source_profile.content_type if source_profile is not None else "")
     )
     if _is_audio_source(source_profile, normalized_content_type):
         return False
@@ -905,7 +937,8 @@ def _external_adapter_supports_source(
         }
     if backend == "mineru":
         return (
-            modality in {SourceModality.PDF, SourceModality.IMAGE, SourceModality.OFFICE}
+            modality
+            in {SourceModality.PDF, SourceModality.IMAGE, SourceModality.OFFICE}
             or normalized_content_type == "application/pdf"
             or normalized_content_type.startswith("image/")
             or normalized_content_type
@@ -954,13 +987,20 @@ def _external_adapter_supports_source(
 def _source_extension(source_profile: SourceProfile | None) -> str:
     if source_profile is None:
         return ""
-    return (source_profile.extension or PurePath(source_profile.sanitized_file_name).suffix).lower()
+    return (
+        source_profile.extension or PurePath(source_profile.sanitized_file_name).suffix
+    ).lower()
 
 
 def _is_audio_source(source_profile: SourceProfile | None, content_type: str) -> bool:
-    modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
+    modality = (
+        source_profile.modality
+        if source_profile is not None
+        else SourceModality.UNKNOWN
+    )
     normalized_content_type = _normalized_content_type_for_parser(
-        content_type or (source_profile.content_type if source_profile is not None else "")
+        content_type
+        or (source_profile.content_type if source_profile is not None else "")
     )
     return (
         modality == SourceModality.AUDIO
@@ -970,10 +1010,15 @@ def _is_audio_source(source_profile: SourceProfile | None, content_type: str) ->
 
 
 def _source_route_kind(source_profile: SourceProfile | None, content_type: str) -> str:
-    modality = source_profile.modality if source_profile is not None else SourceModality.UNKNOWN
+    modality = (
+        source_profile.modality
+        if source_profile is not None
+        else SourceModality.UNKNOWN
+    )
     extension = _source_extension(source_profile)
     normalized_content_type = _normalized_content_type_for_parser(
-        content_type or (source_profile.content_type if source_profile is not None else "")
+        content_type
+        or (source_profile.content_type if source_profile is not None else "")
     )
     if _is_audio_source(source_profile, normalized_content_type):
         return "audio"
@@ -1113,8 +1158,12 @@ def _external_adapter_result(
                 "parser_backend": backend,
                 "content_type": content_type,
                 "source_bytes": len(source_bytes),
-                "source_sha256": source_profile.content_sha256 if source_profile else None,
-                "source_modality": source_profile.modality.value if source_profile else None,
+                "source_sha256": (
+                    source_profile.content_sha256 if source_profile else None
+                ),
+                "source_modality": (
+                    source_profile.modality.value if source_profile else None
+                ),
             },
         )
         return _adapter_fallback_result(backend, f"{backend}_adapter_failed")
@@ -1133,7 +1182,10 @@ def _external_adapter_package_available(backend: str) -> bool:
     if backend == "glm_ocr":
         return _module_available("transformers")
     if backend == "unlimited_ocr":
-        runtime = os.environ.get("UNLIMITED_OCR_RUNTIME", "sglang").strip().lower() or "sglang"
+        runtime = (
+            os.environ.get("UNLIMITED_OCR_RUNTIME", "sglang").strip().lower()
+            or "sglang"
+        )
         if runtime in {"sglang", "official_sglang"}:
             return _module_available("sglang") or bool(
                 os.environ.get("UNLIMITED_OCR_CUSTOM_LOGIT_PROCESSOR", "").strip()
@@ -1401,7 +1453,9 @@ def _run_mineru_cli(path: Path) -> object:
             timeout=timeout,
         )
         if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or "").strip().splitlines()[-5:]
+            detail = (
+                (completed.stderr or completed.stdout or "").strip().splitlines()[-5:]
+            )
             raise RuntimeError(f"mineru CLI failed: {' | '.join(detail)}")
         markdown_files = sorted(Path(output_dir).rglob("*.md"))
         markdown_text = "\n\n".join(
@@ -1454,8 +1508,10 @@ def _collect_mineru_text_elements(
     if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):
         for index, item in enumerate(value):
             child_page_number = page_number
-            if page_number is None and isinstance(item, Sequence) and not isinstance(
-                item, bytes | bytearray | str
+            if (
+                page_number is None
+                and isinstance(item, Sequence)
+                and not isinstance(item, bytes | bytearray | str)
             ):
                 child_page_number = index + 1
             _collect_mineru_text_elements(
@@ -1484,7 +1540,9 @@ def _collect_mineru_text_elements(
     text = _mineru_element_text(value)
     if text and _mineru_text_type_is_searchable(normalized_type):
         element: dict[str, object] = {
-            "type": "text" if normalized_type in {"header", "page_header"} else raw_type,
+            "type": (
+                "text" if normalized_type in {"header", "page_header"} else raw_type
+            ),
             "text": text,
             "page_number": effective_page_number,
             "metadata": {
@@ -1511,7 +1569,9 @@ def _collect_mineru_text_elements(
 def _mineru_nested_content_items(content: Mapping[object, object]) -> list[object]:
     items: list[object] = []
     for value in content.values():
-        if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):
+        if isinstance(value, Sequence) and not isinstance(
+            value, bytes | bytearray | str
+        ):
             items.extend(value)
         else:
             items.append(value)
@@ -1624,7 +1684,9 @@ def _load_dots_ocr_vllm_parser() -> object:
         model_name=model_name,
         temperature=float(os.environ.get("DOTS_OCR_TEMPERATURE", "0.1")),
         top_p=float(os.environ.get("DOTS_OCR_TOP_P", "1.0")),
-        max_completion_tokens=int(os.environ.get("DOTS_OCR_MAX_COMPLETION_TOKENS", "16384")),
+        max_completion_tokens=int(
+            os.environ.get("DOTS_OCR_MAX_COMPLETION_TOKENS", "16384")
+        ),
         num_thread=int(os.environ.get("DOTS_OCR_NUM_THREAD", "1")),
         dpi=int(os.environ.get("DOTS_OCR_DPI", "200")),
         output_dir=os.environ.get("DOTS_OCR_OUTPUT_DIR", "/tmp/dots-ocr-output"),
@@ -1642,7 +1704,9 @@ def _load_dots_ocr_hf_parser() -> object:
         os.environ.get("DOTS_OCR_MODEL_ID", "rednote-hilab/dots.mocr").strip()
         or "rednote-hilab/dots.mocr"
     )
-    dtype_name = os.environ.get("DOTS_OCR_TORCH_DTYPE", "bfloat16").strip() or "bfloat16"
+    dtype_name = (
+        os.environ.get("DOTS_OCR_TORCH_DTYPE", "bfloat16").strip() or "bfloat16"
+    )
     device_name = os.environ.get("DOTS_OCR_DEVICE", "cuda:0").strip() or "cuda:0"
     attention_impl = (
         os.environ.get("DOTS_OCR_ATTENTION_IMPLEMENTATION", "sdpa").strip() or "sdpa"
@@ -1659,7 +1723,9 @@ def _load_dots_ocr_hf_parser() -> object:
         def _load_hf_model(self) -> None:
             torch = importlib.import_module("torch")
             if not torch.cuda.is_available():
-                raise RuntimeError("dots_ocr_cuda_unavailable: Dots.OCR requires a CUDA GPU")
+                raise RuntimeError(
+                    "dots_ocr_cuda_unavailable: Dots.OCR requires a CUDA GPU"
+                )
             transformers = importlib.import_module("transformers")
             qwen_vl_utils = importlib.import_module("qwen_vl_utils")
             model_ref = _resolve_dots_ocr_model_ref(model_id)
@@ -1669,7 +1735,9 @@ def _load_dots_ocr_hf_parser() -> object:
                 error_prefix="dots_ocr",
             )
             device = torch.device(device_name)
-            config = transformers.AutoConfig.from_pretrained(model_ref, trust_remote_code=True)
+            config = transformers.AutoConfig.from_pretrained(
+                model_ref, trust_remote_code=True
+            )
             vision_config = getattr(config, "vision_config", None)
             if isinstance(vision_config, dict):
                 vision_config["attn_implementation"] = attention_impl
@@ -1721,7 +1789,9 @@ def _load_dots_ocr_hf_parser() -> object:
             generated_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens)
             generated_ids_trimmed = [
                 out_ids[len(in_ids) :]
-                for in_ids, out_ids in zip(inputs.input_ids, generated_ids, strict=False)
+                for in_ids, out_ids in zip(
+                    inputs.input_ids, generated_ids, strict=False
+                )
             ]
             decoded = self.processor.batch_decode(
                 generated_ids_trimmed,
@@ -1833,7 +1903,9 @@ def _run_glm_ocr(path: Path) -> object:
     elif runtime in {"transformers", "hf", "local_transformers"}:
         runner = _run_glm_ocr_transformers
     else:
-        raise RuntimeError("glm_ocr_invalid_runtime: set GLM_OCR_RUNTIME to vllm or transformers")
+        raise RuntimeError(
+            "glm_ocr_invalid_runtime: set GLM_OCR_RUNTIME to vllm or transformers"
+        )
     # GLM-OCR は画像入力前提。PDF はページ画像へラスタライズしてから OCR する
     # (dots_ocr / unlimited_ocr と同じ扱い)。
     if path.suffix.lower() == ".pdf":
@@ -1862,7 +1934,9 @@ def _run_unlimited_ocr(path: Path) -> object:
             candidate = getattr(module, attr, None)
             if callable(candidate):
                 return candidate(str(path))
-    runtime = os.environ.get("UNLIMITED_OCR_RUNTIME", "sglang").strip().lower() or "sglang"
+    runtime = (
+        os.environ.get("UNLIMITED_OCR_RUNTIME", "sglang").strip().lower() or "sglang"
+    )
     if runtime in {"sglang", "official_sglang"}:
         return _run_unlimited_ocr_sglang(path)
     if runtime in {"transformers", "hf", "local_transformers"}:
@@ -1964,7 +2038,10 @@ def _run_glm_ocr_transformers(path: Path) -> object:
     """
     import os
 
-    model_id = os.environ.get("GLM_OCR_MODEL_ID", "zai-org/GLM-OCR").strip() or "zai-org/GLM-OCR"
+    model_id = (
+        os.environ.get("GLM_OCR_MODEL_ID", "zai-org/GLM-OCR").strip()
+        or "zai-org/GLM-OCR"
+    )
     processor, model = _load_glm_ocr_pipeline(model_id)
     image_module = importlib.import_module("PIL.Image")
     prompt = os.environ.get(
@@ -2016,7 +2093,9 @@ def _load_glm_ocr_pipeline(model_id: str) -> tuple[object, object]:
     )
     device = torch.device("cuda:0")
     transformers = importlib.import_module("transformers")
-    processor = transformers.AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    processor = transformers.AutoProcessor.from_pretrained(
+        model_id, trust_remote_code=True
+    )
     model = transformers.AutoModelForImageTextToText.from_pretrained(
         model_id,
         trust_remote_code=True,
@@ -2039,7 +2118,9 @@ def _run_unlimited_ocr_sglang(path: Path) -> object:
     """公式 SGLang OpenAI-compatible endpoint で Unlimited-OCR を実行する。"""
     image_files: list[str]
     if path.suffix.lower() == ".pdf":
-        with tempfile.TemporaryDirectory(prefix="unlimited-ocr-sglang-pages-") as page_dir:
+        with tempfile.TemporaryDirectory(
+            prefix="unlimited-ocr-sglang-pages-"
+        ) as page_dir:
             image_files = _unlimited_ocr_pdf_to_images(
                 path,
                 Path(page_dir),
@@ -2050,7 +2131,8 @@ def _run_unlimited_ocr_sglang(path: Path) -> object:
             )
     return _run_unlimited_ocr_sglang_images(
         [str(path)],
-        image_mode=os.environ.get("UNLIMITED_OCR_IMAGE_MODE", "gundam").strip() or "gundam",
+        image_mode=os.environ.get("UNLIMITED_OCR_IMAGE_MODE", "gundam").strip()
+        or "gundam",
         ngram_window=_env_int("UNLIMITED_OCR_NGRAM_WINDOW", 128),
         prompt=os.environ.get("UNLIMITED_OCR_PROMPT", "document parsing."),
     )
@@ -2111,7 +2193,10 @@ def _unlimited_ocr_sglang_payload(
         "model": os.environ.get("UNLIMITED_OCR_SGLANG_MODEL", "Unlimited-OCR").strip()
         or "Unlimited-OCR",
         "messages": [
-            {"role": "user", "content": _unlimited_ocr_sglang_content(prompt, image_files)}
+            {
+                "role": "user",
+                "content": _unlimited_ocr_sglang_content(prompt, image_files),
+            }
         ],
         "temperature": float(os.environ.get("UNLIMITED_OCR_TEMPERATURE", "0")),
         "skip_special_tokens": False,
@@ -2141,7 +2226,10 @@ def _unlimited_ocr_sglang_content(
 def _encoded_image_content(path: Path) -> dict[str, object]:
     content_type = _content_type_for_path(path)
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{encoded}"}}
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{content_type};base64,{encoded}"},
+    }
 
 
 def _unlimited_ocr_no_repeat_processor() -> str | None:
@@ -2149,10 +2237,14 @@ def _unlimited_ocr_no_repeat_processor() -> str | None:
     if override:
         return override
     try:
-        processor_module = importlib.import_module("sglang.srt.sampling.custom_logit_processor")
+        processor_module = importlib.import_module(
+            "sglang.srt.sampling.custom_logit_processor"
+        )
     except Exception:
         return None
-    processor = getattr(processor_module, "DeepseekOCRNoRepeatNGramLogitProcessor", None)
+    processor = getattr(
+        processor_module, "DeepseekOCRNoRepeatNGramLogitProcessor", None
+    )
     to_str = getattr(processor, "to_str", None)
     return to_str() if callable(to_str) else None
 
@@ -2192,7 +2284,9 @@ def _streaming_chat_completion_text(response: Any) -> str:
 
 def _run_unlimited_ocr_pdf_with_timeout(path: Path) -> object:
     timeout_seconds = _env_float("UNLIMITED_OCR_PDF_TIMEOUT_SECONDS", 1200.0)
-    with tempfile.TemporaryDirectory(prefix="unlimited-ocr-child-result-") as result_dir:
+    with tempfile.TemporaryDirectory(
+        prefix="unlimited-ocr-child-result-"
+    ) as result_dir:
         result_path = Path(result_dir) / "result.txt"
         result_queue: Any = multiprocessing.Queue(maxsize=1)
         process = multiprocessing.Process(
@@ -2211,7 +2305,9 @@ def _run_unlimited_ocr_pdf_with_timeout(path: Path) -> object:
             _release_unlimited_ocr_gpu_cache()
             result_queue.close()
             result_queue.join_thread()
-            raise TimeoutError(f"unlimited_ocr_pdf_timeout: exceeded {timeout_seconds:g}s")
+            raise TimeoutError(
+                f"unlimited_ocr_pdf_timeout: exceeded {timeout_seconds:g}s"
+            )
         try:
             status, payload = result_queue.get(timeout=1)
         except queue.Empty as exc:
@@ -2262,7 +2358,9 @@ def _run_unlimited_ocr_transformers_in_process(path: Path) -> object:
         with tempfile.TemporaryDirectory(prefix="unlimited-ocr-output-") as output_dir:
             output_path = Path(output_dir)
             if path.suffix.lower() == ".pdf":
-                with tempfile.TemporaryDirectory(prefix="unlimited-ocr-pages-") as page_dir:
+                with tempfile.TemporaryDirectory(
+                    prefix="unlimited-ocr-pages-"
+                ) as page_dir:
                     image_files = _unlimited_ocr_pdf_to_images(
                         path,
                         Path(page_dir),
@@ -2278,7 +2376,9 @@ def _run_unlimited_ocr_transformers_in_process(path: Path) -> object:
                 base_size, image_size, crop_mode = _unlimited_ocr_image_config()
                 result = model_runner.infer(
                     tokenizer,
-                    prompt=os.environ.get("UNLIMITED_OCR_PROMPT", "<image>document parsing."),
+                    prompt=os.environ.get(
+                        "UNLIMITED_OCR_PROMPT", "<image>document parsing."
+                    ),
                     image_file=str(path),
                     output_path=str(output_path),
                     base_size=base_size,
@@ -2288,7 +2388,9 @@ def _run_unlimited_ocr_transformers_in_process(path: Path) -> object:
                     no_repeat_ngram_size=int(
                         os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")
                     ),
-                    ngram_window=int(os.environ.get("UNLIMITED_OCR_NGRAM_WINDOW", "128")),
+                    ngram_window=int(
+                        os.environ.get("UNLIMITED_OCR_NGRAM_WINDOW", "128")
+                    ),
                     save_results=True,
                 )
             return _unlimited_ocr_output_text(result, output_path)
@@ -2320,11 +2422,17 @@ def _run_unlimited_ocr_pdf_batches(
             output_path=str(batch_output_path),
             image_size=int(os.environ.get("UNLIMITED_OCR_PDF_IMAGE_SIZE", "1024")),
             max_length=int(os.environ.get("UNLIMITED_OCR_MAX_LENGTH", "32768")),
-            no_repeat_ngram_size=int(os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")),
-            ngram_window=int(os.environ.get("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", "1024")),
+            no_repeat_ngram_size=int(
+                os.environ.get("UNLIMITED_OCR_NO_REPEAT_NGRAM_SIZE", "35")
+            ),
+            ngram_window=int(
+                os.environ.get("UNLIMITED_OCR_MULTI_NGRAM_WINDOW", "1024")
+            ),
             save_results=True,
         )
-        text = _adapter_text_value(_unlimited_ocr_output_text(batch_result, batch_output_path))
+        text = _adapter_text_value(
+            _unlimited_ocr_output_text(batch_result, batch_output_path)
+        )
         if text.strip():
             texts.append(text.strip())
     return "\n\n".join(texts)
@@ -2338,14 +2446,18 @@ def _load_unlimited_ocr_pipeline(model_id: str) -> tuple[object, object]:
     torch = importlib.import_module("torch")
     device_name = os.environ.get("UNLIMITED_OCR_DEVICE", "cuda:0").strip() or "cuda:0"
     if device_name.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError("unlimited_ocr_cuda_unavailable: Unlimited-OCR requires a CUDA GPU")
+        raise RuntimeError(
+            "unlimited_ocr_cuda_unavailable: Unlimited-OCR requires a CUDA GPU"
+        )
     dtype = _torch_dtype(
         torch,
         os.environ.get("UNLIMITED_OCR_TORCH_DTYPE", "bfloat16"),
         error_prefix="unlimited_ocr",
     )
     transformers = importlib.import_module("transformers")
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model_id, trust_remote_code=True
+    )
     model = transformers.AutoModel.from_pretrained(
         model_id,
         trust_remote_code=True,
@@ -2392,7 +2504,9 @@ def _unlimited_ocr_image_config() -> tuple[int, int, bool]:
     return 1024, 640, True
 
 
-def _unlimited_ocr_pdf_to_images(path: Path, output_dir: Path, *, dpi: int) -> list[str]:
+def _unlimited_ocr_pdf_to_images(
+    path: Path, output_dir: Path, *, dpi: int
+) -> list[str]:
     fitz = importlib.import_module("fitz")
     doc = fitz.open(str(path))
     try:
@@ -2733,7 +2847,8 @@ def _unstructured_partition_kwargs(
 ) -> dict[str, object]:
     """Unstructured adapter に渡す高保真 partition option。"""
     normalized_content_type = _normalized_content_type_for_parser(
-        content_type or (source_profile.content_type if source_profile is not None else "")
+        content_type
+        or (source_profile.content_type if source_profile is not None else "")
     )
     extension = (source_profile.extension if source_profile is not None else "") or ""
     kwargs: dict[str, object] = {}
@@ -2784,14 +2899,19 @@ def _unstructured_supports_page_breaks(content_type: str, extension: str) -> boo
 
 
 def _unstructured_supports_table_inference(content_type: str, extension: str) -> bool:
-    return content_type == "application/pdf" or content_type.startswith("image/") or extension in {
-        ".pdf",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".bmp",
-        ".heic",
-    }
+    return (
+        content_type == "application/pdf"
+        or content_type.startswith("image/")
+        or extension
+        in {
+            ".pdf",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".bmp",
+            ".heic",
+        }
+    )
 
 
 def _call_with_supported_kwargs(
@@ -2850,7 +2970,9 @@ def _text_result(
     content_type: str = "",
 ) -> ParserRegistryResult:
     text = _decode_text_bytes(source_bytes)
-    if _is_delimited_table_source(source_profile=source_profile, content_type=content_type):
+    if _is_delimited_table_source(
+        source_profile=source_profile, content_type=content_type
+    ):
         delimited = _delimited_table_extraction(
             text,
             source_profile=source_profile,
@@ -3075,7 +3197,9 @@ def _asset_from_html_image(
     )
 
 
-def _html_link_metadata(links: Sequence[_HTMLLink]) -> dict[str, ExtractionMetadataValue]:
+def _html_link_metadata(
+    links: Sequence[_HTMLLink],
+) -> dict[str, ExtractionMetadataValue]:
     if not links:
         return {}
     urls = _dedupe_adapter_labels([link.url for link in links])
@@ -3148,7 +3272,9 @@ def _markdown_image_links(
         reference = raw_reference or label
         url = reference_links.get(_markdown_reference_key(reference))
         if url is not None:
-            links.append(_HTMLLink(text=_markdown_image_label(label, None, url), url=url))
+            links.append(
+                _HTMLLink(text=_markdown_image_label(label, None, url), url=url)
+            )
     return links
 
 
@@ -3192,11 +3318,17 @@ def _adapter_link_metadata(
     metadata = _object_member(item, "metadata")
     links: list[_HTMLLink] = []
     for field_name in ADAPTER_LINK_COLLECTION_FIELDS:
-        for value in (_object_member(item, field_name), _metadata_get(metadata, field_name)):
+        for value in (
+            _object_member(item, field_name),
+            _metadata_get(metadata, field_name),
+        ):
             links.extend(_adapter_links_from_value(value))
     fallback_label = _adapter_link_text_label(fallback_text)
     for field_name in ADAPTER_LINK_SCALAR_FIELDS:
-        for value in (_object_member(item, field_name), _metadata_get(metadata, field_name)):
+        for value in (
+            _object_member(item, field_name),
+            _metadata_get(metadata, field_name),
+        ):
             links.extend(_adapter_links_from_value(value, fallback_text=fallback_label))
     return _html_link_metadata(links)
 
@@ -3210,7 +3342,9 @@ def _adapter_links_from_value(
         return []
     if isinstance(value, str):
         url = _safe_link_url(value)
-        return [_HTMLLink(text=fallback_text or url, url=url)] if url is not None else []
+        return (
+            [_HTMLLink(text=fallback_text or url, url=url)] if url is not None else []
+        )
     if isinstance(value, Mapping):
         return _adapter_links_from_mapping(value, fallback_text=fallback_text)
     if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray | str):
@@ -3547,12 +3681,20 @@ def parse_openxml_office_segment_extractions(
 def _office_kind(source_profile: SourceProfile | None) -> str | None:
     """拡張子または MIME type から OpenXML Office 種別を返す。"""
     extension = (source_profile.extension if source_profile is not None else "") or ""
-    content_type = (source_profile.content_type if source_profile is not None else "") or ""
-    if extension == ".docx" or content_type.endswith("officedocument.wordprocessingml.document"):
+    content_type = (
+        source_profile.content_type if source_profile is not None else ""
+    ) or ""
+    if extension == ".docx" or content_type.endswith(
+        "officedocument.wordprocessingml.document"
+    ):
         return "docx"
-    if extension == ".pptx" or content_type.endswith("officedocument.presentationml.presentation"):
+    if extension == ".pptx" or content_type.endswith(
+        "officedocument.presentationml.presentation"
+    ):
         return "pptx"
-    if extension == ".xlsx" or content_type.endswith("officedocument.spreadsheetml.sheet"):
+    if extension == ".xlsx" or content_type.endswith(
+        "officedocument.spreadsheetml.sheet"
+    ):
         return "xlsx"
     return None
 
@@ -3562,7 +3704,9 @@ def _pptx_segment_parse_result(
 ) -> OfficeSegmentParseResult:
     segments: list[OfficeSegmentExtraction] = []
     failures: list[OfficeSegmentFailure] = []
-    for number, name in _openxml_numbered_members(archive, r"ppt/slides/slide(\d+)\.xml"):
+    for number, name in _openxml_numbered_members(
+        archive, r"ppt/slides/slide(\d+)\.xml"
+    ):
         try:
             text, tables = _office_pptx_slide_text_and_tables(
                 archive,
@@ -3608,7 +3752,9 @@ def _xlsx_segment_parse_result(
         shared_strings = {}
     segments: list[OfficeSegmentExtraction] = []
     failures: list[OfficeSegmentFailure] = []
-    for number, name in _openxml_numbered_members(archive, r"xl/worksheets/sheet(\d+)\.xml"):
+    for number, name in _openxml_numbered_members(
+        archive, r"xl/worksheets/sheet(\d+)\.xml"
+    ):
         try:
             text, table, formula_elements = _office_xlsx_sheet_text_and_table(
                 archive,
@@ -3754,10 +3900,14 @@ def _office_table_element_matches(
 
 
 def _table_markdown_from_cells(cells: Sequence[ExtractionTableCell]) -> str:
-    return "\n".join(_xlsx_markdown_row(row) for row in _table_plain_rows_from_cells(cells))
+    return "\n".join(
+        _xlsx_markdown_row(row) for row in _table_plain_rows_from_cells(cells)
+    )
 
 
-def _table_plain_rows_from_cells(cells: Sequence[ExtractionTableCell]) -> list[list[str]]:
+def _table_plain_rows_from_cells(
+    cells: Sequence[ExtractionTableCell],
+) -> list[list[str]]:
     row_count, column_count = _table_shape_from_cells(cells)
     if row_count <= 0 or column_count <= 0:
         return []
@@ -3835,7 +3985,9 @@ def _structured_from_text(
         asset_metadata = _markdown_asset_metadata(element_assets)
         figure_text = _markdown_image_only_text(element.text, image_refs)
         kind = element.kind
-        content_kind = default_content_kind if element.kind == "text" else element.content_kind
+        content_kind = (
+            default_content_kind if element.kind == "text" else element.content_kind
+        )
         text = element.text
         if figure_text is not None:
             kind = "figure"
@@ -3883,7 +4035,9 @@ def _structured_from_text(
                 }
             )
         )
-    existing_table_count = _int_value(extraction.parser_artifacts.get("table_count")) or 0
+    existing_table_count = (
+        _int_value(extraction.parser_artifacts.get("table_count")) or 0
+    )
     artifacts = {
         **extraction.parser_artifacts,
         "table_count": max(existing_table_count, markdown_table_count),
@@ -3911,7 +4065,9 @@ def _markdown_table_from_element(
     cells = _table_cells_from_adapter_text(element.text)
     if not cells:
         return None
-    table_id = _metadata_table_id(element.metadata) or f"markdown-table-{table_index:04d}"
+    table_id = (
+        _metadata_table_id(element.metadata) or f"markdown-table-{table_index:04d}"
+    )
     row_count, column_count = _table_shape_from_cells(cells)
     metadata: dict[str, ExtractionMetadataValue] = {
         "source_parser": source_parser,
@@ -3999,7 +4155,9 @@ def _markdown_image_refs(
                 asset_id="",
                 src=url,
                 alt_text=_markdown_image_label(label, raw_title, url),
-                title=_clean_text(raw_title) if raw_title and raw_title.strip() else None,
+                title=(
+                    _clean_text(raw_title) if raw_title and raw_title.strip() else None
+                ),
             )
         )
     for label, raw_reference in MARKDOWN_REFERENCE_IMAGE.findall(text):
@@ -4070,7 +4228,8 @@ def _markdown_image_only_text(text: str, images: Sequence[_HTMLImage]) -> str | 
     if len(lines) != len(images):
         return None
     if not all(
-        MARKDOWN_INLINE_IMAGE.fullmatch(line) or MARKDOWN_REFERENCE_IMAGE.fullmatch(line)
+        MARKDOWN_INLINE_IMAGE.fullmatch(line)
+        or MARKDOWN_REFERENCE_IMAGE.fullmatch(line)
         for line in lines
     ):
         return None
@@ -4192,25 +4351,31 @@ def _structured_from_adapter_elements(
                     table_source="adapter_cells",
                 )
                 if adapter_cells
-                else _tables_from_adapter_rows(
-                    adapter_rows,
-                    element_id=element_id,
-                    page_number=page_number,
-                    source_parser=source_parser,
-                    parser_backend=parser_backend,
-                    parser_version=parser_version,
-                )
-                if adapter_rows
-                else _tables_from_adapter_text(
-                    text,
-                    element_id=element_id,
-                    page_number=page_number,
-                    source_parser=source_parser,
-                    parser_backend=parser_backend,
-                    parser_version=parser_version,
+                else (
+                    _tables_from_adapter_rows(
+                        adapter_rows,
+                        element_id=element_id,
+                        page_number=page_number,
+                        source_parser=source_parser,
+                        parser_backend=parser_backend,
+                        parser_version=parser_version,
+                    )
+                    if adapter_rows
+                    else _tables_from_adapter_text(
+                        text,
+                        element_id=element_id,
+                        page_number=page_number,
+                        source_parser=source_parser,
+                        parser_backend=parser_backend,
+                        parser_version=parser_version,
+                    )
                 )
             )
-            if adapter_tables and page_number is not None and page_number in page_metadata:
+            if (
+                adapter_tables
+                and page_number is not None
+                and page_number in page_metadata
+            ):
                 page = page_metadata[page_number]
                 adapter_tables = [
                     _adapter_table_with_page_metadata(table, page=page)
@@ -4312,7 +4477,11 @@ def _attach_adapter_table_captions(
     """adapter の TableCaption element を親 table / tables[] へ回填する。"""
     caption_by_parent: dict[str, DocumentElement] = {}
     for element in elements:
-        if element.kind != "table_caption" or not element.parent_id or not element.text.strip():
+        if (
+            element.kind != "table_caption"
+            or not element.parent_id
+            or not element.text.strip()
+        ):
             continue
         caption_by_parent.setdefault(element.parent_id, element)
     if not caption_by_parent:
@@ -4460,7 +4629,8 @@ def _is_delimited_table_source(
 ) -> bool:
     extension = (source_profile.extension if source_profile is not None else "") or ""
     normalized_content_type = _normalized_content_type_for_parser(
-        content_type or (source_profile.content_type if source_profile is not None else "")
+        content_type
+        or (source_profile.content_type if source_profile is not None else "")
     )
     return extension in {".csv", ".tsv"} or normalized_content_type in {
         "text/csv",
@@ -4476,7 +4646,8 @@ def _delimiter_for_delimited_source(
 ) -> str:
     extension = (source_profile.extension if source_profile is not None else "") or ""
     normalized_content_type = _normalized_content_type_for_parser(
-        content_type or (source_profile.content_type if source_profile is not None else "")
+        content_type
+        or (source_profile.content_type if source_profile is not None else "")
     )
     if extension == ".tsv" or normalized_content_type == "text/tab-separated-values":
         return "\t"
@@ -4566,8 +4737,7 @@ def _adapter_table_cells(item: object) -> list[ExtractionTableCell]:
     for value in (_object_member(item, "rows"), _object_member(item, "data")):
         cells = _table_cells_from_adapter_cell_value(value)
         has_layout = any(
-            _adapter_cell_has_layout(cell)
-            for cell in _flatten_table_cell_values(value)
+            _adapter_cell_has_layout(cell) for cell in _flatten_table_cell_values(value)
         )
         if cells and has_layout:
             return cells
@@ -4616,9 +4786,11 @@ def _adapter_table_with_page_metadata(
     if not page_metadata:
         return table
     updated_cells = [
-        cell.model_copy(update={"metadata": {**cell.metadata, **page_metadata}})
-        if cell.bbox
-        else cell
+        (
+            cell.model_copy(update={"metadata": {**cell.metadata, **page_metadata}})
+            if cell.bbox
+            else cell
+        )
         for cell in table.cells
     ]
     return table.model_copy(
@@ -4692,10 +4864,14 @@ def _table_cells_from_adapter_cell_value(value: object) -> list[ExtractionTableC
     return []
 
 
-def _table_cells_from_flat_adapter_cells(items: Sequence[object]) -> list[ExtractionTableCell]:
+def _table_cells_from_flat_adapter_cells(
+    items: Sequence[object],
+) -> list[ExtractionTableCell]:
     cells: list[ExtractionTableCell] = []
     for item in items:
-        if isinstance(item, Sequence) and not isinstance(item, str | bytes | bytearray | Mapping):
+        if isinstance(item, Sequence) and not isinstance(
+            item, str | bytes | bytearray | Mapping
+        ):
             return []
         cell = _adapter_table_cell(item, row_index=None, col_index=None)
         if cell is None:
@@ -4704,7 +4880,9 @@ def _table_cells_from_flat_adapter_cells(items: Sequence[object]) -> list[Extrac
     return _usable_table_cells(cells)
 
 
-def _table_cells_from_adapter_cell_rows(items: Sequence[object]) -> list[ExtractionTableCell]:
+def _table_cells_from_adapter_cell_rows(
+    items: Sequence[object],
+) -> list[ExtractionTableCell]:
     cells: list[ExtractionTableCell] = []
     for row_index, row in enumerate(items):
         if not isinstance(row, Sequence) or isinstance(row, str | bytes | bytearray):
@@ -4724,7 +4902,9 @@ def _adapter_table_cell(
     col_index: int | None,
 ) -> ExtractionTableCell | None:
     row = _adapter_cell_index(item, ("row", "row_index", "rowindex"), row_index)
-    col = _adapter_cell_index(item, ("col", "column", "column_index", "col_index"), col_index)
+    col = _adapter_cell_index(
+        item, ("col", "column", "column_index", "col_index"), col_index
+    )
     if row is None or col is None:
         return None
     text = _adapter_table_cell_text(item)
@@ -4781,21 +4961,45 @@ def _adapter_cell_metadata_aliases() -> tuple[tuple[str, tuple[str, ...]], ...]:
         ("cell_id", ("cell_id", "cellId", "id", "cell_identifier")),
         (
             "cell_ref",
-            ("cell_ref", "cell_reference", "reference", "ref", "address", "cell_address"),
+            (
+                "cell_ref",
+                "cell_reference",
+                "reference",
+                "ref",
+                "address",
+                "cell_address",
+            ),
         ),
         (
             "formula_cell_ref",
-            ("formula_cell_ref", "formula_cell_reference", "formula_ref", "formula_address"),
+            (
+                "formula_cell_ref",
+                "formula_cell_reference",
+                "formula_ref",
+                "formula_address",
+            ),
         ),
-        ("formula", ("formula", "formula_text", "excel_formula", "spreadsheet_formula")),
+        (
+            "formula",
+            ("formula", "formula_text", "excel_formula", "spreadsheet_formula"),
+        ),
         (
             "formula_value",
-            ("formula_value", "cached_value", "cached_result", "computed_value", "result"),
+            (
+                "formula_value",
+                "cached_value",
+                "cached_result",
+                "computed_value",
+                "result",
+            ),
         ),
         ("equation_format", ("equation_format", "formula_format", "formula_type")),
         ("is_header", ("is_header", "isHeader", "header", "header_cell")),
         ("row_header", ("row_header", "is_row_header", "isRowHeader")),
-        ("column_header", ("column_header", "col_header", "is_column_header", "isColumnHeader")),
+        (
+            "column_header",
+            ("column_header", "col_header", "is_column_header", "isColumnHeader"),
+        ),
         ("header_scope", ("header_scope", "scope")),
         ("cell_role", ("cell_role", "role")),
         ("cell_kind", ("cell_kind", "kind", "cell_type")),
@@ -4864,14 +5068,18 @@ def _flatten_table_cell_values(value: object) -> list[object]:
     items = list(value)
     flattened: list[object] = []
     for item in items:
-        if isinstance(item, Sequence) and not isinstance(item, str | bytes | bytearray | Mapping):
+        if isinstance(item, Sequence) and not isinstance(
+            item, str | bytes | bytearray | Mapping
+        ):
             flattened.extend(list(item))
         else:
             flattened.append(item)
     return flattened
 
 
-def _usable_table_cells(cells: Sequence[ExtractionTableCell]) -> list[ExtractionTableCell]:
+def _usable_table_cells(
+    cells: Sequence[ExtractionTableCell],
+) -> list[ExtractionTableCell]:
     if not cells:
         return []
     if max((cell.col for cell in cells), default=0) <= 0:
@@ -5324,7 +5532,9 @@ def _adapter_page_size(page: object) -> tuple[float | None, float | None]:
         _metadata_get(metadata, "dimensions"),
         _metadata_get(metadata, "page_size"),
     ):
-        width = _adapter_page_dimension(container, ("width", "w", "page_width", "page_w"))
+        width = _adapter_page_dimension(
+            container, ("width", "w", "page_width", "page_w")
+        )
         height = _adapter_page_dimension(
             container,
             ("height", "h", "page_height", "page_h"),
@@ -5415,7 +5625,9 @@ def _adapter_pages_for_elements(
     for element in elements:
         if element.page_number is None or element.element_id is None:
             continue
-        element_ids_by_page.setdefault(element.page_number, []).append(element.element_id)
+        element_ids_by_page.setdefault(element.page_number, []).append(
+            element.element_id
+        )
     merged: list[ExtractionPage] = []
     for page_number in sorted(set(by_page) | set(element_ids_by_page)):
         page = by_page.get(page_number)
@@ -5455,7 +5667,12 @@ def _adapter_element_text(item: object) -> str:
         value = _object_member(item, attr)
         if isinstance(value, str) and value.strip():
             return _clean_text(value)
-    for method_name in ("export_to_markdown", "to_markdown", "export_to_text", "to_text"):
+    for method_name in (
+        "export_to_markdown",
+        "to_markdown",
+        "export_to_text",
+        "to_text",
+    ):
         exported = getattr(item, method_name, None)
         if callable(exported):
             exported = exported()
@@ -5563,7 +5780,7 @@ def _canonical_adapter_kind(value: str) -> str:
         return "page_break"
     if "table" in compact and "caption" in compact:
         return "table_caption"
-    if (_adapter_visual_kind(compact) is not None and "caption" in compact):
+    if _adapter_visual_kind(compact) is not None and "caption" in compact:
         return "figure_caption"
     if "title" in compact or "heading" in compact or "section" in compact:
         return "title"
@@ -5820,7 +6037,15 @@ def _adapter_code_language(item: object) -> str | None:
 
 def _adapter_formula_candidates(item: object) -> tuple[tuple[str, object | None], ...]:
     metadata = _object_member(item, "metadata")
-    fields = ("latex", "formula", "equation", "math", "mathml", "asciimath", "ascii_math")
+    fields = (
+        "latex",
+        "formula",
+        "equation",
+        "math",
+        "mathml",
+        "asciimath",
+        "ascii_math",
+    )
     candidates: list[tuple[str, object | None]] = []
     for field_name in fields:
         candidates.append((field_name, _object_member(item, field_name)))
@@ -5913,7 +6138,9 @@ def _adapter_element_bbox(item: object) -> Any:
 def _adapter_bbox_value(value: object) -> object | None:
     if value is None:
         return None
-    if isinstance(value, Mapping | Sequence) and not isinstance(value, str | bytes | bytearray):
+    if isinstance(value, Mapping | Sequence) and not isinstance(
+        value, str | bytes | bytearray
+    ):
         return value
     for attr in ("points", "coordinates", "bbox", "bounding_box"):
         nested: object | None = getattr(value, attr, None)
@@ -6080,7 +6307,11 @@ def _mapping_from_object(value: object) -> Mapping[str, object]:
             return {str(key): item for key, item in dumped.items()}
     attrs = getattr(value, "__dict__", None)
     if isinstance(attrs, Mapping):
-        return {str(key): item for key, item in attrs.items() if not str(key).startswith("_")}
+        return {
+            str(key): item
+            for key, item in attrs.items()
+            if not str(key).startswith("_")
+        }
     return {}
 
 
@@ -6312,7 +6543,9 @@ def _office_pptx_text_and_tables(
     parts: list[str] = []
     tables: list[ExtractionTable] = []
     table_index = 0
-    for slide_number, name in _openxml_numbered_members(archive, r"ppt/slides/slide(\d+)\.xml"):
+    for slide_number, name in _openxml_numbered_members(
+        archive, r"ppt/slides/slide(\d+)\.xml"
+    ):
         text, slide_tables = _office_pptx_slide_text_and_tables(
             archive,
             name,
@@ -6400,7 +6633,9 @@ def _office_xlsx_text_and_tables(
 ) -> tuple[str, list[ExtractionTable], list[DocumentElement]]:
     shared_strings = _xlsx_shared_strings(archive)
     sheet_names = sorted(
-        name for name in archive.namelist() if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
+        name
+        for name in archive.namelist()
+        if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
     )
     rows: list[str] = []
     tables: list[ExtractionTable] = []
@@ -6454,7 +6689,9 @@ def _office_xlsx_sheet_text_and_table(
         for fallback_col_index, cell in enumerate(row.findall("{*}c")):
             detected_col_index = _xlsx_cell_col_index(cell.attrib.get("r"))
             col_index = (
-                detected_col_index if detected_col_index is not None else fallback_col_index
+                detected_col_index
+                if detected_col_index is not None
+                else fallback_col_index
             )
             value_text = _xlsx_cell_text(cell, shared_strings=shared_strings)
             formula_text = _xlsx_cell_formula(cell)
@@ -6468,7 +6705,9 @@ def _office_xlsx_sheet_text_and_table(
                     row_ref=row.attrib.get("r"),
                     fallback_row_index=len(table_rows),
                 )
-                row_formula_cells.append((col_index, cell_ref, formula_text, value_text))
+                row_formula_cells.append(
+                    (col_index, cell_ref, formula_text, value_text)
+                )
         if cell_values:
             cells = _xlsx_row_values(cell_values)
             table_row_index = len(table_rows)
@@ -6631,7 +6870,9 @@ def _xlsx_cell_ref(
     row_ref: str | None,
     fallback_row_index: int,
 ) -> str:
-    row_number = int(row_ref) if row_ref and row_ref.isdigit() else fallback_row_index + 1
+    row_number = (
+        int(row_ref) if row_ref and row_ref.isdigit() else fallback_row_index + 1
+    )
     return f"{_xlsx_column_name(col_index)}{row_number}"
 
 

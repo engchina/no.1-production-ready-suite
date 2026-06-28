@@ -410,8 +410,7 @@ def render_markdown_runbook(
         ]
     )
     lines.extend(
-        f"| `{check.name}` | `{check.severity}` | {check.expected} |"
-        for check in resolved_checks
+        f"| `{check.name}` | `{check.severity}` | {check.expected} |" for check in resolved_checks
     )
     lines.extend(
         [
@@ -501,8 +500,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rag-variant-backfill",
         description=(
-            "RAG 構築 variant migration/backfill の read-only runbook と"
-            "検証 SQL を生成します。"
+            "RAG 構築 variant migration/backfill の read-only runbook と" "検証 SQL を生成します。"
         ),
     )
     parser.add_argument(

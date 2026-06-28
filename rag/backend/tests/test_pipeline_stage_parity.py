@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
@@ -65,18 +67,17 @@ def test_chunking_service_matches_local_core() -> None:
         overlap=0,
     )
     remote = _run(create_chunking_app(), request, ChunkingStageResponse)
-    local = ChunkingStageResponse.from_chunks(
-        chunk_extraction_with_strategy(
-            request.extraction,
-            strategy=request.strategy,
-            chunk_size=request.chunk_size,
-            overlap=request.overlap,
-            child_size=request.child_size,
-            sentence_window_size=request.sentence_window_size,
-            min_chars=request.min_chars,
-            delimiter=request.delimiter,
-        )
+    local_chunks = chunk_extraction_with_strategy(
+        request.extraction,
+        strategy=request.strategy,
+        chunk_size=request.chunk_size,
+        overlap=request.overlap,
+        child_size=request.child_size,
+        sentence_window_size=request.sentence_window_size,
+        min_chars=request.min_chars,
+        delimiter=request.delimiter,
     )
+    local = ChunkingStageResponse.from_chunks(cast("list[object]", local_chunks))
     assert remote == local
 
 

@@ -24,7 +24,7 @@ class _ServiceStatusAccessFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        return not ('"GET /api/services/' in message and '/status HTTP/' in message)
+        return not ('"GET /api/services/' in message and "/status HTTP/" in message)
 
 
 def _install_uvicorn_access_filters() -> None:

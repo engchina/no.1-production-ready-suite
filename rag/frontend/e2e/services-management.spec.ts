@@ -154,6 +154,9 @@ async function mockServices(
       label_key: service.label_key,
       execution_policy: service.execution_policy,
       configured: service.configured,
+      // deployable=false の段は in_process 固定表示(操作ボタン非表示)。純 CPU の
+      // pipeline 段(in_process_when_disabled)は demote 済み、それ以外は deployable。
+      deployable: service.execution_policy !== "in_process_when_disabled",
     }));
     await route.fulfill({
       json: {

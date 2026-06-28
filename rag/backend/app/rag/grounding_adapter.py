@@ -181,18 +181,20 @@ def grounding_adapter_runtime_settings(settings: Settings) -> GroundingAdapterRu
     """Settings から Grounding アダプター readiness snapshot を作る。"""
     params = resolve_grounding_adapter(settings)
     statuses = tuple(
-        _custom_status(settings, params)
-        if spec.name == "custom"
-        else GroundingPipelineStatus(
-            name=spec.name,  # type: ignore[arg-type]
-            origin=spec.origin,
-            recommended_for=spec.recommended_for,
-            selected=spec.name == params.pipeline,
-            dependency_promotion=spec.dependency_promotion,
-            diversity=spec.diversity,
-            expansion_mode=spec.expansion_mode,
-            compression=spec.compression,
-            corrective=spec.corrective,
+        (
+            _custom_status(settings, params)
+            if spec.name == "custom"
+            else GroundingPipelineStatus(
+                name=spec.name,  # type: ignore[arg-type]
+                origin=spec.origin,
+                recommended_for=spec.recommended_for,
+                selected=spec.name == params.pipeline,
+                dependency_promotion=spec.dependency_promotion,
+                diversity=spec.diversity,
+                expansion_mode=spec.expansion_mode,
+                compression=spec.compression,
+                corrective=spec.corrective,
+            )
         )
         for spec in (GROUNDING_SPECS[name] for name in GROUNDING_PIPELINES)
     )

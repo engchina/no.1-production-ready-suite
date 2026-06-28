@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
+import asyncio as asyncio
 import logging
-import time
+import time as time
 from dataclasses import dataclass
 from typing import Any
 
@@ -164,7 +164,14 @@ def _sleep_before_retry(
         initial_delay=retry.initial_delay_seconds,
         max_delay=retry.max_delay_seconds,
     )
-    _log_retry(logger, retry=retry, log_extra=log_extra, attempt=attempt, delay=delay, error=error)
+    _log_retry(
+        logger,
+        retry=retry,
+        log_extra=log_extra,
+        attempt=attempt,
+        delay=delay,
+        error=error,
+    )
     if delay > 0:
         time.sleep(delay)
 
@@ -182,7 +189,14 @@ async def _async_sleep_before_retry(
         initial_delay=retry.initial_delay_seconds,
         max_delay=retry.max_delay_seconds,
     )
-    _log_retry(logger, retry=retry, log_extra=log_extra, attempt=attempt, delay=delay, error=error)
+    _log_retry(
+        logger,
+        retry=retry,
+        log_extra=log_extra,
+        attempt=attempt,
+        delay=delay,
+        error=error,
+    )
     if delay > 0:
         await asyncio.sleep(delay)
 

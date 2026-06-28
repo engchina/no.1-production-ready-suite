@@ -75,10 +75,7 @@ def test_variant_backfill_cli_writes_markdown_json_and_sql(tmp_path: Path) -> No
     sql_output = tmp_path / "artifacts" / "variant-backfill.sql"
 
     assert (
-        variant_backfill_cli.main(
-            ["--format", "markdown", "--output", str(markdown_output)]
-        )
-        == 0
+        variant_backfill_cli.main(["--format", "markdown", "--output", str(markdown_output)]) == 0
     )
     assert (
         variant_backfill_cli.main(
@@ -87,9 +84,7 @@ def test_variant_backfill_cli_writes_markdown_json_and_sql(tmp_path: Path) -> No
         == 0
     )
     assert (
-        variant_backfill_cli.main(
-            ["--format", "sql", "--checks-only", "--output", str(sql_output)]
-        )
+        variant_backfill_cli.main(["--format", "sql", "--checks-only", "--output", str(sql_output)])
         == 0
     )
 

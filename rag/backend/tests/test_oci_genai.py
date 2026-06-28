@@ -119,9 +119,7 @@ async def test_embed_rejects_too_long_input_before_oci_call() -> None:
 
     with pytest.raises(
         ValueError,
-        match=(
-            rf"index=1, chars={len(long_text)}, max_chars={EMBEDDING_INPUT_MAX_CHARS}"
-        ),
+        match=(rf"index=1, chars={len(long_text)}, max_chars={EMBEDDING_INPUT_MAX_CHARS}"),
     ):
         await client.embed(["短い本文", long_text])
 

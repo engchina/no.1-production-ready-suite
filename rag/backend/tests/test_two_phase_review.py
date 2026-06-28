@@ -608,8 +608,7 @@ def test_document_chunk_sets_endpoint_lists_variants(monkeypatch: MonkeyPatch) -
         for name, status in planned_layers
     )
     assert any(
-        name == "graph" and status["status"] == "planned_only"
-        for name, status in planned_layers
+        name == "graph" and status["status"] == "planned_only" for name, status in planned_layers
     )
 
     metadata_owner = next(

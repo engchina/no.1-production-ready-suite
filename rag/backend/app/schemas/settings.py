@@ -690,9 +690,9 @@ WiredRetrievalStrategy = Literal[
     "business_context_strict",
     "corrective_multi_query",
 ]
-assert set(get_args(WiredRetrievalStrategy)) == set(WIRED_RETRIEVAL_STRATEGIES), (
-    "WiredRetrievalStrategy と core の WIRED_RETRIEVAL_STRATEGIES がずれています。"
-)
+assert set(get_args(WiredRetrievalStrategy)) == set(
+    WIRED_RETRIEVAL_STRATEGIES
+), "WiredRetrievalStrategy と core の WIRED_RETRIEVAL_STRATEGIES がずれています。"
 PostRetrievalPipelineName = PostRetrievalPipeline
 ExpansionModeName = Literal["none", "neighbor", "group", "adaptive"]
 

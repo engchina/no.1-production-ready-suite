@@ -150,9 +150,7 @@ class PreprocessServiceError(RuntimeError):
         self.profile = profile
         self.reason = reason
         self.service_url = service_url
-        super().__init__(
-            _preprocess_error_message(profile, reason, service_url=service_url)
-        )
+        super().__init__(_preprocess_error_message(profile, reason, service_url=service_url))
 
 
 def _preprocess_error_message(

@@ -65,7 +65,11 @@ def test_structured_extraction_infers_elements_from_raw_text() -> None:
 |期限|月末|
 """)
 
-    assert [element.kind for element in extraction.elements] == ["title", "list", "table"]
+    assert [element.kind for element in extraction.elements] == [
+        "title",
+        "list",
+        "table",
+    ]
     assert extraction.elements[1].section_path == ["経費申請"]
     raw_start = extraction.elements[2].metadata["raw_start"]
     assert isinstance(raw_start, int)
@@ -85,7 +89,11 @@ E = mc^2
 $$
 """)
 
-    assert [element.kind for element in extraction.elements] == ["title", "code", "equation"]
+    assert [element.kind for element in extraction.elements] == [
+        "title",
+        "code",
+        "equation",
+    ]
     code_element = extraction.elements[1]
     equation_element = extraction.elements[2]
     assert code_element.content_kind == "code"
@@ -209,7 +217,7 @@ def test_chunk_extraction_unions_same_page_bbox() -> None:
     chunks = chunk_extraction(extraction, chunk_size=200, overlap=0)
 
     chunk = next(c for c in chunks if "一行目" in c.text and "二行目" in c.text)
-    assert json.loads(chunk.metadata["bbox"]) == [0.1, 0.05, 0.6, 0.25]
+    assert json.loads(str(chunk.metadata["bbox"])) == [0.1, 0.05, 0.6, 0.25]
     assert chunk.metadata["bbox_coordinate_mode"] == "xyxy"
     assert chunk.metadata["bbox_unit"] == "ratio"
     assert chunk.metadata.get("element_ids")
@@ -219,7 +227,12 @@ def test_union_and_parse_bbox_helpers() -> None:
     """union/parse の境界分岐(退化・不正 JSON)を直接押さえる。"""
     from rag_pipeline_core.chunking import _parse_bbox_json, _union_bbox
 
-    assert _union_bbox([[0.1, 0.05, 0.4, 0.1], [0.1, 0.2, 0.6, 0.25]]) == [0.1, 0.05, 0.6, 0.25]
+    assert _union_bbox([[0.1, 0.05, 0.4, 0.1], [0.1, 0.2, 0.6, 0.25]]) == [
+        0.1,
+        0.05,
+        0.6,
+        0.25,
+    ]
     assert _union_bbox([[0.5, 0.5, 0.5, 0.5]]) is None  # 面積 0 は None
     assert _union_bbox([]) is None
     assert _parse_bbox_json("[1,2,3,4]") == [1.0, 2.0, 3.0, 4.0]
@@ -432,10 +445,22 @@ def test_chunk_extraction_repeats_table_header_for_row_group_chunks() -> None:
         assert chunk.metadata["table_header_repeated"] is True
         assert chunk.metadata["element_ids"] == "tbl-expenses"
         assert chunk.metadata["chunk_group_id"] == table_chunks[0].metadata["chunk_group_id"]
-    assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [1, 2, 3]
+    assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [
+        1,
+        2,
+        3,
+    ]
     assert [chunk.metadata["table_data_row_end"] for chunk in table_chunks] == [1, 2, 3]
-    assert [chunk.metadata["table_row_tree_row_start"] for chunk in table_chunks] == [1, 2, 3]
-    assert [chunk.metadata["table_row_tree_row_end"] for chunk in table_chunks] == [1, 2, 3]
+    assert [chunk.metadata["table_row_tree_row_start"] for chunk in table_chunks] == [
+        1,
+        2,
+        3,
+    ]
+    assert [chunk.metadata["table_row_tree_row_end"] for chunk in table_chunks] == [
+        1,
+        2,
+        3,
+    ]
     assert all(
         json.loads(str(chunk.metadata["table_row_tree_column_keys"])) == ["項目", "金額"]
         for chunk in table_chunks
@@ -479,7 +504,11 @@ def test_chunk_extraction_repeats_table_caption_with_split_header() -> None:
         assert chunk.metadata["chunk_group_kind"] == "table"
     assert table_chunks[0].metadata["table_header_repeated"] is False
     assert all(chunk.metadata["table_header_repeated"] is True for chunk in table_chunks[1:])
-    assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [1, 2, 3]
+    assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [
+        1,
+        2,
+        3,
+    ]
     assert [chunk.metadata["table_data_row_end"] for chunk in table_chunks] == [1, 2, 3]
 
 
@@ -527,7 +556,10 @@ def test_chunk_extraction_links_cross_page_table_continuity() -> None:
     assert all(chunk.metadata["table_page_start"] == 1 for chunk in table_chunks)
     assert all(chunk.metadata["table_page_end"] == 2 for chunk in table_chunks)
     assert [chunk.metadata["chunk_part_index"] for chunk in table_chunks] == [1, 2]
-    assert [chunk.metadata["table_continuation_index"] for chunk in table_chunks] == [1, 2]
+    assert [chunk.metadata["table_continuation_index"] for chunk in table_chunks] == [
+        1,
+        2,
+    ]
     assert [chunk.metadata["table_data_row_start"] for chunk in table_chunks] == [1, 3]
     assert [chunk.metadata["table_data_row_end"] for chunk in table_chunks] == [2, 4]
     assert table_chunks[0].metadata["table_header_repeated"] is False

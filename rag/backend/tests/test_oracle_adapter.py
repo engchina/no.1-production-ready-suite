@@ -972,9 +972,10 @@ async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitte
     assert "t.extraction_json" not in matched_update
     assert call.parameters["extraction_json"] is None
     assert call.parameters["recipe_subset"] == {"rag_parser_adapter_backend": "mineru"}
-    assert call.input_sizes["extraction_json"] == oracle_module._json_input_sizes(
-        "extraction_json"
-    )["extraction_json"]
+    assert (
+        call.input_sizes["extraction_json"]
+        == oracle_module._json_input_sizes("extraction_json")["extraction_json"]
+    )
 
 
 async def test_upsert_extraction_artifact_updates_payload_when_provided() -> None:
@@ -997,9 +998,10 @@ async def test_upsert_extraction_artifact_updates_payload_when_provided() -> Non
     )[0]
     assert "t.extraction_json = :extraction_json" in matched_update
     assert call.parameters["extraction_json"] == {"elements": [{"text": "本文"}]}
-    assert call.input_sizes["extraction_json"] == oracle_module._json_input_sizes(
-        "extraction_json"
-    )["extraction_json"]
+    assert (
+        call.input_sizes["extraction_json"]
+        == oracle_module._json_input_sizes("extraction_json")["extraction_json"]
+    )
 
 
 async def test_upsert_extraction_artifact_binds_large_payload_as_json() -> None:
@@ -1019,9 +1021,10 @@ async def test_upsert_extraction_artifact_binds_large_payload_as_json() -> None:
     call = pool.connection.calls[0]
     assert len(json.dumps(call.parameters["extraction_json"])) > 32767
     assert call.parameters["extraction_json"] == {"elements": [{"text": large_text}]}
-    assert call.input_sizes["extraction_json"] == oracle_module._json_input_sizes(
-        "extraction_json"
-    )["extraction_json"]
+    assert (
+        call.input_sizes["extraction_json"]
+        == oracle_module._json_input_sizes("extraction_json")["extraction_json"]
+    )
 
 
 async def test_oracle_replace_document_graph_index_replaces_document_scope() -> None:
@@ -2097,7 +2100,7 @@ def test_oracle_document_schema_includes_ingestion_metadata_columns() -> None:
     assert "duplicate_of_document_id VARCHAR2(64)" in ddl
     assert "rag_documents_content_sha256_idx" in ddl
     assert "rag_documents_tenant_status_uploaded_idx" in ddl
-    assert "'UPLOADED', 'PREPROCESSING', 'INGESTING', 'REVIEW', 'CHUNKING', 'CHUNKED'," in ddl
+    assert "'UPLOADED', 'PREPROCESSING', 'PREPROCESSED', 'INGESTING', 'REVIEW'," in ddl
     assert "'INDEXING', 'INDEXED', 'ERROR'" in ddl
 
 

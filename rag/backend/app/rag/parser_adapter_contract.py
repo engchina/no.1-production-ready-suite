@@ -16,7 +16,7 @@ from typing import Literal
 
 from rag_parser_core.result import ExternalAdapterRunner
 
-from app.clients.parser_service import ParserServiceClient
+from app.clients.parser_service import ParserServiceClient as ParserServiceClient
 from app.config import Settings
 from app.rag.parser_adapter_readiness import (
     ADAPTER_ORDER,
@@ -613,7 +613,7 @@ def _compatibility_case(
         asset_count=contract["asset_count"],
         bbox_count=contract["bbox_count"],
         warning_codes=result.warnings,
-        reason_codes=("schema_remap_contract_ok",) if status == "passed" else schema_violations,
+        reason_codes=(("schema_remap_contract_ok",) if status == "passed" else schema_violations),
     )
 
 
@@ -928,7 +928,9 @@ def _normalized_source_kinds(
     )
 
 
-def _normalized_backends(backends: Sequence[object] | None) -> tuple[ParserAdapterName, ...]:
+def _normalized_backends(
+    backends: Sequence[object] | None,
+) -> tuple[ParserAdapterName, ...]:
     if not backends:
         return ADAPTER_ORDER
     normalized = tuple(dict.fromkeys(str(backend).strip().casefold() for backend in backends))

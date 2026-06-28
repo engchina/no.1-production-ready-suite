@@ -598,7 +598,7 @@ class OracleClient:
             name=name,
             description=description,
             default_search_mode=default_search_mode,
-            retrieval_config=dict(retrieval_config) if retrieval_config is not None else None,
+            retrieval_config=(dict(retrieval_config) if retrieval_config is not None else None),
             update_fields=update_fields,
         )
 
@@ -749,7 +749,10 @@ class OracleClient:
 
     async def mark_document_extraction(self, *, extraction_id: str, status: str) -> None:
         """抽出の status(EXTRACTING/EXTRACTED/ERROR)を更新する。"""
-        binds = {"extraction_id": extraction_id, "status": _legacy_extraction_status(status)}
+        binds = {
+            "extraction_id": extraction_id,
+            "status": _legacy_extraction_status(status),
+        }
 
         def operation(connection: OracleConnectionProtocol) -> None:
             _execute(
@@ -851,7 +854,7 @@ class OracleClient:
             "document_id": document_id,
             "extraction_recipe_id": extraction_recipe_id,
             "tenant_id_hash": tenant,
-            "recipe_subset": _json_dumps(recipe_subset) if recipe_subset is not None else None,
+            "recipe_subset": (_json_dumps(recipe_subset) if recipe_subset is not None else None),
             "status": status,
         }
 
@@ -7178,7 +7181,9 @@ def _agent_memory_scope_available() -> bool:
     )
 
 
-def _oracle_graph_community_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
+def _oracle_graph_community_where(
+    filters: dict[str, str],
+) -> tuple[str, dict[str, object]]:
     """community summary table 用の tenant / KB scope predicate を作る。"""
     clauses = _oracle_knowledge_base_access_predicates(alias="g")
     binds = _with_tenant_bind({}, alias="g")
@@ -7803,7 +7808,8 @@ def _json_dumps(value: object) -> str:
 def _json_bind(value: object | None) -> object | None:
     if value is None:
         return None
-    return json.loads(_json_dumps(value))
+    decoded: object = json.loads(_json_dumps(value))
+    return decoded
 
 
 def _json_input_sizes(*names: str) -> dict[str, object]:
@@ -7820,7 +7826,13 @@ def _legacy_extraction_status(status: str) -> str:
         "extracted": "materialized",
     }
     normalized = mapping.get(status, status)
-    allowed = {"not_requested", "planned_only", "materialized", "needs_reingest", "error"}
+    allowed = {
+        "not_requested",
+        "planned_only",
+        "materialized",
+        "needs_reingest",
+        "error",
+    }
     return normalized if normalized in allowed else "planned_only"
 
 
@@ -8960,7 +8972,9 @@ CREATE INDEX {table_name}_tenant_created_idx
 """.strip()
 
 
-def oracle_evaluation_artifact_schema_sql(table_name: str = "rag_evaluation_runs") -> str:
+def oracle_evaluation_artifact_schema_sql(
+    table_name: str = "rag_evaluation_runs",
+) -> str:
     """nightly / staging の評価結果 artifact table DDL を返す。"""
     return f"""
 CREATE TABLE {table_name} (
@@ -9202,7 +9216,9 @@ def _document_matches_current_tenant(document: StoredDocument) -> bool:
     return True
 
 
-def _stored_chunk_score_sort_key(item: tuple[StoredChunk, float]) -> tuple[float, str, int, str]:
+def _stored_chunk_score_sort_key(
+    item: tuple[StoredChunk, float],
+) -> tuple[float, str, int, str]:
     """score 降順、document/chunk 昇順の安定した検索順を返す。"""
     chunk, score = item
     return (-score, chunk.document_id, chunk.chunk_index, chunk.id)
@@ -9256,7 +9272,9 @@ def _chunk_group_id_from_metadata(metadata: Mapping[str, MetadataValue]) -> str 
     return cleaned or None
 
 
-def _context_dependency_match_sql(anchor: RetrievedChunk) -> tuple[str, dict[str, object]]:
+def _context_dependency_match_sql(
+    anchor: RetrievedChunk,
+) -> tuple[str, dict[str, object]]:
     """anchor lineage に一致する dependency candidate を Oracle metadata から絞り込む。"""
     tokens = _context_dependency_anchor_tokens(anchor.metadata)
     if not tokens:
@@ -9466,7 +9484,9 @@ def _to_knowledge_base_summary(
     )
 
 
-def _to_knowledge_base_detail(knowledge_base: StoredKnowledgeBase) -> KnowledgeBaseDetail:
+def _to_knowledge_base_detail(
+    knowledge_base: StoredKnowledgeBase,
+) -> KnowledgeBaseDetail:
     adapter_config = parse_adapter_config(knowledge_base.retrieval_config)
     return KnowledgeBaseDetail(
         **_to_knowledge_base_summary(knowledge_base).model_dump(),

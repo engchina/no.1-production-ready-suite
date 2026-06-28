@@ -234,9 +234,7 @@ class SearchDiagnostics(BaseModel):
     agentic_hops: int = 0
     route_reason: str = "default_hybrid"
     keyword_terms: list[str] = Field(default_factory=list)
-    retrieval_breakdown: SearchRetrievalBreakdown = Field(
-        default_factory=SearchRetrievalBreakdown
-    )
+    retrieval_breakdown: SearchRetrievalBreakdown = Field(default_factory=SearchRetrievalBreakdown)
     retrieval_candidates: list[SearchRetrievalCandidate] = Field(default_factory=list)
     memory_plan_id: str | None = None
     graph_hit_count: int = 0

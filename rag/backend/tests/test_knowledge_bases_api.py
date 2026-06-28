@@ -133,9 +133,7 @@ class FakeKnowledgeBaseOracle:
                     else detail.retrieval_config
                 ),
                 "adapter_config": adapter_config,
-                "legacy_query_config_ignored": (
-                    adapter_config.query != KnowledgeBaseQueryConfig()
-                ),
+                "legacy_query_config_ignored": (adapter_config.query != KnowledgeBaseQueryConfig()),
                 "updated_at": datetime(2026, 1, 2, tzinfo=UTC),
             }
         )

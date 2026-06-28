@@ -59,6 +59,18 @@ async function mockApi(page: Page) {
       return;
     }
 
+    if (url.pathname === "/api/settings/oci") {
+      // リージョン SelectField の選択済み値を確認するため region を返す。
+      await route.fulfill({
+        json: {
+          data: { region: "us-chicago-1" },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+
     await route.fulfill({
       json: { data: null, error_messages: [], warning_messages: [] },
     });
@@ -101,6 +113,8 @@ test("OCI リージョンの候補を指定順で表示し、選択できる", a
 test("検索条件の内容種別も同じドロップダウン UI で選択できる", async ({ page }) => {
   await page.goto("/search");
 
+  // 内容種別は「詳細条件」ディスクロージャ内にあるため展開してから操作する。
+  await page.getByRole("button", { name: "詳細条件" }).click();
   const contentKind = page.getByRole("combobox", { name: "内容種別" });
   await contentKind.click();
 

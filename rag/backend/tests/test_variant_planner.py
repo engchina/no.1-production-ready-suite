@@ -68,8 +68,7 @@ def test_different_parser_axis_splits_extraction_recipes() -> None:
     assert len(plan.extraction_recipes) == 2
     assert len(plan.chunk_sets) == 2
     assert all(
-        len(chunk_sets) == 1
-        for chunk_sets in plan.chunk_sets_by_extraction_recipe().values()
+        len(chunk_sets) == 1 for chunk_sets in plan.chunk_sets_by_extraction_recipe().values()
     )
 
 

@@ -3,6 +3,8 @@
 from app.config import Settings
 from app.rag.grounding_adapter import (
     GROUNDING_PIPELINE_ORDER,
+    GroundingAdapterRuntimeSettings,
+    GroundingPipelineStatus,
     grounding_adapter_runtime_settings,
     normalize_post_retrieval_pipeline,
     resolve_grounding_adapter,
@@ -91,7 +93,7 @@ def test_runtime_settings_orders_and_marks_selected() -> None:
     assert selected == ["compact"]
 
 
-def _status(runtime, name):  # type: ignore[no-untyped-def]
+def _status(runtime: GroundingAdapterRuntimeSettings, name: str) -> GroundingPipelineStatus:
     return next(status for status in runtime.pipelines if status.name == name)
 
 

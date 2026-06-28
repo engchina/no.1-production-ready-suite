@@ -419,6 +419,7 @@ def _configure_oci_readiness(
     monkeypatch.setattr(settings, "oracle_dsn", "adb.example.com/rag")
     monkeypatch.setattr(settings, "oracle_client_lib_dir", oracle_client_lib_dir)
     monkeypatch.setattr(settings, "oracle_wallet_dir", oracle_wallet_dir)
+    monkeypatch.setattr(settings, "object_storage_region", "ap-osaka-1")
     monkeypatch.setattr(settings, "object_storage_namespace", "example-namespace")
     monkeypatch.setattr(settings, "object_storage_bucket", "rag-originals")
     monkeypatch.setattr(settings, "audit_context_hash_salt", audit_context_hash_salt)

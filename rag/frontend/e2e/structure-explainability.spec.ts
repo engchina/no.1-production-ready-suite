@@ -220,6 +220,8 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await page.getByRole("button", { name: "検索", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: /引用/ })).toBeVisible();
+  // 詳細メトリクス(適応展開/依存昇格)は「診断」ディスクロージャ内にあるため展開する。
+  await page.getByRole("button", { name: "診断" }).click();
   const executionMetrics = page.getByLabel("検索実行");
   await expect(executionMetrics.locator("div").filter({ hasText: "適応展開" })).toContainText("2");
   await expect(executionMetrics.locator("div").filter({ hasText: "依存昇格" })).toContainText("1");

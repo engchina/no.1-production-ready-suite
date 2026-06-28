@@ -373,11 +373,7 @@ def _source_route_warning_codes(
     if source_kind == "audio":
         warning_codes.append("unsupported_audio")
         warning_codes.append("audio_transcription_not_configured")
-    if (
-        runtime.adapter_backend in adapter_by_backend
-        and candidate_order
-        and not attempted_order
-    ):
+    if runtime.adapter_backend in adapter_by_backend and candidate_order and not attempted_order:
         warning_codes.append(f"{runtime.adapter_backend}_adapter_source_unsupported")
     for backend in candidate_order:
         adapter = adapter_by_backend.get(backend)

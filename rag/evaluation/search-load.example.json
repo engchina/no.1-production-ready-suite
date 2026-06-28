@@ -6,7 +6,7 @@
       "top_k": 10,
       "rerank_top_n": 5,
       "mode": "hybrid",
-      "strategy": "auto",
+      "strategy": "hybrid",
       "filters": {
         "status": "INDEXED"
       }
@@ -17,7 +17,7 @@
       "top_k": 10,
       "rerank_top_n": 5,
       "mode": "hybrid",
-      "strategy": "auto",
+      "strategy": "hybrid",
       "filters": {
         "status": "INDEXED"
       }
