@@ -925,6 +925,7 @@ export function DocumentWorkspace({
               fileName={selectedPreviewFileName}
               variant={selectedPreviewVariant}
               sourceProfile={selectedPreviewSourceProfile}
+              preparedPdfAvailable={hasPreparedArtifact}
               focusPage={effectiveFocusPage}
               focusBbox={effectiveFocusBbox}
               focusBboxMode={effectiveFocusBboxMode}

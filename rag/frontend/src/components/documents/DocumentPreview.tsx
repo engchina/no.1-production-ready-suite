@@ -45,6 +45,7 @@ export function DocumentPreview({
   fileName,
   variant = "original",
   sourceProfile = null,
+  preparedPdfAvailable = false,
   focusPage = null,
   focusBbox = null,
   focusBboxMode = null,
@@ -55,6 +56,8 @@ export function DocumentPreview({
   fileName: string;
   variant?: DocumentContentVariant;
   sourceProfile?: SourceProfile | null;
+  /** Office 原本のとき、変換済 prepared PDF が利用可能なら原本でなく PDF を表示する。 */
+  preparedPdfAvailable?: boolean;
   focusPage?: number | null;
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
@@ -119,6 +122,29 @@ export function DocumentPreview({
   }
 
   if (kind === "office") {
+    // 原本(docx/pptx/xlsx 等)はブラウザで直接描画できないため、preprocess が生成した
+    // 変換済 PDF があればそれを表示する(抽出 bbox も prepared PDF 座標系で整合)。
+    if (preparedPdfAvailable && variant !== "prepared") {
+      const preparedPdfUrl = pdfPreviewUrl(
+        api.documentContentUrl(documentId, { variant: "prepared" }),
+        focusPage
+      );
+      return (
+        <PreviewFrame
+          focusBbox={focusBbox}
+          focusBboxMode={focusBboxMode}
+          focusBboxUnit={focusBboxUnit}
+          focusPage={focusPage}
+          focusPageSize={focusPageSize}
+        >
+          <iframe
+            src={preparedPdfUrl}
+            title={fileName}
+            className="h-[60vh] w-full rounded-md border border-border bg-card"
+          />
+        </PreviewFrame>
+      );
+    }
     return (
       <UnsupportedPreview fileName={fileName} url={downloadUrl} message={t("preview.office")} />
     );

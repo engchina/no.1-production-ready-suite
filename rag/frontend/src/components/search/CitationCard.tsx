@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import { Button } from "@/components/ui/button";
 import { ApiError, api, type CitationFeedbackRating, type RetrievedChunk } from "@/lib/api";
+import { useDocument } from "@/lib/queries";
 import {
   bboxCoordinateModeFromMetadata,
   bboxFromMetadata,
@@ -44,6 +45,9 @@ export function CitationCard({
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // ドロワーを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
+  const previewDoc = useDocument(previewOpen ? chunk.document_id : null);
+  const preparedPdfAvailable = Boolean(previewDoc.data?.preprocess_artifact?.object_storage_path);
   const focusPage = firstIntegerMetadata(chunk.metadata, ["page_start", "page"]);
   const focusBbox = bboxFromMetadata(chunk.metadata);
   const focusBboxMode = bboxCoordinateModeFromMetadata(chunk.metadata);
@@ -235,6 +239,7 @@ export function CitationCard({
               <DocumentPreview
                 documentId={chunk.document_id}
                 fileName={previewFileName}
+                preparedPdfAvailable={preparedPdfAvailable}
                 focusPage={focusPage}
                 focusBbox={focusBbox}
                 focusBboxMode={focusBboxMode}
