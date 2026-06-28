@@ -2,6 +2,7 @@
 export const APP_ROUTES = {
   dashboard: "/",
   agents: "/agents",
+  runtimes: "/runtimes",
   runs: "/runs",
   approvals: "/approvals",
   audit: "/audit",

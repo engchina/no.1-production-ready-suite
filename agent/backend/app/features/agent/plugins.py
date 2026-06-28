@@ -1,13 +1,7 @@
-"""Plugin と Marketplace の registry。
+"""Marketplace 配布 package の registry。
 
-Claude(`plugin.json` + `marketplace.json`)/ Codex / OpenClaw に倣い、
-**plugin = skills + MCP server + agents を束ねた宣言データ**(コード実行なし=セキュリティ境界)を、
-install で各 registry へ `source="plugin:<id>"` で展開し、uninstall でまとめて外す。
-**marketplace = plugin manifest 一覧を返すソース**(リモート HTTP / ローカル inline)で
-複数登録できる。
-
-確定スタック不変・中立命名(`.claude`/`.codex` は使わない)。
-外部 LLM provider / 外部ベクトル DB は増やさない。
+Plugin は実行概念ではなく Skill / MCP / 非実行 resource の原子的な配布単位。
+install 後の Agent は Plugin ではなく Skill だけを参照する。
 """
 
 from __future__ import annotations
@@ -15,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from threading import Lock
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -39,7 +33,20 @@ class PluginManifest(BaseModel):
     author: str = ""
     skills: list[AgentSkillDefinition] = Field(default_factory=list)
     mcp_servers: list[ExternalMcpRuntimeConfig] = Field(default_factory=list)
+    resources: list[PluginResource] = Field(default_factory=list)
+    # Deprecated input compatibility。install 時に template resource へ変換し、Agent は作成しない。
     agents: list[AgentProfile] = Field(default_factory=list)
+
+
+class PluginResource(BaseModel):
+    id: str
+    kind: Literal["prompt", "workflow", "template"]
+    name: str
+    version: str = "0.0.0"
+    media_type: str = "application/json"
+    content: str | JsonObject
+    metadata: JsonObject = Field(default_factory=dict)
+    source: str = "runtime"
 
 
 class PluginRecord(BaseModel):
@@ -52,6 +59,9 @@ class PluginRecord(BaseModel):
     marketplace_id: str | None = None
     skill_count: int = 0
     mcp_count: int = 0
+    resource_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    # Deprecated response compatibility。常に 0。
     agent_count: int = 0
     manifest: PluginManifest
 
@@ -66,6 +76,8 @@ class PluginSummary(BaseModel):
     marketplace_id: str | None = None
     skill_count: int = 0
     mcp_count: int = 0
+    resource_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
     agent_count: int = 0
 
 
@@ -98,6 +110,64 @@ def _plugin_source(plugin_id: str) -> str:
     return f"plugin:{plugin_id}"
 
 
+class PluginResourceRegistry:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._resources: dict[str, PluginResource] = {}
+
+    def set_declared(self, source: str, resources: list[PluginResource]) -> None:
+        with self._lock:
+            for resource_id in [
+                rid for rid, resource in self._resources.items() if resource.source == source
+            ]:
+                del self._resources[resource_id]
+            for resource in resources:
+                existing = self._resources.get(resource.id)
+                if existing is not None and existing.source != source:
+                    raise ValueError(f"resource id already exists: {resource.id}")
+                self._resources[resource.id] = resource.model_copy(
+                    deep=True, update={"source": source}
+                )
+
+    def get(self, resource_id: str) -> PluginResource | None:
+        with self._lock:
+            resource = self._resources.get(resource_id)
+            return resource.model_copy(deep=True) if resource else None
+
+    def list(self) -> list[PluginResource]:
+        with self._lock:
+            return [item.model_copy(deep=True) for item in self._resources.values()]
+
+
+plugin_resource_registry = PluginResourceRegistry()
+
+
+def _normalize_manifest(manifest: PluginManifest) -> tuple[PluginManifest, list[str]]:
+    if not manifest.agents:
+        return manifest.model_copy(deep=True), []
+    resources = [resource.model_copy(deep=True) for resource in manifest.resources]
+    existing_ids = {resource.id for resource in resources}
+    for agent in manifest.agents:
+        resource_id = f"{manifest.id}.agent-template.{agent.id}"
+        if resource_id in existing_ids:
+            raise ValueError(f"resource id already exists: {resource_id}")
+        existing_ids.add(resource_id)
+        resources.append(
+            PluginResource(
+                id=resource_id,
+                kind="template",
+                name=f"{agent.name} template",
+                version=manifest.version,
+                content=agent.model_dump(mode="json"),
+                metadata={"deprecated_source": "agents[]"},
+            )
+        )
+    return (
+        manifest.model_copy(deep=True, update={"resources": resources, "agents": []}),
+        ["plugin.agents_deprecated_converted_to_templates"],
+    )
+
+
 class PluginRegistry:
     def __init__(self) -> None:
         self._lock = Lock()
@@ -107,33 +177,39 @@ class PluginRegistry:
         source = _plugin_source(manifest.id)
         skill_registry.set_declared(source, [s.model_copy(deep=True) for s in manifest.skills])
         runtime_config_store.set_plugin_mcp_servers(source, manifest.mcp_servers)
-        runtime_repository.set_plugin_agents(source, manifest.agents)
+        plugin_resource_registry.set_declared(
+            source, [resource.model_copy(deep=True) for resource in manifest.resources]
+        )
 
     def _revoke(self, plugin_id: str) -> None:
         source = _plugin_source(plugin_id)
         skill_registry.set_declared(source, [])
         runtime_config_store.remove_mcp_servers_by_source(source)
-        runtime_repository.remove_agents_by_source(source)
+        plugin_resource_registry.set_declared(source, [])
 
     def install(
         self, manifest: PluginManifest, *, marketplace_id: str | None = None
     ) -> PluginRecord:
         with self._lock:
-            self._apply(manifest)
+            normalized, warnings = _normalize_manifest(manifest)
+            self._validate_install(normalized)
+            self._apply(normalized)
             record = PluginRecord(
-                id=manifest.id,
-                name=manifest.name,
-                version=manifest.version,
-                description=manifest.description,
-                author=manifest.author,
+                id=normalized.id,
+                name=normalized.name,
+                version=normalized.version,
+                description=normalized.description,
+                author=normalized.author,
                 enabled=True,
                 marketplace_id=marketplace_id,
-                skill_count=len(manifest.skills),
-                mcp_count=len(manifest.mcp_servers),
-                agent_count=len(manifest.agents),
-                manifest=manifest,
+                skill_count=len(normalized.skills),
+                mcp_count=len(normalized.mcp_servers),
+                resource_count=len(normalized.resources),
+                agent_count=0,
+                warnings=warnings,
+                manifest=normalized,
             )
-            self._plugins[manifest.id] = record
+            self._plugins[normalized.id] = record
             return record.model_copy(deep=True)
 
     def set_enabled(self, plugin_id: str, enabled: bool) -> PluginRecord:
@@ -141,7 +217,10 @@ class PluginRegistry:
             record = self._plugins.get(plugin_id)
             if record is None:
                 raise KeyError(plugin_id)
+            if not enabled:
+                self._ensure_not_referenced(record)
             if enabled and not record.enabled:
+                self._validate_reenable(record.manifest)
                 self._apply(record.manifest)
             elif not enabled and record.enabled:
                 self._revoke(plugin_id)
@@ -152,6 +231,7 @@ class PluginRegistry:
         with self._lock:
             if plugin_id not in self._plugins:
                 raise KeyError(plugin_id)
+            self._ensure_not_referenced(self._plugins[plugin_id])
             self._revoke(plugin_id)
             del self._plugins[plugin_id]
 
@@ -166,6 +246,62 @@ class PluginRegistry:
         with self._lock:
             record = self._plugins.get(plugin_id)
             return record.model_copy(deep=True) if record is not None else None
+
+    def _validate_install(self, manifest: PluginManifest) -> None:
+        if manifest.id in self._plugins:
+            raise ValueError("plugin already exists")
+        skill_ids = [item.id for item in manifest.skills]
+        mcp_ids = [item.server_id for item in manifest.mcp_servers]
+        resource_ids = [item.id for item in manifest.resources]
+        for label, values in (
+            ("skill", skill_ids),
+            ("MCP server", mcp_ids),
+            ("resource", resource_ids),
+        ):
+            duplicate = next((value for value in values if values.count(value) > 1), None)
+            if duplicate is not None:
+                raise ValueError(f"duplicate {label} id: {duplicate}")
+        manifest_resource_ids = set(resource_ids)
+        for resource_id in resource_ids:
+            if plugin_resource_registry.get(resource_id) is not None:
+                raise ValueError(f"resource id already exists: {resource_id}")
+        for skill in manifest.skills:
+            existing = skill_registry.get(skill.id)
+            if existing is not None:
+                raise ValueError(f"skill id already exists: {skill.id}")
+            for resource_id in skill.resource_ids:
+                if resource_id not in manifest_resource_ids and (
+                    plugin_resource_registry.get(resource_id) is None
+                ):
+                    raise ValueError(f"unknown resource: {resource_id}")
+        existing_mcp = {item.server_id for item in runtime_config_store.list_mcp_servers()}
+        for server in manifest.mcp_servers:
+            if server.server_id in existing_mcp:
+                raise ValueError(f"MCP server id already exists: {server.server_id}")
+
+    @staticmethod
+    def _validate_reenable(manifest: PluginManifest) -> None:
+        for skill in manifest.skills:
+            if skill_registry.get(skill.id) is not None:
+                raise ValueError(f"skill id already exists: {skill.id}")
+        existing_mcp = {item.server_id for item in runtime_config_store.list_mcp_servers()}
+        for server in manifest.mcp_servers:
+            if server.server_id in existing_mcp:
+                raise ValueError(f"MCP server id already exists: {server.server_id}")
+        for resource in manifest.resources:
+            if plugin_resource_registry.get(resource.id) is not None:
+                raise ValueError(f"resource id already exists: {resource.id}")
+
+    @staticmethod
+    def _ensure_not_referenced(record: PluginRecord) -> None:
+        skill_ids = {skill.id for skill in record.manifest.skills}
+        referenced = [
+            agent.id
+            for agent in runtime_repository.list_agents()
+            if skill_ids.intersection(agent.skill_ids)
+        ]
+        if referenced:
+            raise ValueError(f"plugin skills are referenced by agents: {', '.join(referenced)}")
 
 
 # --- Marketplace registry -------------------------------------------------

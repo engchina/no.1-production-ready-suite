@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import io
 import json
+import os
 import re
 import shutil
 import stat
@@ -35,6 +36,7 @@ from anyio import fail_after
 from anyio import to_thread as anyio_to_thread
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     HTTPException,
     Query,
@@ -47,6 +49,22 @@ from pr_backend_core import ApiResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.features.agent.config import runtime_config_store
+from app.features.agent.control_plane import (
+    RUNTIME_ADAPTERS,
+    RuntimeAdapterError,
+    RuntimeBinding,
+    RuntimeBindingListData,
+    RuntimeBindingPatch,
+    RuntimeDefinition,
+    RuntimeListData,
+    RuntimePatch,
+    RuntimeServiceAction,
+    control_runtime_service,
+    probe_runtime,
+    runtime_binding_registry,
+    runtime_registry,
+    runtime_service_logs,
+)
 from app.features.agent.plugins import (
     MarketplaceListing,
     MarketplaceSource,
@@ -84,6 +102,7 @@ from app.features.agent.skills import (
     AgentSkillListOutput,
     AgentSkillPlanOutput,
     AgentSkillRunInput,
+    SkillMcpRequirement,
     SkillToolCallTemplate,
     reload_declared_skills,
     skill_registry,
@@ -94,6 +113,7 @@ from app.features.agent.tools import (
     ExternalToolError,
     ToolCall,
     ToolDefinitionsData,
+    ToolInvocationContext,
     ToolPolicy,
     ToolResult,
     ToolsData,
@@ -213,6 +233,8 @@ class AgentSkillCreate(BaseModel):
     name: str
     description: str = ""
     instructions: str = ""
+    mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
+    resource_ids: list[str] = Field(default_factory=list)
     tool_calls: list[SkillToolCallTemplate] = Field(default_factory=list)
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
@@ -222,6 +244,8 @@ class AgentSkillPatch(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
+    mcp_requirements: list[SkillMcpRequirement] | None = None
+    resource_ids: list[str] | None = None
     tool_calls: list[SkillToolCallTemplate] | None = None
     enabled: bool | None = None
     tags: list[str] | None = None
@@ -1849,8 +1873,7 @@ def _model_test_troubleshooting(
         )
     if any(token in lowered for token in ("401", "unauthorized", "authentication")):
         tips.append(
-            "認証エラーです。API key / OCI config の資格情報を"
-            "再発行または再保存してください。"
+            "認証エラーです。API key / OCI config の資格情報を" "再発行または再保存してください。"
         )
     if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
         tips.append("権限エラーです。Project / compartment / IAM policy を確認してください。")
@@ -1888,8 +1911,7 @@ def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettin
             "has_api_key": (
                 not payload.enterprise_ai.clear_api_key
                 and (
-                    payload.enterprise_ai.has_api_key
-                    or _is_present(payload.enterprise_ai.api_key)
+                    payload.enterprise_ai.has_api_key or _is_present(payload.enterprise_ai.api_key)
                 )
             ),
             "clear_api_key": False,
@@ -2607,8 +2629,7 @@ def _database_connection_troubleshooting(
         tips.append("Wallet ZIP と Wallet パスワードを確認してください。")
     if "dpi-1047" in combined:
         tips.append(
-            "Oracle Instant Client が必要な実行環境では"
-            "配置とライブラリパスを確認してください。"
+            "Oracle Instant Client が必要な実行環境では" "配置とライブラリパスを確認してください。"
         )
     if not tips:
         tips.append("backend ログの Oracle エラーコードと設定値を確認してください。")
@@ -2842,9 +2863,7 @@ def _get_adb_info_state() -> AdbInfoData:
         _adb_info_state = AdbInfoData(
             status="success" if database.adb_ocid else "not_configured",
             message=(
-                "ADB OCID が設定されています。"
-                if database.adb_ocid
-                else "ADB OCID が未設定です。"
+                "ADB OCID が設定されています。" if database.adb_ocid else "ADB OCID が未設定です。"
             ),
             id=database.adb_ocid or None,
             display_name=None,
@@ -3592,6 +3611,8 @@ async def create_agent_skill(
         name=payload.name,
         description=payload.description,
         instructions=payload.instructions,
+        mcp_requirements=payload.mcp_requirements,
+        resource_ids=payload.resource_ids,
         tool_calls=payload.tool_calls,
         enabled=payload.enabled,
         tags=payload.tags,
@@ -3626,9 +3647,15 @@ async def patch_agent_skill(
             "instructions": (
                 current.instructions if patch.instructions is None else patch.instructions
             ),
-            "tool_calls": (
-                current.tool_calls if patch.tool_calls is None else patch.tool_calls
+            "mcp_requirements": (
+                current.mcp_requirements
+                if patch.mcp_requirements is None
+                else patch.mcp_requirements
             ),
+            "resource_ids": (
+                current.resource_ids if patch.resource_ids is None else patch.resource_ids
+            ),
+            "tool_calls": (current.tool_calls if patch.tool_calls is None else patch.tool_calls),
             "enabled": current.enabled if patch.enabled is None else patch.enabled,
             "tags": current.tags if patch.tags is None else patch.tags,
         }
@@ -3651,9 +3678,7 @@ async def delete_agent_skill(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     skills = skill_registry.list()
-    return ApiResponse(
-        data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)})
-    )
+    return ApiResponse(data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)}))
 
 
 def _plugin_summary(record: PluginRecord) -> PluginSummary:
@@ -3667,6 +3692,8 @@ def _plugin_summary(record: PluginRecord) -> PluginSummary:
         marketplace_id=record.marketplace_id,
         skill_count=record.skill_count,
         mcp_count=record.mcp_count,
+        resource_count=record.resource_count,
+        warnings=record.warnings,
         agent_count=record.agent_count,
     )
 
@@ -3705,7 +3732,7 @@ async def install_plugin(
     try:
         record = plugin_registry.install(manifest, marketplace_id=payload.marketplace_id)
     except (ValueError, KeyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(data=record)
 
 
@@ -3728,9 +3755,7 @@ async def add_plugin_marketplace(
     _: None = Depends(require_admin),
 ) -> ApiResponse[MarketplaceSource]:
     try:
-        source = MarketplaceSource(
-            id=payload.id, name=payload.name or payload.id, url=payload.url
-        )
+        source = MarketplaceSource(id=payload.id, name=payload.name or payload.id, url=payload.url)
         return ApiResponse(data=marketplace_registry.add(source, payload.listing))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3806,6 +3831,8 @@ async def patch_plugin(
         return ApiResponse(data=plugin_registry.set_enabled(plugin_id, patch.enabled))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="plugin not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.delete("/plugins/{plugin_id}", response_model=ApiResponse[PluginListOutput])
@@ -3817,6 +3844,8 @@ async def uninstall_plugin(
         plugin_registry.uninstall(plugin_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="plugin not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ApiResponse(data=_plugin_list_response())
 
 
@@ -3853,6 +3882,384 @@ async def invoke_tool(
     return ApiResponse(data=tool_registry.invoke(call, policy=_configured_tool_policy()))
 
 
+def _binding_token_env_name(binding_id: str) -> str:
+    safe_id = re.sub(r"[^A-Za-z0-9]", "_", binding_id).upper()
+    return f"CONTROL_PLANE_MCP_TOKEN_{safe_id}"
+
+
+def _binding_mcp_token(binding_id: str) -> str | None:
+    direct = os.environ.get(_binding_token_env_name(binding_id), "").strip()
+    if direct:
+        return direct
+    secret = get_settings().agent_control_plane_mcp_token_secret
+    if not secret:
+        return None
+    return hmac.new(secret.encode("utf-8"), binding_id.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _binding_mcp_tool_names(binding: RuntimeBinding) -> set[str]:
+    agent = _control_plane_agent(binding.agent_id)
+    names: set[str] = set()
+    for skill_id in agent.skill_ids:
+        skill = skill_registry.get(skill_id)
+        if skill is None or not skill.enabled:
+            continue
+        for requirement in skill.mcp_requirements:
+            if requirement.server_id == "control-plane":
+                names.update(requirement.tool_names)
+    return names
+
+
+def _json_rpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+@router.post("/mcp/{binding_id}")
+async def control_plane_mcp(
+    binding_id: str,
+    payload: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
+    """Binding 固有 token で Skill の必要 tool だけを公開する MCP endpoint。"""
+    binding = runtime_binding_registry.get(binding_id)
+    if binding is None or not binding.enabled:
+        raise HTTPException(status_code=404, detail="binding not found")
+    expected = _binding_mcp_token(binding_id)
+    if expected is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "binding_mcp_token_not_configured",
+                "message": "Binding MCP token が設定されていません。",
+            },
+        )
+    authorization = request.headers.get("authorization", "")
+    supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="invalid binding token")
+
+    request_id = payload.get("id")
+    method = payload.get("method")
+    allowed_names = _binding_mcp_tool_names(binding)
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "production-ready-agent-control-plane", "version": "2"},
+            },
+        }
+    if method == "notifications/initialized":
+        return {"jsonrpc": "2.0", "id": request_id, "result": {}}
+    if method == "tools/list":
+        definitions = [
+            definition
+            for definition in tool_registry.definitions()
+            if definition.name in allowed_names
+        ]
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "tools": [
+                    {
+                        "name": definition.name,
+                        "description": definition.description,
+                        "inputSchema": definition.input_schema,
+                    }
+                    for definition in definitions
+                ]
+            },
+        }
+    if method == "tools/call":
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            return _json_rpc_error(request_id, -32602, "params must be an object")
+        name = str(params.get("name", ""))
+        if name not in allowed_names:
+            return _json_rpc_error(request_id, -32601, "tool is not allowed by Binding Skills")
+        arguments = params.get("arguments", {})
+        if not isinstance(arguments, dict):
+            return _json_rpc_error(request_id, -32602, "arguments must be an object")
+        result = tool_registry.invoke(
+            ToolCall(name=name, arguments=arguments),
+            policy=_configured_tool_policy(),
+            context=ToolInvocationContext(agent_id=binding.agent_id),
+        )
+        body = result.model_dump(mode="json")
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(body, ensure_ascii=False),
+                    }
+                ],
+                "structuredContent": body,
+                "isError": not result.success,
+            },
+        }
+    return _json_rpc_error(request_id, -32601, "method not found")
+
+
+def _control_plane_agent(agent_id: str) -> AgentProfile:
+    agent = next((item for item in runtime_repository.list_agents() if item.id == agent_id), None)
+    if agent is None:
+        raise KeyError(agent_id)
+    return agent
+
+
+async def _sync_runtime_binding(binding: RuntimeBinding) -> RuntimeBinding:
+    agent = _control_plane_agent(binding.agent_id)
+    runtime = runtime_registry.get(binding.runtime_id)
+    if runtime is None:
+        raise KeyError(binding.runtime_id)
+    skills: list[AgentSkillDefinition] = []
+    mcp_ids: set[str] = set()
+    for skill_id in agent.skill_ids:
+        skill = skill_registry.get(skill_id)
+        if skill is None or not skill.enabled:
+            raise ValueError(f"skill is unavailable: {skill_id}")
+        skills.append(skill)
+        mcp_ids.update(requirement.server_id for requirement in skill.mcp_requirements)
+    configured_mcp = {item.server_id: item for item in runtime_config_store.list_mcp_servers()}
+    missing_mcp = sorted(mcp_ids.difference({*configured_mcp, "control-plane"}))
+    if missing_mcp:
+        raise ValueError(f"MCP server is unavailable: {', '.join(missing_mcp)}")
+    try:
+        mcp_servers = [
+            configured_mcp[item].model_dump(mode="json")
+            for item in sorted(mcp_ids)
+            if item != "control-plane"
+        ]
+        if "control-plane" in mcp_ids:
+            settings = get_settings()
+            mcp_servers.append(
+                {
+                    "server_id": "control-plane",
+                    "base_url": (
+                        f"{settings.agent_control_plane_public_base_url.rstrip('/')}"
+                        f"/mcp/{binding.id}"
+                    ),
+                    "api_key_env": _binding_token_env_name(binding.id),
+                }
+            )
+        await RUNTIME_ADAPTERS[runtime.kind].sync_binding(
+            runtime,
+            binding,
+            agent=agent.model_dump(mode="json", exclude={"tool_names", "command_allowed_prefixes"}),
+            skills=[skill.model_dump(mode="json") for skill in skills],
+            mcp_servers=mcp_servers,
+        )
+    except Exception as exc:
+        updated = runtime_binding_registry.set_sync_result(binding.id, "error", str(exc))
+        runtime_repository.persist_control_plane_state()
+        return updated
+    updated = runtime_binding_registry.set_sync_result(binding.id, "ready")
+    runtime_repository.persist_control_plane_state()
+    return updated
+
+
+@router.get("/runtimes", response_model=ApiResponse[RuntimeListData])
+async def list_runtimes(_: None = Depends(require_viewer)) -> ApiResponse[RuntimeListData]:
+    return ApiResponse(data=RuntimeListData(runtimes=runtime_registry.list()))
+
+
+@router.post("/runtimes", response_model=ApiResponse[RuntimeDefinition])
+async def create_runtime(
+    runtime: RuntimeDefinition,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RuntimeDefinition]:
+    try:
+        created = runtime_registry.create(runtime)
+        runtime_repository.persist_control_plane_state()
+        return ApiResponse(data=created)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/runtimes/{runtime_id}", response_model=ApiResponse[RuntimeDefinition])
+async def patch_runtime(
+    runtime_id: str,
+    patch: RuntimePatch,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RuntimeDefinition]:
+    try:
+        updated = runtime_registry.patch(runtime_id, patch)
+        runtime_repository.persist_control_plane_state()
+        return ApiResponse(data=updated)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="runtime not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/runtimes/{runtime_id}", response_model=ApiResponse[RuntimeListData])
+async def delete_runtime(
+    runtime_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RuntimeListData]:
+    if runtime_binding_registry.references_runtime(runtime_id):
+        raise HTTPException(status_code=409, detail="runtime is referenced by bindings")
+    try:
+        runtime_registry.delete(runtime_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="runtime not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    runtime_repository.persist_control_plane_state()
+    return ApiResponse(data=RuntimeListData(runtimes=runtime_registry.list()))
+
+
+@router.get("/runtimes/{runtime_id}/status", response_model=ApiResponse[RuntimeDefinition])
+async def get_runtime_status(
+    runtime_id: str,
+    _: None = Depends(require_viewer),
+) -> ApiResponse[RuntimeDefinition]:
+    try:
+        return ApiResponse(data=await probe_runtime(runtime_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="runtime not found") from exc
+
+
+@router.post("/runtimes/services/{service_id}/{action}", response_model=ApiResponse[dict[str, Any]])
+async def run_runtime_service_action(
+    service_id: str,
+    action: RuntimeServiceAction,
+    _: None = Depends(require_admin),
+) -> ApiResponse[dict[str, Any]]:
+    try:
+        return ApiResponse(data=await control_runtime_service(service_id, action))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="runtime service not found") from exc
+    except RuntimeAdapterError as exc:
+        status = 409 if exc.code == "runtime_service_control_disabled" else 502
+        raise HTTPException(
+            status_code=status,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@router.get("/runtimes/services/{service_id}/logs", response_model=ApiResponse[dict[str, Any]])
+async def get_runtime_service_logs(
+    service_id: str,
+    lines: int = Query(default=200, ge=1, le=1000),
+    _: None = Depends(require_admin),
+) -> ApiResponse[dict[str, Any]]:
+    try:
+        return ApiResponse(data=await runtime_service_logs(service_id, lines))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="runtime service not found") from exc
+    except RuntimeAdapterError as exc:
+        status = 409 if exc.code == "runtime_service_control_disabled" else 502
+        raise HTTPException(
+            status_code=status,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+@router.get("/runtime-bindings", response_model=ApiResponse[RuntimeBindingListData])
+async def list_runtime_bindings(
+    agent_id: str | None = None,
+    _: None = Depends(require_viewer),
+) -> ApiResponse[RuntimeBindingListData]:
+    bindings = runtime_binding_registry.list(agent_id=agent_id)
+    return ApiResponse(data=RuntimeBindingListData(bindings=bindings))
+
+
+@router.post("/runtime-bindings", response_model=ApiResponse[RuntimeBinding])
+async def create_runtime_binding(
+    binding: RuntimeBinding,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RuntimeBinding]:
+    try:
+        agent = _control_plane_agent(binding.agent_id)
+        runtime = runtime_registry.get(binding.runtime_id)
+        if runtime is None or runtime.kind == "legacy_native":
+            raise ValueError("runtime is unavailable")
+        if agent.command_allowed_prefixes and "command_allowed_prefixes" not in binding.policy:
+            binding.policy["command_allowed_prefixes"] = list(agent.command_allowed_prefixes)
+        created = runtime_binding_registry.create(binding)
+        runtime_repository.persist_control_plane_state()
+        return ApiResponse(data=await _sync_runtime_binding(created))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="agent not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/runtime-bindings/{binding_id}", response_model=ApiResponse[RuntimeBinding])
+async def patch_runtime_binding(
+    binding_id: str,
+    patch: RuntimeBindingPatch,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RuntimeBinding]:
+    try:
+        if patch.runtime_id is not None and runtime_registry.get(patch.runtime_id) is None:
+            raise ValueError("runtime is unavailable")
+        updated = runtime_binding_registry.patch(binding_id, patch)
+        runtime_repository.persist_control_plane_state()
+        return ApiResponse(data=await _sync_runtime_binding(updated))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="binding not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/runtime-bindings/{binding_id}/sync", response_model=ApiResponse[RuntimeBinding])
+async def sync_runtime_binding(
+    binding_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RuntimeBinding]:
+    binding = runtime_binding_registry.get(binding_id)
+    if binding is None:
+        raise HTTPException(status_code=404, detail="binding not found")
+    return ApiResponse(data=await _sync_runtime_binding(binding))
+
+
+@router.delete("/runtime-bindings/{binding_id}", response_model=ApiResponse[RuntimeBindingListData])
+async def delete_runtime_binding(
+    binding_id: str,
+    _: None = Depends(require_admin),
+) -> ApiResponse[RuntimeBindingListData]:
+    try:
+        runtime_binding_registry.delete(binding_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="binding not found") from exc
+    runtime_repository.persist_control_plane_state()
+    return ApiResponse(data=RuntimeBindingListData(bindings=runtime_binding_registry.list()))
+
+
+async def _dispatch_control_plane_run(
+    run_id: str,
+    runtime: RuntimeDefinition,
+    binding: RuntimeBinding,
+    agent: AgentProfile,
+) -> None:
+    try:
+        submission = await RUNTIME_ADAPTERS[runtime.kind].submit_run(
+            runtime,
+            binding,
+            goal=runtime_repository.get_run(run_id).goal,
+            instructions=agent.instructions,
+            control_plane_run_id=run_id,
+        )
+        runtime_repository.mark_runtime_submitted(
+            run_id,
+            external_run_id=submission.external_run_id,
+            external_cursor=submission.external_cursor,
+            external_status=submission.status,
+        )
+    except RuntimeAdapterError as exc:
+        runtime_repository.mark_runtime_failed(run_id, code=exc.code, detail=str(exc))
+    except (httpx.HTTPError, ValueError) as exc:
+        runtime_repository.mark_runtime_failed(run_id, code="runtime.unavailable", detail=str(exc))
+
+
 @router.get("/runs", response_model=ApiResponse[RunsData])
 async def list_runs(
     request: Request,
@@ -3866,16 +4273,95 @@ async def list_runs(
 async def create_run(
     run_request: RunCreateRequest,
     request: Request,
+    response: Response,
+    background_tasks: BackgroundTasks,
     _: None = Depends(require_operator),
 ) -> ApiResponse[RunState]:
     try:
         _require_agent_access(request, run_request.agent_id)
         _require_business_view_access(request, _run_create_business_view_id(run_request))
-        return ApiResponse(data=runtime_repository.create_run(run_request))
+        if request.headers.get("x-agent-api-version") == "1":
+            response.headers["Deprecation"] = "true"
+            response.headers["Sunset"] = "Wed, 30 Sep 2026 00:00:00 GMT"
+            response.headers["Warning"] = (
+                '299 - "Agent Runtime v1 is deprecated; migrate to Skill + Runtime Binding"'
+            )
+            return ApiResponse(data=runtime_repository.create_run(run_request))
+        agent = _control_plane_agent(run_request.agent_id)
+        if agent.migration_required:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "agent_migration_required",
+                    "message": "Skill を選択して Agent の移行を完了してください。",
+                },
+            )
+        if run_request.tool_calls:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "legacy_tool_calls_not_supported",
+                    "message": "tool_calls は廃止されました。Agent に Skill を割り当ててください。",
+                },
+            )
+        binding = (
+            runtime_binding_registry.get(run_request.runtime_binding_id)
+            if run_request.runtime_binding_id
+            else runtime_binding_registry.default_for_agent(run_request.agent_id)
+        )
+        if binding is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_binding_required",
+                    "message": "実行先 Runtime Binding を設定してください。",
+                },
+            )
+        if binding.agent_id != run_request.agent_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_binding_agent_mismatch",
+                    "message": "指定した Binding はこの Agent の実行先ではありません。",
+                },
+            )
+        if not binding.enabled or binding.sync_status != "ready":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_binding_unavailable",
+                    "message": "Binding を有効化し、同期を完了してください。",
+                },
+            )
+        runtime = runtime_registry.get(binding.runtime_id)
+        if runtime is None or not runtime.enabled or runtime.kind == "legacy_native":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_unavailable",
+                    "message": "選択した Runtime は実行できません。",
+                },
+            )
+        run = runtime_repository.create_control_plane_run(
+            run_request,
+            runtime_id=runtime.id,
+            binding_id=binding.id,
+            capabilities=runtime.capabilities.model_dump(mode="json"),
+        )
+        if get_settings().agent_runtime_dispatch_mode.strip().lower() == "in_process":
+            background_tasks.add_task(
+                _dispatch_control_plane_run,
+                run.id,
+                runtime,
+                binding,
+                agent,
+            )
+        return ApiResponse(data=run)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        status_code = 400 if request.headers.get("x-agent-api-version") == "1" else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}", response_model=ApiResponse[RunState])
@@ -4114,6 +4600,34 @@ async def cancel_run(
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
         _require_business_view_access(request, _run_business_view_id(run))
+        if run.binding_id is not None:
+            if run.status == "cancelled":
+                return ApiResponse(data=run)
+            if not bool(run.runtime_capabilities.get("cancel")):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "runtime_capability_unsupported",
+                        "message": "この Runtime は Run の取消に対応していません。",
+                        "capability": "cancel",
+                    },
+                )
+            runtime = runtime_registry.get(run.runtime_id)
+            if runtime is None or run.external_run_id is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "runtime_run_not_submitted",
+                        "message": "外部 Runtime の Run ID がまだ確定していません。",
+                    },
+                )
+            try:
+                await RUNTIME_ADAPTERS[runtime.kind].cancel(runtime, run.external_run_id)
+            except RuntimeAdapterError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": exc.code, "message": str(exc)},
+                ) from exc
         return ApiResponse(data=runtime_repository.cancel_run(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
@@ -4129,6 +4643,15 @@ async def resume_run(
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
         _require_business_view_access(request, _run_business_view_id(run))
+        if run.binding_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_capability_unsupported",
+                    "message": "外部 Runtime Run の再開はサポートしていません。",
+                    "capability": "resume",
+                },
+            )
         return ApiResponse(data=runtime_repository.resume_run(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
@@ -4144,6 +4667,15 @@ async def replay_run(
         run = runtime_repository.get_run(run_id)
         _require_agent_access(request, run.agent_id)
         _require_business_view_access(request, _run_business_view_id(run))
+        if run.binding_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "runtime_capability_unsupported",
+                    "message": "外部 Runtime Run は新規 Run として再実行してください。",
+                    "capability": "replay",
+                },
+            )
         return ApiResponse(data=runtime_repository.replay_run(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
@@ -4229,7 +4761,14 @@ async def add_memory(
     entry: MemoryEntry,
     _: None = Depends(require_operator),
 ) -> ApiResponse[MemoryEntry]:
-    return ApiResponse(data=runtime_repository.add_memory(entry))
+    del entry
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "legacy_memory_read_only",
+            "message": "Memory は legacy export の読取専用です。",
+        },
+    )
 
 
 @router.get("/settings/external-rag", response_model=ApiResponse[ExternalServiceSettings])
@@ -4338,9 +4877,7 @@ def _mcp_server_settings(config: object, *, default_id: str) -> ExternalMcpServe
     )
 
 
-@router.get(
-    "/settings/external-mcp-servers", response_model=ApiResponse[ExternalMcpServersData]
-)
+@router.get("/settings/external-mcp-servers", response_model=ApiResponse[ExternalMcpServersData])
 async def list_external_mcp_servers() -> ApiResponse[ExternalMcpServersData]:
     """登録済み MCP server を一覧する(credential は露出しない)。"""
     default_id = runtime_config_store.mcp_default_id()
@@ -4348,9 +4885,7 @@ async def list_external_mcp_servers() -> ApiResponse[ExternalMcpServersData]:
         _mcp_server_settings(config, default_id=default_id)
         for config in runtime_config_store.list_mcp_servers()
     ]
-    return ApiResponse(
-        data=ExternalMcpServersData(servers=servers, default_server_id=default_id)
-    )
+    return ApiResponse(data=ExternalMcpServersData(servers=servers, default_server_id=default_id))
 
 
 @router.post(

@@ -28,11 +28,21 @@ class SkillToolCallTemplate(BaseModel):
     trace_id: str | None = None
 
 
+class SkillMcpRequirement(BaseModel):
+    """Skill の内部実装が必要とする MCP server / tool allowlist。"""
+
+    server_id: str
+    tool_names: list[str] = Field(default_factory=list)
+
+
 class AgentSkillDefinition(BaseModel):
     id: str
     name: str
     description: str = ""
     instructions: str = ""
+    mcp_requirements: list[SkillMcpRequirement] = Field(default_factory=list)
+    resource_ids: list[str] = Field(default_factory=list)
+    # 1 release の後方互換。新規 Runtime は mcp_requirements を使用する。
     tool_calls: list[SkillToolCallTemplate] = Field(default_factory=list)
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
@@ -234,6 +244,9 @@ skill_registry.register(
         name="業務 RAG 調査",
         description="外部業務 RAG を使って根拠付き情報を検索する。",
         instructions="ユーザーの目的を外部 RAG の query として扱い、引用と根拠を返す。",
+        mcp_requirements=[
+            SkillMcpRequirement(server_id="control-plane", tool_names=["external_rag_search"])
+        ],
         tags=["rag", "research", "business-data"],
         tool_calls=[
             SkillToolCallTemplate(
@@ -254,6 +267,9 @@ skill_registry.register(
         name="構造化データ照会",
         description="外部 NL2SQL/構造化データサービスへ質問を渡して表形式結果を取得する。",
         instructions="SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。",
+        mcp_requirements=[
+            SkillMcpRequirement(server_id="control-plane", tool_names=["external_nl2sql_query"])
+        ],
         tags=["nl2sql", "structured-data", "audit-sql"],
         tool_calls=[
             SkillToolCallTemplate(
@@ -277,6 +293,9 @@ skill_registry.register(
         name="MCP ツール探索",
         description="外部 MCP gateway の tools/list を呼んで利用可能な tool を確認する。",
         instructions="MCP tool 実行前に schema と説明を確認する。",
+        mcp_requirements=[
+            SkillMcpRequirement(server_id="control-plane", tool_names=["external_mcp_list_tools"])
+        ],
         tags=["mcp", "tool-discovery"],
         tool_calls=[
             SkillToolCallTemplate(
@@ -294,6 +313,9 @@ skill_registry.register(
         name="MCP ツール実行",
         description="外部 MCP gateway 経由で指定 tool を実行する。",
         instructions="MCP tool の schema に合わせた arguments を渡す。副作用は通常承認対象になる。",
+        mcp_requirements=[
+            SkillMcpRequirement(server_id="control-plane", tool_names=["external_mcp_call"])
+        ],
         tags=["mcp", "tool-call"],
         tool_calls=[
             SkillToolCallTemplate(
@@ -313,6 +335,12 @@ skill_registry.register(
         name="RAG 後に構造化データ照会",
         description="業務 RAG で文脈を確認した後、外部 NL2SQL へ同じ目的を渡す。",
         instructions="非構造文脈と構造化表の両方が必要な調査に使う。",
+        mcp_requirements=[
+            SkillMcpRequirement(
+                server_id="control-plane",
+                tool_names=["external_rag_search", "external_nl2sql_query"],
+            )
+        ],
         tags=["rag", "nl2sql", "business-data"],
         tool_calls=[
             SkillToolCallTemplate(
@@ -345,6 +373,9 @@ skill_registry.register(
         name="ワークスペースコマンド",
         description="許可済み prefix のコマンドを sandbox command tool として計画する。",
         instructions="コード調査・テスト・生成物確認のために、許可されたコマンドだけを使う。",
+        mcp_requirements=[
+            SkillMcpRequirement(server_id="control-plane", tool_names=["sandbox_command_run"])
+        ],
         tags=["command", "workspace", "sandbox"],
         tool_calls=[
             SkillToolCallTemplate(

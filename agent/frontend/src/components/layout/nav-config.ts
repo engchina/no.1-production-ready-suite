@@ -7,15 +7,10 @@ import {
   Cloud,
   KeyRound,
   LayoutDashboard,
-  Package,
-  Search,
   PlayCircle,
-  ShieldCheck,
-  SlidersHorizontal,
+  Server,
   Settings,
   Store,
-  Terminal,
-  Wrench,
   type LucideIcon,
 } from "lucide-react";
 
@@ -39,37 +34,28 @@ export interface NavSection {
 export const NAV_SECTIONS: NavSection[] = [
   {
     titleKey: "nav.section.overview",
-    items: [
-      { href: APP_ROUTES.dashboard, labelKey: "nav.dashboard", icon: LayoutDashboard },
-      { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot },
-    ],
+    items: [{ href: APP_ROUTES.dashboard, labelKey: "nav.dashboard", icon: LayoutDashboard }],
   },
   {
-    titleKey: "nav.section.runtime",
+    titleKey: "nav.section.controlPlane",
     items: [
-      { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: PlayCircle },
-      { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck },
-      { href: APP_ROUTES.audit, labelKey: "nav.audit", icon: ClipboardList },
-      { href: APP_ROUTES.tools, labelKey: "nav.tools", icon: Wrench },
+      { href: APP_ROUTES.agents, labelKey: "nav.agents", icon: Bot },
       {
         href: APP_ROUTES.skills,
         labelKey: "nav.skills",
         sidebarLabelKey: "nav.skills.sidebar",
         icon: Boxes,
       },
-      {
-        href: APP_ROUTES.plugins,
-        labelKey: "nav.plugins",
-        sidebarLabelKey: "nav.plugins.sidebar",
-        icon: Package,
-      },
+      { href: APP_ROUTES.runtimes, labelKey: "nav.runtimes", icon: Server },
+      { href: APP_ROUTES.runs, labelKey: "nav.runs", icon: PlayCircle },
+      { href: APP_ROUTES.approvals, labelKey: "nav.approvals", icon: BadgeCheck },
+      { href: APP_ROUTES.audit, labelKey: "nav.audit", icon: ClipboardList },
       {
         href: APP_ROUTES.pluginMarketplaces,
         labelKey: "nav.pluginMarketplaces",
         sidebarLabelKey: "nav.pluginMarketplaces.sidebar",
         icon: Store,
       },
-      { href: APP_ROUTES.memory, labelKey: "nav.memory", icon: Search },
     ],
   },
   {
@@ -98,9 +84,6 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: APP_ROUTES.settingsExternalRag, labelKey: "nav.settingsExternalRag", icon: Settings },
       { href: APP_ROUTES.settingsExternalNl2Sql, labelKey: "nav.settingsExternalNl2Sql", icon: Settings },
       { href: APP_ROUTES.settingsExternalMcp, labelKey: "nav.settingsExternalMcp", icon: Settings },
-      { href: APP_ROUTES.settingsToolPolicy, labelKey: "nav.settingsToolPolicy", icon: ShieldCheck },
-      { href: APP_ROUTES.settingsCommandPolicy, labelKey: "nav.settingsCommandPolicy", icon: Terminal },
-      { href: APP_ROUTES.settingsRuntimeSafety, labelKey: "nav.settingsRuntimeSafety", icon: SlidersHorizontal },
       { href: APP_ROUTES.settingsRuntimeSnapshot, labelKey: "nav.settingsRuntimeSnapshot", icon: DatabaseBackup },
     ],
   },

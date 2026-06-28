@@ -223,9 +223,7 @@ class AgentRuntimeConfigStore:
                 config = self._mcp_servers.get(server_id)
                 if config is not None:
                     return config.model_copy(deep=True)
-            config = self._mcp_servers.get(self._mcp_default_id) or self._mcp_servers.get(
-                "default"
-            )
+            config = self._mcp_servers.get(self._mcp_default_id) or self._mcp_servers.get("default")
             if config is None:
                 raise KeyError(server_id or self._mcp_default_id)
             return config.model_copy(deep=True)
@@ -234,9 +232,7 @@ class AgentRuntimeConfigStore:
         with self._lock:
             return [
                 config.model_copy(deep=True)
-                for config in sorted(
-                    self._mcp_servers.values(), key=lambda item: item.server_id
-                )
+                for config in sorted(self._mcp_servers.values(), key=lambda item: item.server_id)
             ]
 
     def mcp_default_id(self) -> str:
@@ -299,9 +295,7 @@ class AgentRuntimeConfigStore:
             self._mcp_default_id = server_id
             return self._mcp_default_id
 
-    def set_plugin_mcp_servers(
-        self, source: str, configs: list[ExternalMcpRuntimeConfig]
-    ) -> None:
+    def set_plugin_mcp_servers(self, source: str, configs: list[ExternalMcpRuntimeConfig]) -> None:
         """指定 source(例: plugin:<id>)の MCP server を一括置換する。default は保護。"""
         with self._lock:
             self._remove_mcp_source_locked(source)

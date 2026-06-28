@@ -326,16 +326,19 @@ test.describe("Agent Runtime settings", () => {
 
     // 追加
     await page.getByRole("button", { name: "スキルを追加" }).click();
-    await page.getByLabel("ID").fill("e2e_custom");
+    await page.getByLabel("ID", { exact: true }).fill("e2e_custom");
     await page.getByLabel("名前").fill("E2E カスタム");
-    await page.getByLabel("tool_calls (JSON)").fill('[{"name":"agent_skill_list"}]');
+    await page
+      .getByLabel("MCP 依存 (JSON)")
+      .fill('[{"server_id":"control-plane","tool_names":["external_rag_search"]}]');
+    await page.getByLabel("Resource ID (JSON)").fill('["prompt.e2e"]');
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("スキルを追加しました")).toBeVisible();
     await expect(page.getByRole("button", { name: "詳細 e2e_custom" })).toBeVisible();
 
-    // 詳細(progressive disclosure: tool_calls JSON を表示)
+    // 詳細(progressive disclosure: MCP/resource 依存を表示)
     await page.getByRole("button", { name: "詳細 e2e_custom" }).click();
-    await expect(page.locator("pre").filter({ hasText: "agent_skill_list" })).toBeVisible();
+    await expect(page.locator("pre").filter({ hasText: "external_rag_search" })).toBeVisible();
 
     // 編集
     await page.getByRole("button", { name: "編集 e2e_custom" }).click();
@@ -359,7 +362,9 @@ test.describe("Agent Runtime settings", () => {
 
   test("plugin を manifest から install・無効化・アンインストールできる", async ({ page }) => {
     await page.goto("/plugins");
-    await expect(page.getByRole("heading", { name: "プラグイン", level: 1 })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "インストール済み連携", level: 1 })
+    ).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     await page.getByRole("button", { name: "manifest から install" }).click();
@@ -368,24 +373,36 @@ test.describe("Agent Runtime settings", () => {
       name: "UI Plugin",
       version: "0.1.0",
       skills: [
-        { id: "ui_plugin_skill", name: "UI Skill", tool_calls: [{ name: "agent_skill_list" }] },
+        {
+          id: "ui_plugin_skill",
+          name: "UI Skill",
+          mcp_requirements: [],
+          resource_ids: ["ui_plugin_prompt"],
+        },
       ],
       mcp_servers: [{ server_id: "ui_plugin_mcp", base_url: "http://127.0.0.1:8052/jsonrpc" }],
-      agents: [{ id: "ui_plugin_agent", name: "UI Agent", tool_names: ["echo"] }],
+      resources: [
+        {
+          id: "ui_plugin_prompt",
+          kind: "prompt",
+          name: "UI prompt",
+          content: "日本語で回答する",
+        },
+      ],
     });
     await page.locator("#plugin-manifest").fill(manifest);
     await page.getByRole("button", { name: "install", exact: true }).click();
-    await expect(page.getByText("plugin を install しました")).toBeVisible();
+    await expect(page.getByText("連携機能をインストールしました")).toBeVisible();
     await expect(page.getByRole("button", { name: "アンインストール ui_plugin" })).toBeVisible();
 
     // 無効化(switch トグル)
     await page.getByRole("switch", { name: "有効 ui_plugin" }).click();
-    await expect(page.getByText("plugin の有効状態を更新しました")).toBeVisible();
+    await expect(page.getByText("連携機能の有効状態を更新しました")).toBeVisible();
 
     // アンインストール
     await page.getByRole("button", { name: "アンインストール ui_plugin" }).click();
     await page.getByRole("button", { name: "アンインストール", exact: true }).click();
-    await expect(page.getByText("plugin をアンインストールしました")).toBeVisible();
+    await expect(page.getByText("連携機能をアンインストールしました")).toBeVisible();
     await expect(page.getByRole("button", { name: "アンインストール ui_plugin" })).toHaveCount(0);
   });
 
@@ -403,20 +420,20 @@ test.describe("Agent Runtime settings", () => {
 
     // リモート HTTP 取得
     await page.getByRole("button", { name: "更新 fixture_market" }).click();
-    await expect(page.getByText("plugin 一覧を更新しました")).toBeVisible();
+    await expect(page.getByText("連携機能一覧を更新しました")).toBeVisible();
 
     // 閲覧 → install
-    await page.getByRole("button", { name: "plugin を見る fixture_market" }).click();
-    await expect(page.getByRole("heading", { name: "利用可能な plugin" })).toBeVisible();
+    await page.getByRole("button", { name: "連携機能を見る fixture_market" }).click();
+    await expect(page.getByRole("heading", { name: "利用可能な連携機能" })).toBeVisible();
     await expect(page.getByText("Fixture Plugin")).toBeVisible();
     await page.getByRole("button", { name: "install fixture_plugin" }).click();
-    await expect(page.getByText("plugin を install しました")).toBeVisible();
+    await expect(page.getByText("連携機能をインストールしました")).toBeVisible();
 
     // cleanup: plugins ページでアンインストール、marketplace を削除
     await page.goto("/plugins");
     await page.getByRole("button", { name: "アンインストール fixture_plugin" }).click();
     await page.getByRole("button", { name: "アンインストール", exact: true }).click();
-    await expect(page.getByText("plugin をアンインストールしました")).toBeVisible();
+    await expect(page.getByText("連携機能をアンインストールしました")).toBeVisible();
 
     await page.goto("/plugins/marketplaces");
     await page.getByRole("button", { name: "削除 fixture_market" }).click();
@@ -465,44 +482,47 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 
-  test("Agent の command prefix policy を保存できる", async ({ page }) => {
+  test("業務 Agent は Skill だけを選択して保存できる", async ({ page }) => {
     await page.goto("/agents");
 
-    await expect(page.getByRole("heading", { name: "エージェント一覧", level: 1 })).toBeVisible();
-    await page.locator("#new-agent-name").fill("Command Policy Agent");
-    await page.locator("#new-agent-description").fill("sandbox command の prefix を限定する");
-    await page.locator("#new-agent-command-prefixes").fill("echo allowed\npwd");
+    await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
+    await page.locator("#new-agent-name").fill("RAG Skill Agent");
+    await page.locator("#new-agent-description").fill("Skill で能力を選択する");
     await page
       .locator("label")
-      .filter({ hasText: "sandbox_command_run" })
+      .filter({ hasText: "業務 RAG 調査" })
       .first()
       .locator("input")
       .check();
     await page.getByRole("button", { name: "作成" }).first().click();
     await expect(page.getByText("Agent を作成しました")).toBeVisible();
-    await expect(page.locator("#new-agent-command-prefixes")).toHaveValue("echo allowed\npwd");
+    await expect(page.getByText("Command allowed prefixes")).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
 
     await page.setViewportSize({ width: 375, height: 812 });
-    await expect(page.getByLabel("Command allowed prefixes").first()).toBeVisible();
+    await expect(page.getByText("業務 RAG 調査").first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
   });
 
-  test("Runtime Snapshot を検証できる", async ({ page }) => {
+  test("Control Plane バックアップを検証できる", async ({ page }) => {
     await page.goto("/settings/runtime-snapshot");
 
-    await expect(page.getByRole("heading", { name: "Runtime Snapshot", level: 1 })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Control Plane バックアップ", level: 1 })
+    ).toBeVisible();
     const exportTextarea = page.locator("#runtime-snapshot-export");
-    await expect(exportTextarea).toHaveValue(/agent-runtime\.snapshot\.v1/);
+    await expect(exportTextarea).toHaveValue(/agent-control-plane\.snapshot\.v2/);
     const exportText = await exportTextarea.inputValue();
     const snapshot = JSON.parse(exportText) as {
       version: string;
       agents: Array<Record<string, unknown>>;
     };
-    expect(snapshot.version).toBe("agent-runtime.snapshot.v1");
+    expect(snapshot.version).toBe("agent-control-plane.snapshot.v2");
 
     await page.getByRole("button", { name: "現在値を入力へ反映" }).click();
-    await expect(page.locator("#runtime-snapshot-import")).toHaveValue(/agent-runtime\.snapshot\.v1/);
+    await expect(page.locator("#runtime-snapshot-import")).toHaveValue(
+      /agent-control-plane\.snapshot\.v2/
+    );
     await expect(page.getByRole("button", { name: "置換" })).toBeDisabled();
 
     await page.getByRole("button", { name: "検証" }).click();

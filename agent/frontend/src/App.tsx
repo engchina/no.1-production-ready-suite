@@ -22,6 +22,7 @@ import {
   PluginsPage,
   RuntimeSnapshotSettingsPage,
   RuntimeSafetySettingsPage,
+  RuntimesPage,
   RunsPage,
   SkillsPage,
   ToolPolicySettingsPage,
@@ -40,6 +41,7 @@ export function App() {
         <Routes>
           <Route path={APP_ROUTES.dashboard} element={<DashboardPage />} />
           <Route path={APP_ROUTES.agents} element={<AgentsPage />} />
+          <Route path={APP_ROUTES.runtimes} element={<RuntimesPage />} />
           <Route path={APP_ROUTES.runs} element={<RunsPage />} />
           <Route path={APP_ROUTES.approvals} element={<ApprovalsPage />} />
           <Route path={APP_ROUTES.audit} element={<AuditPage />} />

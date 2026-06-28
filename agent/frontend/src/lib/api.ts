@@ -74,6 +74,11 @@ export interface RunState {
   id: string;
   goal: string;
   agent_id: string;
+  runtime_id: string;
+  binding_id?: string | null;
+  external_run_id?: string | null;
+  external_cursor?: string | null;
+  runtime_capabilities: RuntimeCapabilities;
   status: "queued" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
   steps: RunStep[];
   events: RunEvent[];
@@ -161,8 +166,10 @@ export interface AgentProfile {
   name: string;
   description: string;
   instructions: string;
-  tool_names: string[];
-  command_allowed_prefixes: string[];
+  skill_ids: string[];
+  migration_required: boolean;
+  tool_names?: string[];
+  command_allowed_prefixes?: string[];
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -173,8 +180,7 @@ export interface AgentProfileWritePayload {
   name: string;
   description?: string;
   instructions?: string;
-  tool_names: string[];
-  command_allowed_prefixes?: string[];
+  skill_ids: string[];
   enabled: boolean;
 }
 
@@ -182,8 +188,7 @@ export interface AgentProfilePatchPayload {
   name?: string;
   description?: string;
   instructions?: string;
-  tool_names?: string[];
-  command_allowed_prefixes?: string[];
+  skill_ids?: string[];
   enabled?: boolean;
 }
 
@@ -267,6 +272,8 @@ export interface AgentSkill {
   name: string;
   description: string;
   instructions: string;
+  mcp_requirements: { server_id: string; tool_names: string[] }[];
+  resource_ids: string[];
   tool_calls: AgentSkillToolCall[];
   enabled: boolean;
   tags: string[];
@@ -285,6 +292,8 @@ export interface AgentSkillWritePayload {
   name?: string;
   description?: string;
   instructions?: string;
+  mcp_requirements?: { server_id: string; tool_names: string[] }[];
+  resource_ids?: string[];
   tool_calls?: AgentSkillToolCall[];
   enabled?: boolean;
   tags?: string[];
@@ -298,7 +307,19 @@ export interface PluginManifest {
   author?: string;
   skills?: AgentSkill[];
   mcp_servers?: Record<string, unknown>[];
+  resources?: PluginResource[];
+  /** @deprecated v1 manifest compatibility only. */
   agents?: Record<string, unknown>[];
+}
+
+export interface PluginResource {
+  id: string;
+  kind: "prompt" | "workflow" | "template";
+  name: string;
+  version: string;
+  media_type: string;
+  content: string | Record<string, unknown>;
+  metadata: Record<string, unknown>;
 }
 
 export interface PluginSummary {
@@ -311,6 +332,8 @@ export interface PluginSummary {
   marketplace_id?: string | null;
   skill_count: number;
   mcp_count: number;
+  resource_count: number;
+  warnings: string[];
   agent_count: number;
 }
 
@@ -405,6 +428,7 @@ export interface RuntimeSnapshot {
   runs: RunState[];
   agents: AgentProfile[];
   memory: MemoryEntry[];
+  control_plane_state: Record<string, unknown>;
 }
 
 export interface RuntimeSnapshotSummary {
@@ -442,8 +466,55 @@ export interface RuntimeSnapshotImportPayload {
 export interface CreateRunPayload {
   goal: string;
   agent_id?: string;
-  tool_calls?: ToolCall[];
+  runtime_binding_id?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface RuntimeCapabilities {
+  stream_events: boolean;
+  cancel: boolean;
+  artifacts: boolean;
+  approvals: boolean;
+  skill_sync: boolean;
+  mcp_sync: boolean;
+}
+
+export interface RuntimeDefinition {
+  id: string;
+  name: string;
+  kind: "openclaw" | "hermes" | "deerflow" | "legacy_native";
+  base_url: string;
+  auth_secret_ref?: string | null;
+  managed_service_id?: string | null;
+  capabilities: RuntimeCapabilities;
+  enabled: boolean;
+  status: "unknown" | "running" | "degraded" | "stopped" | "disabled" | "legacy";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeBinding {
+  id: string;
+  agent_id: string;
+  runtime_id: string;
+  native_agent_ref: string;
+  is_default: boolean;
+  enabled: boolean;
+  policy: Record<string, unknown>;
+  sync_status: "pending" | "ready" | "error";
+  sync_error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeBindingWritePayload {
+  id?: string;
+  agent_id: string;
+  runtime_id: string;
+  native_agent_ref: string;
+  is_default?: boolean;
+  enabled?: boolean;
+  policy?: Record<string, unknown>;
 }
 
 export interface ApprovalDecisionPayload {
@@ -720,6 +791,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         detail = body.error_messages[0];
       } else if (typeof body.detail === "string") {
         detail = body.detail;
+      } else if (
+        body.detail &&
+        typeof body.detail === "object" &&
+        "message" in body.detail &&
+        typeof body.detail.message === "string"
+      ) {
+        detail = body.detail.message;
       }
     } catch {
       // Ignore non-JSON error bodies.
@@ -755,6 +833,47 @@ function externalMcpToolsQuery(filters: ExternalMcpToolsFilters): string {
 }
 
 export const agentApi = {
+  listRuntimes: () => request<{ runtimes: RuntimeDefinition[] }>("/api/runtimes"),
+  patchRuntime: (runtimeId: string, payload: Partial<RuntimeDefinition>) =>
+    request<RuntimeDefinition>(`/api/runtimes/${encodeURIComponent(runtimeId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  probeRuntime: (runtimeId: string) =>
+    request<RuntimeDefinition>(`/api/runtimes/${encodeURIComponent(runtimeId)}/status`),
+  runtimeServiceAction: (
+    serviceId: string,
+    action: "pull" | "start" | "stop" | "restart" | "remove"
+  ) =>
+    request<Record<string, unknown>>(
+      `/api/runtimes/services/${encodeURIComponent(serviceId)}/${action}`,
+      { method: "POST" }
+    ),
+  runtimeServiceLogs: (serviceId: string) =>
+    request<{ content: string }>(`/api/runtimes/services/${encodeURIComponent(serviceId)}/logs`),
+  listRuntimeBindings: (agentId?: string) =>
+    request<{ bindings: RuntimeBinding[] }>(
+      `/api/runtime-bindings${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`
+    ),
+  createRuntimeBinding: (payload: RuntimeBindingWritePayload) =>
+    request<RuntimeBinding>("/api/runtime-bindings", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  patchRuntimeBinding: (bindingId: string, payload: Partial<RuntimeBindingWritePayload>) =>
+    request<RuntimeBinding>(`/api/runtime-bindings/${encodeURIComponent(bindingId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteRuntimeBinding: (bindingId: string) =>
+    request<{ bindings: RuntimeBinding[] }>(
+      `/api/runtime-bindings/${encodeURIComponent(bindingId)}`,
+      { method: "DELETE" }
+    ),
+  syncRuntimeBinding: (bindingId: string) =>
+    request<RuntimeBinding>(`/api/runtime-bindings/${encodeURIComponent(bindingId)}/sync`, {
+      method: "POST",
+    }),
   listRuns: () => request<{ runs: RunState[] }>("/api/runs"),
   createRun: (payload: CreateRunPayload) =>
     request<RunState>("/api/runs", { method: "POST", body: JSON.stringify(payload) }),

@@ -12,6 +12,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Server,
   ShieldAlert,
   Star,
   Trash2,
@@ -43,7 +44,6 @@ import {
   type AgentProfile,
   type AgentProfileWritePayload,
   type AgentSkill,
-  type AgentSkillToolCall,
   type Artifact,
   type ApprovalRequest,
   type ExternalMcpServerSettings,
@@ -59,6 +59,8 @@ import {
   type RunAuditData,
   type RunEvent,
   type RunState,
+  type RuntimeBinding,
+  type RuntimeDefinition,
   type ToolCallAuditFilters,
   type ToolCallAuditRecord,
   type ToolAuditRecord,
@@ -66,18 +68,9 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
-type ToolChoice = "none" | "echo" | "external_rag_search" | "external_nl2sql_query";
 type ToolPolicyChoice = "default" | "allow" | "ask" | "deny";
 type RunStreamMode = "sse" | "websocket";
 type WebSocketStreamStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed" | "error";
-
-const DEFAULT_ARGUMENTS: Record<ToolChoice, string> = {
-  none: "{}",
-  echo: '{\n  "sample": true\n}',
-  external_rag_search: '{\n  "query": "確認したい業務質問",\n  "top_k": 5\n}',
-  external_nl2sql_query:
-    '{\n  "question": "今月の売上を部門別に集計して",\n  "mode": "dry_run",\n  "limit": 100\n}',
-};
 
 interface RunWebSocketState {
   status: WebSocketStreamStatus;
@@ -347,7 +340,12 @@ function isRunTerminal(status: RunState["status"]): boolean {
 export function AgentsPage() {
   const queryClient = useQueryClient();
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
-  const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
+  const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
+  const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
+  const bindings = useQuery({
+    queryKey: ["runtime-bindings"],
+    queryFn: () => agentApi.listRuntimeBindings(),
+  });
   const createAgent = useMutation({
     mutationFn: agentApi.createAgent,
     onSuccess: () => {
@@ -363,7 +361,30 @@ export function AgentsPage() {
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
   });
-  const availableTools = tools.data?.tools ?? [];
+  const refreshBindings = () => {
+    void queryClient.invalidateQueries({ queryKey: ["runtime-bindings"] });
+  };
+  const createBinding = useMutation({
+    mutationFn: agentApi.createRuntimeBinding,
+    onSuccess: () => {
+      toast.success(t("binding.saved"));
+      refreshBindings();
+    },
+  });
+  const patchBinding = useMutation({
+    mutationFn: ({ binding, payload }: { binding: RuntimeBinding; payload: Partial<RuntimeBinding> }) =>
+      agentApi.patchRuntimeBinding(binding.id, payload),
+    onSuccess: refreshBindings,
+  });
+  const deleteBinding = useMutation({
+    mutationFn: agentApi.deleteRuntimeBinding,
+    onSuccess: refreshBindings,
+  });
+  const syncBinding = useMutation({
+    mutationFn: agentApi.syncRuntimeBinding,
+    onSuccess: refreshBindings,
+  });
+  const availableSkills = skills.data?.skills ?? [];
 
   return (
     <>
@@ -372,30 +393,203 @@ export function AgentsPage() {
         <AgentEditor
           title={t("agent.create")}
           description={t("page.agents.subtitle")}
-          availableTools={availableTools}
+          availableSkills={availableSkills}
           pending={createAgent.isPending}
           error={createAgent.error}
           onSave={(payload) => createAgent.mutate(payload)}
         />
         <QueryState query={agents}>
           <div className="grid min-w-0 gap-4">
-            {tools.error ? <Banner severity="danger">{tools.error.message}</Banner> : null}
+            {skills.error ? <Banner severity="danger">{skills.error.message}</Banner> : null}
             {(agents.data?.agents ?? []).length ? (
               (agents.data?.agents ?? []).map((agent) => (
-                <AgentEditor
-                  key={agent.id}
-                  agent={agent}
-                  title={agent.name}
-                  description={agent.id}
-                  availableTools={availableTools}
-                  pending={patchAgent.isPending}
-                  error={patchAgent.error}
-                  onSave={(payload) => patchAgent.mutate({ agent, payload })}
-                />
+                <div key={agent.id} className="space-y-4">
+                  <AgentEditor
+                    agent={agent}
+                    title={agent.name}
+                    description={agent.id}
+                    availableSkills={availableSkills}
+                    pending={patchAgent.isPending}
+                    error={patchAgent.error}
+                    onSave={(payload) => patchAgent.mutate({ agent, payload })}
+                  />
+                  <RuntimeBindingsPanel
+                    agent={agent}
+                    bindings={(bindings.data?.bindings ?? []).filter(
+                      (binding) => binding.agent_id === agent.id
+                    )}
+                    runtimes={runtimes.data?.runtimes ?? []}
+                    pending={
+                      createBinding.isPending ||
+                      patchBinding.isPending ||
+                      deleteBinding.isPending ||
+                      syncBinding.isPending
+                    }
+                    error={
+                      createBinding.error ??
+                      patchBinding.error ??
+                      deleteBinding.error ??
+                      syncBinding.error
+                    }
+                    onCreate={(payload) => createBinding.mutate(payload)}
+                    onDefault={(binding) =>
+                      patchBinding.mutate({ binding, payload: { is_default: true } })
+                    }
+                    onSync={(binding) => syncBinding.mutate(binding.id)}
+                    onDelete={(binding) => deleteBinding.mutate(binding.id)}
+                  />
+                </div>
               ))
             ) : (
               <EmptyState title={t("common.empty.title")} />
             )}
+          </div>
+        </QueryState>
+      </main>
+    </>
+  );
+}
+
+export function RuntimesPage() {
+  const queryClient = useQueryClient();
+  const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
+  const [logs, setLogs] = useState<Record<string, string>>({});
+  const patchRuntime = useMutation({
+    mutationFn: ({ runtime, enabled }: { runtime: RuntimeDefinition; enabled: boolean }) =>
+      agentApi.patchRuntime(runtime.id, { enabled }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
+  });
+  const probe = useMutation({
+    mutationFn: agentApi.probeRuntime,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
+  });
+  const serviceAction = useMutation({
+    mutationFn: ({
+      serviceId,
+      action,
+    }: {
+      serviceId: string;
+      action: "pull" | "start" | "stop" | "restart" | "remove";
+    }) => agentApi.runtimeServiceAction(serviceId, action),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["runtimes"] }),
+  });
+
+  async function loadLogs(runtime: RuntimeDefinition) {
+    if (!runtime.managed_service_id) return;
+    try {
+      const result = await agentApi.runtimeServiceLogs(runtime.managed_service_id);
+      setLogs((current) => ({ ...current, [runtime.id]: result.content }));
+    } catch (error) {
+      setLogs((current) => ({
+        ...current,
+        [runtime.id]: error instanceof Error ? error.message : t("common.error"),
+      }));
+    }
+  }
+
+  const error = patchRuntime.error ?? probe.error ?? serviceAction.error;
+  return (
+    <>
+      <PageHeader
+        title={t("nav.runtimes")}
+        subtitle={t("page.runtimes.subtitle")}
+        actions={
+          <Button variant="secondary" onClick={() => void runtimes.refetch()}>
+            <RefreshCw size={15} aria-hidden />
+            {t("common.retry")}
+          </Button>
+        }
+      />
+      <main className="space-y-5 p-6 md:p-8">
+        {error ? <Banner severity="danger">{error.message}</Banner> : null}
+        <QueryState query={runtimes}>
+          <div className="grid gap-4 xl:grid-cols-2">
+            {(runtimes.data?.runtimes ?? []).map((runtime) => (
+              <Card key={runtime.id} className="min-w-0">
+                <CardHeader className="flex-row items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <CardTitle className="flex items-center gap-2">
+                      <Server size={18} aria-hidden />
+                      {runtime.name}
+                    </CardTitle>
+                    <CardDescription className="break-all">
+                      {runtime.kind === "legacy_native" ? t("runtime.legacyReadOnly") : runtime.base_url}
+                    </CardDescription>
+                  </div>
+                  <StatusBadge
+                    variant={
+                      runtime.status === "running"
+                        ? "success"
+                        : runtime.status === "degraded"
+                          ? "warning"
+                          : runtime.status === "stopped"
+                            ? "danger"
+                            : "neutral"
+                    }
+                    label={runtime.status}
+                  />
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap gap-2" aria-label={t("runtime.capabilities")}>
+                    {Object.entries(runtime.capabilities).map(([name, supported]) => (
+                      <StatusBadge
+                        key={name}
+                        variant={supported ? "info" : "neutral"}
+                        label={`${name}: ${supported ? "on" : "off"}`}
+                      />
+                    ))}
+                  </div>
+                  {runtime.kind !== "legacy_native" ? (
+                    <>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Switch
+                          checked={runtime.enabled}
+                          onCheckedChange={(enabled) => patchRuntime.mutate({ runtime, enabled })}
+                          aria-label={`${runtime.name} ${t("agent.enabled")}`}
+                        />
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => probe.mutate(runtime.id)}
+                        >
+                          <RefreshCw size={14} aria-hidden />
+                          {t("runtime.probe")}
+                        </Button>
+                      </div>
+                      {runtime.managed_service_id ? (
+                        <div className="flex flex-wrap gap-2">
+                          {(["pull", "start", "stop", "restart", "remove"] as const).map(
+                            (action) => (
+                              <Button
+                                key={action}
+                                size="sm"
+                                variant={action === "remove" ? "danger" : "secondary"}
+                                onClick={() =>
+                                  serviceAction.mutate({
+                                    serviceId: runtime.managed_service_id as string,
+                                    action,
+                                  })
+                                }
+                              >
+                                {t(`runtime.action.${action}` as Parameters<typeof t>[0])}
+                              </Button>
+                            )
+                          )}
+                          <Button size="sm" variant="ghost" onClick={() => void loadLogs(runtime)}>
+                            {t("runtime.logs")}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {logs[runtime.id] ? (
+                    <pre className="max-h-56 overflow-auto rounded-md bg-muted/30 p-3 text-xs leading-5">
+                      {logs[runtime.id]}
+                    </pre>
+                  ) : null}
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </QueryState>
       </main>
@@ -411,8 +605,11 @@ export function RunsPage() {
     queryFn: agentApi.listRuns,
     refetchInterval: 5000,
   });
-  const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
+  const bindings = useQuery({
+    queryKey: ["runtime-bindings"],
+    queryFn: () => agentApi.listRuntimeBindings(),
+  });
   const createRun = useMutation({
     mutationFn: agentApi.createRun,
     onSuccess: (run) => {
@@ -443,23 +640,18 @@ export function RunsPage() {
   });
   const [goal, setGoal] = useState("外部データを確認して要点を整理する");
   const [agentId, setAgentId] = useState("default");
-  const [tool, setTool] = useState<ToolChoice>("none");
-  const [argumentsText, setArgumentsText] = useState(DEFAULT_ARGUMENTS.none);
+  const [bindingId, setBindingId] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [streamMode, setStreamMode] = useState<RunStreamMode>("sse");
 
   const runItems = runs.data?.runs ?? [];
   const selectedRun = runItems.find((run) => run.id === selectedRunId) ?? runItems[0];
-  const selectedAgent = agents.data?.agents.find((agent) => agent.id === agentId);
-  const selectableTools = useMemo(() => {
-    const allTools = tools.data?.tools ?? [];
-    if (!selectedAgent) {
-      return allTools;
-    }
-    const allowed = new Set(selectedAgent.tool_names);
-    return allTools.filter((definition) => allowed.has(definition.name));
-  }, [selectedAgent, tools.data?.tools]);
+  const agentBindings = (bindings.data?.bindings ?? []).filter(
+    (binding) => binding.agent_id === agentId && binding.enabled
+  );
+  const defaultBinding = agentBindings.find((binding) => binding.is_default);
+  const resolvedBindingId = bindingId || defaultBinding?.id || "";
 
   useEffect(() => {
     if (!selectedRunId && runItems.length) {
@@ -501,6 +693,9 @@ export function RunsPage() {
       "tool.guardrail_warning",
       "run.completed",
       "run.cancelled",
+      "runtime.dispatch_claimed",
+      "runtime.submitted",
+      "runtime.failed",
       "memory.written",
     ];
     eventTypes.forEach((type) => source.addEventListener(type, refresh));
@@ -508,35 +703,22 @@ export function RunsPage() {
     return () => source.close();
   }, [selectedRun, refreshRuntimeEvents, streamMode]);
 
-  function onToolChange(value: ToolChoice) {
-    setTool(value);
-    setArgumentsText(DEFAULT_ARGUMENTS[value]);
-    setFormError(null);
-  }
-
   function onAgentChange(value: string) {
     setAgentId(value);
-    const nextAgent = agents.data?.agents.find((agent) => agent.id === value);
-    if (tool !== "none" && nextAgent && !nextAgent.tool_names.includes(tool)) {
-      onToolChange("none");
-    }
+    setBindingId("");
+    setFormError(null);
   }
 
   function submitRun() {
     setFormError(null);
-    let parsedArguments: Record<string, unknown> = {};
-    if (tool !== "none") {
-      try {
-        parsedArguments = JSON.parse(argumentsText) as Record<string, unknown>;
-      } catch {
-        setFormError("引数 JSON を確認してください。");
-        return;
-      }
+    if (!resolvedBindingId) {
+      setFormError(t("run.bindingRequired"));
+      return;
     }
     createRun.mutate({
       goal,
       agent_id: agentId,
-      tool_calls: tool === "none" ? [] : [{ name: tool, arguments: parsedArguments }],
+      runtime_binding_id: resolvedBindingId,
     });
   }
 
@@ -599,31 +781,27 @@ export function RunsPage() {
                   className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                 />
               </Field>
-              <Field label={t("run.form.tool")} htmlFor="run-tool">
+              <Field label={t("run.form.binding")} htmlFor="run-binding">
                 <select
-                  id="run-tool"
-                  value={tool}
-                  onChange={(event) => onToolChange(event.target.value as ToolChoice)}
+                  id="run-binding"
+                  value={bindingId}
+                  onChange={(event) => setBindingId(event.target.value)}
                   className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                 >
-                  <option value="none">{t("run.form.noTool")}</option>
-                  {selectableTools.map((definition) => (
-                    <option key={definition.name} value={definition.name}>
-                      {definition.name}
+                  <option value="">
+                    {defaultBinding
+                      ? `${t("run.form.defaultBinding")}: ${defaultBinding.native_agent_ref}`
+                      : t("run.form.selectBinding")}
+                  </option>
+                  {agentBindings.map((binding) => (
+                    <option key={binding.id} value={binding.id}>
+                      {binding.native_agent_ref} / {binding.runtime_id}
                     </option>
                   ))}
                 </select>
               </Field>
-              {tool !== "none" ? (
-                <Field label={t("run.form.arguments")} htmlFor="run-arguments">
-                  <textarea
-                    id="run-arguments"
-                    value={argumentsText}
-                    onChange={(event) => setArgumentsText(event.target.value)}
-                    className="min-h-44 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                    spellCheck={false}
-                  />
-                </Field>
+              {!agentBindings.length ? (
+                <Banner severity="warning">{t("run.unbound")}</Banner>
               ) : null}
               {formError ? <Banner severity="danger">{formError}</Banner> : null}
               {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
@@ -1873,7 +2051,8 @@ interface SkillFormState {
   instructions: string;
   tags: string;
   enabled: boolean;
-  toolCallsJson: string;
+  mcpRequirementsJson: string;
+  resourceIdsJson: string;
 }
 
 const EMPTY_SKILL_FORM: SkillFormState = {
@@ -1883,7 +2062,8 @@ const EMPTY_SKILL_FORM: SkillFormState = {
   instructions: "",
   tags: "",
   enabled: true,
-  toolCallsJson: "[]",
+  mcpRequirementsJson: "[]",
+  resourceIdsJson: "[]",
 };
 
 function skillSourceLabel(source: string): string {
@@ -1922,7 +2102,11 @@ export function SkillsPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const toolCalls = JSON.parse(form.toolCallsJson) as AgentSkillToolCall[];
+      const mcpRequirements = JSON.parse(form.mcpRequirementsJson) as {
+        server_id: string;
+        tool_names: string[];
+      }[];
+      const resourceIds = JSON.parse(form.resourceIdsJson) as string[];
       const payload = {
         name: form.name,
         description: form.description,
@@ -1932,7 +2116,9 @@ export function SkillsPage() {
           .map((tag) => tag.trim())
           .filter(Boolean),
         enabled: form.enabled,
-        tool_calls: toolCalls,
+        mcp_requirements: mcpRequirements,
+        resource_ids: resourceIds,
+        tool_calls: [],
       };
       if (editingId) {
         return agentApi.updateSkill(editingId, payload);
@@ -1978,7 +2164,8 @@ export function SkillsPage() {
       instructions: skill.instructions,
       tags: skill.tags.join(", "),
       enabled: skill.enabled,
-      toolCallsJson: JSON.stringify(skill.tool_calls, null, 2),
+      mcpRequirementsJson: JSON.stringify(skill.mcp_requirements, null, 2),
+      resourceIdsJson: JSON.stringify(skill.resource_ids, null, 2),
     });
     setFormError(null);
     setFormOpen(true);
@@ -2003,7 +2190,17 @@ export function SkillsPage() {
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(form.toolCallsJson);
+      parsed = JSON.parse(form.mcpRequirementsJson);
+    } catch {
+      setFormError(t("skills.invalidJson"));
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      setFormError(t("skills.invalidJson"));
+      return;
+    }
+    try {
+      parsed = JSON.parse(form.resourceIdsJson);
     } catch {
       setFormError(t("skills.invalidJson"));
       return;
@@ -2124,16 +2321,30 @@ export function SkillsPage() {
                   />
                   <p className="mt-1 text-xs leading-5 text-muted">{t("skills.tagsHint")}</p>
                 </Field>
-                <Field label={t("skills.toolCalls")} htmlFor="skill-tool-calls">
+                <Field label={t("skills.mcpRequirements")} htmlFor="skill-mcp-requirements">
                   <textarea
-                    id="skill-tool-calls"
-                    value={form.toolCallsJson}
+                    id="skill-mcp-requirements"
+                    value={form.mcpRequirementsJson}
                     rows={8}
                     spellCheck={false}
-                    onChange={(event) => setForm({ ...form, toolCallsJson: event.target.value })}
+                    onChange={(event) =>
+                      setForm({ ...form, mcpRequirementsJson: event.target.value })
+                    }
                     className={`${TEXTAREA_CLASS} font-mono`}
                   />
-                  <p className="mt-1 text-xs leading-5 text-muted">{t("skills.toolCallsHint")}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted">
+                    {t("skills.mcpRequirementsHint")}
+                  </p>
+                </Field>
+                <Field label={t("skills.resourceIds")} htmlFor="skill-resource-ids">
+                  <textarea
+                    id="skill-resource-ids"
+                    value={form.resourceIdsJson}
+                    rows={4}
+                    spellCheck={false}
+                    onChange={(event) => setForm({ ...form, resourceIdsJson: event.target.value })}
+                    className={`${TEXTAREA_CLASS} font-mono`}
+                  />
                 </Field>
                 <label className="flex items-center gap-2 text-sm text-foreground">
                   <Switch
@@ -2350,7 +2561,8 @@ function SkillDetailCard({ skill, onClose }: { skill: AgentSkill; onClose: () =>
             </p>
           </div>
         ) : null}
-        <JsonPanel title={t("skills.toolCalls")} value={skill.tool_calls} />
+        <JsonPanel title={t("skills.mcpRequirements")} value={skill.mcp_requirements} />
+        <JsonPanel title={t("skills.resourceIds")} value={skill.resource_ids} />
       </CardContent>
     </Card>
   );
@@ -2531,7 +2743,7 @@ function PluginBundle({ plugin }: { plugin: PluginSummary }) {
     <div className="flex flex-wrap gap-1.5">
       <StatusBadge variant="info" label={`${t("plugins.skills")} ${plugin.skill_count}`} />
       <StatusBadge variant="info" label={`${t("plugins.mcp")} ${plugin.mcp_count}`} />
-      <StatusBadge variant="info" label={`${t("plugins.agents")} ${plugin.agent_count}`} />
+      <StatusBadge variant="info" label={`${t("plugins.resources")} ${plugin.resource_count}`} />
     </div>
   );
 }
@@ -3701,7 +3913,7 @@ function AgentEditor({
   agent,
   title,
   description,
-  availableTools,
+  availableSkills,
   pending,
   error,
   onSave,
@@ -3709,7 +3921,7 @@ function AgentEditor({
   agent?: AgentProfile;
   title: string;
   description: string;
-  availableTools: ToolDefinition[];
+  availableSkills: AgentSkill[];
   pending: boolean;
   error: Error | null;
   onSave: (payload: AgentProfileWritePayload) => void;
@@ -3718,10 +3930,7 @@ function AgentEditor({
   const [agentDescription, setAgentDescription] = useState(agent?.description ?? "");
   const [instructions, setInstructions] = useState(agent?.instructions ?? "");
   const [enabled, setEnabled] = useState(agent?.enabled ?? true);
-  const [toolNames, setToolNames] = useState<string[]>(agent?.tool_names ?? []);
-  const [commandPrefixes, setCommandPrefixes] = useState(
-    (agent?.command_allowed_prefixes ?? []).join("\n")
-  );
+  const [skillIds, setSkillIds] = useState<string[]>(agent?.skill_ids ?? []);
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -3732,24 +3941,15 @@ function AgentEditor({
     setAgentDescription(agent.description);
     setInstructions(agent.instructions);
     setEnabled(agent.enabled);
-    setToolNames(agent.tool_names);
-    setCommandPrefixes(agent.command_allowed_prefixes.join("\n"));
+    setSkillIds(agent.skill_ids);
     setFormError(null);
   }, [agent]);
 
-  useEffect(() => {
-    if (agent || toolNames.length || !availableTools.length) {
-      return;
-    }
-    const echo = availableTools.find((tool) => tool.name === "echo");
-    setToolNames([echo?.name ?? availableTools[0].name]);
-  }, [agent, availableTools, toolNames.length]);
-
-  function toggleTool(toolName: string) {
-    setToolNames((current) =>
-      current.includes(toolName)
-        ? current.filter((name) => name !== toolName)
-        : [...current, toolName].sort()
+  function toggleSkill(skillId: string) {
+    setSkillIds((current) =>
+      current.includes(skillId)
+        ? current.filter((id) => id !== skillId)
+        : [...current, skillId].sort()
     );
   }
 
@@ -3763,8 +3963,7 @@ function AgentEditor({
       name: name.trim(),
       description: agentDescription.trim(),
       instructions: instructions.trim(),
-      tool_names: toolNames,
-      command_allowed_prefixes: parseCommandPrefixes(commandPrefixes),
+      skill_ids: skillIds,
       enabled,
     });
   }
@@ -3782,6 +3981,9 @@ function AgentEditor({
         />
       </CardHeader>
       <CardContent className="space-y-4">
+        {agent?.migration_required ? (
+          <Banner severity="warning">{t("agent.migrationRequired")}</Banner>
+        ) : null}
         <Field label={t("agent.name")} htmlFor={`${agent?.id ?? "new"}-agent-name`}>
           <input
             id={`${agent?.id ?? "new"}-agent-name`}
@@ -3815,51 +4017,40 @@ function AgentEditor({
           />
           {t("agent.enabled")}
         </label>
-        <Field
-          label={t("agent.commandAllowedPrefixes")}
-          htmlFor={`${agent?.id ?? "new"}-agent-command-prefixes`}
-        >
-          <textarea
-            id={`${agent?.id ?? "new"}-agent-command-prefixes`}
-            value={commandPrefixes}
-            onChange={(event) => setCommandPrefixes(event.target.value)}
-            className="min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          />
-          <p className="mt-1 text-xs leading-5 text-muted">{t("agent.commandAllowedPrefixesHint")}</p>
-        </Field>
         <div className="space-y-2">
-          <p className="text-sm font-medium text-foreground">{t("agent.tools")}</p>
-          {availableTools.length ? (
+          <p className="text-sm font-medium text-foreground">{t("agent.skills")}</p>
+          {availableSkills.length ? (
             <div className="grid gap-2 md:grid-cols-2">
-              {availableTools.map((tool) => (
+              {availableSkills.map((skill) => (
                 <label
-                  key={tool.name}
+                  key={skill.id}
                   className="flex min-h-11 min-w-0 flex-col items-start justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm md:flex-row md:items-center"
                 >
                   <span className="flex min-w-0 flex-1 items-start gap-2">
                     <input
                       type="checkbox"
-                      checked={toolNames.includes(tool.name)}
-                      onChange={() => toggleTool(tool.name)}
+                      checked={skillIds.includes(skill.id)}
+                      onChange={() => toggleSkill(skill.id)}
                       className="mt-0.5 h-4 w-4 shrink-0"
                     />
-                    <span className="break-all font-medium leading-5 text-foreground">{tool.name}</span>
+                    <span className="min-w-0">
+                      <span className="block break-words font-medium leading-5 text-foreground">
+                        {skill.name}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-muted">
+                        {skill.description}
+                      </span>
+                    </span>
                   </span>
                   <StatusBadge
-                    variant={
-                      tool.permission_level === "read"
-                        ? "success"
-                        : tool.permission_level === "write"
-                          ? "warning"
-                          : "danger"
-                    }
-                    label={tool.permission_level}
+                    variant={skill.enabled ? "success" : "neutral"}
+                    label={skill.source}
                   />
                 </label>
               ))}
             </div>
           ) : (
-            <Banner severity="warning">{t("agent.toolsUnavailable")}</Banner>
+            <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
           )}
         </div>
         {formError ? <Banner severity="danger">{formError}</Banner> : null}
@@ -3867,6 +4058,140 @@ function AgentEditor({
         <Button onClick={saveAgent} loading={pending}>
           <Save size={15} aria-hidden />
           {agent ? t("common.save") : t("common.create")}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RuntimeBindingsPanel({
+  agent,
+  bindings,
+  runtimes,
+  pending,
+  error,
+  onCreate,
+  onDefault,
+  onSync,
+  onDelete,
+}: {
+  agent: AgentProfile;
+  bindings: RuntimeBinding[];
+  runtimes: RuntimeDefinition[];
+  pending: boolean;
+  error: Error | null;
+  onCreate: (payload: {
+    agent_id: string;
+    runtime_id: string;
+    native_agent_ref: string;
+    is_default: boolean;
+    enabled: boolean;
+  }) => void;
+  onDefault: (binding: RuntimeBinding) => void;
+  onSync: (binding: RuntimeBinding) => void;
+  onDelete: (binding: RuntimeBinding) => void;
+}) {
+  const candidates = runtimes.filter((runtime) => runtime.kind !== "legacy_native");
+  const [runtimeId, setRuntimeId] = useState(candidates[0]?.id ?? "");
+  const [nativeAgentRef, setNativeAgentRef] = useState(agent.id);
+
+  useEffect(() => {
+    if (!runtimeId && candidates[0]) {
+      setRuntimeId(candidates[0].id);
+    }
+  }, [candidates, runtimeId]);
+
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle>{t("binding.title")}</CardTitle>
+        <CardDescription>{t("binding.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {bindings.length ? (
+          <div className="grid gap-2">
+            {bindings.map((binding) => (
+              <div
+                key={binding.id}
+                className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3"
+              >
+                <div className="min-w-0">
+                  <p className="break-words text-sm font-medium text-foreground">
+                    {binding.native_agent_ref}
+                  </p>
+                  <p className="mt-1 break-all text-xs text-muted">{binding.runtime_id}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge
+                    variant={binding.sync_status === "ready" ? "success" : binding.sync_status === "error" ? "danger" : "pending"}
+                    label={binding.sync_status}
+                  />
+                  {!binding.is_default ? (
+                    <Button size="sm" variant="secondary" onClick={() => onDefault(binding)}>
+                      {t("binding.makeDefault")}
+                    </Button>
+                  ) : (
+                    <StatusBadge variant="info" label={t("binding.default")} />
+                  )}
+                  <Button size="sm" variant="secondary" onClick={() => onSync(binding)}>
+                    <RefreshCw size={14} aria-hidden />
+                    {t("binding.sync")}
+                  </Button>
+                  <Button size="sm" variant="danger" onClick={() => onDelete(binding)}>
+                    <Trash2 size={14} aria-hidden />
+                    {t("common.delete")}
+                  </Button>
+                </div>
+                {binding.sync_error ? (
+                  <p className="w-full text-xs text-danger">{binding.sync_error}</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Banner severity="warning">{t("binding.empty")}</Banner>
+        )}
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label={t("binding.runtime")} htmlFor={`${agent.id}-binding-runtime`}>
+            <select
+              id={`${agent.id}-binding-runtime`}
+              value={runtimeId}
+              onChange={(event) => setRuntimeId(event.target.value)}
+              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+            >
+              {candidates.map((runtime) => (
+                <option key={runtime.id} value={runtime.id}>
+                  {runtime.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t("binding.nativeAgentRef")} htmlFor={`${agent.id}-binding-native-ref`}>
+            <input
+              id={`${agent.id}-binding-native-ref`}
+              value={nativeAgentRef}
+              onChange={(event) => setNativeAgentRef(event.target.value)}
+              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+            />
+          </Field>
+        </div>
+        {error ? <Banner severity="danger">{error.message}</Banner> : null}
+        <Button
+          variant="secondary"
+          loading={pending}
+          disabled={!runtimeId || !nativeAgentRef.trim()}
+          onClick={() =>
+            onCreate({
+              agent_id: agent.id,
+              runtime_id: runtimeId,
+              native_agent_ref: nativeAgentRef.trim(),
+              is_default: !bindings.length,
+              enabled: true,
+            })
+          }
+        >
+          <Plus size={15} aria-hidden />
+          {t("binding.add")}
         </Button>
       </CardContent>
     </Card>
@@ -3954,8 +4279,11 @@ function RunDetail({
   websocketState: RunWebSocketState;
 }) {
   const structured = getStructuredResult(run);
-  const canCancel = ["queued", "running", "waiting_approval"].includes(run.status);
-  const canResume = ["running", "waiting_approval"].includes(run.status);
+  const isExternal = Boolean(run.binding_id);
+  const canCancel =
+    ["queued", "running", "waiting_approval"].includes(run.status) &&
+    (!isExternal || run.runtime_capabilities.cancel);
+  const canResume = !isExternal && ["running", "waiting_approval"].includes(run.status);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
 
   return (
@@ -3972,9 +4300,14 @@ function RunDetail({
           <p className="text-sm leading-6 text-foreground">{run.goal}</p>
           <div className="grid gap-2 text-xs text-muted sm:grid-cols-2">
             <span>{`${t("run.form.agent")}: ${run.agent_id}`}</span>
+            <span>{`${t("run.runtime")}: ${run.runtime_id}`}</span>
+            <span>{`${t("run.form.binding")}: ${run.binding_id ?? t("runtime.legacyReadOnly")}`}</span>
             <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
             <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
           </div>
+          {isExternal && !run.runtime_capabilities.cancel && canCancel === false && !isRunTerminal(run.status) ? (
+            <Banner severity="warning">{t("run.cancelUnsupported")}</Banner>
+          ) : null}
           <div className="flex flex-wrap gap-2 pt-1" aria-label={t("run.actions")}>
             {canCancel ? (
               <Button
@@ -4000,16 +4333,18 @@ function RunDetail({
                 {t("run.resume")}
               </Button>
             ) : null}
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={onReplay}
-              loading={actionPending}
-              aria-label={t("run.replay")}
-            >
-              <RefreshCw size={15} aria-hidden />
-              {t("run.replay")}
-            </Button>
+            {!isExternal ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onReplay}
+                loading={actionPending}
+                aria-label={t("run.replay")}
+              >
+                <RefreshCw size={15} aria-hidden />
+                {t("run.replay")}
+              </Button>
+            ) : null}
           </div>
         </CardContent>
       </Card>
@@ -4171,6 +4506,21 @@ function timelineEventView(event: RunEvent): TimelineEventView {
   }
   if (event.type === "skill.planned") {
     return skillTimelineView(event);
+  }
+  if (event.type.startsWith("runtime.")) {
+    return {
+      title: t("run.runtime"),
+      subtitle: event.message,
+      icon: <Server size={16} aria-hidden />,
+      badgeLabel: event.type.replace("runtime.", ""),
+      badgeVariant: event.type === "runtime.failed" ? "danger" : "info",
+      details: compactTimelineDetails([
+        [t("run.timeline.runtime"), payloadString(event.payload, "runtime_id")],
+        [t("run.timeline.externalRun"), payloadString(event.payload, "external_run_id")],
+      ]),
+      warnings: [],
+      payloadPreview: event.type === "runtime.failed" ? event.payload : undefined,
+    };
   }
   if (event.type === "tool.guardrail_warning") {
     return {

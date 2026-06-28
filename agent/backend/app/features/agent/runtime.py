@@ -11,7 +11,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Iterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from importlib import import_module
 from pathlib import Path
@@ -82,6 +82,10 @@ class RunEventType(StrEnum):
     RUN_CANCELLED = "run.cancelled"
     MEMORY_WRITTEN = "memory.written"
     PLANNER_COMPLETED = "planner.completed"
+    RUNTIME_SUBMITTED = "runtime.submitted"
+    RUNTIME_EVENT = "runtime.event"
+    RUNTIME_FAILED = "runtime.failed"
+    RUNTIME_DISPATCH_CLAIMED = "runtime.dispatch_claimed"
 
 
 class ArtifactContentRef(BaseModel):
@@ -139,6 +143,9 @@ class AgentProfile(BaseModel):
     name: str
     description: str = ""
     instructions: str = ""
+    skill_ids: list[str] = Field(default_factory=list)
+    migration_required: bool = False
+    # Deprecated read compatibility。新規 UI/API は skill_ids だけを書き込む。
     tool_names: list[str] = Field(default_factory=list)
     command_allowed_prefixes: list[str] = Field(default_factory=list)
     enabled: bool = True
@@ -152,6 +159,7 @@ class AgentProfilePatch(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
+    skill_ids: list[str] | None = None
     tool_names: list[str] | None = None
     command_allowed_prefixes: list[str] | None = None
     enabled: bool | None = None
@@ -181,6 +189,7 @@ class MemorySearchRequest(BaseModel):
 class RunCreateRequest(BaseModel):
     goal: str
     agent_id: str = "default"
+    runtime_binding_id: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
     planner_mode: PlannerMode = PlannerMode.AUTO
@@ -190,6 +199,11 @@ class RunState(BaseModel):
     id: str
     goal: str
     agent_id: str
+    runtime_id: str = "legacy-native"
+    binding_id: str | None = None
+    external_run_id: str | None = None
+    external_cursor: str | None = None
+    runtime_capabilities: JsonObject = Field(default_factory=dict)
     status: RunStatus
     steps: list[RunStep] = Field(default_factory=list)
     events: list[RunEvent] = Field(default_factory=list)
@@ -224,11 +238,12 @@ class MemoryData(BaseModel):
 
 
 class AgentRuntimeSnapshot(BaseModel):
-    version: str = "agent-runtime.snapshot.v1"
+    version: str = "agent-control-plane.snapshot.v2"
     exported_at: datetime = Field(default_factory=_now)
     runs: list[RunState] = Field(default_factory=list)
     agents: list[AgentProfile] = Field(default_factory=list)
     memory: list[MemoryEntry] = Field(default_factory=list)
+    control_plane_state: JsonObject = Field(default_factory=dict)
 
 
 class AgentRuntimeSnapshotSummary(BaseModel):
@@ -285,6 +300,34 @@ class RuntimeToolCallAuditData(BaseModel):
 
 class AgentRuntimeRepositoryContract(Protocol):
     def create_run(self, request: RunCreateRequest) -> RunState: ...
+    def create_control_plane_run(
+        self,
+        request: RunCreateRequest,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        capabilities: JsonObject,
+    ) -> RunState: ...
+    def mark_runtime_submitted(
+        self,
+        run_id: str,
+        *,
+        external_run_id: str,
+        external_cursor: str | None,
+        external_status: str,
+    ) -> RunState: ...
+    def mark_runtime_failed(self, run_id: str, *, code: str, detail: str) -> RunState: ...
+    def record_runtime_event(
+        self, run_id: str, payload: JsonObject, *, cursor: str | None = None
+    ) -> RunState: ...
+    def reconcile_runtime_status(
+        self, run_id: str, *, external_status: str, payload: JsonObject | None = None
+    ) -> RunState: ...
+    def replace_runtime_artifacts(
+        self, run_id: str, artifacts: Sequence[JsonObject]
+    ) -> RunState: ...
+    def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
+    def persist_control_plane_state(self) -> None: ...
     def replay_run(self, run_id: str) -> RunState: ...
     def list_runs(self) -> list[RunState]: ...
     def get_run(self, run_id: str) -> RunState: ...
@@ -397,6 +440,241 @@ class AgentRuntimeRepository:
             if run is None:
                 raise KeyError(run_id)
             return run.model_copy(deep=True)
+
+    def create_control_plane_run(
+        self,
+        request: RunCreateRequest,
+        *,
+        runtime_id: str,
+        binding_id: str,
+        capabilities: JsonObject,
+    ) -> RunState:
+        """外部 Runtime 用の Run を投入する。tool loop はこのプロセスで実行しない。"""
+        with self._lock:
+            agent = self._agents.get(request.agent_id)
+            if agent is None:
+                raise KeyError(request.agent_id)
+            if not agent.enabled:
+                raise ValueError("agent disabled")
+            if request.tool_calls:
+                raise ValueError("legacy_tool_calls_not_supported")
+            run = RunState(
+                id=f"run_{uuid4().hex}",
+                goal=request.goal,
+                agent_id=request.agent_id,
+                runtime_id=runtime_id,
+                binding_id=binding_id,
+                runtime_capabilities=dict(capabilities),
+                status=RunStatus.QUEUED,
+                metadata={**request.metadata, "_planner_mode": "runtime"},
+            )
+            self._runs[run.id] = run
+            self._append_event(
+                run,
+                RunEventType.RUN_CREATED,
+                "Control Plane が外部 Runtime Run を作成しました。",
+                {"runtime_id": runtime_id, "binding_id": binding_id},
+            )
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def mark_runtime_submitted(
+        self,
+        run_id: str,
+        *,
+        external_run_id: str,
+        external_cursor: str | None,
+        external_status: str,
+    ) -> RunState:
+        with self._lock:
+            run = self._require_run(run_id)
+            run.external_run_id = external_run_id
+            run.external_cursor = external_cursor
+            run.metadata.pop("_runtime_dispatch_lease", None)
+            submitted_status = _normalize_runtime_status(external_status)
+            run.status = (
+                submitted_status
+                if submitted_status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+                else RunStatus.RUNNING
+            )
+            run.updated_at = _now()
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_SUBMITTED,
+                "外部 Runtime が Run を受理しました。",
+                {"external_run_id": external_run_id, "external_status": external_status},
+            )
+            if run.status == RunStatus.COMPLETED:
+                self._append_event(
+                    run,
+                    RunEventType.RUN_COMPLETED,
+                    "外部 Runtime Run が完了しました。",
+                )
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def mark_runtime_failed(self, run_id: str, *, code: str, detail: str) -> RunState:
+        with self._lock:
+            run = self._require_run(run_id)
+            run.metadata.pop("_runtime_dispatch_lease", None)
+            run.status = RunStatus.FAILED
+            run.updated_at = _now()
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_FAILED,
+                "外部 Runtime への dispatch に失敗しました。",
+                {"error_code": code, "detail": detail},
+            )
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def record_runtime_event(
+        self, run_id: str, payload: JsonObject, *, cursor: str | None = None
+    ) -> RunState:
+        """Runtime event を安全な metadata に縮約し、再接続時の重複を除外する。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            event_payload = _runtime_event_metadata(payload)
+            event_key = _runtime_event_key(payload, cursor)
+            seen = run.metadata.setdefault("_runtime_event_keys", [])
+            if not isinstance(seen, list):
+                seen = []
+                run.metadata["_runtime_event_keys"] = seen
+            if event_key in seen:
+                return run.model_copy(deep=True)
+            seen.append(event_key)
+            del seen[:-256]
+            if cursor:
+                run.external_cursor = cursor
+            event_payload["runtime_event_key"] = event_key
+            run.updated_at = _now()
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_EVENT,
+                "外部 Runtime からイベントを受信しました。",
+                event_payload,
+            )
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def reconcile_runtime_status(
+        self,
+        run_id: str,
+        *,
+        external_status: str,
+        payload: JsonObject | None = None,
+    ) -> RunState:
+        """Runtime 固有 status を Control Plane の共通 RunStatus へ写像する。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            normalized = _normalize_runtime_status(external_status)
+            previous = run.status
+            run.metadata["_runtime_status"] = {
+                "status": external_status[:128],
+                **_runtime_event_metadata(payload or {}),
+            }
+            if (
+                normalized is not None
+                and not _is_terminal(run.status)
+                and not (normalized == RunStatus.QUEUED and run.status != RunStatus.QUEUED)
+            ):
+                run.status = normalized
+            run.updated_at = _now()
+            if run.status != previous:
+                if run.status == RunStatus.COMPLETED:
+                    event_type = RunEventType.RUN_COMPLETED
+                    message = "外部 Runtime Run が完了しました。"
+                elif run.status == RunStatus.FAILED:
+                    event_type = RunEventType.RUNTIME_FAILED
+                    message = "外部 Runtime Run が失敗しました。"
+                elif run.status == RunStatus.CANCELLED:
+                    event_type = RunEventType.RUN_CANCELLED
+                    message = "外部 Runtime Run がキャンセルされました。"
+                else:
+                    event_type = RunEventType.RUN_STATUS_CHANGED
+                    message = "外部 Runtime Run の状態を更新しました。"
+                self._append_event(
+                    run,
+                    event_type,
+                    message,
+                    {"external_status": external_status, "status": run.status.value},
+                )
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def replace_runtime_artifacts(self, run_id: str, artifacts: Sequence[JsonObject]) -> RunState:
+        """Runtime Artifact を共通 Artifact 契約へ決定論的に正規化する。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            existing = {item.id: item for item in run.artifacts}
+            normalized = [
+                _runtime_artifact(run.id, item, index) for index, item in enumerate(artifacts)
+            ]
+            normalized = [
+                (
+                    item.model_copy(update={"created_at": existing[item.id].created_at})
+                    if item.id in existing
+                    else item
+                )
+                for item in normalized
+            ]
+            previous_ids = {item.id for item in run.artifacts}
+            run.artifacts = normalized
+            run.updated_at = _now()
+            for artifact in normalized:
+                if artifact.id not in previous_ids:
+                    self._append_event(
+                        run,
+                        RunEventType.ARTIFACT_CREATED,
+                        "外部 Runtime の Artifact を同期しました。",
+                        {"artifact_id": artifact.id, "kind": artifact.kind},
+                    )
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
+        with self._lock:
+            run = self._claim_control_plane_run_locked(worker_id, lease_seconds=lease_seconds)
+            if run is None:
+                return None
+            self._persist_locked()
+            return run.model_copy(deep=True)
+
+    def _claim_control_plane_run_locked(
+        self, worker_id: str, *, lease_seconds: int
+    ) -> RunState | None:
+        now = _now()
+        for run in reversed(self._sorted_runs_locked()):
+            if run.binding_id is None or run.status != RunStatus.QUEUED:
+                continue
+            lease = run.metadata.get("_runtime_dispatch_lease")
+            if isinstance(lease, dict):
+                expires_at = lease.get("expires_at")
+                if isinstance(expires_at, str):
+                    try:
+                        if datetime.fromisoformat(expires_at) > now:
+                            continue
+                    except ValueError:
+                        pass
+            expires = now + timedelta(seconds=max(1, lease_seconds))
+            run.metadata["_runtime_dispatch_lease"] = {
+                "worker_id": worker_id,
+                "claimed_at": now.isoformat(),
+                "expires_at": expires.isoformat(),
+            }
+            run.updated_at = now
+            self._append_event(
+                run,
+                RunEventType.RUNTIME_DISPATCH_CLAIMED,
+                "runtime-dispatcher が Run を claim しました。",
+                {"worker_id": worker_id, "lease_expires_at": expires.isoformat()},
+            )
+            return run
+        return None
+
+    def persist_control_plane_state(self) -> None:
+        with self._lock:
+            self._persist_locked()
 
     def events_for_run(self, run_id: str) -> list[RunEvent]:
         return self.get_run(run_id).events
@@ -593,6 +871,7 @@ class AgentRuntimeRepository:
         with self._lock:
             if agent.id in self._agents:
                 raise ValueError("agent already exists")
+            self._validate_agent_skills(agent.skill_ids)
             self._validate_agent_tools(agent.tool_names)
             now = _now()
             agent.created_at = now
@@ -610,6 +889,10 @@ class AgentRuntimeRepository:
             tool_names = data.get("tool_names")
             if isinstance(tool_names, list):
                 self._validate_agent_tools(tool_names)
+            skill_ids = data.get("skill_ids")
+            if isinstance(skill_ids, list):
+                self._validate_agent_skills(skill_ids)
+                data["migration_required"] = False
             for key, value in data.items():
                 setattr(agent, key, value)
             agent.updated_at = _now()
@@ -623,6 +906,9 @@ class AgentRuntimeRepository:
             if agent_id not in self._agents:
                 raise KeyError(agent_id)
             del self._agents[agent_id]
+            from app.features.agent.control_plane import runtime_binding_registry
+
+            runtime_binding_registry.delete_for_agent(agent_id)
             self._persist_locked()
 
     def set_plugin_agents(self, source: str, agents: list[AgentProfile]) -> None:
@@ -638,6 +924,7 @@ class AgentRuntimeRepository:
             for agent in agents:
                 if agent.id == "default":
                     continue
+                self._validate_agent_skills(agent.skill_ids)
                 self._validate_agent_tools(agent.tool_names)
                 self._agents[agent.id] = agent.model_copy(
                     deep=True, update={"source": source, "created_at": now, "updated_at": now}
@@ -686,21 +973,27 @@ class AgentRuntimeRepository:
         return sorted(self._memory.values(), key=lambda entry: entry.created_at, reverse=True)
 
     def _export_snapshot_locked(self) -> AgentRuntimeSnapshot:
+        from app.features.agent.control_plane import export_control_plane_state
+
         return AgentRuntimeSnapshot(
             runs=[run.model_copy(deep=True) for run in self._sorted_runs_locked()],
             agents=[agent.model_copy(deep=True) for agent in self._sorted_agents_locked()],
             memory=[entry.model_copy(deep=True) for entry in self._sorted_memory_locked()],
+            control_plane_state=export_control_plane_state(),
         )
 
     def _replace_state_locked(self, snapshot: AgentRuntimeSnapshot) -> None:
+        from app.features.agent.control_plane import import_control_plane_state
+
         self._runs = {run.id: run.model_copy(deep=True) for run in snapshot.runs}
-        self._agents = {agent.id: agent.model_copy(deep=True) for agent in snapshot.agents}
+        self._agents = {agent.id: _migrate_legacy_agent(agent) for agent in snapshot.agents}
         if "default" not in self._agents:
             self._agents["default"] = _default_agent()
         self._memory = {entry.id: entry.model_copy(deep=True) for entry in snapshot.memory}
         self._approvals = {
             approval.id: approval for run in self._runs.values() for approval in run.approvals
         }
+        import_control_plane_state(snapshot.control_plane_state)
 
     def _load_snapshot_from_disk(self) -> None:
         if self._snapshot_path is None:
@@ -1467,6 +1760,16 @@ class AgentRuntimeRepository:
             raise ValueError(f"unknown tool: {', '.join(unknown_tools)}")
 
     @staticmethod
+    def _validate_agent_skills(skill_ids: list[str]) -> None:
+        from app.features.agent.skills import skill_registry
+
+        unknown = sorted(
+            {skill_id for skill_id in skill_ids if skill_registry.get(skill_id) is None}
+        )
+        if unknown:
+            raise ValueError(f"unknown skill: {', '.join(unknown)}")
+
+    @staticmethod
     def _require_step(run: RunState, step_id: str) -> RunStep:
         for step in run.steps:
             if step.id == step_id:
@@ -1559,6 +1862,30 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         with self._connect_oracle() as connection, connection.cursor() as cursor:
             self._write_checkpoint_cursor(cursor, snapshot_json)
             connection.commit()
+
+    def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None:
+        """Oracle row lock 下で最新 checkpoint を読み、Run lease を原子的に取得する。"""
+        query = (
+            f"SELECT snapshot_json FROM {self._oracle_table_name} "
+            "WHERE checkpoint_key = :checkpoint_key FOR UPDATE"
+        )
+        with self._connect_oracle() as connection, connection.cursor() as cursor:
+            cursor.execute(query, checkpoint_key=self._oracle_checkpoint_key)
+            row = cursor.fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            snapshot = AgentRuntimeSnapshot.model_validate_json(_oracle_lob_to_text(row[0]))
+            with self._lock:
+                self._replace_state_locked(snapshot)
+                run = self._claim_control_plane_run_locked(worker_id, lease_seconds=lease_seconds)
+                if run is None:
+                    connection.commit()
+                    return None
+                snapshot_json = self._export_snapshot_locked().model_dump_json()
+            self._write_checkpoint_cursor(cursor, snapshot_json)
+            connection.commit()
+            return run.model_copy(deep=True)
 
     def _write_checkpoint_cursor(self, cursor: Any, snapshot_json: str) -> None:
         statement = f"""
@@ -2296,6 +2623,86 @@ def _is_terminal(status: RunStatus) -> bool:
     return status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
 
 
+def _normalize_runtime_status(value: str) -> RunStatus | None:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in {"queued", "pending", "created", "submitted"}:
+        return RunStatus.QUEUED
+    if normalized in {"running", "in_progress", "streaming", "active", "working"}:
+        return RunStatus.RUNNING
+    if normalized in {"completed", "complete", "succeeded", "success", "done"}:
+        return RunStatus.COMPLETED
+    if normalized in {"failed", "failure", "error", "errored"}:
+        return RunStatus.FAILED
+    if normalized in {"cancelled", "canceled", "stopped", "aborted"}:
+        return RunStatus.CANCELLED
+    if normalized in {"waiting_approval", "requires_action", "interrupted"}:
+        return RunStatus.WAITING_APPROVAL
+    return None
+
+
+_RUNTIME_SECRET_KEY = re.compile(
+    r"(?:authorization|cookie|password|passwd|secret|token|api[_-]?key|credential)",
+    re.IGNORECASE,
+)
+
+
+def _runtime_event_metadata(payload: JsonObject) -> JsonObject:
+    value = _safe_runtime_value(payload)
+    return value if isinstance(value, dict) else {}
+
+
+def _safe_runtime_value(value: object, *, depth: int = 0) -> object:
+    if depth >= 5:
+        return "[truncated]"
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        return value[:2000]
+    if isinstance(value, list | tuple):
+        return [_safe_runtime_value(item, depth=depth + 1) for item in value[:50]]
+    if isinstance(value, dict):
+        result: JsonObject = {}
+        for raw_key, item in list(value.items())[:50]:
+            key = str(raw_key)[:128]
+            if _RUNTIME_SECRET_KEY.search(key):
+                result[key] = "[REDACTED]"
+            elif key.lower() in {"uri", "url", "href"} and isinstance(item, str):
+                result[key] = item.split("?", 1)[0].split("#", 1)[0][:2000]
+            else:
+                result[key] = _safe_runtime_value(item, depth=depth + 1)
+        return result
+    return str(value)[:2000]
+
+
+def _runtime_event_key(payload: JsonObject, cursor: str | None) -> str:
+    for key in ("id", "event_id", "eventId", "cursor"):
+        value = payload.get(key)
+        if isinstance(value, str | int):
+            return f"{key}:{value}"
+    if cursor:
+        return f"cursor:{cursor}"
+    canonical = json.dumps(
+        _runtime_event_metadata(payload),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _runtime_artifact(run_id: str, payload: JsonObject, index: int) -> Artifact:
+    external_id = str(payload.get("id") or payload.get("artifact_id") or index)
+    digest = hashlib.sha256(f"{run_id}:{external_id}".encode()).hexdigest()[:24]
+    name = str(payload.get("name") or payload.get("title") or f"Runtime artifact {index + 1}")
+    kind = str(payload.get("kind") or payload.get("type") or "runtime_artifact")
+    return Artifact(
+        id=f"artifact_runtime_{digest}",
+        name=name[:256],
+        kind=kind[:128],
+        content=_runtime_event_metadata(payload),
+    )
+
+
 def _pending_approval_count(run: RunState) -> int:
     return sum(1 for approval in run.approvals if approval.status == ApprovalStatus.PENDING)
 
@@ -2754,8 +3161,13 @@ def _validate_snapshot(snapshot: AgentRuntimeSnapshot) -> AgentRuntimeSnapshotVa
         pending_tool_calls=sum(len(run.pending_tool_calls) for run in snapshot.runs),
     )
 
-    if snapshot.version != "agent-runtime.snapshot.v1":
+    if snapshot.version not in {
+        "agent-runtime.snapshot.v1",
+        "agent-control-plane.snapshot.v2",
+    }:
         errors.append(f"unsupported snapshot version: {snapshot.version}")
+    elif snapshot.version == "agent-runtime.snapshot.v1":
+        warnings.append("legacy snapshot will be migrated to agent-control-plane.snapshot.v2")
 
     _append_duplicate_errors("run", [run.id for run in snapshot.runs], errors)
     _append_duplicate_errors("agent", [agent.id for agent in snapshot.agents], errors)
@@ -2880,8 +3292,43 @@ def _default_agent() -> AgentProfile:
         name="汎用業務 Agent",
         description="外部 RAG / NL2SQL と承認フローを使う既定 Agent。",
         instructions="業務データは外部ツール経由で取得し、根拠と監査情報を残す。",
+        skill_ids=[
+            "business_rag_research",
+            "structured_data_query",
+            "mcp_tool_discovery",
+            "mcp_tool_call",
+            "rag_then_structured_data",
+        ],
         tool_names=tool_registry.names(),
         source="builtin",
+    )
+
+
+_LEGACY_TOOL_SKILLS: dict[str, str] = {
+    "external_rag_search": "business_rag_research",
+    "external_nl2sql_query": "structured_data_query",
+    "external_mcp_list_tools": "mcp_tool_discovery",
+    "external_mcp_call": "mcp_tool_call",
+    "sandbox_command_run": "workspace_command",
+}
+
+
+def _migrate_legacy_agent(agent: AgentProfile) -> AgentProfile:
+    if agent.skill_ids or not agent.tool_names:
+        return agent.model_copy(deep=True)
+    inferred = {
+        skill_id
+        for tool_name in agent.tool_names
+        if (skill_id := _LEGACY_TOOL_SKILLS.get(tool_name)) is not None
+    }
+    unmapped = sorted(set(agent.tool_names).difference(_LEGACY_TOOL_SKILLS))
+    return agent.model_copy(
+        deep=True,
+        update={
+            "skill_ids": sorted(inferred),
+            "migration_required": bool(unmapped),
+            "enabled": agent.enabled and not unmapped,
+        },
     )
 
 

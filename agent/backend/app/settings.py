@@ -106,6 +106,17 @@ class Settings(BaseServiceSettings):
     # Plugin 宣言: install 済み plugin manifest と marketplace ソース。
     agent_plugins_json: str | None = None
     agent_plugin_marketplaces_json: str | None = None
+    # Control Plane が管理する外部 Runtime。secret は値ではなく env 名で参照する。
+    agent_runtime_adapter_timeout_seconds: float = 30.0
+    agent_runtime_bindings_dir: str = ".agent-runtime-bindings"
+    agent_runtime_dispatch_mode: str = "in_process"
+    agent_runtime_dispatch_poll_seconds: float = 1.0
+    agent_runtime_dispatch_lease_seconds: int = 120
+    agent_runtime_service_control_enabled: bool = False
+    agent_runtime_service_control_command: str = "docker compose"
+    agent_runtime_service_control_timeout_seconds: float = 300.0
+    agent_control_plane_public_base_url: str = "http://backend:8000/api"
+    agent_control_plane_mcp_token_secret: str | None = None
     agent_planner_provider: str = "heuristic"
     agent_planner_oci_responses_base_url: str | None = None
     agent_planner_oci_responses_api_key: str | None = None

@@ -56,6 +56,10 @@ from app.settings import get_settings
 
 class _AsgiTestClient:
     async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        if method == "POST" and url == "/api/runs":
+            headers = dict(kwargs.get("headers", {}))
+            headers.setdefault("X-Agent-API-Version", "1")
+            kwargs["headers"] = headers
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
             transport=transport,
@@ -2635,7 +2639,8 @@ def test_runtime_snapshot_endpoint_exports_current_state() -> None:
 
     assert snapshot.status_code == 200
     data = snapshot.json()["data"]
-    assert data["version"] == "agent-runtime.snapshot.v1"
+    assert data["version"] == "agent-control-plane.snapshot.v2"
+    assert "control_plane_state" in data
     assert any(run["id"] == run_id for run in data["runs"])
     assert any(agent["id"] == "default" for agent in data["agents"])
     assert any(entry["metadata"].get("run_id") == run_id for entry in data["memory"])
@@ -8285,9 +8290,7 @@ def test_mcp_server_registry_crud_and_default() -> None:
     )
     assert dup.status_code == 409
 
-    patched = client.patch(
-        "/api/settings/external-mcp-servers/erp", json={"timeout_seconds": 12}
-    )
+    patched = client.patch("/api/settings/external-mcp-servers/erp", json={"timeout_seconds": 12})
     assert patched.status_code == 200
     assert patched.json()["data"]["timeout_seconds"] == 12
 
@@ -8306,15 +8309,9 @@ def test_mcp_server_registry_crud_and_default() -> None:
     assert all(server["server_id"] != "erp" for server in deleted.json()["data"]["servers"])
 
     # default server は削除不可
-    assert (
-        client.request("DELETE", "/api/settings/external-mcp-servers/default").status_code
-        == 400
-    )
+    assert client.request("DELETE", "/api/settings/external-mcp-servers/default").status_code == 400
     # 不在 server は 404
-    assert (
-        client.request("DELETE", "/api/settings/external-mcp-servers/missing").status_code
-        == 404
-    )
+    assert client.request("DELETE", "/api/settings/external-mcp-servers/missing").status_code == 404
 
 
 def test_skill_loader_reads_skill_md_and_json(tmp_path: Any) -> None:
@@ -8379,19 +8376,12 @@ def test_skill_runtime_crud_and_builtin_protection() -> None:
     # 重複・builtin 上書きは拒否
     assert client.post("/api/skills", json={"id": "custom_x", "name": "x"}).status_code == 409
     assert (
-        client.post(
-            "/api/skills", json={"id": "business_rag_research", "name": "x"}
-        ).status_code
+        client.post("/api/skills", json={"id": "business_rag_research", "name": "x"}).status_code
         == 409
     )
     # builtin は patch/delete 不可
-    assert (
-        client.patch("/api/skills/business_rag_research", json={"name": "x"}).status_code
-        == 400
-    )
-    assert (
-        client.request("DELETE", "/api/skills/business_rag_research").status_code == 400
-    )
+    assert client.patch("/api/skills/business_rag_research", json={"name": "x"}).status_code == 400
+    assert client.request("DELETE", "/api/skills/business_rag_research").status_code == 400
 
     patched = client.patch("/api/skills/custom_x", json={"enabled": False})
     assert patched.status_code == 200
@@ -8446,14 +8436,17 @@ def test_plugin_install_expands_registries_and_uninstall_removes() -> None:
     created = client.post("/api/plugins", json={"manifest": _plugin_manifest(pid)})
     assert created.status_code == 200
     data = created.json()["data"]
-    assert (data["skill_count"], data["mcp_count"], data["agent_count"]) == (1, 1, 1)
+    assert (data["skill_count"], data["mcp_count"], data["agent_count"]) == (1, 1, 0)
+    assert data["resource_count"] == 1
+    assert data["warnings"] == ["plugin.agents_deprecated_converted_to_templates"]
 
-    # 3 registry に source=plugin:<id> で展開される
+    # Skill / MCP は registry に展開し、旧 agents[] は template resource に変換する
     skills = {s["id"]: s for s in client.get("/api/skills").json()["data"]["skills"]}
     assert skills[f"{pid}_skill"]["source"] == src
     assert f"{pid}_mcp" in _mcp_ids()
-    agents = {a["id"]: a for a in client.get("/api/agents").json()["data"]["agents"]}
-    assert agents[f"{pid}_agent"]["source"] == src
+    assert f"{pid}_agent" not in _agent_ids()
+    resources = data["manifest"]["resources"]
+    assert resources[0]["kind"] == "template"
 
     # disable で外れる
     patched = client.patch(f"/api/plugins/{pid}", json={"enabled": False})
