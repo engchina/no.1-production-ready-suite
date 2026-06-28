@@ -178,6 +178,9 @@ fi
 if [ "${SKIP_FRONTEND}" != "1" ]; then
   ensure_frontend_deps
 
+  log "frontend lint"
+  (cd "${FRONTEND_DIR}" && npm run lint)
+
   log "frontend build"
   (cd "${FRONTEND_DIR}" && npm run build)
 
