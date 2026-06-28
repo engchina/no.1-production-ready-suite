@@ -8,6 +8,7 @@ import {
   Library,
   Cloud,
   KeyRound,
+  MessagesSquare,
   LayoutDashboard,
   LayoutGrid,
   Boxes,
@@ -54,6 +55,7 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.section.rag",
     items: [
       { href: APP_ROUTES.search, labelKey: "nav.search", icon: FileSearch },
+      { href: APP_ROUTES.chat, labelKey: "nav.chat", icon: MessagesSquare },
       {
         href: APP_ROUTES.businessViews,
         labelKey: "nav.businessViews",

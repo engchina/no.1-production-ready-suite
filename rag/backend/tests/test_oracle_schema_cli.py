@@ -89,6 +89,8 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "documents",
         "knowledge_bases",
         "business_views",
+        "conversations",
+        "messages",
         "ingestion_jobs",
         "ingestion_segments",
         "chunks",

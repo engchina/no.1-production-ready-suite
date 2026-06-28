@@ -1400,6 +1400,33 @@ class Settings(BaseSettings):
         description="CHUNK 完了後に CHUNKED で止めず、INDEX job を自動投入する。",
     )
 
+    # --- チャット（会話 / マルチモデル比較）---
+    rag_chat_enabled: bool = Field(
+        default=True,
+        description=(
+            "チャット(会話)機能の有効化。True で会話 API を提供し UI に項目を出す。"
+            "False のとき会話 API は 404 を返す(運用キルスイッチ)。"
+        ),
+    )
+    rag_chat_history_turns: int = Field(
+        default=6,
+        ge=0,
+        le=50,
+        description="回答生成時に注入する直近会話ターン数の上限。0 で履歴注入を無効化。",
+    )
+    rag_chat_history_chars_per_turn: int = Field(
+        default=1200,
+        ge=0,
+        le=20000,
+        description="履歴注入時に 1 ターンあたり保持する最大文字数(超過分は末尾を切り詰める)。",
+    )
+    rag_chat_max_compare_models: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="マルチモデル比較で同時に回答生成する OCI モデルの最大数。",
+    )
+
     # --- レート制限（高コスト API の保護）---
     rate_limit_enabled: bool = Field(default=True)
     rate_limit_window_seconds: float = Field(default=60.0, gt=0.0, le=3600.0)

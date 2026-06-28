@@ -187,6 +187,8 @@ export interface AuthStatus {
   authenticated: boolean;
   user: AuthUser | null;
   expires_at: number | null;
+  /** チャット(会話)機能が有効か(運用キルスイッチ)。 */
+  chat_enabled: boolean;
 }
 
 export interface LoginRequestBody {
@@ -769,6 +771,56 @@ export interface RetrievedChunk {
   file_name: string | null;
   category_name: string | null;
   metadata: Record<string, JsonValue>;
+}
+
+// --- チャット（会話 / マルチモデル比較）---
+export type ConversationStatus = "ACTIVE" | "ARCHIVED";
+export type MessageRole = "USER" | "ASSISTANT" | "SYSTEM";
+export type MessageStatus = "STREAMING" | "COMPLETE" | "ERROR";
+
+export interface ChatMessage {
+  message_id: string;
+  conversation_id: string;
+  role: MessageRole;
+  content: string;
+  model: string | null;
+  citations: RetrievedChunk[];
+  guardrail_warnings: string[];
+  trace_id: string | null;
+  status: MessageStatus;
+  reply_to_message_id: string | null;
+  created_at: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  business_view_id: string;
+  title: string | null;
+  status: ConversationStatus;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  messages: ChatMessage[];
+}
+
+export interface ConversationCreateBody {
+  business_view_id: string;
+  title?: string | null;
+}
+
+export interface ChatMessageRequestBody {
+  content: string;
+  model_ids?: string[];
+  mode?: SearchMode;
+  top_k?: number;
+}
+
+export interface CompareModel {
+  model_id: string;
+  display_name: string;
 }
 
 export interface SearchDiagnostics {
@@ -2253,6 +2305,27 @@ export const api = {
     request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}/archive`, {
       method: "POST",
     }),
+
+  // チャット（会話 / マルチモデル比較）
+  listConversations: (params: { business_view_id?: string; limit?: number; offset?: number } = {}) => {
+    const search = new URLSearchParams();
+    if (params.business_view_id) search.set("business_view_id", params.business_view_id);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return requestDegradable<Page<ConversationSummary>>(
+      `/api/chat/conversations${qs ? `?${qs}` : ""}`
+    );
+  },
+  createConversation: (body: ConversationCreateBody) =>
+    request<ConversationDetail>("/api/chat/conversations", jsonBody(body)),
+  getConversation: (id: string) =>
+    request<ConversationDetail>(`/api/chat/conversations/${encodeURIComponent(id)}`),
+  archiveConversation: (id: string) =>
+    request<ConversationSummary>(`/api/chat/conversations/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+    }),
+  listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
 
   // 検索
   search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),

@@ -7,6 +7,7 @@ export const APP_ROUTES = {
   knowledgeBases: "/knowledge-bases",
   businessViews: "/business-views",
   documents: "/documents",
+  chat: "/chat",
   search: "/search",
   evaluation: "/evaluation",
   settingsPipeline: "/settings/pipeline",

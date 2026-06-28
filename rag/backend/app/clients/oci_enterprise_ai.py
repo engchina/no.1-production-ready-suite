@@ -8,6 +8,8 @@ parser マイクロサービス(oci_genai_vision)は共有 core を env 由来 c
 
 from __future__ import annotations
 
+import dataclasses
+
 from rag_parser_core.oci_enterprise_ai import (
     DEFAULT_MIME_TYPE,
     EnterpriseAiHttpTransport,
@@ -86,8 +88,12 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
         self,
         settings: Settings | None = None,
         http_transport: EnterpriseAiHttpTransport | None = None,
+        *,
+        model_id: str | None = None,
     ) -> None:
-        super().__init__(
-            config_from_settings(settings or get_settings()),
-            http_transport=http_transport,
-        )
+        config = config_from_settings(settings or get_settings())
+        # マルチモデル比較では生成モデルだけを差し替える。共有 core は frozen config の
+        # default_model_id をペイロードへ焼き込むため、ここで置換した config で駆動する。
+        if model_id:
+            config = dataclasses.replace(config, default_model_id=model_id)
+        super().__init__(config, http_transport=http_transport)

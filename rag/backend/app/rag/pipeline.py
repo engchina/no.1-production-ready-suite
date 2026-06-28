@@ -5,7 +5,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from time import perf_counter
 
@@ -105,6 +105,45 @@ class SearchTokenDelta:
 type SearchTokenCallback = Callable[[SearchTokenDelta], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class ChatTurn:
+    """会話履歴の 1 ターン。検索ではなく生成プロンプトの文脈にだけ使う。"""
+
+    role: str  # "USER" | "ASSISTANT"
+    content: str
+
+
+def _format_chat_history(
+    history: Sequence[ChatTurn],
+    *,
+    max_turns: int,
+    chars_per_turn: int,
+) -> str:
+    """直近会話を生成プロンプト用のテキストへ整形する(ターン数・文字数を制限)。"""
+    if max_turns <= 0:
+        return ""
+    recent = [turn for turn in history if turn.content.strip()][-max_turns:]
+    lines: list[str] = []
+    for turn in recent:
+        speaker = "ユーザー" if turn.role == "USER" else "アシスタント"
+        content = turn.content.strip()
+        if chars_per_turn and len(content) > chars_per_turn:
+            content = content[:chars_per_turn] + "…"
+        lines.append(f"{speaker}: {content}")
+    return "\n".join(lines)
+
+
+def _query_with_history(history_text: str, query: str) -> str:
+    """履歴テキストを今回の質問の前に置いた生成用クエリを組み立てる。"""
+    if not history_text:
+        return query
+    return (
+        f"これまでの会話:\n{history_text}\n\n"
+        f"上記の会話の流れを踏まえて、次の質問に回答してください。\n"
+        f"質問: {query}"
+    )
+
+
 class RagPipeline:
     """ハイブリッド検索 + リランク + 生成の RAG パイプライン。"""
 
@@ -128,8 +167,14 @@ class RagPipeline:
         trace_id: str | None = None,
         progress_callback: SearchStageProgressCallback | None = None,
         token_callback: SearchTokenCallback | None = None,
+        *,
+        history: Sequence[ChatTurn] | None = None,
     ) -> SearchResponse:
-        """RAG 検索を実行する。"""
+        """RAG 検索を実行する。
+
+        ``history`` を渡すと会話履歴を「生成プロンプト」にだけ前置する。検索(retrieval)は
+        最新メッセージのみで実行し履歴に引っ張られないため、単発検索の挙動は不変。
+        """
         started_at = perf_counter()
         trace_id = trace_id or new_trace_id()
         stream_stage_timings: dict[str, float] = {}
@@ -833,12 +878,20 @@ class RagPipeline:
             )
             error_stage = "generation"
             stream_generation = self._settings.rag_stream_realtime_enabled and token_callback
+            generation_query = query_guardrail.sanitized_text
+            if history:
+                history_text = _format_chat_history(
+                    history,
+                    max_turns=self._settings.rag_chat_history_turns,
+                    chars_per_turn=self._settings.rag_chat_history_chars_per_turn,
+                )
+                generation_query = _query_with_history(history_text, generation_query)
             answer = await _observe_stage(
                 trace_id,
                 request.mode.value,
                 "generation",
                 self._generate_answer(
-                    query_guardrail.sanitized_text,
+                    generation_query,
                     context,
                     trace_id=trace_id,
                     token_callback=token_callback if stream_generation else None,

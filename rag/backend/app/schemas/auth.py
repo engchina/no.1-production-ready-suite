@@ -26,10 +26,12 @@ class AuthUser(BaseModel):
 
 
 class AuthStatus(BaseModel):
-    """現在の認証状態。"""
+    """現在の認証状態。アプリ起動時に読み込まれるため、軽量な機能フラグも併せて返す。"""
 
     mode: str
     auth_required: bool
     authenticated: bool
     user: AuthUser | None = None
     expires_at: int | None = None
+    # 機能フラグ(フロントのナビ表示・画面ゲートに使う)。
+    chat_enabled: bool = True

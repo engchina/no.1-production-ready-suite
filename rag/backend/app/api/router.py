@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     auth,
     business_views,
+    chat,
     dashboard,
     documents,
     evaluation,
@@ -30,6 +31,7 @@ api_router.include_router(
     prefix="/business-views",
     tags=["business-views"],
 )
+api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(search.router, prefix="/search", tags=["search"])
 api_router.include_router(evaluation.router, prefix="/evaluation", tags=["evaluation"])
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])

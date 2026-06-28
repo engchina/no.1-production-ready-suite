@@ -292,6 +292,41 @@ class StoredBusinessView:
 
 
 @dataclass
+class StoredConversation:
+    """チャット会話(conversation)行。業務ビュー配下に置く。"""
+
+    id: str
+    business_view_id: str
+    created_at: datetime
+    updated_at: datetime
+    title: str | None = None
+    status: str = "ACTIVE"
+    message_count: int = 0
+    tenant_id_hash: str | None = None
+    user_id_hash: str | None = None
+
+
+@dataclass
+class StoredMessage:
+    """チャットメッセージ(message)行。ASSISTANT は生成モデル・引用・trace を保持する。"""
+
+    id: str
+    conversation_id: str
+    role: str
+    content: str
+    created_at: datetime
+    reply_to_message_id: str | None = None
+    model: str | None = None
+    citations: list[dict[str, object]] = field(default_factory=list)
+    guardrail_warnings: list[str] = field(default_factory=list)
+    trace_id: str | None = None
+    status: str = "COMPLETE"
+    elapsed_ms: float | None = None
+    tenant_id_hash: str | None = None
+    user_id_hash: str | None = None
+
+
+@dataclass
 class StoredAgentMemory:
     """Agent Memory 行。raw user/thread id ではなく hash scope だけを保持する。"""
 
@@ -1623,6 +1658,289 @@ class OracleClient:
     async def archive_business_view(self, business_view_id: str) -> BusinessViewDetail:
         """業務ビューをアーカイブする。参照 KB・文書は変更しない。"""
         return await self._archive_business_view_with_oracle(business_view_id)
+
+    # --- チャット会話 / メッセージ -----------------------------------------
+
+    async def create_conversation(
+        self,
+        *,
+        business_view_id: str,
+        title: str | None = None,
+    ) -> StoredConversation:
+        """業務ビュー配下にチャット会話を作成する。"""
+        now = datetime.now(UTC)
+        conversation = StoredConversation(
+            id=uuid4().hex,
+            business_view_id=business_view_id,
+            title=title,
+            status="ACTIVE",
+            message_count=0,
+            tenant_id_hash=_current_tenant_id_hash(),
+            user_id_hash=current_audit_request_context().user_id_hash,
+            created_at=now,
+            updated_at=now,
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> StoredConversation:
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_conversations (
+                    conversation_id,
+                    business_view_id,
+                    tenant_id_hash,
+                    user_id_hash,
+                    title,
+                    status,
+                    message_count,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    :conversation_id,
+                    :business_view_id,
+                    :tenant_id_hash,
+                    :user_id_hash,
+                    :title,
+                    :status,
+                    :message_count,
+                    :created_at,
+                    :updated_at
+                )
+                """,
+                _conversation_binds(conversation),
+            )
+            return conversation
+
+        return await self._run_transaction(operation)
+
+    async def list_conversations(
+        self,
+        *,
+        business_view_id: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[StoredConversation]:
+        """会話一覧を更新が新しい順に返す(tenant scope で絞る)。"""
+        where_sql, binds = _oracle_conversation_where(business_view_id=business_view_id)
+        binds["offset"] = offset
+        if limit is not None:
+            binds["limit"] = limit
+            paging_sql = "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
+        else:
+            paging_sql = "OFFSET :offset ROWS"
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                c.conversation_id,
+                c.business_view_id,
+                c.tenant_id_hash,
+                c.user_id_hash,
+                c.title,
+                c.status,
+                c.message_count,
+                c.created_at,
+                c.updated_at
+            FROM rag_conversations c
+            WHERE {where_sql}
+            ORDER BY c.updated_at DESC, c.created_at DESC
+            {paging_sql}
+            """,
+                where_sql=where_sql,
+                paging_sql=paging_sql,
+            ),
+            binds,
+        )
+        return [_stored_conversation_from_row(row) for row in rows]
+
+    async def count_conversations(self, *, business_view_id: str | None = None) -> int:
+        """条件に一致する会話数を返す。"""
+        where_sql, binds = _oracle_conversation_where(business_view_id=business_view_id)
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT COUNT(*) AS count_value
+            FROM rag_conversations c
+            WHERE {where_sql}
+            """,
+                where_sql=where_sql,
+            ),
+            binds,
+        )
+        return _row_count_value(row)
+
+    async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
+        """会話の現在状態を返す(tenant scope)。"""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                c.conversation_id,
+                c.business_view_id,
+                c.tenant_id_hash,
+                c.user_id_hash,
+                c.title,
+                c.status,
+                c.message_count,
+                c.created_at,
+                c.updated_at
+            FROM rag_conversations c
+            WHERE c.conversation_id = :conversation_id
+              AND {tenant_sql}
+            """,
+                tenant_sql=_oracle_tenant_predicate(alias="c"),
+            ),
+            _with_tenant_bind({"conversation_id": conversation_id}),
+        )
+        if not rows:
+            return None
+        return _stored_conversation_from_row(rows[0])
+
+    async def archive_conversation(self, conversation_id: str) -> StoredConversation:
+        """会話を ARCHIVED にする。"""
+
+        def operation(connection: OracleConnectionProtocol) -> StoredConversation:
+            existing = _select_conversation(connection, conversation_id)
+            if existing is None:
+                raise KeyError(f"conversation_id={conversation_id} は存在しません。")
+            now = datetime.now(UTC)
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_conversations
+                SET status = 'ARCHIVED', updated_at = :updated_at
+                WHERE conversation_id = :conversation_id
+                  AND {tenant_sql}
+                """,
+                    tenant_sql=_oracle_tenant_predicate(),
+                ),
+                _with_tenant_bind({"conversation_id": conversation_id, "updated_at": now}),
+            )
+            existing.status = "ARCHIVED"
+            existing.updated_at = now
+            return existing
+
+        return await self._run_transaction(operation)
+
+    async def append_message(self, message: StoredMessage) -> StoredMessage:
+        """会話にメッセージを 1 件追加し、会話の message_count / updated_at を更新する。"""
+        now = datetime.now(UTC)
+        stored = StoredMessage(
+            id=message.id or uuid4().hex,
+            conversation_id=message.conversation_id,
+            reply_to_message_id=message.reply_to_message_id,
+            role=message.role,
+            model=message.model,
+            content=message.content,
+            citations=message.citations,
+            guardrail_warnings=message.guardrail_warnings,
+            trace_id=message.trace_id,
+            status=message.status,
+            elapsed_ms=message.elapsed_ms,
+            tenant_id_hash=_current_tenant_id_hash(),
+            user_id_hash=current_audit_request_context().user_id_hash,
+            created_at=message.created_at or now,
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> StoredMessage:
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_messages (
+                    message_id,
+                    conversation_id,
+                    reply_to_message_id,
+                    tenant_id_hash,
+                    user_id_hash,
+                    role,
+                    model,
+                    content,
+                    citations_json,
+                    guardrail_warnings,
+                    trace_id,
+                    status,
+                    elapsed_ms,
+                    created_at
+                ) VALUES (
+                    :message_id,
+                    :conversation_id,
+                    :reply_to_message_id,
+                    :tenant_id_hash,
+                    :user_id_hash,
+                    :role,
+                    :model,
+                    :content,
+                    :citations_json,
+                    :guardrail_warnings,
+                    :trace_id,
+                    :status,
+                    :elapsed_ms,
+                    :created_at
+                )
+                """,
+                _message_binds(stored),
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_conversations
+                SET message_count = message_count + 1, updated_at = :updated_at
+                WHERE conversation_id = :conversation_id
+                  AND {tenant_sql}
+                """,
+                    tenant_sql=_oracle_tenant_predicate(),
+                ),
+                _with_tenant_bind({"conversation_id": stored.conversation_id, "updated_at": now}),
+            )
+            return stored
+
+        return await self._run_transaction(operation)
+
+    async def list_messages(
+        self,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+    ) -> list[StoredMessage]:
+        """会話のメッセージを作成順に返す(tenant scope)。"""
+        binds = _with_tenant_bind({"conversation_id": conversation_id})
+        if limit is not None:
+            binds["limit"] = limit
+            paging_sql = "FETCH NEXT :limit ROWS ONLY"
+        else:
+            paging_sql = ""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT
+                m.message_id,
+                m.conversation_id,
+                m.reply_to_message_id,
+                m.tenant_id_hash,
+                m.user_id_hash,
+                m.role,
+                m.model,
+                m.content,
+                m.citations_json,
+                m.guardrail_warnings,
+                m.trace_id,
+                m.status,
+                m.elapsed_ms,
+                m.created_at
+            FROM rag_messages m
+            WHERE m.conversation_id = :conversation_id
+              AND {tenant_sql}
+            ORDER BY m.created_at ASC, m.message_id ASC
+            {paging_sql}
+            """,
+                tenant_sql=_oracle_tenant_predicate(alias="m"),
+                paging_sql=paging_sql,
+            ),
+            binds,
+        )
+        return [_stored_message_from_row(row) for row in rows]
 
     async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
         """取込 job を永続化する。"""
@@ -6725,6 +7043,35 @@ def _select_business_view(
     return None if not rows else _stored_business_view_from_row(rows[0])
 
 
+def _select_conversation(
+    connection: OracleConnectionProtocol,
+    conversation_id: str,
+) -> StoredConversation | None:
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            conversation_id,
+            business_view_id,
+            tenant_id_hash,
+            user_id_hash,
+            title,
+            status,
+            message_count,
+            created_at,
+            updated_at
+        FROM rag_conversations
+        WHERE conversation_id = :conversation_id
+          AND {tenant_sql}
+        """,
+            tenant_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"conversation_id": conversation_id}),
+    )
+    return None if not rows else _stored_conversation_from_row(rows[0])
+
+
 def _select_knowledge_base_by_name(
     connection: OracleConnectionProtocol,
     name: str,
@@ -7519,6 +7866,51 @@ def _business_view_binds(view: StoredBusinessView) -> dict[str, object]:
     }
 
 
+def _conversation_binds(conversation: StoredConversation) -> dict[str, object]:
+    return {
+        "conversation_id": conversation.id,
+        "business_view_id": conversation.business_view_id,
+        "tenant_id_hash": conversation.tenant_id_hash,
+        "user_id_hash": conversation.user_id_hash,
+        "title": conversation.title,
+        "status": conversation.status,
+        "message_count": conversation.message_count,
+        "created_at": conversation.created_at,
+        "updated_at": conversation.updated_at,
+    }
+
+
+def _message_binds(message: StoredMessage) -> dict[str, object]:
+    return {
+        "message_id": message.id,
+        "conversation_id": message.conversation_id,
+        "reply_to_message_id": message.reply_to_message_id,
+        "tenant_id_hash": message.tenant_id_hash,
+        "user_id_hash": message.user_id_hash,
+        "role": message.role,
+        "model": message.model,
+        "content": message.content,
+        "citations_json": _json_dumps(message.citations),
+        "guardrail_warnings": _json_dumps(message.guardrail_warnings),
+        "trace_id": message.trace_id,
+        "status": message.status,
+        "elapsed_ms": message.elapsed_ms,
+        "created_at": message.created_at,
+    }
+
+
+def _oracle_conversation_where(
+    *,
+    business_view_id: str | None = None,
+) -> tuple[str, dict[str, object]]:
+    clauses = [_oracle_tenant_predicate(alias="c")]
+    binds = _with_tenant_bind({})
+    if business_view_id is not None:
+        clauses.append("c.business_view_id = :business_view_id")
+        binds["business_view_id"] = business_view_id
+    return " AND ".join(clauses), binds
+
+
 def _document_knowledge_base_binds(
     *,
     knowledge_base_id: str,
@@ -7620,6 +8012,39 @@ def _stored_business_view_from_row(row: Mapping[str, object]) -> StoredBusinessV
         created_at=_datetime_value(row.get("created_at")),
         updated_at=_datetime_value(row.get("updated_at")),
         archived_at=_optional_datetime(row.get("archived_at")),
+    )
+
+
+def _stored_conversation_from_row(row: Mapping[str, object]) -> StoredConversation:
+    return StoredConversation(
+        id=str(row["conversation_id"]),
+        business_view_id=str(row["business_view_id"]),
+        tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
+        user_id_hash=_optional_str(row.get("user_id_hash")),
+        title=_optional_str(row.get("title")),
+        status=str(row.get("status") or "ACTIVE"),
+        message_count=_int_value(row.get("message_count")),
+        created_at=_datetime_value(row.get("created_at")),
+        updated_at=_datetime_value(row.get("updated_at")),
+    )
+
+
+def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
+    return StoredMessage(
+        id=str(row["message_id"]),
+        conversation_id=str(row["conversation_id"]),
+        reply_to_message_id=_optional_str(row.get("reply_to_message_id")),
+        tenant_id_hash=_optional_str(row.get("tenant_id_hash")),
+        user_id_hash=_optional_str(row.get("user_id_hash")),
+        role=str(row.get("role") or "USER"),
+        model=_optional_str(row.get("model")),
+        content=_optional_str(row.get("content")) or "",
+        citations=_json_object_list(row.get("citations_json")),
+        guardrail_warnings=_json_string_list(row.get("guardrail_warnings")),
+        trace_id=_optional_str(row.get("trace_id")),
+        status=str(row.get("status") or "COMPLETE"),
+        elapsed_ms=_optional_float(row.get("elapsed_ms")),
+        created_at=_datetime_value(row.get("created_at")),
     )
 
 
@@ -8049,6 +8474,38 @@ def _float_value(value: object) -> float:
     raise ValueError(f"数値に変換できない値です: {value!r}")
 
 
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return _float_value(value)
+
+
+def _json_object_list(value: object) -> list[dict[str, object]]:
+    """JSON 列を dict のリストとして読み出す(citations 等)。非 dict 要素は除外する。"""
+    if value is None:
+        return []
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [
+            {str(key): item for key, item in element.items()}
+            for element in value
+            if isinstance(element, Mapping)
+        ]
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(decoded, list):
+        return [
+            {str(key): item for key, item in element.items()}
+            for element in decoded
+            if isinstance(element, Mapping)
+        ]
+    return []
+
+
 def _int_value(value: object) -> int:
     if value is None:
         return 0
@@ -8377,6 +8834,86 @@ CREATE UNIQUE INDEX {table_name}_tenant_name_uidx
 
 CREATE INDEX {table_name}_tenant_status_idx
     ON {table_name} (tenant_id_hash, status, updated_at DESC);
+""".strip()
+
+
+def oracle_conversation_schema_sql(
+    table_name: str = "rag_conversations",
+    business_view_table: str = "rag_business_views",
+) -> str:
+    """チャット会話(conversation)table の DDL 例を返す。業務ビュー配下に置く。"""
+    return f"""
+CREATE TABLE {table_name} (
+    conversation_id    VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
+    business_view_id   VARCHAR2(64) NOT NULL,
+    tenant_id_hash     CHAR(64),
+    user_id_hash       CHAR(64),
+    title              VARCHAR2(400),
+    status             VARCHAR2(16) DEFAULT 'ACTIVE' NOT NULL,
+    message_count      NUMBER(10) DEFAULT 0 NOT NULL,
+    created_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_status_ck
+        CHECK (status IN ('ACTIVE', 'ARCHIVED')),
+    CONSTRAINT {table_name}_business_view_fk
+        FOREIGN KEY (business_view_id)
+        REFERENCES {business_view_table} (business_view_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX {table_name}_tenant_view_updated_idx
+    ON {table_name} (tenant_id_hash, business_view_id, updated_at DESC);
+
+CREATE INDEX {table_name}_business_view_idx
+    ON {table_name} (business_view_id);
+""".strip()
+
+
+def oracle_message_schema_sql(
+    table_name: str = "rag_messages",
+    conversation_table: str = "rag_conversations",
+) -> str:
+    """チャットメッセージ(message)table の DDL 例を返す。
+
+    比較カラムのグルーピングに ``reply_to_message_id``(ASSISTANT→対応する USER)を使う。
+    """
+    return f"""
+CREATE TABLE {table_name} (
+    message_id           VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
+    conversation_id      VARCHAR2(64) NOT NULL,
+    reply_to_message_id  VARCHAR2(64),
+    tenant_id_hash       CHAR(64),
+    user_id_hash         CHAR(64),
+    role                 VARCHAR2(16) NOT NULL,
+    model                VARCHAR2(160),
+    content              CLOB,
+    citations_json       JSON,
+    guardrail_warnings   JSON,
+    trace_id             VARCHAR2(64),
+    status               VARCHAR2(16) DEFAULT 'COMPLETE' NOT NULL,
+    elapsed_ms           NUMBER(12, 3),
+    created_at           TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_role_ck
+        CHECK (role IN ('USER', 'ASSISTANT', 'SYSTEM')),
+    CONSTRAINT {table_name}_status_ck
+        CHECK (status IN ('STREAMING', 'COMPLETE', 'ERROR')),
+    CONSTRAINT {table_name}_conversation_fk
+        FOREIGN KEY (conversation_id)
+        REFERENCES {conversation_table} (conversation_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX {table_name}_conversation_created_idx
+    ON {table_name} (conversation_id, created_at);
+
+CREATE INDEX {table_name}_tenant_created_idx
+    ON {table_name} (tenant_id_hash, created_at DESC);
+
+CREATE INDEX {table_name}_trace_idx
+    ON {table_name} (trace_id);
+
+CREATE INDEX {table_name}_reply_to_idx
+    ON {table_name} (reply_to_message_id);
 """.strip()
 
 

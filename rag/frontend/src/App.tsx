@@ -23,6 +23,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { CommandPalette } from "@/components/layout/CommandPalette";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { PageHeader } from "@/components/PageHeader";
+import { ChatClient } from "@/components/chat/ChatClient";
 import { SearchClient } from "@/components/search/SearchClient";
 import { ErrorState } from "@/components/StateViews";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
@@ -84,6 +85,7 @@ export function App() {
         />
         <Route path={APP_ROUTES.businessViews} element={<BusinessViewManagementClient />} />
         <Route path={`${APP_ROUTES.documents}/:id`} element={<DocumentDetailRoute />} />
+        <Route path={APP_ROUTES.chat} element={<ChatClient />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationClient />} />
         <Route path={APP_ROUTES.settingsPipeline} element={<SettingsPipelineRoute />} />

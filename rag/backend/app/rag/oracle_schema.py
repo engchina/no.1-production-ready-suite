@@ -18,6 +18,7 @@ from app.clients.oracle import (
     oracle_agent_memory_schema_sql,
     oracle_business_view_schema_sql,
     oracle_chunk_set_schema_sql,
+    oracle_conversation_schema_sql,
     oracle_document_extractions_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
@@ -27,6 +28,7 @@ from app.clients.oracle import (
     oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
+    oracle_message_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_text_index_parameters_sql,
     oracle_text_preferences_sql,
@@ -103,6 +105,16 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="business_views",
             table_name="rag_business_views",
             sql=oracle_business_view_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="conversations",
+            table_name="rag_conversations",
+            sql=oracle_conversation_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="messages",
+            table_name="rag_messages",
+            sql=oracle_message_schema_sql(),
         ),
         OracleSchemaSection(
             name="ingestion_jobs",

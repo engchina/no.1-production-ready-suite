@@ -33,6 +33,7 @@ import {
   type BusinessViewCreateRequest,
   type BusinessViewStatus,
   type BusinessViewUpdateRequest,
+  type ConversationCreateBody,
   type ModelSettingsPayload,
   type ModelSettingsTestRequest,
   type ParserAdapterContractData,
@@ -111,6 +112,10 @@ export const queryKeys = {
     offset?: number;
   }) => ["business-views", params] as const,
   businessView: (id: string) => ["business-views", id] as const,
+  conversations: (params: { business_view_id?: string; limit?: number; offset?: number }) =>
+    ["conversations", params] as const,
+  conversation: (id: string) => ["conversations", id] as const,
+  compareModels: ["chat", "models"] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
   adbInfo: ["settings", "database", "adb"] as const,
@@ -647,6 +652,49 @@ export function useUpdateBusinessView() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["business-views"] });
     },
+  });
+}
+
+/** チャット会話一覧(業務ビュー scope)。 */
+export function useConversations(params: {
+  business_view_id?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  return useQuery({
+    queryKey: queryKeys.conversations(params),
+    queryFn: () => api.listConversations(params),
+    enabled: params.business_view_id != null,
+  });
+}
+
+/** チャット会話詳細(メッセージ列を含む)。 */
+export function useConversation(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.conversation(id ?? ""),
+    queryFn: () => api.getConversation(id as string),
+    enabled: id != null,
+  });
+}
+
+/** チャット会話作成。 */
+export function useCreateConversation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: ConversationCreateBody) => api.createConversation(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+}
+
+/** 比較で選べる設定済み OCI モデル一覧。 */
+export function useCompareModels(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.compareModels,
+    queryFn: () => api.listCompareModels(),
+    enabled,
+    staleTime: 5 * 60 * 1000,
   });
 }
 

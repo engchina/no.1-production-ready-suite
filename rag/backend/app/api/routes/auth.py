@@ -59,7 +59,7 @@ async def login(
     session = build_auth_session(settings, payload.username, payload.remember_me)
     set_auth_cookie(response, settings, session)
     request.state.auth_session = session
-    return ApiResponse(data=_status_from_session(settings.auth_mode, True, session))
+    return ApiResponse(data=_status_from_session(settings.auth_mode, True, session, settings))
 
 
 @router.post("/logout", response_model=ApiResponse[AuthStatus])
@@ -71,7 +71,12 @@ async def logout(request: Request, response: Response) -> ApiResponse[AuthStatus
         return ApiResponse(data=_local_auth_status(settings))
     request.state.auth_session = None
     return ApiResponse(
-        data=AuthStatus(mode=settings.auth_mode, auth_required=True, authenticated=False)
+        data=AuthStatus(
+            mode=settings.auth_mode,
+            auth_required=True,
+            authenticated=False,
+            chat_enabled=settings.rag_chat_enabled,
+        )
     )
 
 
@@ -80,19 +85,27 @@ def _auth_status(request: Request, settings: Settings) -> AuthStatus:
         return _local_auth_status(settings)
     session = read_auth_session(request, settings)
     if session is None:
-        return AuthStatus(mode=settings.auth_mode, auth_required=True, authenticated=False)
-    return _status_from_session(settings.auth_mode, True, session)
+        return AuthStatus(
+            mode=settings.auth_mode,
+            auth_required=True,
+            authenticated=False,
+            chat_enabled=settings.rag_chat_enabled,
+        )
+    return _status_from_session(settings.auth_mode, True, session, settings)
 
 
 def _local_auth_status(settings: Settings) -> AuthStatus:
-    return _status_from_session(settings.auth_mode, False, local_session())
+    return _status_from_session(settings.auth_mode, False, local_session(), settings)
 
 
-def _status_from_session(mode: str, auth_required: bool, session: AuthSession) -> AuthStatus:
+def _status_from_session(
+    mode: str, auth_required: bool, session: AuthSession, settings: Settings
+) -> AuthStatus:
     return AuthStatus(
         mode=mode,
         auth_required=auth_required,
         authenticated=True,
         user=AuthUser(id=session.user_id, name=session.username, role=session.role),
         expires_at=session.expires_at or None,
+        chat_enabled=settings.rag_chat_enabled,
     )
