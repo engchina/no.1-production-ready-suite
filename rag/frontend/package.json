@@ -14,6 +14,7 @@
   "dependencies": {
     "@engchina/production-ready-ui": "file:../../no.1-production-ready-platform/packages/ui",
     "@tanstack/react-query": "^5.62.0",
+    "@xyflow/react": "^12.11.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",

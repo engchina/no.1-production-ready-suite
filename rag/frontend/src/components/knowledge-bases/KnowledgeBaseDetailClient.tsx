@@ -33,6 +33,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { KnowledgeBaseAdapterConfigPanel } from "./KnowledgeBaseAdapterConfigPanel";
+import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
 
@@ -117,6 +118,8 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
         effectiveConfig={kb.effective_adapter_config}
         disabled={!isActive}
       />
+
+      <KnowledgeBasePipelineCanvas config={kb.effective_adapter_config ?? kb.adapter_config} />
     </div>
   );
 }

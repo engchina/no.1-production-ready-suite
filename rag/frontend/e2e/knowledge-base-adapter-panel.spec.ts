@@ -164,3 +164,16 @@ test("一覧から KB 名リンクで詳細ページへ遷移できる", async (
   await expect(page).toHaveURL(/\/knowledge-bases\/kb-1$/);
   await expect(page.getByText("個別設定 1 / 10 項目")).toBeVisible();
 });
+
+test("構築パイプライン図(高度な診断)を展開して工程ノードを表示する", async ({ page }) => {
+  await mockKnowledgeBasePage(page);
+
+  await page.goto("/knowledge-bases/kb-1");
+
+  await page.getByRole("button", { name: "パイプライン図を表示" }).click();
+  const canvas = page.getByRole("region", { name: "構築パイプライン図(高度な診断)" });
+  await expect(canvas).toBeVisible();
+  await expect(canvas.getByText("ファイル準備")).toBeVisible();
+  await expect(canvas.getByText("文書分割")).toBeVisible();
+  await expect(canvas.getByText("検索インデックス")).toBeVisible();
+});
