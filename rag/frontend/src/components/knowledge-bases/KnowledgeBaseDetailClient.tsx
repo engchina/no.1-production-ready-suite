@@ -33,6 +33,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { KnowledgeBaseAdapterConfigPanel } from "./KnowledgeBaseAdapterConfigPanel";
+import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
 import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
@@ -111,6 +112,9 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
         indexedDocumentCount={kb.indexed_document_count}
         disabled={!isActive}
       />
+
+      {/* 関係情報(GraphRAG)の俯瞰。展開時のみ subgraph を取得。 */}
+      <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
 
       <KnowledgeBaseAdapterConfigPanel
         knowledgeBaseId={kb.id}

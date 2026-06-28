@@ -463,6 +463,74 @@ class OracleClient:
         """軽量 KG の community summary から横断・全体質問向け根拠を取得する。"""
         return await self._graph_global_search_with_oracle(query, top_k, filters or {})
 
+    async def fetch_knowledge_base_subgraph(
+        self,
+        knowledge_base_id: str,
+        *,
+        limit: int,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        """KG の entity(node)/relationship(edge) を KB scope で可視化用に取得する。
+
+        confidence 降順で node/edge を上限件数まで取り、端点が node 集合に含まれる
+        edge のみ返す(部分グラフの整合)。グラフ未構築なら空を返す。
+        """
+        node_rows = await self._fetch_all(
+            """
+            SELECT * FROM (
+                SELECT
+                    e.entity_id,
+                    e.canonical_name,
+                    e.entity_type,
+                    NVL(e.confidence, 1) AS confidence
+                FROM rag_graph_entities e
+                WHERE e.knowledge_base_id = :kb
+                ORDER BY NVL(e.confidence, 1) DESC, e.canonical_name ASC, e.entity_id ASC
+            ) WHERE ROWNUM <= :limit
+            """,
+            {"kb": knowledge_base_id, "limit": limit},
+        )
+        nodes: list[dict[str, object]] = [
+            {
+                "id": _optional_str(row.get("entity_id")) or "",
+                "name": _optional_str(row.get("canonical_name")) or "",
+                "type": _optional_str(row.get("entity_type")),
+                "confidence": round(_float_value(row.get("confidence")), 6),
+            }
+            for row in node_rows
+        ]
+        node_ids = {node["id"] for node in nodes if node["id"]}
+        if not node_ids:
+            return nodes, []
+        edge_rows = await self._fetch_all(
+            """
+            SELECT * FROM (
+                SELECT
+                    r.relationship_id,
+                    r.source_entity_id,
+                    r.target_entity_id,
+                    r.relationship_type,
+                    NVL(r.confidence, 1) AS confidence
+                FROM rag_graph_relationships r
+                WHERE r.knowledge_base_id = :kb
+                ORDER BY NVL(r.confidence, 1) DESC, r.relationship_id ASC
+            ) WHERE ROWNUM <= :limit
+            """,
+            {"kb": knowledge_base_id, "limit": limit},
+        )
+        edges: list[dict[str, object]] = [
+            {
+                "id": _optional_str(row.get("relationship_id")) or "",
+                "source": _optional_str(row.get("source_entity_id")) or "",
+                "target": _optional_str(row.get("target_entity_id")) or "",
+                "type": _optional_str(row.get("relationship_type")),
+                "confidence": round(_float_value(row.get("confidence")), 6),
+            }
+            for row in edge_rows
+        ]
+        return nodes, [
+            edge for edge in edges if edge["source"] in node_ids and edge["target"] in node_ids
+        ]
+
     async def context_neighbors(
         self,
         anchors: list[RetrievedChunk],

@@ -640,6 +640,28 @@ export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   legacy_query_config_ignored?: boolean;
 }
 
+export interface KnowledgeBaseGraphNode {
+  id: string;
+  name: string;
+  type: string | null;
+  confidence: number;
+}
+
+export interface KnowledgeBaseGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: string | null;
+  confidence: number;
+}
+
+export interface KnowledgeBaseGraphData {
+  status: "ok" | "empty";
+  nodes: KnowledgeBaseGraphNode[];
+  edges: KnowledgeBaseGraphEdge[];
+  truncated: boolean;
+}
+
 export interface KnowledgeBaseCreateRequest {
   name: string;
   description?: string | null;
@@ -2168,6 +2190,10 @@ export const api = {
   },
   getKnowledgeBase: (id: string) =>
     request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}`),
+  getKnowledgeBaseGraph: (id: string, limit = 80) =>
+    request<KnowledgeBaseGraphData>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`
+    ),
   createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
     request<KnowledgeBaseDetail>("/api/knowledge-bases", jsonBody(body)),
   updateKnowledgeBase: (id: string, body: KnowledgeBaseUpdateRequest) =>

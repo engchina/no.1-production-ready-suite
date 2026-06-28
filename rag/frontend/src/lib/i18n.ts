@@ -1708,6 +1708,16 @@ export const ja = {
     "先に文書を追加し、索引が完了するとここで検索を試せます。",
   "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",
   "knowledgeBases.searchTest.resultMeta": "{mode} / {count} 件 / {ms} ms",
+  "knowledgeBases.graph.show": "関係情報グラフを表示",
+  "knowledgeBases.graph.hide": "関係情報グラフを隠す",
+  "knowledgeBases.graph.title": "関係情報グラフ",
+  "knowledgeBases.graph.hint":
+    "この知識ベースの関係情報(GraphRAG)を、エンティティ(ノード)と関係(エッジ)で俯瞰します。",
+  "knowledgeBases.graph.empty": "関係情報がまだありません。",
+  "knowledgeBases.graph.emptyHint":
+    "関係情報の構築(GraphRAG)を有効にして再取込すると、ここにグラフが表示されます。",
+  "knowledgeBases.graph.error": "関係情報の取得に失敗しました。再試行してください。",
+  "knowledgeBases.graph.truncated": "ノードが多いため一部のみ表示しています。",
 
   "knowledgeBases.adapter.title": "構築設定",
   "knowledgeBases.adapter.subtitle":

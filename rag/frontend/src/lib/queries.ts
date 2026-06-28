@@ -103,6 +103,7 @@ export const queryKeys = {
     offset?: number;
   }) => ["knowledge-bases", params] as const,
   knowledgeBase: (id: string) => ["knowledge-bases", id] as const,
+  knowledgeBaseGraph: (id: string) => ["knowledge-bases", id, "graph"] as const,
   businessViews: (params: {
     status?: BusinessViewStatus;
     q?: string;
@@ -556,6 +557,14 @@ export function useKnowledgeBase(id: string | null) {
   return useQuery({
     queryKey: queryKeys.knowledgeBase(id ?? ""),
     queryFn: () => api.getKnowledgeBase(id as string),
+    enabled: id != null,
+  });
+}
+
+export function useKnowledgeBaseGraph(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.knowledgeBaseGraph(id ?? ""),
+    queryFn: () => api.getKnowledgeBaseGraph(id as string),
     enabled: id != null,
   });
 }
