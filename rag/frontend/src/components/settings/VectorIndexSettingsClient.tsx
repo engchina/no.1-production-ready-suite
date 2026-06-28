@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Boxes, CheckCircle2, RotateCcw, Save } from "lucide-react";
+import { Boxes, CheckCircle2, Database, RotateCcw, Save } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
+import { SettingsPreviewCard } from "@/components/settings/SettingsPreviewPanels";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormStatus } from "@/components/ui/form-status";
@@ -27,8 +28,10 @@ export function VectorIndexSettingsClient() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    // ponytail: 初回ハイドレーションのみ同期。未保存選択を裏の refetch で上書きしない。
+    // 保存後の再同期は submit/onSuccess・resetForm が担う(外部更新の取り込みは remount 時)。
     if (query.data && !save.isPending) {
-      setProfile(query.data.profile);
+      setProfile((prev) => (prev === null ? query.data!.profile : prev));
     }
   }, [query.data, save.isPending]);
 
@@ -199,6 +202,16 @@ export function VectorIndexSettingsClient() {
           </div>
         </CardContent>
       </Card>
+      {settings.requires_reprovision && settings.reindex_sql ? (
+        <SettingsPreviewCard
+          icon={Database}
+          title={t("settings.vectorIndex.reindexSql.title")}
+          description={t("settings.vectorIndex.reindexSql.description")}
+          value={settings.reindex_sql}
+          copyLabel={t("settings.vectorIndex.reindexSql.copy")}
+          previewHeightClassName="h-44"
+        />
+      ) : null}
     </div>
   );
 }
@@ -209,10 +222,10 @@ function ProfileChips({ profile }: { profile: VectorIndexProfileStatusData }) {
       <span className="inline-flex min-h-5 items-center rounded bg-info-bg px-1.5 text-[11px] font-medium text-info">
         {t("settings.vectorIndex.targetAccuracy")} {profile.target_accuracy}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+      <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
         {t("settings.vectorIndex.neighbors")} {profile.neighbors}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+      <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
         {t("settings.vectorIndex.efconstruction")} {profile.efconstruction}
       </span>
     </span>

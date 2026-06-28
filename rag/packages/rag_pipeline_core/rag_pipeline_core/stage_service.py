@@ -217,7 +217,6 @@ def create_evaluation_app(
         return EvaluationStageResponse(
             suite=resolved.suite,
             thresholds=resolved.thresholds,
-            focus_metrics=list(resolved.focus_metrics),
         )
 
     return app

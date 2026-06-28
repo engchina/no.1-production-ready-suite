@@ -151,7 +151,10 @@ export function RetrievalSettingsClient() {
             </div>
           </div>
           <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <RuntimeFact label={t("settings.retrieval.strategy")} value={strategyLabel(strategy)} />
+            <RuntimeFact
+              label={t("settings.retrieval.strategy")}
+              value={strategyLabel(settings.strategy)}
+            />
             <RuntimeFact
               label={t("settings.retrieval.queryExpansion")}
               value={settings.query_expansion ? "ON" : "OFF"}
@@ -210,9 +213,9 @@ function TechniqueChips({ strategy }: { strategy: RetrievalStrategyStatusData })
       {strategy.recommended_for.slice(0, 2).map((item) => (
         <span
           key={item}
-          className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted"
+          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
         >
-          {item}
+          {purposeLabel(item)}
         </span>
       ))}
       {techniques.map((label) => (
@@ -247,7 +250,13 @@ function orderedStrategies(
 }
 
 function strategyLabel(name: RetrievalStrategyName) {
-  return t(`settings.retrieval.strategy.${name}` as I18nKey);
+  // 欠損キー(env 手編集の未配線戦略など)では undefined を返すため生名へ縮退する。
+  return t(`settings.retrieval.strategy.${name}` as I18nKey) || name;
+}
+
+/** 推奨用途トークンを i18n ラベルへ。未定義トークンは生のまま安全縮退する。 */
+function purposeLabel(token: string) {
+  return t(`settings.retrieval.useCase.${token}` as I18nKey) || token;
 }
 
 function strategyDescription(name: RetrievalStrategyName) {

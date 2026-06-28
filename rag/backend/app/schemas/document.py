@@ -19,13 +19,15 @@ __all__ = [
 class FileStatus(StrEnum):
     """ファイル処理状態。
 
-    RAG はアップロード後に段階ごとに取込む。EXTRACT は REVIEW、CHUNK は CHUNKED で
-    停止でき、INDEX だけが検索対象の INDEXED へ進める。
-    REVIEW / CHUNKED / 実行中状態は検索対象に含めず、INDEXED のみを検索可能とする。
+    RAG はアップロード後に段階ごとに取込む。PREPROCESS は PREPROCESSED、EXTRACT は
+    REVIEW、CHUNK は CHUNKED で停止でき、INDEX だけが検索対象の INDEXED へ進める。
+    PREPROCESSED / REVIEW / CHUNKED / 実行中状態は検索対象に含めず、INDEXED のみを
+    検索可能とする。
     """
 
     UPLOADED = "UPLOADED"
     PREPROCESSING = "PREPROCESSING"
+    PREPROCESSED = "PREPROCESSED"
     INGESTING = "INGESTING"
     REVIEW = "REVIEW"
     CHUNKING = "CHUNKING"

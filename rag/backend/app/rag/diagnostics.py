@@ -3,6 +3,8 @@
 import hashlib
 import json
 
+from rag_pipeline_core.vector_index import resolve_vector_index
+
 from app.config import Settings, get_settings
 from app.schemas.search import (
     SUPPORTED_SCALAR_SEARCH_FILTER_KEYS,
@@ -11,6 +13,18 @@ from app.schemas.search import (
     SearchRetrievalBreakdown,
     SearchRetrievalCandidate,
 )
+
+
+def _effective_vector_target_accuracy(settings: Settings) -> int:
+    """選択 profile 解決後の検索時 target accuracy(診断/fingerprint 用)。
+
+    実 SQL は ``resolve_vector_index_adapter`` 経由で同値を使うが、ここでは決定論・
+    ネットワーク無しの pure core ロジックで揃える(サービス委譲と同一結果)。
+    """
+    return resolve_vector_index(
+        settings.rag_vector_index_profile,
+        settings.oracle_vector_target_accuracy,
+    ).target_accuracy
 
 
 def build_search_diagnostics(
@@ -127,7 +141,7 @@ def build_search_diagnostics(
         context_window_chars=resolved_settings.rag_context_window_chars,
         rrf_k=resolved_settings.rag_rrf_k,
         query_variant_count=query_variant_count,
-        oracle_vector_target_accuracy=resolved_settings.oracle_vector_target_accuracy,
+        oracle_vector_target_accuracy=_effective_vector_target_accuracy(resolved_settings),
         filter_keys=sorted(request.filters),
         scalar_filter_keys=sorted(set(request.filters) & SUPPORTED_SCALAR_SEARCH_FILTER_KEYS),
         knowledge_base_count=len(request.knowledge_base_ids),
@@ -171,7 +185,8 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "rrf_k": resolved_settings.rag_rrf_k,
         "query_expansion_enabled": resolved_settings.rag_query_expansion_enabled,
         "query_expansion_max_variants": resolved_settings.rag_query_expansion_max_variants,
-        "oracle_vector_target_accuracy": resolved_settings.oracle_vector_target_accuracy,
+        "vector_index_profile": resolved_settings.rag_vector_index_profile,
+        "oracle_vector_target_accuracy": _effective_vector_target_accuracy(resolved_settings),
         "search_timeout_seconds": resolved_settings.rag_search_timeout_seconds,
         "agent_memory_search_enabled": resolved_settings.rag_agent_memory_search_enabled,
         "agent_memory_writeback_enabled": (resolved_settings.rag_agent_memory_writeback_enabled),

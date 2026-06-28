@@ -54,6 +54,8 @@ import {
   type GroundingSettingsUpdate,
   type GenerationSettingsData,
   type GenerationSettingsUpdate,
+  type PromptVersionsData,
+  type PromptVersionCreate,
   type GuardrailSettingsData,
   type GuardrailSettingsUpdate,
   type VectorIndexSettingsData,
@@ -120,6 +122,7 @@ export const queryKeys = {
   retrievalSettings: ["settings", "retrieval"] as const,
   groundingSettings: ["settings", "grounding"] as const,
   generationSettings: ["settings", "generation"] as const,
+  promptVersions: ["settings", "prompts"] as const,
   guardrailSettings: ["settings", "guardrail"] as const,
   vectorIndexSettings: ["settings", "vector-index"] as const,
   evaluationSettings: ["settings", "evaluation-suite"] as const,
@@ -260,10 +263,13 @@ export function documentWorkspaceShouldRefresh({
   if (segmentStatuses.some((status) => status === "QUEUED" || status === "RUNNING")) return true;
   if (documentStatus != null && DOCUMENT_ACTIVE_STATUSES.has(documentStatus)) return true;
 
-  // REVIEW / CHUNKED / INDEXED / ERROR は通常は安定状態。ただし job 投入直後の引き継ぎ窓では
-  // mutation 側の job status が上の判定に入るため、ここでは止めてよい。
+  // PREPROCESSED / REVIEW / CHUNKED / INDEXED / ERROR は通常は安定状態。ただし job 投入直後の
+  // 引き継ぎ窓では mutation 側の job status が上の判定に入るため、ここでは止めてよい。
   const terminal =
-    documentStatus === "INDEXED" || documentStatus === "ERROR" || documentStatus === "REVIEW";
+    documentStatus === "INDEXED" ||
+    documentStatus === "ERROR" ||
+    documentStatus === "PREPROCESSED" ||
+    documentStatus === "REVIEW";
   const stageReview = documentStatus === "CHUNKED";
   return Boolean((watchProcessing || localWatchProcessing) && !terminal && !stageReview);
 }
@@ -1088,6 +1094,39 @@ export function useUpdateGenerationSettings() {
       qc.setQueryData(queryKeys.generationSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
+  });
+}
+
+/** 回答プロンプト版の一覧と有効版(custom 回答スタイルが使用)。 */
+export function usePromptVersions() {
+  return useQuery<PromptVersionsData>({
+    queryKey: queryKeys.promptVersions,
+    queryFn: api.getPromptVersions,
+    retry: false,
+  });
+}
+
+/** 有効版変更は custom 回答スタイルの実体に影響するため generationSettings も無効化する。 */
+function invalidatePromptDependents(qc: QueryClient, data: PromptVersionsData) {
+  qc.setQueryData(queryKeys.promptVersions, data);
+  qc.invalidateQueries({ queryKey: queryKeys.generationSettings });
+}
+
+/** 新しい回答プロンプト版を作成(activate=true で即時有効化)。 */
+export function useCreatePromptVersion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PromptVersionCreate) => api.createPromptVersion(payload),
+    onSuccess: (data) => invalidatePromptDependents(qc, data),
+  });
+}
+
+/** 指定の回答プロンプト版を有効化(rollback = 旧版の再有効化)。 */
+export function useActivatePromptVersion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (versionId: string) => api.activatePromptVersion(versionId),
+    onSuccess: (data) => invalidatePromptDependents(qc, data),
   });
 }
 

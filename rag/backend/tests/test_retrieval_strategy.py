@@ -61,3 +61,36 @@ def test_explicit_graph_strategy_is_preserved_when_graph_enabled() -> None:
     assert resolved.mode == SearchMode.HYBRID
     assert resolved.route_reason == "explicit_graph_global"
     assert resolved.fallback_reason is None
+
+
+def test_global_graph_falls_back_when_only_entities() -> None:
+    """entities プロファイルは community summary 未構築なので GRAPH_GLOBAL は hybrid へ戻す。"""
+    settings = Settings.model_construct(rag_graph_enabled=False, rag_graph_profile="entities")
+    request = SearchRequest(
+        query="文書全体の関係をまとめて",
+        mode=SearchMode.VECTOR,
+        strategy=SearchStrategy.GRAPH_GLOBAL,
+    )
+
+    resolved = resolve_retrieval_strategy(request, settings=settings, query=request.query)
+
+    assert resolved.strategy == SearchStrategy.HYBRID
+    assert resolved.mode == SearchMode.VECTOR
+    assert resolved.route_reason == "explicit_graph_global"
+    assert resolved.fallback_reason == "graph_community_summary_unavailable"
+
+
+def test_local_graph_is_preserved_with_entities() -> None:
+    """entities プロファイルでも GRAPH_LOCAL は entity を引けるので維持する。"""
+    settings = Settings.model_construct(rag_graph_enabled=False, rag_graph_profile="entities")
+    request = SearchRequest(
+        query="承認条件の関係",
+        mode=SearchMode.HYBRID,
+        strategy=SearchStrategy.GRAPH_LOCAL,
+    )
+
+    resolved = resolve_retrieval_strategy(request, settings=settings, query=request.query)
+
+    assert resolved.strategy == SearchStrategy.GRAPH_LOCAL
+    assert resolved.route_reason == "explicit_graph_local"
+    assert resolved.fallback_reason is None

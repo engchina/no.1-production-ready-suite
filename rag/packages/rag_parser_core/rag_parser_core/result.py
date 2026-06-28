@@ -104,6 +104,21 @@ class ParseResponse(BaseModel):
         )
 
 
+def service_failure_warning(backend: str, exc: BaseException) -> str:
+    """service parser の失敗を別経路へ縮退させず、actionable な理由を warning に残す。
+
+    `safe_for_user` を持つ例外(timeout / 不完全応答 / schema 不一致 / 入力非対応 等)は
+    そのメッセージを上流へ届け、利用者が container ログを開かずに原因を直せるようにする。
+    それ以外は情報漏えいを避けて例外型名だけを返す。warning は backend の
+    `_selected_parser_failure_message` で `エラーコード:` として表示される。
+    """
+    if getattr(exc, "safe_for_user", False):
+        detail = " ".join(str(exc).split())[:400]
+    else:
+        detail = type(exc).__name__
+    return f"{backend}_unavailable: {detail}"
+
+
 class ParseHealth(BaseModel):
     """`GET /health` のレスポンス。readiness 表示の値ソース。"""
 

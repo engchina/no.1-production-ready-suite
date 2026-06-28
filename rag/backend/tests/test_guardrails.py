@@ -80,8 +80,8 @@ def test_validate_answer_warns_when_grounding_overlap_is_low() -> None:
     assert result.warnings == ["回答と検索根拠の重なりが少ないため、引用を確認してください。"]
 
 
-def test_regulated_policy_escalates_low_groundedness_to_error() -> None:
-    """regulated ポリシーは低根拠を warning ではなく error 扱いにする(監査強調)。"""
+def test_regulated_policy_blocks_low_groundedness_with_error() -> None:
+    """regulated ポリシーは低根拠を error 扱いにし、回答自体をブロックする(監査強調)。"""
     result = GuardrailPolicy(Settings(rag_guardrail_policy="regulated")).validate_answer(
         "明日の天気は晴れです。",
         context="[policy.txt#doc-1:0]\n承認条件: 120000 円。クラウド利用料。",
@@ -89,6 +89,22 @@ def test_regulated_policy_escalates_low_groundedness_to_error() -> None:
 
     findings = [finding for finding in result.findings if finding.code == "low_groundedness"]
     assert findings and findings[0].severity == "error"
+    assert result.allowed is False
+    assert "明日の天気" not in result.sanitized_text
+
+
+def test_strict_policy_detects_low_groundedness_on_word_only_overlap() -> None:
+    """英単語が 1 語一致しても high-signal 短絡せず、閾値で低根拠を検出する。
+
+    旧実装では 4 文字以上の英単語(data)が high-signal 扱いで即 grounded=True に
+    短絡したが、数字を含む特徴のみを high-signal とするため閾値評価される。
+    """
+    result = GuardrailPolicy(Settings(rag_guardrail_policy="strict")).validate_answer(
+        "data lorem ipsum dolor sit amet consectetur adipiscing elit nunc",
+        context="[policy.txt#doc-1:0]\nthe data section explains the workflow.",
+    )
+
+    assert [finding.code for finding in result.findings] == ["low_groundedness"]
 
 
 def test_validate_answer_accepts_grounded_numeric_answer() -> None:

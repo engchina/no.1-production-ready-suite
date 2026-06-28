@@ -1,11 +1,16 @@
 """Generation アダプター(回答生成プロファイル)のテスト。"""
 
+import json
+
+import pytest
+
 from app.config import Settings
 from app.rag.generation_adapter import (
     GENERATION_PROFILE_ORDER,
     generation_adapter_runtime_settings,
     normalize_generation_profile,
     resolve_generation_adapter,
+    validate_structured_answer,
 )
 
 
@@ -42,3 +47,27 @@ def test_runtime_settings_orders_and_marks_selected() -> None:
 def test_normalize_generation_profile_defaults() -> None:
     assert normalize_generation_profile("nope") == "grounded_concise"
     assert normalize_generation_profile("structured_json") == "structured_json"
+
+
+def test_validate_structured_answer_accepts_plain_json() -> None:
+    raw = '{"answer": "東京です", "evidence": ["e1"], "sources": ["doc#1"]}'
+    parsed = json.loads(validate_structured_answer(raw))
+    assert parsed == {"answer": "東京です", "evidence": ["e1"], "sources": ["doc#1"]}
+
+
+def test_validate_structured_answer_tolerates_fence_and_prose() -> None:
+    raw = '説明文\n```json\n{"answer": "A", "sources": ["s#1"]}\n```\n以上'
+    parsed = json.loads(validate_structured_answer(raw))
+    # 欠落フィールドは既定値で埋まり、フェンス/前後文を剥がして検証する。
+    assert parsed == {"answer": "A", "evidence": [], "sources": ["s#1"]}
+
+
+def test_validate_structured_answer_rejects_non_json() -> None:
+    with pytest.raises(ValueError):
+        validate_structured_answer("これは JSON ではありません。")
+
+
+def test_validate_structured_answer_rejects_schema_mismatch() -> None:
+    # answer が必須なのに欠落 → スキーマ不一致で ValueError。
+    with pytest.raises(ValueError):
+        validate_structured_answer('{"evidence": ["e1"]}')

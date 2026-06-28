@@ -22,6 +22,8 @@ export interface SearchStreamHandlers {
     diagnostics: SearchDiagnostics;
   }) => void;
   onDelta?: (text: string) => void;
+  /** realtime stream 後にガードレールがマスク/差し替えした本文で累積回答を置換する。 */
+  onReplace?: (text: string) => void;
   onCitations?: (citations: RetrievedChunk[]) => void;
   onDone?: (meta: { trace_id: string }) => void;
 }
@@ -102,6 +104,9 @@ function dispatchEvent(block: string, handlers: SearchStreamHandlers): void {
       break;
     case "delta":
       handlers.onDelta?.((payload as { text: string }).text);
+      break;
+    case "replace":
+      handlers.onReplace?.((payload as { text: string }).text);
       break;
     case "citations":
       handlers.onCitations?.(payload as RetrievedChunk[]);

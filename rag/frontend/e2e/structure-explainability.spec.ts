@@ -1,6 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
 
+// 1x1 透明 PNG。`<img>` で実際に描画できる有効な data URI。
+const PNG_PIXEL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+// 分割で生じた prefix 無し base64 断片の模擬。
+const BASE64_FRAGMENT = "A".repeat(300);
+
 const authStatus = {
   data: {
     mode: "local",
@@ -68,9 +74,8 @@ test("文書詳細で構造化抽出要素と raw text を確認できる", asyn
 
   await page.goto("/documents/doc-1");
 
-  const extractionPanel = page
-    .getByRole("heading", { name: "抽出本文" })
-    .locator("xpath=ancestor::section[1]");
+  // 抽出本文タブが既定で開いており、その tabpanel に内容が表示される。
+  const extractionPanel = page.getByRole("tabpanel");
   await expect(extractionPanel).toBeVisible();
   await expect(extractionPanel.getByText("構造化要素")).toBeVisible();
   await expect(extractionPanel.getByText("見出し")).toBeVisible();
@@ -80,6 +85,78 @@ test("文書詳細で構造化抽出要素と raw text を確認できる", asyn
   await expect(extractionPanel.getByText("表セル")).toBeVisible();
   await expect(extractionPanel.getByRole("button", { name: /料金表 B2 1000/ })).toBeVisible();
   await expect(extractionPanel.getByText("本文テキスト")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("文書詳細で埋め込み base64 を畳んで本文を読みやすく表示する", async ({ page }) => {
+  await mockDocumentDetail(page, {
+    extraction: {
+      raw_text: `本文の冒頭。 ${PNG_PIXEL} 本文の続き。`,
+      document_type: "規程",
+      confidence: 0.9,
+      warnings: [],
+      elements: [
+        {
+          kind: "figure",
+          text: `図1 ${PNG_PIXEL}`,
+          order: 0,
+          element_id: "el-0000",
+          content_kind: "figure",
+          source_parser: "oci_genai_vision",
+          page_number: 1,
+          section_path: [],
+          confidence: 0.8,
+        },
+      ],
+      pages: [{ page_number: 1, element_ids: ["el-0000"] }],
+      tables: [],
+      assets: [],
+      parser_artifacts: {},
+    },
+    chunks: [
+      {
+        document_id: "doc-1",
+        chunk_id: "doc-1:0",
+        chunk_index: 0,
+        text: BASE64_FRAGMENT,
+        page_start: 1,
+        page_end: 1,
+        bbox: null,
+        section_path: null,
+        content_kind: "figure",
+        chunk_group_id: "grp-1",
+        source_parser: "oci_genai_vision",
+        element_ids: ["el-0000"],
+        metadata: {},
+      },
+    ],
+  });
+
+  await page.goto("/documents/doc-1");
+
+  // 既定の抽出本文タブ(tabpanel)。
+  const extractionPanel = page.getByRole("tabpanel");
+  await expect(extractionPanel).toBeVisible();
+
+  // base64 の生文字列は本文テキストとして現れない。
+  await expect(page.getByText(/iVBORw0KGgo/)).toHaveCount(0);
+  await expect(page.getByText(BASE64_FRAGMENT)).toHaveCount(0);
+  // 画像はサムネイル(alt 付き <img>)で描画される。
+  await expect(
+    extractionPanel.getByRole("img", { name: "抽出された埋め込み画像" }).first()
+  ).toBeVisible();
+  // 読める本文は残る。
+  await expect(extractionPanel.getByText("図1")).toBeVisible();
+
+  // Chunk タブへ切替えると、base64 断片はチップに畳まれて表示される。
+  await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
+  const chunkPanel = page.getByRole("tabpanel");
+  await expect(chunkPanel.getByText(/画像データ/)).toBeVisible();
+
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(page.getByRole("tabpanel")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -169,14 +246,16 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await expect(page).toHaveURL(
     /\/documents\/doc-1\?chunk_id=doc-1%3A1&page=2&element_id=tbl-1&cell_ref=B2&formula_cell_ref=B2/
   );
-  const chunkPanel = page
-    .getByRole("heading", { name: "Chunk / Citation" })
-    .locator("xpath=ancestor::section[1]");
-  const linkedChunkButton = chunkPanel.getByRole("button", { name: /料金表の交通費/ });
-  await expect(linkedChunkButton).toHaveAttribute("aria-pressed", "true");
+  // セル指定付き deep-link では抽出本文タブが初期表示され、対象セルがフォーカスされる。
   const linkedCellButton = page.getByRole("button", { name: /料金表 B2 1000/ });
   await expect(linkedCellButton).toHaveAttribute("aria-pressed", "true");
   await expect(linkedCellButton).toBeFocused();
+  // Chunk タブへ切替えると紐づく chunk が選択されている。
+  await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
+  const linkedChunkButton = page
+    .getByRole("tabpanel")
+    .getByRole("button", { name: /料金表の交通費/ });
+  await expect(linkedChunkButton).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText(/位置: p\.2 \/ bbox x=0\.0% y=0\.0% w=50\.0% h=20\.0%/)).toBeVisible();
   const bboxOverlay = page.getByTestId("bbox-preview-overlay");
   await expect(bboxOverlay).toBeVisible();
@@ -184,7 +263,10 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await expectNoHorizontalOverflow(page);
 });
 
-async function mockDocumentDetail(page: Page) {
+async function mockDocumentDetail(
+  page: Page,
+  overrides?: { extraction?: Record<string, unknown>; chunks?: unknown[] }
+) {
   const catalog = [
     knowledgeBase("kb-1", "社内規程", 1),
     knowledgeBase("kb-2", "FAQ", 0),
@@ -273,7 +355,7 @@ async function mockDocumentDetail(page: Page) {
           indexed_at: "2026-06-14T00:01:00Z",
           object_storage_path: "local://policy.txt",
           error_message: null,
-          extraction: {
+          extraction: overrides?.extraction ?? {
             raw_text: "# 経費申請\n| 項目 | 金額 |",
             document_type: "規程",
             confidence: 0.92,
@@ -392,7 +474,7 @@ async function mockDocumentDetail(page: Page) {
   await page.route("**/api/documents/doc-1/chunks", async (route) => {
     await route.fulfill({
       json: {
-        data: [
+        data: overrides?.chunks ?? [
           {
             document_id: "doc-1",
             chunk_id: "doc-1:0",

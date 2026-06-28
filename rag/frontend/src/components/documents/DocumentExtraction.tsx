@@ -1,15 +1,20 @@
 import {
   BookOpen,
+  Check,
   CircleAlert,
+  Clipboard,
   FileText,
+  Hash,
   Layers3,
   ListChecks,
   Table2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useRef, type Ref } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 
 import { Banner } from "@/components/ui/banner";
+import { Button } from "@/components/ui/button";
+import { FormStatus } from "@/components/ui/form-status";
 import type { DocumentElement, ExtractionTable, ExtractionTableCell } from "@/lib/api";
 import {
   parseStructuredExtraction,
@@ -19,6 +24,8 @@ import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { tableCellKey, tableCellRef } from "@/lib/table-cell-focus";
+
+import { ExtractedText, InfoChip } from "./extraction-bits";
 
 const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
   title: "flow.extraction.kind.title",
@@ -137,10 +144,13 @@ export function DocumentExtraction({
           </div>
 
           <section>
-            <h4 className="mb-2 text-sm font-semibold text-foreground">
+            <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
               {t("flow.extraction.elements")}
+              <span className="tnum text-xs font-normal text-muted">
+                {formatNumber(stats.elementCount)}
+              </span>
             </h4>
-            <ol className="max-h-[520px] space-y-3 overflow-auto pr-1">
+            <ol className="space-y-3 pr-1">
               {parsed.elements.map((element) => (
                 <ElementItem
                   key={elementKey(element)}
@@ -254,13 +264,15 @@ function ElementItem({
             </span>
           ) : null}
         </div>
-        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
-          {element.text}
-        </p>
-        <p className="tnum mt-2 break-all text-xs text-muted">
-          {id}
-          {element.source_parser ? ` / ${element.source_parser}` : ""}
-        </p>
+        <div className="mt-2">
+          <ExtractedText text={element.text} clamp />
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <InfoChip
+            icon={Hash}
+            label={element.source_parser ? `${id} / ${element.source_parser}` : id}
+          />
+        </div>
       </button>
     </li>
   );
@@ -335,8 +347,8 @@ function TableCellsPanel({
                             </span>
                           ) : null}
                         </span>
-                        <span className="mt-1 block whitespace-pre-wrap break-words leading-relaxed">
-                          {cell.text || "—"}
+                        <span className="mt-1 block">
+                          <ExtractedText text={cell.text} />
                         </span>
                       </button>
                     );
@@ -378,9 +390,14 @@ function RawTextBlock({ rawText, compact }: { rawText: string; compact: boolean 
   }
 
   const content = (
-    <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-card p-3 text-sm leading-6 text-foreground">
-      {rawText}
-    </pre>
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className="mb-2 flex justify-end">
+        <CopyRawTextButton text={rawText} />
+      </div>
+      <div className="max-h-[420px] overflow-auto">
+        <ExtractedText text={rawText} />
+      </div>
+    </div>
   );
 
   if (!compact) {
@@ -404,6 +421,39 @@ function RawTextBlock({ rawText, compact }: { rawText: string; compact: boolean 
       </summary>
       <div className="pb-2">{content}</div>
     </details>
+  );
+}
+
+function CopyRawTextButton({ text }: { text: string }) {
+  const [state, setState] = useState<"idle" | "success" | "error">("idle");
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setState("success");
+    } catch {
+      setState("error");
+    }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-2">
+      {state === "error" ? (
+        <FormStatus
+          tone="danger"
+          className="text-xs"
+          message={t("flow.extraction.copyFailed")}
+        />
+      ) : null}
+      <Button variant="ghost" size="sm" onClick={() => void handleCopy()}>
+        {state === "success" ? (
+          <Check size={14} aria-hidden />
+        ) : (
+          <Clipboard size={14} aria-hidden />
+        )}
+        {state === "success" ? t("flow.extraction.copied") : t("flow.extraction.copyRawText")}
+      </Button>
+    </span>
   );
 }
 

@@ -40,6 +40,7 @@ async function mockWorkspace(page: Page, drift: boolean, parserDrift = false) {
         document_id: "doc-1",
         is_indexed: true,
         owning_knowledge_base: { id: "kb-1", name: "社内規程" },
+        effective_preprocess_profile: "office_to_pdf",
         effective_chunking_strategy: "page_level",
         effective_parser_adapter_backend: parserDrift ? "mineru" : "docling",
         observed_chunking_strategy: drift ? "structure_aware" : "page_level",
@@ -145,4 +146,14 @@ test("ドリフトが無ければバナーを表示しない", async ({ page }) 
 
   await expect(page.getByRole("heading", { name: "原本プレビュー" })).toBeVisible();
   await expect(page.getByText("取込設定が更新されています")).toHaveCount(0);
+
+  // 適用された構築設定(分割方式の明示 + 設定への往復導線)を文脈内に表示する。
+  const buildConfig = page.getByRole("region", { name: "適用された構築設定" });
+  await expect(buildConfig).toBeVisible();
+  await expect(buildConfig).toContainText("Office→PDF");
+  await expect(buildConfig).toContainText("ページ単位");
+  await expect(buildConfig.getByRole("link", { name: "文書分割の設定を開く" })).toHaveAttribute(
+    "href",
+    "/settings/chunking"
+  );
 });

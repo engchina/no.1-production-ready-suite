@@ -164,3 +164,34 @@ def test_rag_config_fingerprint_changes_when_agent_memory_changes() -> None:
     assert first != second
     assert first != third
     assert first != fourth
+
+
+def test_search_diagnostics_target_accuracy_follows_vector_index_profile() -> None:
+    """検索診断の target accuracy は選択 profile 解決後の値を返す(95/98/85)。"""
+    request = SearchRequest(query="承認条件", mode=SearchMode.VECTOR)
+    balanced = build_search_diagnostics(
+        request,
+        settings=Settings(oracle_vector_target_accuracy=95, rag_vector_index_profile="balanced"),
+    )
+    accurate = build_search_diagnostics(
+        request,
+        settings=Settings(oracle_vector_target_accuracy=95, rag_vector_index_profile="accurate"),
+    )
+    fast = build_search_diagnostics(
+        request,
+        settings=Settings(oracle_vector_target_accuracy=95, rag_vector_index_profile="fast"),
+    )
+
+    assert balanced.oracle_vector_target_accuracy == 95
+    assert accurate.oracle_vector_target_accuracy == 98
+    assert fast.oracle_vector_target_accuracy == 85
+
+
+def test_rag_config_fingerprint_changes_with_vector_index_profile() -> None:
+    """fingerprint は検索インデックス profile の違い(検索時 accuracy)を反映する。"""
+    fingerprints = {
+        rag_config_fingerprint(Settings(rag_vector_index_profile=profile))
+        for profile in ("balanced", "accurate", "fast")
+    }
+
+    assert len(fingerprints) == 3

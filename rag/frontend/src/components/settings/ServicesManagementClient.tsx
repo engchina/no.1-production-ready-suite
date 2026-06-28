@@ -10,6 +10,7 @@ import {
   CircleSlash,
   Clipboard,
   Container,
+  Cpu,
   HardDriveDownload,
   Hammer,
   MinusCircle,
@@ -486,6 +487,7 @@ function ServiceRow({
   onAct: (service: DisplayServiceData, action: "start" | "stop" | "build" | "remove") => void;
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
+  const deployable = service.deployable;
   const running = service.status === "running";
   const stopped = service.status === "stopped";
   const statusLoading = service.status === "loading";
@@ -532,94 +534,104 @@ function ServiceRow({
               {t(stoppedHintKey)}
             </p>
           ) : null}
+          {!deployable ? (
+            <p className="mt-1 text-xs text-muted">{t("settings.services.futureServiceHint")}</p>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ServiceStatusBadge status={service.status} />
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => onToggleLogs(service)}
-            aria-expanded={logsOpen}
-            aria-controls={logsPanelId}
-            aria-label={`${serviceLabel(service)} ${t("settings.services.action.logs")}`}
-          >
-            <TerminalSquare size={14} aria-hidden />
-            {logsOpen
-              ? t("settings.services.action.hideLogs")
-              : t("settings.services.action.logs")}
-            <ChevronDown
-              size={14}
-              className={cn("transition-transform", logsOpen ? "rotate-180" : undefined)}
-              aria-hidden
-            />
-          </Button>
-          <div className="flex flex-wrap justify-end gap-2" title={controlHint}>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={buildPending}
-              disabled={!controlEnabled || (thisPending && !buildPending)}
-              onClick={() => onAct(service, "build")}
-              aria-label={`${serviceLabel(service)} ${t("settings.services.action.build")}`}
-            >
-              <Hammer size={14} aria-hidden />
-              {buildPending
-                ? t("settings.services.action.building")
-                : t("settings.services.action.build")}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={startPending}
-              disabled={
-                !controlEnabled ||
-                !service.statusReady ||
-                running ||
-                (thisPending && !startPending)
-              }
-              onClick={() => onAct(service, "start")}
-              aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
-            >
-              <Play size={14} aria-hidden />
-              {startPending
-                ? t("settings.services.action.starting")
-                : t("settings.services.action.start")}
-            </Button>
-            <Button
-              type="button"
-              variant="danger"
-              size="sm"
-              loading={stopPending}
-              disabled={
-                !controlEnabled || !service.statusReady || stopped || (thisPending && !stopPending)
-              }
-              onClick={() => onAct(service, "stop")}
-              aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
-            >
-              <Square size={14} aria-hidden />
-              {stopPending
-                ? t("settings.services.action.stopping")
-                : t("settings.services.action.stop")}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="text-danger hover:bg-danger-bg/40"
-              loading={removePending}
-              disabled={!controlEnabled || (thisPending && !removePending)}
-              onClick={() => onAct(service, "remove")}
-              aria-label={`${serviceLabel(service)} ${t("settings.services.action.remove")}`}
-            >
-              <Trash2 size={14} aria-hidden />
-              {removePending
-                ? t("settings.services.action.removing")
-                : t("settings.services.action.remove")}
-            </Button>
-          </div>
+          {deployable ? (
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => onToggleLogs(service)}
+                aria-expanded={logsOpen}
+                aria-controls={logsPanelId}
+                aria-label={`${serviceLabel(service)} ${t("settings.services.action.logs")}`}
+              >
+                <TerminalSquare size={14} aria-hidden />
+                {logsOpen
+                  ? t("settings.services.action.hideLogs")
+                  : t("settings.services.action.logs")}
+                <ChevronDown
+                  size={14}
+                  className={cn("transition-transform", logsOpen ? "rotate-180" : undefined)}
+                  aria-hidden
+                />
+              </Button>
+              <div className="flex flex-wrap justify-end gap-2" title={controlHint}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={buildPending}
+                  disabled={!controlEnabled || (thisPending && !buildPending)}
+                  onClick={() => onAct(service, "build")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.build")}`}
+                >
+                  <Hammer size={14} aria-hidden />
+                  {buildPending
+                    ? t("settings.services.action.building")
+                    : t("settings.services.action.build")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={startPending}
+                  disabled={
+                    !controlEnabled ||
+                    !service.statusReady ||
+                    running ||
+                    (thisPending && !startPending)
+                  }
+                  onClick={() => onAct(service, "start")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
+                >
+                  <Play size={14} aria-hidden />
+                  {startPending
+                    ? t("settings.services.action.starting")
+                    : t("settings.services.action.start")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  loading={stopPending}
+                  disabled={
+                    !controlEnabled ||
+                    !service.statusReady ||
+                    stopped ||
+                    (thisPending && !stopPending)
+                  }
+                  onClick={() => onAct(service, "stop")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
+                >
+                  <Square size={14} aria-hidden />
+                  {stopPending
+                    ? t("settings.services.action.stopping")
+                    : t("settings.services.action.stop")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="text-danger hover:bg-danger-bg/40"
+                  loading={removePending}
+                  disabled={!controlEnabled || (thisPending && !removePending)}
+                  onClick={() => onAct(service, "remove")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.remove")}`}
+                >
+                  <Trash2 size={14} aria-hidden />
+                  {removePending
+                    ? t("settings.services.action.removing")
+                    : t("settings.services.action.remove")}
+                </Button>
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
       {logsOpen ? (
@@ -787,6 +799,7 @@ const STATUS_META: Record<
   degraded: { className: "bg-amber-100 text-amber-700", icon: AlertTriangle },
   stopped: { className: "bg-slate-100 text-slate-600", icon: CircleSlash },
   unconfigured: { className: "bg-slate-100 text-slate-500", icon: MinusCircle },
+  in_process: { className: "bg-sky-100 text-sky-700", icon: Cpu },
   loading: { className: "bg-slate-100 text-slate-600", icon: RefreshCw, spin: true },
   error: { className: "bg-rose-100 text-rose-700", icon: AlertTriangle },
 };

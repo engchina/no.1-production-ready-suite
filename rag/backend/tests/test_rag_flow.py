@@ -393,6 +393,7 @@ async def test_ingestion_indexes_documents_with_many_chunks() -> None:
         settings = Settings.model_construct(
             rag_chunk_size=200,
             rag_chunk_overlap=20,
+            rag_auto_parse_after_preprocess_enabled=True,
         )
         pipeline = IngestionPipeline(
             vlm=LongTextVlm(),

@@ -1387,6 +1387,10 @@ class Settings(BaseSettings):
             "False は従来互換で EXTRACT job 内から最後まで進める。"
         ),
     )
+    rag_auto_parse_after_preprocess_enabled: bool = Field(
+        default=False,
+        description="PREPROCESS 完了後に PREPROCESSED で止めず、EXTRACT を自動で続行する。",
+    )
     rag_auto_chunk_after_extract_enabled: bool = Field(
         default=False,
         description="EXTRACT 完了後に REVIEW で止めず、CHUNK job を自動投入する。",

@@ -76,6 +76,8 @@ export const ja = {
   "nav.businessViews.sidebar": "業務ビュー",
   "nav.evaluation": "品質評価",
   // ページタイトルとサイドバー表示はいずれもユーザー向けの業務語を優先する。
+  "nav.settingsPipeline": "設定の概要",
+  "nav.settingsPipeline.sidebar": "概要",
   "nav.settingsOci": "OCI 認証設定",
   "nav.settingsOci.sidebar": "OCI 認証",
   "nav.settingsUploadStorage": "アップロード保存先",
@@ -91,6 +93,8 @@ export const ja = {
   "nav.settingsGrounding.sidebar": "根拠確認",
   "nav.settingsGeneration": "回答スタイル",
   "nav.settingsGeneration.sidebar": "回答スタイル",
+  "nav.settingsPrompts": "回答プロンプト",
+  "nav.settingsPrompts.sidebar": "回答プロンプト",
   "nav.settingsGuardrail": "安全チェック",
   "nav.settingsGuardrail.sidebar": "安全チェック",
   "nav.settingsVectorIndex": "検索インデックス",
@@ -107,7 +111,6 @@ export const ja = {
   "nav.settingsHuggingface.sidebar": "HuggingFace",
   "nav.settingsServices": "サービス管理",
   "nav.settingsServices.sidebar": "サービス",
-  "nav.settingsPrompts": "プロンプト設定",
   "nav.sidebar.aria": "サイドナビゲーション",
   "nav.sidebar.collapse": "サイドバーを折りたたむ",
   "nav.sidebar.expand": "サイドバーを展開",
@@ -342,6 +345,13 @@ export const ja = {
   "settings.chunking.actions.unsaved": "未保存の変更があります。",
   "settings.chunking.loadError": "文書分割設定を取得できませんでした。",
   "settings.chunking.saveError": "文書分割設定を保存できませんでした。",
+  "settings.pipeline.subtitle":
+    "ファイル準備から回答生成まで、各工程の設定を処理順にまとめて確認・移動できます。",
+  "settings.pipeline.phase.ingestion": "ナレッジ構築",
+  "settings.pipeline.phase.ingestionHint": "文書を取り込み、解析・分割・索引する工程。",
+  "settings.pipeline.phase.query": "検索・回答",
+  "settings.pipeline.phase.queryHint": "問い合わせを検索し、根拠付きで回答する工程。",
+  "settings.pipeline.openStage": "{name} の設定を開く",
   "settings.preprocess.subtitle":
     "文書解析の前に原本を一度だけ整えるファイル準備方式を選択します。",
   "settings.preprocess.overview.title": "ファイル準備方式",
@@ -374,6 +384,15 @@ export const ja = {
   "settings.preprocess.profile.excel_to_json": "Excel→JSON",
   "settings.preprocess.profile.excel_to_json.description":
     "Excel(.xls/.xlsx)をシート単位のレコード配列 JSON へ変換してから解析(表向け・サービス)",
+  "settings.preprocess.profile.url_to_markdown": "URL→Markdown",
+  "settings.preprocess.profile.url_to_markdown.description":
+    "URL/HTML を本文抽出して Markdown へ変換してから解析(Web向け・サービス)",
+  "settings.preprocess.profile.image_enhance": "画像補正",
+  "settings.preprocess.profile.image_enhance.description":
+    "画像を OCR 前に補正(コントラスト・傾き等)してから解析(スキャン向け・サービス)",
+  "settings.preprocess.profile.pii_redact": "PIIマスク",
+  "settings.preprocess.profile.pii_redact.description":
+    "個人情報(PII)を検出してマスクしてから解析(テキスト向け・サービス)",
   "settings.preprocess.actions.save": "保存",
   "settings.preprocess.actions.saving": "保存中",
   "settings.preprocess.actions.saved": "前処理設定を保存しました。",
@@ -435,8 +454,11 @@ export const ja = {
   "settings.services.status.degraded": "縮退",
   "settings.services.status.stopped": "停止",
   "settings.services.status.unconfigured": "未設定",
+  "settings.services.status.in_process": "backend 内処理",
   "settings.services.status.loading": "確認中",
   "settings.services.status.error": "取得失敗",
+  "settings.services.futureServiceHint":
+    "backend 内処理で動作します。サービス化(独立した起動/停止)は将来対応予定です。",
   "settings.services.modelCache.label": "モデルキャッシュ",
   "settings.services.modelCache.readonly": "変更不可",
   "settings.services.modelCache.hint":
@@ -518,7 +540,7 @@ export const ja = {
     "業務ビューの検索で使う検索方法を選択します。",
   "settings.retrieval.overview.title": "検索方法",
   "settings.retrieval.overview.description":
-    "意味/全文/グラフ/構造化検索と業務適合・補正検索を OCI / Oracle スタックへ再マップし、手動選択できます。",
+    "意味/全文/グラフ/構造化検索と業務適合・補正検索を OCI / Oracle スタックへ再マップし、手動選択できます。ここで選ぶのはグローバル既定で、公開済みの業務ビューが上書きします。",
   "settings.retrieval.strategy": "検索方法",
   "settings.retrieval.selected": "選択中",
   "settings.retrieval.recommendedFor": "推奨用途",
@@ -529,6 +551,19 @@ export const ja = {
   "settings.retrieval.corrective": "補正検索",
   "settings.retrieval.businessFit": "業務適合加重",
   "settings.retrieval.none": "なし",
+  "settings.retrieval.useCase.general": "一般",
+  "settings.retrieval.useCase.faq": "FAQ",
+  "settings.retrieval.useCase.policy": "規程",
+  "settings.retrieval.useCase.semantic": "意味的",
+  "settings.retrieval.useCase.paraphrase": "言い換え",
+  "settings.retrieval.useCase.named_entity": "固有名詞",
+  "settings.retrieval.useCase.regulation": "規制",
+  "settings.retrieval.useCase.relationship": "関係性",
+  "settings.retrieval.useCase.cross_document": "文書横断",
+  "settings.retrieval.useCase.compliance": "コンプライアンス",
+  "settings.retrieval.useCase.enterprise": "全社",
+  "settings.retrieval.useCase.recall_critical": "再現率重視",
+  "settings.retrieval.useCase.ambiguous": "曖昧",
   "settings.retrieval.strategy.hybrid_rrf": "ハイブリッド(RRF)",
   "settings.retrieval.strategy.hybrid_rrf.description":
     "意味+全文の融合 + クエリ拡張 + RRF(既定)",
@@ -566,6 +601,7 @@ export const ja = {
   "settings.grounding.diversity": "多様化(MMR)",
   "settings.grounding.expansion": "context 拡張",
   "settings.grounding.compression": "context 圧縮",
+  "settings.grounding.corrective": "補正(CRAG)",
   "settings.grounding.none": "なし",
   "settings.grounding.expansionMode.none": "なし",
   "settings.grounding.expansionMode.neighbor": "隣接",
@@ -618,6 +654,12 @@ export const ja = {
   "settings.generation.profile.bilingual_ja_en": "日英バイリンガル",
   "settings.generation.profile.bilingual_ja_en.description":
     "日本語回答 + 英語要約",
+  "settings.generation.profile.inline_cited": "逐句出典付与",
+  "settings.generation.profile.inline_cited.description":
+    "各文の直後に出典を即時付与(SAFE 型)",
+  "settings.generation.profile.custom": "カスタム",
+  "settings.generation.profile.custom.description":
+    "保存済みの system prompt 版を使用(未設定時は既定 prompt)",
   "settings.generation.actions.save": "保存",
   "settings.generation.actions.saving": "保存中",
   "settings.generation.actions.saved": "回答スタイルを保存しました。",
@@ -625,6 +667,32 @@ export const ja = {
   "settings.generation.actions.unsaved": "未保存の変更があります。",
   "settings.generation.loadError": "回答スタイル設定を取得できませんでした。",
   "settings.generation.saveError": "回答スタイル設定を保存できませんでした。",
+  "settings.generation.custom.manageLink": "プロンプト版を管理 →",
+  "settings.prompts.subtitle":
+    "カスタム回答スタイルが使用する system prompt の版を作成・有効化します。",
+  "settings.prompts.overview.title": "回答プロンプト版",
+  "settings.prompts.overview.description":
+    "新しい system prompt 版を追加します。有効化した版がカスタム回答スタイルに適用されます。",
+  "settings.prompts.form.name": "版名",
+  "settings.prompts.form.namePlaceholder": "例: 監査向け厳密版 v2",
+  "settings.prompts.form.systemPrompt": "system prompt",
+  "settings.prompts.form.systemPromptPlaceholder":
+    "あなたは社内ナレッジ検索アシスタントです。検索根拠だけを使って…",
+  "settings.prompts.form.note": "メモ(任意)",
+  "settings.prompts.form.notePlaceholder": "変更点や用途のメモ",
+  "settings.prompts.form.activate": "作成時に有効化する",
+  "settings.prompts.actions.create": "版を作成",
+  "settings.prompts.actions.creating": "作成中",
+  "settings.prompts.actions.created": "回答プロンプト版を作成しました。",
+  "settings.prompts.actions.activate": "有効化",
+  "settings.prompts.actions.activated": "回答プロンプト版を有効化しました。",
+  "settings.prompts.actions.saveError": "回答プロンプト版を保存できませんでした。",
+  "settings.prompts.list.title": "版一覧",
+  "settings.prompts.list.description": "新しい順に表示します。任意の版を有効化(rollback)できます。",
+  "settings.prompts.list.activeBadge": "有効",
+  "settings.prompts.list.createdAt": "作成",
+  "settings.prompts.list.empty": "まだ回答プロンプト版がありません。上のフォームから作成してください。",
+  "settings.prompts.loadError": "回答プロンプト版を取得できませんでした。",
   "settings.guardrail.subtitle":
     "プロンプト攻撃、個人情報、根拠不足への安全チェックの厳しさを選択します。",
   "settings.guardrail.overview.title": "安全チェック",
@@ -653,11 +721,13 @@ export const ja = {
   "settings.guardrail.actions.unsaved": "未保存の変更があります。",
   "settings.guardrail.loadError": "安全チェック設定を取得できませんでした。",
   "settings.guardrail.saveError": "安全チェック設定を保存できませんでした。",
+  "settings.guardrail.ociWarning.compartmentMissing":
+    "OCI Guardrails が選択されていますが compartment が未設定のため、OCI 側の検査は無効です。OCI 認証設定で compartment を設定してください。",
   "settings.vectorIndex.subtitle":
     "検索時の精度とレイテンシのバランスを選択します。",
   "settings.vectorIndex.overview.title": "検索インデックス",
   "settings.vectorIndex.overview.description":
-    "Oracle 26ai AI Vector Search の検索時 target accuracy を選びます。推奨 HNSW ビルドは参考値で、適用には索引再作成が必要です。",
+    "Oracle 26ai AI Vector Search の検索時 target accuracy を選びます。検索時 accuracy は保存後すぐ反映されます。推奨 HNSW ビルド(NEIGHBORS / EFCONSTRUCTION)は現索引には未反映の参考値で、下に生成される再作成 SQL を DBA が適用したときに反映されます。",
   "settings.vectorIndex.profile": "検索精度",
   "settings.vectorIndex.selected": "選択中",
   "settings.vectorIndex.recommendedFor": "推奨用途",
@@ -668,7 +738,7 @@ export const ja = {
   "settings.vectorIndex.distance": "距離計量",
   "settings.vectorIndex.build": "推奨ビルド",
   "settings.vectorIndex.reprovision":
-    "この検索精度の推奨ビルドパラメータを適用するには索引の再作成が必要です。検索時 accuracy は保存後すぐ反映されます。",
+    "この検索精度の推奨ビルドパラメータを適用するには索引の再作成が必要です。検索時 accuracy は保存後すぐ反映されます。下の再作成 SQL を DBA が実行すると NEIGHBORS / EFCONSTRUCTION が反映されます。",
   "settings.vectorIndex.reprovisionBadge": "索引再作成が必要",
   "settings.vectorIndex.profile.balanced": "バランス",
   "settings.vectorIndex.profile.balanced.description":
@@ -684,6 +754,10 @@ export const ja = {
   "settings.vectorIndex.actions.unsaved": "未保存の変更があります。",
   "settings.vectorIndex.loadError": "検索インデックス設定を取得できませんでした。",
   "settings.vectorIndex.saveError": "検索インデックス設定を保存できませんでした。",
+  "settings.vectorIndex.reindexSql.title": "索引再作成 SQL",
+  "settings.vectorIndex.reindexSql.description":
+    "保存中の検索精度の推奨ビルド値で HNSW 索引を再作成する DDL です。backend は実行しません。DBA がレビューのうえ実行してください(再作成中は検索が停止します)。",
+  "settings.vectorIndex.reindexSql.copy": "SQL をコピー",
   "settings.evaluation.subtitle":
     "検索・回答品質の判定に使う品質評価の基準を選択します。",
   "settings.evaluation.overview.title": "品質評価",
@@ -694,7 +768,6 @@ export const ja = {
   "settings.evaluation.recommendedFor": "推奨用途",
   "settings.evaluation.source": "設定元",
   "settings.evaluation.thresholds": "閾値",
-  "settings.evaluation.focusMetrics": "重点指標",
   "settings.evaluation.noThresholds": "プリセット閾値なし(request の thresholds を使用)",
   "settings.evaluation.suite.request_only": "リクエスト準拠",
   "settings.evaluation.suite.request_only.description":
@@ -757,7 +830,10 @@ export const ja = {
   "settings.agentic.rewrite": "クエリ書き換え",
   "settings.agentic.decompose": "sub-question 分解",
   "settings.agentic.multiHop": "multi-hop",
+  "settings.agentic.hyde": "HyDE",
   "settings.agentic.maxSubqueries": "最大 sub-question 数",
+  "settings.agentic.maxSubqueriesHelper": "分解 / multi-hop 時に有効(1〜8)",
+  "settings.agentic.maxSubqueriesError": "最大 sub-question 数は 1〜8 で入力してください。",
   "settings.agentic.on": "あり",
   "settings.agentic.off": "なし",
   "settings.agentic.llmWarning":
@@ -774,6 +850,12 @@ export const ja = {
   "settings.agentic.profile.multi_hop": "multi-hop",
   "settings.agentic.profile.multi_hop.description":
     "分解 + 根拠が弱い時に top context で 1 回追加分解(上限 1 hop)",
+  "settings.agentic.profile.smart_routing": "スマートルーティング",
+  "settings.agentic.profile.smart_routing.description":
+    "クエリの種別を見極めて検索向けに正規化(現状は書き換え相当の LLM 計画)",
+  "settings.agentic.profile.hyde": "HyDE",
+  "settings.agentic.profile.hyde.description":
+    "仮説的な回答文書を 1 つ生成し、その埋め込みで検索する",
   "settings.agentic.actions.save": "保存",
   "settings.agentic.actions.saving": "保存中",
   "settings.agentic.actions.saved": "高度な検索設定を保存しました。",
@@ -1229,7 +1311,7 @@ export const ja = {
   "settings.database.wallet.statusConfigured": "設定済み",
   "settings.database.wallet.statusNotConfigured": "未設定",
   "settings.database.wallet.location": "Wallet保存先",
-  "settings.database.status.title": "接続状態",
+  "settings.database.status.title": "構成状態",
   "settings.database.status.description": "接続可否に必要な最小情報だけを表示します。",
   "settings.database.status.readiness": "Readiness",
   "settings.database.status.authMethod": "認証方式",
@@ -1598,6 +1680,21 @@ export const ja = {
   "knowledgeBases.error.documents":
     "文書一覧の取得に失敗しました。接続状態を確認して再試行してください。",
 
+  "knowledgeBases.searchTest.title": "このナレッジで検索テスト",
+  "knowledgeBases.searchTest.description":
+    "業務ビューを作らずに、この知識ベース単体で検索の手応えをその場で確認できます。",
+  "knowledgeBases.searchTest.placeholder": "この知識ベースに質問してみる…",
+  "knowledgeBases.searchTest.button": "検索テスト",
+  "knowledgeBases.searchTest.searching": "検索中…",
+  "knowledgeBases.searchTest.cancel": "中止",
+  "knowledgeBases.searchTest.initialHint":
+    "質問を入力すると、この知識ベースから上位の根拠チャンクを取得します。",
+  "knowledgeBases.searchTest.needsIndexed": "索引済みの文書がありません。",
+  "knowledgeBases.searchTest.needsIndexedHint":
+    "先に文書を追加し、索引が完了するとここで検索を試せます。",
+  "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",
+  "knowledgeBases.searchTest.resultMeta": "{mode} / {count} 件 / {ms} ms",
+
   "knowledgeBases.adapter.title": "構築設定",
   "knowledgeBases.adapter.subtitle":
     "この知識ベースで文書をどう準備・解析・分割・索引するかを設定します。検索・回答設定は業務ビューで管理します。",
@@ -1614,6 +1711,7 @@ export const ja = {
   "knowledgeBases.adapter.field.fieldExtraction": "メタデータ/項目抽出",
   "knowledgeBases.adapter.field.assetSummary": "図表 VLM 要約",
   "knowledgeBases.adapter.field.navigationSummary": "ナビゲーション要約(章節木)",
+  "knowledgeBases.adapter.field.autoParseAfterPreprocess": "ファイル準備後に抽出へ進む",
   "knowledgeBases.adapter.field.autoChunkAfterExtract": "抽出後に Chunk 作成へ進む",
   "knowledgeBases.adapter.field.autoIndexAfterChunk": "Chunk 後に Embedding / 索引へ進む",
   "knowledgeBases.adapter.bool.enabled": "有効",
@@ -1886,6 +1984,13 @@ export const ja = {
   "flow.extraction.kind.other": "その他",
   "flow.extraction.rawText": "本文テキスト",
   "flow.extraction.noRawText": "本文テキストはまだありません。",
+  "flow.extraction.embeddedAsset": "画像データ(約{size})",
+  "flow.extraction.embeddedAssetFragment": "画像データ(断片)",
+  "flow.extraction.embeddedMore": "+{count}",
+  "flow.extraction.embeddedImageAlt": "抽出された埋め込み画像",
+  "flow.extraction.copyRawText": "本文をコピー",
+  "flow.extraction.copied": "コピーしました",
+  "flow.extraction.copyFailed": "コピーに失敗しました",
   "flow.extractionExport.title": "抽出エクスポート",
   "flow.extractionExport.format": "抽出エクスポート形式",
   "flow.extractionExport.markdown": "Markdown",
@@ -1905,6 +2010,7 @@ export const ja = {
   "flow.preview.preparedUnavailable": "処理後ファイルはまだありません。",
   "flow.step.upload": "アップロード",
   "flow.step.preprocess": "ファイル準備",
+  "flow.step.preprocessReview": "準備確認",
   "flow.step.extract": "抽出",
   "flow.step.review": "抽出確認",
   "flow.step.chunk": "Chunk",
@@ -1912,6 +2018,8 @@ export const ja = {
   "flow.step.indexing": "索引中",
   "flow.step.indexed": "索引済み",
   "flow.step.skipped": "skip",
+  "flow.inspector.tabs": "表示の切替",
+  "flow.inspector.details": "取込・診断の詳細",
   "flow.chunks.title": "Chunk / Citation",
   "flow.chunks.empty": "chunk はまだ作成されていません。",
   "flow.chunks.loadError": "chunk を取得できません",
@@ -1922,16 +2030,25 @@ export const ja = {
   "flow.indexSummary.status": "状態",
   "flow.indexSummary.chunks": "Chunks",
   "flow.indexSummary.vectors": "Vectors",
+  "flow.buildConfig.title": "適用された構築設定",
+  "flow.buildConfig.preprocess": "ファイル準備",
+  "flow.buildConfig.parser": "文書解析",
+  "flow.buildConfig.chunking": "文書分割",
+  "flow.buildConfig.openSettingsShort": "設定",
+  "flow.buildConfig.openSettings": "{name}の設定を開く",
   "flow.segments.retryFailed": "失敗 segment を再試行",
   "flow.ingestFailed": "取込に失敗しました。",
   "flow.ingestionQueued": "取込ジョブをキューに投入しました。完了まで状態を更新します。",
   "flow.ingestionSkipped": "この文書の取込ジョブはスキップされました。",
   "flow.indexed": "索引が完了し、RAG 検索の対象になりました。",
+  "flow.preprocessed.description":
+    "ファイル準備が完了しました。処理後ファイルを確認し、問題なければ解析(抽出)へ進めてください。",
   "flow.review.description":
     "抽出が完了しました。内容を確認し、問題なければ Chunk 作成へ進めてください。",
   "flow.chunked.description":
     "Chunk 作成が完了しました。Chunk / Citation を確認し、問題なければ Embedding / 索引へ進めてください。",
   "flow.approve": "承認して次へ",
+  "flow.approvePreprocess": "承認して解析へ",
   "flow.approveExtraction": "承認して Chunk 作成",
   "flow.approveChunks": "承認して Embedding / 索引",
   "flow.approved": "承認しました。次の処理を開始します。",
@@ -2070,6 +2187,9 @@ export const ja = {
   "search.citation.profileValue": "{profile}",
   "search.citation.openPreview": "{file} の引用位置を開く",
   "search.citation.openPreviewShort": "引用位置",
+  "search.citation.previewOpen": "プレビュー",
+  "search.citation.previewClose": "閉じる",
+  "search.citation.previewFullpage": "全画面で開く",
   "search.citation.feedback.group": "引用フィードバック",
   "search.citation.feedback.helpful": "この引用は役に立った",
   "search.citation.feedback.notHelpful": "この引用は役に立たなかった",
@@ -2167,6 +2287,7 @@ export const ja = {
   "evaluation.suite.followDefault": "設定の既定に従う",
   "evaluation.suite.followDefaultWith": "設定の既定に従う(現在: {suite})",
   "evaluation.suite.thresholdsPreview": "適用される閾値",
+  "evaluation.suite.thresholdsPreviewOverride": "適用される閾値(リクエスト指定が優先)",
   "evaluation.suite.noThresholds": "プリセット閾値なし(閾値判定を行いません)",
   "evaluation.suite.manualOverrideNote":
     "リクエスト JSON に thresholds があるため、スイートより優先して適用されます。",
@@ -2267,6 +2388,7 @@ export const ja = {
 
   "status.UPLOADED": "アップロード済み",
   "status.PREPROCESSING": "ファイル準備中",
+  "status.PREPROCESSED": "解析待ち",
   "status.INGESTING": "取込中",
   "status.REVIEW": "確認待ち",
   "status.CHUNKING": "Chunk 作成中",

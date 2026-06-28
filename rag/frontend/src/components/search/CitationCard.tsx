@@ -1,7 +1,8 @@
-import { FileText, Layers, LocateFixed, ThumbsDown, ThumbsUp } from "lucide-react";
-import { useState } from "react";
+import { Eye, FileText, Layers, LocateFixed, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import { Button } from "@/components/ui/button";
 import { ApiError, api, type CitationFeedbackRating, type RetrievedChunk } from "@/lib/api";
 import {
@@ -10,6 +11,7 @@ import {
   bboxPageRotationFromMetadata,
   bboxPageSizeFromMetadata,
   bboxUnitFromMetadata,
+  withBboxPageRotation,
 } from "@/lib/bbox";
 import {
   citationMetadataChips,
@@ -39,9 +41,28 @@ export function CitationCard({
   const retrievalBadges = citationRetrievalBadges(chunk);
   const variantId = variantIdFromChunkId(chunk.chunk_id);
   const previewUrl = citationPreviewUrl(chunk);
+  const previewFileName = chunk.file_name ?? chunk.document_id;
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const focusPage = firstIntegerMetadata(chunk.metadata, ["page_start", "page"]);
+  const focusBbox = bboxFromMetadata(chunk.metadata);
+  const focusBboxMode = bboxCoordinateModeFromMetadata(chunk.metadata);
+  const focusBboxUnit = bboxUnitFromMetadata(chunk.metadata);
+  const focusPageSize = withBboxPageRotation(
+    bboxPageSizeFromMetadata(chunk.metadata),
+    bboxPageRotationFromMetadata(chunk.metadata)
+  );
   const [pendingRating, setPendingRating] = useState<CitationFeedbackRating | null>(null);
   const [submittedRating, setSubmittedRating] = useState<CitationFeedbackRating | null>(null);
   const canSubmitFeedback = Boolean(traceId);
+
+  function openPreview() {
+    setPreviewOpen(true);
+    dialogRef.current?.showModal();
+  }
+  function closePreview() {
+    dialogRef.current?.close();
+  }
 
   async function submitFeedback(rating: CitationFeedbackRating) {
     if (!traceId || pendingRating) return;
@@ -118,16 +139,26 @@ export function CitationCard({
         </span>
       ) : null}
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <Link
-          to={previewUrl}
-          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          aria-label={t("search.citation.openPreview", {
-            file: chunk.file_name ?? chunk.document_id,
-          })}
-        >
-          <LocateFixed size={15} aria-hidden />
-          {t("search.citation.openPreviewShort")}
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={openPreview}
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            <Eye size={15} aria-hidden />
+            {t("search.citation.previewOpen")}
+          </button>
+          <Link
+            to={previewUrl}
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            aria-label={t("search.citation.openPreview", {
+              file: previewFileName,
+            })}
+          >
+            <LocateFixed size={15} aria-hidden />
+            {t("search.citation.openPreviewShort")}
+          </Link>
+        </div>
         <div
           className="flex justify-end gap-1"
           role="group"
@@ -165,6 +196,55 @@ export function CitationCard({
           </Button>
         </div>
       </div>
+      <dialog
+        ref={dialogRef}
+        onClose={() => setPreviewOpen(false)}
+        onClick={(event) => {
+          if (event.target === dialogRef.current) closePreview();
+        }}
+        aria-label={t("search.citation.openPreview", { file: previewFileName })}
+        className="m-auto w-[min(92vw,900px)] max-h-[85vh] overflow-auto rounded-lg border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
+      >
+        {previewOpen ? (
+          <div className="flex flex-col">
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-card px-4 py-3">
+              <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+                <FileText size={14} className="shrink-0 text-muted" aria-hidden />
+                <span className="truncate" title={previewFileName}>
+                  {previewFileName}
+                </span>
+              </span>
+              <div className="flex shrink-0 items-center gap-2">
+                <Link
+                  to={previewUrl}
+                  className="text-xs font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  {t("search.citation.previewFullpage")}
+                </Link>
+                <button
+                  type="button"
+                  onClick={closePreview}
+                  aria-label={t("search.citation.previewClose")}
+                  className="inline-flex size-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  <X size={16} aria-hidden />
+                </button>
+              </div>
+            </div>
+            <div className="p-4">
+              <DocumentPreview
+                documentId={chunk.document_id}
+                fileName={previewFileName}
+                focusPage={focusPage}
+                focusBbox={focusBbox}
+                focusBboxMode={focusBboxMode}
+                focusBboxUnit={focusBboxUnit}
+                focusPageSize={focusPageSize}
+              />
+            </div>
+          </div>
+        ) : null}
+      </dialog>
     </li>
   );
 }
@@ -172,6 +252,20 @@ export function CitationCard({
 export interface CitationScoreMaxima {
   score: number;
   rerankScore: number;
+}
+
+/** 引用一覧から retrieval / rerank スコアの最大値を求める(スコアメータの基準)。 */
+export function scoreMaximaForCitations(citations: RetrievedChunk[]): CitationScoreMaxima {
+  return {
+    score: maxScore(citations.map((chunk) => chunk.score)),
+    rerankScore: maxScore(
+      citations.flatMap((chunk) => (chunk.rerank_score == null ? [] : [chunk.rerank_score]))
+    ),
+  };
+}
+
+function maxScore(values: number[]): number {
+  return values.reduce((max, value) => (Number.isFinite(value) && value > max ? value : max), 0);
 }
 
 function citationRetrievalBadges(chunk: RetrievedChunk): string[] {

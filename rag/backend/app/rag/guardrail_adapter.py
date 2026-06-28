@@ -99,8 +99,21 @@ def resolve_guardrail_adapter(settings: Settings) -> GuardrailAdapterParams:
     )
 
 
+# policy→静的閾値はプロセス内で不変(定数)。サービス委譲時の毎リクエスト HTTP と
+# hard-fail を避けるため、解決成功結果を policy 名でメモ化する(policy あたり最大 1 回)。
+_STATIC_CACHE: dict[str, tuple[int, float, bool]] = {}
+
+
+def reset_guardrail_static_cache() -> None:
+    """静的解決メモ化をクリアする(テスト isolation 用)。"""
+    _STATIC_CACHE.clear()
+
+
 def _resolve_static(settings: Settings, policy: str) -> tuple[int, float, bool]:
     """静的 (grounding_min_overlap, grounding_min_ratio, audit_emphasis) を解決する。"""
+    cached = _STATIC_CACHE.get(policy)
+    if cached is not None:
+        return cached
     from rag_pipeline_core.stage import GuardrailStageRequest
 
     from app.clients.pipeline_stage import PipelineStageClient
@@ -109,13 +122,17 @@ def _resolve_static(settings: Settings, policy: str) -> tuple[int, float, bool]:
     if client.is_enabled("guardrail"):
         response = client.run_guardrail(GuardrailStageRequest(policy=policy))
         if response is not None:
-            return (
+            result = (
                 response.grounding_min_overlap,
                 response.grounding_min_ratio,
                 response.audit_emphasis,
             )
+            _STATIC_CACHE[policy] = result
+            return result
     resolved = resolve_guardrail(policy)
-    return resolved.grounding_min_overlap, resolved.grounding_min_ratio, resolved.audit_emphasis
+    result = (resolved.grounding_min_overlap, resolved.grounding_min_ratio, resolved.audit_emphasis)
+    _STATIC_CACHE[policy] = result
+    return result
 
 
 def guardrail_adapter_runtime_settings(settings: Settings) -> GuardrailAdapterRuntimeSettings:

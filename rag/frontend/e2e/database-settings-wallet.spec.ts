@@ -89,8 +89,8 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   await expect(page.getByRole("heading", { name: "データベース設定" }).first()).toBeVisible();
   await expect(page.getByLabel("データベースユーザー")).toHaveValue("rag_app");
   await expect(page.getByLabel("データベースパスワード")).toBeVisible();
-  await expect(page.getByText("Wallet状態:")).toBeVisible();
-  await expect(page.locator("form").getByText("未設定", { exact: true }).first()).toBeVisible();
+  // Wallet 状態・Readiness は右「構成状態」パネル(form 外)に一本化。左フォームは保存先パスのみ。
+  await expect(main.getByText("未検出")).toBeVisible();
   await expect(
     page.getByText("Wallet保存先: /u01/aipoc/instantclient_23_26/network/admin")
   ).toBeVisible();
@@ -112,7 +112,7 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   await expect(
     page.getByText("Wallet ZIP をアップロードしました: Wallet_RAGDB.zip")
   ).toBeVisible();
-  await expect(page.locator("form").getByText("Readiness: OK")).toBeVisible();
+  await expect(main.getByText("Readiness: OK")).toBeVisible();
   await expect(main.getByText("サービス名候補")).toHaveCount(0);
   await expect(main.getByText("Embedding 次元")).toHaveCount(0);
   await expect(page.getByText("ベクトル列")).toHaveCount(0);

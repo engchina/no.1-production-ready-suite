@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from rag_parser_core import service as service_module
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import ParserRegistryResult
-from rag_parser_core.result import ParseResponse
+from rag_parser_core.result import ParseResponse, service_failure_warning
 from rag_parser_core.service import create_parse_app
 from rag_parser_core.source import SourceModality, SourceProfile
 
@@ -197,3 +197,23 @@ def test_parse_result_to_registry_result_preserves_fallback() -> None:
     assert result.warnings == ("marker_adapter_failed",)
     # 往復で等価
     assert ParseResponse.from_result(result).model_dump() == response.model_dump()
+
+
+def test_service_failure_warning_surfaces_safe_message() -> None:
+    class _SafeError(Exception):
+        safe_for_user = True
+
+    warning = service_failure_warning(
+        "oci_genai_vision",
+        _SafeError("VLM が   max_output_tokens 上限で\n途中終了しました。"),
+    )
+    # 利用者向けメッセージを上流へ届ける(空白は畳む)。
+    assert warning == (
+        "oci_genai_vision_unavailable: VLM が max_output_tokens 上限で 途中終了しました。"
+    )
+
+
+def test_service_failure_warning_hides_unsafe_detail() -> None:
+    warning = service_failure_warning("oci_genai_vision", RuntimeError("secret://token"))
+    # safe_for_user でない例外は型名のみ(情報漏えい回避)。
+    assert warning == "oci_genai_vision_unavailable: RuntimeError"

@@ -204,11 +204,11 @@ function ProfileChips({ profile }: { profile: GraphProfileStatusData }) {
         {t("settings.graph.enabled")}{" "}
         {profile.enabled ? t("settings.graph.on") : t("settings.graph.off")}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+      <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
         {t("settings.graph.claims")}{" "}
         {profile.build_claims ? t("settings.graph.on") : t("settings.graph.off")}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+      <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
         {t("settings.graph.community")}{" "}
         {profile.build_community_summaries ? t("settings.graph.on") : t("settings.graph.off")}
       </span>

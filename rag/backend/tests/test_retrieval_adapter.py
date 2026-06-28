@@ -60,6 +60,10 @@ def test_runtime_settings_orders_and_marks_selected() -> None:
         Settings(rag_retrieval_strategy="business_context_strict")
     )
     assert tuple(status.name for status in runtime.strategies) == RETRIEVAL_STRATEGY_ORDER
+    # 未配線戦略は設定 API の表面から除外する。
+    names = {status.name for status in runtime.strategies}
+    assert "reasoning_tree_search" not in names
+    assert "colpali_visual_retrieval" not in names
     selected = [status.name for status in runtime.strategies if status.selected]
     assert selected == ["business_context_strict"]
 

@@ -170,11 +170,10 @@ class EvaluationStageRequest(BaseModel):
 
 
 class EvaluationStageResponse(BaseModel):
-    """``POST /run``(evaluation)の出力(CI gate 用閾値 + focus metrics)。"""
+    """``POST /run``(evaluation)の出力(CI gate 用閾値)。"""
 
     suite: str
     thresholds: dict[str, float] | None = None
-    focus_metrics: list[str] = Field(default_factory=list)
 
 
 class RetrievalStageRequest(BaseModel):

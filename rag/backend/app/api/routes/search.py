@@ -327,6 +327,11 @@ async def _search_events(
     if include_answer_deltas:
         for chunk in _answer_chunks(result.answer):
             yield _sse_event("delta", {"text": chunk})
+    elif result.answer_replaced:
+        # realtime stream 済みで回答ガードレールが本文をマスク/差し替えした場合は、
+        # 生トークンを置換するためマスク済み本文を 1 回送る。
+        # ponytail: 配信済みトークンの一瞬の露出窓は残る(完全防止は配信前バッファリングが必要)。
+        yield _sse_event("replace", {"text": result.answer})
     yield _sse_event(
         "citations",
         [citation.model_dump(mode="json") for citation in result.citations],

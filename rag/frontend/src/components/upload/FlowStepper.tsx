@@ -7,6 +7,7 @@ import type { FileStatus } from "@/lib/api";
 export type FlowStepStatus =
   | "UPLOADED"
   | "PREPROCESSING"
+  | "PREPROCESSED"
   | "INGESTING"
   | "REVIEW"
   | "CHUNKING"
@@ -16,6 +17,7 @@ export type FlowStepStatus =
 const ORDER: FlowStepStatus[] = [
   "UPLOADED",
   "PREPROCESSING",
+  "PREPROCESSED",
   "INGESTING",
   "REVIEW",
   "CHUNKING",
@@ -26,6 +28,7 @@ const ORDER: FlowStepStatus[] = [
 const STEP_LABEL_KEY: Record<FlowStepStatus, I18nKey> = {
   UPLOADED: "flow.step.upload",
   PREPROCESSING: "flow.step.preprocess",
+  PREPROCESSED: "flow.step.preprocessReview",
   INGESTING: "flow.step.extract",
   REVIEW: "flow.step.review",
   CHUNKING: "flow.step.chunk",

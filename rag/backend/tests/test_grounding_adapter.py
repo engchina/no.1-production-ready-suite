@@ -91,6 +91,46 @@ def test_runtime_settings_orders_and_marks_selected() -> None:
     assert selected == ["compact"]
 
 
+def _status(runtime, name):  # type: ignore[no-untyped-def]
+    return next(status for status in runtime.pipelines if status.name == name)
+
+
+def test_custom_status_reflects_legacy_flags_even_when_not_selected() -> None:
+    """custom カードは選択中 preset に関わらず legacy フラグの effective を表示する。"""
+    runtime = grounding_adapter_runtime_settings(
+        Settings(
+            rag_post_retrieval_pipeline="lean",
+            rag_context_dependency_promotion_enabled=True,
+            rag_context_diversity_lambda=0.5,
+            rag_context_adaptive_expansion_enabled=True,
+            rag_context_compression_enabled=True,
+        )
+    )
+    custom = _status(runtime, "custom")
+    assert custom.selected is False
+    assert custom.dependency_promotion is True
+    assert custom.diversity is True
+    assert custom.expansion_mode == "adaptive"
+    assert custom.compression is True
+    assert custom.corrective is False
+
+
+def test_custom_status_maps_neighbor_only_expansion() -> None:
+    """custom が neighbor のみ拡張のとき expansion_mode は neighbor として表示される。"""
+    runtime = grounding_adapter_runtime_settings(
+        Settings(rag_post_retrieval_pipeline="custom", rag_context_neighbor_window=2)
+    )
+    assert runtime.expansion_mode == "neighbor"
+    assert _status(runtime, "custom").expansion_mode == "neighbor"
+
+
+def test_status_surfaces_corrective_for_crag_presets() -> None:
+    """corrective(CRAG) は verified_context / full_governed の status に出る。"""
+    runtime = grounding_adapter_runtime_settings(Settings())
+    corrective = {status.name for status in runtime.pipelines if status.corrective}
+    assert corrective == {"verified_context", "full_governed"}
+
+
 def test_normalize_post_retrieval_pipeline_defaults() -> None:
     assert normalize_post_retrieval_pipeline("nope") == "custom"
     assert normalize_post_retrieval_pipeline("full_governed") == "full_governed"

@@ -16,7 +16,6 @@ def test_request_only_has_no_preset_thresholds() -> None:
     params = resolve_evaluation_adapter(Settings())
     assert params.suite == "request_only"
     assert params.thresholds is None
-    assert params.focus_metrics == ()
 
 
 def test_retrieval_focused_sets_retrieval_thresholds() -> None:

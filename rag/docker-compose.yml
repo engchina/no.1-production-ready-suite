@@ -321,6 +321,16 @@ services:
         required: false
     environment:
       OCI_CONFIG_FILE: /home/appuser/.oci/config
+      # backend の _compose_env が起動時に注入する実効モデル設定(model-settings.json 由来を含む)。
+      # environment は env_file より優先され、これが正本になる。
+      OCI_ENTERPRISE_AI_ENDPOINT: ${OCI_ENTERPRISE_AI_ENDPOINT:-}
+      OCI_ENTERPRISE_AI_API_KEY: ${OCI_ENTERPRISE_AI_API_KEY:-}
+      OCI_ENTERPRISE_AI_PROJECT_OCID: ${OCI_ENTERPRISE_AI_PROJECT_OCID:-}
+      OCI_ENTERPRISE_AI_VLM_MODEL: ${OCI_ENTERPRISE_AI_VLM_MODEL:-}
+      OCI_ENTERPRISE_AI_DEFAULT_MODEL: ${OCI_ENTERPRISE_AI_DEFAULT_MODEL:-}
+      OCI_ENTERPRISE_AI_VLM_PATH: ${OCI_ENTERPRISE_AI_VLM_PATH:-/responses}
+      OCI_ENTERPRISE_AI_LLM_PATH: ${OCI_ENTERPRISE_AI_LLM_PATH:-/responses}
+      OCI_ENTERPRISE_AI_VLM_INPUT_MODE: ${OCI_ENTERPRISE_AI_VLM_INPUT_MODE:-files_api}
     volumes:
       - oci-config:/home/appuser/.oci
 

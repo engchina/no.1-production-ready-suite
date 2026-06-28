@@ -315,19 +315,27 @@ class IngestionPipeline:
                 await self._save_preprocess_artifact(
                     document_id=document_id,
                     source_derivation=source_derivation,
-                    original_file_name=source_profile.original_file_name
-                    if source_profile is not None
-                    else "document",
+                    original_file_name=(
+                        source_profile.original_file_name
+                        if source_profile is not None
+                        else "document"
+                    ),
                     original_object_storage_path=original_object_storage_path,
                     fallback_content_type=parse_content_type,
                 )
+                if not self._settings.rag_auto_parse_after_preprocess_enabled:
+                    # ファイル準備ゲート: PREPROCESSED で停止し、人の承認(または KB/全体
+                    # 設定で自動進行)で EXTRACT ジョブを別途投入して parse へ進む。
+                    detail = await self._oracle.update_document_status(
+                        document_id, FileStatus.PREPROCESSED
+                    )
+                    record_ingestion("preprocessed", 0)
+                    return detail
                 await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
             else:
                 parse_bytes = image_bytes
                 parse_content_type = prepared_artifact.content_type or content_type
-                source_derivation = _source_derivation_from_preprocess_artifact(
-                    prepared_artifact
-                )
+                source_derivation = _source_derivation_from_preprocess_artifact(prepared_artifact)
             await _raise_if_cancelled(cancel_checker)
             try:
                 parser_result = await _observe_cpu_ingestion_stage(
@@ -2191,8 +2199,10 @@ def _is_audio_source(source_profile: SourceProfile | None, content_type: str) ->
     if source_profile is not None and source_profile.modality == SourceModality.AUDIO:
         return True
     normalized = (
-        content_type or (source_profile.content_type if source_profile is not None else "")
-    ).strip().casefold()
+        (content_type or (source_profile.content_type if source_profile is not None else ""))
+        .strip()
+        .casefold()
+    )
     if normalized.startswith("audio/"):
         return True
     extension = (source_profile.extension if source_profile is not None else None) or ""

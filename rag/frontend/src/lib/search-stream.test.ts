@@ -46,6 +46,27 @@ describe("streamSearch", () => {
     expect(done).toBe(true);
   });
 
+  it("replace event はマスク済み本文で onReplace を呼ぶ", async () => {
+    const body = [
+      `event: delta\ndata: ${JSON.stringify({ text: "口座番号は " })}\n\n`,
+      `event: delta\ndata: ${JSON.stringify({ text: "1234567 です。" })}\n\n`,
+      `event: replace\ndata: ${JSON.stringify({ text: "口座番号は [機微情報] です。" })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ trace_id: "t1" })}\n\n`,
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse(body)));
+
+    let answer = "";
+    await streamSearch(
+      { query: "口座番号" },
+      {
+        onDelta: (text) => (answer += text),
+        onReplace: (text) => (answer = text),
+      }
+    );
+
+    expect(answer).toBe("口座番号は [機微情報] です。");
+  });
+
   it("末尾の空行がない最後の event も解析する", async () => {
     vi.stubGlobal(
       "fetch",

@@ -228,6 +228,16 @@ class GuardrailPolicy:
                     message="回答と検索根拠の重なりが少ないため、引用を確認してください。",
                 )
             )
+            if self._params.audit_emphasis:
+                # 規制対応(audit_emphasis): 低根拠回答は表示せずブロックする。
+                # 監査 outcome=blocked と user 表示が一致する(error 所見を outcome へ反映)。
+                return GuardrailResult(
+                    allowed=False,
+                    sanitized_text=(
+                        "根拠が不十分なため、安全ポリシー(規制対応)により回答を表示できません。"
+                    ),
+                    findings=findings,
+                )
         return GuardrailResult(allowed=True, sanitized_text=sanitized, findings=findings)
 
     def _augment_with_oci(self, result: GuardrailResult, *, block_on_flag: bool) -> GuardrailResult:
@@ -393,7 +403,10 @@ def _char_ngrams(text: str, n: int) -> set[str]:
 
 
 def _is_high_signal_feature(feature: str) -> bool:
-    """金額・日付・ID らしい特徴は強い根拠として扱う。"""
-    return any(char.isdigit() for char in feature) or bool(
-        re.fullmatch(r"[a-z][a-z0-9_-]{3,}", feature, re.IGNORECASE)
-    )
+    """金額・日付・ID らしい特徴(数字を含む)は強い根拠として扱う。
+
+    純英単語(data/system/oracle 等)まで high-signal にすると 1 語一致で
+    min_overlap/min_ratio を素通りし strict/regulated の閾値が無効化されるため、
+    数字を含む特徴に限定する。
+    """
+    return any(char.isdigit() for char in feature)

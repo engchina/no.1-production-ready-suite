@@ -12,6 +12,7 @@ from app.config import (
     get_settings,
     load_persisted_model_settings,
 )
+from app.rag.guardrail_adapter import reset_guardrail_static_cache
 from app.rag.rate_limit import reset_rate_limiter
 from app.rag.request_context import (
     AuditRequestContext,
@@ -40,6 +41,7 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
     reset_local_store()
     reset_rate_limiter()
+    reset_guardrail_static_cache()
     _reset_runtime_settings(get_settings(), tmp_path)
 
 
@@ -130,6 +132,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.oci_enterprise_ai_max_retries = 3
     settings.oci_enterprise_ai_llm_max_output_tokens = 1200
     settings.oci_enterprise_ai_vlm_max_output_tokens = 65536
+    settings.oci_enterprise_ai_vlm_input_mode = "files_api"
     settings.rag_parser_adapter_backend = "unstructured"
     settings.rag_parser_docling_enabled = False
     settings.rag_parser_marker_enabled = False
@@ -155,3 +158,6 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.rag_pdf_segmentation_enabled = True
     settings.rag_pdf_max_pages_per_segment = 10
     settings.rag_pdf_max_segments = 300
+    # 本番既定は False(PREPROCESSED で停止)。既存テストは preprocess を越えて
+    # REVIEW まで進む前提なのでテスト既定は自動進行とし、停止挙動は専用テストで検証する。
+    settings.rag_auto_parse_after_preprocess_enabled = True

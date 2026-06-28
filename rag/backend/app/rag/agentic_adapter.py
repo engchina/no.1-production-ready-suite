@@ -55,6 +55,7 @@ class AgenticProfileStatus:
     rewrite: bool
     decompose: bool
     multi_hop: bool
+    hyde: bool = False
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,7 @@ def agentic_adapter_runtime_settings(settings: Settings) -> AgenticAdapterRuntim
             rewrite=spec.rewrite,
             decompose=spec.decompose,
             multi_hop=spec.multi_hop,
+            hyde=spec.hyde,
         )
         for spec in (AGENTIC_SPECS[name] for name in AGENTIC_PROFILES)
     )

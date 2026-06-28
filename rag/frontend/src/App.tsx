@@ -36,11 +36,13 @@ import { ServicesManagementClient } from "@/components/settings/ServicesManageme
 import { RetrievalSettingsClient } from "@/components/settings/RetrievalSettingsClient";
 import { GroundingSettingsClient } from "@/components/settings/GroundingSettingsClient";
 import { GenerationSettingsClient } from "@/components/settings/GenerationSettingsClient";
+import { PromptVersionsClient } from "@/components/settings/PromptVersionsClient";
 import { GuardrailSettingsClient } from "@/components/settings/GuardrailSettingsClient";
 import { VectorIndexSettingsClient } from "@/components/settings/VectorIndexSettingsClient";
 import { EvaluationSettingsClient } from "@/components/settings/EvaluationSettingsClient";
 import { GraphSettingsClient } from "@/components/settings/GraphSettingsClient";
 import { AgenticSettingsClient } from "@/components/settings/AgenticSettingsClient";
+import { PipelineHubClient } from "@/components/settings/PipelineHubClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -84,6 +86,7 @@ export function App() {
         <Route path={`${APP_ROUTES.documents}/:id`} element={<DocumentDetailRoute />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationClient />} />
+        <Route path={APP_ROUTES.settingsPipeline} element={<SettingsPipelineRoute />} />
         <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
         <Route
           path={APP_ROUTES.settingsUploadStorage}
@@ -98,6 +101,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsRetrieval} element={<SettingsRetrievalRoute />} />
         <Route path={APP_ROUTES.settingsGrounding} element={<SettingsGroundingRoute />} />
         <Route path={APP_ROUTES.settingsGeneration} element={<SettingsGenerationRoute />} />
+        <Route path={APP_ROUTES.settingsPrompts} element={<SettingsPromptsRoute />} />
         <Route path={APP_ROUTES.settingsGuardrail} element={<SettingsGuardrailRoute />} />
         <Route path={APP_ROUTES.settingsVectorIndex} element={<SettingsVectorIndexRoute />} />
         <Route path={APP_ROUTES.settingsEvaluation} element={<SettingsEvaluationRoute />} />
@@ -313,6 +317,18 @@ function KnowledgeBaseDetailRoute() {
   );
 }
 
+function SettingsPipelineRoute() {
+  return (
+    <div>
+      <PageHeader
+        title={t("nav.settingsPipeline")}
+        subtitle={t("settings.pipeline.subtitle")}
+      />
+      <PipelineHubClient />
+    </div>
+  );
+}
+
 function SettingsOciRoute() {
   return (
     <div>
@@ -414,6 +430,15 @@ function SettingsGenerationRoute() {
         subtitle={t("settings.generation.subtitle")}
       />
       <GenerationSettingsClient />
+    </div>
+  );
+}
+
+function SettingsPromptsRoute() {
+  return (
+    <div>
+      <PageHeader title={t("nav.settingsPrompts")} subtitle={t("settings.prompts.subtitle")} />
+      <PromptVersionsClient />
     </div>
   );
 }

@@ -76,6 +76,31 @@ def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
     assert by_id["preprocess-office-to-pdf"].execution_policy == "selected_adapter"
 
 
+# サービス化が未成熟な純 CPU 段。UI/API のデプロイ操作を出さず backend 内処理で動作する。
+_DEMOTED_STAGE_IDS = {
+    "pipeline-chunking",
+    "pipeline-vector-index",
+    "pipeline-graphrag",
+    "pipeline-grounding",
+    "pipeline-guardrail",
+    "pipeline-evaluation",
+    "pipeline-agentic",
+}
+
+
+def test_catalog_deployable_marks_future_service_stages() -> None:
+    by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
+    # 格下げ 7 段は deployable=False かつ backend 内処理(in_process_when_disabled)。
+    for sid in _DEMOTED_STAGE_IDS:
+        assert by_id[sid].deployable is False, sid
+        assert by_id[sid].execution_policy == "in_process_when_disabled", sid
+    # サービス維持: retrieval/generation と parser/preprocess 代表。
+    assert by_id["pipeline-retrieval"].deployable is True
+    assert by_id["pipeline-generation"].deployable is True
+    assert by_id["parser-docling"].deployable is True
+    assert by_id["preprocess-office-to-pdf"].deployable is True
+
+
 def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
     """モデル DL を行う 7 parser だけ model_cache_path を持ち、root/appuser でパスが分かれる。"""
     by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
@@ -118,6 +143,50 @@ def test_compose_env_injects_huggingface_settings() -> None:
     assert env["HF_ENDPOINT"] == "https://hf-mirror.com"
     # os.environ を継承していること(PATH などが残る)。
     assert "PATH" in env
+
+
+def test_compose_env_injects_oci_enterprise_ai_settings() -> None:
+    """OCI parser コンテナ向けに実効 OCI Enterprise AI 設定を env 注入する。"""
+    settings = get_settings().model_copy(
+        update={
+            "oci_enterprise_ai_endpoint": "https://inference.example/openai/v1",
+            "oci_enterprise_ai_api_key": "sk-secret",
+            "oci_enterprise_ai_project_ocid": "ocid1.generativeaiproject.oc1..x",
+            # catalog が空でも resolver は legacy VLM/LLM へフォールバックする。
+            "oci_enterprise_ai_models": [],
+            "oci_enterprise_ai_vlm_model": "xai.grok-4.3",
+            "oci_enterprise_ai_llm_model": "xai.grok-4.3",
+            "oci_enterprise_ai_vlm_input_mode": "files_api",
+        }
+    )
+    env = _compose_env(settings)
+    assert env["OCI_ENTERPRISE_AI_ENDPOINT"] == "https://inference.example/openai/v1"
+    assert env["OCI_ENTERPRISE_AI_API_KEY"] == "sk-secret"
+    assert env["OCI_ENTERPRISE_AI_PROJECT_OCID"] == "ocid1.generativeaiproject.oc1..x"
+    assert env["OCI_ENTERPRISE_AI_VLM_MODEL"] == "xai.grok-4.3"
+    assert env["OCI_ENTERPRISE_AI_DEFAULT_MODEL"] == "xai.grok-4.3"
+    assert env["OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] == "files_api"
+
+
+def test_compose_env_oci_vlm_model_empty_when_unconfigured() -> None:
+    """Vision モデル未設定なら空文字で渡し、parser は degraded を維持する。"""
+    settings = get_settings().model_copy(
+        update={
+            "oci_enterprise_ai_models": [],
+            "oci_enterprise_ai_vlm_model": "",
+            "oci_enterprise_ai_llm_model": "",
+        }
+    )
+    env = _compose_env(settings)
+    assert env["OCI_ENTERPRISE_AI_VLM_MODEL"] == ""
+
+
+def test_compose_passes_oci_enterprise_ai_env_to_vision_parser() -> None:
+    """compose は parser-oci-genai-vision へ ${OCI_ENTERPRISE_AI_*} を渡す。"""
+    compose = Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    text = compose.read_text(encoding="utf-8")
+    assert "OCI_ENTERPRISE_AI_VLM_MODEL: ${OCI_ENTERPRISE_AI_VLM_MODEL:-}" in text
+    assert "OCI_ENTERPRISE_AI_ENDPOINT: ${OCI_ENTERPRISE_AI_ENDPOINT:-}" in text
 
 
 def test_list_services_exposes_model_cache_mount(monkeypatch: MonkeyPatch) -> None:
@@ -265,6 +334,22 @@ def test_probe_unconfigured_when_url_blank(monkeypatch: MonkeyPatch) -> None:
     _patch_probe_httpx(monkeypatch)
     statuses = asyncio.run(probe_service_statuses(settings))
     assert statuses["parser-docling"] == "unconfigured"
+
+
+def test_probe_non_deployable_returns_in_process_without_http(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    _patch_probe_httpx(monkeypatch)
+    entry = get_catalog_entry("pipeline-chunking")
+    assert entry is not None and entry.deployable is False
+    _FakeAsyncClient.calls = []
+    try:
+        status = asyncio.run(probe_service_status(settings, entry))
+        calls = list(_FakeAsyncClient.calls)
+    finally:
+        _FakeAsyncClient.calls = []
+    # backend 内処理の段は /health を叩かず固定で in_process を返す。
+    assert status == "in_process"
+    assert calls == []
 
 
 # --- 制御層 -----------------------------------------------------------------
@@ -615,8 +700,23 @@ def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     assert dots["execution_policy"] == "selected_adapter"
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
     assert chunking["execution_policy"] == "in_process_when_disabled"
+    assert chunking["deployable"] is False
     retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
     assert retrieval["execution_policy"] == "in_process_when_disabled"
+    assert retrieval["deployable"] is True
+
+
+def test_control_rejects_non_deployable_stage(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "dev")  # dev は制御自動有効
+
+    async def fail_exec(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("non-deployable stage must not invoke compose")
+
+    # 409 ガードは control 実行前。compose が呼ばれたらテスト失敗にする。
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail_exec)
+    resp = client.post("/api/services/pipeline-chunking/start")
+    assert resp.status_code == 409
 
 
 def test_list_services_dev_auto_enables_control(monkeypatch: MonkeyPatch) -> None:

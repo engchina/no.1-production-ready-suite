@@ -8,23 +8,36 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, type AgenticProfileName, type AgenticProfileStatusData } from "@/lib/api";
+import {
+  ApiError,
+  type AgenticProfileName,
+  type AgenticProfileStatusData,
+  type AgenticSettingsData,
+  type AgenticSettingsUpdate,
+} from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useAgenticSettings, useUpdateAgenticSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
-const PROFILE_ORDER: AgenticProfileName[] = ["off", "query_rewrite", "decompose", "multi_hop"];
+const PROFILE_ORDER: AgenticProfileName[] = [
+  "off",
+  "smart_routing",
+  "query_rewrite",
+  "hyde",
+  "decompose",
+  "multi_hop",
+];
 
 /** 高度な検索方式の現在設定を管理する設定画面。 */
 export function AgenticSettingsClient() {
   const query = useAgenticSettings();
   const save = useUpdateAgenticSettings();
-  const [profile, setProfile] = useState<AgenticProfileName | null>(null);
+  const [form, setForm] = useState<AgenticSettingsUpdate | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (query.data && !save.isPending) {
-      setProfile(query.data.profile);
+      setForm(formFromSettings(query.data));
     }
   }, [query.data, save.isPending]);
 
@@ -50,39 +63,46 @@ export function AgenticSettingsClient() {
   }
 
   const settings = query.data;
-  if (!settings || !profile) return null;
+  if (!settings || !form) return null;
 
-  const dirty = profile !== settings.profile;
+  const baseline = formFromSettings(settings);
+  const dirty =
+    form.profile !== baseline.profile || form.max_subqueries !== baseline.max_subqueries;
+  const maxSubqueriesError =
+    !Number.isInteger(form.max_subqueries) || form.max_subqueries < 1 || form.max_subqueries > 8;
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.agentic.saveError");
   const profiles = orderedProfiles(settings.profiles);
-  const selectedProfile = profiles.find((item) => item.name === profile);
-  const showLlmWarning = Boolean(selectedProfile?.enabled);
+  const selectedProfile = profiles.find((item) => item.name === form.profile);
+  const showLlmWarning = Boolean(selectedProfile?.enabled ?? settings.enabled);
 
   function selectProfile(next: AgenticProfileName) {
     save.reset();
     setSuccessMessage(null);
-    setProfile(next);
+    setForm((current) => (current ? { ...current, profile: next } : current));
+  }
+
+  function updateMaxSubqueries(value: number) {
+    save.reset();
+    setSuccessMessage(null);
+    setForm((current) => (current ? { ...current, max_subqueries: value } : current));
   }
 
   function resetForm() {
     save.reset();
     setSuccessMessage(null);
-    setProfile(settings.profile);
+    setForm(formFromSettings(settings));
   }
 
   function submit() {
-    if (!profile) return;
-    save.mutate(
-      { profile },
-      {
-        onSuccess: (data) => {
-          setProfile(data.profile);
-          setSuccessMessage(t("settings.agentic.actions.saved"));
-        },
-        onError: () => setSuccessMessage(null),
-      }
-    );
+    if (!form || maxSubqueriesError) return;
+    save.mutate(form, {
+      onSuccess: (data) => {
+        setForm(formFromSettings(data));
+        setSuccessMessage(t("settings.agentic.actions.saved"));
+      },
+      onError: () => setSuccessMessage(null),
+    });
   }
 
   return (
@@ -110,7 +130,7 @@ export function AgenticSettingsClient() {
               className="grid grid-cols-1 gap-2 md:grid-cols-2"
             >
               {profiles.map((item) => {
-                const selected = profile === item.name;
+                const selected = form.profile === item.name;
                 return (
                   <button
                     key={item.name}
@@ -144,7 +164,7 @@ export function AgenticSettingsClient() {
           {showLlmWarning ? (
             <FormStatus tone="warning" message={t("settings.agentic.llmWarning")} />
           ) : null}
-          <dl className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <RuntimeFact
               label={t("settings.agentic.rewrite")}
               value={settings.rewrite ? t("settings.agentic.on") : t("settings.agentic.off")}
@@ -157,14 +177,23 @@ export function AgenticSettingsClient() {
               label={t("settings.agentic.multiHop")}
               value={settings.multi_hop ? t("settings.agentic.on") : t("settings.agentic.off")}
             />
-            <RuntimeFact
-              label={t("settings.agentic.maxSubqueries")}
-              value={String(settings.max_subqueries)}
-            />
           </dl>
+          <div className="max-w-xs">
+            <NumberField
+              label={t("settings.agentic.maxSubqueries")}
+              value={form.max_subqueries}
+              min={1}
+              max={8}
+              disabled={save.isPending}
+              helper={t("settings.agentic.maxSubqueriesHelper")}
+              onChange={updateMaxSubqueries}
+            />
+          </div>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">
-              {dirty ? (
+              {maxSubqueriesError ? (
+                <FormStatus tone="danger" message={t("settings.agentic.maxSubqueriesError")} />
+              ) : dirty ? (
                 <FormStatus tone="warning" message={t("settings.agentic.actions.unsaved")} />
               ) : null}
               {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
@@ -184,7 +213,7 @@ export function AgenticSettingsClient() {
               <Button
                 type="button"
                 loading={save.isPending}
-                disabled={!dirty}
+                disabled={!dirty || maxSubqueriesError}
                 onClick={submit}
                 aria-label={t("settings.agentic.actions.save")}
               >
@@ -204,23 +233,28 @@ export function AgenticSettingsClient() {
 function ProfileChips({ profile }: { profile: AgenticProfileStatusData }) {
   return (
     <span className="mt-2 flex flex-wrap gap-1">
+      {profile.hyde ? (
+        <span className="inline-flex min-h-5 items-center rounded bg-info-bg px-1.5 text-[11px] font-medium text-info">
+          {t("settings.agentic.hyde")}
+        </span>
+      ) : null}
       {profile.rewrite ? (
         <span className="inline-flex min-h-5 items-center rounded bg-info-bg px-1.5 text-[11px] font-medium text-info">
           {t("settings.agentic.rewrite")}
         </span>
       ) : null}
       {profile.decompose ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+        <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
           {t("settings.agentic.decompose")}
         </span>
       ) : null}
       {profile.multi_hop ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+        <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
           {t("settings.agentic.multiHop")}
         </span>
       ) : null}
       {!profile.enabled ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+        <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
           {t("settings.agentic.off")}
         </span>
       ) : null}
@@ -237,12 +271,56 @@ function RuntimeFact({ label, value }: { label: string; value: string }) {
   );
 }
 
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  disabled,
+  helper,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  disabled: boolean;
+  helper?: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="space-y-1.5">
+      <span className="block text-sm font-medium text-foreground">{label}</span>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={Number.isFinite(value) ? value : ""}
+        min={min}
+        max={max}
+        aria-label={label}
+        disabled={disabled}
+        onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
+        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+      />
+      {helper ? <span className="block text-xs text-muted">{helper}</span> : null}
+    </label>
+  );
+}
+
+function formFromSettings(settings: AgenticSettingsData): AgenticSettingsUpdate {
+  return { profile: settings.profile, max_subqueries: settings.max_subqueries };
+}
+
 function orderedProfiles(profiles: AgenticProfileStatusData[]): AgenticProfileStatusData[] {
   const byName = new Map(profiles.map((item) => [item.name, item]));
   const ordered = PROFILE_ORDER.map((name) => byName.get(name)).filter(
     (item): item is AgenticProfileStatusData => Boolean(item)
   );
-  return ordered.length ? ordered : profiles;
+  // PROFILE_ORDER に無い API 返却 profile も捨てず末尾に出す(将来の profile 追加でも
+  // アクティブ値が必ず描画されるよう堅牢化)。
+  const known = new Set(PROFILE_ORDER as string[]);
+  const extras = profiles.filter((item) => !known.has(item.name));
+  return [...ordered, ...extras];
 }
 
 function profileLabel(name: AgenticProfileName) {

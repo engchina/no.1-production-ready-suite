@@ -3,11 +3,13 @@ import {
   FlaskConical,
   FileSearch,
   HardDriveDownload,
+  History,
   FileStack,
   Library,
   Cloud,
   KeyRound,
   LayoutDashboard,
+  LayoutGrid,
   Boxes,
   ClipboardCheck,
   Plug,
@@ -80,6 +82,12 @@ export const NAV_SECTIONS: NavSection[] = [
     titleKey: "nav.section.pipeline",
     items: [
       {
+        href: APP_ROUTES.settingsPipeline,
+        labelKey: "nav.settingsPipeline",
+        sidebarLabelKey: "nav.settingsPipeline.sidebar",
+        icon: LayoutGrid,
+      },
+      {
         href: APP_ROUTES.settingsPreprocess,
         labelKey: "nav.settingsPreprocess",
         sidebarLabelKey: "nav.settingsPreprocess.sidebar",
@@ -120,6 +128,12 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsGeneration",
         sidebarLabelKey: "nav.settingsGeneration.sidebar",
         icon: Sparkles,
+      },
+      {
+        href: APP_ROUTES.settingsPrompts,
+        labelKey: "nav.settingsPrompts",
+        sidebarLabelKey: "nav.settingsPrompts.sidebar",
+        icon: History,
       },
       {
         href: APP_ROUTES.settingsGuardrail,

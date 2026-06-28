@@ -207,21 +207,28 @@ function OverviewCard({
                       : "border-border bg-card text-foreground hover:bg-background"
                   )}
                 >
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold">{strategyLabel(strategy.name)}</span>
-                    {selected ? (
-                      <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
-                    ) : null}
-                  </span>
-                  <span className="mt-1 block text-xs leading-relaxed text-muted">
-                    {strategyDescription(strategy.name)}
-                  </span>
-                  {strategy.recommended_for.length ? (
-                    <span className="mt-2 block text-[11px] text-muted">
-                      {t("settings.chunking.recommendedFor")}:{" "}
-                      {strategy.recommended_for.join(", ")}
+                  <span className="flex items-start gap-3">
+                    <ChunkStrategyDiagram strategy={strategy.name} selected={selected} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold">
+                          {strategyLabel(strategy.name)}
+                        </span>
+                        {selected ? (
+                          <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
+                        ) : null}
+                      </span>
+                      <span className="mt-1 block text-xs leading-relaxed text-muted">
+                        {strategyDescription(strategy.name)}
+                      </span>
+                      {strategy.recommended_for.length ? (
+                        <span className="mt-2 block text-[11px] text-muted">
+                          {t("settings.chunking.recommendedFor")}:{" "}
+                          {strategy.recommended_for.join(", ")}
+                        </span>
+                      ) : null}
                     </span>
-                  ) : null}
+                  </span>
                 </button>
               );
             })}
@@ -455,6 +462,149 @@ function RuntimeFact({ label, value }: { label: string; value: string }) {
       <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
     </div>
   );
+}
+
+/**
+ * 分割方式の概念を表す装飾 SVG(初学者の選択補助)。currentColor でテーマ追従、
+ * 選択時は primary で強調。意味はラベル/説明が担うため aria-hidden。
+ */
+function ChunkStrategyDiagram({
+  strategy,
+  selected,
+}: {
+  strategy: ChunkingStrategyName;
+  selected: boolean;
+}) {
+  return (
+    <svg
+      viewBox="0 0 48 36"
+      className={cn("h-9 w-12 shrink-0", selected ? "text-primary" : "text-muted")}
+      fill="currentColor"
+      aria-hidden
+    >
+      {chunkStrategyDiagramShapes(strategy)}
+    </svg>
+  );
+}
+
+function chunkStrategyDiagramShapes(strategy: ChunkingStrategyName) {
+  switch (strategy) {
+    case "structure_aware":
+      // 見出し + 字下げ本文(構造に沿う)
+      return (
+        <>
+          <rect x="4" y="5" width="28" height="6" rx="2" opacity="0.9" />
+          <rect x="10" y="15" width="34" height="4" rx="2" opacity="0.5" />
+          <rect x="10" y="22" width="30" height="4" rx="2" opacity="0.5" />
+          <rect x="10" y="29" width="34" height="4" rx="2" opacity="0.5" />
+        </>
+      );
+    case "recursive_character":
+      // 区切りで再帰分割(幅が不揃いの塊)
+      return (
+        <>
+          <rect x="4" y="6" width="40" height="6" rx="2" opacity="0.85" />
+          <rect x="4" y="15" width="26" height="6" rx="2" opacity="0.85" />
+          <rect x="4" y="24" width="34" height="6" rx="2" opacity="0.85" />
+        </>
+      );
+    case "sentence_window":
+      // 中心の文を周辺の文脈窓で挟む
+      return (
+        <>
+          <rect x="4" y="6" width="40" height="6" rx="2" opacity="0.3" />
+          <rect x="4" y="15" width="40" height="6" rx="2" opacity="1" />
+          <rect x="4" y="24" width="40" height="6" rx="2" opacity="0.3" />
+        </>
+      );
+    case "hierarchical_parent_child":
+      // 親ブロックの中に子チャンク
+      return (
+        <>
+          <rect
+            x="3"
+            y="4"
+            width="42"
+            height="28"
+            rx="3"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            opacity="0.6"
+          />
+          <rect x="7" y="9" width="34" height="7" rx="2" opacity="0.85" />
+          <rect x="7" y="20" width="34" height="7" rx="2" opacity="0.85" />
+        </>
+      );
+    case "markdown_heading":
+      // 見出しマーカー + 本文行
+      return (
+        <>
+          <rect x="4" y="6" width="6" height="6" rx="1" opacity="0.9" />
+          <rect x="13" y="7" width="29" height="4" rx="2" opacity="0.8" />
+          <rect x="4" y="16" width="6" height="6" rx="1" opacity="0.9" />
+          <rect x="13" y="17" width="23" height="4" rx="2" opacity="0.8" />
+          <rect x="4" y="26" width="6" height="6" rx="1" opacity="0.9" />
+          <rect x="13" y="27" width="27" height="4" rx="2" opacity="0.8" />
+        </>
+      );
+    case "page_level":
+      // ページ単位(重なるシート)
+      return (
+        <>
+          <rect
+            x="9"
+            y="4"
+            width="26"
+            height="24"
+            rx="2"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            opacity="0.45"
+          />
+          <rect
+            x="13"
+            y="9"
+            width="26"
+            height="24"
+            rx="2"
+            opacity="0.12"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+          <rect x="17" y="14" width="18" height="3" rx="1.5" opacity="0.6" />
+          <rect x="17" y="20" width="18" height="3" rx="1.5" opacity="0.6" />
+        </>
+      );
+    case "fixed_size":
+      // 固定長(均等な塊)
+      return (
+        <>
+          <rect x="4" y="6" width="40" height="6" rx="2" opacity="0.85" />
+          <rect x="4" y="15" width="40" height="6" rx="2" opacity="0.85" />
+          <rect x="4" y="24" width="40" height="6" rx="2" opacity="0.85" />
+        </>
+      );
+    case "fixed_delimiter":
+      // 区切り文字で分割(破線の境界)
+      return (
+        <>
+          <rect x="4" y="5" width="40" height="9" rx="2" opacity="0.85" />
+          <line
+            x1="4"
+            y1="18"
+            x2="44"
+            y2="18"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeDasharray="3 2"
+            opacity="0.7"
+          />
+          <rect x="4" y="22" width="40" height="9" rx="2" opacity="0.85" />
+        </>
+      );
+  }
 }
 
 function orderedStrategies(strategies: ChunkingStrategyStatusData[]): ChunkingStrategyStatusData[] {

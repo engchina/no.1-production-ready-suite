@@ -54,13 +54,22 @@ def _resolve_graph_strategy(
     route_reason: str,
     fallback_mode: SearchMode = SearchMode.HYBRID,
 ) -> ResolvedRetrievalStrategy:
-    """GraphRAG-lite が未有効なら既存 retrieval へ戻す。"""
-    if not resolve_graph_adapter(settings).enabled:
+    """GraphRAG-lite が未有効、または要求経路の構築物が無ければ既存 retrieval へ戻す。"""
+    params = resolve_graph_adapter(settings)
+    if not params.enabled:
         return ResolvedRetrievalStrategy(
             strategy=SearchStrategy.HYBRID,
             mode=fallback_mode,
             route_reason=route_reason,
             fallback_reason="graph_disabled",
+        )
+    # GRAPH_GLOBAL は community summary を引くため、entities では未構築になり空振りする。
+    if requested == SearchStrategy.GRAPH_GLOBAL and not params.build_community_summaries:
+        return ResolvedRetrievalStrategy(
+            strategy=SearchStrategy.HYBRID,
+            mode=fallback_mode,
+            route_reason=route_reason,
+            fallback_reason="graph_community_summary_unavailable",
         )
     return ResolvedRetrievalStrategy(
         strategy=requested,

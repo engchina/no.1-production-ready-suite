@@ -62,6 +62,7 @@ from app.rag.guardrail_adapter import (
     guardrail_adapter_runtime_settings,
     normalize_guardrail_policy,
 )
+from app.rag.oracle_schema import vector_index_reindex_sql
 from app.rag.parser_adapter_contract import (
     parser_adapter_contract_artifact_payload,
     run_parser_adapter_compatibility_matrix,
@@ -749,10 +750,15 @@ async def update_graph_settings(
     """関係情報設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
-        update={"rag_graph_profile": normalize_graph_profile(payload.profile)}
+        update={
+            "rag_graph_profile": normalize_graph_profile(payload.profile),
+            # UI で明示保存したら新 profile を正本にし、legacy の full 強制上書きを退役させる。
+            "rag_graph_enabled": False,
+        }
     )
     _persist_graph_settings(candidate)
     settings.rag_graph_profile = candidate.rag_graph_profile
+    settings.rag_graph_enabled = candidate.rag_graph_enabled
     return ApiResponse(data=_graph_settings_data(settings))
 
 
@@ -769,10 +775,14 @@ async def update_agentic_settings(
     """高度な検索設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
-        update={"rag_agentic_profile": normalize_agentic_profile(payload.profile)}
+        update={
+            "rag_agentic_profile": normalize_agentic_profile(payload.profile),
+            "rag_agentic_max_subqueries": payload.max_subqueries,
+        }
     )
     _persist_agentic_settings(candidate)
     settings.rag_agentic_profile = candidate.rag_agentic_profile
+    settings.rag_agentic_max_subqueries = candidate.rag_agentic_max_subqueries
     return ApiResponse(data=_agentic_settings_data(settings))
 
 
@@ -2227,7 +2237,11 @@ def _persist_graph_settings(settings: Settings) -> None:
     """関係情報設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
-        {"RAG_GRAPH_PROFILE": settings.rag_graph_profile},
+        {
+            "RAG_GRAPH_PROFILE": settings.rag_graph_profile,
+            # legacy フラグも併記して、profile を正本に固定する(off/entities を選べる状態にする)。
+            "RAG_GRAPH_ENABLED": str(settings.rag_graph_enabled).lower(),
+        },
         section_comment="# GraphRAG アダプター",
         error_detail="関係情報設定を backend/.env へ保存できませんでした。",
     )
@@ -2253,6 +2267,7 @@ def _agentic_settings_data(settings: Settings) -> AgenticSettingsData:
                 rewrite=status.rewrite,
                 decompose=status.decompose,
                 multi_hop=status.multi_hop,
+                hyde=status.hyde,
             )
             for status in runtime.profiles
         ],
@@ -2264,7 +2279,10 @@ def _persist_agentic_settings(settings: Settings) -> None:
     """高度な検索設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
-        {"RAG_AGENTIC_PROFILE": settings.rag_agentic_profile},
+        {
+            "RAG_AGENTIC_PROFILE": settings.rag_agentic_profile,
+            "RAG_AGENTIC_MAX_SUBQUERIES": str(settings.rag_agentic_max_subqueries),
+        },
         section_comment="# Agentic アダプター",
         error_detail="高度な検索設定を backend/.env へ保存できませんでした。",
     )
@@ -2284,7 +2302,6 @@ def _evaluation_settings_data(settings: Settings) -> EvaluationSettingsData:
     return EvaluationSettingsData(
         suite=runtime.suite,
         thresholds=_thresholds_dict(runtime.thresholds),
-        focus_metrics=list(runtime.focus_metrics),
         suites=[
             EvaluationSuiteStatusData(
                 name=status.name,
@@ -2292,7 +2309,6 @@ def _evaluation_settings_data(settings: Settings) -> EvaluationSettingsData:
                 recommended_for=list(status.recommended_for),
                 selected=status.selected,
                 thresholds=_thresholds_dict(status.thresholds),
-                focus_metrics=list(status.focus_metrics),
             )
             for status in runtime.suites
         ],
@@ -2333,6 +2349,12 @@ def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
             )
             for status in runtime.profiles
         ],
+        reindex_sql=vector_index_reindex_sql(
+            target_accuracy=runtime.target_accuracy,
+            neighbors=runtime.neighbors,
+            efconstruction=runtime.efconstruction,
+            distance=runtime.distance,
+        ),
         config_source="runtime",
     )
 
@@ -2491,6 +2513,7 @@ def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
                 diversity=status.diversity,
                 expansion_mode=status.expansion_mode,
                 compression=status.compression,
+                corrective=status.corrective,
             )
             for status in runtime.pipelines
         ],

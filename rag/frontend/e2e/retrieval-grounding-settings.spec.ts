@@ -36,6 +36,8 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /業務厳格/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /補正マルチクエリ/ })).toBeVisible();
+    // 推奨用途チップは英語生トークンではなく日本語 i18n ラベルで表示する。
+    await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toContainText("一般");
     await expect(page.getByRole("link", { name: "検索方法" })).toHaveAttribute(
       "aria-current",
       "page"
@@ -55,6 +57,7 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "根拠確認" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /カスタム/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toContainText("補正(CRAG)");
     await expect(page.getByRole("link", { name: "根拠確認" })).toHaveAttribute(
       "aria-current",
       "page"
@@ -87,6 +90,23 @@ test("検索方法設定は検索方法を保存できる", async ({ page }) => 
   await expect(page.getByText("検索方法を保存しました。")).toBeVisible();
   expect(savedPayload).toEqual({ strategy: "business_context_strict" });
   await expectNoHorizontalOverflow(page);
+});
+
+test("検索方法設定の現在の設定行は未保存時も保存値を保つ", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await mockRetrieval(page); // GET は hybrid_rrf を返す
+
+  await page.goto("/settings/retrieval");
+
+  // 「設定元: 現在の設定」行(dl)は保存済みスナップショット。
+  const facts = page.locator("dl").filter({ hasText: "設定元" });
+  await expect(facts).toContainText("ハイブリッド(RRF)");
+
+  // 未保存で別戦略を選んでも現在の設定行は保存値のまま(プレビュー値を混ぜない)。
+  await page.getByRole("radio", { name: /業務厳格/ }).click();
+  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
+  await expect(facts).toContainText("ハイブリッド(RRF)");
+  await expect(facts).not.toContainText("業務厳格");
 });
 
 test("根拠確認設定は処理方式を保存できる", async ({ page }) => {
@@ -163,12 +183,12 @@ function retrievalEnvelope(strategy: string) {
 
 function groundingEnvelope(pipeline: string) {
   const specs = [
-    { name: "custom", dependency_promotion: false, diversity: false, expansion_mode: "none", compression: false },
-    { name: "lean", dependency_promotion: false, diversity: false, expansion_mode: "none", compression: false },
-    { name: "verified_context", dependency_promotion: false, diversity: true, expansion_mode: "none", compression: false },
-    { name: "context_enrich", dependency_promotion: true, diversity: true, expansion_mode: "adaptive", compression: false },
-    { name: "compact", dependency_promotion: false, diversity: true, expansion_mode: "none", compression: true },
-    { name: "full_governed", dependency_promotion: true, diversity: true, expansion_mode: "adaptive", compression: true },
+    { name: "custom", dependency_promotion: false, diversity: false, expansion_mode: "none", compression: false, corrective: false },
+    { name: "lean", dependency_promotion: false, diversity: false, expansion_mode: "none", compression: false, corrective: false },
+    { name: "verified_context", dependency_promotion: false, diversity: true, expansion_mode: "none", compression: false, corrective: true },
+    { name: "context_enrich", dependency_promotion: true, diversity: true, expansion_mode: "adaptive", compression: false, corrective: false },
+    { name: "compact", dependency_promotion: false, diversity: true, expansion_mode: "none", compression: true, corrective: false },
+    { name: "full_governed", dependency_promotion: true, diversity: true, expansion_mode: "adaptive", compression: true, corrective: true },
   ];
   const selected = specs.find((spec) => spec.name === pipeline) ?? specs[0];
   return {

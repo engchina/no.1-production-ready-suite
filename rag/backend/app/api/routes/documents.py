@@ -92,9 +92,7 @@ logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
-CHUNK_SET_PUBLISH_ERROR_MESSAGE = (
-    "索引の公開設定に失敗しました。時間をおいて再実行してください。"
-)
+CHUNK_SET_PUBLISH_ERROR_MESSAGE = "索引の公開設定に失敗しました。時間をおいて再実行してください。"
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
 
 
@@ -926,8 +924,7 @@ async def list_document_ingestion_segments(
     if persisted_segments:
         return ApiResponse(
             data=[
-                _segment_with_progress_defaults(segment, detail)
-                for segment in persisted_segments
+                _segment_with_progress_defaults(segment, detail) for segment in persisted_segments
             ]
         )
     effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
@@ -1136,7 +1133,13 @@ async def approve_document(
     detail = await OracleClient().get_document(document_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status == FileStatus.REVIEW:
+    if detail.status == FileStatus.PREPROCESSED:
+        # ファイル準備の承認: 保存済み preprocess artifact から EXTRACT ジョブを投入し、
+        # parse → REVIEW へ進める。
+        job = await _enqueue_ingestion_job_for_document(
+            document_id, force=False, phase=IngestionJobPhase.EXTRACT
+        )
+    elif detail.status == FileStatus.REVIEW:
         await _ensure_review_only_materialization_safe(document_id)
         if body is not None and (
             body.element_edits or body.table_cell_edits or body.raw_text is not None
@@ -2106,12 +2109,8 @@ async def _enqueue_ingestion_job_for_document(
             skip_reason="already_indexed",
             phase=phase,
         )
-    if (
-        phase == IngestionJobPhase.EXTRACT
-        and (
-            detail.preprocess_artifact is None
-            or not detail.preprocess_artifact.object_storage_path
-        )
+    if phase == IngestionJobPhase.EXTRACT and (
+        detail.preprocess_artifact is None or not detail.preprocess_artifact.object_storage_path
     ):
         raise HTTPException(
             status_code=409,

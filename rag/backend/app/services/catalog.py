@@ -50,6 +50,9 @@ class ServiceCatalogEntry:
     - ``working_dir``: リポジトリ root からのサービス実装の相対パス。
     - ``dev_port``: dev で ``docker-compose.dev.yml`` が localhost に公開するポート。
     - ``execution_policy``: 停止時・未使用時の runtime 契約。UI/API で fallback 境界を明示する。
+    - ``deployable``: UI/API からデプロイ操作(起動/停止/ビルド/削除)を提供するか。
+      ``execution_policy``(停止時の fallback 契約)とは別軸。False のステージは backend 内処理
+      (``rag_pipeline_core``)で動作し、サービス化は将来対応(操作系を出さず /health も叩かない)。
     - ``model_cache_path``: モデル DL を行うサービスのコンテナ内キャッシュ親(``~/.cache``)。
       HF・docling・mineru など tool 別キャッシュをまとめて含めるため ``huggingface`` ではなく
       ``.cache`` 親を指す。dev では host の ``<huggingface_download_dir>/<service_id>`` を
@@ -64,6 +67,7 @@ class ServiceCatalogEntry:
     working_dir: str
     dev_port: int
     execution_policy: ServiceExecutionPolicy = "selected_adapter"
+    deployable: bool = True
     model_cache_path: str | None = None
 
 
@@ -241,6 +245,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/chunking",
         dev_port=18030,
         execution_policy="in_process_when_disabled",
+        deployable=False,
     ),
     ServiceCatalogEntry(
         service_id="pipeline-vector-index",
@@ -251,6 +256,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/vector_index",
         dev_port=18031,
         execution_policy="in_process_when_disabled",
+        deployable=False,
     ),
     ServiceCatalogEntry(
         service_id="pipeline-graphrag",
@@ -261,6 +267,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/graphrag",
         dev_port=18032,
         execution_policy="in_process_when_disabled",
+        deployable=False,
     ),
     ServiceCatalogEntry(
         service_id="pipeline-generation",
@@ -281,6 +288,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/guardrail",
         dev_port=18034,
         execution_policy="in_process_when_disabled",
+        deployable=False,
     ),
     ServiceCatalogEntry(
         service_id="pipeline-agentic",
@@ -291,6 +299,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/agentic",
         dev_port=18035,
         execution_policy="in_process_when_disabled",
+        deployable=False,
     ),
     ServiceCatalogEntry(
         service_id="pipeline-grounding",
@@ -301,6 +310,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/grounding",
         dev_port=18036,
         execution_policy="in_process_when_disabled",
+        deployable=False,
     ),
     ServiceCatalogEntry(
         service_id="pipeline-evaluation",
@@ -311,6 +321,7 @@ SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
         working_dir="services/pipeline/evaluation",
         dev_port=18037,
         execution_policy="in_process_when_disabled",
+        deployable=False,
     ),
     ServiceCatalogEntry(
         service_id="pipeline-retrieval",

@@ -20,7 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from app.config import Settings
+from app.config import (
+    Settings,
+    enterprise_ai_default_model_id,
+    enterprise_ai_vision_model_id,
+)
 from app.services.catalog import (
     ServiceCatalogEntry,
     is_dev_mode,
@@ -140,12 +144,27 @@ def _compose_env(settings: Settings) -> dict[str, str]:
 
     HuggingFace 設定を docker-compose の ``${HF_DOWNLOAD_DIR}`` / ``${HF_TOKEN}`` /
     ``${HF_ENDPOINT}`` substitution へ供給する(dev の host マウント基点と DL 認証/ミラー)。
+
+    OCI parser マイクロサービス(parser-oci-genai-vision 等)はモデル設定 JSON を読まず env
+    からのみ OCI 設定を読むため、backend が解決済みの実効値(model-settings.json 由来を含む)を
+    ``${OCI_ENTERPRISE_AI_*}`` substitution へ供給する。これで「モデル画面で設定 → parser 再起動
+    → 稼働中」が成立する(parser は起動時に 1 回だけ env を読むため再起動が必要)。
     ``os.environ`` を継承しつつ上書きする。
     """
     env = dict(os.environ)
     env["HF_DOWNLOAD_DIR"] = settings.huggingface_download_dir
     env["HF_TOKEN"] = settings.huggingface_token
     env["HF_ENDPOINT"] = settings.huggingface_endpoint
+    # OCI parser コンテナの env へ橋渡しする実効 OCI Enterprise AI 設定。未設定は空文字のまま渡し、
+    # parser 側は引き続き degraded(=正しい挙動)になる。api_key は env で渡り argv には乗らない。
+    env["OCI_ENTERPRISE_AI_ENDPOINT"] = settings.oci_enterprise_ai_endpoint
+    env["OCI_ENTERPRISE_AI_API_KEY"] = settings.oci_enterprise_ai_api_key
+    env["OCI_ENTERPRISE_AI_PROJECT_OCID"] = settings.oci_enterprise_ai_project_ocid
+    env["OCI_ENTERPRISE_AI_VLM_MODEL"] = enterprise_ai_vision_model_id(settings)
+    env["OCI_ENTERPRISE_AI_DEFAULT_MODEL"] = enterprise_ai_default_model_id(settings)
+    env["OCI_ENTERPRISE_AI_VLM_PATH"] = settings.oci_enterprise_ai_vlm_path
+    env["OCI_ENTERPRISE_AI_LLM_PATH"] = settings.oci_enterprise_ai_llm_path
+    env["OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] = str(settings.oci_enterprise_ai_vlm_input_mode)
     return env
 
 

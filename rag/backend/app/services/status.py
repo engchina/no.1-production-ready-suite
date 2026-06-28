@@ -26,11 +26,14 @@ logger = logging.getLogger(__name__)
 # - degraded: 到達したが status!=ok(例: LibreOffice 未導入)
 # - stopped: 接続拒否/timeout(コンテナ停止と解釈)
 # - unconfigured: URL 未設定
+# - in_process: deployable=False のステージ。backend 内処理で動作し、サービス化は将来対応
+#   (/health を叩かず固定で返す)。
 ServiceRuntimeStatus = Literal[
     "running",
     "degraded",
     "stopped",
     "unconfigured",
+    "in_process",
 ]
 
 
@@ -38,6 +41,9 @@ async def probe_service_status(
     settings: Settings, entry: ServiceCatalogEntry
 ) -> ServiceRuntimeStatus:
     """1 サービスの /health を問い合わせて稼働状態を返す(例外は安全に縮退)。"""
+    # deployable=False は backend 内処理で動作するため、HTTP を叩かず固定で in_process を返す。
+    if not entry.deployable:
+        return "in_process"
     url = service_health_url(settings, entry)
     if not url:
         return "unconfigured"

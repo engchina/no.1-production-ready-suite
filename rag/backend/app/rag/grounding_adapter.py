@@ -60,6 +60,7 @@ class GroundingPipelineStatus:
     diversity: bool
     expansion_mode: ExpansionMode
     compression: bool
+    corrective: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,11 +146,44 @@ def _resolve_static(settings: Settings, pipeline: str):  # type: ignore[no-untyp
     return resolve_grounding(pipeline)
 
 
+def _display_expansion_mode(params: GroundingAdapterParams) -> ExpansionMode:
+    """表示用に neighbor 専用拡張を単一 expansion_mode フィールドへ畳む。"""
+    if params.expansion_mode == "none" and params.neighbor_expansion_enabled:
+        return "neighbor"
+    return params.expansion_mode
+
+
+def _custom_status(settings: Settings, params: GroundingAdapterParams) -> GroundingPipelineStatus:
+    """custom カードは静的 spec ではなく legacy フラグの effective を反映する。"""
+    spec = GROUNDING_SPECS["custom"]
+    # 選択中が custom 以外でも custom の effective を示すため、custom 固定で再解決する。
+    custom_params = (
+        params
+        if params.pipeline == "custom"
+        else resolve_grounding_adapter(
+            settings.model_copy(update={"rag_post_retrieval_pipeline": "custom"})
+        )
+    )
+    return GroundingPipelineStatus(
+        name="custom",
+        origin=spec.origin,
+        recommended_for=spec.recommended_for,
+        selected=params.pipeline == "custom",
+        dependency_promotion=custom_params.dependency_promotion_enabled,
+        diversity=custom_params.diversity_enabled,
+        expansion_mode=_display_expansion_mode(custom_params),
+        compression=custom_params.compression_enabled,
+        corrective=custom_params.corrective_enabled,
+    )
+
+
 def grounding_adapter_runtime_settings(settings: Settings) -> GroundingAdapterRuntimeSettings:
     """Settings から Grounding アダプター readiness snapshot を作る。"""
     params = resolve_grounding_adapter(settings)
     statuses = tuple(
-        GroundingPipelineStatus(
+        _custom_status(settings, params)
+        if spec.name == "custom"
+        else GroundingPipelineStatus(
             name=spec.name,  # type: ignore[arg-type]
             origin=spec.origin,
             recommended_for=spec.recommended_for,
@@ -158,6 +192,7 @@ def grounding_adapter_runtime_settings(settings: Settings) -> GroundingAdapterRu
             diversity=spec.diversity,
             expansion_mode=spec.expansion_mode,
             compression=spec.compression,
+            corrective=spec.corrective,
         )
         for spec in (GROUNDING_SPECS[name] for name in GROUNDING_PIPELINES)
     )
@@ -165,7 +200,7 @@ def grounding_adapter_runtime_settings(settings: Settings) -> GroundingAdapterRu
         pipeline=params.pipeline,
         dependency_promotion_enabled=params.dependency_promotion_enabled,
         diversity_enabled=params.diversity_enabled,
-        expansion_mode=params.expansion_mode,
+        expansion_mode=_display_expansion_mode(params),
         compression_enabled=params.compression_enabled,
         pipelines=statuses,
     )

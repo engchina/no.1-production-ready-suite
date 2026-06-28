@@ -3,9 +3,10 @@
 import json
 import re
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from rag_pipeline_core.retrieval import WIRED_RETRIEVAL_STRATEGIES
 
 from app.config import (
     AgenticProfile,
@@ -680,6 +681,18 @@ class ChunkingSettingsUpdate(BaseModel):
 
 
 RetrievalStrategyName = RetrievalStrategy
+# 設定 API から選択・保存できる戦略(未配線戦略は除外)。core の wired 集合と一致させる。
+WiredRetrievalStrategy = Literal[
+    "hybrid_rrf",
+    "vector",
+    "keyword",
+    "graph_augmented",
+    "business_context_strict",
+    "corrective_multi_query",
+]
+assert set(get_args(WiredRetrievalStrategy)) == set(WIRED_RETRIEVAL_STRATEGIES), (
+    "WiredRetrievalStrategy と core の WIRED_RETRIEVAL_STRATEGIES がずれています。"
+)
 PostRetrievalPipelineName = PostRetrievalPipeline
 ExpansionModeName = Literal["none", "neighbor", "group", "adaptive"]
 
@@ -709,9 +722,9 @@ class RetrievalSettingsData(BaseModel):
 
 
 class RetrievalSettingsUpdate(BaseModel):
-    """検索方法設定の更新 payload。"""
+    """検索方法設定の更新 payload。未配線戦略は受理しない(wired のみ)。"""
 
-    strategy: RetrievalStrategyName
+    strategy: WiredRetrievalStrategy
 
 
 class GroundingPipelineStatusData(BaseModel):
@@ -725,6 +738,7 @@ class GroundingPipelineStatusData(BaseModel):
     diversity: bool = False
     expansion_mode: ExpansionModeName = "none"
     compression: bool = False
+    corrective: bool = False
 
 
 class GroundingSettingsData(BaseModel):
@@ -902,6 +916,7 @@ class VectorIndexSettingsData(BaseModel):
     distance: str
     requires_reprovision: bool
     profiles: list[VectorIndexProfileStatusData] = Field(default_factory=list)
+    reindex_sql: str = ""
     config_source: Literal["runtime"]
 
 
@@ -922,7 +937,6 @@ class EvaluationSuiteStatusData(BaseModel):
     recommended_for: list[str] = Field(default_factory=list)
     selected: bool
     thresholds: dict[str, float] = Field(default_factory=dict)
-    focus_metrics: list[str] = Field(default_factory=list)
 
 
 class EvaluationSettingsData(BaseModel):
@@ -930,7 +944,6 @@ class EvaluationSettingsData(BaseModel):
 
     suite: EvaluationSuiteName
     thresholds: dict[str, float] = Field(default_factory=dict)
-    focus_metrics: list[str] = Field(default_factory=list)
     suites: list[EvaluationSuiteStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
@@ -985,6 +998,7 @@ class AgenticProfileStatusData(BaseModel):
     rewrite: bool
     decompose: bool
     multi_hop: bool
+    hyde: bool = False
 
 
 class AgenticSettingsData(BaseModel):
@@ -1004,6 +1018,7 @@ class AgenticSettingsUpdate(BaseModel):
     """高度な検索設定の更新 payload。"""
 
     profile: AgenticProfileName
+    max_subqueries: int = Field(default=3, ge=1, le=8)
 
 
 class OciConfigReadRequest(BaseModel):

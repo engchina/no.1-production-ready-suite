@@ -1,15 +1,19 @@
 """Guardrail アダプター(安全ポリシー)のテスト。"""
 
+import pytest
 from rag_pipeline_core.guardrail import (
     DEFAULT_GROUNDING_MIN_OVERLAP,
     DEFAULT_GROUNDING_MIN_RATIO,
 )
+from rag_pipeline_core.stage import GuardrailStageResponse
 
+from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings
 from app.rag.guardrail_adapter import (
     GUARDRAIL_POLICY_ORDER,
     guardrail_adapter_runtime_settings,
     normalize_guardrail_policy,
+    reset_guardrail_static_cache,
     resolve_guardrail_adapter,
 )
 
@@ -62,3 +66,25 @@ def test_runtime_settings_orders_and_marks_selected() -> None:
 def test_normalize_guardrail_policy_defaults() -> None:
     assert normalize_guardrail_policy("nope") == "standard"
     assert normalize_guardrail_policy("regulated") == "regulated"
+
+
+def test_static_resolution_is_cached_per_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """サービス委譲時、静的閾値解決は policy あたり 1 回だけ HTTP を呼ぶ(毎リクエスト回避)。"""
+    reset_guardrail_static_cache()
+    calls = {"n": 0}
+
+    def fake_run_guardrail(self: object, request: object) -> GuardrailStageResponse:
+        calls["n"] += 1
+        return GuardrailStageResponse(
+            policy="strict", grounding_min_overlap=5, grounding_min_ratio=0.30, audit_emphasis=False
+        )
+
+    monkeypatch.setattr(PipelineStageClient, "is_enabled", lambda self, stage: True)
+    monkeypatch.setattr(PipelineStageClient, "run_guardrail", fake_run_guardrail)
+
+    settings = Settings(rag_guardrail_policy="strict")
+    first = resolve_guardrail_adapter(settings)
+    second = resolve_guardrail_adapter(settings)
+
+    assert calls["n"] == 1
+    assert first.grounding_min_overlap == second.grounding_min_overlap == 5

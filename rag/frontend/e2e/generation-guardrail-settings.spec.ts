@@ -27,6 +27,8 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "回答スタイル" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /根拠重視・簡潔/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /構造化 JSON/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /逐句出典付与/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /カスタム/ })).toBeVisible();
     await expect(page.getByRole("link", { name: "回答スタイル" })).toHaveAttribute(
       "aria-current",
       "page"
@@ -73,6 +75,20 @@ test("回答スタイル設定は回答スタイルを保存できる", async ({
   await expect(page.getByText("回答スタイルを保存しました。")).toBeVisible();
   expect(saved).toEqual({ profile: "detailed_cited" });
   await expectNoHorizontalOverflow(page);
+});
+
+test("カスタム回答スタイル選択でプロンプト版管理への導線が出る", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.route("**/api/settings/generation", async (route) => {
+    await route.fulfill({ json: generationEnvelope("grounded_concise") });
+  });
+
+  await page.goto("/settings/generation");
+  await page.getByRole("radio", { name: /カスタム/ }).click();
+
+  const manageLink = page.getByRole("link", { name: "プロンプト版を管理 →" });
+  await expect(manageLink).toBeVisible();
+  await expect(manageLink).toHaveAttribute("href", "/settings/prompts");
 });
 
 test("安全チェック設定は方針を保存できる", async ({ page }) => {
@@ -129,6 +145,8 @@ function generationEnvelope(profile: string) {
     { name: "strict_extractive", structured_output: false },
     { name: "structured_json", structured_output: true },
     { name: "bilingual_ja_en", structured_output: false },
+    { name: "inline_cited", structured_output: false },
+    { name: "custom", structured_output: false },
   ];
   const selected = specs.find((s) => s.name === profile) ?? specs[0];
   return {

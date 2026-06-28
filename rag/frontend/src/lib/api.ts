@@ -32,6 +32,7 @@ export type JsonValue =
 export type FileStatus =
   | "UPLOADED"
   | "PREPROCESSING"
+  | "PREPROCESSED"
   | "INGESTING"
   | "REVIEW"
   | "CHUNKING"
@@ -608,6 +609,7 @@ export interface KnowledgeBaseIngestionConfig {
   field_extraction_enabled: boolean | null;
   asset_summary_enabled: boolean | null;
   navigation_summary_enabled: boolean | null;
+  auto_parse_after_preprocess_enabled: boolean | null;
   auto_chunk_after_extract_enabled: boolean | null;
   auto_index_after_chunk_enabled: boolean | null;
 }
@@ -1349,7 +1351,10 @@ export type PreprocessProfileName =
   | "office_to_pdf"
   | "pdf_to_page_images"
   | "csv_to_json"
-  | "excel_to_json";
+  | "excel_to_json"
+  | "url_to_markdown"
+  | "image_enhance"
+  | "pii_redact";
 
 export interface PreprocessProfileStatusData {
   name: PreprocessProfileName;
@@ -1392,7 +1397,8 @@ export type ServiceRuntimeStatus =
   | "running"
   | "degraded"
   | "stopped"
-  | "unconfigured";
+  | "unconfigured"
+  | "in_process";
 export type ServiceExecutionPolicy =
   | "required_no_fallback"
   | "in_process_when_disabled"
@@ -1411,6 +1417,7 @@ export interface ServiceCatalogItemData {
   profile: ServiceProfile;
   label_key: string;
   execution_policy: ServiceExecutionPolicy;
+  deployable: boolean;
   configured: boolean;
   model_cache: ServiceModelCacheData | null;
 }
@@ -1532,6 +1539,7 @@ export interface GroundingPipelineStatusData {
   diversity: boolean;
   expansion_mode: GroundingExpansionMode;
   compression: boolean;
+  corrective: boolean;
 }
 
 export interface GroundingSettingsData {
@@ -1554,7 +1562,9 @@ export type GenerationProfileName =
   | "detailed_cited"
   | "strict_extractive"
   | "structured_json"
-  | "bilingual_ja_en";
+  | "bilingual_ja_en"
+  | "inline_cited"
+  | "custom";
 
 export interface GenerationProfileStatusData {
   name: GenerationProfileName;
@@ -1573,6 +1583,29 @@ export interface GenerationSettingsData {
 
 export interface GenerationSettingsUpdate {
   profile: GenerationProfileName;
+}
+
+// --- 設定: 回答プロンプト版(custom 回答スタイルが使用) ---
+export interface PromptVersionData {
+  version_id: string;
+  name: string;
+  system_prompt: string;
+  note: string;
+  created_at: string;
+  created_by: string;
+  active: boolean;
+}
+
+export interface PromptVersionsData {
+  active_version_id: string | null;
+  versions: PromptVersionData[];
+}
+
+export interface PromptVersionCreate {
+  name: string;
+  system_prompt: string;
+  note?: string;
+  activate?: boolean;
 }
 
 // --- 設定: Guardrail アダプター ---
@@ -1597,6 +1630,9 @@ export interface GuardrailSettingsData {
   grounding_min_ratio: number;
   audit_emphasis: boolean;
   policies: GuardrailPolicyStatusData[];
+  backend: string;
+  oci_configured: boolean;
+  oci_warning_code: string | null;
   config_source: "runtime";
 }
 
@@ -1626,6 +1662,7 @@ export interface VectorIndexSettingsData {
   distance: string;
   requires_reprovision: boolean;
   profiles: VectorIndexProfileStatusData[];
+  reindex_sql: string;
   config_source: "runtime";
 }
 
@@ -1647,13 +1684,11 @@ export interface EvaluationSuiteStatusData {
   recommended_for: string[];
   selected: boolean;
   thresholds: Record<string, number>;
-  focus_metrics: string[];
 }
 
 export interface EvaluationSettingsData {
   suite: EvaluationSuiteName;
   thresholds: Record<string, number>;
-  focus_metrics: string[];
   suites: EvaluationSuiteStatusData[];
   config_source: "runtime";
 }
@@ -1689,7 +1724,13 @@ export interface GraphSettingsUpdate {
 }
 
 // --- 設定: Agentic アダプター ---
-export type AgenticProfileName = "off" | "query_rewrite" | "decompose" | "multi_hop";
+export type AgenticProfileName =
+  | "off"
+  | "smart_routing"
+  | "query_rewrite"
+  | "hyde"
+  | "decompose"
+  | "multi_hop";
 
 export interface AgenticProfileStatusData {
   name: AgenticProfileName;
@@ -1700,6 +1741,7 @@ export interface AgenticProfileStatusData {
   rewrite: boolean;
   decompose: boolean;
   multi_hop: boolean;
+  hyde: boolean;
 }
 
 export interface AgenticSettingsData {
@@ -1715,6 +1757,7 @@ export interface AgenticSettingsData {
 
 export interface AgenticSettingsUpdate {
   profile: AgenticProfileName;
+  max_subqueries: number;
 }
 
 // --- 設定: OCI config ---
@@ -2321,6 +2364,20 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+
+  // 設定: 回答プロンプト版
+  getPromptVersions: () => request<PromptVersionsData>("/api/settings/prompts"),
+  createPromptVersion: (body: PromptVersionCreate) =>
+    request<PromptVersionsData>("/api/settings/prompts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  activatePromptVersion: (versionId: string) =>
+    request<PromptVersionsData>(
+      `/api/settings/prompts/${encodeURIComponent(versionId)}/activate`,
+      { method: "POST" }
+    ),
 
   // 設定: Guardrail アダプター
   getGuardrailSettings: () => request<GuardrailSettingsData>("/api/settings/guardrail"),

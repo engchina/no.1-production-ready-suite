@@ -26,7 +26,6 @@ def test_health_ok() -> None:
 def test_request_only_has_no_thresholds() -> None:
     body = _run("request_only")
     assert body["thresholds"] is None
-    assert body["focus_metrics"] == []
 
 
 def test_strict_ci_thresholds() -> None:
@@ -38,7 +37,7 @@ def test_strict_ci_thresholds() -> None:
 def test_ragas_like_thresholds() -> None:
     body = _run("ragas_like")
     assert body["thresholds"]["faithfulness"] == 0.8
-    assert "context_recall" in body["focus_metrics"]
+    assert body["thresholds"]["context_recall"] == 0.8
 
 
 def test_unknown_suite_falls_back() -> None:

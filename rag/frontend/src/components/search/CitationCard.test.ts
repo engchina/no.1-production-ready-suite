@@ -1,7 +1,38 @@
 import { describe, expect, it } from "vitest";
 
 import type { RetrievedChunk } from "@/lib/api";
-import { citationPreviewUrl, scoreMeterPercent, variantIdFromChunkId } from "./CitationCard";
+import {
+  citationPreviewUrl,
+  scoreMaximaForCitations,
+  scoreMeterPercent,
+  variantIdFromChunkId,
+} from "./CitationCard";
+
+function chunk(score: number, rerankScore: number | null): RetrievedChunk {
+  return {
+    document_id: "doc",
+    chunk_id: `doc:${score}`,
+    text: "",
+    score,
+    rerank_score: rerankScore,
+    file_name: null,
+    category_name: null,
+    metadata: {},
+  } satisfies RetrievedChunk;
+}
+
+describe("scoreMaximaForCitations", () => {
+  it("retrieval / rerank の最大値を返す", () => {
+    const maxima = scoreMaximaForCitations([chunk(0.3, 0.8), chunk(0.9, 0.4), chunk(0.5, null)]);
+    expect(maxima.score).toBe(0.9);
+    expect(maxima.rerankScore).toBe(0.8);
+  });
+
+  it("空配列・全 rerank null は 0 を返す(0 除算しない基準値)", () => {
+    expect(scoreMaximaForCitations([])).toEqual({ score: 0, rerankScore: 0 });
+    expect(scoreMaximaForCitations([chunk(0.5, null)]).rerankScore).toBe(0);
+  });
+});
 
 describe("variantIdFromChunkId", () => {
   it("document:chunk_set:index 形式から chunk_set(variant)id を取り出す", () => {

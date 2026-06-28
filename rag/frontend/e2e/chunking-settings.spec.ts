@@ -45,6 +45,8 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /親子階層/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /ページ単位/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /固定分割符/ })).toBeVisible();
+    // 各方式カードに概念図(装飾 SVG)が 1 つずつ描画される。
+    await expect(page.locator('svg[viewBox="0 0 48 36"]')).toHaveCount(8);
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
     await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveValue("800");
     await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");

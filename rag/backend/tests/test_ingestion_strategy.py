@@ -521,7 +521,11 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
-        settings=Settings(rag_parser_adapter_backend="local", rag_review_gate_enabled=False),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        ),
     )
 
     detail = await pipeline.ingest(
@@ -556,6 +560,36 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
     assert all(segment.artifact_path == artifact_path for segment in oracle.segments.values())
 
 
+async def test_ingestion_pipeline_stops_at_preprocessed_when_parse_gate_off() -> None:
+    """ファイル準備ゲート off では PREPROCESSED で停止し、抽出/索引へ進めない。"""
+    oracle = FakeOracle()
+    storage = FakeObjectStorage()
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, storage),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_auto_parse_after_preprocess_enabled=False,
+        ),
+    )
+
+    detail = await pipeline.ingest(
+        "doc-gate",
+        b"pdfdata",
+        "本文を抽出してください。",
+        content_type="application/pdf",
+        source_profile=_pdf_source_profile(file_size_bytes=7),
+    )
+
+    assert detail.status == FileStatus.PREPROCESSED
+    assert oracle.statuses[-1] == FileStatus.PREPROCESSED
+    # parse 以降は走らない: 抽出も chunk も保存されない。
+    assert oracle.saved_extraction is None
+    assert oracle.saved_chunk_count == 0
+
+
 async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys() -> None:
     """artifact cache key は prefix/document id を安全な Object Storage path に正規化する。"""
     oracle = FakeOracle()
@@ -568,6 +602,7 @@ async def test_ingestion_pipeline_sanitizes_extraction_artifact_keys() -> None:
         settings=Settings(
             rag_parser_adapter_backend="local",
             rag_extraction_artifact_prefix=("../unsafe//prefix with space\\nested/./../final"),
+            rag_auto_parse_after_preprocess_enabled=True,
         ),
     )
 
@@ -601,7 +636,11 @@ async def test_ingestion_pipeline_reports_extraction_artifact_cache_failure() ->
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
-        settings=Settings(rag_parser_adapter_backend="local", rag_review_gate_enabled=False),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        ),
     )
 
     detail = await pipeline.ingest(
@@ -635,7 +674,11 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
         genai=FailingEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
-        settings=Settings(rag_parser_adapter_backend="local", rag_review_gate_enabled=False),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        ),
     )
 
     with pytest.raises(RuntimeError, match="embedding failure"):
@@ -664,7 +707,11 @@ async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embeddin
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
         object_storage=cast(Any, storage),
-        settings=Settings(rag_parser_adapter_backend="local", rag_review_gate_enabled=False),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        ),
     )
 
     detail = await second_pipeline.ingest(
@@ -710,7 +757,11 @@ async def test_ingestion_pipeline_cancel_after_extraction_does_not_save_index() 
         vlm=CapturingVlm(),
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
-        settings=Settings(rag_parser_adapter_backend="local", rag_review_gate_enabled=False),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        ),
     )
     checks = 0
 
@@ -741,6 +792,7 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
     settings = Settings.model_construct(
         rag_parser_adapter_backend="local",
         rag_review_gate_enabled=False,
+        rag_auto_parse_after_preprocess_enabled=True,
         rag_graph_enabled=True,
         rag_chunk_size=800,
         rag_chunk_overlap=120,

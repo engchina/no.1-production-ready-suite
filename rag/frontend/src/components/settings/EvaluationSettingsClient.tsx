@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, ClipboardCheck, RotateCcw, Save } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -31,12 +31,17 @@ export function EvaluationSettingsClient() {
   const save = useUpdateEvaluationSettings();
   const [suite, setSuite] = useState<EvaluationSuiteName | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const lastServerSuite = useRef<EvaluationSuiteName | null>(null);
 
+  // サーバの suite が実際に変わったときだけ local 選択へ同期する。
+  // 背景再取得で同じ値が返っても未保存の選択を上書きしない。
   useEffect(() => {
-    if (query.data && !save.isPending) {
-      setSuite(query.data.suite);
+    const serverSuite = query.data?.suite ?? null;
+    if (serverSuite && serverSuite !== lastServerSuite.current) {
+      lastServerSuite.current = serverSuite;
+      setSuite(serverSuite);
     }
-  }, [query.data, save.isPending]);
+  }, [query.data]);
 
   if (query.isPending) {
     return (
@@ -220,7 +225,7 @@ function SuiteChips({ suite }: { suite: EvaluationSuiteStatusData }) {
       {suite.recommended_for.slice(0, 2).map((item) => (
         <span
           key={item}
-          className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted"
+          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
         >
           {item}
         </span>

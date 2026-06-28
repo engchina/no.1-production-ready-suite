@@ -268,9 +268,9 @@ class FakeWorkspaceOracle:
         updated = detail.model_copy(
             update={
                 "status": status,
-                "preprocess_artifact": None
-                if clear_preprocess_artifact
-                else detail.preprocess_artifact,
+                "preprocess_artifact": (
+                    None if clear_preprocess_artifact else detail.preprocess_artifact
+                ),
                 "extraction": {},
                 "error_message": error_message,
                 "indexed_at": None,
@@ -1101,6 +1101,33 @@ def test_document_approve_chunked_queues_index_phase(
     assert job["phase"] == "INDEX"
     assert job["status"] == "QUEUED"
     assert fake_document_dependencies.documents[document_id].status == FileStatus.CHUNKED
+
+
+def test_document_approve_preprocessed_queues_extract_phase(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """PREPROCESSED 承認は保存済み準備ファイルから EXTRACT 専用 job を投入する。"""
+    document_id = _upload("preprocessed-policy.txt", b"prepared text", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.PREPROCESSED,
+            "preprocess_artifact": DocumentPreprocessArtifact(
+                derivation_id="der-1",
+                profile="passthrough",
+                file_name="preprocessed-policy.txt",
+                object_storage_path="local://prepared/preprocessed-policy.txt",
+                content_type="text/plain",
+            ),
+        }
+    )
+
+    resp = client.post(f"/api/documents/{document_id}/approve")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["phase"] == "EXTRACT"
+    assert job["status"] == "QUEUED"
 
 
 def test_document_ingestion_config_returns_effective_preprocess_profile(
@@ -1999,17 +2026,16 @@ def test_document_content_returns_prepared_artifact(
     )
 
     resp = client.get(
-        f"/api/documents/{document_id}/content"
-        "?variant=prepared&disposition=attachment"
+        f"/api/documents/{document_id}/content" "?variant=prepared&disposition=attachment"
     )
 
     assert resp.status_code == 200
     assert resp.content == prepared_body
     assert resp.headers["content-type"].startswith("application/pdf")
     assert resp.headers["content-disposition"].startswith("attachment;")
-    assert "%E7%A7%81%E3%81%AE%E4%B8%8A%E5%8F%B8__prepared.pdf" in resp.headers[
-        "content-disposition"
-    ]
+    assert (
+        "%E7%A7%81%E3%81%AE%E4%B8%8A%E5%8F%B8__prepared.pdf" in resp.headers["content-disposition"]
+    )
 
 
 def test_document_content_prepared_missing_returns_404() -> None:

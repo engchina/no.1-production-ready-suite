@@ -35,7 +35,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260625_002"
+MIGRATION_ARTIFACT_VERSION = "20260627_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -44,6 +44,37 @@ VECTOR_INDEX_CONTRACT = {
     "neighbors": 32,
     "efconstruction": 500,
 }
+
+
+def vector_index_reindex_sql(
+    *,
+    target_accuracy: int,
+    neighbors: int,
+    efconstruction: int,
+    distance: str = "COSINE",
+    table: str = "rag_chunks",
+    index: str = "rag_chunks_embedding_hnsw_idx",
+) -> str:
+    """選択 profile のビルド推奨値で HNSW 索引を再作成する DDL を返す。
+
+    backend は実行時に DDL を実行しないため、ここでは適用用の SQL を生成するだけにする
+    (DBA がレビュー済み artifact として適用する)。引数は ``resolve_vector_index_adapter``
+    で解決済みの値を呼び出し側が渡す。
+    ponytail: 主検索索引 rag_chunks のみ。agent memory 索引(同形状)は必要時に追従。
+    """
+    return (
+        f"DROP INDEX {index};\n"
+        f"CREATE VECTOR INDEX {index}\n"
+        f"    ON {table} (embedding)\n"
+        f"    ORGANIZATION INMEMORY NEIGHBOR GRAPH\n"
+        f"    DISTANCE {distance}\n"
+        f"    WITH TARGET ACCURACY {int(target_accuracy)}\n"
+        f"    PARAMETERS (\n"
+        f"        TYPE HNSW,\n"
+        f"        NEIGHBORS {int(neighbors)},\n"
+        f"        EFCONSTRUCTION {int(efconstruction)}\n"
+        f"    );"
+    )
 
 
 @dataclass(frozen=True)
@@ -234,6 +265,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260625_002_preprocess_artifact",
             table_name="rag_documents",
             sql=_documents_preprocess_artifact_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260627_001_documents_preprocessed_status",
+            table_name="rag_documents",
+            sql=_documents_preprocessed_status_migration_sql(),
         ),
     ]
 
@@ -625,6 +661,34 @@ BEGIN
         || 'rag_documents_status_ck CHECK '
         || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''INGESTING'', ''REVIEW'', '
         || '''CHUNKING'', ''CHUNKED'', ''INDEXING'', ''INDEXED'', ''ERROR''))';
+END;
+/
+""".strip()
+
+
+def _documents_preprocessed_status_migration_sql() -> str:
+    """rag_documents.status に PREPROCESSED(ファイル準備後の停止状態)を追加する。"""
+    return """
+DECLARE
+    v_constraint_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND constraint_name = 'RAG_DOCUMENTS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_documents DROP CONSTRAINT rag_documents_status_ck';
+    END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_documents ADD CONSTRAINT '
+        || 'rag_documents_status_ck CHECK '
+        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''PREPROCESSED'', '
+        || '''INGESTING'', ''REVIEW'', ''CHUNKING'', ''CHUNKED'', ''INDEXING'', '
+        || '''INDEXED'', ''ERROR''))';
 END;
 /
 """.strip()

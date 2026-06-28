@@ -155,8 +155,9 @@ function ImagePreview({
         focusBboxUnit={focusBboxUnit}
         focusPage={focusPage}
         focusPageSize={pageSize}
-      showContentOverlay
-    >
+        showContentOverlay
+        contentMaxWidth={imagePreviewMaxWidth(pageSize)}
+      >
       <div
         className="relative mx-auto w-full overflow-hidden rounded-md border border-border bg-card"
         data-testid="preview-image-surface"
@@ -207,6 +208,7 @@ function PreviewFrame({
   focusPage = null,
   focusPageSize = null,
   showContentOverlay = false,
+  contentMaxWidth,
 }: {
   children: ReactNode;
   focusBbox?: number[] | null;
@@ -215,6 +217,8 @@ function PreviewFrame({
   focusPage?: number | null;
   focusPageSize?: BboxPageSize | null;
   showContentOverlay?: boolean;
+  /** content overlay 表示時、relative 基準をサーフェス幅へ揃えて overlay のズレを防ぐ。 */
+  contentMaxWidth?: string;
 }) {
   const overlayRect = normalizeBboxForPreview(
     focusBbox,
@@ -240,7 +244,10 @@ function PreviewFrame({
           focusPageSize={focusPageSize}
         />
       ) : null}
-      <div className="relative">
+      <div
+        className={showContentOverlay ? "relative mx-auto w-full" : "relative"}
+        style={showContentOverlay && contentMaxWidth ? { maxWidth: contentMaxWidth } : undefined}
+      >
         {children}
         {style && showContentOverlay ? (
           <span

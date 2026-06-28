@@ -712,6 +712,9 @@ def test_retrieval_settings_reports_runtime_strategy(monkeypatch: MonkeyPatch) -
     names = [item["name"] for item in body["strategies"]]
     assert names[0] == "hybrid_rrf"
     assert "corrective_multi_query" in names
+    # 未配線戦略は設定 API の一覧へ出さない。
+    assert "reasoning_tree_search" not in names
+    assert "colpali_visual_retrieval" not in names
     selected = [item["name"] for item in body["strategies"] if item["selected"]]
     assert selected == ["business_context_strict"]
 
@@ -736,6 +739,12 @@ def test_update_retrieval_settings_persists_env_and_mutates_runtime(
 
 def test_update_retrieval_settings_rejects_unknown_strategy() -> None:
     resp = client.patch("/api/settings/retrieval", json={"strategy": "hyde_fusion"})
+    assert resp.status_code == 422
+
+
+def test_update_retrieval_settings_rejects_pending_strategy() -> None:
+    """未配線(pending_execution)戦略は wired のみ受理のため 422。"""
+    resp = client.patch("/api/settings/retrieval", json={"strategy": "reasoning_tree_search"})
     assert resp.status_code == 422
 
 
@@ -919,7 +928,6 @@ def test_evaluation_settings_reports_runtime_suite(monkeypatch: MonkeyPatch) -> 
     body = resp.json()["data"]
     assert body["suite"] == "balanced"
     assert body["thresholds"]["groundedness_pass_rate"] == 0.9
-    assert "groundedness_pass_rate" in body["focus_metrics"]
     names = [item["name"] for item in body["suites"]]
     assert names[0] == "request_only"
     selected = [item["name"] for item in body["suites"] if item["selected"]]
@@ -1004,7 +1012,29 @@ def test_update_graph_settings_persists_env_and_mutates_runtime(
     assert resp.json()["data"]["profile"] == "full"
     assert resp.json()["data"]["build_community_summaries"] is True
     assert settings.rag_graph_profile == "full"
-    assert "RAG_GRAPH_PROFILE=full" in env_file.read_text(encoding="utf-8")
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_GRAPH_PROFILE=full" in env_text
+    assert "RAG_GRAPH_ENABLED=false" in env_text
+
+
+def test_update_graph_settings_off_clears_legacy_flag(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """legacy RAG_GRAPH_ENABLED=true でも UI 保存で off を正本にできる(full へ戻らない)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_graph_profile", "off")
+    monkeypatch.setattr(settings, "rag_graph_enabled", True)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/graph", json={"profile": "off"})
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["profile"] == "off"
+    assert body["enabled"] is False
+    assert settings.rag_graph_enabled is False
+    assert "RAG_GRAPH_ENABLED=false" in env_file.read_text(encoding="utf-8")
 
 
 def test_update_graph_settings_rejects_unknown_profile() -> None:
@@ -1030,6 +1060,9 @@ def test_agentic_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> N
     assert names == ["off", "smart_routing", "query_rewrite", "hyde", "decompose", "multi_hop"]
     selected = [item["name"] for item in body["profiles"] if item["selected"]]
     assert selected == ["decompose"]
+    by_name = {item["name"]: item for item in body["profiles"]}
+    assert by_name["hyde"]["hyde"] is True
+    assert by_name["decompose"]["hyde"] is False
 
 
 def test_agentic_settings_off_disables_planning(monkeypatch: MonkeyPatch) -> None:
@@ -1049,19 +1082,35 @@ def test_update_agentic_settings_persists_env_and_mutates_runtime(
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_agentic_profile", "off")
+    monkeypatch.setattr(settings, "rag_agentic_max_subqueries", 3)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    resp = client.patch("/api/settings/agentic", json={"profile": "multi_hop"})
+    resp = client.patch(
+        "/api/settings/agentic",
+        json={"profile": "multi_hop", "max_subqueries": 5},
+    )
 
     assert resp.status_code == 200
     assert resp.json()["data"]["profile"] == "multi_hop"
     assert resp.json()["data"]["multi_hop"] is True
+    assert resp.json()["data"]["max_subqueries"] == 5
     assert settings.rag_agentic_profile == "multi_hop"
-    assert "RAG_AGENTIC_PROFILE=multi_hop" in env_file.read_text(encoding="utf-8")
+    assert settings.rag_agentic_max_subqueries == 5
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_AGENTIC_PROFILE=multi_hop" in env_text
+    assert "RAG_AGENTIC_MAX_SUBQUERIES=5" in env_text
 
 
 def test_update_agentic_settings_rejects_unknown_profile() -> None:
     resp = client.patch("/api/settings/agentic", json={"profile": "react_agent"})
+    assert resp.status_code == 422
+
+
+def test_update_agentic_settings_rejects_out_of_range_max_subqueries() -> None:
+    resp = client.patch(
+        "/api/settings/agentic",
+        json={"profile": "decompose", "max_subqueries": 0},
+    )
     assert resp.status_code == 422
 
 

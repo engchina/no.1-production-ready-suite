@@ -28,6 +28,9 @@ const PREPROCESS_OPTIONS: SelectFieldOption<PreprocessProfileName>[] = [
   { value: "pdf_to_page_images", label: t("settings.preprocess.profile.pdf_to_page_images") },
   { value: "csv_to_json", label: t("settings.preprocess.profile.csv_to_json") },
   { value: "excel_to_json", label: t("settings.preprocess.profile.excel_to_json") },
+  { value: "url_to_markdown", label: t("settings.preprocess.profile.url_to_markdown") },
+  { value: "image_enhance", label: t("settings.preprocess.profile.image_enhance") },
+  { value: "pii_redact", label: t("settings.preprocess.profile.pii_redact") },
 ];
 // 文書解析はサービスとして起動できる解析エンジンのみを並べる。
 const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = [
@@ -120,8 +123,8 @@ interface KnowledgeBaseAdapterConfigPanelProps {
   disabled?: boolean;
 }
 
-/** 上書きサマリの対象段数(構築 9)。 */
-const TOTAL_STAGES = 9;
+/** 上書きサマリの対象段数(構築 10)。 */
+const TOTAL_STAGES = 10;
 
 /** 上書き対象 9 段のうち、非継承(上書き)の件数を数える。 */
 function countOverrides(config: KnowledgeBaseAdapterConfig): number {
@@ -133,6 +136,7 @@ function countOverrides(config: KnowledgeBaseAdapterConfig): number {
     config.ingestion.field_extraction_enabled,
     config.ingestion.asset_summary_enabled,
     config.ingestion.navigation_summary_enabled,
+    config.ingestion.auto_parse_after_preprocess_enabled,
     config.ingestion.auto_chunk_after_extract_enabled,
     config.ingestion.auto_index_after_chunk_enabled,
   ];
@@ -210,6 +214,12 @@ export function KnowledgeBaseAdapterConfigPanel({
         t("knowledgeBases.adapter.field.navigationSummary"),
         form.ingestion.navigation_summary_enabled,
         effectiveConfig?.ingestion.navigation_summary_enabled ?? null
+      ),
+      resolveBoolStage(
+        "auto-parse",
+        t("knowledgeBases.adapter.field.autoParseAfterPreprocess"),
+        form.ingestion.auto_parse_after_preprocess_enabled,
+        effectiveConfig?.ingestion.auto_parse_after_preprocess_enabled ?? null
       ),
       resolveBoolStage(
         "auto-chunk",
@@ -347,6 +357,14 @@ export function KnowledgeBaseAdapterConfigPanel({
             effectiveValue={effectiveConfig?.ingestion.navigation_summary_enabled ?? null}
             disabled={disabled}
             onChange={(value) => updateIngestion({ navigation_summary_enabled: value })}
+          />
+          <AdapterToggleRow
+            id={`kb-adapter-auto-parse-${knowledgeBaseId}`}
+            label={t("knowledgeBases.adapter.field.autoParseAfterPreprocess")}
+            value={form.ingestion.auto_parse_after_preprocess_enabled}
+            effectiveValue={effectiveConfig?.ingestion.auto_parse_after_preprocess_enabled ?? null}
+            disabled={disabled}
+            onChange={(value) => updateIngestion({ auto_parse_after_preprocess_enabled: value })}
           />
           <AdapterToggleRow
             id={`kb-adapter-auto-chunk-${knowledgeBaseId}`}

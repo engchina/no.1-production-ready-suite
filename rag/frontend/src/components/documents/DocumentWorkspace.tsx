@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowUpRight,
   Braces,
   Check,
   Clock3,
@@ -15,15 +16,18 @@ import {
   Route,
   Save,
   Send,
+  SlidersHorizontal,
   TriangleAlert,
+  Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { DocumentPreview } from "./DocumentPreview";
 import { IngestionConfigDriftBanner } from "@/components/knowledge-bases/IngestionConfigDriftBanner";
 import { DocumentExtraction } from "./DocumentExtraction";
+import { ExtractedText, IndexBadge, InfoChip } from "./extraction-bits";
 import {
   type IngestionParserDisplay,
   type IngestionProgressSummary,
@@ -45,7 +49,7 @@ import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormStatus } from "@/components/ui/form-status";
-import { ErrorState } from "@/components/StateViews";
+import { EmptyState, ErrorState } from "@/components/StateViews";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   api,
@@ -53,6 +57,7 @@ import {
   type DocumentApproveRequest,
   type DocumentElement,
   type DocumentChunkView,
+  type DocumentIngestionConfigData,
   type DocumentExtractionExportFormat,
   type ExtractionTable,
   type ExtractionTableCell,
@@ -83,8 +88,9 @@ import {
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
-import { t, type I18nKey } from "@/lib/i18n";
-import { formatBytes, formatDateTime, parseApiDateTime } from "@/lib/format";
+import { ja, t, type I18nKey } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
+import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import {
   type BboxCoordinateMode,
@@ -236,6 +242,12 @@ export function DocumentWorkspace({
   const requestedCellRef = requestedFormulaCellRef ?? requestedCellRefParam;
   const requestedCellRow = integerSearchParam(searchParams.get("cell_row"));
   const requestedCellCol = integerSearchParam(searchParams.get("cell_col"));
+  // インスペクタ右ペインのタブ。要素/表セル指定の deep-link は構造化(抽出本文)を、
+  // chunk のみの引用 deep-link は Chunk タブを初期表示する。
+  const [inspectorTab, setInspectorTab] = useState<"extraction" | "chunks" | "export">(() => {
+    if (requestedElementId || requestedTableId || requestedCellRef) return "extraction";
+    return requestedChunkId ? "chunks" : "extraction";
+  });
   const requestedUrlFocus = useMemo<UrlFallbackFocus | null>(() => {
     const page = integerSearchParam(searchParams.get("page"));
     const bbox = bboxSearchParam(searchParams.get("bbox"));
@@ -323,6 +335,21 @@ export function DocumentWorkspace({
       retriedSegmentJobErrorMessage,
     ]
   );
+  // 取込・診断の折りたたみ。通常は閉じておき、取込中/失敗/エラー/セグメント失敗時のみ自動展開する。
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const diagnosticsAutoOpenedRef = useRef(false);
+  const diagnosticsHasActivity =
+    status === "INGESTING" ||
+    status === "ERROR" ||
+    latestDocumentJobActive ||
+    latestDocumentJob?.status === "FAILED" ||
+    ingestionErrorDisplays.segmentIds.size > 0;
+  useEffect(() => {
+    if (diagnosticsHasActivity && !diagnosticsAutoOpenedRef.current) {
+      diagnosticsAutoOpenedRef.current = true;
+      setDiagnosticsOpen(true);
+    }
+  }, [diagnosticsHasActivity]);
   const approveErrorText = approveDocument.isError
     ? errorMessage(approveDocument.error, t("flow.approveFailed"))
     : "";
@@ -532,7 +559,10 @@ export function DocumentWorkspace({
   useEffect(() => {
     if (
       !activeSubmittedJob &&
-      (status === "INDEXED" || status === "ERROR" || status === "REVIEW")
+      (status === "INDEXED" ||
+        status === "ERROR" ||
+        status === "PREPROCESSED" ||
+        status === "REVIEW")
     ) {
       setLocalWatchProcessing(false);
     }
@@ -776,6 +806,9 @@ export function DocumentWorkspace({
             </div>
           </dl>
         ) : null}
+        {ingestionConfigQuery.data ? (
+          <BuildConfigSummary config={ingestionConfigQuery.data} />
+        ) : null}
         {shouldShowProcessingWatchBanner({
           watchProcessing,
           documentStatus: doc.status,
@@ -806,46 +839,9 @@ export function DocumentWorkspace({
           </div>
         </dl>
 
-        {sourceProfile ? (
-          <SourceProfilePanel profile={sourceProfile} ingestionParser={ingestionParser} />
-        ) : null}
-
-        {parsedExtraction.sourceDerivation ? (
-          <SourceDerivationPanel
-            derivation={parsedExtraction.sourceDerivation}
-            originalFileName={sourceProfile?.original_file_name ?? doc.file_name}
-          />
-        ) : null}
-
         <DocumentKnowledgeBaseEditor
           documentId={documentId}
           initialKnowledgeBases={doc.knowledge_bases}
-        />
-
-        <IngestionJobsPanel
-          jobs={documentJobsQuery.data ?? []}
-          segments={segmentsQuery.data ?? []}
-          loading={documentJobsQuery.isPending}
-          error={documentJobsQuery.isError}
-          nowMs={elapsedNowMs}
-        />
-
-        <IngestionSegmentsPanel
-          segments={segmentsQuery.data ?? []}
-          loading={segmentsQuery.isPending}
-          error={segmentsQuery.isError}
-          retrying={retryFailedSegments.isPending}
-          visibleErrorSegmentIds={ingestionErrorDisplays.segmentIds}
-          onRetryFailedSegments={() =>
-            retryFailedSegments.mutate(
-              documentId,
-              {
-                onSuccess: (job) => {
-                  setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
-                },
-              }
-            )
-          }
         />
 
         {ingestionErrorDisplays.documentMessage ? (
@@ -884,8 +880,9 @@ export function DocumentWorkspace({
           <Banner severity="danger">{ingestionErrorDisplays.retriedSegmentJobMessage}</Banner>
         ) : null}
 
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)]">
-          <section>
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+          {/* 左ペイン: 原本プレビュー(desktop は引用照合のアンカーとして sticky 固定) */}
+          <section className="min-w-0 xl:sticky xl:top-4 xl:self-start">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-foreground">{t("flow.preview")}</h3>
               <div className="flex items-center gap-2">
@@ -935,75 +932,180 @@ export function DocumentWorkspace({
               focusPageSize={focusPageSize}
             />
           </section>
-          <section>
-            <h3 className="mb-2 text-sm font-semibold text-foreground">
-              {t("flow.extraction.title")}
-            </h3>
-            {doc.status === "REVIEW" ? (
-              <div className="mb-2 flex justify-end">
-                <Button
-                  size="sm"
-                  variant={editingReview ? "secondary" : "ghost"}
-                  onClick={() => setEditingReview((prev) => !prev)}
-                  aria-pressed={editingReview}
-                >
-                  <Pencil size={14} aria-hidden />
-                  {editingReview
-                    ? t("flow.review.edit.close")
-                    : t("flow.review.edit.open")}
-                </Button>
+
+          {/* 右ペイン: 抽出本文 / Chunk / エクスポート をタブ切替(1つずつ全幅表示) */}
+          <section className="min-w-0">
+            <div
+              role="tablist"
+              aria-label={t("flow.inspector.tabs")}
+              className="mb-3 flex flex-wrap items-center gap-1"
+            >
+              <InspectorTab
+                id="inspector-tab-extraction"
+                controls="inspector-panel-extraction"
+                active={inspectorTab === "extraction"}
+                onSelect={() => setInspectorTab("extraction")}
+              >
+                {t("flow.extraction.title")}
+              </InspectorTab>
+              <InspectorTab
+                id="inspector-tab-chunks"
+                controls="inspector-panel-chunks"
+                active={inspectorTab === "chunks"}
+                onSelect={() => setInspectorTab("chunks")}
+              >
+                {t("flow.chunks.title")}
+                {chunksQuery.data?.length ? (
+                  <span className="tnum ml-1.5 opacity-70">
+                    {formatNumber(chunksQuery.data.length)}
+                  </span>
+                ) : null}
+              </InspectorTab>
+              <InspectorTab
+                id="inspector-tab-export"
+                controls="inspector-panel-export"
+                active={inspectorTab === "export"}
+                onSelect={() => setInspectorTab("export")}
+              >
+                {t("flow.extractionExport.title")}
+              </InspectorTab>
+            </div>
+
+            {inspectorTab === "extraction" ? (
+              <div
+                role="tabpanel"
+                id="inspector-panel-extraction"
+                aria-labelledby="inspector-tab-extraction"
+                tabIndex={0}
+              >
+                {doc.status === "REVIEW" ? (
+                  <div className="mb-2 flex justify-end">
+                    <Button
+                      size="sm"
+                      variant={editingReview ? "secondary" : "ghost"}
+                      onClick={() => setEditingReview((prev) => !prev)}
+                      aria-pressed={editingReview}
+                    >
+                      <Pencil size={14} aria-hidden />
+                      {editingReview
+                        ? t("flow.review.edit.close")
+                        : t("flow.review.edit.open")}
+                    </Button>
+                  </div>
+                ) : null}
+                {doc.status === "REVIEW" && editingReview ? (
+                  <ReviewTextEditor extraction={doc.extraction} onChange={setReviewEdits} />
+                ) : (
+                  <DocumentExtraction
+                    extraction={doc.extraction}
+                    selectedElementId={selectedElementId}
+                    selectedTableCellKey={selectedTableCellKey}
+                    focusRequestKey={focusRequest?.key ?? null}
+                    focusSelectedElement={focusRequest?.target === "element"}
+                    focusSelectedTableCell={focusRequest?.target === "table_cell"}
+                    onElementSelect={selectElement}
+                    onTableCellSelect={selectTableCell}
+                  />
+                )}
               </div>
             ) : null}
-            {doc.status === "REVIEW" && editingReview ? (
-              <ReviewTextEditor extraction={doc.extraction} onChange={setReviewEdits} />
-            ) : (
-              <DocumentExtraction
-                extraction={doc.extraction}
-                selectedElementId={selectedElementId}
-                selectedTableCellKey={selectedTableCellKey}
-                focusRequestKey={focusRequest?.key ?? null}
-                focusSelectedElement={focusRequest?.target === "element"}
-                focusSelectedTableCell={focusRequest?.target === "table_cell"}
-                onElementSelect={selectElement}
-                onTableCellSelect={selectTableCell}
-              />
-            )}
-            <DocumentExtractionExportPanel
-              format={exportFormat}
-              onFormatChange={setExportFormat}
-              content={extractionExportQuery.data?.content ?? ""}
-              loading={extractionExportQuery.isPending}
-              error={extractionExportQuery.isError}
-              pageCount={extractionExportQuery.data?.page_count ?? 0}
-              elementCount={extractionExportQuery.data?.element_count ?? 0}
-              chunkCount={extractionExportQuery.data?.chunks.length ?? 0}
-            />
-          </section>
-          <section>
-            <h3 className="mb-2 text-sm font-semibold text-foreground">
-              {t("flow.chunks.title")}
-            </h3>
-            <DocumentChunksPanel
-              chunks={chunksQuery.data ?? []}
-              loading={chunksQuery.isPending}
-              error={chunksQuery.isError}
-              selectedChunkId={selectedChunkId}
-              focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
-              onSelect={(chunk) => {
-                setUrlFallbackFocus(null);
-                setSelectedChunkId(chunk.chunk_id);
-                setSelectedElementId(chunk.element_ids[0] ?? null);
-                setSelectedTableCellKey(null);
-                setPreviewFocusSource("chunk");
-              }}
-            />
+
+            {inspectorTab === "chunks" ? (
+              <div
+                role="tabpanel"
+                id="inspector-panel-chunks"
+                aria-labelledby="inspector-tab-chunks"
+                tabIndex={0}
+              >
+                <DocumentChunksPanel
+                  chunks={chunksQuery.data ?? []}
+                  loading={chunksQuery.isPending}
+                  error={chunksQuery.isError}
+                  selectedChunkId={selectedChunkId}
+                  focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
+                  onSelect={(chunk) => {
+                    setUrlFallbackFocus(null);
+                    setSelectedChunkId(chunk.chunk_id);
+                    setSelectedElementId(chunk.element_ids[0] ?? null);
+                    setSelectedTableCellKey(null);
+                    setPreviewFocusSource("chunk");
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {inspectorTab === "export" ? (
+              <div
+                role="tabpanel"
+                id="inspector-panel-export"
+                aria-labelledby="inspector-tab-export"
+                tabIndex={0}
+              >
+                <DocumentExtractionExportPanel
+                  format={exportFormat}
+                  onFormatChange={setExportFormat}
+                  content={extractionExportQuery.data?.content ?? ""}
+                  loading={extractionExportQuery.isPending}
+                  error={extractionExportQuery.isError}
+                  pageCount={extractionExportQuery.data?.page_count ?? 0}
+                  elementCount={extractionExportQuery.data?.element_count ?? 0}
+                  chunkCount={extractionExportQuery.data?.chunks.length ?? 0}
+                />
+              </div>
+            ) : null}
           </section>
         </div>
+
+        <details
+          className="rounded-md border border-border bg-card px-4 py-1"
+          open={diagnosticsOpen}
+          onToggle={(event) => setDiagnosticsOpen((event.target as HTMLDetailsElement).open)}
+        >
+          <summary className="flex min-h-10 cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
+            <Wrench size={15} className="text-primary" aria-hidden />
+            {t("flow.inspector.details")}
+          </summary>
+          <div className="space-y-5 pb-3 pt-3">
+            {sourceProfile ? (
+              <SourceProfilePanel profile={sourceProfile} ingestionParser={ingestionParser} />
+            ) : null}
+            {parsedExtraction.sourceDerivation ? (
+              <SourceDerivationPanel
+                derivation={parsedExtraction.sourceDerivation}
+                originalFileName={sourceProfile?.original_file_name ?? doc.file_name}
+              />
+            ) : null}
+            <IngestionJobsPanel
+              jobs={documentJobsQuery.data ?? []}
+              segments={segmentsQuery.data ?? []}
+              loading={documentJobsQuery.isPending}
+              error={documentJobsQuery.isError}
+              nowMs={elapsedNowMs}
+            />
+            <IngestionSegmentsPanel
+              segments={segmentsQuery.data ?? []}
+              loading={segmentsQuery.isPending}
+              error={segmentsQuery.isError}
+              retrying={retryFailedSegments.isPending}
+              visibleErrorSegmentIds={ingestionErrorDisplays.segmentIds}
+              onRetryFailedSegments={() =>
+                retryFailedSegments.mutate(documentId, {
+                  onSuccess: (job) => {
+                    setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
+                  },
+                })
+              }
+            />
+          </div>
+        </details>
 
         {doc.status === "INDEXED" ? (
           <Banner severity="success">{t("flow.indexed")}</Banner>
         ) : null}
 
+        {doc.status === "PREPROCESSED" ? (
+          <Banner severity="info">{t("flow.preprocessed.description")}</Banner>
+        ) : null}
         {doc.status === "REVIEW" ? (
           <Banner severity="info">{t("flow.review.description")}</Banner>
         ) : null}
@@ -1048,7 +1150,9 @@ export function DocumentWorkspace({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          {(doc.status === "REVIEW" || doc.status === "CHUNKED") && (
+          {(doc.status === "PREPROCESSED" ||
+            doc.status === "REVIEW" ||
+            doc.status === "CHUNKED") && (
             <>
               <Button
                 onClick={() =>
@@ -1081,9 +1185,11 @@ export function DocumentWorkspace({
                 {!approveDocument.isPending ? <Check size={15} aria-hidden /> : null}
                 {approveDocument.isPending
                   ? t("action.queueing")
-                  : doc.status === "CHUNKED"
-                    ? t("flow.approveChunks")
-                    : t("flow.approveExtraction")}
+                  : doc.status === "PREPROCESSED"
+                    ? t("flow.approvePreprocess")
+                    : doc.status === "CHUNKED"
+                      ? t("flow.approveChunks")
+                      : t("flow.approveExtraction")}
               </Button>
               {doc.status === "REVIEW" ? (
                 <Button
@@ -1617,6 +1723,41 @@ function formatJobElapsed(job: IngestionJob, nowMs = Date.now()): string {
     : t("flow.jobs.elapsedMinutes", { minutes });
 }
 
+/** インスペクタ右ペインのタブ(抽出本文 / Chunk / エクスポート切替)。 */
+function InspectorTab({
+  id,
+  controls,
+  active,
+  onSelect,
+  children,
+}: {
+  id: string;
+  controls: string;
+  active: boolean;
+  onSelect: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={id}
+      aria-selected={active}
+      aria-controls={controls}
+      tabIndex={active ? 0 : -1}
+      onClick={onSelect}
+      className={cn(
+        "cursor-pointer rounded-full px-3 py-1 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+        active
+          ? "bg-primary text-primary-foreground"
+          : "border border-border bg-card text-muted hover:bg-background hover:text-foreground"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 function DocumentChunksPanel({
   chunks,
   loading,
@@ -1649,14 +1790,14 @@ function DocumentChunksPanel({
   }
   if (!chunks.length) {
     return (
-      <div className="rounded-md border border-border bg-background p-4 text-sm text-muted">
-        {t("flow.chunks.empty")}
+      <div className="rounded-md border border-border bg-background">
+        <EmptyState title={t("flow.chunks.empty")} />
       </div>
     );
   }
 
   return (
-    <ol className="max-h-[680px] space-y-3 overflow-auto rounded-lg border border-border bg-background p-3">
+    <ol className="space-y-3 rounded-lg border border-border bg-background p-3">
       {chunks.map((chunk) => {
         const selected = chunk.chunk_id === selectedChunkId;
         return (
@@ -1671,9 +1812,7 @@ function DocumentChunksPanel({
               onClick={() => onSelect(chunk)}
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className="tnum rounded-full bg-background px-2 py-0.5 text-xs text-muted">
-                  #{chunk.chunk_index + 1}
-                </span>
+                <IndexBadge>#{chunk.chunk_index + 1}</IndexBadge>
                 {chunk.content_kind ? (
                   <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                     {chunk.content_kind}
@@ -1695,17 +1834,23 @@ function DocumentChunksPanel({
                 ) : null}
               </div>
               {chunk.section_path ? (
-                <p className="mt-2 break-words text-xs text-muted">{chunk.section_path}</p>
+                <div className="mt-2 flex">
+                  <InfoChip icon={Route} label={chunk.section_path} />
+                </div>
               ) : null}
-              <p className="mt-2 max-h-24 overflow-hidden whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
-                {chunk.text}
-              </p>
-              <p className="mt-2 inline-flex items-center gap-1 break-all text-xs text-muted">
-                <ListTree size={13} aria-hidden />
-                {chunk.element_ids.length
-                  ? chunk.element_ids.join(", ")
-                  : t("flow.chunks.noElements")}
-              </p>
+              <div className="mt-2">
+                <ExtractedText text={chunk.text} clamp />
+              </div>
+              <div className="mt-2 flex">
+                <InfoChip
+                  icon={ListTree}
+                  label={
+                    chunk.element_ids.length
+                      ? chunk.element_ids.join(", ")
+                      : t("flow.chunks.noElements")
+                  }
+                />
+              </div>
             </button>
           </li>
         );
@@ -1778,6 +1923,73 @@ function SourceDerivationPanel({
           ))}
         </ul>
       ) : null}
+    </section>
+  );
+}
+
+/** 動的 i18n キーが存在しない場合は生値へフォールバック(t は未定義キーで undefined を返すため)。 */
+function configValueLabel(key: I18nKey, raw: string): string {
+  return key in ja ? t(key) : raw;
+}
+
+/**
+ * この文書を処理した「適用済み構築設定」(ファイル準備 / 文書解析 / 文書分割)を文脈内に明示し、
+ * 各設定ページへの導線を添える(P0-2 分割方式の明示 + P0-3 設定↔文書の往復)。
+ */
+function BuildConfigSummary({ config }: { config: DocumentIngestionConfigData }) {
+  const items = [
+    {
+      key: "preprocess",
+      label: t("flow.buildConfig.preprocess"),
+      value: configValueLabel(
+        `settings.preprocess.profile.${config.effective_preprocess_profile}` as I18nKey,
+        config.effective_preprocess_profile
+      ),
+      href: APP_ROUTES.settingsPreprocess,
+    },
+    {
+      key: "parser",
+      label: t("flow.buildConfig.parser"),
+      value: parserBackendLabel(config.effective_parser_adapter_backend),
+      href: APP_ROUTES.settingsParserAdapters,
+    },
+    {
+      key: "chunking",
+      label: t("flow.buildConfig.chunking"),
+      value: configValueLabel(
+        `settings.chunking.strategy.${config.effective_chunking_strategy}` as I18nKey,
+        config.effective_chunking_strategy
+      ),
+      href: APP_ROUTES.settingsChunking,
+    },
+  ];
+  return (
+    <section
+      aria-label={t("flow.buildConfig.title")}
+      className="rounded-md border border-border bg-background p-3"
+    >
+      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold text-muted">
+        <SlidersHorizontal size={14} className="text-primary" aria-hidden />
+        {t("flow.buildConfig.title")}
+      </h3>
+      <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+        {items.map((item) => (
+          <div key={item.key} className="min-w-0">
+            <dt className="text-xs text-muted">{item.label}</dt>
+            <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span className="min-w-0 break-words font-medium text-foreground">{item.value}</span>
+              <Link
+                to={item.href}
+                aria-label={t("flow.buildConfig.openSettings", { name: item.label })}
+                className="inline-flex shrink-0 items-center gap-0.5 text-xs font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                {t("flow.buildConfig.openSettingsShort")}
+                <ArrowUpRight size={12} aria-hidden />
+              </Link>
+            </dd>
+          </div>
+        ))}
+      </dl>
     </section>
   );
 }

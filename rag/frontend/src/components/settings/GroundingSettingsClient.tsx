@@ -35,10 +35,11 @@ export function GroundingSettingsClient() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (query.data && !save.isPending) {
+    // 初期化時のみ server 値で同期する。dirty な未保存選択は背景 refetch で上書きしない。
+    if (query.data && pipeline === null) {
       setPipeline(query.data.pipeline);
     }
-  }, [query.data, save.isPending]);
+  }, [query.data, pipeline]);
 
   if (query.isPending) {
     return (
@@ -207,6 +208,7 @@ function StageChips({ pipeline }: { pipeline: GroundingPipelineStatusData }) {
   if (pipeline.diversity) stages.push(t("settings.grounding.diversity"));
   if (pipeline.expansion_mode !== "none") stages.push(t("settings.grounding.expansion"));
   if (pipeline.compression) stages.push(t("settings.grounding.compression"));
+  if (pipeline.corrective) stages.push(t("settings.grounding.corrective"));
   return (
     <span className="mt-2 flex flex-wrap gap-1">
       {stages.length ? (
@@ -219,7 +221,7 @@ function StageChips({ pipeline }: { pipeline: GroundingPipelineStatusData }) {
           </span>
         ))
       ) : (
-        <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+        <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
           {pipeline.recommended_for[0] ?? t("settings.grounding.none")}
         </span>
       )}

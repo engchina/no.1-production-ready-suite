@@ -65,6 +65,7 @@ def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCata
         profile=entry.profile,
         label_key=entry.label_key,
         execution_policy=entry.execution_policy,
+        deployable=entry.deployable,
         configured=bool(service_health_url(settings, entry)),
         model_cache=_model_cache(settings, entry),
     )
@@ -174,6 +175,12 @@ async def _control(service_id: str, action: ServiceAction) -> ApiResponse[Servic
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="指定したサービスが見つかりません。",
+        )
+    # UI 非表示だけに頼らず、非 deployable ステージへの操作はサーバ側でも拒否する。
+    if not entry.deployable:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="このステージは backend 内処理で動作します(サービス化は将来対応)。",
         )
     try:
         await _control_client.control(settings, entry, action)

@@ -9,6 +9,7 @@ export type { FileStatus };
 const STATUS_VARIANT: Record<FileStatus, StatusVariant> = {
   UPLOADED: "neutral",
   PREPROCESSING: "pending",
+  PREPROCESSED: "info",
   INGESTING: "pending",
   REVIEW: "info",
   CHUNKING: "pending",

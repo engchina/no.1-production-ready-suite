@@ -193,6 +193,7 @@ export function EvaluationClient() {
           effectiveSuiteName={effectiveSuiteName}
           suiteStatuses={suiteStatuses}
           requestHasThresholds={requestHasThresholds}
+          requestThresholds={parsedRequest.ok ? (parsedRequest.value.thresholds ?? null) : null}
         />
 
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -309,6 +310,7 @@ function SuiteSelector({
   effectiveSuiteName,
   suiteStatuses,
   requestHasThresholds,
+  requestThresholds,
 }: {
   suite: SuiteSelection;
   onChange: (value: SuiteSelection) => void;
@@ -316,6 +318,7 @@ function SuiteSelector({
   effectiveSuiteName: EvaluationSuiteName | null;
   suiteStatuses: EvaluationSuiteStatusData[];
   requestHasThresholds: boolean;
+  requestThresholds: EvaluationRunRequestBody["thresholds"];
 }) {
   const defaultLabel = globalSuite
     ? t("evaluation.suite.followDefaultWith", { suite: suiteLabel(globalSuite) })
@@ -327,7 +330,13 @@ function SuiteSelector({
   const effectiveStatus = effectiveSuiteName
     ? (suiteStatuses.find((item) => item.name === effectiveSuiteName) ?? null)
     : null;
-  const thresholdEntries = Object.entries(effectiveStatus?.thresholds ?? {});
+  // request JSON に thresholds があるときは backend が request 側を優先するため、
+  // プレビューも実際に適用される request の値を表示する(スイート既定値ではなく)。
+  const thresholdEntries = requestHasThresholds
+    ? Object.entries(requestThresholds ?? {}).filter(
+        (entry): entry is [string, number] => typeof entry[1] === "number"
+      )
+    : Object.entries(effectiveStatus?.thresholds ?? {});
 
   return (
     <Card className="min-w-0">
@@ -348,7 +357,9 @@ function SuiteSelector({
         />
         <div className="rounded-md border border-border bg-muted/20 p-3">
           <p className="text-xs font-medium text-muted">
-            {t("evaluation.suite.thresholdsPreview")}
+            {requestHasThresholds
+              ? t("evaluation.suite.thresholdsPreviewOverride")
+              : t("evaluation.suite.thresholdsPreview")}
           </p>
           {thresholdEntries.length ? (
             <div className="mt-2 flex flex-wrap gap-1.5">

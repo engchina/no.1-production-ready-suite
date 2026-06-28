@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { CheckCircle2, RotateCcw, Save, Sparkles } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -15,6 +16,7 @@ import {
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGenerationSettings, useUpdateGenerationSettings } from "@/lib/queries";
+import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 const PROFILE_ORDER: GenerationProfileName[] = [
@@ -23,6 +25,8 @@ const PROFILE_ORDER: GenerationProfileName[] = [
   "strict_extractive",
   "structured_json",
   "bilingual_ja_en",
+  "inline_cited",
+  "custom",
 ];
 
 /** 回答スタイルの現在設定を管理する設定画面。 */
@@ -33,10 +37,12 @@ export function GenerationSettingsClient() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (query.data && !save.isPending) {
+    // 初回ロード時のみ同期する。保存後の反映は onSuccess が担うため、背景 refetch で
+    // 未保存の選択を上書きしない。
+    if (query.data && profile === null) {
       setProfile(query.data.profile);
     }
-  }, [query.data, save.isPending]);
+  }, [query.data, profile]);
 
   if (query.isPending) {
     return (
@@ -150,12 +156,22 @@ export function GenerationSettingsClient() {
                 );
               })}
             </div>
+            {profile === "custom" ? (
+              <Link
+                to={APP_ROUTES.settingsPrompts}
+                className="inline-flex text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                {t("settings.generation.custom.manageLink")}
+              </Link>
+            ) : null}
           </div>
           <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <RuntimeFact label={t("settings.generation.profile")} value={profileLabel(profile)} />
             <RuntimeFact
               label={t("settings.generation.structuredOutput")}
-              value={settings.structured_output ? "JSON" : "—"}
+              value={
+                profiles.find((item) => item.name === profile)?.structured_output ? "JSON" : "—"
+              }
             />
             <RuntimeFact
               label={t("settings.generation.source")}
@@ -207,7 +223,7 @@ function ProfileChips({ profile }: { profile: GenerationProfileStatusData }) {
       {profile.recommended_for.slice(0, 2).map((item) => (
         <span
           key={item}
-          className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted"
+          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
         >
           {item}
         </span>
@@ -241,9 +257,10 @@ function orderedProfiles(
 }
 
 function profileLabel(name: GenerationProfileName) {
-  return t(`settings.generation.profile.${name}` as I18nKey);
+  // 未知 profile(将来の backend 追加など)でも空白表示にせず名称へフォールバック。
+  return t(`settings.generation.profile.${name}` as I18nKey) ?? name;
 }
 
 function profileDescription(name: GenerationProfileName) {
-  return t(`settings.generation.profile.${name}.description` as I18nKey);
+  return t(`settings.generation.profile.${name}.description` as I18nKey) ?? "";
 }

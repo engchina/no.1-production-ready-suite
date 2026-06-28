@@ -95,6 +95,36 @@ def test_stream_search_api_uses_realtime_deltas_without_duplicate_answer(
     assert "event: done" in response.text
 
 
+def test_search_response_dedupes_guardrail_warnings() -> None:
+    """クエリ側/回答側で重複する warning は順序保持で 1 件に畳む。"""
+    response = SearchResponse(
+        answer="ok",
+        trace_id="trace-1",
+        elapsed_ms=1.0,
+        guardrail_warnings=["A をマスクしました。", "B 検出。", "A をマスクしました。"],
+    )
+
+    assert response.guardrail_warnings == ["A をマスクしました。", "B 検出。"]
+
+
+def test_stream_search_api_replaces_answer_when_guardrail_masks_realtime_stream(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """realtime stream 後にガードレールが本文をマスクした場合、replace event で再送する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_stream_realtime_enabled", True)
+    monkeypatch.setattr(search_route, "RagPipeline", RealtimeMaskingPipeline)
+
+    response = client.post("/api/search/stream", json={"query": "口座番号"})
+
+    assert response.status_code == 200
+    # 生トークンは delta で配信済み、マスク済み本文は replace で再送される。
+    assert "event: replace" in response.text
+    assert '{"text": "口座番号は [機微情報] です。"}' in response.text
+    # 最終 answer を delta として二重配信しない。
+    assert response.text.count("event: delta") == 2
+
+
 def test_search_api_hashes_tenant_and_user_headers_into_audit(
     monkeypatch: MonkeyPatch,
     caplog: LogCaptureFixture,
@@ -337,6 +367,34 @@ class RealtimeStreamingPipeline:
                     )
                 ],
             ),
+        )
+
+
+class RealtimeMaskingPipeline:
+    """生トークンを stream した後にガードレールが本文をマスクするテスト用 pipeline。"""
+
+    def __init__(self, *, settings: object | None = None, **_kwargs: object) -> None:
+        self._settings = settings
+
+    async def run(
+        self,
+        request: SearchRequest,
+        trace_id: str | None = None,
+        progress_callback: object | None = None,
+        token_callback: Any | None = None,
+    ) -> SearchResponse:
+        _ = progress_callback
+        assert trace_id
+        assert token_callback is not None
+        await token_callback(SearchTokenDelta(trace_id=trace_id, text="口座番号は "))
+        await token_callback(SearchTokenDelta(trace_id=trace_id, text="1234567 です。"))
+        return SearchResponse(
+            answer="口座番号は [機微情報] です。",
+            citations=[],
+            trace_id=trace_id,
+            elapsed_ms=1.0,
+            answer_replaced=True,
+            diagnostics=build_search_diagnostics(request, settings=get_settings()),
         )
 
 

@@ -154,7 +154,7 @@ export function formatSettingsJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-function SettingsPreviewCard({
+export function SettingsPreviewCard({
   title,
   description,
   value,

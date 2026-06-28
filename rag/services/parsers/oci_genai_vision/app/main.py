@@ -12,7 +12,7 @@ PDF 分割・checkpoint/segment の取込オーケストレーションは backe
 
 from rag_parser_core.extraction import StructuredExtraction
 from rag_parser_core.oci_enterprise_ai import OciEnterpriseAiClient, OciEnterpriseAiConfig
-from rag_parser_core.result import ParseResponse
+from rag_parser_core.result import ParseResponse, service_failure_warning
 from rag_parser_core.service import create_service_parse_app
 from rag_parser_core.source import SourceProfile
 
@@ -51,14 +51,14 @@ async def _parse(
             mime_type=content_type,
             parser_profile=parser_profile,
         )
-    except Exception as exc:  # noqa: BLE001 - 失敗時は安全に縮退する
+    except Exception as exc:  # noqa: BLE001 - 別経路へ縮退せず actionable な原因を上流へ届ける
         return ParseResponse(
             extraction=None,
             parser_backend=_BACKEND,
             parser_version=_BACKEND,
             fallback_used=True,
             template=f"{_BACKEND}_fallback",
-            warnings=[f"{_BACKEND}_unavailable: {type(exc).__name__}"],
+            warnings=[service_failure_warning(_BACKEND, exc)],
         )
     return ParseResponse(
         extraction=StructuredExtraction.model_validate(payload),

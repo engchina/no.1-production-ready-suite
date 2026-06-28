@@ -246,6 +246,8 @@ class EnterpriseAiHttpTransport(Protocol):
 class EnterpriseAiTimeoutError(TimeoutError):
     """OCI Enterprise AI 呼び出しの timeout を利用者向けに正規化したエラー。"""
 
+    safe_for_user = True
+
     def __init__(self, operation: str, timeout_seconds: float) -> None:
         self.operation = operation
         self.timeout_seconds = timeout_seconds

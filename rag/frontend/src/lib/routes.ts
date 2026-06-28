@@ -9,6 +9,7 @@ export const APP_ROUTES = {
   documents: "/documents",
   search: "/search",
   evaluation: "/evaluation",
+  settingsPipeline: "/settings/pipeline",
   settingsOci: "/settings/oci",
   settingsUploadStorage: "/settings/upload-storage",
   settingsPreprocess: "/settings/preprocess",

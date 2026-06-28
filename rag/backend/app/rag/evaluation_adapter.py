@@ -1,11 +1,9 @@
 """Evaluation アダプター(評価スイート/閾値の手動選択プリセット)。
 
-suite→CI gate 用閾値の静的解決は共有パッケージ ``rag_pipeline_core.evaluation`` を単一ソースとして
-使い、backend と evaluation マイクロサービスが同一結果を返す。`rag_evaluation_service_enabled` が
-真のとき設定由来の解決を pipeline-evaluation サービスへ委譲する。無効時は in-process(同一
-ロジック)、remote 未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は
-処理停止する。閾値 dict は backend で `EvaluationThresholds`
-へ写す。外部評価 SaaS / LLM-as-judge は導入しない(決定論指標のみ)。
+suite→CI gate 用閾値の解決は共有パッケージ ``rag_pipeline_core.evaluation`` を単一ソースに
+in-process で行う(決定論の name→閾値 lookup)。表示も実 gate も同一の in-process 経路を使う。
+閾値 dict は backend で `EvaluationThresholds` へ写す。外部評価 SaaS / LLM-as-judge は
+導入しない(決定論指標のみ)。
 """
 
 from __future__ import annotations
@@ -35,7 +33,6 @@ class EvaluationAdapterParams:
 
     suite: EvaluationSuiteName
     thresholds: EvaluationThresholds | None
-    focus_metrics: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -47,7 +44,6 @@ class EvaluationSuiteStatus:
     recommended_for: tuple[str, ...]
     selected: bool
     thresholds: EvaluationThresholds | None
-    focus_metrics: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -56,7 +52,6 @@ class EvaluationAdapterRuntimeSettings:
 
     suite: EvaluationSuiteName
     thresholds: EvaluationThresholds | None
-    focus_metrics: tuple[str, ...]
     suites: tuple[EvaluationSuiteStatus, ...]
 
 
@@ -75,37 +70,14 @@ def resolve_evaluation_suite(value: object) -> EvaluationThresholds | None:
 
 
 def resolve_evaluation_adapter(settings: Settings) -> EvaluationAdapterParams:
-    """Settings から Evaluation アダプターの解決済みパラメータを作る。
-
-    `rag_evaluation_service_enabled` のときは pipeline-evaluation サービスへ委譲する。
-    無効時と remote 未到達時は in-process(同一 rag_pipeline_core ロジック)へ縮退する。
-    """
+    """Settings から Evaluation アダプターの解決済みパラメータを作る(in-process)。"""
     suite = normalize_evaluation_suite(
         getattr(settings, "rag_evaluation_suite", DEFAULT_EVALUATION_SUITE)
     )
-    thresholds, focus = _resolve_static(settings, suite)
     return EvaluationAdapterParams(
         suite=suite,
-        thresholds=_thresholds_from_dict(thresholds),
-        focus_metrics=focus,
+        thresholds=_thresholds_from_dict(resolve_evaluation(suite).thresholds),
     )
-
-
-def _resolve_static(
-    settings: Settings, suite: str
-) -> tuple[dict[str, float] | None, tuple[str, ...]]:
-    """静的 (thresholds dict, focus_metrics) を opt-in service / disabled 時 local で解決する。"""
-    from rag_pipeline_core.stage import EvaluationStageRequest
-
-    from app.clients.pipeline_stage import PipelineStageClient
-
-    client = PipelineStageClient(settings)
-    if client.is_enabled("evaluation"):
-        response = client.run_evaluation(EvaluationStageRequest(suite=suite))
-        if response is not None:
-            return response.thresholds, tuple(response.focus_metrics)
-    resolved = resolve_evaluation(suite)
-    return resolved.thresholds, resolved.focus_metrics
 
 
 def evaluation_adapter_runtime_settings(settings: Settings) -> EvaluationAdapterRuntimeSettings:
@@ -118,13 +90,11 @@ def evaluation_adapter_runtime_settings(settings: Settings) -> EvaluationAdapter
             recommended_for=spec.recommended_for,
             selected=spec.name == params.suite,
             thresholds=_thresholds_from_dict(spec.thresholds),
-            focus_metrics=spec.focus_metrics,
         )
         for spec in (EVALUATION_SPECS[name] for name in EVALUATION_SUITES)
     )
     return EvaluationAdapterRuntimeSettings(
         suite=params.suite,
         thresholds=params.thresholds,
-        focus_metrics=params.focus_metrics,
         suites=statuses,
     )

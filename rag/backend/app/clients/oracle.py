@@ -4743,8 +4743,7 @@ class OracleClient:
         def chunk_id_for(chunk: Chunk) -> str:
             document_id = str(chunk.metadata.get("document_id") or "")
             return str(
-                chunk.metadata.get("chunk_id")
-                or f"{document_id}:{chunk_set_id}:{chunk.index}"
+                chunk.metadata.get("chunk_id") or f"{document_id}:{chunk_set_id}:{chunk.index}"
             )
 
         rows = [
@@ -7033,9 +7032,7 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
                   {knowledge_base_filter_sql}
             )
             """.format(
-                duplicate_document_access_sql=_oracle_access_predicate_sql(
-                    alias="duplicate_d"
-                ),
+                duplicate_document_access_sql=_oracle_access_predicate_sql(alias="duplicate_d"),
                 knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
                 knowledge_base_filter_sql=knowledge_base_filter_sql,
             )
@@ -8433,9 +8430,7 @@ def oracle_text_preferences_sql(
     stoplist: str = ORACLE_TEXT_STOPLIST,
 ) -> str:
     """Oracle Text 用 lexer / stoplist preference を冪等に用意する DDL。"""
-    stopword_calls = "\n".join(
-        f"    add_stopword('{word}');" for word in ORACLE_TEXT_STOP_WORDS
-    )
+    stopword_calls = "\n".join(f"    add_stopword('{word}');" for word in ORACLE_TEXT_STOP_WORDS)
     return f"""
 DECLARE
     v_count NUMBER;
@@ -8639,8 +8634,8 @@ CREATE TABLE {table_name} (
     indexed_at               TIMESTAMP WITH TIME ZONE,
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN (
-            'UPLOADED', 'PREPROCESSING', 'INGESTING', 'REVIEW', 'CHUNKING', 'CHUNKED',
-            'INDEXING', 'INDEXED', 'ERROR'
+            'UPLOADED', 'PREPROCESSING', 'PREPROCESSED', 'INGESTING', 'REVIEW',
+            'CHUNKING', 'CHUNKED', 'INDEXING', 'INDEXED', 'ERROR'
         )),
     CONSTRAINT {table_name}_duplicate_fk
         FOREIGN KEY (duplicate_of_document_id) REFERENCES {table_name} (document_id)

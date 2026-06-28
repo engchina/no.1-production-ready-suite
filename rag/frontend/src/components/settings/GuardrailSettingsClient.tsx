@@ -60,6 +60,11 @@ export function GuardrailSettingsClient() {
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.guardrail.saveError");
   const policies = orderedPolicies(settings.policies);
+  // サマリーは選択中ポリシーの閾値を表示する(未保存時に保存済み値とずれないように)。
+  const selectedStatus = policies.find((item) => item.name === policy);
+  const summaryOverlap = selectedStatus?.grounding_min_overlap ?? settings.grounding_min_overlap;
+  const summaryRatio = selectedStatus?.grounding_min_ratio ?? settings.grounding_min_ratio;
+  const ociWarning = ociWarningMessage(settings.oci_warning_code);
 
   function selectPolicy(next: GuardrailPolicyName) {
     save.reset();
@@ -102,6 +107,7 @@ export function GuardrailSettingsClient() {
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
+          {ociWarning ? <FormStatus tone="warning" message={ociWarning} /> : null}
           <div className="space-y-2">
             <div className="text-sm font-medium text-foreground">
               {t("settings.guardrail.policy")}
@@ -147,11 +153,11 @@ export function GuardrailSettingsClient() {
             <RuntimeFact label={t("settings.guardrail.policy")} value={policyLabel(policy)} />
             <RuntimeFact
               label={t("settings.guardrail.groundingOverlap")}
-              value={String(settings.grounding_min_overlap)}
+              value={String(summaryOverlap)}
             />
             <RuntimeFact
               label={t("settings.guardrail.groundingRatio")}
-              value={settings.grounding_min_ratio.toFixed(2)}
+              value={summaryRatio.toFixed(2)}
             />
           </dl>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
@@ -196,10 +202,10 @@ export function GuardrailSettingsClient() {
 function PolicyChips({ policy }: { policy: GuardrailPolicyStatusData }) {
   return (
     <span className="mt-2 flex flex-wrap gap-1">
-      <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+      <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
         {t("settings.guardrail.groundingOverlap")} {policy.grounding_min_overlap}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-muted px-1.5 text-[11px] text-muted">
+      <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
         {t("settings.guardrail.groundingRatio")} {policy.grounding_min_ratio.toFixed(2)}
       </span>
       {policy.audit_emphasis ? (
@@ -226,6 +232,13 @@ function orderedPolicies(policies: GuardrailPolicyStatusData[]): GuardrailPolicy
     (item): item is GuardrailPolicyStatusData => Boolean(item)
   );
   return ordered.length ? ordered : policies;
+}
+
+function ociWarningMessage(code: string | null): string | null {
+  if (code === "oci_guardrails_compartment_missing") {
+    return t("settings.guardrail.ociWarning.compartmentMissing");
+  }
+  return code ? code : null;
 }
 
 function policyLabel(name: GuardrailPolicyName) {

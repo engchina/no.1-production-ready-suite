@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from rag_pipeline_core.retrieval import (
     RETRIEVAL_SPECS,
-    RETRIEVAL_STRATEGIES,
+    WIRED_RETRIEVAL_STRATEGIES,
     resolve_retrieval,
 )
 from rag_pipeline_core.retrieval import (
@@ -27,7 +27,8 @@ from app.schemas.search import SearchMode, SearchStrategy
 
 RetrievalStrategyName = RetrievalStrategy
 DEFAULT_RETRIEVAL_STRATEGY: RetrievalStrategyName = "hybrid_rrf"
-RETRIEVAL_STRATEGY_ORDER: tuple[RetrievalStrategyName, ...] = RETRIEVAL_STRATEGIES  # type: ignore[assignment]
+# 設定 API が公開する戦略順。未配線(pending_execution)戦略は除外する。
+RETRIEVAL_STRATEGY_ORDER: tuple[RetrievalStrategyName, ...] = WIRED_RETRIEVAL_STRATEGIES  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -141,7 +142,7 @@ def retrieval_adapter_runtime_settings(settings: Settings) -> RetrievalAdapterRu
             corrective_retrieval=spec.corrective_retrieval,
             business_fit_weighting=spec.business_fit_weighting,
         )
-        for spec in (RETRIEVAL_SPECS[name] for name in RETRIEVAL_STRATEGIES)
+        for spec in (RETRIEVAL_SPECS[name] for name in WIRED_RETRIEVAL_STRATEGIES)
     )
     return RetrievalAdapterRuntimeSettings(
         strategy=params.strategy,

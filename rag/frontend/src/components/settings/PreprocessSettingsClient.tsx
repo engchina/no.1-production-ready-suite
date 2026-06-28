@@ -23,6 +23,9 @@ const PROFILE_ORDER: PreprocessProfileName[] = [
   "pdf_to_page_images",
   "csv_to_json",
   "excel_to_json",
+  "url_to_markdown",
+  "image_enhance",
+  "pii_redact",
 ];
 
 /** 前処理(Preprocess)アダプター(parse 前の原本変換)の runtime 設定を管理する設定画面。 */

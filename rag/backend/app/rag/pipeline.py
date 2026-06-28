@@ -16,7 +16,7 @@ from app.config import Settings, enterprise_ai_default_model_id, get_settings
 from app.rag.agentic_adapter import resolve_agentic_adapter
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.generation_adapter import resolve_generation_adapter
+from app.rag.generation_adapter import resolve_generation_adapter, validate_structured_answer
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.grounding_adapter import GroundingAdapterParams, resolve_grounding_adapter
 from app.rag.guardrails import GuardrailPolicy
@@ -907,6 +907,9 @@ class RagPipeline:
                 guardrail_warnings=warnings,
                 elapsed_ms=elapsed,
                 diagnostics=diagnostics,
+                # マスク/ブロックで本文が変化したか。realtime stream 済みのとき
+                # マスク済み本文を置換イベントで再送する判定に使う。
+                answer_replaced=final_answer != answer,
             )
         except Exception as exc:
             elapsed = elapsed_ms(started_at)
@@ -1044,22 +1047,29 @@ class RagPipeline:
         system_prompt = generation_params.system_prompt
         if token_callback is None:
             if system_prompt is None:
-                return await self._llm.generate(query, context)
-            return await self._llm.generate(query, context, system_prompt=system_prompt)
-        stream = (
-            self._llm.generate_stream(query, context)
-            if system_prompt is None
-            else self._llm.generate_stream(query, context, system_prompt=system_prompt)
-        )
-        chunks: list[str] = []
-        async for chunk in stream:
-            if not chunk:
-                continue
-            chunks.append(chunk)
-            await token_callback(SearchTokenDelta(trace_id=trace_id, text=chunk))
-        if not chunks:
-            raise ValueError("OCI Enterprise AI stream に回答 text がありません。")
-        return "".join(chunks)
+                answer = await self._llm.generate(query, context)
+            else:
+                answer = await self._llm.generate(query, context, system_prompt=system_prompt)
+        else:
+            stream = (
+                self._llm.generate_stream(query, context)
+                if system_prompt is None
+                else self._llm.generate_stream(query, context, system_prompt=system_prompt)
+            )
+            chunks: list[str] = []
+            async for chunk in stream:
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                await token_callback(SearchTokenDelta(trace_id=trace_id, text=chunk))
+            if not chunks:
+                raise ValueError("OCI Enterprise AI stream に回答 text がありません。")
+            answer = "".join(chunks)
+        # structured_json プロファイルは生成結果を JSON スキーマで検証する(AGENTS ルール 4)。
+        # ストリーム時はトークンが検証前にクライアントへ届くため、失敗はストリーム後に表面化する。
+        if generation_params.structured_output:
+            answer = validate_structured_answer(answer)
+        return answer
 
     async def _write_agent_memory(
         self,

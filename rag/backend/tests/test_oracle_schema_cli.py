@@ -202,14 +202,15 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "|| 'INDEXTYPE IS CTXSYS.CONTEXT '" in sql
     assert (
         "|| 'PARAMETERS (''LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST "
-        "SYNC (ON COMMIT)'')'"
-        in sql
+        "SYNC (ON COMMIT)'')'" in sql
     )
     assert "-- migration: 20260625_002_preprocess_artifact" in sql
     assert "column_name = 'PREPROCESS_ARTIFACT'" in sql
     assert "ALTER TABLE rag_documents ADD (preprocess_artifact JSON)" in sql
     assert "''PREPROCESSING''" in sql
-    assert len(statements) == 22
+    assert "-- migration: 20260627_001_documents_preprocessed_status" in sql
+    assert "''PREPROCESSED''" in sql
+    assert len(statements) == 23
     assert all(statement.startswith(("-- migration:", "DECLARE")) for statement in statements)
 
 
@@ -222,7 +223,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260625_002"
+    assert manifest["migration_artifact_version"] == "20260627_001"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -244,6 +245,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260623_001_nullable_chunk_embeddings",
         "20260625_001_chunks_text_world_lexer",
         "20260625_002_preprocess_artifact",
+        "20260627_001_documents_preprocessed_status",
     ]
 
 
@@ -324,3 +326,33 @@ def test_oracle_schema_cli_migration_manifest_only_prints_json(
     assert "ALTER TABLE" not in captured.out
     manifest = json.loads(captured.out)
     assert manifest["artifact_type"] == "migration"
+
+
+def test_vector_index_reindex_sql_reflects_profile_build_params() -> None:
+    """再作成 SQL は渡された profile のビルド推奨値を反映する(DROP + CREATE)。"""
+    sql = oracle_schema.vector_index_reindex_sql(
+        target_accuracy=98,
+        neighbors=48,
+        efconstruction=800,
+    )
+
+    assert "DROP INDEX rag_chunks_embedding_hnsw_idx;" in sql
+    assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in sql
+    assert "ON rag_chunks (embedding)" in sql
+    assert "WITH TARGET ACCURACY 98" in sql
+    assert "NEIGHBORS 48" in sql
+    assert "EFCONSTRUCTION 800" in sql
+    assert "DISTANCE COSINE" in sql
+
+
+def test_vector_index_reindex_sql_balanced_uses_current_build() -> None:
+    """balanced 既定値では現行 HNSW ビルド(32/500)を出力する。"""
+    sql = oracle_schema.vector_index_reindex_sql(
+        target_accuracy=95,
+        neighbors=32,
+        efconstruction=500,
+    )
+
+    assert "WITH TARGET ACCURACY 95" in sql
+    assert "NEIGHBORS 32" in sql
+    assert "EFCONSTRUCTION 500" in sql

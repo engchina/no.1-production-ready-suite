@@ -33,6 +33,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { KnowledgeBaseAdapterConfigPanel } from "./KnowledgeBaseAdapterConfigPanel";
+import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
 
 /** ナレッジベース詳細ページ。概要・所属文書・構築設定(構築フロー + フォーム)を全幅で扱う。 */
@@ -102,6 +103,13 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
           <KnowledgeBaseDocuments knowledgeBase={kb} />
         </CardContent>
       </Card>
+
+      {/* このナレッジ単体で検索の手応えを確認(業務ビュー不要)。文書追加→検証→構築設定 の流れ。 */}
+      <KnowledgeBaseSearchTestPanel
+        knowledgeBaseId={kb.id}
+        indexedDocumentCount={kb.indexed_document_count}
+        disabled={!isActive}
+      />
 
       <KnowledgeBaseAdapterConfigPanel
         knowledgeBaseId={kb.id}

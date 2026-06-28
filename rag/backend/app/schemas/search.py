@@ -296,6 +296,15 @@ class SearchResponse(BaseModel):
     guardrail_warnings: list[str] = Field(default_factory=list)
     elapsed_ms: float
     diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
+    # 回答側ガードレールが本文をマスク/差し替えしたか。realtime stream 時に
+    # マスク済み本文を再送(置換)するかの判定に使う内部フラグ。
+    answer_replaced: bool = False
+
+    @field_validator("guardrail_warnings")
+    @classmethod
+    def _dedup_warnings(cls, value: list[str]) -> list[str]:
+        """クエリ側/回答側で同一文言が重複するため順序保持で重複除去する。"""
+        return list(dict.fromkeys(value))
 
 
 def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:

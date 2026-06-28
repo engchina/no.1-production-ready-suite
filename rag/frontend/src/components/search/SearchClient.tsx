@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { BusinessViewPickerGrid } from "@/components/business-views/BusinessViewPickerGrid";
-import { CitationCard, type CitationScoreMaxima } from "./CitationCard";
+import { CitationCard, scoreMaximaForCitations } from "./CitationCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
@@ -229,6 +229,7 @@ export function SearchClient() {
             );
           },
           onDelta: (text) => setAnswer((prev) => prev + text),
+          onReplace: (text) => setAnswer(text),
           onCitations: (list) => setCitations(list),
           onDone: () => {
             finishRun();
@@ -606,22 +607,6 @@ export function SearchClient() {
         </section>
       </div>
     </div>
-  );
-}
-
-function scoreMaximaForCitations(citations: RetrievedChunk[]): CitationScoreMaxima {
-  return {
-    score: maxScore(citations.map((chunk) => chunk.score)),
-    rerankScore: maxScore(
-      citations.flatMap((chunk) => (chunk.rerank_score == null ? [] : [chunk.rerank_score]))
-    ),
-  };
-}
-
-function maxScore(values: number[]): number {
-  return values.reduce(
-    (max, value) => (Number.isFinite(value) && value > max ? value : max),
-    0
   );
 }
 

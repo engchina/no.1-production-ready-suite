@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import BaseModel, ValidationError
 from rag_pipeline_core.generation import (
     GENERATION_PROFILES,
     GENERATION_SPECS,
@@ -121,3 +122,30 @@ def generation_adapter_runtime_settings(settings: Settings) -> GenerationAdapter
         structured_output=params.structured_output,
         profiles=statuses,
     )
+
+
+class StructuredAnswer(BaseModel):
+    """structured_json プロファイルの回答スキーマ(machine-consumable)。"""
+
+    answer: str
+    evidence: list[str] = []
+    sources: list[str] = []
+
+
+def validate_structured_answer(text: str) -> str:
+    """structured_json の生成結果を JSON として parse / スキーマ検証し正規化 JSON を返す。
+
+    ```json フェンスや前後の説明文に寛容(最初の ``{`` から最後の ``}`` までを抽出)。
+    検証失敗は ValueError を投げる(fail-fast、外部 provider なし)。
+    """
+    candidate = text.strip()
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("構造化 JSON 回答に JSON オブジェクトが見つかりません。")
+    candidate = candidate[start : end + 1]
+    try:
+        model = StructuredAnswer.model_validate_json(candidate)
+    except ValidationError as exc:
+        raise ValueError(f"構造化 JSON 回答がスキーマに一致しません: {exc}") from exc
+    return model.model_dump_json()

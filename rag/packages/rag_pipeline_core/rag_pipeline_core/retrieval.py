@@ -94,6 +94,13 @@ RETRIEVAL_SPECS: dict[str, RetrievalSpec] = {
 }
 
 
+# 実行が配線済み(pending_execution=False)で、設定 API から選択・保存できる戦略。
+# 未配線戦略は hybrid へ黙縮退するため、検索方法設定の表面(GET 一覧 / PATCH 受理)から外す。
+WIRED_RETRIEVAL_STRATEGIES: tuple[str, ...] = tuple(
+    name for name in RETRIEVAL_STRATEGIES if not RETRIEVAL_SPECS[name].pending_execution
+)
+
+
 @dataclass(frozen=True)
 class RetrievalResolved:
     strategy: str

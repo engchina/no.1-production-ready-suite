@@ -36,6 +36,13 @@ class ServiceCatalogItemData(BaseModel):
     execution_policy: ServiceExecutionPolicy = Field(
         description="停止時・未使用時の runtime 契約。fallback 境界の UI 表示に使う。",
     )
+    deployable: bool = Field(
+        default=True,
+        description=(
+            "UI/API からデプロイ操作を提供するか。False は backend 内処理で動作し"
+            "(status=in_process)、起動/停止等の操作系を出さない(サービス化は将来対応)。"
+        ),
+    )
     configured: bool = Field(
         description="base URL が設定済みか(未設定なら status=unconfigured)。",
     )

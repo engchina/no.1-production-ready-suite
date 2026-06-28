@@ -911,46 +911,14 @@ function WalletUploadField({
       ) : null}
       {uploadError ? <FormStatus tone="danger" className="text-xs" message={uploadError} /> : null}
 
+      {/* Wallet 状態と Readiness は右「構成状態」パネルが正本。ここでは固有情報の保存先パスのみ残す。 */}
       <div className="space-y-1 text-xs leading-relaxed text-muted">
-        <StatusLine
-          label={t("settings.database.wallet.status")}
-          value={
-            settings.wallet_uploaded
-              ? t("settings.database.wallet.statusConfigured")
-              : t("settings.database.wallet.statusNotConfigured")
-          }
-          ok={settings.wallet_uploaded}
-        />
         <p>
           <span>{t("settings.database.wallet.location")}:</span>{" "}
           <span className="break-all text-foreground">{settings.wallet_dir || "—"}</span>
         </p>
-        <StatusLine
-          label={t("settings.database.status.readiness")}
-          value={readinessLabel(settings.readiness)}
-          ok={settings.readiness === "ok"}
-        />
       </div>
     </div>
-  );
-}
-
-function StatusLine({
-  label,
-  value,
-  ok,
-}: {
-  label: string;
-  value: string;
-  ok: boolean;
-}) {
-  return (
-    <p>
-      <span>{label}:</span>{" "}
-      <span className={ok ? "font-medium text-success" : "font-medium text-warning"}>
-        {value}
-      </span>
-    </p>
   );
 }
 
