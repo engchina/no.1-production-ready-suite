@@ -164,7 +164,9 @@ if [ "${SKIP_BACKEND}" != "1" ]; then
 
     if [ "${SKIP_AUDIT}" != "1" ]; then
       log "backend pip-audit"
-      run_backend_tool pip-audit
+      # OCI SDK 2.179.0 pins cryptography<47. Production builds cryptography
+      # from sdist against patched system OpenSSL; see the exception ledger.
+      run_backend_tool pip-audit --ignore-vuln GHSA-537c-gmf6-5ccf
     else
       log "backend pip-audit skipped"
     fi
