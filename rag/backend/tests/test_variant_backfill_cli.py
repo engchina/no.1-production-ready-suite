@@ -14,7 +14,9 @@ def test_variant_backfill_markdown_describes_v3_artifact_tables() -> None:
     assert "RAG 構築 variant migration / backfill runbook" in markdown
     assert "rag_document_extractions" in markdown
     assert "rag_artifact_layers" in markdown
-    assert "rag_kb_chunk_set_bindings" in markdown
+    # 3 層モデル: per-KB binding 表は退役し、配信は文書単位 is_serving に一本化。
+    assert "rag_kb_chunk_set_bindings" not in markdown
+    assert "is_serving" in markdown
     assert "needs_reingest" in markdown
     assert "Business View" in markdown
     assert "Select AI" not in markdown
@@ -28,7 +30,7 @@ def test_variant_backfill_manifest_is_deterministic() -> None:
     assert manifest == variant_backfill_cli.variant_backfill_manifest()
     assert "generated_at" not in manifest
     assert manifest["artifact_type"] == "variant_backfill_runbook"
-    assert manifest["artifact_version"] == "20260622_001"
+    assert manifest["artifact_version"] == "20260629_001"
     assert manifest["status_enum"] == [
         "not_requested",
         "planned_only",
@@ -54,7 +56,7 @@ def test_variant_backfill_validation_sql_is_read_only() -> None:
     """検証 SQL は production data を変更する文を含めない。"""
     sql = variant_backfill_cli.render_validation_sql()
 
-    assert "-- artifact_version: 20260622_001" in sql
+    assert "-- artifact_version: 20260629_001" in sql
     assert "-- check: required_variant_tables_missing" in sql
     assert "-- check: requested_layers_needing_action" in sql
     assert "SELECT COUNT(*) AS issue_count" in sql

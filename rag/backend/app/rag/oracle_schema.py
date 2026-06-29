@@ -37,7 +37,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260629_001"
+MIGRATION_ARTIFACT_VERSION = "20260629_002"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -287,6 +287,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260629_001_chunk_sets_serving",
             table_name="rag_chunk_sets",
             sql=_chunk_sets_serving_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260629_002_drop_kb_chunk_set_bindings",
+            table_name="rag_kb_chunk_set_bindings",
+            sql=_drop_kb_chunk_set_bindings_migration_sql(),
         ),
     ]
 
@@ -763,6 +768,27 @@ BEGIN
         EXECUTE IMMEDIATE
             'CREATE INDEX rag_chunk_sets_serving_idx '
             || 'ON rag_chunk_sets (document_id, is_serving)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _drop_kb_chunk_set_bindings_migration_sql() -> str:
+    """per-KB binding 表 rag_kb_chunk_set_bindings を退役(冪等 DROP)する。
+
+    3 層モデル: serving は文書単位の rag_chunk_sets.is_serving(20260629_001 で backfill 済)へ
+    一本化したため、KB→chunk_set の参照表は不要。DROP TABLE が索引/制約も同時に落とす。
+    """
+    return """
+DECLARE
+    v_table_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables WHERE table_name = 'RAG_KB_CHUNK_SET_BINDINGS';
+
+    IF v_table_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_kb_chunk_set_bindings';
     END IF;
 END;
 /

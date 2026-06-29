@@ -151,8 +151,8 @@ def test_approve_chunks_then_second_approve_indexes_and_makes_searchable(
     assert any(citation["document_id"] == document_id for citation in search["citations"])
 
 
-def test_approve_records_chunk_set_and_kb_binding(monkeypatch: MonkeyPatch) -> None:
-    """索引後に reconcile が chunk_set を記録し所属 KB を binding する(planner 駆動の基盤)。"""
+def test_approve_records_chunk_set_and_marks_serving(monkeypatch: MonkeyPatch) -> None:
+    """索引後に reconcile が chunk_set を記録し文書の serving を確定する(planner 駆動の基盤)。"""
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
     _extract_to_review(document_id)
@@ -171,20 +171,20 @@ def test_approve_records_chunk_set_and_kb_binding(monkeypatch: MonkeyPatch) -> N
     # chunk がタグ付け・計数されている。
     assert chunk_set["chunk_count"]
 
-    # 既定ナレッジベースがこの chunk_set を参照(refcount=1)。
-    assert asyncio.run(oracle.chunk_set_refcount(chunk_set_ids[0])) == 1
+    # 3 層モデル: 文書単位 serving としてこの chunk_set が配信中(is_serving=1)。
+    assert int(str(chunk_set["is_serving"])) == 1
 
 
-def test_publish_binding_failure_marks_document_error(monkeypatch: MonkeyPatch) -> None:
-    """chunk/vector 保存後でも KB binding に失敗したら INDEXED 成功扱いにしない。"""
+def test_publish_serving_failure_marks_document_error(monkeypatch: MonkeyPatch) -> None:
+    """chunk/vector 保存後でも serving 確定に失敗したら INDEXED 成功扱いにしない。"""
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
     _extract_to_review(document_id)
 
-    async def _fail_binding(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("binding failed")
+    async def _fail_serving(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("serving failed")
 
-    monkeypatch.setattr(OracleClient, "upsert_chunk_set_binding", _fail_binding)
+    monkeypatch.setattr(OracleClient, "set_document_serving_chunk_set", _fail_serving)
 
     _approve_to_chunked(document_id)
     approve_resp = client.post(f"/api/documents/{document_id}/approve")
@@ -292,8 +292,10 @@ def test_multiple_kb_configs_share_single_chunk_set(monkeypatch: MonkeyPatch) ->
         cast(str, detail["content_sha256"]), get_settings(), configs
     )
     assert len(plan.extraction_recipes) == 1
-    # 単一 chunk_set を両 KB が参照(refcount=2)。
-    assert asyncio.run(oracle.chunk_set_refcount(materialized[0])) == 2
+    # 3 層モデル: 単一 serving chunk_set を 2 KB membership が共有する。
+    assert len(asyncio.run(oracle.list_document_knowledge_bases(document_id))) == 2
+    chunk_set = asyncio.run(oracle.get_chunk_set(materialized[0]))
+    assert chunk_set is not None and int(str(chunk_set["is_serving"])) == 1
 
 
 def test_approve_succeeds_with_divergent_kb_config(
@@ -329,9 +331,11 @@ def test_approve_succeeds_with_divergent_kb_config(
 
     oracle = OracleClient()
     materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
-    # KB の preprocess 上書きは無視 → 単一 chunk_set を 2 KB が共有。
+    # KB の preprocess 上書きは無視 → 単一 serving chunk_set を 2 KB membership が共有。
     assert len(materialized) == 1
-    assert asyncio.run(oracle.chunk_set_refcount(materialized[0])) == 2
+    assert len(asyncio.run(oracle.list_document_knowledge_bases(document_id))) == 2
+    chunk_set = asyncio.run(oracle.get_chunk_set(materialized[0]))
+    assert chunk_set is not None and int(str(chunk_set["is_serving"])) == 1
 
 
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
@@ -465,9 +469,11 @@ def test_gate_disabled_multiple_kb_configs_share_single_chunk_set(
 
     oracle = OracleClient()
     materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
-    # KB 別取込上書きは無視 → 単一 chunk_set を 2 KB が共有(refcount=2)。
+    # KB 別取込上書きは無視 → 単一 serving chunk_set を 2 KB membership が共有。
     assert len(materialized) == 1
-    assert asyncio.run(oracle.chunk_set_refcount(materialized[0])) == 2
+    assert len(asyncio.run(oracle.list_document_knowledge_bases(document_id))) == 2
+    chunk_set = asyncio.run(oracle.get_chunk_set(materialized[0]))
+    assert chunk_set is not None and int(str(chunk_set["is_serving"])) == 1
 
 
 def test_gate_disabled_divergent_preprocess_collapses_to_single_recipe(

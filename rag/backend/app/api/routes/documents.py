@@ -1781,15 +1781,15 @@ async def _reconcile_plan_chunk_sets(
     detail: DocumentDetail,
     plan: MaterializationPlan,
 ) -> None:
-    """plan の各 chunk_set を永続化し、KB グループを binding、plan に無い chunk_set を GC する。
+    """plan の各 chunk_set を永続化し、文書の serving を確定、plan に無い chunk_set を GC する。
 
-    chunk は save_index で挿入時タグ付け済み。KB binding / extraction artifact まで揃って
+    chunk は save_index で挿入時タグ付け済み。serving 設定 / extraction artifact まで揃って
     初めて検索可能な INDEXED とみなすため、失敗時は ERROR に戻す。
     """
     if detail.status != FileStatus.INDEXED:
         return
     try:
-        for chunk_set_id, knowledge_base_ids in plan.chunk_sets.items():
+        for chunk_set_id in plan.chunk_sets:
             chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
             extraction_recipe_id = plan.extraction_recipe_for_chunk_set(chunk_set_id)
             await oracle.upsert_chunk_set(
@@ -1800,12 +1800,6 @@ async def _reconcile_plan_chunk_sets(
             await oracle.mark_chunk_set_indexed(
                 chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
             )
-            for knowledge_base_id in knowledge_base_ids:
-                await oracle.upsert_chunk_set_binding(
-                    knowledge_base_id=knowledge_base_id,
-                    document_id=document_id,
-                    chunk_set_id=chunk_set_id,
-                )
             if extraction_recipe_id is not None:
                 # 3 層モデル: extraction recipe は global から計算済み。artifact 記録も global で。
                 await _record_document_extraction_artifact(
@@ -2088,10 +2082,10 @@ async def _reconcile_document_chunk_sets(
     detail: DocumentDetail,
     chunk_set_id: str | None,
 ) -> None:
-    """取込後、materialize した chunk_set を記録し所属 KB を binding する(planner 駆動の基盤)。
+    """取込後、materialize した chunk_set を記録し文書の serving を確定する(planner 駆動の基盤)。
 
     chunk は save_index で**挿入時に chunk_set_id タグ付け済み**。本関数は chunk_set 行の永続化・
-    KB binding・旧 chunk_set(とその chunk、未タグ chunk)の GC を行う。公開 binding まで揃って
+    serving 設定・旧 chunk_set(とその chunk、未タグ chunk)の GC を行う。serving 確定まで揃って
     初めて検索可能な INDEXED とみなすため、失敗時は ERROR に戻す。
     """
     if detail.status != FileStatus.INDEXED or chunk_set_id is None:
@@ -2120,18 +2114,10 @@ async def _reconcile_document_chunk_sets(
             document_id=document_id, keep_chunk_set_id=chunk_set_id
         )
         # 3 層モデル: この単一 chunk_set を文書の serving にする(retrieval はこれを検索対象)。
+        # 所属 KB は membership(rag_document_knowledge_bases)が正本で、別表 binding は持たない。
         await oracle.set_document_serving_chunk_set(
             document_id=document_id, chunk_set_id=chunk_set_id
         )
-        # 単一 materialization なので所属 KB すべてをこの chunk_set に bind する(binding は当面
-        # dual-write で温存。退役は後続の increment で実施)。
-        knowledge_bases = await oracle.list_document_knowledge_bases(document_id)
-        for knowledge_base in knowledge_bases:
-            await oracle.upsert_chunk_set_binding(
-                knowledge_base_id=knowledge_base.id,
-                document_id=document_id,
-                chunk_set_id=chunk_set_id,
-            )
     except Exception as exc:
         logger.warning(
             "chunk_set reconcile に失敗しました。document_id=%s",

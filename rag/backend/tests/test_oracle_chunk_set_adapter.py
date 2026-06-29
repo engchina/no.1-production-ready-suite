@@ -1,6 +1,7 @@
-"""variant chunk_set / KB binding 永続化の実 Oracle 統合テスト(dedup / refcount / GC)。
+"""chunk_set 永続化の実 Oracle 統合テスト(3 層モデル: 文書単位 serving)。
 
-実 Oracle 26ai を使い、共有(refcount)・他 KB 参照中は GC しない・refcount 0 で GC、を検証する。
+実 Oracle 26ai を使い、文書単位 serving(is_serving)の確定/付け替え、所属 KB の
+membership 由来導出、save_index の chunk_set スコープ、extraction 層の永続化を検証する。
 未到達なら oracle_db fixture が skip し、作成行は cleanup_to_baseline で後始末する。
 """
 
@@ -32,51 +33,6 @@ async def _new_document(client: OracleClient) -> str:
 
 
 @pytest.mark.usefixtures("oracle_db")
-async def test_chunk_set_dedup_refcount_and_gc() -> None:
-    """共有 chunk_set の refcount と、他 KB 参照中は GC しない / refcount 0 で GC を検証。"""
-    client = OracleClient()
-    document_id = await _new_document(client)
-
-    cs_a = "cs_test_shared_aaaaaa"
-    cs_b = "cs_test_other_bbbbbbb"
-    await client.upsert_chunk_set(chunk_set_id=cs_a, document_id=document_id)
-    await client.upsert_chunk_set(chunk_set_id=cs_b, document_id=document_id)
-
-    # kb-1, kb-2 が cs_a を共有、kb-3 が cs_b を参照。
-    await client.upsert_chunk_set_binding(
-        knowledge_base_id="kb-1", document_id=document_id, chunk_set_id=cs_a
-    )
-    await client.upsert_chunk_set_binding(
-        knowledge_base_id="kb-2", document_id=document_id, chunk_set_id=cs_a
-    )
-    await client.upsert_chunk_set_binding(
-        knowledge_base_id="kb-3", document_id=document_id, chunk_set_id=cs_b
-    )
-
-    assert await client.chunk_set_refcount(cs_a) == 2
-    assert await client.chunk_set_refcount(cs_b) == 1
-    assert set(await client.list_document_chunk_set_ids(document_id)) == {cs_a, cs_b}
-
-    # すべて参照中 → GC は何も消さない。
-    assert await client.collect_unreferenced_chunk_sets(document_id) == []
-
-    # kb-1 を外しても cs_a は kb-2 が参照中 → GC されない。
-    await client.delete_chunk_set_binding(
-        knowledge_base_id="kb-1", document_id=document_id, chunk_set_id=cs_a
-    )
-    assert await client.chunk_set_refcount(cs_a) == 1
-    assert await client.collect_unreferenced_chunk_sets(document_id) == []
-
-    # kb-2 も外すと refcount 0 → GC で cs_a だけ削除、cs_b は残る。
-    await client.delete_chunk_set_binding(
-        knowledge_base_id="kb-2", document_id=document_id, chunk_set_id=cs_a
-    )
-    assert await client.chunk_set_refcount(cs_a) == 0
-    assert await client.collect_unreferenced_chunk_sets(document_id) == [cs_a]
-    assert set(await client.list_document_chunk_set_ids(document_id)) == {cs_b}
-
-
-@pytest.mark.usefixtures("oracle_db")
 async def test_set_document_serving_chunk_set_marks_exactly_one_serving() -> None:
     """3 層モデル: set_document_serving_chunk_set は指定 1 つだけ is_serving=1、他は 0。"""
     client = OracleClient()
@@ -99,6 +55,43 @@ async def test_set_document_serving_chunk_set_marks_exactly_one_serving() -> Non
     swapped_b = await client.get_chunk_set(cs_b)
     assert swapped_a is not None and int(str(swapped_a["is_serving"])) == 0
     assert swapped_b is not None and int(str(swapped_b["is_serving"])) == 1
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_list_document_chunk_sets_derives_membership_and_serving() -> None:
+    """3 層モデル: 所属 KB は文書 membership、配信は cs.is_serving から導出する(binding 非依存)。"""
+    client = OracleClient()
+    document_id = await _new_document(client)
+    cs_a = "cs_list_aaaaaaaaaaaa"
+    cs_b = "cs_list_bbbbbbbbbbbb"
+    await client.upsert_chunk_set(chunk_set_id=cs_a, document_id=document_id)
+    await client.upsert_chunk_set(chunk_set_id=cs_b, document_id=document_id)
+
+    kb_1 = await client.create_knowledge_base(name="一覧KB-1")
+    kb_2 = await client.create_knowledge_base(name="一覧KB-2")
+    await client.assign_documents_to_knowledge_base(kb_1.id, [document_id])
+    await client.assign_documents_to_knowledge_base(kb_2.id, [document_id])
+
+    # cs_a を serving に確定(cs_b は demote)。
+    await client.set_document_serving_chunk_set(document_id=document_id, chunk_set_id=cs_a)
+
+    rows = {
+        str(row["chunk_set_id"]): row for row in await client.list_document_chunk_sets(document_id)
+    }
+    member_ids = {kb_1.id, kb_2.id}
+
+    def _ids(value: object) -> set[str]:
+        assert isinstance(value, list)
+        return {str(item) for item in value}
+
+    # 所属 KB は全 chunk_set 共通(文書 membership。既定 KB を含み得る)。
+    a_members = _ids(rows[cs_a]["knowledge_base_ids"])
+    b_members = _ids(rows[cs_b]["knowledge_base_ids"])
+    assert member_ids <= a_members
+    assert a_members == b_members
+    # 配信中の chunk_set だけ全 membership が serving、非配信は空。
+    assert _ids(rows[cs_a]["serving_knowledge_base_ids"]) == a_members
+    assert _ids(rows[cs_b]["serving_knowledge_base_ids"]) == set()
 
 
 @pytest.mark.usefixtures("oracle_db")

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-BACKFILL_ARTIFACT_VERSION = "20260622_001"
+BACKFILL_ARTIFACT_VERSION = "20260629_001"
 STATUS_ENUM = (
     "not_requested",
     "planned_only",
@@ -60,7 +60,6 @@ FROM (
     SELECT 'RAG_CHUNK_SETS' AS table_name FROM dual
     UNION ALL SELECT 'RAG_DOCUMENT_EXTRACTIONS' FROM dual
     UNION ALL SELECT 'RAG_ARTIFACT_LAYERS' FROM dual
-    UNION ALL SELECT 'RAG_KB_CHUNK_SET_BINDINGS' FROM dual
 ) required
 WHERE NOT EXISTS (
     SELECT 1
@@ -82,7 +81,7 @@ FROM (
     UNION ALL SELECT 'RAG_DOCUMENT_EXTRACTIONS', 'STATUS' FROM dual
     UNION ALL SELECT 'RAG_ARTIFACT_LAYERS', 'LAYER_KIND' FROM dual
     UNION ALL SELECT 'RAG_ARTIFACT_LAYERS', 'PARENT_CHUNK_SET_ID' FROM dual
-    UNION ALL SELECT 'RAG_KB_CHUNK_SET_BINDINGS', 'IS_SERVING' FROM dual
+    UNION ALL SELECT 'RAG_CHUNK_SETS', 'IS_SERVING' FROM dual
 ) required
 WHERE NOT EXISTS (
     SELECT 1
@@ -160,27 +159,22 @@ WHERE d.status = 'INDEXED'
   AND kb.status = 'ACTIVE'
   AND NOT EXISTS (
       SELECT 1
-      FROM rag_kb_chunk_set_bindings b
-      JOIN rag_chunk_sets cs
-        ON cs.chunk_set_id = b.chunk_set_id
-      WHERE b.knowledge_base_id = dkb.knowledge_base_id
-        AND b.document_id = dkb.document_id
-        AND b.is_serving = 1
+      FROM rag_chunk_sets cs
+      WHERE cs.document_id = dkb.document_id
+        AND cs.is_serving = 1
         AND cs.status = 'INDEXED'
   )
 """.strip(),
         ),
         BackfillCheck(
-            name="serving_bindings_without_indexed_chunk_set",
+            name="serving_chunk_sets_not_indexed",
             severity="blocker",
             expected="issue_count = 0",
             sql="""
 SELECT COUNT(*) AS issue_count
-FROM rag_kb_chunk_set_bindings b
-LEFT JOIN rag_chunk_sets cs
-  ON cs.chunk_set_id = b.chunk_set_id
-WHERE b.is_serving = 1
-  AND (cs.chunk_set_id IS NULL OR cs.status <> 'INDEXED')
+FROM rag_chunk_sets cs
+WHERE cs.is_serving = 1
+  AND cs.status <> 'INDEXED'
 """.strip(),
         ),
         BackfillCheck(
@@ -286,14 +280,15 @@ def variant_backfill_phases() -> tuple[BackfillPhase, ...]:
             title="既存文書を構築 artifact へ紐付ける",
             objective=(
                 "既存 chunk を安全側の単一 chunk_set に紐付け、extraction artifact と "
-                "KB serving binding を作る。parser/preprocess 差分がある文書は再取込対象へ分ける。"
+                "文書単位の serving chunk_set を確定する。parser/preprocess 差分がある文書は"
+                "再取込対象へ分ける。"
             ),
             commands=(
                 "既存文書の source_sha256 / effective 構築設定から extraction_recipe_id と "
                 "chunk_set_id を算出する。",
                 "同一 extraction_recipe は extraction artifact を 1 件だけ "
                 "materialized として記録する。",
-                "KB membership ごとに rag_kb_chunk_set_bindings の is_serving=1 を作る。",
+                "文書ごとに rag_chunk_sets.is_serving=1 を 1 つだけ確定する。",
             ),
             acceptance=(
                 "`indexed_chunks_without_chunk_set` が 0。",
@@ -315,7 +310,7 @@ def variant_backfill_phases() -> tuple[BackfillPhase, ...]:
                 "staging で代表 Business View の検索 diagnostics を保存する。",
             ),
             acceptance=(
-                "`serving_bindings_without_indexed_chunk_set` が 0。",
+                "`serving_chunk_sets_not_indexed` が 0。",
                 "`chunks_referencing_missing_chunk_set` が 0。",
                 "検索 diagnostics の設定解決順が request > Business View > "
                 "global defaults になっている。",
@@ -377,8 +372,8 @@ def render_markdown_runbook(
         "# RAG 構築 variant migration / backfill runbook",
         "",
         f"- artifact version: `{BACKFILL_ARTIFACT_VERSION}`",
-        "- 対象: `rag_chunk_sets` / `rag_document_extractions` / "
-        "`rag_artifact_layers` / `rag_kb_chunk_set_bindings`",
+        "- 対象: `rag_chunk_sets`(文書単位 `is_serving`)/ `rag_document_extractions` / "
+        "`rag_artifact_layers`",
         "- 方針: この runbook と検証 SQL は read-only。"
         "実データの回填はレビュー済み手順で実行する。",
         "",

@@ -8,7 +8,6 @@ import pytest
 from app.api.routes.documents import _reconcile_document_chunk_sets
 from app.rag.ingestion import IngestionUserError
 from app.schemas.document import DocumentDetail, FileStatus
-from app.schemas.knowledge_base import KnowledgeBaseRef
 
 
 class FakePublishOracle:
@@ -37,12 +36,8 @@ class FakePublishOracle:
     async def delete_stale_document_chunk_sets(self, **_kwargs: Any) -> None:
         return None
 
-    async def list_document_knowledge_bases(self, document_id: str) -> list[KnowledgeBaseRef]:
-        _ = document_id
-        return [KnowledgeBaseRef(id="kb-1", name="社内規程")]
-
-    async def upsert_chunk_set_binding(self, **_kwargs: Any) -> None:
-        raise RuntimeError("binding failed")
+    async def set_document_serving_chunk_set(self, **_kwargs: Any) -> None:
+        raise RuntimeError("serving failed")
 
     async def update_document_status(
         self,
@@ -80,8 +75,8 @@ def _detail(
 
 
 @pytest.mark.asyncio
-async def test_chunk_set_binding_failure_marks_document_error() -> None:
-    """chunk/vector 保存後でも KB binding に失敗したら INDEXED 成功扱いにしない。"""
+async def test_chunk_set_serving_failure_marks_document_error() -> None:
+    """chunk/vector 保存後でも serving 確定に失敗したら INDEXED 成功扱いにしない。"""
     oracle = FakePublishOracle()
 
     with pytest.raises(IngestionUserError, match="公開設定"):

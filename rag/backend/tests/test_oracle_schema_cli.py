@@ -42,7 +42,8 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "extraction_recipe_id VARCHAR2(64)" in sql
     assert "CREATE TABLE rag_document_extractions" in sql
     assert "CREATE TABLE rag_artifact_layers" in sql
-    assert "CREATE TABLE rag_kb_chunk_set_bindings" in sql
+    # 3 層モデル: per-KB binding 表は base schema から退役済み(membership + is_serving に一本化)。
+    assert "CREATE TABLE rag_kb_chunk_set_bindings" not in sql
     assert "rag_chunk_sets_document_fk" in sql
     assert "CREATE TABLE rag_search_audit" in sql
     assert "memory_plan_id        VARCHAR2(32)" in sql
@@ -213,7 +214,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260627_001_documents_preprocessed_status" in sql
     assert "''PREPROCESSED''" in sql
     assert "-- migration: 20260629_001_chunk_sets_serving" in sql
-    assert len(statements) == 24
+    assert "-- migration: 20260629_002_drop_kb_chunk_set_bindings" in sql
+    assert "DROP TABLE rag_kb_chunk_set_bindings" in sql
+    assert len(statements) == 25
     assert all(statement.startswith(("-- migration:", "DECLARE")) for statement in statements)
 
 
@@ -226,7 +229,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260629_001"
+    assert manifest["migration_artifact_version"] == "20260629_002"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -250,6 +253,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260625_002_preprocess_artifact",
         "20260627_001_documents_preprocessed_status",
         "20260629_001_chunk_sets_serving",
+        "20260629_002_drop_kb_chunk_set_bindings",
     ]
 
 

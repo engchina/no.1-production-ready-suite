@@ -1311,8 +1311,9 @@ class OracleClient:
     async def list_document_chunk_sets(self, document_id: str) -> list[dict[str, object]]:
         """文書の chunk_set 一覧(状態/件数/所属・配信 KB)を返す。variant 可視化に使う。
 
-        rag_chunk_sets と rag_kb_chunk_set_bindings を join し、chunk_set ごとに集約する。
-        created_at 昇順で安定。binding が無い chunk_set も(KB 未割当でも)返す。
+        3 層モデル: chunk_set は文書単位(KB 非依存)。所属 KB は文書の membership
+        (rag_document_knowledge_bases)で全 chunk_set 共通、配信中かは cs.is_serving=1 で決まる。
+        created_at 昇順で安定。
         """
         rows = await self._fetch_all(
             """
@@ -1321,30 +1322,26 @@ class OracleClient:
                    cs.status AS status,
                    cs.chunk_count AS chunk_count,
                    cs.vector_count AS vector_count,
-                   ex.recipe_subset AS extraction_recipe,
-                   b.knowledge_base_id AS knowledge_base_id,
-                   b.is_serving AS is_serving
+                   cs.is_serving AS is_serving,
+                   ex.recipe_subset AS extraction_recipe
             FROM rag_chunk_sets cs
             LEFT JOIN rag_document_extractions ex
               ON ex.document_id = cs.document_id
              AND ex.extraction_recipe_id = cs.extraction_recipe_id
-            LEFT JOIN rag_kb_chunk_set_bindings b ON b.chunk_set_id = cs.chunk_set_id
             WHERE cs.document_id = :document_id
-            ORDER BY cs.created_at, cs.chunk_set_id, b.knowledge_base_id
+            ORDER BY cs.created_at, cs.chunk_set_id
             """,
             {"document_id": document_id},
         )
-        by_id: dict[str, dict[str, object]] = {}
-        members: dict[str, list[str]] = {}
-        serving: dict[str, list[str]] = {}
-        order: list[str] = []
+        member_kb_ids = [kb.id for kb in await self.list_document_knowledge_bases(document_id)]
+        result: list[dict[str, object]] = []
         for row in rows:
             norm = {str(key).lower(): value for key, value in row.items()}
-            chunk_set_id = str(norm["chunk_set_id"])
-            if chunk_set_id not in by_id:
-                recipe = _json_loads(norm.get("extraction_recipe"))
-                by_id[chunk_set_id] = {
-                    "chunk_set_id": chunk_set_id,
+            recipe = _json_loads(norm.get("extraction_recipe"))
+            is_serving = int(str(norm.get("is_serving") or 0)) == 1
+            result.append(
+                {
+                    "chunk_set_id": str(norm["chunk_set_id"]),
                     "extraction_recipe_id": (
                         str(norm["extraction_recipe_id"])
                         if norm.get("extraction_recipe_id") is not None
@@ -1356,108 +1353,11 @@ class OracleClient:
                     "extraction_id": None,
                     "parser": recipe.get("rag_parser_adapter_backend"),
                     "preprocess": recipe.get("rag_preprocess_profile"),
+                    "knowledge_base_ids": list(member_kb_ids),
+                    "serving_knowledge_base_ids": list(member_kb_ids) if is_serving else [],
                 }
-                members[chunk_set_id] = []
-                serving[chunk_set_id] = []
-                order.append(chunk_set_id)
-            kb_value = norm.get("knowledge_base_id")
-            if kb_value is None:
-                continue
-            kb_id = str(kb_value)
-            if kb_id not in members[chunk_set_id]:
-                members[chunk_set_id].append(kb_id)
-            if int(str(norm.get("is_serving") or 0)) == 1 and kb_id not in serving[chunk_set_id]:
-                serving[chunk_set_id].append(kb_id)
-        result: list[dict[str, object]] = []
-        for chunk_set_id in order:
-            entry = by_id[chunk_set_id]
-            entry["knowledge_base_ids"] = members[chunk_set_id]
-            entry["serving_knowledge_base_ids"] = serving[chunk_set_id]
-            result.append(entry)
+            )
         return result
-
-    async def upsert_chunk_set_binding(
-        self,
-        *,
-        knowledge_base_id: str,
-        document_id: str,
-        chunk_set_id: str,
-        is_serving: bool = True,
-    ) -> None:
-        """KB→chunk_set の参照(refcount の実体)を冪等に作成/更新する。"""
-        tenant = current_audit_request_context().tenant_id_hash
-        binds = {
-            "knowledge_base_id": knowledge_base_id,
-            "document_id": document_id,
-            "chunk_set_id": chunk_set_id,
-            "tenant_id_hash": tenant,
-            "is_serving": 1 if is_serving else 0,
-        }
-
-        def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                """
-                MERGE INTO rag_kb_chunk_set_bindings t
-                USING (
-                    SELECT :knowledge_base_id AS knowledge_base_id,
-                           :document_id AS document_id,
-                           :chunk_set_id AS chunk_set_id
-                    FROM dual
-                ) s
-                ON (t.knowledge_base_id = s.knowledge_base_id
-                    AND t.document_id = s.document_id
-                    AND t.chunk_set_id = s.chunk_set_id)
-                WHEN MATCHED THEN UPDATE SET t.is_serving = :is_serving
-                WHEN NOT MATCHED THEN INSERT
-                    (knowledge_base_id, document_id, chunk_set_id, tenant_id_hash, is_serving)
-                    VALUES
-                    (:knowledge_base_id, :document_id, :chunk_set_id, :tenant_id_hash, :is_serving)
-                """,
-                binds,
-            )
-
-        await self._run_transaction(operation)
-
-    async def delete_chunk_set_binding(
-        self,
-        *,
-        knowledge_base_id: str,
-        document_id: str,
-        chunk_set_id: str,
-    ) -> None:
-        """KB→chunk_set の参照を削除する(refcount を減らす)。chunk_set 自体は消さない。"""
-        binds = {
-            "knowledge_base_id": knowledge_base_id,
-            "document_id": document_id,
-            "chunk_set_id": chunk_set_id,
-        }
-
-        def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_kb_chunk_set_bindings
-                WHERE knowledge_base_id = :knowledge_base_id
-                  AND document_id = :document_id
-                  AND chunk_set_id = :chunk_set_id
-                """,
-                binds,
-            )
-
-        await self._run_transaction(operation)
-
-    async def chunk_set_refcount(self, chunk_set_id: str) -> int:
-        """chunk_set を参照する KB binding 数(= refcount)。"""
-        row = await self._fetch_one(
-            """
-            SELECT COUNT(*) AS cnt
-            FROM rag_kb_chunk_set_bindings
-            WHERE chunk_set_id = :chunk_set_id
-            """,
-            {"chunk_set_id": chunk_set_id},
-        )
-        return int(str(next(iter(row.values())))) if row else 0
 
     async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
         """指定 chunk_set の chunk 行数(chunk_set 単位の件数記録用)。"""
@@ -1473,7 +1373,7 @@ class OracleClient:
         """plan に無い chunk_set(とその chunk、未タグ chunk)を削除する。keep だけ残す。
 
         複数 materialization の cleanup。keep が空なら何もしない(安全側・現行 chunk は保持)。
-        binding は FK cascade。削除した chunk_set id を返す。
+        削除した chunk_set id を返す。
         """
         keep = list(dict.fromkeys(keep_chunk_set_ids))
         if not keep:
@@ -1518,43 +1418,6 @@ class OracleClient:
                 binds,
             )
             return removed
-
-        return await self._run_transaction(operation)
-
-    async def collect_unreferenced_chunk_sets(self, document_id: str) -> list[str]:
-        """文書の chunk_set のうち refcount 0 のものを GC する。削除した chunk_set id を返す。
-
-        他 KB が参照中(binding 存在)の chunk_set は削除しない。削除直前に DB で refcount 0 を
-        再確認(NOT EXISTS)してから chunk と chunk_set を消すため、早すぎる削除を防ぐ。
-        """
-
-        def operation(connection: OracleConnectionProtocol) -> list[str]:
-            rows = _fetch_all(
-                connection,
-                """
-                SELECT cs.chunk_set_id
-                FROM rag_chunk_sets cs
-                WHERE cs.document_id = :document_id
-                  AND NOT EXISTS (
-                      SELECT 1 FROM rag_kb_chunk_set_bindings b
-                      WHERE b.chunk_set_id = cs.chunk_set_id
-                  )
-                """,
-                {"document_id": document_id},
-            )
-            collected = [str(next(iter(row.values()))) for row in rows]
-            for chunk_set_id in collected:
-                _execute(
-                    connection,
-                    "DELETE FROM rag_chunks WHERE chunk_set_id = :chunk_set_id",
-                    {"chunk_set_id": chunk_set_id},
-                )
-                _execute(
-                    connection,
-                    "DELETE FROM rag_chunk_sets WHERE chunk_set_id = :chunk_set_id",
-                    {"chunk_set_id": chunk_set_id},
-                )
-            return collected
 
         return await self._run_transaction(operation)
 
@@ -5475,23 +5338,6 @@ class OracleClient:
             )
             _execute(
                 connection,
-                _render_sql(
-                    """
-                DELETE FROM rag_kb_chunk_set_bindings
-                WHERE document_id = :document_id
-                  AND EXISTS (
-                      SELECT 1
-                      FROM rag_documents d
-                      WHERE d.document_id = rag_kb_chunk_set_bindings.document_id
-                        AND {access_predicate}
-                  )
-                """,
-                    access_predicate=_oracle_access_predicate_sql(alias="d"),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            _execute(
-                connection,
                 """
                 DELETE FROM rag_chunks
                 WHERE document_id = :document_id
@@ -5611,22 +5457,6 @@ class OracleClient:
             )
             _execute(
                 connection,
-                _render_sql(
-                    """
-                DELETE FROM rag_kb_chunk_set_bindings
-                WHERE document_id = :document_id
-                  AND EXISTS (
-                      SELECT 1 FROM rag_documents d
-                      WHERE d.document_id = rag_kb_chunk_set_bindings.document_id
-                        AND {access_predicate}
-                  )
-                """,
-                    access_predicate=_oracle_access_predicate_sql(alias="d"),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            _execute(
-                connection,
                 "DELETE FROM rag_chunks WHERE document_id = :document_id",
                 {"document_id": document_id},
             )
@@ -5710,22 +5540,6 @@ class OracleClient:
                   AND EXISTS (
                       SELECT 1 FROM rag_documents d
                       WHERE d.document_id = rag_artifact_layers.document_id
-                        AND {access_predicate}
-                  )
-                """,
-                    access_predicate=_oracle_access_predicate_sql(alias="d"),
-                ),
-                _with_tenant_bind({"document_id": document_id}),
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                DELETE FROM rag_kb_chunk_set_bindings
-                WHERE document_id = :document_id
-                  AND EXISTS (
-                      SELECT 1 FROM rag_documents d
-                      WHERE d.document_id = rag_kb_chunk_set_bindings.document_id
                         AND {access_predicate}
                   )
                 """,
@@ -9154,11 +8968,10 @@ def oracle_text_index_parameters_sql(
 
 
 def oracle_chunk_set_schema_sql() -> str:
-    """variant materialization の chunk_set 層 + KB binding の DDL を返す。
+    """変換成果(chunk_set / extraction / artifact layer)の永続層 DDL を返す。
 
-    1 文書 × N レシピ(複数チャンク集合)を共有して保持するための土台。
-    refcount は ``rag_kb_chunk_set_bindings`` の件数から導出する(列で持たず drift しない)。
-    実際の dedup/GC 計算は :mod:`app.rag.variant_planner`(決定論)が行い、本表はその永続層。
+    3 層モデル: chunk_set は文書単位(KB 非依存)。配信中かは ``is_serving`` 列で持つ。
+    所属 KB は ``rag_document_knowledge_bases`` の membership が正本(別表 binding は持たない)。
     """
     return """
 CREATE TABLE rag_chunk_sets (
@@ -9243,24 +9056,6 @@ CREATE TABLE rag_artifact_layers (
 
 CREATE INDEX rag_artifact_layers_parent_idx
     ON rag_artifact_layers (parent_chunk_set_id, layer_kind, status);
-
-CREATE TABLE rag_kb_chunk_set_bindings (
-    knowledge_base_id VARCHAR2(64) NOT NULL,
-    document_id       VARCHAR2(64) NOT NULL,
-    chunk_set_id      VARCHAR2(64) NOT NULL,
-    tenant_id_hash    CHAR(64),
-    is_serving        NUMBER(1) DEFAULT 1 NOT NULL,
-    created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
-    CONSTRAINT rag_kb_chunk_set_bindings_pk
-        PRIMARY KEY (knowledge_base_id, document_id, chunk_set_id),
-    CONSTRAINT rag_kb_cs_bind_cs_fk
-        FOREIGN KEY (chunk_set_id) REFERENCES rag_chunk_sets (chunk_set_id) ON DELETE CASCADE,
-    CONSTRAINT rag_kb_cs_bind_serving_ck
-        CHECK (is_serving IN (0, 1))
-);
-
-CREATE INDEX rag_kb_cs_bind_cs_idx
-    ON rag_kb_chunk_set_bindings (chunk_set_id);
 """.strip()
 
 
