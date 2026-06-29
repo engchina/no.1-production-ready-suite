@@ -37,7 +37,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260627_001"
+MIGRATION_ARTIFACT_VERSION = "20260629_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -282,6 +282,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260627_001_documents_preprocessed_status",
             table_name="rag_documents",
             sql=_documents_preprocessed_status_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260629_001_chunk_sets_serving",
+            table_name="rag_chunk_sets",
+            sql=_chunk_sets_serving_migration_sql(),
         ),
     ]
 
@@ -703,6 +708,62 @@ BEGIN
         || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''PREPROCESSED'', '
         || '''INGESTING'', ''REVIEW'', ''CHUNKING'', ''CHUNKED'', ''INDEXING'', '
         || '''INDEXED'', ''ERROR''))';
+END;
+/
+""".strip()
+
+
+def _chunk_sets_serving_migration_sql() -> str:
+    """rag_chunk_sets に文書単位 serving フラグ(is_serving)を追加する(冪等)。
+
+    3 層モデル: 配信中(serving)の判定を per-KB binding から文書単位の chunk_set へ移す。
+    既存行は per-KB binding の serving 状態から backfill する(別 chunk_set が serving の
+    chunk_set だけ 0、それ以外は既定の 1 を維持=安全側で配信を残す)。
+    """
+    return """
+DECLARE
+    v_col_count   NUMBER;
+    v_constraint_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_col_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'IS_SERVING';
+
+    IF v_col_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_chunk_sets ADD (is_serving NUMBER(1) DEFAULT 1 NOT NULL)';
+        -- backfill は列追加直後の一度だけ。動的 SQL(EXECUTE IMMEDIATE)にしないと新列を
+        -- 静的参照できず PL/SQL コンパイルに失敗する。同一文書で別 chunk_set が serving
+        -- binding を持ち自分は持たない chunk_set だけ 0、それ以外は既定 1(配信を残す安全側)。
+        EXECUTE IMMEDIATE
+            'UPDATE rag_chunk_sets cs SET is_serving = 0 '
+            || 'WHERE EXISTS (SELECT 1 FROM rag_kb_chunk_set_bindings b '
+            || 'WHERE b.document_id = cs.document_id AND b.is_serving = 1 '
+            || 'AND b.chunk_set_id <> cs.chunk_set_id) '
+            || 'AND NOT EXISTS (SELECT 1 FROM rag_kb_chunk_set_bindings b2 '
+            || 'WHERE b2.chunk_set_id = cs.chunk_set_id AND b2.is_serving = 1)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_CHUNK_SETS'
+      AND constraint_name = 'RAG_CHUNK_SETS_SERVING_CK';
+
+    IF v_constraint_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_chunk_sets ADD CONSTRAINT '
+            || 'rag_chunk_sets_serving_ck CHECK (is_serving IN (0, 1))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes WHERE index_name = 'RAG_CHUNK_SETS_SERVING_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_chunk_sets_serving_idx '
+            || 'ON rag_chunk_sets (document_id, is_serving)';
+    END IF;
 END;
 /
 """.strip()

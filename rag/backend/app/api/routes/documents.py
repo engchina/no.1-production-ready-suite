@@ -1814,6 +1814,12 @@ async def _reconcile_plan_chunk_sets(
                     extraction_recipe_id=extraction_recipe_id,
                     settings=get_settings(),
                 )
+        # 3 層モデル: 文書の serving chunk_set を設定(単一レシピなので plan の chunk_set)。
+        serving_chunk_sets = sorted(plan.chunk_sets)
+        if serving_chunk_sets:
+            await oracle.set_document_serving_chunk_set(
+                document_id=document_id, chunk_set_id=serving_chunk_sets[0]
+            )
         await _reconcile_plan_artifact_layers(oracle, document_id, detail, plan)
         await oracle.delete_document_chunk_sets_except(
             document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
@@ -2113,8 +2119,12 @@ async def _reconcile_document_chunk_sets(
         await oracle.delete_stale_document_chunk_sets(
             document_id=document_id, keep_chunk_set_id=chunk_set_id
         )
-        # 現状は単一 materialization なので、所属 KB すべてをこの chunk_set に bind する。
-        # KB ごとに取込設定が分岐する複数 materialization は後続の増分で対応する。
+        # 3 層モデル: この単一 chunk_set を文書の serving にする(retrieval はこれを検索対象)。
+        await oracle.set_document_serving_chunk_set(
+            document_id=document_id, chunk_set_id=chunk_set_id
+        )
+        # 単一 materialization なので所属 KB すべてをこの chunk_set に bind する(binding は当面
+        # dual-write で温存。退役は後続の increment で実施)。
         knowledge_bases = await oracle.list_document_knowledge_bases(document_id)
         for knowledge_base in knowledge_bases:
             await oracle.upsert_chunk_set_binding(

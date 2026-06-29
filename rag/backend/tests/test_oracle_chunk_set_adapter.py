@@ -77,6 +77,31 @@ async def test_chunk_set_dedup_refcount_and_gc() -> None:
 
 
 @pytest.mark.usefixtures("oracle_db")
+async def test_set_document_serving_chunk_set_marks_exactly_one_serving() -> None:
+    """3 層モデル: set_document_serving_chunk_set は指定 1 つだけ is_serving=1、他は 0。"""
+    client = OracleClient()
+    document_id = await _new_document(client)
+    cs_a = "cs_serving_aaaaaaaaaa"
+    cs_b = "cs_serving_bbbbbbbbbb"
+    await client.upsert_chunk_set(chunk_set_id=cs_a, document_id=document_id)
+    await client.upsert_chunk_set(chunk_set_id=cs_b, document_id=document_id)
+
+    # 既定は両方 serving(DEFAULT 1)。cs_a を serving に確定すると cs_b は 0 になる。
+    await client.set_document_serving_chunk_set(document_id=document_id, chunk_set_id=cs_a)
+    got_a = await client.get_chunk_set(cs_a)
+    got_b = await client.get_chunk_set(cs_b)
+    assert got_a is not None and int(str(got_a["is_serving"])) == 1
+    assert got_b is not None and int(str(got_b["is_serving"])) == 0
+
+    # serving を cs_b へ付け替える(Phase 3 の昇格相当)と入れ替わる。
+    await client.set_document_serving_chunk_set(document_id=document_id, chunk_set_id=cs_b)
+    swapped_a = await client.get_chunk_set(cs_a)
+    swapped_b = await client.get_chunk_set(cs_b)
+    assert swapped_a is not None and int(str(swapped_a["is_serving"])) == 0
+    assert swapped_b is not None and int(str(swapped_b["is_serving"])) == 1
+
+
+@pytest.mark.usefixtures("oracle_db")
 async def test_upsert_chunk_set_is_idempotent_and_mark_indexed() -> None:
     """upsert は冪等(重複行を作らない)、mark_chunk_set_indexed が status/件数を更新する。"""
     client = OracleClient()

@@ -1020,6 +1020,33 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
+    async def set_document_serving_chunk_set(
+        self,
+        *,
+        document_id: str,
+        chunk_set_id: str,
+    ) -> None:
+        """文書の serving chunk_set を指定の 1 つに設定する(他は is_serving=0)。
+
+        3 層モデル: serving は文書単位で 1 つ。retrieval はこの chunk_set だけを検索対象にする
+        (Phase 3 の「別レシピで試す→昇格」も serving の付け替えで表現する)。
+        """
+        binds = {"document_id": document_id, "chunk_set_id": chunk_set_id}
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_chunk_sets
+                SET is_serving = CASE WHEN chunk_set_id = :chunk_set_id THEN 1 ELSE 0 END,
+                    updated_at = SYSTIMESTAMP
+                WHERE document_id = :document_id
+                """,
+                binds,
+            )
+
+        await self._run_transaction(operation)
+
     async def mark_chunk_set_chunked(
         self,
         *,
@@ -1052,11 +1079,11 @@ class OracleClient:
         await self._run_transaction(operation)
 
     async def get_chunk_set(self, chunk_set_id: str) -> dict[str, object] | None:
-        """chunk_set の状態(status/件数/親 extraction_id)を返す。キーは小文字へ正規化。"""
+        """chunk_set の状態(status/件数/親 extraction_id/is_serving)を返す。キーは小文字化。"""
         row = await self._fetch_one(
             """
             SELECT chunk_set_id, document_id, extraction_recipe_id,
-                   status, chunk_count, vector_count
+                   status, chunk_count, vector_count, is_serving
             FROM rag_chunk_sets WHERE chunk_set_id = :chunk_set_id
             """,
             {"chunk_set_id": chunk_set_id},
@@ -7436,25 +7463,25 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         )
         binds.update(knowledge_base_binds)
         knowledge_base_filter_sql = f"AND {knowledge_base_filter_sql}"
-        # variant: 配信中(is_serving)の chunk_set だけを検索対象にする(single/routed)。
-        # スコープ KB が「この文書で別 chunk_set を配信中」のときだけ、その chunk_set 以外の
-        # chunk を除外する。単一 materialization では別 chunk_set が無いので no-op(回帰なし)。
-        # chunk_set 未タグ(NULL)や binding 未整備の chunk は除外しない(後方互換)。
+        # variant: 配信中(serving)の chunk_set だけを検索対象にする(single/routed)。
+        # 3 層モデル: serving は文書単位(rag_chunk_sets.is_serving)で per-KB ではない。
+        # chunk は次のいずれかで採用する: ① chunk_set 未タグ(NULL=後方互換)/
+        # ② その chunk_set が serving / ③ 文書に serving chunk_set が 1 つも無い(安全側で全採用)。
+        # 単一 materialization では当該 chunk_set が serving なので従来どおり全採用(回帰なし)。
         # fused は全 serving chunk_set を横断検索するため、この制限をかけない(重複は
         # アプリ側の source-span dedup で除去する)。
         if serving_mode != "fused":
-            served_in_sql, served_binds = _oracle_in_predicate(
-                "b.knowledge_base_id", "filter_knowledge_base_id", knowledge_base_ids
-            )
-            binds.update(served_binds)
-            clauses.append(f"""
-            NOT EXISTS (
-                SELECT 1
-                FROM rag_kb_chunk_set_bindings b
-                WHERE b.document_id = c.document_id
-                  AND b.is_serving = 1
-                  AND b.chunk_set_id <> c.chunk_set_id
-                  AND {served_in_sql}
+            clauses.append("""
+            (
+                c.chunk_set_id IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM rag_chunk_sets cs
+                    WHERE cs.chunk_set_id = c.chunk_set_id AND cs.is_serving = 1
+                )
+                OR NOT EXISTS (
+                    SELECT 1 FROM rag_chunk_sets cs2
+                    WHERE cs2.document_id = c.document_id AND cs2.is_serving = 1
+                )
             )
             """)
     if knowledge_base_ids or current_audit_request_context().allowed_knowledge_base_ids is not None:
@@ -9143,17 +9170,22 @@ CREATE TABLE rag_chunk_sets (
     status          VARCHAR2(32) DEFAULT 'INGESTING' NOT NULL,
     chunk_count     NUMBER(10) DEFAULT 0 NOT NULL,
     vector_count    NUMBER(10) DEFAULT 0 NOT NULL,
+    is_serving      NUMBER(1) DEFAULT 1 NOT NULL,
     metrics_json    JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_chunk_sets_document_fk
         FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
     CONSTRAINT rag_chunk_sets_status_ck
-        CHECK (status IN ('INGESTING', 'CHUNKED', 'INDEXED', 'ERROR'))
+        CHECK (status IN ('INGESTING', 'CHUNKED', 'INDEXED', 'ERROR')),
+    CONSTRAINT rag_chunk_sets_serving_ck CHECK (is_serving IN (0, 1))
 );
 
 CREATE INDEX rag_chunk_sets_document_idx
     ON rag_chunk_sets (document_id, status);
+
+CREATE INDEX rag_chunk_sets_serving_idx
+    ON rag_chunk_sets (document_id, is_serving);
 
 CREATE INDEX rag_chunk_sets_extraction_idx
     ON rag_chunk_sets (document_id, extraction_recipe_id);

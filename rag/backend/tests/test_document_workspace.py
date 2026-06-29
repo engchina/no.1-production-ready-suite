@@ -446,6 +446,9 @@ class FakeWorkspaceOracle:
     async def delete_stale_document_chunk_sets(self, **kwargs: object) -> None:
         _ = kwargs
 
+    async def set_document_serving_chunk_set(self, **kwargs: object) -> None:
+        _ = kwargs
+
     async def upsert_chunk_set_binding(self, **kwargs: object) -> None:
         _ = kwargs
 

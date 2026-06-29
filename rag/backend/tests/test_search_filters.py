@@ -101,12 +101,13 @@ def test_retrieval_where_rejects_unknown_filter_key() -> None:
 
 
 def test_retrieval_where_adds_serving_chunk_set_filter_for_kb_scope() -> None:
-    """KB スコープ検索では配信中 chunk_set 以外を除外する NOT EXISTS を足す。"""
+    """KB スコープ検索では文書単位 serving(rag_chunk_sets.is_serving)で配信中 chunk_set を選ぶ。"""
     sql, binds = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
-    assert "rag_kb_chunk_set_bindings b" in sql
-    assert "b.is_serving = 1" in sql
-    assert "b.chunk_set_id <> c.chunk_set_id" in sql
-    assert "b.document_id = c.document_id" in sql
+    # 3 層モデル: serving は per-KB binding ではなく文書単位の chunk_set フラグ。
+    assert "rag_kb_chunk_set_bindings" not in sql
+    assert "cs.is_serving = 1" in sql
+    assert "cs.chunk_set_id = c.chunk_set_id" in sql
+    assert "cs2.document_id = c.document_id" in sql
     assert any(name.startswith("filter_knowledge_base_id") for name in binds)
 
 
@@ -134,6 +135,6 @@ def test_retrieval_where_omits_chunk_set_filter_for_fused_serving_mode() -> None
 
 
 def test_retrieval_where_keeps_chunk_set_filter_for_single_serving_mode() -> None:
-    """single(既定)では従来どおり配信中 chunk_set 制限を足す。"""
+    """single(既定)では従来どおり配信中 chunk_set 制限(文書単位 is_serving)を足す。"""
     sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "single"})
-    assert "b.is_serving = 1" in sql
+    assert "cs.is_serving = 1" in sql

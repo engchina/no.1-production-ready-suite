@@ -107,6 +107,8 @@ def ensure_schema() -> None:
                     continue
                 if code == 904 and "RAG_CHUNK_SETS_EXTRACTION_IDX" in sql.upper():
                     continue
+                if code == 904 and "RAG_CHUNK_SETS_SERVING_IDX" in sql.upper():
+                    continue
                 if code == 904 and "RAG_DOC_EXT_STATUS_IDX" in sql.upper():
                     continue
                 if code == 904 and "RAG_ARTIFACT_LAYERS_PARENT_IDX" in sql.upper():
