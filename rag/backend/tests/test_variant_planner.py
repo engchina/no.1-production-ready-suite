@@ -122,8 +122,12 @@ def test_plan_from_kb_configs_shares_when_both_inherit() -> None:
     assert next(iter(plan.chunk_sets.values())) == frozenset({"kb-1", "kb-2"})
 
 
-def test_plan_from_kb_configs_splits_on_chunk_override() -> None:
-    """一方の KB が chunk_size を上書きすると chunk_set が分裂する。"""
+def test_plan_from_kb_configs_ignores_kb_chunk_override() -> None:
+    """3 層モデル: KB の chunk_size 上書きは無視され、両 KB は単一 chunk_set を共有する。
+
+    レシピは文書プロパティ(global)で KB からは解決しない。KB 別取込上書きで chunk_set が
+    分裂しないことを固定する(以前は分裂していた挙動の回帰防止)。
+    """
     settings = get_settings()
     plan = plan_document_materializations(
         SRC,
@@ -133,12 +137,13 @@ def test_plan_from_kb_configs_splits_on_chunk_override() -> None:
             "kb-2": _config(chunk_size=settings.rag_chunk_size + 512),
         },
     )
-    assert len(plan.chunk_sets) == 2
-    assert all(len(kb_ids) == 1 for kb_ids in plan.chunk_sets.values())
+    assert len(plan.chunk_sets) == 1
+    assert len(plan.extraction_recipes) == 1
+    assert next(iter(plan.chunk_sets.values())) == frozenset({"kb-1", "kb-2"})
 
 
-def test_plan_from_kb_configs_graph_override_shares_chunk_set() -> None:
-    """graph_profile だけ違う上書きでも chunk_set は共有、graph 層だけ分裂。"""
+def test_plan_from_kb_configs_ignores_kb_graph_override() -> None:
+    """3 層モデル: graph_profile の KB 上書きも無視され、graph 層も分裂しない。"""
     settings = get_settings()
     plan = plan_document_materializations(
         SRC,
@@ -146,7 +151,33 @@ def test_plan_from_kb_configs_graph_override_shares_chunk_set() -> None:
         {"kb-1": KnowledgeBaseAdapterConfig(), "kb-2": _config(graph_profile="entities")},
     )
     assert len(plan.chunk_sets) == 1
-    assert len(plan.graph_layers) == 2
+    assert len(plan.graph_layers) == 1
+
+
+def test_membership_count_does_not_change_single_chunk_set() -> None:
+    """3 層モデルの核: KB の出し入れ(membership 数)が単一 chunk_set を変えない。
+
+    1 KB でも 3 KB でも同じ chunk_set/extraction_recipe ID になる(参照 KB 群だけが変わる)。
+    これにより KB の追加・削除が chunk 再処理 / GC を引き起こさない。
+    """
+    settings = get_settings()
+    chunk_set_id = compute_chunk_set_id(SRC, settings)
+    extraction_recipe_id = compute_extraction_recipe_id(SRC, settings)
+
+    one = plan_document_materializations(SRC, settings, {"kb-1": KnowledgeBaseAdapterConfig()})
+    three = plan_document_materializations(
+        SRC,
+        settings,
+        {kb: KnowledgeBaseAdapterConfig() for kb in ("kb-1", "kb-2", "kb-3")},
+    )
+
+    assert set(one.chunk_sets) == {chunk_set_id} == set(three.chunk_sets)
+    assert set(one.extraction_recipes) == {extraction_recipe_id} == set(three.extraction_recipes)
+    # ID は不変。参照 KB 群(refcount)だけが membership に応じて増減する。
+    assert one.chunk_sets[chunk_set_id] == frozenset({"kb-1"})
+    assert three.chunk_sets[chunk_set_id] == frozenset({"kb-1", "kb-2", "kb-3"})
+    # 既存 = 3 KB 状態から 1 KB へ減らしても、chunk_set は GC 対象にならない(計画に残る)。
+    assert chunk_set_id not in diff_plan(three.all_ids(), one).to_collect
 
 
 def test_shared_layer_not_collected_while_other_kb_references_it() -> None:
@@ -244,8 +275,8 @@ def test_diff_creates_and_collects_extraction_recipe_tier() -> None:
     assert extraction_recipe_id not in diff_gc.to_collect
 
 
-def test_plan_from_kb_configs_shares_extraction_recipe_when_only_chunk_differs() -> None:
-    """KB 設定経由でも chunk 上書きだけなら extraction recipe を共有する。"""
+def test_plan_from_kb_configs_collapses_to_single_recipe_regardless_of_overrides() -> None:
+    """3 層モデル: KB 設定に何が入っていても文書は単一 extraction recipe・単一 chunk_set。"""
     settings = get_settings()
     plan = plan_document_materializations(
         SRC,
@@ -253,9 +284,10 @@ def test_plan_from_kb_configs_shares_extraction_recipe_when_only_chunk_differs()
         {
             "kb-1": KnowledgeBaseAdapterConfig(),
             "kb-2": _config(chunk_size=settings.rag_chunk_size + 512),
+            "kb-3": _config(parser_adapter_backend="docling", graph_profile="entities"),
         },
     )
     assert len(plan.extraction_recipes) == 1
-    assert len(plan.chunk_sets) == 2
+    assert len(plan.chunk_sets) == 1
     recipe_id = next(iter(plan.extraction_recipes))
-    assert len(plan.chunk_sets_by_extraction_recipe()[recipe_id]) == 2
+    assert len(plan.chunk_sets_by_extraction_recipe()[recipe_id]) == 1

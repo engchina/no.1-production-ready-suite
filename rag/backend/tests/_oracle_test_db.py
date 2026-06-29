@@ -12,7 +12,7 @@ from contextlib import suppress
 from functools import lru_cache
 from typing import Any
 
-from app.clients.oracle import _oracle_connect_kwargs
+from app.clients.oracle import _init_oracle_client, _oracle_connect_kwargs
 from app.config import Settings
 from app.rag.oracle_schema import (
     oracle_schema_migration_sql,
@@ -48,6 +48,9 @@ def apply_real_oracle_settings(settings: Settings) -> None:
 
 def _connect() -> Any:
     oracledb = importlib.import_module("oracledb")
+    # 実 DB は thick client(instant client)を使う。thin 接続を先に作るとアプリ側の
+    # thick 初期化が DPY-2019 で失敗するため、connect 前に thick を初期化する(冪等)。
+    _init_oracle_client(oracledb, _REAL_SETTINGS)
     return oracledb.connect(**real_oracle_connection_kwargs())
 
 

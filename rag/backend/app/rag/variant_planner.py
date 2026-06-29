@@ -19,10 +19,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.config import Settings
-from app.rag.kb_adapter_config import (
-    KnowledgeBaseAdapterConfig,
-    apply_adapter_config_or_global,
-)
+from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.rag.variant_keys import (
     MAX_EXTRACTIONS_PER_DOCUMENT,
     compute_extraction_recipe_id,
@@ -193,19 +190,16 @@ def plan_document_materializations(
     global_settings: Settings,
     kb_configs: Mapping[str, KnowledgeBaseAdapterConfig],
 ) -> MaterializationPlan:
-    """文書の所属 KB 群とその KB アダプター設定から materialization 計画を作る。
+    """文書の所属 KB 群から materialization 計画を作る(3 層モデル)。
 
-    取込入口が呼ぶ想定の橋渡し。各 KB の取込上書きを ``apply_adapter_config_or_global``
-    でグローバルへ重ねて effective 取込設定を求め(=取込パイプラインが使うのと同じ
-    解決)、:func:`plan_materializations` に渡す。同じ effective 設定に解決される KB は
-    同じ層を共有する(複製ゼロ)。設定が矛盾する KB はグローバルへ安全縮退する。
+    3 層モデルでは KB はコレクション(検索スコープ)で、レシピ(取込モード)は文書のプロパティ。
+    KB 別の取込上書きは使わず、所属 KB は全て文書の単一レシピ(= global 既定)を共有する。
+    → 常に extraction recipe 1 本・chunk_set 1 つ。membership が変わっても計画は変わらない
+    (= KB の出し入れが chunk 再処理 / GC / 409 を引き起こさない)。
+    将来の「文書単位レシピ選択」は global_settings に文書の選択値を重ねて渡すだけで実現する。
     """
-    consumers: dict[str, Settings] = {}
-    for kb_id, config in kb_configs.items():
-        effective, _applied = apply_adapter_config_or_global(
-            global_settings, config, scope="ingestion"
-        )
-        consumers[kb_id] = effective
+    # KB を keys として使い、値は全て文書の単一レシピ(global)に揃える。
+    consumers: dict[str, Settings] = {kb_id: global_settings for kb_id in kb_configs}
     owning_extraction_recipe_id = compute_extraction_recipe_id(source_sha256, global_settings)
     return plan_materializations(
         source_sha256,

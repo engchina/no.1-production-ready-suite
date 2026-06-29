@@ -592,8 +592,9 @@ BEGIN
     EXECUTE IMMEDIATE
         'ALTER TABLE rag_documents ADD CONSTRAINT '
         || 'rag_documents_status_ck CHECK '
-        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''INGESTING'', ''REVIEW'', '
-        || '''CHUNKING'', ''CHUNKED'', ''INDEXING'', ''INDEXED'', ''ERROR''))';
+        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''PREPROCESSED'', '
+        || '''INGESTING'', ''REVIEW'', ''CHUNKING'', ''CHUNKED'', ''INDEXING'', '
+        || '''INDEXED'', ''ERROR''))';
 END;
 /
 """.strip()
@@ -671,8 +672,9 @@ BEGIN
     EXECUTE IMMEDIATE
         'ALTER TABLE rag_documents ADD CONSTRAINT '
         || 'rag_documents_status_ck CHECK '
-        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''INGESTING'', ''REVIEW'', '
-        || '''CHUNKING'', ''CHUNKED'', ''INDEXING'', ''INDEXED'', ''ERROR''))';
+        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''PREPROCESSED'', '
+        || '''INGESTING'', ''REVIEW'', ''CHUNKING'', ''CHUNKED'', ''INDEXING'', '
+        || '''INDEXED'', ''ERROR''))';
 END;
 /
 """.strip()

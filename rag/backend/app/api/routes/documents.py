@@ -604,16 +604,12 @@ def _effective_ingestion_settings_by_kb(
     global_settings: Settings,
     configs: Mapping[str, KnowledgeBaseAdapterConfig],
 ) -> dict[str, Settings]:
-    """KB ごとの有効な構築設定を返す。矛盾時は apply 側でグローバルへ縮退する。"""
-    effective: dict[str, Settings] = {}
-    for knowledge_base_id, config in configs.items():
-        settings, _applied = apply_adapter_config_or_global(
-            global_settings,
-            config,
-            scope="ingestion",
-        )
-        effective[knowledge_base_id] = settings
-    return effective
+    """KB ごとの有効な構築設定を返す(3 層モデル: レシピは文書/global で KB 共通)。
+
+    レイヤー状態表示を単一レシピ(global)に揃え、materialization と一致させる。
+    KB 別取込上書きは使わない。
+    """
+    return {knowledge_base_id: global_settings for knowledge_base_id in configs}
 
 
 def _layer_statuses_for_chunk_set(
@@ -1386,7 +1382,8 @@ async def approve_document(
             document_id, force=False, phase=IngestionJobPhase.EXTRACT
         )
     elif detail.status == FileStatus.REVIEW:
-        await _ensure_review_only_materialization_safe(document_id)
+        # 3 層モデル: レシピは文書単位の単一 extraction recipe なので、保存済みプレビューから
+        # 安全に後段 chunk/index できる(KB 別の解析分岐に伴う再取込ゲートは廃止)。
         if body is not None and (
             body.element_edits or body.table_cell_edits or body.raw_text is not None
         ):
@@ -1400,30 +1397,6 @@ async def approve_document(
             detail="確認待ちの文書のみ承認できます。",
         )
     return ApiResponse(data=job)
-
-
-async def _ensure_review_only_materialization_safe(document_id: str) -> None:
-    """保存済み抽出だけで後段索引できる構築設定かを検査する。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status != FileStatus.REVIEW:
-        raise HTTPException(
-            status_code=409,
-            detail="プレビュー確認待ちの文書のみ索引できます。",
-        )
-    plan, _configs = await _materialization_plan_for_document(oracle, detail)
-    if plan is not None and len(plan.extraction_recipes) > 1:
-        await _record_reingest_required_extractions(oracle, detail, plan)
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "所属ナレッジベースで文書解析または前処理の設定が分かれています。"
-                "保存済みプレビューだけでは別の解析結果を安全に作れないため、"
-                "現在の構築設定で文書を再取込してください。"
-            ),
-        )
 
 
 async def _apply_review_text_edits(
@@ -1643,15 +1616,15 @@ async def _ingest_existing_document(
         ingest_content_type = detail.content_type or "application/octet-stream"
         prepared_artifact = None
     global_settings = get_settings()
-    plan, configs = await _materialization_plan_for_document(
+    plan, _configs = await _materialization_plan_for_document(
         oracle,
         detail,
         global_settings=global_settings,
     )
     ingest_prompt = "ドキュメントを日本語で OCR し、本文テキストを抽出してください。"
     if plan is None or not plan.chunk_sets:
-        # owning KB(最古割当)の取込上書きをスナップショットとして適用する。
-        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        # 3 層モデル: materialization のレシピは常に global(KB からは解決しない)。
+        effective_settings = get_settings()
         chunk_set_id = _document_chunk_set_id(detail, effective_settings)
         pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
         result = await pipeline.ingest(
@@ -1674,11 +1647,8 @@ async def _ingest_existing_document(
     processed_chunk_sets = 0
     for _recipe_id, chunk_set_ids in recipe_groups.items():
         for index, chunk_set_id in enumerate(chunk_set_ids):
-            representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
-            recipe_settings, _applied = apply_adapter_config_or_global(
-                global_settings, configs[representative_kb_id], scope="ingestion"
-            )
-            pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+            # 3 層モデル: レシピは文書単位(global)。chunk_set_id も global から計算済み。
+            pipeline = IngestionPipeline(oracle=oracle, settings=global_settings)
             processed_chunk_sets += 1
             # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
             record_outcome = processed_chunk_sets == total_chunk_sets
@@ -1726,14 +1696,14 @@ async def _chunk_reviewed_document(
             detail="プレビュー確認待ちの文書のみ Chunk 作成できます。",
         )
     global_settings = get_settings()
-    plan, configs = await _materialization_plan_for_document(
+    plan, _configs = await _materialization_plan_for_document(
         oracle,
         detail,
         global_settings=global_settings,
     )
     if plan is None or not plan.chunk_sets:
-        # 所属 KB / content_sha256 が無い → 現行の単一(owning)挙動へ縮退する。
-        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        # 3 層モデル: 所属 KB / content_sha256 が無い縮退でもレシピは global を使う。
+        effective_settings = get_settings()
         chunk_set_id = _document_chunk_set_id(detail, effective_settings)
         pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
         result = await pipeline.chunk_reviewed(
@@ -1741,25 +1711,11 @@ async def _chunk_reviewed_document(
         )
         await _reconcile_document_chunk_sets_chunked(oracle, document_id, result, chunk_set_id)
         return result
-    if len(plan.extraction_recipes) > 1:
-        await _record_reingest_required_extractions(oracle, detail, plan)
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "所属ナレッジベースで文書解析または前処理の設定が分かれています。"
-                "保存済みプレビューだけでは別の解析結果を安全に作れないため、"
-                "現在の構築設定で文書を再取込してください。"
-            ),
-        )
-    # plan 駆動: 同一 extraction recipe の chunk_set を保存済み extraction から chunk 化する。
+    # 3 層モデル: plan は常に単一 extraction recipe。保存済み extraction から chunk 化する。
     result = detail
     chunk_set_ids = sorted(plan.chunk_sets)
     for index, chunk_set_id in enumerate(chunk_set_ids):
-        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
-        recipe_settings, _applied = apply_adapter_config_or_global(
-            global_settings, configs[representative_kb_id], scope="ingestion"
-        )
-        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        pipeline = IngestionPipeline(oracle=oracle, settings=global_settings)
         # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
         result = await pipeline.chunk_reviewed(
             document_id,
@@ -1787,13 +1743,14 @@ async def _index_reviewed_document(
             detail="Chunk 確認済みの文書のみ索引できます。",
         )
     global_settings = get_settings()
-    plan, configs = await _materialization_plan_for_document(
+    plan, _configs = await _materialization_plan_for_document(
         oracle,
         detail,
         global_settings=global_settings,
     )
     if plan is None or not plan.chunk_sets:
-        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        # 3 層モデル: materialization のレシピは常に global。
+        effective_settings = get_settings()
         chunk_set_id = _document_chunk_set_id(detail, effective_settings)
         if chunk_set_id is None:
             raise HTTPException(status_code=409, detail="索引対象の chunk_set がありません。")
@@ -1806,11 +1763,8 @@ async def _index_reviewed_document(
     result = detail
     chunk_set_ids = sorted(plan.chunk_sets)
     for index, chunk_set_id in enumerate(chunk_set_ids):
-        representative_kb_id = sorted(plan.chunk_sets[chunk_set_id])[0]
-        recipe_settings, _applied = apply_adapter_config_or_global(
-            global_settings, configs[representative_kb_id], scope="ingestion"
-        )
-        pipeline = IngestionPipeline(oracle=oracle, settings=recipe_settings)
+        # 3 層モデル: レシピは文書単位(global)。
+        pipeline = IngestionPipeline(oracle=oracle, settings=global_settings)
         result = await pipeline.index_chunked(
             document_id,
             chunk_set_id=chunk_set_id,
@@ -1853,18 +1807,12 @@ async def _reconcile_plan_chunk_sets(
                     chunk_set_id=chunk_set_id,
                 )
             if extraction_recipe_id is not None:
-                representative_kb_id = sorted(knowledge_base_ids)[0]
-                configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
-                settings, _applied = apply_adapter_config_or_global(
-                    get_settings(),
-                    configs.get(representative_kb_id, KnowledgeBaseAdapterConfig()),
-                    scope="ingestion",
-                )
+                # 3 層モデル: extraction recipe は global から計算済み。artifact 記録も global で。
                 await _record_document_extraction_artifact(
                     oracle,
                     detail,
                     extraction_recipe_id=extraction_recipe_id,
-                    settings=settings,
+                    settings=get_settings(),
                 )
         await _reconcile_plan_artifact_layers(oracle, document_id, detail, plan)
         await oracle.delete_document_chunk_sets_except(
@@ -1903,8 +1851,7 @@ async def _reconcile_plan_chunk_sets_chunked(
     if detail.status != FileStatus.CHUNKED:
         return
     try:
-        configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
-        for chunk_set_id, knowledge_base_ids in plan.chunk_sets.items():
+        for chunk_set_id in plan.chunk_sets:
             chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
             extraction_recipe_id = plan.extraction_recipe_for_chunk_set(chunk_set_id)
             await oracle.upsert_chunk_set(
@@ -1915,17 +1862,12 @@ async def _reconcile_plan_chunk_sets_chunked(
             )
             await oracle.mark_chunk_set_chunked(chunk_set_id=chunk_set_id, chunk_count=chunk_count)
             if extraction_recipe_id is not None:
-                representative_kb_id = sorted(knowledge_base_ids)[0]
-                settings, _applied = apply_adapter_config_or_global(
-                    get_settings(),
-                    configs.get(representative_kb_id, KnowledgeBaseAdapterConfig()),
-                    scope="ingestion",
-                )
+                # 3 層モデル: extraction recipe は global から計算済み。artifact 記録も global で。
                 await _record_document_extraction_artifact(
                     oracle,
                     detail,
                     extraction_recipe_id=extraction_recipe_id,
-                    settings=settings,
+                    settings=get_settings(),
                 )
         await oracle.delete_document_chunk_sets_except(
             document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
@@ -2123,33 +2065,6 @@ async def _record_document_extraction_artifact(
     )
 
 
-async def _record_reingest_required_extractions(
-    oracle: OracleClient,
-    detail: DocumentDetail,
-    plan: MaterializationPlan,
-) -> None:
-    """review-only では作れない extraction recipe を needs_reingest として残す。"""
-    configs = dict(await oracle.list_document_knowledge_base_configs(detail.id))
-    effective_by_kb = _effective_ingestion_settings_by_kb(get_settings(), configs)
-    reason = (
-        "保存済みプレビューだけでは別の文書解析/前処理結果を安全に作れません。"
-        "現在の構築設定で文書を再取込してください。"
-    )
-    for extraction_recipe_id, knowledge_base_ids in plan.extraction_recipes.items():
-        representative_kb_id = sorted(knowledge_base_ids)[0]
-        settings = effective_by_kb.get(representative_kb_id, get_settings())
-        await oracle.upsert_document_extraction_artifact(
-            document_id=detail.id,
-            extraction_recipe_id=extraction_recipe_id,
-            source_sha256=detail.content_sha256,
-            recipe_subset=_extraction_recipe_subset(settings),
-            extraction=None,
-            status=DocumentLayerStatusName.NEEDS_REINGEST.value,
-            reason=reason,
-            metrics=None,
-        )
-
-
 def _extraction_metrics(extraction: Mapping[str, object] | None) -> dict[str, object]:
     if not extraction:
         return {}
@@ -2177,7 +2092,8 @@ async def _reconcile_document_chunk_sets(
         return
     try:
         chunk_count = await oracle.count_document_chunks(document_id)
-        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        # 3 層モデル: materialization のレシピは常に global。
+        effective_settings = get_settings()
         extraction_recipe_id = _document_extraction_recipe_id(detail, effective_settings)
         await oracle.upsert_chunk_set(
             chunk_set_id=chunk_set_id,
@@ -2231,7 +2147,8 @@ async def _reconcile_document_chunk_sets_chunked(
         return
     try:
         chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
-        effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
+        # 3 層モデル: materialization のレシピは常に global。
+        effective_settings = get_settings()
         extraction_recipe_id = _document_extraction_recipe_id(detail, effective_settings)
         await oracle.upsert_chunk_set(
             chunk_set_id=chunk_set_id,
@@ -2267,9 +2184,11 @@ async def _resolve_ingestion_settings(
     oracle: OracleClient,
     document_id: str,
 ) -> tuple[Settings, KnowledgeBaseDetail | None]:
-    """owning KB の取込上書きを重ねた有効 Settings と owning KB detail を返す。
+    """owning KB の取込上書きを重ねた有効 Settings と owning KB detail を返す(**表示専用**)。
 
-    所属が無い・設定が無い・グローバルと矛盾する場合はグローバル設定へ縮退する。
+    取込設定スナップショット / ドリフト表示 endpoint 用。3 層モデルでは materialization は
+    この関数を使わず常に global 既定で実体化する(レシピ=文書プロパティ)。owning KB の
+    取込表示は Phase 4 で文書単位レシピ表示へ置き換える予定。
     """
     global_settings = get_settings()
     owning = await oracle.get_owning_knowledge_base(document_id)
@@ -3303,10 +3222,9 @@ def _safe_ingestion_job_error_message(error: Exception) -> str:
 
 
 async def _enqueue_auto_advance_job(job: IngestionJob, detail: DocumentDetail) -> None:
-    """KB/グローバル設定に従い、次 stage の job を必要なら投入する。"""
+    """グローバル設定に従い次 stage の job を投入する(3 層モデル: レシピは global)。"""
     try:
-        oracle = OracleClient()
-        settings, _owning = await _resolve_ingestion_settings(oracle, job.document_id)
+        settings = get_settings()
         if (
             job.phase in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
             and detail.status == FileStatus.REVIEW

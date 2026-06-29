@@ -257,17 +257,17 @@ def test_plan_yields_the_single_materialized_chunk_set(monkeypatch: MonkeyPatch)
     assert set(plan.chunk_sets) == set(materialized)
 
 
-def test_multiple_kb_configs_materialize_separate_chunk_sets(monkeypatch: MonkeyPatch) -> None:
-    """取込設定が分岐する 2 KB に属する文書は、2 つの chunk_set を共存 materialize する。
+def test_multiple_kb_configs_share_single_chunk_set(monkeypatch: MonkeyPatch) -> None:
+    """3 層モデル: 取込設定が分岐する 2 KB に属しても、文書は単一 chunk_set を共有する。
 
-    Stage 2: per-recipe ループ。default(chunk_size=800)と別 KB(chunk_size=3500)で別 chunk_set
-    になり、各 KB が自分の chunk_set を refcount=1 で参照する。
+    レシピは文書プロパティ(global)で KB からは解決しない。KB の chunk_size 上書きは無視され、
+    両 KB が同じ 1 つの chunk_set を refcount=2 で参照する(以前は KB ごとに分裂していた)。
     """
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
     _extract_to_review(document_id)
 
-    # 別 chunk_size の 2 つ目の KB を作り、文書を両方に所属させる。
+    # 別 chunk_size の 2 つ目の KB を作り、文書を両方に所属させる(上書きは無視される)。
     kb_resp = client.post(
         "/api/knowledge-bases",
         json={"name": "高chunk-KB", "adapter_config": {"ingestion": {"chunk_size": 3500}}},
@@ -284,24 +284,26 @@ def test_multiple_kb_configs_materialize_separate_chunk_sets(monkeypatch: Monkey
 
     oracle = OracleClient()
     materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
-    # 2 つの取込設定 → 2 chunk_set が共存。
-    assert len(materialized) == 2
+    # KB 別取込上書きは無視 → 単一 chunk_set を 2 KB が共有。
+    assert len(materialized) == 1
     detail = _get_document(document_id)
     configs = dict(asyncio.run(oracle.list_document_knowledge_base_configs(document_id)))
     plan = plan_document_materializations(
         cast(str, detail["content_sha256"]), get_settings(), configs
     )
-    # chunking だけの差分なので extraction は 1 つを共有する。
     assert len(plan.extraction_recipes) == 1
-    # 各 chunk_set はちょうど 1 KB に bind(materialization が KB ごとに分裂)。
-    for chunk_set_id in materialized:
-        assert asyncio.run(oracle.chunk_set_refcount(chunk_set_id)) == 1
+    # 単一 chunk_set を両 KB が参照(refcount=2)。
+    assert asyncio.run(oracle.chunk_set_refcount(materialized[0])) == 2
 
 
-def test_approve_rejects_review_only_extraction_recipe_split(
+def test_approve_succeeds_with_divergent_kb_config(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """REVIEW 後に前処理/Parser が分岐した場合、保存済み抽出の静かな再利用は 409 で止める。"""
+    """3 層モデル: REVIEW 後に KB の前処理/Parser 設定が分岐していても承認は成功する。
+
+    レシピは文書単位の単一 extraction recipe なので、KB 別上書き(preprocess 等)は無視され、
+    保存済みプレビューからそのまま後段 chunk/index できる(以前の 409 再取込ゲートは廃止)。
+    """
     _enable_review_gate(monkeypatch)
     document_id = _upload_sample()
     _extract_to_review(document_id)
@@ -322,9 +324,14 @@ def test_approve_rejects_review_only_extraction_recipe_split(
         == 200
     )
 
-    approve_resp = client.post(f"/api/documents/{document_id}/approve")
-    assert approve_resp.status_code == 409
-    assert "再取込" in approve_resp.json()["error_messages"][0]
+    _approve_all(document_id)
+    assert _get_document(document_id)["status"] == "INDEXED"
+
+    oracle = OracleClient()
+    materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
+    # KB の preprocess 上書きは無視 → 単一 chunk_set を 2 KB が共有。
+    assert len(materialized) == 1
+    assert asyncio.run(oracle.chunk_set_refcount(materialized[0])) == 2
 
 
 def test_reject_returns_document_to_uploaded(monkeypatch: MonkeyPatch) -> None:
@@ -429,18 +436,18 @@ def test_gate_disabled_keeps_single_pass_indexing(monkeypatch: MonkeyPatch) -> N
     assert _get_document(document_id)["status"] == "INDEXED"
 
 
-def test_gate_disabled_multiple_kb_configs_materialize_separate_chunk_sets(
+def test_gate_disabled_multiple_kb_configs_share_single_chunk_set(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """gate-off(ingest 経路)でも、取込設定が分岐する 2 KB は 2 chunk_set を共存 materialize する。
+    """gate-off(ingest 経路)でも、取込設定が分岐する 2 KB は単一 chunk_set を共有する。
 
-    _ingest_existing_document の plan 駆動化(先頭 chunk_set=ingest で抽出保存、残りは
-    index_reviewed で抽出再利用)を検証。INDEX 経路の同名テストと対になる。
+    3 層モデル: レシピは文書単位。_ingest_existing_document は単一レシピで materialize し、
+    所属 KB を同じ 1 つの chunk_set に bind する。INDEX 経路の同名テストと対になる。
     """
     monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
     document_id = _upload_sample()
 
-    # default(chunk_size=800)に加え、別 chunk_size の 2 つ目の KB を作り両方へ所属させる。
+    # 別 chunk_size の 2 つ目の KB を作り両方へ所属させる(上書きは無視される)。
     kb_resp = client.post(
         "/api/knowledge-bases",
         json={"name": "高chunk-KB-ingest", "adapter_config": {"ingestion": {"chunk_size": 3500}}},
@@ -458,17 +465,15 @@ def test_gate_disabled_multiple_kb_configs_materialize_separate_chunk_sets(
 
     oracle = OracleClient()
     materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
-    # 2 つの取込設定 → 2 chunk_set が共存。
-    assert len(materialized) == 2
-    # 各 chunk_set はちょうど 1 KB に bind(materialization が KB ごとに分裂)。
-    for chunk_set_id in materialized:
-        assert asyncio.run(oracle.chunk_set_refcount(chunk_set_id)) == 1
+    # KB 別取込上書きは無視 → 単一 chunk_set を 2 KB が共有(refcount=2)。
+    assert len(materialized) == 1
+    assert asyncio.run(oracle.chunk_set_refcount(materialized[0])) == 2
 
 
-def test_gate_disabled_extraction_recipe_split_reextracts_from_source(
+def test_gate_disabled_divergent_preprocess_collapses_to_single_recipe(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """原文 bytes がある取込経路では、前処理差分ごとに extract+index を実行する。"""
+    """3 層モデル: KB の前処理上書きが分岐していても、単一 extraction recipe・単一 chunk_set。"""
     monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
     document_id = _upload_sample()
 
@@ -495,19 +500,19 @@ def test_gate_disabled_extraction_recipe_split_reextracts_from_source(
 
     oracle = OracleClient()
     materialized = asyncio.run(oracle.list_document_chunk_set_ids(document_id))
-    assert len(materialized) == 2
+    assert len(materialized) == 1
     configs = dict(asyncio.run(oracle.list_document_knowledge_base_configs(document_id)))
     plan = plan_document_materializations(
         cast(str, detail["content_sha256"]), get_settings(), configs
     )
-    assert len(plan.extraction_recipes) == 2
-    assert len(plan.chunk_sets_by_extraction_recipe()) == 2
+    assert len(plan.extraction_recipes) == 1
+    assert len(plan.chunk_sets_by_extraction_recipe()) == 1
 
 
-def test_multi_chunk_set_records_single_success_audit(monkeypatch: MonkeyPatch) -> None:
-    """複数 chunk_set を materialize しても成功 audit は 1 回(1 文書 1 論理取込に集約)。
+def test_indexing_records_single_success_audit(monkeypatch: MonkeyPatch) -> None:
+    """取込は文書につき成功 audit を 1 回だけ記録する(1 文書 1 論理取込に集約)。
 
-    record_outcome=最後のみ により、N chunk_set でも成功 audit/metric が N→1 になることを検証。
+    3 層モデルでは分岐 KB 設定でも単一 chunk_set になり、成功 audit/metric は 1 回に収束する。
     """
     monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
 
@@ -537,34 +542,36 @@ def test_multi_chunk_set_records_single_success_audit(monkeypatch: MonkeyPatch) 
     assert _get_document(document_id)["status"] == "INDEXED"
 
     oracle = OracleClient()
-    # 2 chunk_set が materialize されている。
-    assert len(asyncio.run(oracle.list_document_chunk_set_ids(document_id))) == 2
-    # それでも成功 audit はこの文書につき 1 回だけ(複数化前は chunk_set 数だけ出ていた)。
+    # KB 別取込上書きは無視 → 単一 chunk_set。
+    assert len(asyncio.run(oracle.list_document_chunk_set_ids(document_id))) == 1
+    # 成功 audit はこの文書につき 1 回だけ。
     assert success_audit_docs.count(document_id) == 1
 
 
-def test_document_chunk_sets_endpoint_lists_variants(monkeypatch: MonkeyPatch) -> None:
-    """/chunk-sets が文書の複数 chunk_set(variant)を状態/件数/配信 KB つきで返す。"""
-    monkeypatch.setattr(get_settings(), "rag_review_gate_enabled", False)
+def test_document_chunk_sets_endpoint_lists_single_variant_with_layers(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """/chunk-sets が文書の単一 chunk_set を状態/件数/配信 KB/レイヤー状態つきで返す。
+
+    3 層モデル: レシピもレイヤー方針も global から来る(KB 別上書きは無視)。レイヤー軸
+    (graph / field / navigation)は global で有効化して検証する。
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_review_gate_enabled", False)
+    # レイヤー軸は KB 上書きではなく global で有効化する(3 層モデル)。
+    monkeypatch.setattr(settings, "rag_graph_profile", "entities")
+    monkeypatch.setattr(settings, "rag_field_extraction_enabled", True)
+    monkeypatch.setattr(settings, "rag_navigation_summary_enabled", True)
     document_id = _upload_sample(
         "# 第1章 概要\n\n"
         "社内規程の概要を説明します。\n\n"
         "## 1.1 経費申請\n\n"
         "部門長の承認後、経理部が確認します。\n"
     )
+    # 2 つ目の KB(設定上書きは無視される)に所属させても variant は単一。
     kb_resp = client.post(
         "/api/knowledge-bases",
-        json={
-            "name": "高chunk-KB-csapi",
-            "adapter_config": {
-                "ingestion": {
-                    "chunk_size": 3500,
-                    "graph_profile": "entities",
-                    "field_extraction_enabled": True,
-                    "navigation_summary_enabled": True,
-                }
-            },
-        },
+        json={"name": "高chunk-KB-csapi", "adapter_config": {"ingestion": {"chunk_size": 3500}}},
     )
     assert kb_resp.status_code == 200
     kb_b = kb_resp.json()["data"]["id"]
@@ -582,8 +589,8 @@ def test_document_chunk_sets_endpoint_lists_variants(monkeypatch: MonkeyPatch) -
     resp = client.get(f"/api/documents/{document_id}/chunk-sets")
     assert resp.status_code == 200
     chunk_sets = cast(list[dict[str, Any]], resp.json()["data"])
-    # default + 高chunk = 2 variant。
-    assert len(chunk_sets) == 2
+    # KB 別取込上書きは無視 → 単一 variant。
+    assert len(chunk_sets) == 1
     for chunk_set in chunk_sets:
         assert chunk_set["status"] == "INDEXED"
         assert chunk_set["extraction_recipe_id"].startswith("er_")
