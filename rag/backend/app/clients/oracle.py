@@ -55,6 +55,7 @@ from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
     DocumentPreprocessArtifact,
+    DocumentProcessingConfig,
     DocumentStats,
     DocumentSummary,
     FileStatus,
@@ -975,6 +976,7 @@ class OracleClient:
                 WHEN MATCHED THEN UPDATE SET
                     t.extraction_recipe_id =
                         COALESCE(:extraction_recipe_id, t.extraction_recipe_id),
+                    t.recipe_subset = COALESCE(:recipe_subset, t.recipe_subset),
                     t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
                     (chunk_set_id, document_id, extraction_recipe_id, tenant_id_hash,
@@ -1082,7 +1084,7 @@ class OracleClient:
         """chunk_set の状態(status/件数/親 extraction_id/is_serving)を返す。キーは小文字化。"""
         row = await self._fetch_one(
             """
-            SELECT chunk_set_id, document_id, extraction_recipe_id,
+            SELECT chunk_set_id, document_id, extraction_recipe_id, recipe_subset,
                    status, chunk_count, vector_count, is_serving
             FROM rag_chunk_sets WHERE chunk_set_id = :chunk_set_id
             """,
@@ -1090,7 +1092,9 @@ class OracleClient:
         )
         if row is None:
             return None
-        return {str(key).lower(): value for key, value in row.items()}
+        normalized = {str(key).lower(): value for key, value in row.items()}
+        normalized["recipe_subset"] = _json_loads(normalized.get("recipe_subset"))
+        return normalized
 
     async def upsert_document_extraction_artifact(
         self,
@@ -2035,6 +2039,61 @@ class OracleClient:
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         """ドキュメント詳細を返す。"""
         return await self._get_document_with_oracle(document_id)
+
+    async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
+        """文書単位の処理レシピ上書きを返す。未設定は全項目継承。"""
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT processing_config
+                FROM rag_documents
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                access_predicate=_oracle_access_predicate_sql(),
+            ),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        if row is None:
+            raise KeyError(f"document_id={document_id} は存在しません。")
+        try:
+            return DocumentProcessingConfig.model_validate(
+                _json_loads(row.get("processing_config"))
+            )
+        except Exception:  # noqa: BLE001 - 壊れた永続値は global 継承へ安全に縮退する
+            logger.warning(
+                "文書処理設定の復元に失敗したため global 継承へ縮退します。",
+                exc_info=True,
+            )
+            return DocumentProcessingConfig()
+
+    async def update_document_processing_config(
+        self,
+        document_id: str,
+        config: DocumentProcessingConfig,
+    ) -> DocumentProcessingConfig:
+        """文書単位の処理レシピ上書きを保存する。"""
+        payload = config.model_dump(mode="json", exclude_none=True)
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentProcessingConfig:
+            if _select_document(connection, document_id) is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            _execute(
+                connection,
+                """
+                UPDATE rag_documents
+                SET processing_config = :processing_config
+                WHERE document_id = :document_id
+                """,
+                {
+                    "document_id": document_id,
+                    "processing_config": _json_bind(payload),
+                },
+                input_sizes=_json_input_sizes("processing_config"),
+            )
+            return config
+
+        return await self._run_transaction(operation)
 
     async def delete_document(self, document_id: str) -> bool:
         """ドキュメントと関連 chunk/index/ingestion 行を削除する。"""
@@ -9139,6 +9198,7 @@ CREATE TABLE {table_name} (
     category_name            VARCHAR2(256),
     object_storage_path      VARCHAR2(1024),
     preprocess_artifact      JSON,
+    processing_config        JSON,
     content_type             VARCHAR2(255),
     file_size_bytes          NUMBER(19),
     content_sha256           CHAR(64),

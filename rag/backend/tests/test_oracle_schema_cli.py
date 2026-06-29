@@ -218,7 +218,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "DROP TABLE rag_kb_chunk_set_bindings" in sql
     assert "-- migration: 20260629_003_ingestion_jobs_settings_overrides" in sql
     assert "ALTER TABLE rag_ingestion_jobs ADD (settings_overrides JSON)" in sql
-    assert len(statements) == 26
+    assert "-- migration: 20260629_004_documents_processing_config" in sql
+    assert "ALTER TABLE rag_documents ADD (processing_config JSON)" in sql
+    assert len(statements) == 27
     assert all(statement.startswith(("-- migration:", "DECLARE")) for statement in statements)
 
 
@@ -231,7 +233,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260629_003"
+    assert manifest["migration_artifact_version"] == "20260629_004"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -257,6 +259,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260629_001_chunk_sets_serving",
         "20260629_002_drop_kb_chunk_set_bindings",
         "20260629_003_ingestion_jobs_settings_overrides",
+        "20260629_004_documents_processing_config",
     ]
 
 

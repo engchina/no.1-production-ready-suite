@@ -13,7 +13,12 @@ import pytest
 from app.api.routes import documents as documents_route
 from app.config import get_settings
 from app.main import app
-from app.schemas.document import DocumentChunkView, DocumentDetail, FileStatus
+from app.schemas.document import (
+    DocumentChunkView,
+    DocumentDetail,
+    DocumentProcessingConfig,
+    FileStatus,
+)
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -25,6 +30,9 @@ class FakeIngestionConfigOracle:
     def __init__(self) -> None:
         self.documents: dict[str, DocumentDetail] = {}
         self.chunks: dict[str, list[DocumentChunkView]] = {}
+        self.processing_configs: dict[str, DocumentProcessingConfig] = {}
+        self.active_job_statuses: set[str] = set()
+        self.serving_recipe_snapshot: dict[str, object] | None = None
 
     def add_document(
         self,
@@ -60,6 +68,31 @@ class FakeIngestionConfigOracle:
 
     async def list_document_chunks(self, document_id: str) -> list[DocumentChunkView]:
         return list(self.chunks.get(document_id, []))
+
+    async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
+        return self.processing_configs.get(document_id, DocumentProcessingConfig())
+
+    async def update_document_processing_config(
+        self, document_id: str, config: DocumentProcessingConfig
+    ) -> DocumentProcessingConfig:
+        self.processing_configs[document_id] = config
+        return config
+
+    async def get_document_serving_chunk_set_id(self, document_id: str) -> str | None:
+        _ = document_id
+        return "cs-serving" if self.serving_recipe_snapshot is not None else None
+
+    async def get_chunk_set(self, chunk_set_id: str) -> dict[str, object] | None:
+        if chunk_set_id != "cs-serving" or self.serving_recipe_snapshot is None:
+            return None
+        return {"chunk_set_id": chunk_set_id, "recipe_subset": self.serving_recipe_snapshot}
+
+    async def list_document_ingestion_jobs(
+        self, document_id: str, **kwargs: object
+    ) -> list[object]:
+        _ = document_id
+        status = kwargs.get("status")
+        return [object()] if getattr(status, "value", status) in self.active_job_statuses else []
 
 
 @pytest.fixture
@@ -211,3 +244,97 @@ def test_ingestion_config_returns_404_for_missing_document(
 ) -> None:
     resp = client.get("/api/documents/missing/ingestion-config")
     assert resp.status_code == 404
+
+
+def test_ingestion_config_update_persists_document_override(
+    fake_oracle: FakeIngestionConfigOracle,
+) -> None:
+    fake_oracle.add_document("doc-1", status=FileStatus.UPLOADED)
+
+    resp = client.put(
+        "/api/documents/doc-1/ingestion-config",
+        json={"parser_adapter_backend": "mineru", "chunking_strategy": "page_level"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["processing_config"]["parser_adapter_backend"] == "mineru"
+    assert data["effective_processing_config"]["chunking_strategy"] == "page_level"
+    assert data["effective_processing_config"]["parser_mineru_enabled"] is True
+    assert data["effective_parser_adapter_backend"] == "mineru"
+
+
+def test_ingestion_config_update_empty_restores_global_inheritance(
+    fake_oracle: FakeIngestionConfigOracle,
+) -> None:
+    fake_oracle.add_document("doc-1", status=FileStatus.UPLOADED)
+    fake_oracle.processing_configs["doc-1"] = DocumentProcessingConfig(
+        parser_adapter_backend="mineru"
+    )
+
+    resp = client.put("/api/documents/doc-1/ingestion-config", json={})
+
+    assert resp.status_code == 200
+    assert all(value is None for value in resp.json()["data"]["processing_config"].values())
+
+
+def test_ingestion_config_update_rejects_intermediate_status(
+    fake_oracle: FakeIngestionConfigOracle,
+) -> None:
+    fake_oracle.add_document("doc-1", status=FileStatus.REVIEW)
+
+    resp = client.put(
+        "/api/documents/doc-1/ingestion-config",
+        json={"chunking_strategy": "page_level"},
+    )
+
+    assert resp.status_code == 409
+
+
+def test_ingestion_config_update_rejects_invalid_chunk_parameters(
+    fake_oracle: FakeIngestionConfigOracle,
+) -> None:
+    fake_oracle.add_document("doc-1", status=FileStatus.UPLOADED)
+
+    resp = client.put(
+        "/api/documents/doc-1/ingestion-config",
+        json={"chunk_size": 300, "chunk_overlap": 300},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_ingestion_config_update_rejects_active_job(
+    fake_oracle: FakeIngestionConfigOracle,
+) -> None:
+    fake_oracle.add_document("doc-1", status=FileStatus.UPLOADED)
+    fake_oracle.active_job_statuses.add("QUEUED")
+
+    resp = client.put(
+        "/api/documents/doc-1/ingestion-config",
+        json={"chunking_strategy": "page_level"},
+    )
+
+    assert resp.status_code == 409
+
+
+def test_ingestion_config_detects_derived_setting_drift_from_serving_snapshot(
+    fake_oracle: FakeIngestionConfigOracle,
+) -> None:
+    fake_oracle.add_document(
+        "doc-1",
+        status=FileStatus.INDEXED,
+        chunk_strategy="structure_aware",
+        source_parser="local",
+    )
+    _, observed = documents_route._merge_document_processing_config(DocumentProcessingConfig())
+    fake_oracle.serving_recipe_snapshot = {
+        "processing_config": {},
+        "effective_processing_config": observed.model_dump(mode="json"),
+    }
+    fake_oracle.processing_configs["doc-1"] = DocumentProcessingConfig(graph_profile="entities")
+
+    data = client.get("/api/documents/doc-1/ingestion-config").json()["data"]
+
+    assert data["drift_fields"] == ["graph_profile"]
+    assert data["config_drift"] is True

@@ -11,12 +11,12 @@ from app.api.routes import documents as documents_route
 from app.clients.object_storage import ObjectStorageClient
 from app.config import Settings
 from app.main import app
-from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
     DocumentExtractionExportFormat,
     DocumentPreprocessArtifact,
+    DocumentProcessingConfig,
     DocumentSummary,
     FileStatus,
     IngestionJob,
@@ -25,7 +25,7 @@ from app.schemas.document import (
     IngestionSegment,
 )
 from app.schemas.extraction import ExtractionTable, ExtractionTableCell
-from app.schemas.knowledge_base import KnowledgeBaseDetail, KnowledgeBaseRef, KnowledgeBaseStatus
+from app.schemas.knowledge_base import KnowledgeBaseRef
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -86,6 +86,7 @@ class FakeWorkspaceOracle:
         self.ingestion_jobs: dict[str, IngestionJob] = {}
         self.ingestion_segments: dict[str, list[IngestionSegment]] = {}
         self.knowledge_base_assignments: set[tuple[str, str]] = set()
+        self.processing_configs: dict[str, DocumentProcessingConfig] = {}
 
     async def find_document_by_content_hash(self, content_sha256: str) -> DocumentSummary | None:
         for detail in self.documents.values():
@@ -213,6 +214,19 @@ class FakeWorkspaceOracle:
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.documents.get(document_id)
+
+    async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
+        return self.processing_configs.get(document_id, DocumentProcessingConfig())
+
+    async def update_document_processing_config(
+        self, document_id: str, config: DocumentProcessingConfig
+    ) -> DocumentProcessingConfig:
+        self.processing_configs[document_id] = config
+        return config
+
+    async def get_document_serving_chunk_set_id(self, document_id: str) -> None:
+        _ = document_id
+        return None
 
     async def list_document_knowledge_base_configs(
         self, document_id: str
@@ -456,9 +470,12 @@ class FakeWorkspaceOracle:
 class FakeWorkspaceIngestionPipeline:
     """取込 API テストで外部 AI/embedding を呼ばずに抽出結果を保存する fake。"""
 
-    def __init__(self, *, oracle: FakeWorkspaceOracle, settings: object | None = None) -> None:
+    last_settings: Settings | None = None
+
+    def __init__(self, *, oracle: FakeWorkspaceOracle, settings: Settings | None = None) -> None:
         self._oracle = oracle
         self._settings = settings
+        FakeWorkspaceIngestionPipeline.last_settings = settings
 
     async def ingest(
         self,
@@ -511,6 +528,7 @@ def fake_document_dependencies(monkeypatch: pytest.MonkeyPatch) -> FakeWorkspace
     fake_oracle = FakeWorkspaceOracle()
     monkeypatch.setattr(documents_route, "OracleClient", lambda: fake_oracle)
     monkeypatch.setattr(documents_route, "IngestionPipeline", FakeWorkspaceIngestionPipeline)
+    FakeWorkspaceIngestionPipeline.last_settings = None
     return fake_oracle
 
 
@@ -659,6 +677,24 @@ def test_document_upload_keeps_ingestion_manual_until_explicit_enqueue() -> None
     assert job_detail.status_code == 200
     assert job_detail.json()["data"]["status"] == "SUCCEEDED"
     assert job_detail.json()["data"]["attempt_count"] == 1
+
+
+def test_document_processing_config_is_used_by_ingestion_pipeline() -> None:
+    """文書上書きは KB を介さず実取込 pipeline の Settings へ渡る。"""
+    document_id = _upload("custom-recipe.txt", b"recipe", "text/plain")
+    update = client.put(
+        f"/api/documents/{document_id}/ingestion-config",
+        json={"parser_adapter_backend": "mineru", "chunking_strategy": "page_level"},
+    )
+    assert update.status_code == 200
+    job = client.post(f"/api/documents/{document_id}/ingestion-jobs").json()["data"]
+
+    anyio.run(documents_route._run_ingestion_job, job["id"])
+
+    settings = FakeWorkspaceIngestionPipeline.last_settings
+    assert settings is not None
+    assert settings.rag_parser_adapter_backend == "mineru"
+    assert settings.rag_chunking_strategy == "page_level"
 
 
 def test_document_upload_rejects_deprecated_immediate_ingestion_mode() -> None:
@@ -2262,29 +2298,13 @@ def test_ingestion_segments_fallback_uses_planned_parser_for_running_extract_job
     assert segments[0]["parser_profile"] == "mineru"
 
 
-def test_ingestion_segments_fallback_uses_owning_kb_parser_before_ingest(
+def test_ingestion_segments_fallback_uses_document_parser_before_ingest(
     fake_document_dependencies: FakeWorkspaceOracle,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """未取込表示は upload 時 profile ではなく owning KB の現行 parser 設定を使う。"""
+    """未取込表示は upload 時 profile ではなく文書の現行 parser 設定を使う。"""
     document_id = _upload("scan-before-ingest.pdf", b"%PDF-1.7\nsample", "application/pdf")
-
-    async def get_owning_knowledge_base(_document_id: str) -> KnowledgeBaseDetail:
-        return KnowledgeBaseDetail(
-            id="kb-mineru",
-            name="MinerU KB",
-            status=KnowledgeBaseStatus.ACTIVE,
-            adapter_config=KnowledgeBaseAdapterConfig.model_validate(
-                {"ingestion": {"parser_adapter_backend": "mineru"}}
-            ),
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        )
-
-    monkeypatch.setattr(
-        fake_document_dependencies,
-        "get_owning_knowledge_base",
-        get_owning_knowledge_base,
+    fake_document_dependencies.processing_configs[document_id] = DocumentProcessingConfig(
+        parser_adapter_backend="mineru"
     )
 
     resp = client.get(f"/api/documents/{document_id}/ingestion-segments")

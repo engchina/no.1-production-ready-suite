@@ -39,8 +39,10 @@ from app.rag.ingestion import (
 )
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
 from app.rag.kb_adapter_config import (
+    KbAdapterConfigError,
     KnowledgeBaseAdapterConfig,
-    apply_adapter_config_or_global,
+    resolve_effective_adapter_config,
+    resolve_effective_settings,
 )
 from app.rag.navigation import build_navigation_tree
 from app.rag.rate_limit import enforce_rate_limit
@@ -66,6 +68,7 @@ from app.schemas.document import (
     DocumentIngestionConfigData,
     DocumentLayerStatusName,
     DocumentMaterializationLayerStatus,
+    DocumentProcessingConfig,
     DocumentStats,
     DocumentSummary,
     DocumentTableCellTextEdit,
@@ -90,7 +93,6 @@ from app.schemas.extraction import (
 )
 from app.schemas.knowledge_base import (
     DocumentKnowledgeBaseReplaceRequest,
-    KnowledgeBaseDetail,
     KnowledgeBaseRef,
 )
 from app.schemas.search import normalize_search_id_list
@@ -102,6 +104,34 @@ SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロー
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
 CHUNK_SET_PUBLISH_ERROR_MESSAGE = "索引の公開設定に失敗しました。時間をおいて再実行してください。"
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
+DOCUMENT_PROCESSING_EDITABLE_STATUSES = frozenset(
+    {FileStatus.UPLOADED, FileStatus.INDEXED, FileStatus.ERROR}
+)
+DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
+    "preprocess_profile": ("preprocess_profile",),
+    "parser_adapter_backend": (
+        "parser_adapter_backend",
+        "parser_docling_enabled",
+        "parser_marker_enabled",
+        "parser_unstructured_enabled",
+        "parser_unlimited_ocr_enabled",
+        "parser_mineru_enabled",
+        "parser_dots_ocr_enabled",
+        "parser_glm_ocr_enabled",
+    ),
+    "chunking_strategy": (
+        "chunking_strategy",
+        "chunk_size",
+        "chunk_overlap",
+        "chunk_child_size",
+        "chunk_sentence_window_size",
+        "chunk_min_chars",
+    ),
+    "graph_profile": ("graph_profile",),
+    "field_extraction_enabled": ("field_extraction_enabled",),
+    "asset_summary_enabled": ("asset_summary_enabled",),
+    "navigation_summary_enabled": ("navigation_summary_enabled",),
+}
 
 
 class UploadIngestionMode(StrEnum):
@@ -553,7 +583,8 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     rows = await oracle.list_document_chunk_sets(document_id)
     plan, configs = await _materialization_plan_for_document(oracle, detail)
-    effective_by_kb = _effective_ingestion_settings_by_kb(get_settings(), configs)
+    effective_settings, _config = await _resolve_ingestion_settings(oracle, document_id)
+    effective_by_kb = _effective_ingestion_settings_by_kb(effective_settings, configs)
     persisted_layers = await oracle.list_artifact_layers_for_chunk_sets(
         [str(row.get("chunk_set_id")) for row in rows if row.get("chunk_set_id") is not None]
     )
@@ -643,7 +674,12 @@ async def create_chunk_set_experiment(
     serving_chunk_set_id = await oracle.get_document_serving_chunk_set_id(document_id)
     if serving_chunk_set_id is None:
         raise HTTPException(status_code=409, detail="配信中の chunk_set がありません。")
-    candidate_settings = _candidate_experiment_settings(get_settings(), request)
+    base_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
+    candidate_settings = _candidate_experiment_settings(base_settings, request)
+    candidate_config = processing_config.model_copy(
+        update={field: value for field, value in request.model_dump().items() if value is not None}
+    )
+    _, effective_candidate_config = _merge_document_processing_config(candidate_config)
     candidate_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
     if candidate_chunk_set_id == serving_chunk_set_id:
         raise HTTPException(
@@ -663,6 +699,7 @@ async def create_chunk_set_experiment(
         chunk_set_id=candidate_chunk_set_id,
         document_id=document_id,
         extraction_recipe_id=extraction_recipe_id,
+        recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
     )
     await oracle.mark_chunk_set_indexed(
         chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
@@ -698,6 +735,14 @@ async def promote_chunk_set_experiment(
         raise HTTPException(
             status_code=409, detail="索引済み(INDEXED)の chunk_set のみ昇格できます。"
         )
+    recipe_subset = chunk_set.get("recipe_subset")
+    if isinstance(recipe_subset, Mapping) and isinstance(
+        recipe_subset.get("processing_config"), Mapping
+    ):
+        await oracle.update_document_processing_config(
+            document_id,
+            DocumentProcessingConfig.model_validate(recipe_subset["processing_config"]),
+        )
     await oracle.set_document_serving_chunk_set(document_id=document_id, chunk_set_id=chunk_set_id)
     await oracle.delete_document_chunk_sets_except(
         document_id=document_id, keep_chunk_set_ids=[chunk_set_id]
@@ -730,12 +775,17 @@ async def create_parser_extraction_experiment(
     if await oracle.get_document_serving_chunk_set_id(document_id) is None:
         raise HTTPException(status_code=409, detail="配信中の chunk_set がありません。")
     overrides = request.settings_overrides()
-    global_settings = get_settings()
-    candidate_settings = global_settings.model_copy(update=overrides)
+    base_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
+    candidate_config = processing_config.model_copy(
+        update={field: value for field, value in request.model_dump().items() if value is not None}
+    )
+    candidate_settings, _effective_candidate_config = _merge_document_processing_config(
+        candidate_config
+    )
     # parser/前処理が現状と同じなら再抽出は不要(分割だけ変えるなら chunk-set-experiments を使う)。
     if compute_extraction_recipe_id(
         detail.content_sha256, candidate_settings
-    ) == compute_extraction_recipe_id(detail.content_sha256, global_settings):
+    ) == compute_extraction_recipe_id(detail.content_sha256, base_settings):
         raise HTTPException(
             status_code=409,
             detail="現在配信中の前処理/解析と同じ設定です。分割だけ変える場合は別レシピ実験を使ってください。",
@@ -746,7 +796,10 @@ async def create_parser_extraction_experiment(
         parser_profile=_source_profile_for_detail(detail).parser_profile,
         quality_warnings=[],
         phase=IngestionJobPhase.EXTRACT,
-        settings_overrides=overrides,
+        settings_overrides={
+            **overrides,
+            "processing_config": candidate_config.model_dump(mode="json", exclude_none=True),
+        },
     )
     _dispatch_ingestion_job(job.id)
     return ApiResponse(data=job)
@@ -774,9 +827,19 @@ async def _materialize_experiment_candidate(
     serving_chunk_set_id = await oracle.get_document_serving_chunk_set_id(job.document_id)
     if serving_chunk_set_id is None:
         raise IngestionUserError("配信中の chunk_set がありません。")
-    candidate_settings = _experiment_candidate_settings(
-        get_settings(), job.settings_overrides or {}
-    )
+    base_settings, current_config = await _resolve_ingestion_settings(oracle, job.document_id)
+    raw_config = (job.settings_overrides or {}).get("processing_config")
+    if isinstance(raw_config, Mapping):
+        candidate_config = DocumentProcessingConfig.model_validate(raw_config)
+        candidate_settings, effective_candidate_config = _merge_document_processing_config(
+            candidate_config
+        )
+    else:
+        candidate_config = current_config
+        candidate_settings = _experiment_candidate_settings(
+            base_settings, job.settings_overrides or {}
+        )
+        _, effective_candidate_config = _merge_document_processing_config(candidate_config)
     candidate_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
     if candidate_chunk_set_id == serving_chunk_set_id:
         raise IngestionUserError("現在配信中のレシピと同じ設定です。")
@@ -800,6 +863,7 @@ async def _materialize_experiment_candidate(
         chunk_set_id=candidate_chunk_set_id,
         document_id=job.document_id,
         extraction_recipe_id=extraction_recipe_id,
+        recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
     )
     await oracle.mark_chunk_set_indexed(
         chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
@@ -816,24 +880,26 @@ async def _materialization_plan_for_document(
     *,
     global_settings: Settings | None = None,
 ) -> tuple[MaterializationPlan | None, dict[str, KnowledgeBaseAdapterConfig]]:
-    """文書の所属 KB 構築設定から materialization plan を復元する。"""
+    """文書の有効レシピと所属 KB scope から materialization plan を復元する。"""
     configs = dict(await oracle.list_document_knowledge_base_configs(detail.id))
     if not detail.content_sha256 or not configs:
         return None, configs
-    settings = global_settings or get_settings()
+    settings = global_settings
+    if settings is None:
+        settings, _config = await _resolve_ingestion_settings(oracle, detail.id)
     return plan_document_materializations(detail.content_sha256, settings, configs), configs
 
 
 def _effective_ingestion_settings_by_kb(
-    global_settings: Settings,
+    document_settings: Settings,
     configs: Mapping[str, KnowledgeBaseAdapterConfig],
 ) -> dict[str, Settings]:
-    """KB ごとの有効な構築設定を返す(3 層モデル: レシピは文書/global で KB 共通)。
+    """KB ごとの有効な構築設定を返す(3 層モデル: レシピは文書で KB 共通)。
 
-    レイヤー状態表示を単一レシピ(global)に揃え、materialization と一致させる。
+    レイヤー状態表示を文書の単一レシピに揃え、materialization と一致させる。
     KB 別取込上書きは使わない。
     """
-    return {knowledge_base_id: global_settings for knowledge_base_id in configs}
+    return {knowledge_base_id: document_settings for knowledge_base_id in configs}
 
 
 def _layer_statuses_for_chunk_set(
@@ -982,27 +1048,62 @@ def _parser_backend_drifted(observed_parser: str, effective_backend: str) -> boo
     return observed not in aliases.get(effective, {effective})
 
 
-@router.get(
-    "/{document_id}/ingestion-config",
-    response_model=ApiResponse[DocumentIngestionConfigData],
-)
-async def get_document_ingestion_config(
-    document_id: str,
-) -> ApiResponse[DocumentIngestionConfigData]:
-    """owning KB の現行取込設定と、取込済みチャンクのドリフト状況を返す。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+def _merge_document_processing_config(
+    config: DocumentProcessingConfig,
+    global_settings: Settings | None = None,
+) -> tuple[Settings, DocumentProcessingConfig]:
+    """global 既定へ文書の明示上書きだけを重ねる。KB 設定は参照しない。"""
+    base = global_settings or get_settings()
+    adapter = KnowledgeBaseAdapterConfig(ingestion=config)
+    effective_settings = resolve_effective_settings(base, adapter, scope="ingestion")
+    # 外部 parser 選択時に自動注入される feature flag も含め、実際の Settings を
+    # スナップショットへ投影する。これにより runtime と drift 判定が同じ値を見る。
+    effective = resolve_effective_adapter_config(
+        effective_settings, KnowledgeBaseAdapterConfig()
+    ).ingestion
+    return effective_settings, DocumentProcessingConfig.model_validate(effective.model_dump())
 
-    # 3 層モデル: 配信レシピは global(「検索・回答設定」の既定)。owning KB overlay は使わない。
-    effective_settings = get_settings()
+
+def _processing_recipe_snapshot(
+    config: DocumentProcessingConfig,
+    effective: DocumentProcessingConfig,
+) -> dict[str, object]:
+    """chunk_set に刻む文書レシピ。昇格時に継承/上書き状態も復元できる。"""
+    return {
+        "processing_config": config.model_dump(mode="json", exclude_none=True),
+        "effective_processing_config": effective.model_dump(mode="json"),
+    }
+
+
+def _processing_snapshot_config(
+    row: Mapping[str, object] | None,
+) -> DocumentProcessingConfig | None:
+    if not row:
+        return None
+    raw = row.get("recipe_subset")
+    if not isinstance(raw, Mapping):
+        return None
+    effective = raw.get("effective_processing_config")
+    if not isinstance(effective, Mapping):
+        return None
+    try:
+        return DocumentProcessingConfig.model_validate(dict(effective))
+    except Exception:  # noqa: BLE001 - 旧/破損 snapshot は既存観測値へ縮退する
+        return None
+
+
+async def _document_ingestion_config_data(
+    oracle: OracleClient,
+    detail: DocumentDetail,
+) -> DocumentIngestionConfigData:
+    effective_settings, processing_config = await _resolve_ingestion_settings(oracle, detail.id)
+    _, effective_config = _merge_document_processing_config(processing_config)
     is_indexed = detail.status == FileStatus.INDEXED
 
     observed_strategy: str | None = None
     observed_parser: str | None = None
     if is_indexed:
-        chunks = await oracle.list_document_chunks(document_id)
+        chunks = await oracle.list_document_chunks(detail.id)
         if chunks:
             first = chunks[0]
             strategy_value = first.metadata.get("chunk_strategy")
@@ -1013,37 +1114,93 @@ async def get_document_ingestion_config(
                 else None
             )
 
-    # ドリフト判定は取込済みで観測値があるときのみ。文書解析 / 文書分割はいずれも
-    # 取込時にしか効かないため、差分があれば現在設定での再取込対象になる。
-    chunking_drift = bool(
-        is_indexed
-        and observed_strategy is not None
-        and observed_strategy != effective_settings.rag_chunking_strategy
-    )
-    parser_drift = bool(
-        is_indexed
-        and observed_parser is not None
-        and _parser_backend_drifted(
-            observed_parser,
-            effective_settings.rag_parser_adapter_backend,
-        )
-    )
-    config_drift = chunking_drift or parser_drift
+    drift_fields: list[str] = []
+    serving_id = await oracle.get_document_serving_chunk_set_id(detail.id) if is_indexed else None
+    serving = await oracle.get_chunk_set(serving_id) if serving_id is not None else None
+    observed_config = _processing_snapshot_config(serving)
+    if observed_config is not None:
+        observed_values = observed_config.model_dump(mode="json")
+        effective_values = effective_config.model_dump(mode="json")
+        drift_fields = [
+            group
+            for group, fields in DOCUMENT_PROCESSING_OUTPUT_GROUPS.items()
+            if any(observed_values.get(field) != effective_values.get(field) for field in fields)
+        ]
+    elif is_indexed:
+        if (
+            detail.preprocess_artifact is not None
+            and detail.preprocess_artifact.profile != effective_settings.rag_preprocess_profile
+        ):
+            drift_fields.append("preprocess_profile")
+        if observed_parser and _parser_backend_drifted(
+            observed_parser, effective_settings.rag_parser_adapter_backend
+        ):
+            drift_fields.append("parser_adapter_backend")
+        if observed_strategy and observed_strategy != effective_settings.rag_chunking_strategy:
+            drift_fields.append("chunking_strategy")
 
-    return ApiResponse(
-        data=DocumentIngestionConfigData(
-            document_id=document_id,
-            is_indexed=is_indexed,
-            effective_preprocess_profile=effective_settings.rag_preprocess_profile,
-            effective_chunking_strategy=effective_settings.rag_chunking_strategy,
-            effective_parser_adapter_backend=effective_settings.rag_parser_adapter_backend,
-            observed_chunking_strategy=observed_strategy,
-            observed_parser_backend=observed_parser,
-            chunking_drift=chunking_drift,
-            parser_drift=parser_drift,
-            config_drift=config_drift,
-        )
+    return DocumentIngestionConfigData(
+        document_id=detail.id,
+        is_indexed=is_indexed,
+        processing_config=processing_config,
+        effective_processing_config=effective_config,
+        effective_preprocess_profile=effective_settings.rag_preprocess_profile,
+        effective_chunking_strategy=effective_settings.rag_chunking_strategy,
+        effective_parser_adapter_backend=effective_settings.rag_parser_adapter_backend,
+        observed_chunking_strategy=observed_strategy,
+        observed_parser_backend=observed_parser,
+        chunking_drift="chunking_strategy" in drift_fields,
+        parser_drift="parser_adapter_backend" in drift_fields,
+        config_drift=bool(drift_fields),
+        drift_fields=drift_fields,
     )
+
+
+@router.get(
+    "/{document_id}/ingestion-config",
+    response_model=ApiResponse[DocumentIngestionConfigData],
+)
+async def get_document_ingestion_config(
+    document_id: str,
+) -> ApiResponse[DocumentIngestionConfigData]:
+    """文書の処理レシピ上書き・有効値・配信中レシピとの差分を返す。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    return ApiResponse(data=await _document_ingestion_config_data(oracle, detail))
+
+
+@router.put(
+    "/{document_id}/ingestion-config",
+    response_model=ApiResponse[DocumentIngestionConfigData],
+)
+async def update_document_ingestion_config(
+    document_id: str,
+    request: DocumentProcessingConfig,
+) -> ApiResponse[DocumentIngestionConfigData]:
+    """文書単位の処理レシピ上書きを保存する。既存成果物は変更しない。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status not in DOCUMENT_PROCESSING_EDITABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="処理途中のドキュメントは設定を変更できません。処理を完了するか最初から再処理してください。",
+        )
+    for status in (IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING):
+        if await oracle.list_document_ingestion_jobs(document_id, status=status):
+            raise HTTPException(
+                status_code=409,
+                detail="取込ジョブの実行中は設定を変更できません。完了後に再試行してください。",
+            )
+    try:
+        _merge_document_processing_config(request)
+    except KbAdapterConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await oracle.update_document_processing_config(document_id, request)
+    return ApiResponse(data=await _document_ingestion_config_data(oracle, detail))
 
 
 @router.get(
@@ -1602,16 +1759,14 @@ async def _ingest_existing_document(
         data, source_profile = await _load_source_bytes(oracle, document_id, detail)
         ingest_content_type = detail.content_type or "application/octet-stream"
         prepared_artifact = None
-    global_settings = get_settings()
+    effective_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
     plan, _configs = await _materialization_plan_for_document(
         oracle,
         detail,
-        global_settings=global_settings,
+        global_settings=effective_settings,
     )
     ingest_prompt = "ドキュメントを日本語で OCR し、本文テキストを抽出してください。"
     if plan is None or not plan.chunk_sets:
-        # 3 層モデル: materialization のレシピは常に global(KB からは解決しない)。
-        effective_settings = get_settings()
         chunk_set_id = _document_chunk_set_id(detail, effective_settings)
         pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
         result = await pipeline.ingest(
@@ -1625,7 +1780,14 @@ async def _ingest_existing_document(
             prepared_artifact=prepared_artifact,
             cancel_checker=cancel_checker,
         )
-        await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+        await _reconcile_document_chunk_sets(
+            oracle,
+            document_id,
+            result,
+            chunk_set_id,
+            effective_settings,
+            processing_config,
+        )
         return result
     # plan 実体化: 抽出グループ(parser×preprocess)ごとに extract 1 回 → 各 chunking で index。
     result = detail
@@ -1634,8 +1796,7 @@ async def _ingest_existing_document(
     processed_chunk_sets = 0
     for _recipe_id, chunk_set_ids in recipe_groups.items():
         for index, chunk_set_id in enumerate(chunk_set_ids):
-            # 3 層モデル: レシピは文書単位(global)。chunk_set_id も global から計算済み。
-            pipeline = IngestionPipeline(oracle=oracle, settings=global_settings)
+            pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
             processed_chunk_sets += 1
             # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
             record_outcome = processed_chunk_sets == total_chunk_sets
@@ -1663,7 +1824,9 @@ async def _ingest_existing_document(
                     record_outcome=record_outcome,
                     cancel_checker=cancel_checker,
                 )
-    await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
+    await _reconcile_plan_chunk_sets(
+        oracle, document_id, result, plan, effective_settings, processing_config
+    )
     return result
 
 
@@ -1682,27 +1845,32 @@ async def _chunk_reviewed_document(
             status_code=409,
             detail="プレビュー確認待ちの文書のみ Chunk 作成できます。",
         )
-    global_settings = get_settings()
+    effective_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
     plan, _configs = await _materialization_plan_for_document(
         oracle,
         detail,
-        global_settings=global_settings,
+        global_settings=effective_settings,
     )
     if plan is None or not plan.chunk_sets:
-        # 3 層モデル: 所属 KB / content_sha256 が無い縮退でもレシピは global を使う。
-        effective_settings = get_settings()
         chunk_set_id = _document_chunk_set_id(detail, effective_settings)
         pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
         result = await pipeline.chunk_reviewed(
             document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
         )
-        await _reconcile_document_chunk_sets_chunked(oracle, document_id, result, chunk_set_id)
+        await _reconcile_document_chunk_sets_chunked(
+            oracle,
+            document_id,
+            result,
+            chunk_set_id,
+            effective_settings,
+            processing_config,
+        )
         return result
     # 3 層モデル: plan は常に単一 extraction recipe。保存済み extraction から chunk 化する。
     result = detail
     chunk_set_ids = sorted(plan.chunk_sets)
     for index, chunk_set_id in enumerate(chunk_set_ids):
-        pipeline = IngestionPipeline(oracle=oracle, settings=global_settings)
+        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
         # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
         result = await pipeline.chunk_reviewed(
             document_id,
@@ -1710,7 +1878,9 @@ async def _chunk_reviewed_document(
             record_outcome=index == len(chunk_set_ids) - 1,
             cancel_checker=cancel_checker,
         )
-    await _reconcile_plan_chunk_sets_chunked(oracle, document_id, result, plan)
+    await _reconcile_plan_chunk_sets_chunked(
+        oracle, document_id, result, plan, effective_settings, processing_config
+    )
     return result
 
 
@@ -1729,15 +1899,13 @@ async def _index_reviewed_document(
             status_code=409,
             detail="Chunk 確認済みの文書のみ索引できます。",
         )
-    global_settings = get_settings()
+    effective_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
     plan, _configs = await _materialization_plan_for_document(
         oracle,
         detail,
-        global_settings=global_settings,
+        global_settings=effective_settings,
     )
     if plan is None or not plan.chunk_sets:
-        # 3 層モデル: materialization のレシピは常に global。
-        effective_settings = get_settings()
         chunk_set_id = _document_chunk_set_id(detail, effective_settings)
         if chunk_set_id is None:
             raise HTTPException(status_code=409, detail="索引対象の chunk_set がありません。")
@@ -1745,20 +1913,29 @@ async def _index_reviewed_document(
         result = await pipeline.index_chunked(
             document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
         )
-        await _reconcile_document_chunk_sets(oracle, document_id, result, chunk_set_id)
+        await _reconcile_document_chunk_sets(
+            oracle,
+            document_id,
+            result,
+            chunk_set_id,
+            effective_settings,
+            processing_config,
+        )
         return result
     result = detail
     chunk_set_ids = sorted(plan.chunk_sets)
     for index, chunk_set_id in enumerate(chunk_set_ids):
         # 3 層モデル: レシピは文書単位(global)。
-        pipeline = IngestionPipeline(oracle=oracle, settings=global_settings)
+        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
         result = await pipeline.index_chunked(
             document_id,
             chunk_set_id=chunk_set_id,
             record_outcome=index == len(chunk_set_ids) - 1,
             cancel_checker=cancel_checker,
         )
-    await _reconcile_plan_chunk_sets(oracle, document_id, result, plan)
+    await _reconcile_plan_chunk_sets(
+        oracle, document_id, result, plan, effective_settings, processing_config
+    )
     return result
 
 
@@ -1767,6 +1944,8 @@ async def _reconcile_plan_chunk_sets(
     document_id: str,
     detail: DocumentDetail,
     plan: MaterializationPlan,
+    effective_settings: Settings,
+    processing_config: DocumentProcessingConfig,
 ) -> None:
     """plan の各 chunk_set を永続化し、文書の serving を確定、plan に無い chunk_set を GC する。
 
@@ -1775,6 +1954,8 @@ async def _reconcile_plan_chunk_sets(
     """
     if detail.status != FileStatus.INDEXED:
         return
+    _, effective_config = _merge_document_processing_config(processing_config)
+    recipe_snapshot = _processing_recipe_snapshot(processing_config, effective_config)
     try:
         for chunk_set_id in plan.chunk_sets:
             chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
@@ -1783,17 +1964,17 @@ async def _reconcile_plan_chunk_sets(
                 chunk_set_id=chunk_set_id,
                 document_id=document_id,
                 extraction_recipe_id=extraction_recipe_id,
+                recipe_subset=recipe_snapshot,
             )
             await oracle.mark_chunk_set_indexed(
                 chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
             )
             if extraction_recipe_id is not None:
-                # 3 層モデル: extraction recipe は global から計算済み。artifact 記録も global で。
                 await _record_document_extraction_artifact(
                     oracle,
                     detail,
                     extraction_recipe_id=extraction_recipe_id,
-                    settings=get_settings(),
+                    settings=effective_settings,
                 )
         # 3 層モデル: 文書の serving chunk_set を設定(単一レシピなので plan の chunk_set)。
         serving_chunk_sets = sorted(plan.chunk_sets)
@@ -1801,7 +1982,7 @@ async def _reconcile_plan_chunk_sets(
             await oracle.set_document_serving_chunk_set(
                 document_id=document_id, chunk_set_id=serving_chunk_sets[0]
             )
-        await _reconcile_plan_artifact_layers(oracle, document_id, detail, plan)
+        await _reconcile_plan_artifact_layers(oracle, document_id, detail, plan, effective_settings)
         await oracle.delete_document_chunk_sets_except(
             document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
         )
@@ -1833,10 +2014,14 @@ async def _reconcile_plan_chunk_sets_chunked(
     document_id: str,
     detail: DocumentDetail,
     plan: MaterializationPlan,
+    effective_settings: Settings,
+    processing_config: DocumentProcessingConfig,
 ) -> None:
     """plan の各 chunk_set を CHUNKED として永続化する。KB binding は INDEX 後に作る。"""
     if detail.status != FileStatus.CHUNKED:
         return
+    _, effective_config = _merge_document_processing_config(processing_config)
+    recipe_snapshot = _processing_recipe_snapshot(processing_config, effective_config)
     try:
         for chunk_set_id in plan.chunk_sets:
             chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
@@ -1845,16 +2030,16 @@ async def _reconcile_plan_chunk_sets_chunked(
                 chunk_set_id=chunk_set_id,
                 document_id=document_id,
                 extraction_recipe_id=extraction_recipe_id,
+                recipe_subset=recipe_snapshot,
                 status="CHUNKED",
             )
             await oracle.mark_chunk_set_chunked(chunk_set_id=chunk_set_id, chunk_count=chunk_count)
             if extraction_recipe_id is not None:
-                # 3 層モデル: extraction recipe は global から計算済み。artifact 記録も global で。
                 await _record_document_extraction_artifact(
                     oracle,
                     detail,
                     extraction_recipe_id=extraction_recipe_id,
-                    settings=get_settings(),
+                    settings=effective_settings,
                 )
         await oracle.delete_document_chunk_sets_except(
             document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
@@ -1881,10 +2066,11 @@ async def _reconcile_plan_artifact_layers(
     document_id: str,
     detail: DocumentDetail,
     plan: MaterializationPlan,
+    effective_settings: Settings,
 ) -> None:
     """plan に含まれる派生 layer の状態を永続化する。"""
     configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
-    effective_by_kb = _effective_ingestion_settings_by_kb(get_settings(), configs)
+    effective_by_kb = _effective_ingestion_settings_by_kb(effective_settings, configs)
     for chunk_set_id in plan.chunk_sets:
         for layer, user_label in (
             ("metadata", "項目抽出"),
@@ -2068,6 +2254,8 @@ async def _reconcile_document_chunk_sets(
     document_id: str,
     detail: DocumentDetail,
     chunk_set_id: str | None,
+    effective_settings: Settings,
+    processing_config: DocumentProcessingConfig,
 ) -> None:
     """取込後、materialize した chunk_set を記録し文書の serving を確定する(planner 駆動の基盤)。
 
@@ -2079,13 +2267,13 @@ async def _reconcile_document_chunk_sets(
         return
     try:
         chunk_count = await oracle.count_document_chunks(document_id)
-        # 3 層モデル: materialization のレシピは常に global。
-        effective_settings = get_settings()
         extraction_recipe_id = _document_extraction_recipe_id(detail, effective_settings)
+        _, effective_config = _merge_document_processing_config(processing_config)
         await oracle.upsert_chunk_set(
             chunk_set_id=chunk_set_id,
             document_id=document_id,
             extraction_recipe_id=extraction_recipe_id,
+            recipe_subset=_processing_recipe_snapshot(processing_config, effective_config),
         )
         await oracle.mark_chunk_set_indexed(
             chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
@@ -2124,19 +2312,21 @@ async def _reconcile_document_chunk_sets_chunked(
     document_id: str,
     detail: DocumentDetail,
     chunk_set_id: str | None,
+    effective_settings: Settings,
+    processing_config: DocumentProcessingConfig,
 ) -> None:
     """CHUNK 後、chunk_set 行だけを記録する。KB binding は INDEX 完了まで作らない。"""
     if detail.status != FileStatus.CHUNKED or chunk_set_id is None:
         return
     try:
         chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
-        # 3 層モデル: materialization のレシピは常に global。
-        effective_settings = get_settings()
         extraction_recipe_id = _document_extraction_recipe_id(detail, effective_settings)
+        _, effective_config = _merge_document_processing_config(processing_config)
         await oracle.upsert_chunk_set(
             chunk_set_id=chunk_set_id,
             document_id=document_id,
             extraction_recipe_id=extraction_recipe_id,
+            recipe_subset=_processing_recipe_snapshot(processing_config, effective_config),
             status="CHUNKED",
         )
         await oracle.mark_chunk_set_chunked(chunk_set_id=chunk_set_id, chunk_count=chunk_count)
@@ -2166,23 +2356,11 @@ async def _reconcile_document_chunk_sets_chunked(
 async def _resolve_ingestion_settings(
     oracle: OracleClient,
     document_id: str,
-) -> tuple[Settings, KnowledgeBaseDetail | None]:
-    """owning KB の取込上書きを重ねた有効 Settings と owning KB detail を返す(**表示専用**)。
-
-    取込設定スナップショット / ドリフト表示 endpoint 用。3 層モデルでは materialization は
-    この関数を使わず常に global 既定で実体化する(レシピ=文書プロパティ)。owning KB の
-    取込表示は Phase 4 で文書単位レシピ表示へ置き換える予定。
-    """
-    global_settings = get_settings()
-    owning = await oracle.get_owning_knowledge_base(document_id)
-    if owning is None:
-        return global_settings, None
-    effective, _applied = apply_adapter_config_or_global(
-        global_settings,
-        owning.adapter_config,
-        scope="ingestion",
-    )
-    return effective, owning
+) -> tuple[Settings, DocumentProcessingConfig]:
+    """文書上書き > global 既定で有効な処理設定を解決する。KB は参照しない。"""
+    config = await oracle.get_document_processing_config(document_id)
+    effective, _resolved = _merge_document_processing_config(config)
+    return effective, config
 
 
 def _dispatch_ingestion_job(
@@ -3214,9 +3392,9 @@ def _safe_ingestion_job_error_message(error: Exception) -> str:
 
 
 async def _enqueue_auto_advance_job(job: IngestionJob, detail: DocumentDetail) -> None:
-    """グローバル設定に従い次 stage の job を投入する(3 層モデル: レシピは global)。"""
+    """文書の有効な処理レシピに従い次 stage の job を投入する。"""
     try:
-        settings = get_settings()
+        settings, _config = await _resolve_ingestion_settings(OracleClient(), job.document_id)
         if (
             job.phase in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
             and detail.status == FileStatus.REVIEW

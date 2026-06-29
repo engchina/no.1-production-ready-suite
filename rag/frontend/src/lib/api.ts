@@ -623,6 +623,10 @@ export interface KnowledgeBaseIngestionConfig {
   parser_docling_enabled: boolean | null;
   parser_marker_enabled: boolean | null;
   parser_unstructured_enabled: boolean | null;
+  parser_unlimited_ocr_enabled: boolean | null;
+  parser_mineru_enabled: boolean | null;
+  parser_dots_ocr_enabled: boolean | null;
+  parser_glm_ocr_enabled: boolean | null;
   chunking_strategy: ChunkingStrategyName | null;
   chunk_size: number | null;
   chunk_overlap: number | null;
@@ -752,6 +756,8 @@ export interface BusinessViewUpdateRequest {
 export interface DocumentIngestionConfigData {
   document_id: string;
   is_indexed: boolean;
+  processing_config: DocumentProcessingConfig;
+  effective_processing_config: DocumentProcessingConfig;
   effective_preprocess_profile: PreprocessProfileName;
   effective_chunking_strategy: string;
   effective_parser_adapter_backend: string;
@@ -760,7 +766,10 @@ export interface DocumentIngestionConfigData {
   chunking_drift: boolean;
   parser_drift: boolean;
   config_drift: boolean;
+  drift_fields: string[];
 }
+
+export type DocumentProcessingConfig = KnowledgeBaseIngestionConfig;
 
 export interface KnowledgeBaseDocumentAssignmentRequest {
   document_ids: string[];
@@ -2132,6 +2141,11 @@ export const api = {
   getDocumentIngestionConfig: (id: string) =>
     request<DocumentIngestionConfigData>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-config`
+    ),
+  updateDocumentIngestionConfig: (id: string, body: DocumentProcessingConfig) =>
+    request<DocumentIngestionConfigData>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-config`,
+      { ...jsonBody(body), method: "PUT" }
     ),
   exportDocumentExtraction: (id: string, format: DocumentExtractionExportFormat = "markdown") => {
     const search = new URLSearchParams({ format });

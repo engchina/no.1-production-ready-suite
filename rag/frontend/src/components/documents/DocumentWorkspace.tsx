@@ -15,7 +15,6 @@ import {
   Route,
   Save,
   Send,
-  SlidersHorizontal,
   TriangleAlert,
   Wrench,
   X,
@@ -25,6 +24,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { ChunkSetExperimentPanel } from "./ChunkSetExperimentPanel";
 import { DocumentPreview } from "./DocumentPreview";
+import { DocumentProcessingConfigPanel } from "./DocumentProcessingConfigPanel";
 import { IngestionConfigDriftBanner } from "@/components/knowledge-bases/IngestionConfigDriftBanner";
 import { DocumentExtraction } from "./DocumentExtraction";
 import { ExtractedText, IndexBadge, InfoChip } from "./extraction-bits";
@@ -58,7 +58,6 @@ import {
   type DocumentApproveRequest,
   type DocumentElement,
   type DocumentChunkView,
-  type DocumentIngestionConfigData,
   type DocumentExtractionExportFormat,
   type ExtractionTable,
   type ExtractionTableCell,
@@ -89,7 +88,7 @@ import {
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
-import { ja, t, type I18nKey } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import {
@@ -820,11 +819,15 @@ export function DocumentWorkspace({
             {documentFailure.primaryMessage ?? t("flow.error.fallback")}
           </Banner>
         ) : null}
-        <DocumentRecipeCard
-          config={ingestionConfigQuery.data ?? null}
+        <DocumentProcessingConfigPanel
+          documentId={documentId}
+          data={ingestionConfigQuery.data ?? null}
           loading={ingestionConfigQuery.isPending}
           error={ingestionConfigQuery.error}
           onRetry={() => void ingestionConfigQuery.refetch()}
+          disabled={
+            activeSubmittedJob || !["UPLOADED", "INDEXED", "ERROR"].includes(doc.status)
+          }
         />
         {shouldShowProcessingWatchBanner({
           watchProcessing,
@@ -1968,82 +1971,6 @@ function SourceDerivationPanel({
         </ul>
       ) : null}
     </section>
-  );
-}
-
-/** 動的 i18n キーが存在しない場合は生値へフォールバック(t は未定義キーで undefined を返すため)。 */
-function configValueLabel(key: I18nKey, raw: string): string {
-  return key in ja ? t(key) : raw;
-}
-
-/** 3 層モデル: 文書の単一レシピ(global 既定から解決した preprocess/parser/chunking)を表示する。 */
-function DocumentRecipeCard({
-  config,
-  loading,
-  error,
-  onRetry,
-}: {
-  config: DocumentIngestionConfigData | null;
-  loading: boolean;
-  error: unknown;
-  onRetry: () => void;
-}) {
-  return (
-    <section
-      aria-label={t("flow.buildConfig.title")}
-      className="rounded-md border border-border bg-background p-3"
-    >
-      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold text-muted">
-        <SlidersHorizontal size={14} className="text-primary" aria-hidden />
-        {t("flow.buildConfig.title")}
-      </h3>
-      {loading ? (
-        <div className="space-y-2" role="status" aria-label={t("flow.buildConfig.loading")}>
-          <Skeleton className="h-16 w-full" />
-          <span className="sr-only">{t("flow.buildConfig.loading")}</span>
-        </div>
-      ) : error ? (
-        <Banner severity="warning" title={t("flow.buildConfig.loadError")}>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p>{errorMessage(error, t("flow.buildConfig.loadErrorHint"))}</p>
-            <Button type="button" variant="secondary" size="sm" onClick={onRetry}>
-              <RotateCcw size={14} aria-hidden />
-              {t("common.retry")}
-            </Button>
-          </div>
-        </Banner>
-      ) : config ? (
-        <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-          <RecipeField
-            label={t("flow.buildConfig.preprocess")}
-            value={configValueLabel(
-              `settings.preprocess.profile.${config.effective_preprocess_profile}` as I18nKey,
-              config.effective_preprocess_profile
-            )}
-          />
-          <RecipeField
-            label={t("flow.buildConfig.parser")}
-            value={parserBackendLabel(config.effective_parser_adapter_backend)}
-          />
-          <RecipeField
-            label={t("flow.buildConfig.chunking")}
-            value={configValueLabel(
-              `settings.chunking.strategy.${config.effective_chunking_strategy}` as I18nKey,
-              config.effective_chunking_strategy
-            )}
-          />
-        </dl>
-      ) : null}
-    </section>
-  );
-}
-
-function RecipeField({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className="mt-0.5 break-words font-medium leading-5 text-foreground">{value}</dd>
-    </div>
   );
 }
 

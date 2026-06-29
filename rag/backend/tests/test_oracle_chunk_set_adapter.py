@@ -10,7 +10,7 @@ import pytest
 from app.clients.oracle import OracleClient
 from app.rag.chunking import Chunk
 from app.rag.ingestion import _coerce_extraction_payload, _validate_structured_extraction_payload
-from app.schemas.document import FileStatus
+from app.schemas.document import DocumentProcessingConfig, FileStatus
 from app.schemas.extraction import StructuredExtraction
 
 _EMBEDDING = [0.1] * 1536
@@ -30,6 +30,22 @@ async def _new_document(client: OracleClient) -> str:
         content_type="text/plain",
     )
     return detail.id
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_document_processing_config_round_trip() -> None:
+    """文書の処理レシピ上書き JSON は null を保存せず復元できる。"""
+    client = OracleClient()
+    document_id = await _new_document(client)
+    expected = DocumentProcessingConfig(
+        parser_adapter_backend="mineru",
+        chunking_strategy="page_level",
+        chunk_size=900,
+    )
+
+    await client.update_document_processing_config(document_id, expected)
+
+    assert await client.get_document_processing_config(document_id) == expected
 
 
 @pytest.mark.usefixtures("oracle_db")

@@ -119,13 +119,14 @@ Use a writable cache directory for verification commands, for example `uv --cach
 ### Metadata
 - Reproducible: yes
 - Related Files: backend/pyproject.toml
-- Recurrence-Count: 4
-- Last-Seen: 2026-06-22T17:00:00+09:00
+- Recurrence-Count: 5
+- Last-Seen: 2026-06-29T00:00:00+09:00
 
 ### Recurrence Notes
 - 2026-06-16T20:36:23+09:00: `uv run ruff check ...` and `uv run pytest ...` failed in the managed sandbox for the same `/root/.cache/uv` write issue. Reran successfully with `UV_CACHE_DIR=/tmp/uv-cache`.
 - 2026-06-18T04:26:58+09:00: `uv lock --offline` failed for the same `/root/.cache/uv` write issue. Use a writable cache path such as `UV_CACHE_DIR=/tmp/uv-cache`.
 - 2026-06-22T17:00:00+09:00: `uv run pytest tests/test_oci_enterprise_ai.py tests/test_settings_api.py -q` failed in the sandbox for the same `/root/.cache/uv` write issue. Reran successfully with approved escalation.
+- 2026-06-29T00:00:00+09:00: parallel `uv run ruff` / `uv run mypy` hit the same default-cache lock failure. Run checks sequentially with `uv --cache-dir /tmp/uv-cache`.
 
 ---
 
@@ -1388,5 +1389,104 @@ DPI-1010: not connected
 ### Resolution
 - **Resolved**: 2026-06-29T09:19:41+09:00
 - **Notes**: recoverable read retry、例外保持、非機密 retry log を追加。Oracle adapter 72 passed / 17 skipped、Ruff、mypy、対象 API 200 を確認。
+
+---
+
+## [ERR-20260629-002] black_check_unformatted_changes
+
+**Logged**: 2026-06-29T20:35:39+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+PR 前の Black 検査で変更中の Python 3 ファイルが未整形だった。
+
+### Error
+```text
+would reformat backend/tests/test_document_ingestion_config.py
+would reformat backend/app/api/routes/documents.py
+would reformat backend/app/clients/oracle.py
+```
+
+### Context
+- Command attempted: `uv --cache-dir /tmp/uv-cache run black --check .`
+- ロジック検査前の機械的な整形漏れで、Black による自動修正が可能。
+
+### Suggested Fix
+PR 作成前に Black を実行し、その後 CI と同じ `black --check` を再実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/api/routes/documents.py, backend/app/clients/oracle.py, backend/tests/test_document_ingestion_config.py
+
+### Resolution
+- **Resolved**: 2026-06-29T20:35:39+09:00
+- **Notes**: Black で対象ファイルを整形し、検査を再実行する。
+
+---
+
+## [ERR-20260629-003] gitleaks_directory_scan_local_secrets
+
+**Logged**: 2026-06-29T20:47:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+作業ディレクトリ全体の gitleaks 検査が、Git 管理外のローカル runtime secret 2 件を検出した。
+
+### Error
+```text
+WRN leaks found: 2
+```
+
+### Context
+- Command attempted: `gitleaks dir . --config .gitleaks.toml --no-banner`
+- 脱敏 JSON で確認した対象は `backend/.env` と `backend/model-settings.json` で、どちらも Git 管理外。
+- CI は `gitleaks-action` で Git 履歴を検査するため、作業ディレクトリ全体の検査とは対象が異なる。
+
+### Suggested Fix
+PR の secret 検査はコミット後に Git 履歴を対象として実行し、ローカル runtime secret は出力・stage しない。
+
+### Metadata
+- Reproducible: yes
+- Related Files: .gitleaks.toml, .gitignore
+
+### Resolution
+- **Resolved**: 2026-06-29T20:47:00+09:00
+- **Notes**: 検出値を完全脱敏し、対象ファイルが Git 管理外であることを確認した。
+
+---
+
+## [ERR-20260629-004] gh_run_view_job_steps_json
+
+**Logged**: 2026-06-29T20:54:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+`gh run view --job` では `steps` を JSON field として直接取得できなかった。
+
+### Error
+```text
+Unknown JSON field: "steps"
+```
+
+### Context
+- Command attempted: `gh run view RUN_ID --job JOB_ID --json status,conclusion,steps`
+- この gh CLI では run の JSON field として `jobs` を取得し、その配下の step を参照する。
+
+### Suggested Fix
+`gh run view RUN_ID --json jobs` を使い、必要な job を JSON 側で選択する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: .github/workflows/ci.yml
+
+### Resolution
+- **Resolved**: 2026-06-29T20:54:00+09:00
+- **Notes**: 利用可能 field の一覧を確認し、run-level の `jobs` を使う手順へ修正した。
 
 ---

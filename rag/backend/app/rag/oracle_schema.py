@@ -37,7 +37,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260629_003"
+MIGRATION_ARTIFACT_VERSION = "20260629_004"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -297,6 +297,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260629_003_ingestion_jobs_settings_overrides",
             table_name="rag_ingestion_jobs",
             sql=_ingestion_jobs_settings_overrides_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260629_004_documents_processing_config",
+            table_name="rag_documents",
+            sql=_documents_processing_config_migration_sql(),
         ),
     ]
 
@@ -796,6 +801,25 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_ingestion_jobs ADD (settings_overrides JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _documents_processing_config_migration_sql() -> str:
+    """rag_documents に文書単位の処理レシピ上書き JSON 列を追加する(冪等)。"""
+    return """
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND column_name = 'PROCESSING_CONFIG';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (processing_config JSON)';
     END IF;
 END;
 /

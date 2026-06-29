@@ -23,6 +23,7 @@ import {
   type DocumentDetail,
   type DocumentSummary,
   type DocumentKnowledgeBaseReplaceRequest,
+  type DocumentProcessingConfig,
   type DocumentExtractionExportFormat,
   type EvaluationCompareRequestBody,
   type EvaluationRunRequestBody,
@@ -467,7 +468,7 @@ export function useDocumentKnowledgeBases(id: string | null) {
   });
 }
 
-/** 文書の取込設定スナップショットと owning KB とのドリフト状況。 */
+/** 文書の処理レシピ上書き・有効値・配信中レシピとの差分。 */
 export function useDocumentIngestionConfig(id: string | null) {
   return useQuery({
     queryKey: queryKeys.documentIngestionConfig(id ?? ""),
@@ -476,6 +477,18 @@ export function useDocumentIngestionConfig(id: string | null) {
     // 404(削除済み/未登録の文書)はリトライしても無意味。兄弟の文書スコープ
     // クエリ(chunks / extraction-export / ingestion-segments)と挙動を揃える。
     retry: false,
+  });
+}
+
+/** 文書単位の処理レシピ上書きを保存する。既存 chunk_set は変更しない。 */
+export function useUpdateDocumentIngestionConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, config }: { id: string; config: DocumentProcessingConfig }) =>
+      api.updateDocumentIngestionConfig(id, config),
+    onSuccess: (data, variables) => {
+      qc.setQueryData(queryKeys.documentIngestionConfig(variables.id), data);
+    },
   });
 }
 

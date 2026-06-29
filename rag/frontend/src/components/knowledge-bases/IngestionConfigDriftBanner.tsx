@@ -4,7 +4,7 @@ import { AlertTriangle, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { useDocumentIngestionConfig, useEnqueueDocumentIngestionJob } from "@/lib/queries";
 import { parserBackendLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
@@ -19,6 +19,18 @@ export function IngestionConfigDriftBanner({ documentId }: { documentId: string 
 
   const data = query.data;
   if (!data || !data.config_drift) return null;
+  const driftLabelKeys: Record<string, I18nKey> = {
+    preprocess_profile: "knowledgeBases.adapter.field.preprocessProfile",
+    parser_adapter_backend: "knowledgeBases.adapter.field.parserBackend",
+    chunking_strategy: "knowledgeBases.adapter.field.chunkingStrategy",
+    graph_profile: "knowledgeBases.adapter.field.graphProfile",
+    field_extraction_enabled: "knowledgeBases.adapter.field.fieldExtraction",
+    asset_summary_enabled: "knowledgeBases.adapter.field.assetSummary",
+    navigation_summary_enabled: "knowledgeBases.adapter.field.navigationSummary",
+  };
+  const driftLabels = (data.drift_fields ?? []).map((field) =>
+    t(driftLabelKeys[field] ?? "knowledgeBases.adapter.title")
+  );
   const driftItems = [
     data.chunking_drift
       ? t("ingestionDrift.chunking", {
@@ -55,6 +67,11 @@ export function IngestionConfigDriftBanner({ documentId }: { documentId: string 
         <div className="space-y-0.5">
           <p className="text-sm font-semibold">{t("ingestionDrift.title")}</p>
           <p className="text-sm text-foreground">{t("ingestionDrift.description")}</p>
+          {driftLabels.length > 0 ? (
+            <p className="text-xs text-warning">
+              {t("ingestionDrift.changedFields", { fields: driftLabels.join("、") })}
+            </p>
+          ) : null}
           {driftItems.length > 0 ? (
             <ul className="mt-1 space-y-0.5 text-xs text-warning">
               {driftItems.map((item) => (

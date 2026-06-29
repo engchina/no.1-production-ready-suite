@@ -6,8 +6,9 @@ from typing import Any
 import pytest
 
 from app.api.routes.documents import _reconcile_document_chunk_sets
+from app.config import get_settings
 from app.rag.ingestion import IngestionUserError
-from app.schemas.document import DocumentDetail, FileStatus
+from app.schemas.document import DocumentDetail, DocumentProcessingConfig, FileStatus
 
 
 class FakePublishOracle:
@@ -85,6 +86,8 @@ async def test_chunk_set_serving_failure_marks_document_error() -> None:
             "doc-1",
             _detail(),
             "chunk-set-1",
+            get_settings(),
+            DocumentProcessingConfig(),
         )
 
     assert oracle.statuses == [

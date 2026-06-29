@@ -3,10 +3,11 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
 from app.config import ChunkingStrategy, ParserAdapterBackend, PreprocessProfile
+from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
 
@@ -317,11 +318,21 @@ class ParserExtractionExperimentRequest(BaseModel):
         }
 
 
+class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
+    """文書単位の処理レシピ上書き。None は global 既定を継承する。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class DocumentIngestionConfigData(BaseModel):
     """文書の取込設定スナップショット(3 層モデル: 文書単位の単一レシピ)。"""
 
     document_id: str
     is_indexed: bool = False
+    processing_config: DocumentProcessingConfig = Field(default_factory=DocumentProcessingConfig)
+    effective_processing_config: DocumentProcessingConfig = Field(
+        default_factory=DocumentProcessingConfig
+    )
     # global 既定(「検索・回答設定」)から解決した「これから取り込むなら」の有効レシピ。
     effective_preprocess_profile: str
     effective_chunking_strategy: str
@@ -332,6 +343,7 @@ class DocumentIngestionConfigData(BaseModel):
     chunking_drift: bool = False
     parser_drift: bool = False
     config_drift: bool = False
+    drift_fields: list[str] = Field(default_factory=list)
 
 
 class DocumentExtractionExportFormat(StrEnum):

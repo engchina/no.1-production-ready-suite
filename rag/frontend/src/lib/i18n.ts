@@ -1768,7 +1768,8 @@ export const ja = {
   "knowledgeBases.detail.loading": "ナレッジベース詳細を読み込み中",
   "ingestionDrift.title": "取込設定が更新されています",
   "ingestionDrift.description":
-    "この文書は所属知識ベースの現在の構築設定と異なる設定で取り込まれています。再取込すると現在の設定で作り直されます。",
+    "この文書は現在の処理設定と異なる設定で取り込まれています。再取込すると現在の設定で作り直されます。",
+  "ingestionDrift.changedFields": "変更項目: {fields}",
   "ingestionDrift.chunking": "文書分割: {observed} → {effective}",
   "ingestionDrift.parser": "文書解析: {observed} → {effective}",
   "ingestionDrift.action": "現在の設定で再取込",
@@ -2058,6 +2059,18 @@ export const ja = {
   "flow.buildConfig.preprocess": "ファイル準備",
   "flow.buildConfig.parser": "文書解析",
   "flow.buildConfig.chunking": "文書分割",
+  "documents.processingConfig.subtitle":
+    "この文書だけの処理設定です。個別設定がない項目は検索・回答設定の既定値を使います。",
+  "documents.processingConfig.editHint":
+    "変更する項目だけ「上書き」を選んでください。保存しても現在の索引は自動で作り直しません。",
+  "documents.processingConfig.actions.edit": "処理設定を編集",
+  "documents.processingConfig.actions.close": "編集を閉じる",
+  "documents.processingConfig.blocked":
+    "処理途中または取込ジョブ実行中は設定を変更できません。処理完了後に再試行してください。",
+  "documents.processingConfig.toast.saved":
+    "この文書の処理設定を保存しました。必要な場合は再処理してください。",
+  "documents.processingConfig.error.save":
+    "処理設定を保存できませんでした。値と文書状態を確認して再試行してください。",
   "flow.segments.retryFailed": "失敗 segment を再試行",
   "flow.ingestFailed": "取込に失敗しました。",
   "flow.error.title": "取込に失敗しました",

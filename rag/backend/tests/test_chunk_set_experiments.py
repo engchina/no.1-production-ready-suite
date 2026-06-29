@@ -19,7 +19,12 @@ from app.api.routes.documents import (
     promote_chunk_set_experiment,
 )
 from app.config import get_settings
-from app.schemas.document import ChunkSetExperimentRequest, DocumentDetail, FileStatus
+from app.schemas.document import (
+    ChunkSetExperimentRequest,
+    DocumentDetail,
+    DocumentProcessingConfig,
+    FileStatus,
+)
 
 _SERVING_ID = "cs_serving_existing0"
 
@@ -48,6 +53,7 @@ class FakeExperimentOracle:
         self.chunk_sets: dict[str, dict[str, object]] = {
             _SERVING_ID: {"chunk_set_id": _SERVING_ID, "status": "INDEXED"}
         }
+        self.processing_config = DocumentProcessingConfig()
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.detail if document_id == self.detail.id else None
@@ -60,9 +66,21 @@ class FakeExperimentOracle:
         _ = chunk_set_id
         return 5
 
-    async def upsert_chunk_set(self, *, chunk_set_id: str, **_kwargs: Any) -> None:
+    async def upsert_chunk_set(self, *, chunk_set_id: str, **kwargs: Any) -> None:
         self.chunk_sets.setdefault(chunk_set_id, {"chunk_set_id": chunk_set_id})
         self.chunk_sets[chunk_set_id]["status"] = "INDEXED"
+        self.chunk_sets[chunk_set_id]["recipe_subset"] = kwargs.get("recipe_subset")
+
+    async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
+        _ = document_id
+        return self.processing_config
+
+    async def update_document_processing_config(
+        self, document_id: str, config: DocumentProcessingConfig
+    ) -> DocumentProcessingConfig:
+        _ = document_id
+        self.processing_config = config
+        return config
 
     async def mark_chunk_set_indexed(self, *, chunk_set_id: str, **_kwargs: Any) -> None:
         self.indexed_marks.append(chunk_set_id)
@@ -165,7 +183,13 @@ async def test_promote_switches_serving_and_gcs_losers(
     """昇格は候補を serving に切替え、敗者 chunk_set を keep=候補のみで GC する。"""
     oracle = FakeExperimentOracle()
     candidate_id = "cs_candidate_aaaaaa0"
-    oracle.chunk_sets[candidate_id] = {"chunk_set_id": candidate_id, "status": "INDEXED"}
+    oracle.chunk_sets[candidate_id] = {
+        "chunk_set_id": candidate_id,
+        "status": "INDEXED",
+        "recipe_subset": {
+            "processing_config": {"chunking_strategy": "page_level", "chunk_size": 512},
+        },
+    }
     _patch(monkeypatch, oracle)
 
     response = await promote_chunk_set_experiment("doc-1", candidate_id)
@@ -174,6 +198,8 @@ async def test_promote_switches_serving_and_gcs_losers(
     assert response.data.chunk_set_id == candidate_id
     assert oracle.serving_calls == [candidate_id]
     assert oracle.deleted_keep == [[candidate_id]]
+    assert oracle.processing_config.chunking_strategy == "page_level"
+    assert oracle.processing_config.chunk_size == 512
     # 敗者(旧 serving)は GC 済み。
     assert _SERVING_ID not in oracle.chunk_sets
 
