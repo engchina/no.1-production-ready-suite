@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
-import type { KnowledgeBaseSummary } from "@/lib/api";
+import { DEFAULT_KNOWLEDGE_BASE_NAME, type KnowledgeBaseSummary } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 /**
@@ -26,8 +26,11 @@ export function KnowledgeBasePickerGrid({
   ariaLabel: string;
 }) {
   const topId = useMemo(() => {
-    const sorted = sortKnowledgeBases(items);
-    return sorted.length > 1 && sorted[0]?.document_count > 0 ? sorted[0].id : null;
+    const top = items.reduce<KnowledgeBaseSummary | null>(
+      (best, item) => (!best || item.document_count > best.document_count ? item : best),
+      null
+    );
+    return items.length > 1 && top && top.document_count > 0 ? top.id : null;
   }, [items]);
 
   return (
@@ -41,7 +44,9 @@ export function KnowledgeBasePickerGrid({
       getName={(kb) => kb.name}
       getMetaText={(kb) => t("knowledgeBasePicker.documentCount", { count: kb.document_count })}
       sortItems={sortKnowledgeBases}
-      isEmptyItem={(kb) => kb.document_count === 0}
+      isEmptyItem={(kb) =>
+        kb.document_count === 0 && kb.name !== DEFAULT_KNOWLEDGE_BASE_NAME
+      }
       getOptionBadge={(kb) => (kb.id === topId ? t("knowledgeBasePicker.mostDocs") : null)}
       strings={{
         addPlaceholder: t("knowledgeBasePicker.addPlaceholder"),
@@ -62,6 +67,8 @@ export function KnowledgeBasePickerGrid({
 
 function sortKnowledgeBases(items: KnowledgeBaseSummary[]) {
   return [...items].sort((a, b) => {
+    if (a.name === DEFAULT_KNOWLEDGE_BASE_NAME) return -1;
+    if (b.name === DEFAULT_KNOWLEDGE_BASE_NAME) return 1;
     if (b.document_count !== a.document_count) {
       return b.document_count - a.document_count;
     }

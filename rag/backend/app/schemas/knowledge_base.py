@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field, field_validator
 from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.schemas.search import SearchMode
 
+DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT"
+
 
 class KnowledgeBaseStatus(StrEnum):
     """ナレッジベースの運用状態。"""
@@ -81,7 +83,7 @@ class KnowledgeBaseCreateRequest(BaseModel):
     @classmethod
     def normalize_name(cls, value: str) -> str:
         """前後空白を取り、空名を拒否する。"""
-        return _required_clean_text(value, "名前を入力してください。")
+        return _knowledge_base_name(value)
 
     @field_validator("description")
     @classmethod
@@ -108,7 +110,7 @@ class KnowledgeBaseUpdateRequest(BaseModel):
         """更新時も空名は拒否する。"""
         if value is None:
             return None
-        return _required_clean_text(value, "名前を入力してください。")
+        return _knowledge_base_name(value)
 
     @field_validator("description")
     @classmethod
@@ -145,6 +147,13 @@ def _required_clean_text(value: str, message: str) -> str:
     cleaned = value.strip()
     if not cleaned:
         raise ValueError(message)
+    return cleaned
+
+
+def _knowledge_base_name(value: str) -> str:
+    cleaned = _required_clean_text(value, "名前を入力してください。")
+    if cleaned.casefold() == DEFAULT_KNOWLEDGE_BASE_NAME.casefold():
+        raise ValueError("DEFAULT は予約名のため使用できません。")
     return cleaned
 
 

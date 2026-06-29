@@ -158,6 +158,8 @@ async def update_knowledge_base(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _detail_response(detail)
 
 
@@ -170,6 +172,8 @@ async def archive_knowledge_base(
         detail = await OracleClient().archive_knowledge_base(knowledge_base_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _detail_response(detail)
 
 

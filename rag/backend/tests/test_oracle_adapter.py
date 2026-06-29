@@ -329,7 +329,7 @@ async def test_oracle_client_persists_documents_through_pool() -> None:
     )
 
     assert detail.file_name == "policy.txt"
-    assert detail.knowledge_bases[0].name == "既定ナレッジベース"
+    assert detail.knowledge_bases[0].name == "DEFAULT"
     assert pool.connection.commits == 1
     statements = [call.statement for call in pool.connection.calls]
     assert any("INSERT INTO rag_knowledge_bases" in statement for statement in statements)
@@ -826,6 +826,7 @@ async def test_oracle_client_lists_knowledge_bases_with_counts() -> None:
     call = pool.connection.calls[0]
     assert "FROM rag_knowledge_bases kb" in call.statement
     assert "LEFT JOIN rag_document_knowledge_bases dkb" in call.statement
+    assert "CASE WHEN UPPER(kb.name) = 'DEFAULT' THEN 0 ELSE 1 END" in call.statement
     assert "kb.status = :knowledge_base_status" in call.statement
     assert call.parameters["knowledge_base_status"] == "ACTIVE"
     assert call.parameters["knowledge_base_query"] == "%規程%"
@@ -850,6 +851,29 @@ async def test_oracle_client_updates_knowledge_base_metadata() -> None:
         "SELECT" in statement and "rag_knowledge_bases" in statement for statement in statements
     )
     assert any("UPDATE rag_knowledge_bases" in statement for statement in statements)
+
+
+async def test_oracle_client_protects_default_knowledge_base() -> None:
+    """DEFAULT は改名もアーカイブもできない。"""
+    update_pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row(name="DEFAULT")]])
+    update_client = OracleClient(
+        settings=_oci_settings(), pool=update_pool, db_call_runner=_run_inline
+    )
+
+    with pytest.raises(ValueError, match="名前は変更できません"):
+        await update_client.update_knowledge_base(
+            "kb-1",
+            name="別名",
+            update_fields={"name"},
+        )
+
+    archive_pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row(name="DEFAULT")]])
+    archive_client = OracleClient(
+        settings=_oci_settings(), pool=archive_pool, db_call_runner=_run_inline
+    )
+
+    with pytest.raises(ValueError, match="アーカイブできません"):
+        await archive_client.archive_knowledge_base("kb-1")
 
 
 async def test_oracle_client_assigns_documents_to_knowledge_base() -> None:
@@ -3007,13 +3031,14 @@ def _oracle_document_row(
 
 def _oracle_knowledge_base_row(
     *,
+    name: str = "社内規程",
     status: str = "ACTIVE",
     document_count: int = 0,
 ) -> dict[str, object]:
     return {
         "knowledge_base_id": "kb-1",
         "tenant_id_hash": None,
-        "name": "社内規程",
+        "name": name,
         "description": "規程文書",
         "status": status,
         "default_search_mode": "hybrid",

@@ -37,7 +37,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260629_004"
+MIGRATION_ARTIFACT_VERSION = "20260630_001"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -302,6 +302,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260629_004_documents_processing_config",
             table_name="rag_documents",
             sql=_documents_processing_config_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260630_001_default_knowledge_base_name",
+            table_name="rag_knowledge_bases",
+            sql=_default_knowledge_base_name_migration_sql(),
         ),
     ]
 
@@ -826,6 +831,34 @@ END;
 """.strip()
 
 
+def _default_knowledge_base_name_migration_sql() -> str:
+    """旧既定ナレッジベースを予約名 DEFAULT へ改名する(冪等)。"""
+    return """
+BEGIN
+    UPDATE rag_knowledge_bases current_default
+    SET
+        name = 'DEFAULT-' || current_default.knowledge_base_id,
+        updated_at = SYSTIMESTAMP
+    WHERE LOWER(current_default.name) = 'default'
+      AND EXISTS (
+          SELECT 1
+          FROM rag_knowledge_bases legacy_default
+          WHERE legacy_default.name = '既定ナレッジベース'
+            AND NVL(legacy_default.tenant_id_hash, '__GLOBAL__') =
+                NVL(current_default.tenant_id_hash, '__GLOBAL__')
+      );
+
+    UPDATE rag_knowledge_bases
+    SET
+        name = 'DEFAULT',
+        updated_at = SYSTIMESTAMP
+    WHERE name = '既定ナレッジベース';
+END;
+/
+COMMIT;
+""".strip()
+
+
 def _drop_kb_chunk_set_bindings_migration_sql() -> str:
     """per-KB binding 表 rag_kb_chunk_set_bindings を退役(冪等 DROP)する。
 
@@ -1123,7 +1156,11 @@ BEGIN
     END IF;
 
     SELECT COUNT(*) INTO v_index_count
-    FROM user_indexes WHERE index_name = 'RAG_DOC_EXT_STATUS_IDX';
+    FROM user_indexes
+    WHERE index_name IN (
+        'RAG_DOC_EXT_STATUS_IDX',
+        'RAG_DOCUMENT_EXTRACTIONS_DOCUMENT_IDX'
+    );
 
     IF v_index_count = 0 THEN
         EXECUTE IMMEDIATE
@@ -1477,11 +1514,14 @@ BEGIN
     SELECT COUNT(*)
     INTO v_index_count
     FROM user_indexes
-    WHERE index_name = 'RAG_INGESTION_SEGMENTS_DOC_STATUS_IDX';
+    WHERE index_name IN (
+        'RAG_INGESTION_SEGMENTS_DOC_STATUS_IDX',
+        'RAG_INGESTION_SEGMENTS_DOCUMENT_STATUS_IDX'
+    );
 
     IF v_index_count = 0 THEN
         EXECUTE IMMEDIATE
-            'CREATE INDEX rag_ingestion_segments_doc_status_idx '
+            'CREATE INDEX rag_ingestion_segments_document_status_idx '
             || 'ON rag_ingestion_segments (document_id, status, page_start, page_end)';
     END IF;
 

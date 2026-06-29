@@ -1672,6 +1672,8 @@ export const ja = {
   "knowledgeBases.empty.title": "知識ベースがありません。",
   "knowledgeBases.empty.hint": "名前を入力して、最初の知識ベースを作成してください。",
   "knowledgeBases.validation.nameRequired": "名前を入力してください。",
+  "knowledgeBases.validation.nameReserved": "DEFAULT は予約名のため使用できません。",
+  "knowledgeBases.default.archiveDisabled": "DEFAULT はアーカイブできません",
   "knowledgeBases.confirm.archive.title": "知識ベースをアーカイブしますか？",
   "knowledgeBases.confirm.archive.description":
     "「{name}」は検索対象の選択肢から外れます。文書とチャンクは削除されません。",
@@ -1849,13 +1851,13 @@ export const ja = {
   "upload.knowledgeBases.loading": "知識ベースを読み込んでいます。",
   "upload.knowledgeBases.loadWarning": "知識ベース一覧を取得できませんでした。",
   "upload.knowledgeBases.loadWarningHint":
-    "未選択のままアップロードすると、バックエンドの既定知識ベースへ登録されます。",
+    "未選択のままアップロードすると、DEFAULT へ登録されます。",
   "upload.knowledgeBases.documentCount": "{count} 文書",
   "upload.knowledgeBases.emptyHint":
-    "まだ知識ベースがありません。未選択のままアップロードすると既定知識ベースへ登録されます。",
+    "まだ知識ベースがありません。未選択のままアップロードすると DEFAULT へ登録されます。",
   "upload.knowledgeBases.manage": "知識ベース管理",
   "upload.knowledgeBases.selected": "{count} 件の知識ベースへ登録します。",
-  "upload.knowledgeBases.defaultHint": "未選択の場合は既定知識ベースへ登録します。",
+  "upload.knowledgeBases.defaultHint": "未選択の場合は DEFAULT へ登録します。",
   "upload.ingestion.watch": "取込ジョブの状態を更新しています。",
 
   "sourceProfile.title": "原本の処理情報",

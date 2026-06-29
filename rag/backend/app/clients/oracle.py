@@ -66,6 +66,7 @@ from app.schemas.document import (
 )
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.knowledge_base import (
+    DEFAULT_KNOWLEDGE_BASE_NAME,
     KnowledgeBaseDetail,
     KnowledgeBaseRef,
     KnowledgeBaseStatus,
@@ -159,7 +160,6 @@ type MetadataValue = JsonValue
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 T = TypeVar("T")
 DocumentT = TypeVar("DocumentT", bound=DocumentSummary)
-DEFAULT_KNOWLEDGE_BASE_NAME = "既定ナレッジベース"
 
 
 def _to_vector_bind(embedding: Sequence[float]) -> "array[float]":
@@ -652,7 +652,7 @@ class OracleClient:
         *,
         name: str = DEFAULT_KNOWLEDGE_BASE_NAME,
     ) -> KnowledgeBaseDetail:
-        """tenant ごとの既定ナレッジベースを取得または作成する。"""
+        """tenant ごとの DEFAULT ナレッジベースを取得または作成する。"""
         existing = await self._find_knowledge_base_by_name_with_oracle(name)
         if existing is not None:
             return existing
@@ -3313,7 +3313,10 @@ class OracleClient:
                 kb.created_at,
                 kb.updated_at,
                 kb.archived_at
-            ORDER BY kb.updated_at DESC, kb.name ASC
+            ORDER BY
+                CASE WHEN UPPER(kb.name) = 'DEFAULT' THEN 0 ELSE 1 END,
+                kb.updated_at DESC,
+                kb.name ASC
             {paging_sql}
             """,
                 where_sql=where_sql,
@@ -3427,6 +3430,12 @@ class OracleClient:
             existing = _select_knowledge_base(connection, knowledge_base_id)
             if existing is None:
                 raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
+            if (
+                "name" in fields
+                and name is not None
+                and existing.name.casefold() == DEFAULT_KNOWLEDGE_BASE_NAME.casefold()
+            ):
+                raise ValueError("DEFAULT ナレッジベースの名前は変更できません。")
             updated = existing
             now = datetime.now(UTC)
             if fields:
@@ -3478,6 +3487,8 @@ class OracleClient:
             existing = _select_knowledge_base(connection, knowledge_base_id)
             if existing is None:
                 raise KeyError(f"knowledge_base_id={knowledge_base_id} は存在しません。")
+            if existing.name.casefold() == DEFAULT_KNOWLEDGE_BASE_NAME.casefold():
+                raise ValueError("DEFAULT ナレッジベースはアーカイブできません。")
             now = datetime.now(UTC)
             archived = updated_copy_knowledge_base(
                 existing,
@@ -7108,7 +7119,7 @@ def _ensure_default_knowledge_base(
     existing = _select_knowledge_base_by_name(connection, name)
     if existing is not None:
         if existing.status != KnowledgeBaseStatus.ACTIVE:
-            raise ValueError("既定ナレッジベースがアーカイブ済みです。")
+            raise ValueError("DEFAULT ナレッジベースがアーカイブ済みです。")
         return existing
     now = datetime.now(UTC)
     knowledge_base = StoredKnowledgeBase(

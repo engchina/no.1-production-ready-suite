@@ -668,6 +668,8 @@ export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   legacy_query_config_ignored?: boolean;
 }
 
+export const DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT";
+
 export interface KnowledgeBaseGraphNode {
   id: string;
   name: string;

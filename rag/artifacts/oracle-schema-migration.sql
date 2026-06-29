@@ -246,11 +246,14 @@ BEGIN
     SELECT COUNT(*)
     INTO v_index_count
     FROM user_indexes
-    WHERE index_name = 'RAG_INGESTION_SEGMENTS_DOC_STATUS_IDX';
+    WHERE index_name IN (
+        'RAG_INGESTION_SEGMENTS_DOC_STATUS_IDX',
+        'RAG_INGESTION_SEGMENTS_DOCUMENT_STATUS_IDX'
+    );
 
     IF v_index_count = 0 THEN
         EXECUTE IMMEDIATE
-            'CREATE INDEX rag_ingestion_segments_doc_status_idx '
+            'CREATE INDEX rag_ingestion_segments_document_status_idx '
             || 'ON rag_ingestion_segments (document_id, status, page_start, page_end)';
     END IF;
 
@@ -514,8 +517,9 @@ BEGIN
     EXECUTE IMMEDIATE
         'ALTER TABLE rag_documents ADD CONSTRAINT '
         || 'rag_documents_status_ck CHECK '
-        || '(status IN (''UPLOADED'', ''INGESTING'', ''REVIEW'', '
-        || '''CHUNKING'', ''CHUNKED'', ''INDEXING'', ''INDEXED'', ''ERROR''))';
+        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''PREPROCESSED'', '
+        || '''INGESTING'', ''REVIEW'', ''CHUNKING'', ''CHUNKED'', ''INDEXING'', '
+        || '''INDEXED'', ''ERROR''))';
 END;
 /
 
@@ -533,7 +537,7 @@ BEGIN
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE
             'ALTER TABLE rag_ingestion_jobs ADD '
-            || '(phase VARCHAR2(16) DEFAULT ''EXTRACT'' NOT NULL)';
+            || '(phase VARCHAR2(16) DEFAULT ''PREPROCESS'' NOT NULL)';
     END IF;
 
     SELECT COUNT(*)
@@ -551,7 +555,7 @@ BEGIN
     EXECUTE IMMEDIATE
         'ALTER TABLE rag_ingestion_jobs ADD CONSTRAINT '
         || 'rag_ingestion_jobs_phase_ck CHECK '
-        || '(phase IN (''EXTRACT'', ''CHUNK'', ''INDEX''))';
+        || '(phase IN (''PREPROCESS'', ''EXTRACT'', ''CHUNK'', ''INDEX''))';
 END;
 /
 
@@ -789,7 +793,11 @@ BEGIN
     END IF;
 
     SELECT COUNT(*) INTO v_index_count
-    FROM user_indexes WHERE index_name = 'RAG_DOC_EXT_STATUS_IDX';
+    FROM user_indexes
+    WHERE index_name IN (
+        'RAG_DOC_EXT_STATUS_IDX',
+        'RAG_DOCUMENT_EXTRACTIONS_DOCUMENT_IDX'
+    );
 
     IF v_index_count = 0 THEN
         EXECUTE IMMEDIATE
@@ -1075,6 +1083,7 @@ BEGIN
     add_stopword('が');
     add_stopword('を');
     add_stopword('に');
+    add_stopword('へ');
     add_stopword('で');
     add_stopword('と');
     add_stopword('も');
@@ -1126,3 +1135,177 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20260625_002_preprocess_artifact
+DECLARE
+    v_column_count NUMBER;
+    v_constraint_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND column_name = 'PREPROCESS_ARTIFACT';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_documents ADD (preprocess_artifact JSON)';
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND constraint_name = 'RAG_DOCUMENTS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_documents DROP CONSTRAINT rag_documents_status_ck';
+    END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_documents ADD CONSTRAINT '
+        || 'rag_documents_status_ck CHECK '
+        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''PREPROCESSED'', '
+        || '''INGESTING'', ''REVIEW'', ''CHUNKING'', ''CHUNKED'', ''INDEXING'', '
+        || '''INDEXED'', ''ERROR''))';
+END;
+/
+
+-- migration: 20260627_001_documents_preprocessed_status
+DECLARE
+    v_constraint_count NUMBER;
+BEGIN
+    SELECT COUNT(*)
+    INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND constraint_name = 'RAG_DOCUMENTS_STATUS_CK';
+
+    IF v_constraint_count > 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_documents DROP CONSTRAINT rag_documents_status_ck';
+    END IF;
+
+    EXECUTE IMMEDIATE
+        'ALTER TABLE rag_documents ADD CONSTRAINT '
+        || 'rag_documents_status_ck CHECK '
+        || '(status IN (''UPLOADED'', ''PREPROCESSING'', ''PREPROCESSED'', '
+        || '''INGESTING'', ''REVIEW'', ''CHUNKING'', ''CHUNKED'', ''INDEXING'', '
+        || '''INDEXED'', ''ERROR''))';
+END;
+/
+
+-- migration: 20260629_001_chunk_sets_serving
+DECLARE
+    v_col_count   NUMBER;
+    v_constraint_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_col_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'IS_SERVING';
+
+    IF v_col_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_chunk_sets ADD (is_serving NUMBER(1) DEFAULT 1 NOT NULL)';
+        -- backfill は列追加直後の一度だけ。動的 SQL(EXECUTE IMMEDIATE)にしないと新列を
+        -- 静的参照できず PL/SQL コンパイルに失敗する。同一文書で別 chunk_set が serving
+        -- binding を持ち自分は持たない chunk_set だけ 0、それ以外は既定 1(配信を残す安全側)。
+        EXECUTE IMMEDIATE
+            'UPDATE rag_chunk_sets cs SET is_serving = 0 '
+            || 'WHERE EXISTS (SELECT 1 FROM rag_kb_chunk_set_bindings b '
+            || 'WHERE b.document_id = cs.document_id AND b.is_serving = 1 '
+            || 'AND b.chunk_set_id <> cs.chunk_set_id) '
+            || 'AND NOT EXISTS (SELECT 1 FROM rag_kb_chunk_set_bindings b2 '
+            || 'WHERE b2.chunk_set_id = cs.chunk_set_id AND b2.is_serving = 1)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_constraint_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_CHUNK_SETS'
+      AND constraint_name = 'RAG_CHUNK_SETS_SERVING_CK';
+
+    IF v_constraint_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_chunk_sets ADD CONSTRAINT '
+            || 'rag_chunk_sets_serving_ck CHECK (is_serving IN (0, 1))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes WHERE index_name = 'RAG_CHUNK_SETS_SERVING_IDX';
+
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_chunk_sets_serving_idx '
+            || 'ON rag_chunk_sets (document_id, is_serving)';
+    END IF;
+END;
+/
+
+-- migration: 20260629_002_drop_kb_chunk_set_bindings
+DECLARE
+    v_table_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables WHERE table_name = 'RAG_KB_CHUNK_SET_BINDINGS';
+
+    IF v_table_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE rag_kb_chunk_set_bindings';
+    END IF;
+END;
+/
+
+-- migration: 20260629_003_ingestion_jobs_settings_overrides
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_INGESTION_JOBS'
+      AND column_name = 'SETTINGS_OVERRIDES';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_ingestion_jobs ADD (settings_overrides JSON)';
+    END IF;
+END;
+/
+
+-- migration: 20260629_004_documents_processing_config
+DECLARE
+    v_column_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_column_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS'
+      AND column_name = 'PROCESSING_CONFIG';
+
+    IF v_column_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (processing_config JSON)';
+    END IF;
+END;
+/
+
+-- migration: 20260630_001_default_knowledge_base_name
+BEGIN
+    UPDATE rag_knowledge_bases current_default
+    SET
+        name = 'DEFAULT-' || current_default.knowledge_base_id,
+        updated_at = SYSTIMESTAMP
+    WHERE LOWER(current_default.name) = 'default'
+      AND EXISTS (
+          SELECT 1
+          FROM rag_knowledge_bases legacy_default
+          WHERE legacy_default.name = '既定ナレッジベース'
+            AND NVL(legacy_default.tenant_id_hash, '__GLOBAL__') =
+                NVL(current_default.tenant_id_hash, '__GLOBAL__')
+      );
+
+    UPDATE rag_knowledge_bases
+    SET
+        name = 'DEFAULT',
+        updated_at = SYSTIMESTAMP
+    WHERE name = '既定ナレッジベース';
+END;
+/
+COMMIT;

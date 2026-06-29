@@ -151,6 +151,8 @@ class FakeKnowledgeBaseOracle:
         detail = self.knowledge_bases.get(knowledge_base_id)
         if detail is None:
             raise KeyError(knowledge_base_id)
+        if detail.name.casefold() == "default":
+            raise ValueError("DEFAULT ナレッジベースはアーカイブできません。")
         archived = detail.model_copy(
             update={
                 "status": KnowledgeBaseStatus.ARCHIVED,
@@ -306,6 +308,26 @@ def test_create_and_list_knowledge_bases(fake_oracle: FakeKnowledgeBaseOracle) -
     assert page["items"][0]["name"] == "社内規程"
 
 
+@pytest.mark.parametrize("reserved_name", ["DEFAULT", "default", " DEFAULT "])
+def test_default_is_a_reserved_knowledge_base_name(
+    fake_oracle: FakeKnowledgeBaseOracle,
+    reserved_name: str,
+) -> None:
+    """DEFAULT は大文字小文字・前後空白にかかわらずユーザー名に使えない。"""
+    create_resp = client.post("/api/knowledge-bases", json={"name": reserved_name})
+
+    assert create_resp.status_code == 422
+    assert "DEFAULT は予約名のため使用できません。" in create_resp.json()["error_messages"][0]
+
+    detail = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
+    update_resp = client.patch(
+        f"/api/knowledge-bases/{detail['id']}",
+        json={"name": reserved_name},
+    )
+
+    assert update_resp.status_code == 422
+
+
 def test_knowledge_base_graph_endpoint(fake_oracle: FakeKnowledgeBaseOracle) -> None:
     """関係情報グラフ endpoint が空/データ/404 を返す。"""
     detail = client.post("/api/knowledge-bases", json={"name": "社内規程"}).json()["data"]
@@ -348,6 +370,22 @@ def test_update_and_archive_knowledge_base(fake_oracle: FakeKnowledgeBaseOracle)
     archive_resp = client.post(f"/api/knowledge-bases/{detail['id']}/archive")
     assert archive_resp.status_code == 200
     assert archive_resp.json()["data"]["status"] == "ARCHIVED"
+
+
+def test_default_knowledge_base_cannot_be_archived(
+    fake_oracle: FakeKnowledgeBaseOracle,
+) -> None:
+    """DEFAULT のアーカイブ要求は競合として拒否する。"""
+    detail = client.post("/api/knowledge-bases", json={"name": "一時名"}).json()["data"]
+    kb_id = detail["id"]
+    fake_oracle.knowledge_bases[kb_id] = fake_oracle.knowledge_bases[kb_id].model_copy(
+        update={"name": "DEFAULT"}
+    )
+
+    response = client.post(f"/api/knowledge-bases/{kb_id}/archive")
+
+    assert response.status_code == 409
+    assert response.json()["error_messages"] == ["DEFAULT ナレッジベースはアーカイブできません。"]
 
 
 def test_assign_and_list_knowledge_base_documents(fake_oracle: FakeKnowledgeBaseOracle) -> None:

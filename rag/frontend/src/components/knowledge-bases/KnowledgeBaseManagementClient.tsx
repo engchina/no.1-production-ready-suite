@@ -13,7 +13,12 @@ import { FieldError } from "@/components/ui/field-error";
 import { FormStatus } from "@/components/ui/form-status";
 import { ToggleChip } from "@/components/ui/toggle-chip";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { ApiError, type KnowledgeBaseStatus, type KnowledgeBaseSummary } from "@/lib/api";
+import {
+  ApiError,
+  DEFAULT_KNOWLEDGE_BASE_NAME,
+  type KnowledgeBaseStatus,
+  type KnowledgeBaseSummary,
+} from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
@@ -204,12 +209,12 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
   const [description, setDescription] = useState("");
   const [touched, setTouched] = useState(false);
 
-  const nameError = touched && !name.trim() ? t("knowledgeBases.validation.nameRequired") : null;
+  const nameError = touched ? validateKnowledgeBaseName(name) : null;
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setTouched(true);
-    if (!name.trim()) return;
+    if (validateKnowledgeBaseName(name)) return;
     create.mutate(
       {
         name: name.trim(),
@@ -300,6 +305,7 @@ function KnowledgeBaseRow({
   archiving: boolean;
   onArchive: () => void;
 }) {
+  const isDefault = knowledgeBase.name === DEFAULT_KNOWLEDGE_BASE_NAME;
   return (
     <tr className="border-t border-border">
       <td className="max-w-[18rem] px-4 py-3">
@@ -330,7 +336,9 @@ function KnowledgeBaseRow({
             size="sm"
             onClick={onArchive}
             loading={archiving}
-            disabled={knowledgeBase.status === "ARCHIVED"}
+            disabled={knowledgeBase.status === "ARCHIVED" || isDefault}
+            aria-label={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
+            title={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
           >
             <Archive size={14} aria-hidden />
             {t("knowledgeBases.actions.archive")}
@@ -339,6 +347,15 @@ function KnowledgeBaseRow({
       </td>
     </tr>
   );
+}
+
+function validateKnowledgeBaseName(name: string) {
+  const cleaned = name.trim();
+  if (!cleaned) return t("knowledgeBases.validation.nameRequired");
+  if (cleaned.toUpperCase() === DEFAULT_KNOWLEDGE_BASE_NAME) {
+    return t("knowledgeBases.validation.nameReserved");
+  }
+  return null;
 }
 
 function KnowledgeBaseListSkeleton() {
