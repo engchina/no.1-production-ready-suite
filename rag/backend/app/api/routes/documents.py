@@ -75,6 +75,7 @@ from app.schemas.document import (
     IngestionJobPhase,
     IngestionJobStatus,
     IngestionSegment,
+    ParserExtractionExperimentRequest,
     SourceProfile,
     UploadResult,
 )
@@ -702,6 +703,111 @@ async def promote_chunk_set_experiment(
         document_id=document_id, keep_chunk_set_ids=[chunk_set_id]
     )
     return ApiResponse(data=await _chunk_set_experiment_view(oracle, document_id, chunk_set_id))
+
+
+@router.post(
+    "/{document_id}/parser-extraction-experiments", response_model=ApiResponse[IngestionJob]
+)
+async def create_parser_extraction_experiment(
+    document_id: str, request: ParserExtractionExperimentRequest
+) -> ApiResponse[IngestionJob]:
+    """parser/前処理を変えた候補を**再抽出**で materialize する非同期ジョブを投入する。
+
+    分割軸(chunk-set-experiments)と違い parser/前処理は抽出結果が変わるため再抽出が必要で、
+    配信中文書を乱さない candidate モードのジョブで実行する。ジョブ完了で候補 chunk_set が
+    is_serving=0 として残り、横並び比較・昇格は既存の導線を使う。
+    """
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status != FileStatus.INDEXED:
+        raise HTTPException(
+            status_code=409, detail="索引済み(INDEXED)の文書のみ別レシピを試せます。"
+        )
+    if not detail.content_sha256:
+        raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
+    if await oracle.get_document_serving_chunk_set_id(document_id) is None:
+        raise HTTPException(status_code=409, detail="配信中の chunk_set がありません。")
+    overrides = request.settings_overrides()
+    global_settings = get_settings()
+    candidate_settings = global_settings.model_copy(update=overrides)
+    # parser/前処理が現状と同じなら再抽出は不要(分割だけ変えるなら chunk-set-experiments を使う)。
+    if compute_extraction_recipe_id(
+        detail.content_sha256, candidate_settings
+    ) == compute_extraction_recipe_id(detail.content_sha256, global_settings):
+        raise HTTPException(
+            status_code=409,
+            detail="現在配信中の前処理/解析と同じ設定です。分割だけ変える場合は別レシピ実験を使ってください。",
+        )
+    job = await _create_ingestion_job_record(
+        oracle=oracle,
+        document_id=document_id,
+        parser_profile=_source_profile_for_detail(detail).parser_profile,
+        quality_warnings=[],
+        phase=IngestionJobPhase.EXTRACT,
+        settings_overrides=overrides,
+    )
+    _dispatch_ingestion_job(job.id)
+    return ApiResponse(data=job)
+
+
+def _experiment_candidate_settings(base: Settings, overrides: dict[str, object]) -> Settings:
+    """global 設定に実験ジョブの候補レシピ上書きを重ねた Settings を返す(既知キーのみ)。"""
+    allowed = {"rag_preprocess_profile", "rag_parser_adapter_backend"}
+    filtered = {key: value for key, value in overrides.items() if key in allowed}
+    return base.model_copy(update=filtered)
+
+
+async def _materialize_experiment_candidate(
+    oracle: OracleClient,
+    job: IngestionJob,
+    *,
+    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+) -> None:
+    """parser/前処理 候補 chunk_set を candidate モードで隔離 materialize する(Phase 3b)。"""
+    detail = await oracle.get_document(job.document_id)
+    if detail is None:
+        raise IngestionUserError("ドキュメントが見つかりません。")
+    if detail.status != FileStatus.INDEXED or not detail.content_sha256:
+        raise IngestionUserError("索引済み文書のみレシピ実験できます。")
+    serving_chunk_set_id = await oracle.get_document_serving_chunk_set_id(job.document_id)
+    if serving_chunk_set_id is None:
+        raise IngestionUserError("配信中の chunk_set がありません。")
+    candidate_settings = _experiment_candidate_settings(
+        get_settings(), job.settings_overrides or {}
+    )
+    candidate_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
+    if candidate_chunk_set_id == serving_chunk_set_id:
+        raise IngestionUserError("現在配信中のレシピと同じ設定です。")
+    data, source_profile = await _load_source_bytes(oracle, job.document_id, detail)
+    pipeline = IngestionPipeline(oracle=oracle, settings=candidate_settings)
+    await pipeline.ingest(
+        document_id=job.document_id,
+        image_bytes=data,
+        prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
+        content_type=detail.content_type or "application/octet-stream",
+        source_profile=source_profile,
+        chunk_set_id=candidate_chunk_set_id,
+        record_outcome=False,
+        original_object_storage_path=detail.object_storage_path,
+        manage_document_state=False,
+        cancel_checker=cancel_checker,
+    )
+    extraction_recipe_id = compute_extraction_recipe_id(detail.content_sha256, candidate_settings)
+    chunk_count = await oracle.count_chunk_set_chunks(candidate_chunk_set_id)
+    await oracle.upsert_chunk_set(
+        chunk_set_id=candidate_chunk_set_id,
+        document_id=job.document_id,
+        extraction_recipe_id=extraction_recipe_id,
+    )
+    await oracle.mark_chunk_set_indexed(
+        chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
+    )
+    # 候補は配信に載せない: 現 serving を再アサートして新 chunk_set を is_serving=0 に落とす。
+    await oracle.set_document_serving_chunk_set(
+        document_id=job.document_id, chunk_set_id=serving_chunk_set_id
+    )
 
 
 async def _materialization_plan_for_document(
@@ -2320,8 +2426,9 @@ async def _create_ingestion_job_record(
     status: IngestionJobStatus = IngestionJobStatus.QUEUED,
     phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS,
     skip_reason: str | None = None,
+    settings_overrides: dict[str, object] | None = None,
 ) -> IngestionJob:
-    """取込 job を永続化する。"""
+    """取込 job を永続化する。``settings_overrides`` 付きはレシピ実験(Phase 3b)ジョブ。"""
     queued_at = datetime.now(UTC)
     settings = get_settings()
     job = IngestionJob(
@@ -2331,6 +2438,7 @@ async def _create_ingestion_job_record(
         phase=phase,
         parser_profile=parser_profile,
         quality_warnings=quality_warnings,
+        settings_overrides=settings_overrides,
         skip_reason=skip_reason,
         max_attempts=settings.ingestion_job_max_attempts,
         queued_at=queued_at,
@@ -2978,16 +3086,22 @@ async def _run_ingestion_job(
         return current is not None and current.status == IngestionJobStatus.CANCELLED
 
     try:
-        if job.phase == IngestionJobPhase.CHUNK:
+        if job.settings_overrides is not None:
+            # Phase 3b: parser/前処理を変えた候補 chunk_set を再抽出で隔離 materialize する。
+            # candidate モードで配信中文書の status/serving を一切触らない(失敗もジョブ側で記録)。
+            await _materialize_experiment_candidate(oracle, job, cancel_checker=is_cancelled)
+        elif job.phase == IngestionJobPhase.CHUNK:
             detail = await _chunk_reviewed_document(
                 job.document_id,
                 cancel_checker=is_cancelled,
             )
+            await _enqueue_auto_advance_job(job, detail)
         elif job.phase == IngestionJobPhase.INDEX:
             detail = await _index_reviewed_document(
                 job.document_id,
                 cancel_checker=is_cancelled,
             )
+            await _enqueue_auto_advance_job(job, detail)
         elif job.phase == IngestionJobPhase.EXTRACT:
             current_detail = await oracle.get_document(job.document_id)
             if (
@@ -3006,6 +3120,7 @@ async def _run_ingestion_job(
                 use_prepared_artifact=True,
                 cancel_checker=is_cancelled,
             )
+            await _enqueue_auto_advance_job(job, detail)
         else:
             await _reset_document_outputs_for_extract(
                 oracle,
@@ -3018,7 +3133,7 @@ async def _run_ingestion_job(
                 use_prepared_artifact=False,
                 cancel_checker=is_cancelled,
             )
-        await _enqueue_auto_advance_job(job, detail)
+            await _enqueue_auto_advance_job(job, detail)
     except HTTPException as exc:
         await _finish_ingestion_job_unless_cancelled(
             oracle,

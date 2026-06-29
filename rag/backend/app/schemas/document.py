@@ -6,7 +6,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, model_validator
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
-from app.config import ChunkingStrategy
+from app.config import ChunkingStrategy, ParserAdapterBackend, PreprocessProfile
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
 
@@ -81,6 +81,8 @@ class IngestionJob(BaseModel):
     phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS
     parser_profile: str
     quality_warnings: list[str] = Field(default_factory=list)
+    # レシピ実験(Phase 3b)ジョブが持つ候補レシピ上書き(rag_* キー)。通常取込では None。
+    settings_overrides: dict[str, object] | None = None
     skip_reason: str | None = None
     error_message: str | None = None
     attempt_count: int = Field(default=0, ge=0)
@@ -273,6 +275,37 @@ class ChunkSetExperimentRequest(BaseModel):
     def _require_at_least_one_override(self) -> "ChunkSetExperimentRequest":
         if not self.settings_overrides():
             raise ValueError("少なくとも 1 つの chunking 設定を指定してください。")
+        return self
+
+    def settings_overrides(self) -> dict[str, object]:
+        """非 None の値を Settings の rag_* キーへ写した上書き dict を返す。"""
+        return {
+            setting: getattr(self, field)
+            for field, setting in self._FIELD_TO_SETTING.items()
+            if getattr(self, field) is not None
+        }
+
+
+class ParserExtractionExperimentRequest(BaseModel):
+    """parser/前処理を変えた候補を試す実験リクエスト(再抽出軸・非同期ジョブ)。
+
+    parser/前処理を変えると抽出結果が変わるため再抽出が必要で、配信中文書を乱さない
+    candidate モードの非同期ジョブで materialize する。指定フィールドだけ global 既定を
+    上書きする(最低 1 つ必須)。
+    """
+
+    preprocess_profile: PreprocessProfile | None = None
+    parser_adapter_backend: ParserAdapterBackend | None = None
+
+    _FIELD_TO_SETTING = {
+        "preprocess_profile": "rag_preprocess_profile",
+        "parser_adapter_backend": "rag_parser_adapter_backend",
+    }
+
+    @model_validator(mode="after")
+    def _require_at_least_one_override(self) -> "ParserExtractionExperimentRequest":
+        if not self.settings_overrides():
+            raise ValueError("前処理プロファイルか文書解析 backend のいずれかを指定してください。")
         return self
 
     def settings_overrides(self) -> dict[str, object]:

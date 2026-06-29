@@ -563,6 +563,83 @@ async def test_candidate_mode_failure_does_not_error_document() -> None:
         assert reloaded is not None and reloaded.status == FileStatus.INDEXED
 
 
+def test_parser_extraction_experiment_job_materializes_isolated_candidate() -> None:
+    """parser/前処理 実験ジョブは配信中文書を乱さず候補 chunk_set(is_serving=0)を作る。
+
+    Phase 3b: settings_overrides 付きジョブを worker が candidate モードで再抽出 materialize し、
+    文書 status・serving を変えないことを実 Oracle で固定する。
+    """
+    from app.rag.variant_keys import compute_chunk_set_id
+
+    content = "社内規程 クラウド利用料 実験対象の本文です。".encode()
+    upload_resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("experiment.txt", content, "text/plain")},
+    )
+    assert upload_resp.status_code == 200
+    document_id = upload_resp.json()["data"]["id"]
+
+    async def _setup_serving() -> str:
+        oracle = OracleClient()
+        detail = await oracle.get_document(document_id)
+        assert detail is not None
+        settings = Settings.model_construct(
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        )
+        pipeline = IngestionPipeline(oracle=oracle, settings=settings)
+        serving_cs = compute_chunk_set_id(cast(str, detail.content_sha256), settings)
+        await pipeline.ingest(
+            document_id,
+            content,
+            "prompt",
+            content_type="text/plain",
+            source_profile=detail.source_profile,
+            chunk_set_id=serving_cs,
+        )
+        await oracle.upsert_chunk_set(chunk_set_id=serving_cs, document_id=document_id)
+        await oracle.mark_chunk_set_indexed(
+            chunk_set_id=serving_cs,
+            chunk_count=await oracle.count_chunk_set_chunks(serving_cs),
+            vector_count=await oracle.count_chunk_set_chunks(serving_cs),
+        )
+        await oracle.set_document_serving_chunk_set(
+            document_id=document_id, chunk_set_id=serving_cs
+        )
+        return serving_cs
+
+    serving_cs = asyncio.run(_setup_serving())
+
+    # parser を docling に変えた実験ジョブを投入(global 既定 = unstructured と異なる)。
+    exp_resp = client.post(
+        f"/api/documents/{document_id}/parser-extraction-experiments",
+        json={"parser_adapter_backend": "docling"},
+    )
+    assert exp_resp.status_code == 200
+    job = exp_resp.json()["data"]
+    assert job["settings_overrides"] == {"rag_parser_adapter_backend": "docling"}
+
+    _run_ingestion_job(cast(str, job["id"]))
+
+    job_after = client.get(f"/api/documents/ingestion-jobs/{job['id']}").json()["data"]
+    assert job_after["status"] == "SUCCEEDED"
+
+    async def _assert_isolated() -> None:
+        oracle = OracleClient()
+        reloaded = await oracle.get_document(document_id)
+        assert reloaded is not None and reloaded.status == FileStatus.INDEXED
+        chunk_set_ids = await oracle.list_document_chunk_set_ids(document_id)
+        candidates = [cs for cs in chunk_set_ids if cs != serving_cs]
+        assert len(candidates) == 1
+        serving_row = await oracle.get_chunk_set(serving_cs)
+        candidate_row = await oracle.get_chunk_set(candidates[0])
+        assert serving_row is not None and int(str(serving_row["is_serving"])) == 1
+        assert candidate_row is not None and int(str(candidate_row["is_serving"])) == 0
+        assert await oracle.count_chunk_set_chunks(candidates[0]) > 0
+
+    asyncio.run(_assert_isolated())
+
+
 def test_prompt_injection_query_is_blocked(caplog: LogCaptureFixture) -> None:
     """プロンプト注入らしい検索は拒否する。"""
     with caplog.at_level(logging.INFO, logger="app.audit"):
