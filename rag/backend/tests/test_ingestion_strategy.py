@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 from pypdf import PdfReader
+from rag_parser_core.preprocess import ConvertOutcome
 from rag_parser_core.result import ParserRegistryResult
 
 from app.clients.oci_enterprise_ai import (
@@ -663,6 +664,138 @@ async def test_ingestion_pipeline_reports_extraction_artifact_cache_failure() ->
     )
     assert oracle.saved_extraction.quality_report.risk_level == "medium"
     assert all(segment.artifact_path is None for segment in oracle.segments.values())
+
+
+class _StubConvertingPreprocess:
+    """converting プロファイルで必ず converted=True を返す前処理スタブ(サービス不要)。"""
+
+    def convert(
+        self,
+        source_bytes: bytes,
+        *,
+        content_type: str,
+        source_profile: Any = None,
+        profile: Any = None,
+    ) -> ConvertOutcome:
+        _ = source_bytes, content_type, source_profile, profile
+        return ConvertOutcome(
+            converted=True,
+            converter_name="stub",
+            converter_version="v1",
+            derived_bytes=b"%PDF-1.7 derived",
+            derived_content_type="application/pdf",
+            page_map={"1": 1},
+        )
+
+
+async def test_preprocess_canonical_persist_failure_surfaces_as_error() -> None:
+    """変換成功でも処理後ファイル保存に失敗したら silent な PREPROCESSED を作らず ERROR にする。"""
+    oracle = FakeOracle()
+    storage = FailingObjectStorage()
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, storage),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_preprocess_enabled=True,
+            rag_preprocess_profile="pdf_to_page_images",
+        ),
+    )
+    pipeline._preprocess = cast(Any, _StubConvertingPreprocess())
+
+    with pytest.raises(IngestionUserError, match="処理後ファイルを保存できませんでした"):
+        await pipeline.ingest(
+            "doc-canonical-fail",
+            b"pdfdata",
+            "本文を抽出してください。",
+            content_type="application/pdf",
+            source_profile=_pdf_source_profile(file_size_bytes=7),
+        )
+
+    assert oracle.statuses[-1] == FileStatus.ERROR
+    assert oracle.error_messages[-1] is not None
+    assert "処理後ファイルを保存できませんでした" in oracle.error_messages[-1]
+    # 処理後ファイルが無い壊れた PREPROCESSED 成功状態を作らない。
+    assert FileStatus.PREPROCESSED not in oracle.statuses
+
+
+async def test_canonical_artifact_persists_even_when_extraction_cache_disabled() -> None:
+    """canonical(処理後ファイル)保存は抽出 JSON キャッシュフラグでは無効化されない(必須)。"""
+    oracle = FakeOracle()
+    storage = FakeObjectStorage()
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, storage),
+        settings=Settings(
+            rag_parser_adapter_backend="local",
+            rag_extraction_artifact_cache_enabled=False,
+        ),
+    )
+
+    path = await pipeline._cache_canonical_artifact(
+        document_id="doc-canonical",
+        trace_id="trace-1",
+        derived_bytes=b"%PDF-1.7 derived",
+        content_type="application/pdf",
+    )
+
+    assert path is not None
+    assert storage.puts
+    assert "/canonical.pdf" in storage.puts[0][0]
+
+
+class _NonPersistingOracle:
+    """save_preprocess_artifact を受けるが永続化しない(読み戻すと artifact なし)スタブ。"""
+
+    async def save_preprocess_artifact(self, document_id: str, artifact: Any) -> None:
+        _ = document_id, artifact
+
+    async def get_document(self, document_id: str) -> DocumentDetail:
+        return DocumentDetail(
+            id=document_id,
+            file_name="x.pdf",
+            status=FileStatus.PREPROCESSING,
+            content_type="application/pdf",
+            file_size_bytes=1,
+            content_sha256="a" * 64,
+            uploaded_at=datetime.now(UTC),
+            indexed_at=None,
+            preprocess_artifact=None,
+        )
+
+
+async def test_preprocess_artifact_save_not_persisted_surfaces_as_error() -> None:
+    """ファイル準備 artifact の保存が永続化しなければ silent にせず ERROR 用例外を出す。"""
+    from rag_parser_core.preprocess import SourceDerivation
+
+    pipeline = IngestionPipeline(
+        vlm=CapturingVlm(),
+        genai=FakeEmbeddingClient(),
+        oracle=cast(Any, _NonPersistingOracle()),
+        settings=Settings(rag_parser_adapter_backend="local"),
+    )
+    derivation = SourceDerivation(
+        derivation_id="d1",
+        preprocess_profile="pdf_to_page_images",
+        converted=True,
+        derived_object_path="local://artifacts/canonical/doc-x/t/canonical.pdf",
+        derived_content_type="application/pdf",
+        source_content_type="application/pdf",
+        source_sha256="a" * 64,
+        derived_sha256="b" * 64,
+    )
+    with pytest.raises(IngestionUserError, match="処理後ファイル情報を保存できませんでした"):
+        await pipeline._save_preprocess_artifact(
+            document_id="doc-x",
+            source_derivation=derivation,
+            original_file_name="x.pdf",
+            original_object_storage_path="local://uploaded/x.pdf",
+            fallback_content_type="application/pdf",
+        )
 
 
 async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embedding_failure() -> None:

@@ -6,7 +6,10 @@ import {
   resolveIngestionProgressSummary,
   shouldShowProcessingWatchBanner,
 } from "./DocumentWorkspace.logic";
-import { resolveIngestionErrorDisplayPlan } from "./ingestion-error-display";
+import {
+  resolveDocumentFailureView,
+  resolveIngestionErrorDisplayPlan,
+} from "./ingestion-error-display";
 
 describe("resolveIngestionParserDisplay", () => {
   it("取込 segment の parser を source profile より優先して表示する", () => {
@@ -151,6 +154,77 @@ describe("resolveIngestionErrorDisplayPlan", () => {
     expect(plan.documentMessage).toBe("document failed");
     expect(plan.queuedJobMessage).toBe("queued job failed");
     expect(plan.retriedSegmentJobMessage).toBe("retried job failed");
+  });
+
+  it("suppressMessages の原因は詳細側で再掲しない（§9 P2）", () => {
+    const plan = resolveIngestionErrorDisplayPlan({
+      segments: [
+        { segment_id: "segment-1", status: "FAILED", error_message: " parser failed " },
+        { segment_id: "segment-2", status: "FAILED", error_message: "ocr failed" },
+      ],
+      documentErrorMessage: "parser failed",
+      queuedJobErrorMessage: "parser failed",
+      suppressMessages: ["parser failed"],
+    });
+
+    // 上部バナーで出した "parser failed" は segment/document/queued から消える。
+    expect(Array.from(plan.segmentIds)).toEqual(["segment-2"]);
+    expect(plan.documentMessage).toBeNull();
+    expect(plan.queuedJobMessage).toBeNull();
+  });
+});
+
+describe("resolveDocumentFailureView", () => {
+  it("ERROR でなければ errored=false で何も出さない", () => {
+    const view = resolveDocumentFailureView({
+      documentStatus: "INDEXED",
+      segments: [],
+    });
+    expect(view).toEqual({ errored: false, failedStep: null, primaryMessage: null });
+  });
+
+  it("最新 FAILED ジョブの phase から失敗工程を導出し、原因を 1 本化する", () => {
+    const view = resolveDocumentFailureView({
+      documentStatus: "ERROR",
+      latestJobStatus: "FAILED",
+      latestJobPhase: "PREPROCESS",
+      latestJobErrorMessage: " ファイル準備に失敗しました。再処理してください。 ",
+      segments: [{ status: "FAILED", error_message: "別の原因" }],
+      documentErrorMessage: "文書側の原因",
+    });
+    expect(view.errored).toBe(true);
+    expect(view.failedStep).toBe("PREPROCESSING");
+    // job → segment → document の順で最具体を採用（job を採る）。
+    expect(view.primaryMessage).toBe("ファイル準備に失敗しました。再処理してください。");
+  });
+
+  it("ジョブ原因が無ければ失敗セグメント→文書の順にフォールバックする", () => {
+    const view = resolveDocumentFailureView({
+      documentStatus: "ERROR",
+      latestJobStatus: "FAILED",
+      latestJobPhase: "EXTRACT",
+      latestJobErrorMessage: "   ",
+      segments: [
+        { status: "SUCCEEDED", error_message: null },
+        { status: "FAILED", error_message: "segment 由来の原因" },
+      ],
+      documentErrorMessage: "文書側の原因",
+    });
+    expect(view.failedStep).toBe("INGESTING");
+    expect(view.primaryMessage).toBe("segment 由来の原因");
+  });
+
+  it("ジョブが FAILED でなければ失敗工程は不明(null)", () => {
+    const view = resolveDocumentFailureView({
+      documentStatus: "ERROR",
+      latestJobStatus: "SUCCEEDED",
+      latestJobPhase: "INDEX",
+      segments: [],
+      documentErrorMessage: "文書側の原因",
+    });
+    expect(view.errored).toBe(true);
+    expect(view.failedStep).toBeNull();
+    expect(view.primaryMessage).toBe("文書側の原因");
   });
 });
 

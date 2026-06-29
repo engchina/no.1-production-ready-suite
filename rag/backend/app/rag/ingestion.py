@@ -1100,6 +1100,14 @@ class IngestionPipeline:
             derived_bytes=derived_bytes,
             content_type=derived_content_type,
         )
+        if derived_path is None:
+            # 変換は成功したが処理後ファイルを保存できなかった。silent に path 欠落の
+            # PREPROCESSED を作ると「処理後」プレビューも EXTRACT(承認して解析へ)も壊れるため、
+            # ここで失敗を表面化して ERROR にし、人に再処理を促す(原因は warning ログ参照)。
+            raise IngestionUserError(
+                "ファイル準備の処理後ファイルを保存できませんでした。"
+                "ストレージ設定を確認し、ファイル準備から再処理してください。"
+            )
         derivation = SourceDerivation(
             derivation_id=uuid4().hex,
             preprocess_profile=profile,
@@ -1154,6 +1162,26 @@ class IngestionPipeline:
             warnings=list(source_derivation.warnings),
         )
         await save_artifact(document_id, artifact)
+        if artifact.object_storage_path:
+            # 保存検証: ファイル準備 artifact(JSON 列)の書き込みが永続化したか読み戻して確認する。
+            # 稀に commit 成功でも値が残らない事象があり、silent に path 欠落の PREPROCESSED を
+            # 作ると「処理後」も EXTRACT も壊れる。残っていなければ失敗を表面化し再処理を促す。
+            get_document = getattr(self._oracle, "get_document", None)
+            if callable(get_document):
+                saved = await get_document(document_id)
+                if (
+                    saved is None
+                    or saved.preprocess_artifact is None
+                    or not saved.preprocess_artifact.object_storage_path
+                ):
+                    logger.warning(
+                        "preprocess_artifact_not_persisted",
+                        extra={"document_id": document_id},
+                    )
+                    raise IngestionUserError(
+                        "ファイル準備の処理後ファイル情報を保存できませんでした。"
+                        "時間をおいてファイル準備から再処理してください。"
+                    )
 
     async def _cache_canonical_artifact(
         self,
@@ -1163,9 +1191,12 @@ class IngestionPipeline:
         derived_bytes: bytes,
         content_type: str,
     ) -> str | None:
-        """前処理で生成した正規化原本(canonical source)を Object Storage へ保存する。"""
-        if not getattr(self._settings, "rag_extraction_artifact_cache_enabled", True):
-            return None
+        """前処理で生成した正規化原本(canonical source)を Object Storage へ保存する。
+
+        変換物(処理後ファイル)は下流の抽出/プレビューに必須なため、抽出 JSON 用の
+        rag_extraction_artifact_cache_enabled では握らず常に保存する。保存失敗は呼び出し側で
+        致命扱いにし(silent な path 欠落の PREPROCESSED を作らない)、原因を warning に残す。
+        """
         key_prefix = _safe_artifact_prefix(
             getattr(self._settings, "rag_canonical_artifact_prefix", "artifacts/canonical")
         )
@@ -1179,10 +1210,18 @@ class IngestionPipeline:
                 derived_bytes,
                 content_type=content_type or "application/octet-stream",
             )
-        except Exception as exc:  # noqa: BLE001 - 保存失敗は派生系譜を path 無しで残し取込を続ける
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - 失敗は呼び出し側で致命扱い。原因を残して None を返す
             logger.warning(
                 "canonical_artifact_cache_failed",
-                extra={"document_id": document_id, "error_type": type(exc).__name__},
+                extra={
+                    "document_id": document_id,
+                    "key": key,
+                    "backend": getattr(self._settings, "upload_storage_backend", "unknown"),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
             )
             return None
 

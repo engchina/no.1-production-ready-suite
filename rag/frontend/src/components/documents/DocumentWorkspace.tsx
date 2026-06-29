@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowUpRight,
   Braces,
   Check,
   Clock3,
@@ -39,11 +38,12 @@ import {
 } from "./DocumentWorkspace.logic";
 import {
   normalizeIngestionErrorMessage,
+  resolveDocumentFailureView,
   resolveIngestionErrorDisplayPlan,
 } from "./ingestion-error-display";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
-import { FlowStepper } from "@/components/upload/FlowStepper";
+import { FlowStepper, STEP_LABEL_KEY } from "@/components/upload/FlowStepper";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
@@ -54,6 +54,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   api,
   ApiError,
+  type DocumentBuildConfigGroup,
+  type DocumentBuildConfigState,
   type DocumentApproveRequest,
   type DocumentElement,
   type DocumentChunkView,
@@ -64,6 +66,7 @@ import {
   type IngestionJob,
   type IngestionJobPhase,
   type IngestionSegment,
+  type KnowledgeBaseIngestionConfig,
   type KnowledgeBaseRef,
   type SourceProfile,
 } from "@/lib/api";
@@ -318,6 +321,26 @@ export function DocumentWorkspace({
     ],
     segmentStatuses: segmentsQuery.data?.map((segment) => segment.status) ?? [],
   });
+  // 文書失敗を 1 本化（messaging-spec §9 P2/P5）: 原因 1 本 + 失敗工程の導出。
+  const documentFailure = useMemo(
+    () =>
+      resolveDocumentFailureView({
+        documentStatus: status,
+        latestJobStatus: latestDocumentJob?.status,
+        latestJobPhase: latestDocumentJob?.phase,
+        latestJobErrorMessage: latestDocumentJob?.error_message,
+        segments: segmentsQuery.data ?? [],
+        documentErrorMessage: query.data?.error_message,
+      }),
+    [
+      status,
+      latestDocumentJob?.status,
+      latestDocumentJob?.phase,
+      latestDocumentJob?.error_message,
+      segmentsQuery.data,
+      query.data?.error_message,
+    ]
+  );
   const ingestionErrorDisplays = useMemo(
     () =>
       resolveIngestionErrorDisplayPlan({
@@ -326,6 +349,8 @@ export function DocumentWorkspace({
         documentErrorMessage: query.data?.error_message,
         queuedJobErrorMessage,
         retriedSegmentJobErrorMessage,
+        // 上部の原因バナーに昇格した本文は詳細側で再掲しない（§9 P2）。
+        suppressMessages: [documentFailure.primaryMessage],
       }),
     [
       latestDocumentJob?.error_message,
@@ -333,6 +358,7 @@ export function DocumentWorkspace({
       query.data?.error_message,
       queuedJobErrorMessage,
       retriedSegmentJobErrorMessage,
+      documentFailure.primaryMessage,
     ]
   );
   // 取込・診断の折りたたみ。通常は閉じておき、取込中/失敗/エラー/セグメント失敗時のみ自動展開する。
@@ -722,6 +748,10 @@ export function DocumentWorkspace({
   const sourceProfile = doc.source_profile ?? initialSourceProfile;
   const preparedArtifact = doc.preprocess_artifact;
   const hasPreparedArtifact = Boolean(preparedArtifact?.object_storage_path);
+  // PREPROCESSED なのに使える処理後ファイル(object_storage_path)が無い状態。承認(EXTRACT)は
+  // 必ず 409 になるため、converted の真偽や artifact の有無に関わらず「ファイル準備から再処理」へ
+  // 誘導する(null artifact / passthrough・path欠落 / 変換成功・保存失敗 を全て包含)。
+  const preparedArtifactMissing = !hasPreparedArtifact;
   const preprocessStepSkipped =
     ingestionConfigQuery.data?.effective_preprocess_profile === "passthrough" ||
     (preparedArtifact?.profile === "passthrough" && preparedArtifact.converted === false) ||
@@ -779,36 +809,26 @@ export function DocumentWorkspace({
         <FlowStepper
           status={doc.status}
           skippedSteps={preprocessStepSkipped ? ["PREPROCESSING"] : []}
+          failedStep={documentFailure.failedStep}
         />
-        {latestChunkSet ? (
-          <dl className="grid grid-cols-2 gap-3 rounded-md border border-border bg-background p-3 text-sm sm:grid-cols-4">
-            <div>
-              <dt className="text-xs text-muted">{t("flow.indexSummary.chunkSet")}</dt>
-              <dd className="mt-0.5 truncate font-medium text-foreground">
-                {latestChunkSet.chunk_set_id}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">{t("flow.indexSummary.status")}</dt>
-              <dd className="mt-0.5 font-medium text-foreground">{latestChunkSet.status}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">{t("flow.indexSummary.chunks")}</dt>
-              <dd className="tnum mt-0.5 font-medium text-foreground">
-                {latestChunkSet.chunk_count}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">{t("flow.indexSummary.vectors")}</dt>
-              <dd className="tnum mt-0.5 font-medium text-foreground">
-                {latestChunkSet.vector_count}
-              </dd>
-            </div>
-          </dl>
+        {documentFailure.errored ? (
+          <Banner
+            severity="danger"
+            title={
+              documentFailure.failedStep
+                ? t("flow.error.atStep", { step: t(STEP_LABEL_KEY[documentFailure.failedStep]) })
+                : t("flow.error.title")
+            }
+          >
+            {documentFailure.primaryMessage ?? t("flow.error.fallback")}
+          </Banner>
         ) : null}
-        {ingestionConfigQuery.data ? (
-          <BuildConfigSummary config={ingestionConfigQuery.data} />
-        ) : null}
+        <BuildConfigSummary
+          config={ingestionConfigQuery.data ?? null}
+          loading={ingestionConfigQuery.isPending}
+          error={ingestionConfigQuery.error}
+          onRetry={() => void ingestionConfigQuery.refetch()}
+        />
         {shouldShowProcessingWatchBanner({
           watchProcessing,
           documentStatus: doc.status,
@@ -844,9 +864,7 @@ export function DocumentWorkspace({
           initialKnowledgeBases={doc.knowledge_bases}
         />
 
-        {ingestionErrorDisplays.documentMessage ? (
-          <Banner severity="danger">{ingestionErrorDisplays.documentMessage}</Banner>
-        ) : null}
+        {/* 文書失敗の原因は上部の原因バナー(documentFailure)に集約済み（§9 P2）。 */}
         {enqueueIngestion.isError ? (
           <Banner severity="danger">
             {errorMessage(enqueueIngestion.error, t("flow.ingestFailed"))}
@@ -1082,6 +1100,7 @@ export function DocumentWorkspace({
               loading={documentJobsQuery.isPending}
               error={documentJobsQuery.isError}
               nowMs={elapsedNowMs}
+              suppressMessage={documentFailure.primaryMessage}
             />
             <IngestionSegmentsPanel
               segments={segmentsQuery.data ?? []}
@@ -1105,7 +1124,15 @@ export function DocumentWorkspace({
         ) : null}
 
         {doc.status === "PREPROCESSED" ? (
-          <Banner severity="info">{t("flow.preprocessed.description")}</Banner>
+          preparedArtifactMissing ? (
+            <Banner severity="danger">
+              {preparedArtifact?.converted
+                ? t("flow.preprocessed.persistFailed")
+                : t("flow.preprocessed.preparedMissing")}
+            </Banner>
+          ) : (
+            <Banner severity="info">{t("flow.preprocessed.description")}</Banner>
+          )
         ) : null}
         {doc.status === "REVIEW" ? (
           <Banner severity="info">{t("flow.review.description")}</Banner>
@@ -1151,7 +1178,7 @@ export function DocumentWorkspace({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          {(doc.status === "PREPROCESSED" ||
+          {((doc.status === "PREPROCESSED" && !preparedArtifactMissing) ||
             doc.status === "REVIEW" ||
             doc.status === "CHUNKED") && (
             <>
@@ -1216,6 +1243,16 @@ export function DocumentWorkspace({
                 </Button>
               ) : null}
             </>
+          )}
+          {doc.status === "PREPROCESSED" && preparedArtifactMissing && (
+            <Button
+              variant="primary"
+              onClick={() => void handleReprocessPhase("PREPROCESS")}
+              disabled={enqueueIngestion.isPending}
+            >
+              <RotateCcw size={15} aria-hidden />
+              {t("flow.reprocess.preprocess")}
+            </Button>
           )}
           {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
             <Button
@@ -1301,12 +1338,15 @@ function IngestionJobsPanel({
   loading,
   error,
   nowMs,
+  suppressMessage,
 }: {
   jobs: IngestionJob[];
   segments: IngestionSegment[];
   loading: boolean;
   error: boolean;
   nowMs: number;
+  /** 上部の原因バナーで表示済みの本文。一致時はここで再掲しない（§9 P2）。 */
+  suppressMessage?: string | null;
 }) {
   if (loading) return <Skeleton className="h-24 w-full rounded-md" />;
   if (error) {
@@ -1320,7 +1360,11 @@ function IngestionJobsPanel({
 
   const latest = jobs[0];
   const active = ingestionJobIsActive(latest.status);
-  const latestErrorMessage = normalizeIngestionErrorMessage(latest.error_message);
+  const normalizedLatestError = normalizeIngestionErrorMessage(latest.error_message);
+  const latestErrorMessage =
+    normalizedLatestError && normalizedLatestError !== suppressMessage
+      ? normalizedLatestError
+      : null;
   const progressSummary =
     latest.phase === "PREPROCESS" || latest.phase === "EXTRACT"
       ? resolveIngestionProgressSummary(segments)
@@ -1933,66 +1977,279 @@ function configValueLabel(key: I18nKey, raw: string): string {
   return key in ja ? t(key) : raw;
 }
 
-/**
- * この文書を処理した「適用済み構築設定」(ファイル準備 / 文書解析 / 文書分割)を文脈内に明示し、
- * 各設定ページへの導線を添える(P0-2 分割方式の明示 + P0-3 設定↔文書の往復)。
- */
-function BuildConfigSummary({ config }: { config: DocumentIngestionConfigData }) {
-  const items = [
-    {
-      key: "preprocess",
-      label: t("flow.buildConfig.preprocess"),
-      value: configValueLabel(
-        `settings.preprocess.profile.${config.effective_preprocess_profile}` as I18nKey,
-        config.effective_preprocess_profile
-      ),
-      href: APP_ROUTES.settingsPreprocess,
-    },
-    {
-      key: "parser",
-      label: t("flow.buildConfig.parser"),
-      value: parserBackendLabel(config.effective_parser_adapter_backend),
-      href: APP_ROUTES.settingsParserAdapters,
-    },
-    {
-      key: "chunking",
-      label: t("flow.buildConfig.chunking"),
-      value: configValueLabel(
-        `settings.chunking.strategy.${config.effective_chunking_strategy}` as I18nKey,
-        config.effective_chunking_strategy
-      ),
-      href: APP_ROUTES.settingsChunking,
-    },
-  ];
+const BUILD_CONFIG_STATE_KEYS: Record<DocumentBuildConfigState, I18nKey> = {
+  planned: "flow.buildConfig.state.planned",
+  building: "flow.buildConfig.state.building",
+  serving: "flow.buildConfig.state.serving",
+  update_required: "flow.buildConfig.state.updateRequired",
+  error: "flow.buildConfig.state.error",
+};
+
+const BUILD_CONFIG_STATE_CLASSES: Record<DocumentBuildConfigState, string> = {
+  planned: "border-border bg-muted/10 text-muted",
+  building: "border-info/30 bg-info-bg text-info",
+  serving: "border-success/30 bg-success-bg text-success",
+  update_required: "border-warning/30 bg-warning-bg text-warning",
+  error: "border-danger/30 bg-danger-bg text-danger",
+};
+
+function BuildConfigSummary({
+  config,
+  loading,
+  error,
+  onRetry,
+}: {
+  config: DocumentIngestionConfigData | null;
+  loading: boolean;
+  error: unknown;
+  onRetry: () => void;
+}) {
+  const groups = config?.build_configurations;
   return (
     <section
       aria-label={t("flow.buildConfig.title")}
       className="rounded-md border border-border bg-background p-3"
     >
-      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold text-muted">
-        <SlidersHorizontal size={14} className="text-primary" aria-hidden />
-        {t("flow.buildConfig.title")}
-      </h3>
-      <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-        {items.map((item) => (
-          <div key={item.key} className="min-w-0">
-            <dt className="text-xs text-muted">{item.label}</dt>
-            <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <span className="min-w-0 break-words font-medium text-foreground">{item.value}</span>
-              <Link
-                to={item.href}
-                aria-label={t("flow.buildConfig.openSettings", { name: item.label })}
-                className="inline-flex shrink-0 items-center gap-0.5 text-xs font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              >
-                {t("flow.buildConfig.openSettingsShort")}
-                <ArrowUpRight size={12} aria-hidden />
-              </Link>
-            </dd>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-xs font-semibold text-muted">
+          <SlidersHorizontal size={14} className="text-primary" aria-hidden />
+          {t("flow.buildConfig.title")}
+        </h3>
+        {groups ? (
+          <span className="tnum text-xs text-muted">
+            {t("flow.buildConfig.summary", {
+              knowledgeBases: groups.reduce(
+                (count, group) => count + group.knowledge_bases.length,
+                0
+              ),
+              configurations: groups.length,
+            })}
+          </span>
+        ) : null}
+      </div>
+      {loading ? (
+        <div className="space-y-2" role="status" aria-label={t("flow.buildConfig.loading")}>
+          <Skeleton className="h-28 w-full" />
+          <span className="sr-only">{t("flow.buildConfig.loading")}</span>
+        </div>
+      ) : error ? (
+        <Banner severity="warning" title={t("flow.buildConfig.loadError")}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p>{errorMessage(error, t("flow.buildConfig.loadErrorHint"))}</p>
+            <Button type="button" variant="secondary" size="sm" onClick={onRetry}>
+              <RotateCcw size={14} aria-hidden />
+              {t("common.retry")}
+            </Button>
           </div>
-        ))}
-      </dl>
+        </Banner>
+      ) : config && groups === undefined ? (
+        <LegacyBuildConfig config={config} />
+      ) : groups && groups.length > 0 ? (
+        <ul className="space-y-2" aria-label={t("flow.buildConfig.groups")}>
+          {groups.map((group) => (
+            <BuildConfigGroupCard
+              key={`${group.chunk_set_id}:${group.knowledge_bases.map((item) => item.id).join(",")}`}
+              group={group}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="py-3 text-sm text-muted">{t("flow.buildConfig.empty")}</p>
+      )}
     </section>
   );
+}
+
+function BuildConfigGroupCard({ group }: { group: DocumentBuildConfigGroup }) {
+  const config = group.effective_config;
+  return (
+    <li className="rounded-md border border-border bg-card p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {group.knowledge_bases.map((knowledgeBase) => (
+            <Link
+              key={knowledgeBase.id}
+              to={`${APP_ROUTES.knowledgeBases}/${knowledgeBase.id}`}
+              className="inline-flex min-h-11 items-center rounded-md border border-primary/20 bg-primary/5 px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              {knowledgeBase.name}
+            </Link>
+          ))}
+          {group.knowledge_bases.length > 1 ? (
+            <BuildConfigBadge>{t("flow.buildConfig.shared")}</BuildConfigBadge>
+          ) : null}
+          {group.is_review_target ? (
+            <BuildConfigBadge>{t("flow.buildConfig.reviewTarget")}</BuildConfigBadge>
+          ) : null}
+        </div>
+        <span
+          className={cn(
+            "inline-flex min-h-7 shrink-0 items-center rounded border px-2 text-xs font-medium",
+            BUILD_CONFIG_STATE_CLASSES[group.state]
+          )}
+          title={group.reason ?? undefined}
+        >
+          {t(BUILD_CONFIG_STATE_KEYS[group.state])}
+        </span>
+      </div>
+
+      <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
+        <BuildConfigField
+          label={t("flow.buildConfig.preprocess")}
+          value={configValueLabel(
+            `settings.preprocess.profile.${config.preprocess_profile}` as I18nKey,
+            config.preprocess_profile ?? "-"
+          )}
+        />
+        <BuildConfigField
+          label={t("flow.buildConfig.parser")}
+          value={parserBackendLabel(config.parser_adapter_backend ?? "local")}
+        />
+        <BuildConfigField
+          label={t("flow.buildConfig.chunking")}
+          value={chunkingConfigLabel(config)}
+        />
+        <BuildConfigField label={t("flow.buildConfig.indexBuild")} value={indexBuildLabel(config)} />
+        <BuildConfigField label={t("flow.buildConfig.autoAdvance")} value={autoAdvanceLabel(config)} />
+      </dl>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-xs text-muted">
+        {group.chunk_count > 0 || group.vector_count > 0 ? (
+          <span className="tnum">
+            {t("flow.buildConfig.counts", {
+              chunks: group.chunk_count,
+              vectors: group.vector_count,
+            })}
+          </span>
+        ) : null}
+        {group.serving_knowledge_base_count > 0 ? (
+          <span className="tnum">
+            {t("flow.buildConfig.servingCount", {
+              serving: group.serving_knowledge_base_count,
+              total: group.knowledge_bases.length,
+            })}
+          </span>
+        ) : null}
+        <BuildLayerStatuses group={group} />
+      </div>
+      {/* error 状態の汎用理由は上部の原因バナー/診断に集約済み。ここでは再掲しない（§9 P2）。
+          状態バッジ(上部)の hover(title)に reason は残る。update_required 等の説明的 reason は表示する。
+          ponytail: 多 KB で config 毎に異なる error 理由がある場合は将来 documentFailure と突き合わせて出し分け。 */}
+      {group.state !== "serving" && group.state !== "error" && group.reason ? (
+        <p className="mt-2 text-xs text-muted">{group.reason}</p>
+      ) : null}
+    </li>
+  );
+}
+
+function BuildConfigBadge({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex min-h-7 items-center rounded border border-border bg-background px-2 text-xs font-medium text-muted">
+      {children}
+    </span>
+  );
+}
+
+function BuildConfigField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="mt-0.5 break-words font-medium leading-5 text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+function BuildLayerStatuses({ group }: { group: DocumentBuildConfigGroup }) {
+  const items = [
+    [t("flow.buildConfig.layer.metadata"), group.layer_statuses.metadata],
+    [t("flow.buildConfig.layer.graph"), group.layer_statuses.graph],
+    [t("flow.buildConfig.layer.navigation"), group.layer_statuses.navigation],
+  ] as const;
+  const requested = items.filter(([, status]) => status.requested);
+  if (requested.length === 0) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      {requested.map(([label, status]) => (
+        <span key={label} title={status.reason ?? undefined}>
+          {label}: {t(`knowledgeBases.variant.layerStatus.${status.status}` as I18nKey)}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function LegacyBuildConfig({ config }: { config: DocumentIngestionConfigData }) {
+  return (
+    <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+      <BuildConfigField
+        label={t("flow.buildConfig.preprocess")}
+        value={configValueLabel(
+          `settings.preprocess.profile.${config.effective_preprocess_profile}` as I18nKey,
+          config.effective_preprocess_profile
+        )}
+      />
+      <BuildConfigField
+        label={t("flow.buildConfig.parser")}
+        value={parserBackendLabel(config.effective_parser_adapter_backend)}
+      />
+      <BuildConfigField
+        label={t("flow.buildConfig.chunking")}
+        value={configValueLabel(
+          `settings.chunking.strategy.${config.effective_chunking_strategy}` as I18nKey,
+          config.effective_chunking_strategy
+        )}
+      />
+    </dl>
+  );
+}
+
+function chunkingConfigLabel(config: KnowledgeBaseIngestionConfig) {
+  const strategy = configValueLabel(
+    `settings.chunking.strategy.${config.chunking_strategy}` as I18nKey,
+    config.chunking_strategy ?? "-"
+  );
+  return t("flow.buildConfig.chunkingValue", {
+    strategy,
+    size: config.chunk_size ?? "-",
+    overlap: config.chunk_overlap ?? "-",
+  });
+}
+
+function indexBuildLabel(config: KnowledgeBaseIngestionConfig) {
+  const graph = configValueLabel(
+    `settings.graph.profile.${config.graph_profile}` as I18nKey,
+    config.graph_profile ?? "-"
+  );
+  return [
+    graph,
+    t("flow.buildConfig.index.field", { state: booleanConfigLabel(config.field_extraction_enabled) }),
+    t("flow.buildConfig.index.asset", { state: booleanConfigLabel(config.asset_summary_enabled) }),
+    t("flow.buildConfig.index.navigation", {
+      state: booleanConfigLabel(config.navigation_summary_enabled),
+    }),
+  ].join(" · ");
+}
+
+function autoAdvanceLabel(config: KnowledgeBaseIngestionConfig) {
+  return [
+    t("flow.buildConfig.auto.parse", {
+      state: autoConfigLabel(config.auto_parse_after_preprocess_enabled),
+    }),
+    t("flow.buildConfig.auto.chunk", {
+      state: autoConfigLabel(config.auto_chunk_after_extract_enabled),
+    }),
+    t("flow.buildConfig.auto.index", {
+      state: autoConfigLabel(config.auto_index_after_chunk_enabled),
+    }),
+  ].join(" · ");
+}
+
+function booleanConfigLabel(value: boolean | null) {
+  return t(value ? "knowledgeBases.adapter.bool.enabled" : "knowledgeBases.adapter.bool.disabled");
+}
+
+function autoConfigLabel(value: boolean | null) {
+  return t(value ? "flow.buildConfig.auto.enabled" : "flow.buildConfig.auto.disabled");
 }
 
 function SourceProfilePanel({

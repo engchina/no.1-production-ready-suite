@@ -6,6 +6,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
+from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
 
@@ -144,28 +145,6 @@ class DocumentDetail(DocumentSummary):
     duplicate_source: DuplicateDocumentRef | None = None
 
 
-class DocumentIngestionConfigData(BaseModel):
-    """文書の取込設定スナップショットと owning KB の現行設定のドリフト状況。
-
-    Parser/Chunking は取込時にしか効かないため、owning KB の現行設定と、
-    実際に取込時へ刻まれた chunk metadata を比較し、再取込が必要かを示す。
-    """
-
-    document_id: str
-    is_indexed: bool = False
-    owning_knowledge_base: KnowledgeBaseRef | None = None
-    # owning KB の現行設定を重ねた「これから取り込むなら」の有効値。
-    effective_preprocess_profile: str
-    effective_chunking_strategy: str
-    effective_parser_adapter_backend: str
-    # 実際に取込時へ刻まれた値(INDEXED 済みのときのみ観測できる)。
-    observed_chunking_strategy: str | None = None
-    observed_parser_backend: str | None = None
-    chunking_drift: bool = False
-    parser_drift: bool = False
-    config_drift: bool = False
-
-
 class UploadResult(BaseModel):
     """アップロード結果。"""
 
@@ -262,6 +241,53 @@ class DocumentChunkSet(BaseModel):
     layer_statuses: DocumentChunkSetLayerStatuses = Field(
         default_factory=DocumentChunkSetLayerStatuses
     )
+
+
+class DocumentBuildConfigState(StrEnum):
+    """文書に所属する KB 構築設定グループの適用状態。"""
+
+    PLANNED = "planned"
+    BUILDING = "building"
+    SERVING = "serving"
+    UPDATE_REQUIRED = "update_required"
+    ERROR = "error"
+
+
+class DocumentBuildConfigGroup(BaseModel):
+    """同じ有効な構築設定を共有する KB 群。"""
+
+    knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list)
+    effective_config: KnowledgeBaseIngestionConfig
+    is_review_target: bool = False
+    extraction_recipe_id: str
+    chunk_set_id: str
+    state: DocumentBuildConfigState = DocumentBuildConfigState.PLANNED
+    reason: str | None = None
+    chunk_count: int = 0
+    vector_count: int = 0
+    serving_knowledge_base_count: int = 0
+    layer_statuses: DocumentChunkSetLayerStatuses = Field(
+        default_factory=DocumentChunkSetLayerStatuses
+    )
+
+
+class DocumentIngestionConfigData(BaseModel):
+    """文書の取込設定スナップショットと KB 別の構築設定。"""
+
+    document_id: str
+    is_indexed: bool = False
+    owning_knowledge_base: KnowledgeBaseRef | None = None
+    # owning KB の現行設定を重ねた「これから取り込むなら」の有効値。
+    effective_preprocess_profile: str
+    effective_chunking_strategy: str
+    effective_parser_adapter_backend: str
+    # 実際に取込時へ刻まれた値(INDEXED 済みのときのみ観測できる)。
+    observed_chunking_strategy: str | None = None
+    observed_parser_backend: str | None = None
+    chunking_drift: bool = False
+    parser_drift: bool = False
+    config_drift: bool = False
+    build_configurations: list[DocumentBuildConfigGroup] = Field(default_factory=list)
 
 
 class DocumentExtractionExportFormat(StrEnum):

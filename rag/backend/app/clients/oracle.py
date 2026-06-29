@@ -8,11 +8,13 @@ import asyncio
 import hashlib
 import importlib
 import json
+import logging
 import math
 import re
 from array import array
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -69,6 +71,8 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseSummary,
 )
 from app.schemas.search import RetrievedChunk, SearchMode
+
+logger = logging.getLogger(__name__)
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
 ASCII_TOKEN_PATTERN = re.compile(r"^[a-z0-9_]+$", re.IGNORECASE)
@@ -5217,6 +5221,7 @@ class OracleClient:
                 tenant_id_hash,
                 category_name,
                 object_storage_path,
+                preprocess_artifact,
                 content_type,
                 file_size_bytes,
                 content_sha256,
@@ -6270,14 +6275,29 @@ class OracleClient:
         self, statement: str, binds: Mapping[str, object] | None = None
     ) -> list[dict[str, object]]:
         """Oracle から行を dict として取得する。"""
-        return cast(
-            list[dict[str, object]],
-            await self._db_call_runner(
-                lambda: self._run_with_connection(
+
+        def fetch() -> list[dict[str, object]]:
+            return cast(
+                list[dict[str, object]],
+                self._run_with_connection(
                     lambda connection: _fetch_all(connection, statement, binds or {})
-                )
-            ),
-        )
+                ),
+            )
+
+        try:
+            return cast(list[dict[str, object]], await self._db_call_runner(fetch))
+        except Exception as exc:
+            error = exc.args[0] if exc.args else None
+            if not bool(getattr(error, "isrecoverable", False)):
+                raise
+            logger.warning(
+                "oracle_read_retry",
+                extra={
+                    "error_type": type(exc).__name__,
+                    "oracle_error_code": getattr(error, "full_code", None),
+                },
+            )
+            return cast(list[dict[str, object]], await self._db_call_runner(fetch))
 
     async def _fetch_ingestion_job_rows(
         self, statement: str, binds: Mapping[str, object] | None = None
@@ -6316,9 +6336,14 @@ class OracleClient:
     def _run_with_connection(self, operation: Callable[[OracleConnectionProtocol], Any]) -> Any:
         connection = self._acquire_connection()
         try:
-            return operation(connection)
-        finally:
+            result = operation(connection)
+        except Exception:
+            with suppress(Exception):
+                connection.close()
+            raise
+        else:
             connection.close()
+            return result
 
     def _acquire_connection(self) -> OracleConnectionProtocol:
         """pool から connection を取得する。"""
@@ -6397,9 +6422,14 @@ def _fetch_all(
         normalized = _normalize_sql(statement)
         cursor.execute(normalized, _binds_for_sql(normalized, binds))
         rows = cursor.fetchall()
-        return [_row_to_dict(row, cursor.description) for row in rows]
-    finally:
+        result = [_row_to_dict(row, cursor.description) for row in rows]
+    except Exception:
+        with suppress(Exception):
+            cursor.close()
+        raise
+    else:
         cursor.close()
+        return result
 
 
 def _execute(

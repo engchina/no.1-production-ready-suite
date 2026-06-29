@@ -575,6 +575,8 @@ Use `UV_CACHE_DIR=/tmp/uv-cache uv run ...` for backend validation commands in t
 
 ### Metadata
 - Reproducible: yes
+- Recurrence-Count: 2
+- Last-Seen: 2026-06-28
 - Related Files: backend/pyproject.toml
 
 ### Resolution
@@ -1349,5 +1351,42 @@ When `uv` needs its default cache under `/root/.cache/uv` in this environment, r
 ### Resolution
 - **Resolved**: 2026-06-15T18:52:08+09:00
 - **Notes**: Reran the same backend pytest subset with sandbox escalation; 11 tests passed.
+
+---
+
+## [ERR-20260629-001] oracle_recoverable_read_disconnect
+
+**Logged**: 2026-06-29T09:19:41+09:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Oracle の読取中に一時切断され、後処理の close 例外が元の接続例外を上書きして文書詳細 API が 500 になった。
+
+### Error
+```text
+DPY-4011: the database or network closed the connection
+DPI-1080: connection was closed by ORA-03113
+DPY-1001: not connected to database
+DPI-1010: not connected
+```
+
+### Context
+- `GET /api/documents/{id}` が重複元文書を読む途中で pooled connection を失った。
+- `cursor.fetchall()` の `DPY-4011` に続き、`cursor.close()` の `DPY-1001` が元例外を隠した。
+- python-oracledb はこの切断を `isrecoverable=True` として公開する。
+
+### Suggested Fix
+読取だけを recoverable 接続例外時に1回再試行し、既存例外がある場合は close 例外で上書きしない。transaction は再試行しない。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/clients/oracle.py, backend/tests/test_oracle_adapter.py
+- Tags: oracle, connection-pool, retry, dpy-4011, ora-03113
+
+### Resolution
+- **Resolved**: 2026-06-29T09:19:41+09:00
+- **Notes**: recoverable read retry、例外保持、非機密 retry log を追加。Oracle adapter 72 passed / 17 skipped、Ruff、mypy、対象 API 200 を確認。
 
 ---

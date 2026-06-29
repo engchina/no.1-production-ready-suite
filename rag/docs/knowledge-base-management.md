@@ -5,7 +5,7 @@
 > dataset / knowledge base / collection の考え方を参考にしつつ、実装は本プロジェクトの確定スタック
 > (OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai / Vite + React Router) へ再マッピングする。
 
-最終更新: 2026-06-15
+最終更新: 2026-06-28
 
 ---
 
@@ -38,6 +38,17 @@
 | R2R | API first の文書管理・検索管理 | FastAPI の CRUD / membership / search API と pytest 契約 |
 
 外部ベクトル DB、別 LLM プロバイダ、別フロントエンド基盤は導入しない。
+
+### 2.1 文書所属モデルと構築設定表示の差分
+
+- Dify の `Document` は単一 `dataset_id`、RAGFlow の `Document` は単一 `kb_id` を持つ。
+  PowerRAG は RAGFlow の database / data model を共有するため、いずれも同じ原本を別 KB へ
+  入れる場合は KB ごとに別文書として扱い、文書画面では 1 KB 分の設定だけを表示する。
+- 本プロジェクトは文書と KB を多対多にし、同じ設定の KB は artifact を共有し、設定差分だけを
+  別 materialization にする。このため文書詳細では、KB ごとの有効な構築設定を比較し、同一設定を
+  1 グループへまとめて `適用予定 / 構築中 / 配信中 / 更新が必要 / エラー` を表示する。
+- 表示するのは現在の有効設定であり、`配信中` のときだけ適用済みとみなす。設定変更後に対応する
+  artifact が無い場合は `更新が必要` とし、現在設定を誤って適用済みとは表示しない。
 
 ## 3. 用語
 
@@ -517,7 +528,8 @@ UX 要件:
 - 選択肢には status、文書数、説明を出す。
 - アーカイブ済みナレッジベースは選択不可。
 
-アップロード後の `DocumentWorkspace` には所属ナレッジベースの badge を表示する。
+アップロード後の `DocumentWorkspace` には所属ナレッジベースの badge と、同一設定をまとめた
+ナレッジベース別の構築設定グループを表示する。
 
 ### 8.6 文書インデックス
 

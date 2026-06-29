@@ -1,6 +1,7 @@
 """Oracle adapter 境界のテスト。"""
 
 import json
+import logging
 from array import array
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -335,6 +336,102 @@ async def test_oracle_client_persists_documents_through_pool() -> None:
     assert any("INSERT INTO rag_documents" in statement for statement in statements)
     assert pool.connection.many_calls
     assert "INSERT INTO rag_document_knowledge_bases" in pool.connection.many_calls[0].statement
+
+
+async def test_oracle_client_get_document_restores_preprocess_artifact() -> None:
+    """文書詳細は保存済みファイル準備 artifact を欠落させず返す。"""
+    row = _oracle_document_row(status="PREPROCESSED")
+    row["preprocess_artifact"] = json.dumps(
+        {
+            "derivation_id": "derivation-1",
+            "profile": "pdf_to_page_images",
+            "converted": True,
+            "object_storage_path": "oci://namespace/bucket/artifacts/canonical/doc-1.pdf",
+            "content_type": "application/pdf",
+            "sha256": "b" * 64,
+            "file_name": "policy.pdf",
+        }
+    )
+    pool = FakeOraclePool(
+        execute_results=[
+            [row],
+            [{"document_id": "doc-1", "knowledge_base_id": "kb-1", "name": "社内規程"}],
+        ]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    detail = await client.get_document("doc-1")
+
+    assert "preprocess_artifact" in pool.connection.calls[0].statement
+    assert detail is not None
+    assert detail.preprocess_artifact is not None
+    assert (
+        detail.preprocess_artifact.object_storage_path
+        == "oci://namespace/bucket/artifacts/canonical/doc-1.pdf"
+    )
+    assert detail.preprocess_artifact.content_type == "application/pdf"
+    assert detail.preprocess_artifact.sha256 == "b" * 64
+
+
+async def test_oracle_read_retries_one_recoverable_disconnect(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """recoverable な読取切断は新しい接続で1回だけ再試行する。"""
+    disconnect = RuntimeError(SimpleNamespace(isrecoverable=True, full_code="DPY-4011"))
+    pool = FakeOraclePool(
+        execute_results=[[], [{"ok": 1}]],
+        fetch_errors=[disconnect],
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with caplog.at_level(logging.WARNING, logger="app.clients.oracle"):
+        rows = await client._fetch_all("SELECT 1 AS ok FROM DUAL")
+
+    assert rows == [{"ok": 1}]
+    assert pool.acquire_calls == 2
+    record = next(item for item in caplog.records if item.message == "oracle_read_retry")
+    assert record.__dict__["error_type"] == "RuntimeError"
+    assert record.__dict__["oracle_error_code"] == "DPY-4011"
+
+
+@pytest.mark.parametrize(("recoverable", "expected_attempts"), [(True, 2), (False, 1)])
+async def test_oracle_read_does_not_retry_more_than_once_or_nonrecoverable_errors(
+    recoverable: bool,
+    expected_attempts: int,
+) -> None:
+    """再切断は2回で止め、非recoverable例外は即時に返す。"""
+    errors = [
+        RuntimeError(SimpleNamespace(isrecoverable=recoverable, full_code="DPY-4011"))
+        for _ in range(expected_attempts)
+    ]
+    pool = FakeOraclePool(
+        execute_results=[[] for _ in range(expected_attempts)],
+        fetch_errors=errors,
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with pytest.raises(RuntimeError):
+        await client._fetch_all("SELECT 1 AS ok FROM DUAL")
+
+    assert pool.acquire_calls == expected_attempts
+
+
+def test_fetch_all_preserves_fetch_error_when_cursor_close_also_fails() -> None:
+    """切断後の cursor.close 失敗で元の fetch 例外を上書きしない。"""
+
+    def fail(message: str) -> None:
+        raise RuntimeError(message)
+
+    cursor = SimpleNamespace(
+        description=None,
+        execute=lambda *_args: None,
+        fetchall=lambda: fail("fetch failed"),
+        close=lambda: fail("close failed"),
+    )
+    connection: Any = SimpleNamespace(cursor=lambda: cursor)
+
+    with pytest.raises(RuntimeError, match="fetch failed"):
+        oracle_module._fetch_all(connection, "SELECT 1 FROM DUAL", {})
 
 
 async def test_oracle_client_assigns_uploaded_document_to_selected_knowledge_base() -> None:
@@ -2755,10 +2852,12 @@ class FakeOraclePool:
         self,
         execute_results: list[list[dict[str, object]]] | None = None,
         missing_ingestion_job_max_attempts: bool = False,
+        fetch_errors: Sequence[Exception] | None = None,
     ) -> None:
         self.connection = FakeOracleConnection(
             execute_results or [],
             missing_ingestion_job_max_attempts=missing_ingestion_job_max_attempts,
+            fetch_errors=fetch_errors,
         )
         self.acquire_calls = 0
         self.close_calls = 0
@@ -2796,9 +2895,11 @@ class FakeOracleConnection:
         execute_results: list[list[dict[str, object]]],
         *,
         missing_ingestion_job_max_attempts: bool = False,
+        fetch_errors: Sequence[Exception] | None = None,
     ) -> None:
         self._execute_results = execute_results
         self.missing_ingestion_job_max_attempts = missing_ingestion_job_max_attempts
+        self.fetch_errors = list(fetch_errors or ())
         self.calls: list[SqlCall] = []
         self.many_calls: list[SqlManyCall] = []
         self.commits = 0
@@ -2862,6 +2963,8 @@ class FakeOracleCursor:
         return self._rows[0] if self._rows else None
 
     def fetchall(self) -> list[dict[str, object]]:
+        if self._connection.fetch_errors:
+            raise self._connection.fetch_errors.pop(0)
         return self._rows
 
     def close(self) -> None:

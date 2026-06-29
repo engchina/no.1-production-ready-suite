@@ -25,7 +25,7 @@ const ORDER: FlowStepStatus[] = [
   "INDEXING",
   "INDEXED",
 ];
-const STEP_LABEL_KEY: Record<FlowStepStatus, I18nKey> = {
+export const STEP_LABEL_KEY: Record<FlowStepStatus, I18nKey> = {
   UPLOADED: "flow.step.upload",
   PREPROCESSING: "flow.step.preprocess",
   PREPROCESSED: "flow.step.preprocessReview",
@@ -37,35 +37,35 @@ const STEP_LABEL_KEY: Record<FlowStepStatus, I18nKey> = {
   INDEXED: "flow.step.indexed",
 };
 
-/** ドキュメントの処理段階を可視化する。 */
+/**
+ * ドキュメントの処理段階を可視化する。
+ * エラー時も工程列は維持し、失敗ステップ(failedStep)を danger で強調する（messaging-spec §9 P5）。
+ */
 export function FlowStepper({
   status,
   skippedSteps = [],
+  failedStep = null,
 }: {
   status: FileStatus;
   skippedSteps?: readonly FlowStepStatus[];
+  /** ERROR 時に danger で強調する工程。不明なら null（その場合は工程を中立表示)。 */
+  failedStep?: FlowStepStatus | null;
 }) {
-  if (status === "ERROR") {
-    return (
-      <div
-        role="status"
-        className="flex items-center gap-2 rounded-md bg-danger-bg/50 px-3 py-2 text-sm font-medium text-danger"
-      >
-        <AlertCircle size={16} aria-hidden />
-        {t("status.ERROR")}
-      </div>
-    );
-  }
-
+  const errored = status === "ERROR";
   const currentIndex = ORDER.indexOf(status as FlowStepStatus);
+  const failedIndex = failedStep ? ORDER.indexOf(failedStep) : -1;
   const skipped = new Set(skippedSteps);
 
   return (
     <ol className="flex flex-wrap items-center gap-y-2">
       {ORDER.map((step, i) => {
         const skip = skipped.has(step);
-        const done = !skip && (i < currentIndex || status === "INDEXED");
-        const active = !skip && i === currentIndex;
+        const failed = errored && i === failedIndex;
+        const done =
+          !skip &&
+          !failed &&
+          (errored ? failedIndex >= 0 && i < failedIndex : i < currentIndex || status === "INDEXED");
+        const active = !errored && !skip && i === currentIndex;
         return (
           <li key={step} className="flex items-center">
             <span className="flex items-center gap-2">
@@ -74,6 +74,8 @@ export function FlowStepper({
                   "flex size-7 items-center justify-center rounded-full text-xs font-semibold",
                   skip
                     ? "border border-border bg-card text-muted"
+                    : failed
+                    ? "bg-danger text-white"
                     : done
                     ? "bg-success text-white"
                     : active
@@ -83,6 +85,8 @@ export function FlowStepper({
               >
                 {skip ? (
                   <Minus size={14} aria-hidden />
+                ) : failed ? (
+                  <AlertCircle size={14} aria-hidden />
                 ) : done ? (
                   <Check size={14} aria-hidden />
                 ) : (
@@ -92,13 +96,22 @@ export function FlowStepper({
               <span
                 className={cn(
                   "flex items-center gap-1.5 text-sm",
-                  skip || done || active ? "font-medium text-foreground" : "text-muted"
+                  failed
+                    ? "font-medium text-danger"
+                    : skip || done || active
+                    ? "font-medium text-foreground"
+                    : "text-muted"
                 )}
               >
                 {t(STEP_LABEL_KEY[step])}
                 {skip ? (
                   <span className="rounded bg-border/60 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-muted">
                     {t("flow.step.skipped")}
+                  </span>
+                ) : null}
+                {failed ? (
+                  <span className="rounded bg-danger-bg px-1.5 py-0.5 text-[11px] font-semibold text-danger">
+                    {t("status.ERROR")}
                   </span>
                 ) : null}
               </span>

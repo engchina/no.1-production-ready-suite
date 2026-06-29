@@ -6,7 +6,7 @@
 > 採用する場合も本プロジェクトの確定スタック(OCI Enterprise AI / OCI Generative AI Cohere / Oracle 26ai / Vite + React Router)に
 > 合わせて再実装する。外部ベクトル DB・別 LLM プロバイダをそのまま導入しないこと(逸脱時は AGENTS.md §8 に従い要確認)。
 
-最終更新: 2026-06-20(改訂: zero-hallucination RAG 参照実装 FareedKhan-dev/rag-zero-hallucinations を §2.1、vectorless / ファイル単位ナビゲーション型 jsonlicn/knowledge-navigator を §2.2 に追加)
+最終更新: 2026-06-28(改訂: Dify / RAGFlow / PowerRAG の文書所属モデルと複数 KB 構築設定表示の判断を §1.1 に追加)
 
 ---
 
@@ -26,6 +26,18 @@
 | **DocsGPT** | プライベート AI / 文書 Agent プラットフォーム | 文書アシスタント、私有デプロイ | 「文書 AI プラットフォーム」寄り。ローカル/クラウド API/ローカル推論の各デプロイ対応。 |
 | **R2R** | RAG バックエンド / API プラットフォーム | REST API・ハイブリッド検索・ナレッジグラフ・文書管理が必要な場合 | 開発者がバックエンド能力を組む用途に最適。multimodal ingestion・hybrid search・knowledge graphs・document management 提供。 |
 | **DB-GPT** | DB / データ資産 Agent + RAG | DB 問い合わせ、BI、DWH、CSV/Excel QA | 「データ + RAG + Agent」シナリオ向け。DB・CSV・Excel・DWH・ナレッジベースを接続。 |
+
+### 1.1 複数 KB に属する文書の構築設定表示
+
+| プロジェクト | 文書所属 | 構築設定の扱い | 本プロジェクトでの判断 |
+|---|---|---|---|
+| Dify | `Document.dataset_id` による単一 Dataset | Dataset の索引方式/embedding と文書 process rule を同じ Dataset 文脈で表示 | 単一所属 UI はコピーせず、KB 別の有効設定をグループ表示する |
+| RAGFlow | `Document.kb_id` による単一 KB | KB 既定と文書の `parser_id / parser_config` を単一 KB 文脈で表示 | parser/chunk の説明粒度だけを参考にする |
+| PowerRAG | RAGFlow の database / data model を共有 | RAGFlow 互換に構造抽出・複数 parser・検索能力を追加 | 単一 KB 所属は継承せず、追加能力を既存 variant 層へ再マップする |
+
+本プロジェクトは 1 文書を複数 KB が参照できるため、文書詳細を単一 KB の設定で代表させない。
+同一の有効設定は 1 グループへまとめ、異なる設定は別グループとして、artifact の状態と配信状況を
+`適用予定 / 構築中 / 配信中 / 更新が必要 / エラー` で区別する。
 
 ## 2. 重点トラッキング:GraphRAG / マルチモーダル / Agentic RAG
 

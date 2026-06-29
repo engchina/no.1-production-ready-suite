@@ -455,6 +455,8 @@ export function useReplaceDocumentKnowledgeBases() {
     onSuccess: (_refs, variables) => {
       qc.invalidateQueries({ queryKey: queryKeys.documentKnowledgeBases(variables.id) });
       qc.invalidateQueries({ queryKey: queryKeys.document(variables.id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionConfig(variables.id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(variables.id) });
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });

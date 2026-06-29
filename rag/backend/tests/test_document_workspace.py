@@ -1130,6 +1130,39 @@ def test_document_approve_preprocessed_queues_extract_phase(
     assert job["status"] == "QUEUED"
 
 
+def test_document_approve_preprocessed_duplicate_still_queues_extract_phase(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """重複文書でも PREPROCESSED まで進んでいれば承認で EXTRACT を投入する。
+
+    重複スキップは初回 PREPROCESS の入口だけ。ここで skip すると重複文書は承認しても
+    解析中へ進めず PREPROCESSED で詰まる(本不具合の回帰防止)。
+    """
+    document_id = _upload("dup-preprocessed.txt", b"prepared dup text", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.PREPROCESSED,
+            "duplicate_of_document_id": "doc-original",
+            "preprocess_artifact": DocumentPreprocessArtifact(
+                derivation_id="der-1",
+                profile="passthrough",
+                file_name="dup-preprocessed.txt",
+                object_storage_path="local://prepared/dup-preprocessed.txt",
+                content_type="text/plain",
+            ),
+        }
+    )
+
+    resp = client.post(f"/api/documents/{document_id}/approve")
+
+    assert resp.status_code == 200
+    job = resp.json()["data"]
+    assert job["phase"] == "EXTRACT"
+    assert job["status"] == "QUEUED"
+    assert job["skip_reason"] is None
+
+
 def test_document_ingestion_config_returns_effective_preprocess_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

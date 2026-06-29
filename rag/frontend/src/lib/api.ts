@@ -739,6 +739,29 @@ export interface DocumentIngestionConfigData {
   chunking_drift: boolean;
   parser_drift: boolean;
   config_drift: boolean;
+  /** 同じ有効な構築設定を共有する KB 群。 */
+  build_configurations: DocumentBuildConfigGroup[];
+}
+
+export type DocumentBuildConfigState =
+  | "planned"
+  | "building"
+  | "serving"
+  | "update_required"
+  | "error";
+
+export interface DocumentBuildConfigGroup {
+  knowledge_bases: KnowledgeBaseRef[];
+  effective_config: KnowledgeBaseIngestionConfig;
+  is_review_target: boolean;
+  extraction_recipe_id: string;
+  chunk_set_id: string;
+  state: DocumentBuildConfigState;
+  reason: string | null;
+  chunk_count: number;
+  vector_count: number;
+  serving_knowledge_base_count: number;
+  layer_statuses: DocumentChunkSetLayerStatuses;
 }
 
 export interface KnowledgeBaseDocumentAssignmentRequest {
