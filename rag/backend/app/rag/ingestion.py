@@ -286,19 +286,27 @@ class IngestionPipeline:
         record_outcome: bool = True,
         original_object_storage_path: str | None = None,
         prepared_artifact: DocumentPreprocessArtifact | None = None,
+        manage_document_state: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
-        """1 ドキュメントを取込し、ベクトル索引まで行う。"""
+        """1 ドキュメントを取込し、ベクトル索引まで行う。
+
+        ``manage_document_state=False``(candidate モード)では文書の status / preprocess
+        artifact / 配信を一切更新せず、失敗しても文書を ERROR にしない。レシピ実験で配信中の
+        文書を乱さず候補 chunk_set だけ materialize するために使う(REVIEW ゲートも無視して
+        必ず索引まで進める)。chunk_set の行確定・配信は呼び出し側が行う。
+        """
         started_at = now()
         trace_id = new_trace_id()
         strategy = extraction_strategy_for_source(
             source_profile=source_profile,
             base_prompt=prompt,
         )
-        if prepared_artifact is None:
-            await self._oracle.update_document_status(document_id, FileStatus.PREPROCESSING)
-        else:
-            await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
+        if manage_document_state:
+            if prepared_artifact is None:
+                await self._oracle.update_document_status(document_id, FileStatus.PREPROCESSING)
+            else:
+                await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
         checkpoint_segments: list[IngestionSegment] = []
         try:
             await _raise_if_cancelled(cancel_checker)
@@ -312,26 +320,33 @@ class IngestionPipeline:
                     content_type=content_type,
                     source_profile=source_profile,
                 )
-                await self._save_preprocess_artifact(
-                    document_id=document_id,
-                    source_derivation=source_derivation,
-                    original_file_name=(
-                        source_profile.original_file_name
-                        if source_profile is not None
-                        else "document"
-                    ),
-                    original_object_storage_path=original_object_storage_path,
-                    fallback_content_type=parse_content_type,
-                )
-                if not self._settings.rag_auto_parse_after_preprocess_enabled:
+                if manage_document_state:
+                    # candidate モードは配信中文書の preprocess artifact を上書きしない。
+                    await self._save_preprocess_artifact(
+                        document_id=document_id,
+                        source_derivation=source_derivation,
+                        original_file_name=(
+                            source_profile.original_file_name
+                            if source_profile is not None
+                            else "document"
+                        ),
+                        original_object_storage_path=original_object_storage_path,
+                        fallback_content_type=parse_content_type,
+                    )
+                if (
+                    manage_document_state
+                    and not self._settings.rag_auto_parse_after_preprocess_enabled
+                ):
                     # ファイル準備ゲート: PREPROCESSED で停止し、人の承認(または KB/全体
                     # 設定で自動進行)で EXTRACT ジョブを別途投入して parse へ進む。
+                    # candidate モードはゲートを無視して必ず索引まで進める。
                     detail = await self._oracle.update_document_status(
                         document_id, FileStatus.PREPROCESSED
                     )
                     record_ingestion("preprocessed", 0)
                     return detail
-                await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
+                if manage_document_state:
+                    await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
             else:
                 parse_bytes = image_bytes
                 parse_content_type = prepared_artifact.content_type or content_type
@@ -485,8 +500,9 @@ class IngestionPipeline:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
             # extraction 層(rag_document_extractions)へ正本として書く(両ゲート共通)。
             await self._persist_extraction_layer(document_id, source_profile, extraction)
-            if self._settings.rag_review_gate_enabled:
+            if manage_document_state and self._settings.rag_review_gate_enabled:
                 # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 CHUNK で再利用する。
+                # candidate モードは REVIEW で止めず索引まで進める。
                 await self._oracle.save_extraction(document_id, extraction)
                 detail = await self._oracle.update_document_status(document_id, FileStatus.REVIEW)
                 record_ingestion("review", 0)
@@ -502,6 +518,7 @@ class IngestionPipeline:
                 started_at=started_at,
                 chunk_set_id=chunk_set_id,
                 record_outcome=record_outcome,
+                manage_document_state=manage_document_state,
                 cancel_checker=cancel_checker,
             )
         except IngestionCancelledError as exc:
@@ -521,11 +538,13 @@ class IngestionPipeline:
         except Exception as exc:
             record_ingestion("error", 0)
             await self._mark_segments_failed(checkpoint_segments, error=exc)
-            await self._oracle.update_document_status(
-                document_id,
-                FileStatus.ERROR,
-                _safe_persistent_error_message(exc),
-            )
+            if manage_document_state:
+                # candidate モードは失敗しても配信中文書を ERROR にしない(ジョブ側で失敗記録)。
+                await self._oracle.update_document_status(
+                    document_id,
+                    FileStatus.ERROR,
+                    _safe_persistent_error_message(exc),
+                )
             record_rag_ingestion_audit(
                 trace_id=trace_id,
                 document_id=document_id,
@@ -915,12 +934,15 @@ class IngestionPipeline:
         started_at: float,
         chunk_set_id: str | None = None,
         record_outcome: bool = True,
+        manage_document_state: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
     ) -> DocumentDetail:
         """抽出結果から chunk→embed→index を実行し INDEXED まで進める後段。
 
         ``record_outcome=False`` のときは成功 metric / audit を出さない(複数 chunk_set を
         materialize する loop で、1 文書 1 論理取込として記録を 1 回に集約するため)。
+        ``manage_document_state=False``(candidate モード)では文書 status を INDEXED へ
+        遷移させない(配信中文書を乱さない)。
 
         例外はそのまま呼び出し側(ingest / index_reviewed)の except へ伝播させる。
         """
@@ -942,6 +964,7 @@ class IngestionPipeline:
             started_at=started_at,
             chunk_set_id=chunk_set_id,
             record_outcome=record_outcome,
+            manage_document_state=manage_document_state,
             cancel_checker=cancel_checker,
             reuse_saved_chunks=False,
         )
@@ -959,6 +982,7 @@ class IngestionPipeline:
         started_at: float,
         chunk_set_id: str | None = None,
         record_outcome: bool = True,
+        manage_document_state: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         reuse_saved_chunks: bool,
     ) -> DocumentDetail:
@@ -1012,7 +1036,14 @@ class IngestionPipeline:
                 },
             )
         await _raise_if_cancelled(cancel_checker)
-        detail = await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
+        if manage_document_state:
+            detail = await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
+        else:
+            # candidate モード: 配信中文書の status を変えない。現在の detail をそのまま返す。
+            current = await self._oracle.get_document(document_id)
+            if current is None:
+                raise IngestionUserError("ドキュメントが見つかりません。")
+            detail = current
         if record_outcome:
             record_ingestion("success", len(chunks))
             record_rag_ingestion_audit(

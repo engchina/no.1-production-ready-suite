@@ -457,6 +457,112 @@ async def test_ingestion_redacts_internal_error_messages(
     assert "raw secret detail" not in str(audit_event)
 
 
+async def test_candidate_mode_isolates_document_state_and_serving() -> None:
+    """candidate モード(manage_document_state=False)は配信中文書の状態/配信を乱さない。
+
+    Phase 3b: parser/前処理を変えた候補 chunk_set を再抽出で materialize する際に、
+    配信中の文書 status・serving chunk_set を一切変えないことを実 Oracle で固定する。
+    """
+    with audit_request_context():
+        oracle = OracleClient()
+        document = await oracle.create_document(
+            file_name="candidate.txt",
+            object_storage_path="local://uploaded/candidate.txt",
+            content_type="text/plain",
+            file_size_bytes=4,
+            content_sha256=hashlib.sha256(b"test").hexdigest(),
+        )
+        # review ゲート OFF・自動 parse ON で通常取込を INDEXED まで通す。
+        settings = Settings.model_construct(
+            rag_review_gate_enabled=False,
+            rag_auto_parse_after_preprocess_enabled=True,
+        )
+        pipeline = IngestionPipeline(
+            vlm=ShortTextVlm(),
+            genai=StubEmbeddingClient(),
+            oracle=oracle,
+            settings=settings,
+        )
+
+        # 通常取込で serving chunk_set を作り、配信に確定する(reconcile 相当)。
+        serving_cs = "cs_serving_aaaaaaaa"
+        await pipeline.ingest(document.id, b"test", "prompt", chunk_set_id=serving_cs)
+        await oracle.upsert_chunk_set(chunk_set_id=serving_cs, document_id=document.id)
+        await oracle.mark_chunk_set_indexed(
+            chunk_set_id=serving_cs,
+            chunk_count=await oracle.count_chunk_set_chunks(serving_cs),
+            vector_count=await oracle.count_chunk_set_chunks(serving_cs),
+        )
+        await oracle.set_document_serving_chunk_set(
+            document_id=document.id, chunk_set_id=serving_cs
+        )
+        assert (await oracle.get_document(document.id)).status == FileStatus.INDEXED  # type: ignore[union-attr]
+
+        # candidate モードで別 chunk_set を materialize(配信は触らない)。
+        candidate_cs = "cs_candidate_bbbbbb"
+        await pipeline.ingest(
+            document.id,
+            b"test",
+            "prompt",
+            chunk_set_id=candidate_cs,
+            manage_document_state=False,
+            record_outcome=False,
+        )
+        # job handler 相当: 候補 chunk_set 行を確定し、現 serving を再アサート(候補を demote)。
+        await oracle.upsert_chunk_set(chunk_set_id=candidate_cs, document_id=document.id)
+        await oracle.mark_chunk_set_indexed(
+            chunk_set_id=candidate_cs,
+            chunk_count=await oracle.count_chunk_set_chunks(candidate_cs),
+            vector_count=await oracle.count_chunk_set_chunks(candidate_cs),
+        )
+        await oracle.set_document_serving_chunk_set(
+            document_id=document.id, chunk_set_id=serving_cs
+        )
+
+        # 文書 status は INDEXED のまま、serving は元の chunk_set、候補は is_serving=0。
+        reloaded = await oracle.get_document(document.id)
+        assert reloaded is not None and reloaded.status == FileStatus.INDEXED
+        assert await oracle.count_chunk_set_chunks(serving_cs) > 0
+        assert await oracle.count_chunk_set_chunks(candidate_cs) > 0
+        serving_row = await oracle.get_chunk_set(serving_cs)
+        candidate_row = await oracle.get_chunk_set(candidate_cs)
+        assert serving_row is not None and int(str(serving_row["is_serving"])) == 1
+        assert candidate_row is not None and int(str(candidate_row["is_serving"])) == 0
+
+
+async def test_candidate_mode_failure_does_not_error_document() -> None:
+    """candidate モードの失敗は配信中文書を ERROR にせず、例外だけ伝播する。"""
+    with audit_request_context():
+        oracle = OracleClient()
+        document = await oracle.create_document(
+            file_name="candidate-fail.txt",
+            object_storage_path="local://uploaded/candidate-fail.txt",
+            content_type="text/plain",
+            file_size_bytes=4,
+            content_sha256=hashlib.sha256(b"test").hexdigest(),
+        )
+        await oracle.update_document_status(document.id, FileStatus.INDEXED)
+        pipeline = IngestionPipeline(
+            vlm=ShortTextVlm(),
+            genai=FailingEmbeddingClient(),
+            oracle=oracle,
+        )
+
+        with pytest.raises(RuntimeError):
+            await pipeline.ingest(
+                document.id,
+                b"test",
+                "prompt",
+                chunk_set_id="cs_candidate_fail00",
+                manage_document_state=False,
+                record_outcome=False,
+            )
+
+        # candidate 失敗でも配信中文書は INDEXED のまま(ERROR にしない)。
+        reloaded = await oracle.get_document(document.id)
+        assert reloaded is not None and reloaded.status == FileStatus.INDEXED
+
+
 def test_prompt_injection_query_is_blocked(caplog: LogCaptureFixture) -> None:
     """プロンプト注入らしい検索は拒否する。"""
     with caplog.at_level(logging.INFO, logger="app.audit"):
