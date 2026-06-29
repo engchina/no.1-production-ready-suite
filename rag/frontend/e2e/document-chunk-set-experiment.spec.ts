@@ -14,6 +14,7 @@ const authStatus = {
 const DOC_ID = "doc-experiment";
 const SERVING_ID = "cs_serving_000000000";
 const CANDIDATE_ID = "cs_candidate_00000000";
+const REPARSE_JOB_ID = "job-reparse-0001";
 
 function indexedDetail() {
   return {
@@ -86,6 +87,24 @@ function chunkSet(id: string, isServing: boolean, chunkCount: number) {
   };
 }
 
+function reparseJob(status: string) {
+  return {
+    id: REPARSE_JOB_ID,
+    document_id: DOC_ID,
+    status,
+    phase: "EXTRACT",
+    parser_profile: "local_text_structure",
+    quality_warnings: [],
+    skip_reason: null,
+    error_message: null,
+    attempt_count: 1,
+    max_attempts: 3,
+    queued_at: "2026-06-29T00:02:00Z",
+    started_at: status === "QUEUED" ? null : "2026-06-29T00:02:01Z",
+    finished_at: status === "SUCCEEDED" ? "2026-06-29T00:02:05Z" : null,
+  };
+}
+
 function citation(chunkId: string, text: string) {
   return {
     document_id: DOC_ID,
@@ -101,7 +120,14 @@ function citation(chunkId: string, text: string) {
 
 async function mockExperimentWorkspace(page: Page) {
   const state = { created: false, promoted: false };
-  const calls = { create: 0, promote: 0, search: 0, lastCreateBody: null as unknown };
+  const calls = {
+    create: 0,
+    promote: 0,
+    search: 0,
+    reparse: 0,
+    lastCreateBody: null as unknown,
+    lastReparseBody: null as unknown,
+  };
 
   await mockDatabaseReady(page);
   await page.route("**/api/auth/me", (route) => route.fulfill({ json: authStatus }));
@@ -153,6 +179,22 @@ async function mockExperimentWorkspace(page: Page) {
         json: { data: chunkSet(CANDIDATE_ID, true, 9), error_messages: [], warning_messages: [] },
       });
     }
+  );
+
+  // parser/前処理 再抽出: 投入で候補を materialize 予約、ジョブ状態は polling で SUCCEEDED を返す。
+  await page.route(`**/api/documents/${DOC_ID}/parser-extraction-experiments`, async (route) => {
+    calls.reparse += 1;
+    const body = route.request().postData();
+    calls.lastReparseBody = body ? JSON.parse(body) : null;
+    state.created = true;
+    await route.fulfill({
+      json: { data: reparseJob("QUEUED"), error_messages: [], warning_messages: [] },
+    });
+  });
+  await page.route(`**/api/documents/ingestion-jobs/${REPARSE_JOB_ID}`, (route) =>
+    route.fulfill({
+      json: { data: reparseJob("SUCCEEDED"), error_messages: [], warning_messages: [] },
+    })
   );
 
   await page.route("**/api/search", async (route) => {
@@ -248,7 +290,7 @@ test("候補を作成 → 横並び比較 → 昇格 まで通せる", async ({ 
 
   // 候補を作成(チャンク長を指定)。
   await page.locator("#experiment-chunk-size").fill("400");
-  await page.getByRole("button", { name: "候補を作成" }).click();
+  await page.getByRole("button", { name: "候補を作成", exact: true }).click();
   await expect(page.getByText("候補のチャンク構成を作成しました。")).toBeVisible();
   expect(calls.create).toBe(1);
   expect(calls.lastCreateBody).toEqual({ chunk_size: 400 });
@@ -268,6 +310,39 @@ test("候補を作成 → 横並び比較 → 昇格 まで通せる", async ({ 
   expect(calls.promote).toBe(1);
 });
 
+test("parser を変えて再抽出 → ジョブ完了で候補が追加される", async ({ page }) => {
+  const calls = await mockExperimentWorkspace(page);
+  await page.goto(`/documents/${DOC_ID}`);
+
+  await expect(page.getByText("解析・ファイル準備を変えて試す(再抽出)")).toBeVisible();
+
+  // 文書解析を Docling に変更して再抽出ジョブを投入。
+  await page.getByRole("combobox", { name: "文書解析" }).click();
+  await page.getByRole("option", { name: "Docling" }).click();
+  await page.getByRole("button", { name: "再抽出して候補を作成" }).click();
+
+  await expect(
+    page.getByText("再抽出ジョブを投入しました。完了すると候補が追加されます。")
+  ).toBeVisible();
+  expect(calls.reparse).toBe(1);
+  expect(calls.lastReparseBody).toEqual({ parser_adapter_backend: "docling" });
+
+  // ジョブ polling が SUCCEEDED → 候補が一覧に並ぶ。
+  await expect(page.getByText("再抽出した候補を追加しました。")).toBeVisible();
+  await expect(page.getByText("候補").first()).toBeVisible();
+});
+
+test("変更なしで再抽出すると検証エラーになる", async ({ page }) => {
+  const calls = await mockExperimentWorkspace(page);
+  await page.goto(`/documents/${DOC_ID}`);
+
+  await page.getByRole("button", { name: "再抽出して候補を作成" }).click();
+  await expect(
+    page.getByText("ファイル準備か文書解析のいずれかを現在と違う値に変更してください。")
+  ).toBeVisible();
+  expect(calls.reparse).toBe(0);
+});
+
 test("実験パネルは 375px でも横スクロールしない", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await mockExperimentWorkspace(page);
@@ -275,7 +350,7 @@ test("実験パネルは 375px でも横スクロールしない", async ({ page
 
   await expect(page.getByText("別レシピを試す").first()).toBeVisible();
   await page.locator("#experiment-chunk-size").fill("400");
-  await page.getByRole("button", { name: "候補を作成" }).click();
+  await page.getByRole("button", { name: "候補を作成", exact: true }).click();
   await expect(page.getByText("候補").first()).toBeVisible();
   await expectNoPageOverflow(page);
 });

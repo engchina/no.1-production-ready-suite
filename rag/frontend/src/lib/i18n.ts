@@ -2069,7 +2069,7 @@ export const ja = {
   "flow.indexed": "索引が完了し、RAG 検索の対象になりました。",
   "documents.experiment.title": "別レシピを試す",
   "documents.experiment.description":
-    "同じ文書を別の分割レシピで索引し直した候補を作り、配信中と横並びで検索結果を比べて、良ければ配信に昇格できます。候補は配信に載らないため通常の検索には影響しません。",
+    "同じ文書を別のレシピ(分割、または解析・ファイル準備)で作り直した候補を用意し、配信中と横並びで検索結果を比べて、良ければ配信に昇格できます。候補は配信に載らないため通常の検索には影響しません。",
   "documents.experiment.loading": "チャンク構成を読み込み中",
   "documents.experiment.loadError": "チャンク構成を読み込めませんでした。",
   "documents.experiment.noServing": "配信中のチャンク構成がありません。",
@@ -2103,6 +2103,21 @@ export const ja = {
   "documents.experiment.promote.error": "昇格に失敗しました。",
   "documents.experiment.toast.created": "候補のチャンク構成を作成しました。",
   "documents.experiment.toast.promoted": "候補を配信に昇格しました。",
+  "documents.experiment.reparse.title": "解析・ファイル準備を変えて試す(再抽出)",
+  "documents.experiment.reparse.description":
+    "ファイル準備や文書解析(parser)を変えると抽出結果そのものが変わるため、再抽出が必要です。非同期ジョブで候補を作り直し、完了すると上の一覧に候補として並びます。",
+  "documents.experiment.reparse.preprocess": "ファイル準備",
+  "documents.experiment.reparse.parser": "文書解析",
+  "documents.experiment.reparse.unchanged": "変更なし",
+  "documents.experiment.reparse.current": "現在: {value}",
+  "documents.experiment.reparse.submit": "再抽出して候補を作成",
+  "documents.experiment.reparse.required":
+    "ファイル準備か文書解析のいずれかを現在と違う値に変更してください。",
+  "documents.experiment.reparse.error": "再抽出ジョブの投入に失敗しました。",
+  "documents.experiment.reparse.queued": "再抽出ジョブを待機中…",
+  "documents.experiment.reparse.running": "再抽出を実行中…",
+  "documents.experiment.reparse.toast.enqueued": "再抽出ジョブを投入しました。完了すると候補が追加されます。",
+  "documents.experiment.reparse.toast.done": "再抽出した候補を追加しました。",
   "flow.preprocessed.description":
     "ファイル準備が完了しました。処理後ファイルを確認し、問題なければ解析(抽出)へ進めてください。",
   "flow.preprocessed.persistFailed":

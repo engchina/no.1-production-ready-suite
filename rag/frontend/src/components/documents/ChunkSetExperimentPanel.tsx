@@ -1,7 +1,7 @@
 "use client";
 
-import { ArrowUpCircle, FlaskConical, Search as SearchIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ArrowUpCircle, FlaskConical, Loader2, Search as SearchIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { CitationCard, scoreMaximaForCitations } from "@/components/search/CitationCard";
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -15,14 +15,19 @@ import {
   api,
   type ChunkSetExperimentRequest,
   type DocumentChunkSet,
+  type ParserExtractionExperimentRequest,
   type RetrievedChunk,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
+  ingestionJobIsActive,
   useCreateChunkSetExperiment,
+  useCreateParserExtractionExperiment,
   useDocumentChunkSets,
+  useIngestionJob,
   usePromoteChunkSetExperiment,
 } from "@/lib/queries";
+import { parserBackendLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
 
 const STRATEGIES = [
@@ -34,6 +39,31 @@ const STRATEGIES = [
   "page_level",
   "fixed_size",
   "fixed_delimiter",
+] as const;
+
+/** 再抽出実験で選べる文書解析(parser)backend。廃止(local)・別名(enterprise_ai_vlm)は除く。 */
+const PARSER_BACKENDS = [
+  "docling",
+  "marker",
+  "unstructured",
+  "unlimited_ocr",
+  "mineru",
+  "dots_ocr",
+  "glm_ocr",
+  "oci_genai_vision",
+  "oci_document_understanding",
+] as const;
+
+/** 再抽出実験で選べるファイル準備プロファイル。 */
+const PREPROCESS_PROFILES = [
+  "passthrough",
+  "office_to_pdf",
+  "pdf_to_page_images",
+  "csv_to_json",
+  "excel_to_json",
+  "url_to_markdown",
+  "image_enhance",
+  "pii_redact",
 ] as const;
 
 const PROBE_TOP_K = 5;
@@ -53,6 +83,7 @@ type ProbeResult = { serving: RetrievedChunk[]; candidate: RetrievedChunk[] };
 export function ChunkSetExperimentPanel({ documentId }: { documentId: string }) {
   const chunkSets = useDocumentChunkSets(documentId);
   const createExperiment = useCreateChunkSetExperiment();
+  const createReparse = useCreateParserExtractionExperiment();
   const promoteExperiment = usePromoteChunkSetExperiment();
   const confirm = useConfirm();
 
@@ -75,6 +106,35 @@ export function ChunkSetExperimentPanel({ documentId }: { documentId: string }) 
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
   const [probeError, setProbeError] = useState("");
+
+  // parser/前処理 再抽出(非同期ジョブ)
+  const [reparseProfile, setReparseProfile] = useState("");
+  const [reparseParser, setReparseParser] = useState("");
+  const [reparseError, setReparseError] = useState("");
+  const [reparseJobId, setReparseJobId] = useState<string | null>(null);
+  const reparseJob = useIngestionJob(reparseJobId);
+  const reparseJobData = reparseJob.data;
+  const reparseRefetchChunkSets = chunkSets.refetch;
+
+  // ジョブが終端に達したら chunk-sets を再取得して候補を反映する。
+  useEffect(() => {
+    if (!reparseJobId || !reparseJobData || reparseJobData.id !== reparseJobId) return;
+    const status = reparseJobData.status;
+    if (status === "SUCCEEDED") {
+      toast.success(t("documents.experiment.reparse.toast.done"));
+      void reparseRefetchChunkSets();
+      setReparseJobId(null);
+    } else if (status === "FAILED" || status === "CANCELLED" || status === "SKIPPED") {
+      setReparseError(
+        reparseJobData.error_message ||
+          reparseJobData.skip_reason ||
+          t("documents.experiment.reparse.error")
+      );
+      setReparseJobId(null);
+    }
+  }, [reparseJobId, reparseJobData, reparseRefetchChunkSets]);
+
+  const reparseRunning = reparseJobId != null && ingestionJobIsActive(reparseJobData?.status);
 
   const activeCandidate =
     candidates.find((candidate) => candidate.chunk_set_id === probeCandidateId) ?? candidates[0];
@@ -110,6 +170,44 @@ export function ChunkSetExperimentPanel({ documentId }: { documentId: string }) 
         onError: (error) =>
           setFormError(
             error instanceof ApiError ? error.message : t("documents.experiment.form.error")
+          ),
+      }
+    );
+  };
+
+  const preprocessOptions: SelectFieldOption[] = [
+    { value: "", label: t("documents.experiment.reparse.unchanged") },
+    ...PREPROCESS_PROFILES.map((name) => ({
+      value: name,
+      label: t(`settings.preprocess.profile.${name}` as I18nKey),
+    })),
+  ];
+  const parserOptions: SelectFieldOption[] = [
+    { value: "", label: t("documents.experiment.reparse.unchanged") },
+    ...PARSER_BACKENDS.map((name) => ({ value: name, label: parserBackendLabel(name) })),
+  ];
+
+  const handleReparse = () => {
+    const body: ParserExtractionExperimentRequest = {};
+    if (reparseProfile) body.preprocess_profile = reparseProfile;
+    if (reparseParser) body.parser_adapter_backend = reparseParser;
+    if (Object.keys(body).length === 0) {
+      setReparseError(t("documents.experiment.reparse.required"));
+      return;
+    }
+    setReparseError("");
+    createReparse.mutate(
+      { id: documentId, body },
+      {
+        onSuccess: (job) => {
+          toast.success(t("documents.experiment.reparse.toast.enqueued"));
+          setReparseProfile("");
+          setReparseParser("");
+          setReparseJobId(job.id);
+        },
+        onError: (error) =>
+          setReparseError(
+            error instanceof ApiError ? error.message : t("documents.experiment.reparse.error")
           ),
       }
     );
@@ -251,6 +349,75 @@ export function ChunkSetExperimentPanel({ documentId }: { documentId: string }) 
                 >
                   <FlaskConical size={15} aria-hidden />
                   {t("documents.experiment.form.submit")}
+                </Button>
+              </div>
+            </div>
+
+            {/* 解析・ファイル準備を変えて試す(再抽出・非同期ジョブ) */}
+            <div className="space-y-3 rounded-lg border border-border bg-background p-3">
+              <div className="space-y-1">
+                <h3 className="text-sm font-semibold text-foreground">
+                  {t("documents.experiment.reparse.title")}
+                </h3>
+                <p className="text-xs text-muted">
+                  {t("documents.experiment.reparse.description")}
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <SelectField
+                  id="experiment-reparse-preprocess"
+                  label={t("documents.experiment.reparse.preprocess")}
+                  value={reparseProfile}
+                  options={preprocessOptions}
+                  onValueChange={setReparseProfile}
+                  helper={
+                    serving?.preprocess
+                      ? t("documents.experiment.reparse.current", {
+                          value: t(`settings.preprocess.profile.${serving.preprocess}` as I18nKey),
+                        })
+                      : undefined
+                  }
+                  buttonClassName="h-9"
+                />
+                <SelectField
+                  id="experiment-reparse-parser"
+                  label={t("documents.experiment.reparse.parser")}
+                  value={reparseParser}
+                  options={parserOptions}
+                  onValueChange={setReparseParser}
+                  helper={
+                    serving?.parser
+                      ? t("documents.experiment.reparse.current", {
+                          value: parserBackendLabel(serving.parser),
+                        })
+                      : undefined
+                  }
+                  buttonClassName="h-9"
+                />
+              </div>
+              {reparseError ? <FormStatus tone="danger" message={reparseError} /> : null}
+              {reparseRunning ? (
+                <p
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-muted"
+                  role="status"
+                >
+                  <Loader2 size={15} className="shrink-0 animate-spin" aria-hidden />
+                  {reparseJobData?.status === "RUNNING"
+                    ? t("documents.experiment.reparse.running")
+                    : t("documents.experiment.reparse.queued")}
+                </p>
+              ) : null}
+              <div className="flex">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  onClick={handleReparse}
+                  loading={createReparse.isPending || reparseRunning}
+                  className="h-9"
+                >
+                  <FlaskConical size={15} aria-hidden />
+                  {t("documents.experiment.reparse.submit")}
                 </Button>
               </div>
             </div>

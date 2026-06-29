@@ -543,6 +543,15 @@ export interface ChunkSetExperimentRequest {
   chunk_delimiter?: string;
 }
 
+/**
+ * parser/前処理を変えた候補を**再抽出**(非同期ジョブ)で試す実験リクエスト(最低 1 項目)。
+ * 抽出結果が変わるため chunk-set-experiments(分割のみ)と違い再抽出が必要。
+ */
+export interface ParserExtractionExperimentRequest {
+  preprocess_profile?: string;
+  parser_adapter_backend?: string;
+}
+
 export type DocumentExtractionExportFormat = "json" | "markdown" | "html" | "chunks";
 
 export interface DocumentExtractionExport {
@@ -2114,6 +2123,11 @@ export const api = {
         chunkSetId
       )}/promote`,
       { method: "POST" }
+    ),
+  createParserExtractionExperiment: (id: string, body: ParserExtractionExperimentRequest) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/parser-extraction-experiments`,
+      jsonBody(body)
     ),
   getDocumentIngestionConfig: (id: string) =>
     request<DocumentIngestionConfigData>(

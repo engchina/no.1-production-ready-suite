@@ -15,6 +15,7 @@ import {
   api,
   type AdbSettingsUpdate,
   type ChunkSetExperimentRequest,
+  type ParserExtractionExperimentRequest,
   type DashboardActivity,
   type DatabaseSettingsUpdate,
   type HuggingFaceSettingsUpdate,
@@ -381,6 +382,18 @@ export function useCreateChunkSetExperiment() {
     onSuccess: (_chunkSet, { id }) => {
       qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(id) });
     },
+  });
+}
+
+/**
+ * parser/前処理 を変えた候補を再抽出する非同期ジョブを投入する。
+ * 候補 chunk_set はジョブ完了後に現れるため、ここでは無効化せず
+ * 呼び出し側で {@link useIngestionJob} の完了を待って chunk-sets を再取得する。
+ */
+export function useCreateParserExtractionExperiment() {
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: ParserExtractionExperimentRequest }) =>
+      api.createParserExtractionExperiment(id, body),
   });
 }
 
