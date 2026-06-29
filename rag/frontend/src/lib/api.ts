@@ -519,6 +519,8 @@ export interface DocumentChunkSet {
   status: string;
   chunk_count: number;
   vector_count: number;
+  /** 配信中(serving)か。文書につき 1 つだけ true。candidate(実験)は false。 */
+  is_serving: boolean;
   /** 親抽出(extraction)の ID。parser×preprocess ごとに分かれる 2 階層の上位キー。 */
   extraction_id: string | null;
   /** 親抽出の parser backend(2 階層表示のラベル)。 */
@@ -528,6 +530,17 @@ export interface DocumentChunkSet {
   knowledge_base_ids: string[];
   serving_knowledge_base_ids: string[];
   layer_statuses: DocumentChunkSetLayerStatuses;
+}
+
+/** 別 chunking レシピで候補 chunk_set を試す実験リクエスト(分割軸・最低 1 項目)。 */
+export interface ChunkSetExperimentRequest {
+  chunking_strategy?: string;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  chunk_child_size?: number;
+  chunk_sentence_window_size?: number;
+  chunk_min_chars?: number;
+  chunk_delimiter?: string;
 }
 
 export type DocumentExtractionExportFormat = "json" | "markdown" | "html" | "chunks";
@@ -2114,6 +2127,18 @@ export const api = {
     request<DocumentChunkView[]>(`/api/documents/${encodeURIComponent(id)}/chunks`),
   listDocumentChunkSets: (id: string) =>
     request<DocumentChunkSet[]>(`/api/documents/${encodeURIComponent(id)}/chunk-sets`),
+  createChunkSetExperiment: (id: string, body: ChunkSetExperimentRequest) =>
+    request<DocumentChunkSet>(
+      `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments`,
+      jsonBody(body)
+    ),
+  promoteChunkSetExperiment: (id: string, chunkSetId: string) =>
+    request<DocumentChunkSet>(
+      `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments/${encodeURIComponent(
+        chunkSetId
+      )}/promote`,
+      { method: "POST" }
+    ),
   getDocumentIngestionConfig: (id: string) =>
     request<DocumentIngestionConfigData>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-config`

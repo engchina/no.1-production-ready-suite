@@ -1368,6 +1368,7 @@ class OracleClient:
                     "status": str(norm["status"]),
                     "chunk_count": int(str(norm["chunk_count"] or 0)),
                     "vector_count": int(str(norm["vector_count"] or 0)),
+                    "is_serving": is_serving,
                     "extraction_id": None,
                     "parser": recipe.get("rag_parser_adapter_backend"),
                     "preprocess": recipe.get("rag_preprocess_profile"),

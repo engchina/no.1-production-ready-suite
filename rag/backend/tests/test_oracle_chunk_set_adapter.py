@@ -92,6 +92,9 @@ async def test_list_document_chunk_sets_derives_membership_and_serving() -> None
     # 配信中の chunk_set だけ全 membership が serving、非配信は空。
     assert _ids(rows[cs_a]["serving_knowledge_base_ids"]) == a_members
     assert _ids(rows[cs_b]["serving_knowledge_base_ids"]) == set()
+    # is_serving フラグは membership に依らず serving 判別できる(KB 未所属でも有効)。
+    assert rows[cs_a]["is_serving"] is True
+    assert rows[cs_b]["is_serving"] is False
 
 
 @pytest.mark.usefixtures("oracle_db")

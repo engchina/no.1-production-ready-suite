@@ -15,6 +15,7 @@ function chunkSet(patch: Partial<DocumentChunkSet> = {}): DocumentChunkSet {
     status: "INDEXED",
     chunk_count: 1,
     vector_count: 1,
+    is_serving: true,
     extraction_id: null,
     parser: null,
     preprocess: null,

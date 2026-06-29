@@ -23,6 +23,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { ChunkSetExperimentPanel } from "./ChunkSetExperimentPanel";
 import { DocumentPreview } from "./DocumentPreview";
 import { IngestionConfigDriftBanner } from "@/components/knowledge-bases/IngestionConfigDriftBanner";
 import { DocumentExtraction } from "./DocumentExtraction";
@@ -1122,6 +1123,8 @@ export function DocumentWorkspace({
         {doc.status === "INDEXED" ? (
           <Banner severity="success">{t("flow.indexed")}</Banner>
         ) : null}
+
+        {doc.status === "INDEXED" ? <ChunkSetExperimentPanel documentId={doc.id} /> : null}
 
         {doc.status === "PREPROCESSED" ? (
           preparedArtifactMissing ? (

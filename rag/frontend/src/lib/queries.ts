@@ -14,6 +14,7 @@ import {
 import {
   api,
   type AdbSettingsUpdate,
+  type ChunkSetExperimentRequest,
   type DashboardActivity,
   type DatabaseSettingsUpdate,
   type HuggingFaceSettingsUpdate,
@@ -368,6 +369,30 @@ export function useDocumentChunkSets(id: string | null, enabled = true) {
     queryFn: () => api.listDocumentChunkSets(id as string),
     enabled: id != null && enabled,
     retry: false,
+  });
+}
+
+/** 別 chunking レシピで候補 chunk_set を materialize する(配信は切り替えない)。 */
+export function useCreateChunkSetExperiment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: ChunkSetExperimentRequest }) =>
+      api.createChunkSetExperiment(id, body),
+    onSuccess: (_chunkSet, { id }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(id) });
+    },
+  });
+}
+
+/** 候補 chunk_set を配信(serving)に昇格し、敗者を GC する。 */
+export function usePromoteChunkSetExperiment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, chunkSetId }: { id: string; chunkSetId: string }) =>
+      api.promoteChunkSetExperiment(id, chunkSetId),
+    onSuccess: (_chunkSet, { id }) => {
+      invalidateDocumentProcessingQueries(qc, id);
+    },
   });
 }
 
