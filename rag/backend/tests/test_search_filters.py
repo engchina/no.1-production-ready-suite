@@ -59,6 +59,11 @@ def test_normalize_content_kinds_dedupes_and_validates() -> None:
     assert normalized == {"content_kinds": "table,figure"}
 
 
+def test_normalize_accepts_chunk_set_id_filter() -> None:
+    """実験検索用 chunk_set_id は素通し(strip のみ)で受け付ける。"""
+    assert normalize_search_filters({"chunk_set_id": " cs_x "}) == {"chunk_set_id": "cs_x"}
+
+
 def test_normalize_rejects_unknown_content_kind_in_list() -> None:
     with pytest.raises(ValueError, match="内容種別"):
         normalize_search_filters({"content_kinds": "table,bogus"})
@@ -138,3 +143,22 @@ def test_retrieval_where_keeps_chunk_set_filter_for_single_serving_mode() -> Non
     """single(既定)では従来どおり配信中 chunk_set 制限(文書単位 is_serving)を足す。"""
     sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "single"})
     assert "cs.is_serving = 1" in sql
+
+
+def test_retrieval_where_explicit_chunk_set_filters_and_bypasses_serving() -> None:
+    """実験: chunk_set_id 明示時はその chunk_set だけに絞り、is_serving 制限を外す。"""
+    sql, binds = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "chunk_set_id": "cs_x"})
+    assert "c.chunk_set_id = :filter_chunk_set_id" in sql
+    assert binds["filter_chunk_set_id"] == "cs_x"
+    # 配信中以外の候補も対象にするため serving 制限(is_serving=1)を足さない。
+    assert "cs.is_serving = 1" not in sql
+    # KB スコープ(所属 KB の EXISTS)自体は維持する。
+    assert "rag_document_knowledge_bases dkb" in sql
+
+
+def test_retrieval_where_chunk_set_filter_for_document_scope_experiment() -> None:
+    """KB 未指定の文書スコープ実験検索でも chunk_set_id で 1 つに絞れる。"""
+    sql, binds = _oracle_retrieval_where({"document_id": "doc-1", "chunk_set_id": "cs_y"})
+    assert "c.chunk_set_id = :filter_chunk_set_id" in sql
+    assert binds["filter_chunk_set_id"] == "cs_y"
+    assert binds["filter_document_id"] == "doc-1"

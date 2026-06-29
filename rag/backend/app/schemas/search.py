@@ -33,6 +33,7 @@ SUPPORTED_SCALAR_SEARCH_FILTER_KEYS = (
 SUPPORTED_SEARCH_FILTER_KEYS = {
     "document_id",
     "knowledge_base_id",
+    "chunk_set_id",
     "file_name",
     "category_name",
     "status",

@@ -29,7 +29,7 @@ from fastapi import (
 
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, OracleClient
-from app.config import Settings, get_settings
+from app.config import CHUNKING_STRATEGIES_WITH_MIN_CHARS, Settings, get_settings
 from app.db_degradation import load_or_degrade
 from app.rag.ingestion import (
     IngestionCancelledError,
@@ -57,6 +57,7 @@ from app.schemas.common import ApiResponse, Page
 from app.schemas.document import (
     BatchUploadFailedItem,
     BatchUploadResult,
+    ChunkSetExperimentRequest,
     DocumentApproveRequest,
     DocumentBuildConfigGroup,
     DocumentBuildConfigState,
@@ -584,6 +585,128 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
             )
         chunk_sets.append(chunk_set)
     return ApiResponse(data=chunk_sets)
+
+
+def _candidate_experiment_settings(base: Settings, request: ChunkSetExperimentRequest) -> Settings:
+    """global 設定に chunking 上書きを重ねた候補レシピ設定を返す(cross-field 検証込み)。
+
+    model_copy は Settings の model_validator を再実行しないため、chunking の相互制約だけ
+    ここで明示検証する(不正なら 422)。parser/前処理は変えない=既存抽出を再利用できる。
+    """
+    candidate = base.model_copy(update=request.settings_overrides())
+    if candidate.rag_chunk_overlap >= candidate.rag_chunk_size:
+        raise HTTPException(
+            status_code=422, detail="overlap は chunk_size より小さくしてください。"
+        )
+    if (
+        candidate.rag_chunking_strategy == "hierarchical_parent_child"
+        and candidate.rag_chunk_child_size >= candidate.rag_chunk_size
+    ):
+        raise HTTPException(
+            status_code=422, detail="child_size は chunk_size より小さくしてください。"
+        )
+    if (
+        candidate.rag_chunking_strategy in CHUNKING_STRATEGIES_WITH_MIN_CHARS
+        and candidate.rag_chunk_min_chars >= candidate.rag_chunk_size
+    ):
+        raise HTTPException(
+            status_code=422, detail="min_chars は chunk_size より小さくしてください。"
+        )
+    return candidate
+
+
+async def _chunk_set_experiment_view(
+    oracle: OracleClient, document_id: str, chunk_set_id: str
+) -> DocumentChunkSet:
+    """指定 chunk_set を DocumentChunkSet ビューで返す(一覧と同じ導出を再利用)。"""
+    for row in await oracle.list_document_chunk_sets(document_id):
+        if str(row.get("chunk_set_id")) == chunk_set_id:
+            return DocumentChunkSet.model_validate(row)
+    raise HTTPException(status_code=500, detail="chunk_set の取得に失敗しました。")
+
+
+@router.post("/{document_id}/chunk-set-experiments", response_model=ApiResponse[DocumentChunkSet])
+async def create_chunk_set_experiment(
+    document_id: str, request: ChunkSetExperimentRequest
+) -> ApiResponse[DocumentChunkSet]:
+    """別 chunking レシピで候補 chunk_set を materialize する(配信は切り替えない)。
+
+    既存抽出を再利用して候補レシピで re-chunk→index し、is_serving=0 の候補として残す。
+    検索精度の比較は ``chunk_set_id`` フィルタで候補/配信中をそれぞれ検索して横並びにする。
+    """
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if detail.status != FileStatus.INDEXED:
+        raise HTTPException(
+            status_code=409, detail="索引済み(INDEXED)の文書のみ別レシピを試せます。"
+        )
+    if not detail.content_sha256:
+        raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
+    serving_chunk_set_id = await oracle.get_document_serving_chunk_set_id(document_id)
+    if serving_chunk_set_id is None:
+        raise HTTPException(status_code=409, detail="配信中の chunk_set がありません。")
+    candidate_settings = _candidate_experiment_settings(get_settings(), request)
+    candidate_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
+    if candidate_chunk_set_id == serving_chunk_set_id:
+        raise HTTPException(
+            status_code=409,
+            detail="現在配信中のレシピと同じ設定です。別の chunking 設定を指定してください。",
+        )
+    pipeline = IngestionPipeline(oracle=oracle, settings=candidate_settings)
+    try:
+        await pipeline.index_reviewed(
+            document_id, chunk_set_id=candidate_chunk_set_id, record_outcome=False
+        )
+    except IngestionUserError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    extraction_recipe_id = compute_extraction_recipe_id(detail.content_sha256, candidate_settings)
+    chunk_count = await oracle.count_chunk_set_chunks(candidate_chunk_set_id)
+    await oracle.upsert_chunk_set(
+        chunk_set_id=candidate_chunk_set_id,
+        document_id=document_id,
+        extraction_recipe_id=extraction_recipe_id,
+    )
+    await oracle.mark_chunk_set_indexed(
+        chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
+    )
+    # 候補は配信に載せない: 現 serving を再アサートして新 chunk_set を is_serving=0 に落とす。
+    await oracle.set_document_serving_chunk_set(
+        document_id=document_id, chunk_set_id=serving_chunk_set_id
+    )
+    return ApiResponse(
+        data=await _chunk_set_experiment_view(oracle, document_id, candidate_chunk_set_id)
+    )
+
+
+@router.post(
+    "/{document_id}/chunk-set-experiments/{chunk_set_id}/promote",
+    response_model=ApiResponse[DocumentChunkSet],
+)
+async def promote_chunk_set_experiment(
+    document_id: str, chunk_set_id: str
+) -> ApiResponse[DocumentChunkSet]:
+    """候補 chunk_set を配信(serving)に昇格し、敗者 chunk_set を GC する。
+
+    定常状態は 1 文書 = 1 chunk_set。昇格後はその chunk_set だけが検索対象になる。
+    """
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if chunk_set_id not in await oracle.list_document_chunk_set_ids(document_id):
+        raise HTTPException(status_code=404, detail="この文書の chunk_set ではありません。")
+    chunk_set = await oracle.get_chunk_set(chunk_set_id)
+    if chunk_set is None or str(chunk_set.get("status")) != "INDEXED":
+        raise HTTPException(
+            status_code=409, detail="索引済み(INDEXED)の chunk_set のみ昇格できます。"
+        )
+    await oracle.set_document_serving_chunk_set(document_id=document_id, chunk_set_id=chunk_set_id)
+    await oracle.delete_document_chunk_sets_except(
+        document_id=document_id, keep_chunk_set_ids=[chunk_set_id]
+    )
+    return ApiResponse(data=await _chunk_set_experiment_view(oracle, document_id, chunk_set_id))
 
 
 async def _materialization_plan_for_document(

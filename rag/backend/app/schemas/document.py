@@ -3,9 +3,10 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
+from app.config import ChunkingStrategy
 from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
@@ -241,6 +242,46 @@ class DocumentChunkSet(BaseModel):
     layer_statuses: DocumentChunkSetLayerStatuses = Field(
         default_factory=DocumentChunkSetLayerStatuses
     )
+
+
+class ChunkSetExperimentRequest(BaseModel):
+    """別 chunking レシピで候補 chunk_set を試す実験リクエスト(分割軸)。
+
+    指定したフィールドだけ global 既定を上書きする。parser/前処理は変えない(再抽出不要・
+    既存抽出を再利用して re-chunk する)ので、上書きできるのは chunking 系のみ。
+    """
+
+    chunking_strategy: ChunkingStrategy | None = None
+    chunk_size: int | None = Field(default=None, ge=200, le=4000)
+    chunk_overlap: int | None = Field(default=None, ge=0, le=1000)
+    chunk_child_size: int | None = Field(default=None, ge=80, le=4000)
+    chunk_sentence_window_size: int | None = Field(default=None, ge=1, le=20)
+    chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
+    chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
+
+    _FIELD_TO_SETTING = {
+        "chunking_strategy": "rag_chunking_strategy",
+        "chunk_size": "rag_chunk_size",
+        "chunk_overlap": "rag_chunk_overlap",
+        "chunk_child_size": "rag_chunk_child_size",
+        "chunk_sentence_window_size": "rag_chunk_sentence_window_size",
+        "chunk_min_chars": "rag_chunk_min_chars",
+        "chunk_delimiter": "rag_chunk_delimiter",
+    }
+
+    @model_validator(mode="after")
+    def _require_at_least_one_override(self) -> "ChunkSetExperimentRequest":
+        if not self.settings_overrides():
+            raise ValueError("少なくとも 1 つの chunking 設定を指定してください。")
+        return self
+
+    def settings_overrides(self) -> dict[str, object]:
+        """非 None の値を Settings の rag_* キーへ写した上書き dict を返す。"""
+        return {
+            setting: getattr(self, field)
+            for field, setting in self._FIELD_TO_SETTING.items()
+            if getattr(self, field) is not None
+        }
 
 
 class DocumentBuildConfigState(StrEnum):

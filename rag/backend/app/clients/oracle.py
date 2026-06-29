@@ -1308,6 +1308,24 @@ class OracleClient:
         )
         return [str(next(iter(row.values()))) for row in rows]
 
+    async def get_document_serving_chunk_set_id(self, document_id: str) -> str | None:
+        """文書の配信中(is_serving=1)chunk_set id を返す。無ければ None。
+
+        昇格済みで recipe が global と乖離していても DB の is_serving を正本にする
+        (実験時の候補 demote = 現 serving の再アサートに使う)。複数 serving の旧データは
+        created_at 最新を返す(安全側で1つに収束させる)。
+        """
+        row = await self._fetch_one(
+            """
+            SELECT chunk_set_id FROM rag_chunk_sets
+            WHERE document_id = :document_id AND is_serving = 1
+            ORDER BY created_at DESC, chunk_set_id
+            FETCH FIRST 1 ROWS ONLY
+            """,
+            {"document_id": document_id},
+        )
+        return str(next(iter(row.values()))) if row else None
+
     async def list_document_chunk_sets(self, document_id: str) -> list[dict[str, object]]:
         """文書の chunk_set 一覧(状態/件数/所属・配信 KB)を返す。variant 可視化に使う。
 
@@ -7267,6 +7285,8 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
     serving_mode = (filters.get("serving_mode") or "single").strip().lower()
+    # 実験: chunk_set_id を明示すると is_serving に関係なくその chunk_set だけを検索する。
+    explicit_chunk_set_id = (filters.get("chunk_set_id") or "").strip()
     knowledge_base_ids = _filter_id_values(filters.get("knowledge_base_id"))
     knowledge_base_filter_sql = ""
     if knowledge_base_ids:
@@ -7283,8 +7303,9 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         # ② その chunk_set が serving / ③ 文書に serving chunk_set が 1 つも無い(安全側で全採用)。
         # 単一 materialization では当該 chunk_set が serving なので従来どおり全採用(回帰なし)。
         # fused は全 serving chunk_set を横断検索するため、この制限をかけない(重複は
-        # アプリ側の source-span dedup で除去する)。
-        if serving_mode != "fused":
+        # アプリ側の source-span dedup で除去する)。chunk_set_id 明示時(実験)も
+        # 配信中以外の候補を対象にするため serving 制限を外す(下の述語で1つに絞る)。
+        if serving_mode != "fused" and not explicit_chunk_set_id:
             clauses.append("""
             (
                 c.chunk_set_id IS NULL
@@ -7333,6 +7354,9 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         if key == "document_id":
             clauses.append("d.document_id = :filter_document_id")
             binds["filter_document_id"] = cleaned
+        elif key == "chunk_set_id":
+            clauses.append("c.chunk_set_id = :filter_chunk_set_id")
+            binds["filter_chunk_set_id"] = cleaned
         elif key == "status":
             clauses.append("d.status = :filter_status")
             binds["filter_status"] = cleaned
