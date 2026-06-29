@@ -40,9 +40,7 @@ from app.rag.ingestion import (
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
 from app.rag.kb_adapter_config import (
     KnowledgeBaseAdapterConfig,
-    KnowledgeBaseIngestionConfig,
     apply_adapter_config_or_global,
-    resolve_effective_adapter_config,
 )
 from app.rag.navigation import build_navigation_tree
 from app.rag.rate_limit import enforce_rate_limit
@@ -50,7 +48,6 @@ from app.rag.source_profile import build_source_profile
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_extraction_recipe_id,
-    compute_layer_ids,
 )
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
@@ -59,8 +56,6 @@ from app.schemas.document import (
     BatchUploadResult,
     ChunkSetExperimentRequest,
     DocumentApproveRequest,
-    DocumentBuildConfigGroup,
-    DocumentBuildConfigState,
     DocumentChunkSet,
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
@@ -894,7 +889,8 @@ async def get_document_ingestion_config(
     if detail is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
 
-    effective_settings, owning = await _resolve_ingestion_settings(oracle, document_id)
+    # 3 層モデル: 配信レシピは global(「検索・回答設定」の既定)。owning KB overlay は使わない。
+    effective_settings = get_settings()
     is_indexed = detail.status == FileStatus.INDEXED
 
     observed_strategy: str | None = None
@@ -927,15 +923,11 @@ async def get_document_ingestion_config(
         )
     )
     config_drift = chunking_drift or parser_drift
-    build_configurations = await _document_build_configurations(oracle, detail, owning)
 
     return ApiResponse(
         data=DocumentIngestionConfigData(
             document_id=document_id,
             is_indexed=is_indexed,
-            owning_knowledge_base=(
-                KnowledgeBaseRef(id=owning.id, name=owning.name) if owning is not None else None
-            ),
             effective_preprocess_profile=effective_settings.rag_preprocess_profile,
             effective_chunking_strategy=effective_settings.rag_chunking_strategy,
             effective_parser_adapter_backend=effective_settings.rag_parser_adapter_backend,
@@ -944,242 +936,8 @@ async def get_document_ingestion_config(
             chunking_drift=chunking_drift,
             parser_drift=parser_drift,
             config_drift=config_drift,
-            build_configurations=build_configurations,
         )
     )
-
-
-_BUILD_CONFIG_INTERNAL_FIELDS = frozenset(
-    {
-        "parser_docling_enabled",
-        "parser_marker_enabled",
-        "parser_unstructured_enabled",
-        "parser_unlimited_ocr_enabled",
-        "parser_mineru_enabled",
-        "parser_dots_ocr_enabled",
-        "parser_glm_ocr_enabled",
-    }
-)
-_ACTIVE_DOCUMENT_STATUSES = frozenset(
-    {
-        FileStatus.PREPROCESSING,
-        FileStatus.INGESTING,
-        FileStatus.CHUNKING,
-        FileStatus.INDEXING,
-    }
-)
-
-
-async def _document_build_configurations(
-    oracle: OracleClient,
-    detail: DocumentDetail,
-    owning: KnowledgeBaseDetail | None,
-) -> list[DocumentBuildConfigGroup]:
-    """所属 KB の有効な構築設定をまとめ、現在の物化/配信状態を付ける。"""
-    configs = await oracle.list_document_knowledge_base_configs(detail.id)
-    if not detail.content_sha256 or not configs:
-        return []
-
-    global_settings = get_settings()
-    refs = {knowledge_base.id: knowledge_base for knowledge_base in detail.knowledge_bases}
-    grouped: dict[
-        str,
-        tuple[Settings, KnowledgeBaseIngestionConfig, list[KnowledgeBaseRef]],
-    ] = {}
-    for knowledge_base_id, config in configs:
-        settings, applied = apply_adapter_config_or_global(
-            global_settings,
-            config,
-            scope="ingestion",
-        )
-        display_config = config if applied or config.is_empty() else KnowledgeBaseAdapterConfig()
-        effective_config = resolve_effective_adapter_config(
-            global_settings,
-            display_config,
-        ).ingestion
-        key = _build_config_group_key(effective_config)
-        reference = refs.get(knowledge_base_id)
-        if reference is None:
-            continue
-        if key in grouped:
-            grouped[key][2].append(reference)
-        else:
-            grouped[key] = (settings, effective_config, [reference])
-
-    rows = await oracle.list_document_chunk_sets(detail.id)
-    row_by_id = {str(row["chunk_set_id"]): row for row in rows}
-    chunk_set_ids = [
-        compute_chunk_set_id(detail.content_sha256, settings)
-        for settings, _effective, _refs in grouped.values()
-    ]
-    persisted_layers = await oracle.list_artifact_layers_for_chunk_sets(chunk_set_ids)
-
-    result: list[DocumentBuildConfigGroup] = []
-    extractions: dict[str, Mapping[str, object] | None] = {}
-    for settings, effective_config, knowledge_bases in grouped.values():
-        knowledge_bases.sort(key=lambda item: (item.name.casefold(), item.id))
-        layer_ids = compute_layer_ids(detail.content_sha256, settings)
-        row = row_by_id.get(layer_ids["chunk_set_id"])
-        extraction_recipe_id = layer_ids["extraction_recipe_id"]
-        if extraction_recipe_id not in extractions:
-            extractions[extraction_recipe_id] = await oracle.get_document_extraction_artifact(
-                document_id=detail.id,
-                extraction_recipe_id=extraction_recipe_id,
-            )
-        extraction = extractions[extraction_recipe_id]
-        layer_statuses = _configuration_layer_statuses(
-            settings,
-            layer_ids,
-            persisted_layers,
-        )
-        state, reason = _build_config_state(
-            detail,
-            knowledge_bases,
-            row,
-            extraction,
-            layer_statuses,
-        )
-        serving_ids = _build_config_string_set((row or {}).get("serving_knowledge_base_ids", []))
-        result.append(
-            DocumentBuildConfigGroup(
-                knowledge_bases=knowledge_bases,
-                effective_config=effective_config,
-                is_review_target=bool(
-                    owning and any(item.id == owning.id for item in knowledge_bases)
-                ),
-                extraction_recipe_id=extraction_recipe_id,
-                chunk_set_id=layer_ids["chunk_set_id"],
-                state=state,
-                reason=reason,
-                chunk_count=_metadata_int((row or {}).get("chunk_count")) or 0,
-                vector_count=_metadata_int((row or {}).get("vector_count")) or 0,
-                serving_knowledge_base_count=sum(
-                    item.id in serving_ids for item in knowledge_bases
-                ),
-                layer_statuses=layer_statuses,
-            )
-        )
-    return sorted(
-        result,
-        key=lambda group: (
-            not group.is_review_target,
-            group.knowledge_bases[0].name.casefold(),
-            group.chunk_set_id,
-        ),
-    )
-
-
-def _build_config_group_key(config: KnowledgeBaseIngestionConfig) -> str:
-    """UI で編集できる有効値だけを使い、同じ設定の KB をまとめる。"""
-    values = config.model_dump(mode="json", exclude=set(_BUILD_CONFIG_INTERNAL_FIELDS))
-    return json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _build_config_string_set(value: object) -> set[str]:
-    if not isinstance(value, list | tuple | set | frozenset):
-        return set()
-    return {str(item) for item in value}
-
-
-def _configuration_layer_statuses(
-    settings: Settings,
-    layer_ids: Mapping[str, str],
-    persisted_layers: Mapping[str, Mapping[str, object]],
-) -> DocumentChunkSetLayerStatuses:
-    return DocumentChunkSetLayerStatuses(
-        metadata=_configuration_layer_status(
-            requested=_layer_requested("metadata", settings),
-            layer_id=layer_ids["metadata_layer_id"],
-            persisted_layers=persisted_layers,
-            user_label="項目抽出・画像要約",
-        ),
-        graph=_configuration_layer_status(
-            requested=_layer_requested("graph", settings),
-            layer_id=layer_ids["graph_layer_id"],
-            persisted_layers=persisted_layers,
-            user_label="関係情報",
-        ),
-        navigation=_configuration_layer_status(
-            requested=_layer_requested("navigation", settings),
-            layer_id=layer_ids["nav_layer_id"],
-            persisted_layers=persisted_layers,
-            user_label="ナビゲーション",
-        ),
-    )
-
-
-def _configuration_layer_status(
-    *,
-    requested: bool,
-    layer_id: str,
-    persisted_layers: Mapping[str, Mapping[str, object]],
-    user_label: str,
-) -> DocumentMaterializationLayerStatus:
-    if not requested:
-        return DocumentMaterializationLayerStatus(
-            requested=False,
-            status=DocumentLayerStatusName.NOT_REQUESTED,
-            reason=f"現在の構築設定では{user_label}を使用しません。",
-        )
-    persisted = persisted_layers.get(layer_id)
-    if persisted is None:
-        return DocumentMaterializationLayerStatus(
-            layer_id=layer_id,
-            requested=True,
-            status=DocumentLayerStatusName.PLANNED_ONLY,
-            reason=f"{user_label}は構築計画に含まれていますが、まだ実体化していません。",
-        )
-    return DocumentMaterializationLayerStatus(
-        layer_id=layer_id,
-        requested=bool(persisted.get("requested", True)),
-        status=DocumentLayerStatusName(
-            str(persisted.get("status") or DocumentLayerStatusName.PLANNED_ONLY.value)
-        ),
-        reason=str(persisted["reason"]) if persisted.get("reason") is not None else None,
-    )
-
-
-def _build_config_state(
-    detail: DocumentDetail,
-    knowledge_bases: list[KnowledgeBaseRef],
-    chunk_set: Mapping[str, object] | None,
-    extraction: Mapping[str, object] | None,
-    layer_statuses: DocumentChunkSetLayerStatuses,
-) -> tuple[DocumentBuildConfigState, str]:
-    layer_states = {
-        layer_statuses.metadata.status,
-        layer_statuses.graph.status,
-        layer_statuses.navigation.status,
-    }
-    extraction_status = str((extraction or {}).get("status") or "")
-    chunk_set_status = str((chunk_set or {}).get("status") or "")
-    if (
-        detail.status == FileStatus.ERROR
-        or extraction_status == DocumentLayerStatusName.ERROR.value
-        or chunk_set_status == "ERROR"
-        or DocumentLayerStatusName.ERROR.value in layer_states
-    ):
-        return DocumentBuildConfigState.ERROR, "この構築設定の処理に失敗しています。"
-    if detail.status in _ACTIVE_DOCUMENT_STATUSES or chunk_set_status in {"INGESTING", "CHUNKED"}:
-        return DocumentBuildConfigState.BUILDING, "この構築設定の処理を進めています。"
-    if (
-        extraction_status == DocumentLayerStatusName.NEEDS_REINGEST.value
-        or DocumentLayerStatusName.NEEDS_REINGEST.value in layer_states
-    ):
-        return (
-            DocumentBuildConfigState.UPDATE_REQUIRED,
-            "現在の構築設定で再取込が必要です。",
-        )
-    expected_ids = {knowledge_base.id for knowledge_base in knowledge_bases}
-    serving_ids = _build_config_string_set((chunk_set or {}).get("serving_knowledge_base_ids", []))
-    if chunk_set_status == "INDEXED" and expected_ids <= serving_ids:
-        return DocumentBuildConfigState.SERVING, "この構築設定を検索に使用しています。"
-    if detail.status == FileStatus.INDEXED:
-        return (
-            DocumentBuildConfigState.UPDATE_REQUIRED,
-            "現在の構築設定に対応する結果が未構築または未配信です。",
-        )
-    return DocumentBuildConfigState.PLANNED, "取込時にこの構築設定を適用します。"
 
 
 @router.get(

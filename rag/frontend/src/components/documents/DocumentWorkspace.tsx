@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import { ChunkSetExperimentPanel } from "./ChunkSetExperimentPanel";
 import { DocumentPreview } from "./DocumentPreview";
@@ -55,8 +55,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   api,
   ApiError,
-  type DocumentBuildConfigGroup,
-  type DocumentBuildConfigState,
   type DocumentApproveRequest,
   type DocumentElement,
   type DocumentChunkView,
@@ -67,7 +65,6 @@ import {
   type IngestionJob,
   type IngestionJobPhase,
   type IngestionSegment,
-  type KnowledgeBaseIngestionConfig,
   type KnowledgeBaseRef,
   type SourceProfile,
 } from "@/lib/api";
@@ -93,7 +90,6 @@ import {
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { ja, t, type I18nKey } from "@/lib/i18n";
-import { APP_ROUTES } from "@/lib/routes";
 import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import {
@@ -824,7 +820,7 @@ export function DocumentWorkspace({
             {documentFailure.primaryMessage ?? t("flow.error.fallback")}
           </Banner>
         ) : null}
-        <BuildConfigSummary
+        <DocumentRecipeCard
           config={ingestionConfigQuery.data ?? null}
           loading={ingestionConfigQuery.isPending}
           error={ingestionConfigQuery.error}
@@ -1980,23 +1976,8 @@ function configValueLabel(key: I18nKey, raw: string): string {
   return key in ja ? t(key) : raw;
 }
 
-const BUILD_CONFIG_STATE_KEYS: Record<DocumentBuildConfigState, I18nKey> = {
-  planned: "flow.buildConfig.state.planned",
-  building: "flow.buildConfig.state.building",
-  serving: "flow.buildConfig.state.serving",
-  update_required: "flow.buildConfig.state.updateRequired",
-  error: "flow.buildConfig.state.error",
-};
-
-const BUILD_CONFIG_STATE_CLASSES: Record<DocumentBuildConfigState, string> = {
-  planned: "border-border bg-muted/10 text-muted",
-  building: "border-info/30 bg-info-bg text-info",
-  serving: "border-success/30 bg-success-bg text-success",
-  update_required: "border-warning/30 bg-warning-bg text-warning",
-  error: "border-danger/30 bg-danger-bg text-danger",
-};
-
-function BuildConfigSummary({
+/** 3 層モデル: 文書の単一レシピ(global 既定から解決した preprocess/parser/chunking)を表示する。 */
+function DocumentRecipeCard({
   config,
   loading,
   error,
@@ -2007,32 +1988,18 @@ function BuildConfigSummary({
   error: unknown;
   onRetry: () => void;
 }) {
-  const groups = config?.build_configurations;
   return (
     <section
       aria-label={t("flow.buildConfig.title")}
       className="rounded-md border border-border bg-background p-3"
     >
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-xs font-semibold text-muted">
-          <SlidersHorizontal size={14} className="text-primary" aria-hidden />
-          {t("flow.buildConfig.title")}
-        </h3>
-        {groups ? (
-          <span className="tnum text-xs text-muted">
-            {t("flow.buildConfig.summary", {
-              knowledgeBases: groups.reduce(
-                (count, group) => count + group.knowledge_bases.length,
-                0
-              ),
-              configurations: groups.length,
-            })}
-          </span>
-        ) : null}
-      </div>
+      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold text-muted">
+        <SlidersHorizontal size={14} className="text-primary" aria-hidden />
+        {t("flow.buildConfig.title")}
+      </h3>
       {loading ? (
         <div className="space-y-2" role="status" aria-label={t("flow.buildConfig.loading")}>
-          <Skeleton className="h-28 w-full" />
+          <Skeleton className="h-16 w-full" />
           <span className="sr-only">{t("flow.buildConfig.loading")}</span>
         </div>
       ) : error ? (
@@ -2045,214 +2012,39 @@ function BuildConfigSummary({
             </Button>
           </div>
         </Banner>
-      ) : config && groups === undefined ? (
-        <LegacyBuildConfig config={config} />
-      ) : groups && groups.length > 0 ? (
-        <ul className="space-y-2" aria-label={t("flow.buildConfig.groups")}>
-          {groups.map((group) => (
-            <BuildConfigGroupCard
-              key={`${group.chunk_set_id}:${group.knowledge_bases.map((item) => item.id).join(",")}`}
-              group={group}
-            />
-          ))}
-        </ul>
-      ) : (
-        <p className="py-3 text-sm text-muted">{t("flow.buildConfig.empty")}</p>
-      )}
+      ) : config ? (
+        <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+          <RecipeField
+            label={t("flow.buildConfig.preprocess")}
+            value={configValueLabel(
+              `settings.preprocess.profile.${config.effective_preprocess_profile}` as I18nKey,
+              config.effective_preprocess_profile
+            )}
+          />
+          <RecipeField
+            label={t("flow.buildConfig.parser")}
+            value={parserBackendLabel(config.effective_parser_adapter_backend)}
+          />
+          <RecipeField
+            label={t("flow.buildConfig.chunking")}
+            value={configValueLabel(
+              `settings.chunking.strategy.${config.effective_chunking_strategy}` as I18nKey,
+              config.effective_chunking_strategy
+            )}
+          />
+        </dl>
+      ) : null}
     </section>
   );
 }
 
-function BuildConfigGroupCard({ group }: { group: DocumentBuildConfigGroup }) {
-  const config = group.effective_config;
-  return (
-    <li className="rounded-md border border-border bg-card p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          {group.knowledge_bases.map((knowledgeBase) => (
-            <Link
-              key={knowledgeBase.id}
-              to={`${APP_ROUTES.knowledgeBases}/${knowledgeBase.id}`}
-              className="inline-flex min-h-11 items-center rounded-md border border-primary/20 bg-primary/5 px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            >
-              {knowledgeBase.name}
-            </Link>
-          ))}
-          {group.knowledge_bases.length > 1 ? (
-            <BuildConfigBadge>{t("flow.buildConfig.shared")}</BuildConfigBadge>
-          ) : null}
-          {group.is_review_target ? (
-            <BuildConfigBadge>{t("flow.buildConfig.reviewTarget")}</BuildConfigBadge>
-          ) : null}
-        </div>
-        <span
-          className={cn(
-            "inline-flex min-h-7 shrink-0 items-center rounded border px-2 text-xs font-medium",
-            BUILD_CONFIG_STATE_CLASSES[group.state]
-          )}
-          title={group.reason ?? undefined}
-        >
-          {t(BUILD_CONFIG_STATE_KEYS[group.state])}
-        </span>
-      </div>
-
-      <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
-        <BuildConfigField
-          label={t("flow.buildConfig.preprocess")}
-          value={configValueLabel(
-            `settings.preprocess.profile.${config.preprocess_profile}` as I18nKey,
-            config.preprocess_profile ?? "-"
-          )}
-        />
-        <BuildConfigField
-          label={t("flow.buildConfig.parser")}
-          value={parserBackendLabel(config.parser_adapter_backend ?? "local")}
-        />
-        <BuildConfigField
-          label={t("flow.buildConfig.chunking")}
-          value={chunkingConfigLabel(config)}
-        />
-        <BuildConfigField label={t("flow.buildConfig.indexBuild")} value={indexBuildLabel(config)} />
-        <BuildConfigField label={t("flow.buildConfig.autoAdvance")} value={autoAdvanceLabel(config)} />
-      </dl>
-
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-xs text-muted">
-        {group.chunk_count > 0 || group.vector_count > 0 ? (
-          <span className="tnum">
-            {t("flow.buildConfig.counts", {
-              chunks: group.chunk_count,
-              vectors: group.vector_count,
-            })}
-          </span>
-        ) : null}
-        {group.serving_knowledge_base_count > 0 ? (
-          <span className="tnum">
-            {t("flow.buildConfig.servingCount", {
-              serving: group.serving_knowledge_base_count,
-              total: group.knowledge_bases.length,
-            })}
-          </span>
-        ) : null}
-        <BuildLayerStatuses group={group} />
-      </div>
-      {/* error 状態の汎用理由は上部の原因バナー/診断に集約済み。ここでは再掲しない（§9 P2）。
-          状態バッジ(上部)の hover(title)に reason は残る。update_required 等の説明的 reason は表示する。
-          ponytail: 多 KB で config 毎に異なる error 理由がある場合は将来 documentFailure と突き合わせて出し分け。 */}
-      {group.state !== "serving" && group.state !== "error" && group.reason ? (
-        <p className="mt-2 text-xs text-muted">{group.reason}</p>
-      ) : null}
-    </li>
-  );
-}
-
-function BuildConfigBadge({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex min-h-7 items-center rounded border border-border bg-background px-2 text-xs font-medium text-muted">
-      {children}
-    </span>
-  );
-}
-
-function BuildConfigField({ label, value }: { label: string; value: string }) {
+function RecipeField({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
       <dt className="text-xs text-muted">{label}</dt>
       <dd className="mt-0.5 break-words font-medium leading-5 text-foreground">{value}</dd>
     </div>
   );
-}
-
-function BuildLayerStatuses({ group }: { group: DocumentBuildConfigGroup }) {
-  const items = [
-    [t("flow.buildConfig.layer.metadata"), group.layer_statuses.metadata],
-    [t("flow.buildConfig.layer.graph"), group.layer_statuses.graph],
-    [t("flow.buildConfig.layer.navigation"), group.layer_statuses.navigation],
-  ] as const;
-  const requested = items.filter(([, status]) => status.requested);
-  if (requested.length === 0) return null;
-  return (
-    <span className="flex flex-wrap items-center gap-1.5">
-      {requested.map(([label, status]) => (
-        <span key={label} title={status.reason ?? undefined}>
-          {label}: {t(`knowledgeBases.variant.layerStatus.${status.status}` as I18nKey)}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-function LegacyBuildConfig({ config }: { config: DocumentIngestionConfigData }) {
-  return (
-    <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-      <BuildConfigField
-        label={t("flow.buildConfig.preprocess")}
-        value={configValueLabel(
-          `settings.preprocess.profile.${config.effective_preprocess_profile}` as I18nKey,
-          config.effective_preprocess_profile
-        )}
-      />
-      <BuildConfigField
-        label={t("flow.buildConfig.parser")}
-        value={parserBackendLabel(config.effective_parser_adapter_backend)}
-      />
-      <BuildConfigField
-        label={t("flow.buildConfig.chunking")}
-        value={configValueLabel(
-          `settings.chunking.strategy.${config.effective_chunking_strategy}` as I18nKey,
-          config.effective_chunking_strategy
-        )}
-      />
-    </dl>
-  );
-}
-
-function chunkingConfigLabel(config: KnowledgeBaseIngestionConfig) {
-  const strategy = configValueLabel(
-    `settings.chunking.strategy.${config.chunking_strategy}` as I18nKey,
-    config.chunking_strategy ?? "-"
-  );
-  return t("flow.buildConfig.chunkingValue", {
-    strategy,
-    size: config.chunk_size ?? "-",
-    overlap: config.chunk_overlap ?? "-",
-  });
-}
-
-function indexBuildLabel(config: KnowledgeBaseIngestionConfig) {
-  const graph = configValueLabel(
-    `settings.graph.profile.${config.graph_profile}` as I18nKey,
-    config.graph_profile ?? "-"
-  );
-  return [
-    graph,
-    t("flow.buildConfig.index.field", { state: booleanConfigLabel(config.field_extraction_enabled) }),
-    t("flow.buildConfig.index.asset", { state: booleanConfigLabel(config.asset_summary_enabled) }),
-    t("flow.buildConfig.index.navigation", {
-      state: booleanConfigLabel(config.navigation_summary_enabled),
-    }),
-  ].join(" · ");
-}
-
-function autoAdvanceLabel(config: KnowledgeBaseIngestionConfig) {
-  return [
-    t("flow.buildConfig.auto.parse", {
-      state: autoConfigLabel(config.auto_parse_after_preprocess_enabled),
-    }),
-    t("flow.buildConfig.auto.chunk", {
-      state: autoConfigLabel(config.auto_chunk_after_extract_enabled),
-    }),
-    t("flow.buildConfig.auto.index", {
-      state: autoConfigLabel(config.auto_index_after_chunk_enabled),
-    }),
-  ].join(" · ");
-}
-
-function booleanConfigLabel(value: boolean | null) {
-  return t(value ? "knowledgeBases.adapter.bool.enabled" : "knowledgeBases.adapter.bool.disabled");
-}
-
-function autoConfigLabel(value: boolean | null) {
-  return t(value ? "flow.buildConfig.auto.enabled" : "flow.buildConfig.auto.disabled");
 }
 
 function SourceProfilePanel({
