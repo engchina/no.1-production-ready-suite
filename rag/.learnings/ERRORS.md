@@ -32,6 +32,72 @@ document status=INGESTING error_message=None  # 固着
 
 ---
 
+## [ERR-20260630-003] nightly_missing_shared_backend_core
+
+**Logged**: 2026-06-30T07:42:39+09:00
+**Priority**: high
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Scheduled RAG evaluation failed before tests because the workflow did not checkout the sibling platform repository required by the backend path dependency.
+
+### Error
+```text
+Failed to generate package metadata for production-ready-backend-core
+Distribution not found at: ../../no.1-production-ready-platform/packages/backend_core
+```
+
+### Context
+- GitHub Actions run: 28399801349, job 84147832679.
+- `.github/workflows/ci.yml` already uses sibling app/platform checkouts, but `rag-evaluation-nightly.yml` checked out only the app at workspace root.
+
+### Suggested Fix
+Reuse the CI workflow layout: checkout app and platform as workspace siblings, then update working, cache, and artifact paths.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .github/workflows/rag-evaluation-nightly.yml
+
+### Resolution
+- **Resolved**: 2026-06-30T07:47:00+09:00
+- **Commit**: c1c0aaa
+- **Notes**: Reused the main CI sibling checkout layout; YAML parsing and `uv sync --locked --dev` succeeded locally with the same directory structure.
+
+---
+
+## [ERR-20260630-004] workflow_dispatch_token_scope
+
+**Logged**: 2026-06-30T07:47:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The available GitHub PAT could push code but could not dispatch a workflow run.
+
+### Error
+```text
+HTTP 403: Resource not accessible by personal access token
+```
+
+### Context
+- Command attempted: `gh workflow run rag-evaluation-nightly.yml --ref codex/default-knowledge-base`.
+- The workflow fix was already pushed; equivalent YAML and dependency installation checks passed locally.
+
+### Suggested Fix
+Use a token with Actions workflow dispatch permission, or trigger the branch workflow from the GitHub UI.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .github/workflows/rag-evaluation-nightly.yml
+
+### Resolution
+- **Resolved**: 2026-06-30T07:47:00+09:00
+- **Notes**: Report the dispatch limitation explicitly; no code workaround is appropriate.
+
+---
+
 ## [ERR-20260630-001] eslint_playwright_test_results_race
 
 **Logged**: 2026-06-30T06:36:00+09:00
