@@ -24,7 +24,12 @@ from app.schemas.document import (
     IngestionJobStatus,
     IngestionSegment,
 )
-from app.schemas.extraction import ExtractionTable, ExtractionTableCell
+from app.schemas.extraction import (
+    DocumentElement,
+    ExtractionTable,
+    ExtractionTableCell,
+    StructuredExtraction,
+)
 from app.schemas.knowledge_base import KnowledgeBaseRef
 from tests.support import AsgiTestClient
 
@@ -214,6 +219,17 @@ class FakeWorkspaceOracle:
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.documents.get(document_id)
+
+    async def save_review_extraction(
+        self,
+        document_id: str,
+        extraction: StructuredExtraction,
+    ) -> DocumentDetail:
+        detail = self.documents[document_id].model_copy(
+            update={"extraction": extraction.to_document_payload()}
+        )
+        self.documents[document_id] = detail
+        return detail
 
     async def get_document_processing_config(self, document_id: str) -> DocumentProcessingConfig:
         return self.processing_configs.get(document_id, DocumentProcessingConfig())
@@ -539,6 +555,74 @@ def _upload(file_name: str, body: bytes, content_type: str) -> str:
     )
     assert resp.status_code == 200
     return str(resp.json()["data"]["id"])
+
+
+def test_review_edits_patch_saves_without_creating_chunks(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """PATCH は REVIEW を維持して正本を更新し、Chunk は生成しない。"""
+    document_id = _upload("policy.txt", b"sample", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    extraction = StructuredExtraction(
+        raw_text="経費申請",
+        elements=[
+            DocumentElement(
+                kind="title",
+                text="経費申請",
+                order=0,
+                element_id="el-0000",
+                page_number=1,
+            )
+        ],
+    )
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.REVIEW,
+            "extraction": extraction.to_document_payload(),
+        }
+    )
+
+    response = client.patch(
+        f"/api/documents/{document_id}/review-edits",
+        json={"element_edits": [{"element_id": "el-0000", "text": "経費申請（レビュー済み）"}]},
+    )
+
+    assert response.status_code == 200
+    saved = response.json()["data"]
+    assert saved["status"] == "REVIEW"
+    assert saved["extraction"]["raw_text"] == "経費申請（レビュー済み）"
+    assert fake_document_dependencies.chunks.get(document_id, []) == []
+
+
+def test_review_edits_patch_rejects_unknown_element(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """存在しない要素 ID は新しい保存 API でも 400 にする。"""
+    document_id = _upload("policy.txt", b"sample", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={
+            "status": FileStatus.REVIEW,
+            "extraction": StructuredExtraction(
+                raw_text="経費申請",
+                elements=[
+                    DocumentElement(
+                        kind="title",
+                        text="経費申請",
+                        order=0,
+                        element_id="el-0000",
+                    )
+                ],
+            ).to_document_payload(),
+        }
+    )
+
+    response = client.patch(
+        f"/api/documents/{document_id}/review-edits",
+        json={"element_edits": [{"element_id": "missing", "text": "x"}]},
+    )
+
+    assert response.status_code == 400
 
 
 def test_document_upload_returns_assigned_knowledge_bases() -> None:
@@ -2095,7 +2179,7 @@ def test_document_content_returns_prepared_artifact(
     )
 
     resp = client.get(
-        f"/api/documents/{document_id}/content" "?variant=prepared&disposition=attachment"
+        f"/api/documents/{document_id}/content?variant=prepared&disposition=attachment"
     )
 
     assert resp.status_code == 200

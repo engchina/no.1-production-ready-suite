@@ -20,6 +20,7 @@ import {
   type DatabaseSettingsUpdate,
   type HuggingFaceSettingsUpdate,
   type DocumentApproveRequest,
+  type DocumentReviewEditsRequest,
   type DocumentDetail,
   type DocumentSummary,
   type DocumentKnowledgeBaseReplaceRequest,
@@ -850,6 +851,21 @@ export function useApproveDocument() {
       qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+/** REVIEW 中の構造化要素修正を保存し、確認待ち状態を維持する。 */
+export function useSaveDocumentReviewEdits() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: DocumentReviewEditsRequest }) =>
+      api.saveDocumentReviewEdits(id, payload),
+    onSuccess: (detail) => {
+      qc.setQueryData(queryKeys.document(detail.id), detail);
+      qc.invalidateQueries({
+        queryKey: ["documents", detail.id, "extraction-export"],
+      });
     },
   });
 }

@@ -3,7 +3,6 @@ import {
   Check,
   CircleAlert,
   Clipboard,
-  FileText,
   Hash,
   Layers3,
   ListChecks,
@@ -42,7 +41,27 @@ const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
   other: "flow.extraction.kind.other",
 };
 
-/** RAG 取込で得た構造化要素・本文・軽量メタデータを表示する。 */
+/** RAG 取込で得た本文テキストを表示する。 */
+export function DocumentRawText({ extraction }: { extraction: Record<string, unknown> }) {
+  const { rawText } = parseStructuredExtraction(extraction);
+  if (!rawText) {
+    return <p className="text-sm text-muted">{t("flow.extraction.noRawText")}</p>;
+  }
+
+  return (
+    <section className="rounded-lg border border-border bg-background p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-foreground">
+          {t("flow.extraction.rawText")}
+        </h4>
+        <CopyRawTextButton text={rawText} />
+      </div>
+      <ExtractedText text={rawText} />
+    </section>
+  );
+}
+
+/** RAG 取込で得た構造化要素・軽量メタデータを表示する。 */
 export function DocumentExtraction({
   extraction,
   selectedElementId = null,
@@ -67,7 +86,6 @@ export function DocumentExtraction({
   const selectedElementRef = useRef<HTMLButtonElement | null>(null);
   const selectedTableCellRef = useRef<HTMLButtonElement | null>(null);
   const hasSummary =
-    parsed.rawText ||
     parsed.documentType ||
     parsed.confidence != null ||
     parsed.warnings.length > 0 ||
@@ -175,8 +193,6 @@ export function DocumentExtraction({
           onTableCellSelect={onTableCellSelect}
         />
       ) : null}
-
-      <RawTextBlock rawText={parsed.rawText} compact={parsed.elements.length > 0} />
     </div>
   );
 }
@@ -382,46 +398,6 @@ function tableCellAriaLabel(table: ExtractionTable, cell: ExtractionTableCell): 
     }),
     text: cell.text || "—",
   });
-}
-
-function RawTextBlock({ rawText, compact }: { rawText: string; compact: boolean }) {
-  if (!rawText) {
-    return <p className="text-sm text-muted">{t("flow.extraction.noRawText")}</p>;
-  }
-
-  const content = (
-    <div className="rounded-md border border-border bg-card p-3">
-      <div className="mb-2 flex justify-end">
-        <CopyRawTextButton text={rawText} />
-      </div>
-      <div className="max-h-[420px] overflow-auto">
-        <ExtractedText text={rawText} />
-      </div>
-    </div>
-  );
-
-  if (!compact) {
-    return (
-      <section>
-        <h4 className="mb-2 text-sm font-semibold text-foreground">
-          {t("flow.extraction.rawText")}
-        </h4>
-        {content}
-      </section>
-    );
-  }
-
-  return (
-    <details className="rounded-md border border-border bg-card px-3 py-2">
-      <summary className="min-h-10 cursor-pointer text-sm font-semibold text-foreground">
-        <span className="inline-flex items-center gap-2 py-2">
-          <FileText size={15} className="text-primary" aria-hidden />
-          {t("flow.extraction.rawText")}
-        </span>
-      </summary>
-      <div className="pb-2">{content}</div>
-    </details>
-  );
 }
 
 function CopyRawTextButton({ text }: { text: string }) {

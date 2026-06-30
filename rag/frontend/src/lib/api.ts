@@ -308,10 +308,13 @@ export interface DocumentTableCellTextEdit {
   text: string;
 }
 
-export interface DocumentApproveRequest {
-  raw_text?: string | null;
+export interface DocumentReviewEditsRequest {
   element_edits?: DocumentElementTextEdit[];
   table_cell_edits?: DocumentTableCellTextEdit[];
+}
+
+export interface DocumentApproveRequest extends DocumentReviewEditsRequest {
+  raw_text?: string | null;
 }
 
 export interface IngestionJob {
@@ -2228,6 +2231,12 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}/approve`,
       payload ? jsonBody(payload) : { method: "POST" }
     ),
+  /** REVIEW 中の構造化要素修正を保存する。Chunk job は開始しない。 */
+  saveDocumentReviewEdits: (id: string, payload: DocumentReviewEditsRequest) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/review-edits`, {
+      ...jsonBody(payload),
+      method: "PATCH",
+    }),
   /** REVIEW(確認待ち)文書を却下し、UPLOADED へ戻す。 */
   rejectDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/reject`, {

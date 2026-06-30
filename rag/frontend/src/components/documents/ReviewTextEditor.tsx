@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
-import type { DocumentApproveRequest, DocumentElement } from "@/lib/api";
+import type { DocumentElement, DocumentReviewEditsRequest } from "@/lib/api";
 import { parseStructuredExtraction } from "@/lib/extraction";
 import { t } from "@/lib/i18n";
 
@@ -20,15 +20,18 @@ function editableElementId(element: DocumentElement): string | null {
 
 /**
  * REVIEW(確認待ち)中の人手テキスト修正エディタ。
- * bbox・構造はサーバ側を保持し、要素テキストと raw_text のみ差し替える。
- * 変更があった項目だけを `onChange` で親へ通知する(承認時に送信)。
+ * 要素・表セルのテキストだけを編集する。
+ * bbox・表構造・ページ情報はサーバ側で保持する。
+ * 変更があった項目だけを `onChange` で親へ通知する(明示保存時に送信)。
  */
 export function ReviewTextEditor({
   extraction,
+  edits,
   onChange,
 }: {
   extraction: Record<string, unknown>;
-  onChange: (edits: DocumentApproveRequest) => void;
+  edits: DocumentReviewEditsRequest;
+  onChange: (edits: DocumentReviewEditsRequest) => void;
 }) {
   const parsed = useMemo(() => parseStructuredExtraction(extraction), [extraction]);
   const originalElementText = useMemo(() => {
@@ -53,63 +56,45 @@ export function ReviewTextEditor({
     }
     return map;
   }, [editableTables]);
-
-  const [elementTexts, setElementTexts] = useState<Record<string, string>>(() =>
-    Object.fromEntries(originalElementText.entries())
-  );
-  const [cellTexts, setCellTexts] = useState<Record<string, string>>(() =>
-    Object.fromEntries(originalCellText.entries())
-  );
-  const [rawText, setRawText] = useState(parsed.rawText);
-
-  function emit(
-    nextTexts: Record<string, string>,
-    nextCells: Record<string, string>,
-    nextRaw: string
-  ) {
-    const element_edits = Array.from(originalElementText.entries())
-      .filter(([id, original]) => nextTexts[id] !== original)
-      .map(([id]) => ({ element_id: id, text: nextTexts[id] }));
-    const table_cell_edits = editableTables.flatMap((table) =>
-      table.cells
-        .filter((cell) => {
-          const key = cellKey(table.table_id, cell.row, cell.col);
-          return nextCells[key] !== originalCellText.get(key);
-        })
-        .map((cell) => ({
-          table_id: table.table_id,
-          row: cell.row,
-          col: cell.col,
-          text: nextCells[cellKey(table.table_id, cell.row, cell.col)],
-        }))
-    );
-    const payload: DocumentApproveRequest = { element_edits, table_cell_edits };
-    if (nextRaw !== parsed.rawText) payload.raw_text = nextRaw;
-    onChange(payload);
-  }
+  const structuredTableKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const table of editableTables) {
+      keys.add(table.table_id);
+      if (table.element_id) keys.add(table.element_id);
+    }
+    return keys;
+  }, [editableTables]);
 
   function handleElementChange(id: string, value: string) {
-    const next = { ...elementTexts, [id]: value };
-    setElementTexts(next);
-    emit(next, cellTexts, rawText);
+    const element_edits = (edits.element_edits ?? []).filter((edit) => edit.element_id !== id);
+    if (value !== originalElementText.get(id)) element_edits.push({ element_id: id, text: value });
+    onChange({ ...edits, element_edits });
   }
 
-  function handleCellChange(key: string, value: string) {
-    const next = { ...cellTexts, [key]: value };
-    setCellTexts(next);
-    emit(elementTexts, next, rawText);
+  function handleCellChange(tableId: string, row: number, col: number, value: string) {
+    const table_cell_edits = (edits.table_cell_edits ?? []).filter(
+      (edit) => edit.table_id !== tableId || edit.row !== row || edit.col !== col
+    );
+    if (value !== originalCellText.get(cellKey(tableId, row, col))) {
+      table_cell_edits.push({ table_id: tableId, row, col, text: value });
+    }
+    onChange({ ...edits, table_cell_edits });
   }
 
-  function handleRawChange(value: string) {
-    setRawText(value);
-    emit(elementTexts, cellTexts, value);
-  }
-
-  const editableElements = parsed.elements.filter((element) => editableElementId(element));
+  const editableElements = parsed.elements.filter((element) => {
+    const id = editableElementId(element);
+    if (!id) return false;
+    const metadataTableId = element.metadata?.table_id;
+    const hasStructuredTable =
+      element.kind === "table" &&
+      (structuredTableKeys.has(id) ||
+        (typeof metadataTableId === "string" && structuredTableKeys.has(metadataTableId)));
+    return !hasStructuredTable;
+  });
 
   return (
     <div className="space-y-4 rounded-lg border border-border bg-background p-4">
-      <p className="text-xs text-muted">{t("flow.review.edit.hint")}</p>
+      <p className="text-xs text-muted">{t("flow.review.edit.structuredHint")}</p>
 
       {editableElements.length > 0 ? (
         <section aria-label={t("flow.review.edit.elements")} className="space-y-3">
@@ -142,7 +127,10 @@ export function ReviewTextEditor({
                   </label>
                   <textarea
                     id={fieldId}
-                    value={elementTexts[id] ?? ""}
+                    value={
+                      edits.element_edits?.find((edit) => edit.element_id === id)?.text ??
+                      element.text
+                    }
                     onChange={(event) => handleElementChange(id, event.target.value)}
                     rows={2}
                     className={TEXTAREA_CLASS}
@@ -187,8 +175,22 @@ export function ReviewTextEditor({
                                   </label>
                                   <textarea
                                     id={fieldId}
-                                    value={cellTexts[key] ?? ""}
-                                    onChange={(event) => handleCellChange(key, event.target.value)}
+                                    value={
+                                      edits.table_cell_edits?.find(
+                                        (edit) =>
+                                          edit.table_id === table.table_id &&
+                                          edit.row === cell.row &&
+                                          edit.col === cell.col
+                                      )?.text ?? cell.text
+                                    }
+                                    onChange={(event) =>
+                                      handleCellChange(
+                                        table.table_id,
+                                        cell.row,
+                                        cell.col,
+                                        event.target.value
+                                      )
+                                    }
                                     rows={1}
                                     className={`${TEXTAREA_CLASS} min-h-9`}
                                   />
@@ -204,19 +206,6 @@ export function ReviewTextEditor({
           ))}
         </section>
       ) : null}
-
-      <section className="space-y-1">
-        <label htmlFor="review-edit-raw-text" className="text-sm font-semibold text-foreground">
-          {t("flow.review.edit.rawText")}
-        </label>
-        <textarea
-          id="review-edit-raw-text"
-          value={rawText}
-          onChange={(event) => handleRawChange(event.target.value)}
-          rows={4}
-          className={TEXTAREA_CLASS}
-        />
-      </section>
     </div>
   );
 }

@@ -49,7 +49,13 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.document import FileStatus, IngestionJob, IngestionJobStatus, IngestionSegment
+from app.schemas.document import (
+    DocumentDetail,
+    FileStatus,
+    IngestionJob,
+    IngestionJobStatus,
+    IngestionSegment,
+)
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.knowledge_base import KnowledgeBaseStatus
 from app.schemas.search import RetrievedChunk, SearchMode
@@ -79,6 +85,46 @@ def test_datetime_value_attaches_utc_to_naive_database_values() -> None:
 
     assert value.tzinfo is UTC
     assert value.isoformat() == "2026-06-23T00:34:00+00:00"
+
+
+@pytest.mark.anyio
+async def test_save_review_extraction_updates_canonical_and_legacy_in_one_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """レビュー保存は正本と互換列を同じ transaction callback 内で更新する。"""
+    client = OracleClient(settings=Settings.model_construct())
+    connection = FakeOracleConnection([])
+    transaction_calls = 0
+    detail = DocumentDetail(
+        id="doc-review",
+        file_name="policy.txt",
+        status=FileStatus.REVIEW,
+        uploaded_at=datetime.now(UTC),
+        extraction={"raw_text": "レビュー済み本文"},
+    )
+
+    async def run_transaction(operation: Callable[[object], object]) -> object:
+        nonlocal transaction_calls
+        transaction_calls += 1
+        return operation(connection)
+
+    monkeypatch.setattr(client, "_run_transaction", run_transaction)
+    monkeypatch.setattr(oracle_module, "_select_document", lambda *_: object())
+    monkeypatch.setattr(oracle_module, "_to_document_detail", lambda *_: detail)
+    monkeypatch.setattr(
+        oracle_module,
+        "_select_document_knowledge_base_refs",
+        lambda *_: [],
+    )
+    extraction = StructuredExtraction(raw_text="レビュー済み本文")
+
+    saved = await client.save_review_extraction("doc-review", extraction)
+
+    assert transaction_calls == 1
+    assert saved.extraction["raw_text"] == "レビュー済み本文"
+    assert len(connection.calls) == 2
+    assert "UPDATE rag_documents" in connection.calls[0].statement
+    assert "UPDATE rag_document_extractions" in connection.calls[1].statement
 
 
 def test_oracle_connection_refuses_password_wallet_without_prompt(
@@ -1999,7 +2045,7 @@ async def test_oci_retrieval_applies_multiple_knowledge_base_filters() -> None:
     call = pool.connection.calls[0]
     assert "rag_document_knowledge_bases dkb" in call.statement
     assert (
-        "dkb.knowledge_base_id IN " "(:filter_knowledge_base_id_0, :filter_knowledge_base_id_1)"
+        "dkb.knowledge_base_id IN (:filter_knowledge_base_id_0, :filter_knowledge_base_id_1)"
     ) in call.statement
     assert call.parameters["filter_knowledge_base_id_0"] == "kb-1"
     assert call.parameters["filter_knowledge_base_id_1"] == "kb-2"

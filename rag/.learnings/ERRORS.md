@@ -123,6 +123,8 @@ Frontend lint and Playwright should run sequentially when ESLint scans the proje
 ### Metadata
 - Reproducible: yes
 - Related Files: frontend/playwright.config.ts, frontend/eslint.config.js
+- Recurrence-Count: 3
+- Last-Seen: 2026-06-30
 
 ### Resolution
 - **Resolved**: 2026-06-30T06:36:00+09:00
@@ -217,8 +219,8 @@ Use a writable cache directory for verification commands, for example `uv --cach
 ### Metadata
 - Reproducible: yes
 - Related Files: backend/pyproject.toml
-- Recurrence-Count: 6
-- Last-Seen: 2026-06-30T06:32:36+09:00
+- Recurrence-Count: 7
+- Last-Seen: 2026-06-30T11:11:55+09:00
 
 ### Recurrence Notes
 - 2026-06-16T20:36:23+09:00: `uv run ruff check ...` and `uv run pytest ...` failed in the managed sandbox for the same `/root/.cache/uv` write issue. Reran successfully with `UV_CACHE_DIR=/tmp/uv-cache`.
@@ -226,6 +228,7 @@ Use a writable cache directory for verification commands, for example `uv --cach
 - 2026-06-22T17:00:00+09:00: `uv run pytest tests/test_oci_enterprise_ai.py tests/test_settings_api.py -q` failed in the sandbox for the same `/root/.cache/uv` write issue. Reran successfully with approved escalation.
 - 2026-06-29T00:00:00+09:00: parallel `uv run ruff` / `uv run mypy` hit the same default-cache lock failure. Run checks sequentially with `uv --cache-dir /tmp/uv-cache`.
 - 2026-06-30T06:32:36+09:00: targeted `uv run ruff` hit the same default-cache lock failure while another `uv` check ran. Rerun with `uv --cache-dir /tmp/uv-cache`.
+- 2026-06-30T11:11:55+09:00: targeted backend ruff hit the same default-cache write failure. Rerun with `uv --cache-dir /tmp/uv-cache`.
 
 ---
 
@@ -309,6 +312,7 @@ Error: Process from config.webServer was not able to start. Exit code: 1
 ### Context
 - Command attempted: `npm run test:e2e -- e2e/parser-adapter-settings.spec.ts`
 - Manual Vite startup with `npm run dev -- --host 127.0.0.1 --port 3007` reproduced the `listen EPERM`.
+- 2026-06-30 に `document-review-gate.spec.ts` の再実行でも webServer 起動失敗が再発した。
 
 ### Suggested Fix
 Run Playwright UI verification with approved sandbox escalation when Vite cannot bind a localhost test port.
@@ -316,6 +320,8 @@ Run Playwright UI verification with approved sandbox escalation when Vite cannot
 ### Metadata
 - Reproducible: yes
 - Related Files: frontend/playwright.config.ts
+- Recurrence-Count: 2
+- Last-Seen: 2026-06-30
 
 ### Resolution
 - **Resolved**: 2026-06-18T04:31:00+09:00
@@ -1005,12 +1011,14 @@ pytest backend/tests/test_rag_flow.py::test_unhandled_error_uses_api_response_sh
 - First attempt converted exceptions from `call_next` into a JSON response inside HTTP middleware.
 - Second attempt moved request metrics to a pure ASGI middleware and used `TestClient(app, raise_server_exceptions=False)`.
 - Both approaches caused request tests to hang in this dependency set; even a simple `/ok` route hung with the experimental ASGI middleware.
+- 2026-06-30 に backend 全体の `pytest -q` が 14% で停止し、`tests/test_db_degradation.py -vv` へ絞ると最初の `_RaisingOracle` ケースで同じ hang を再確認した。今回の REVIEW 保存変更とは独立した既知のテスト基盤問題。
 
 ### Suggested Fix
 Keep the previously verified request-id/metrics middleware for now. Treat generic 500 ApiResponse handling as a separate spike with a minimal Starlette reproduction before reintroducing it.
 
 ### Metadata
 - Reproducible: yes
+- Occurrence-Count: 2
 - Related Files: backend/app/main.py, backend/tests/test_rag_flow.py
 - See Also: ERR-20260614-001
 
@@ -1375,6 +1383,7 @@ fatal: Unable to create '/u01/workspace/no.1-production-ready-rag/.git/index.loc
 ### Context
 - Command attempted: `git add -A`
 - The workspace allows source-file edits, but `.git` writes may require sandbox escalation in this environment.
+- 2026-06-30 に REVIEW 編集変更の stage 時も同じ `.git/index.lock` エラーが再発した。
 
 ### Suggested Fix
 When staging, committing, or pushing from this desktop sandbox, rerun Git operations that write `.git` with approved sandbox escalation.
@@ -1382,6 +1391,8 @@ When staging, committing, or pushing from this desktop sandbox, rerun Git operat
 ### Metadata
 - Reproducible: yes
 - Related Files: .git/index
+- Recurrence-Count: 2
+- Last-Seen: 2026-06-30
 
 ---
 

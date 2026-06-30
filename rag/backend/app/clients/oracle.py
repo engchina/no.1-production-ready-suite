@@ -2170,6 +2170,12 @@ class OracleClient:
         """VLM/LLM の抽出本文を保存する。"""
         return await self._save_extraction_with_oracle(document_id, extraction)
 
+    async def save_review_extraction(
+        self, document_id: str, extraction: StructuredExtraction
+    ) -> DocumentDetail:
+        """REVIEW 修正を抽出正本と legacy mirror へ同一 transaction で保存する。"""
+        return await self._save_review_extraction_with_oracle(document_id, extraction)
+
     async def save_chunks(
         self,
         document_id: str,
@@ -5836,6 +5842,67 @@ class OracleClient:
                         "extraction": _json_dumps(extraction.to_document_payload()),
                     }
                 ),
+            )
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            return _to_document_detail(document).model_copy(
+                update={
+                    "knowledge_bases": _select_document_knowledge_base_refs(
+                        connection,
+                        document_id,
+                    )
+                }
+            )
+
+        return await self._run_transaction(operation)
+
+    async def _save_review_extraction_with_oracle(
+        self,
+        document_id: str,
+        extraction: StructuredExtraction,
+    ) -> DocumentDetail:
+        """レビュー済み抽出を正本と互換列へ原子的に保存する。"""
+        payload = extraction.to_document_payload()
+        binds = _with_tenant_bind(
+            {
+                "document_id": document_id,
+                "legacy_extraction": _json_dumps(payload),
+                "extraction_json": _json_bind(payload),
+            }
+        )
+
+        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_documents
+                SET extraction = :legacy_extraction
+                WHERE document_id = :document_id
+                  AND {access_predicate}
+                """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                binds,
+            )
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_document_extractions
+                SET extraction_json = :extraction_json, updated_at = SYSTIMESTAMP
+                WHERE document_id = :document_id
+                  AND EXISTS (
+                      SELECT 1 FROM rag_documents d
+                      WHERE d.document_id = rag_document_extractions.document_id
+                        AND {access_predicate}
+                  )
+                """,
+                    access_predicate=_oracle_access_predicate_sql(alias="d"),
+                ),
+                binds,
+                input_sizes=_json_input_sizes("extraction_json"),
             )
             document = _select_document(connection, document_id)
             if document is None:

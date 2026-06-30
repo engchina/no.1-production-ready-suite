@@ -123,6 +123,53 @@ def test_review_gate_stops_at_review_and_excludes_from_search(monkeypatch: Monke
     assert all(citation["document_id"] != document_id for citation in search["citations"])
 
 
+def test_review_edits_save_without_chunking_and_feed_later_chunks(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """下書き保存は REVIEW を維持し、後続の Chunk は保存済み要素を使う。"""
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    _extract_to_review(document_id)
+
+    detail = _get_document(document_id)
+    target = next(
+        element for element in detail["extraction"]["elements"] if element.get("element_id")
+    )
+    edited_text = "保存済みレビュー修正 ZZZ 部門長が承認します。"
+    save_resp = client.patch(
+        f"/api/documents/{document_id}/review-edits",
+        json={
+            "element_edits": [{"element_id": target["element_id"], "text": edited_text}],
+        },
+    )
+
+    assert save_resp.status_code == 200
+    saved = save_resp.json()["data"]
+    assert saved["status"] == "REVIEW"
+    assert edited_text in saved["extraction"]["raw_text"]
+    chunks_before = client.get(f"/api/documents/{document_id}/chunks")
+    assert chunks_before.status_code == 200
+    assert chunks_before.json()["data"] == []
+
+    _approve_to_chunked(document_id)
+    chunks_after = client.get(f"/api/documents/{document_id}/chunks")
+    assert chunks_after.status_code == 200
+    assert any(edited_text in chunk["text"] for chunk in chunks_after.json()["data"])
+
+
+def test_review_edits_save_requires_review_status(monkeypatch: MonkeyPatch) -> None:
+    """REVIEW 以外の文書へ下書き保存しない。"""
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+
+    response = client.patch(
+        f"/api/documents/{document_id}/review-edits",
+        json={"element_edits": []},
+    )
+
+    assert response.status_code == 409
+
+
 def test_approve_chunks_then_second_approve_indexes_and_makes_searchable(
     monkeypatch: MonkeyPatch,
 ) -> None:

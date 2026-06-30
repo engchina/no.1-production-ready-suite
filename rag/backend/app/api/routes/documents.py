@@ -69,6 +69,7 @@ from app.schemas.document import (
     DocumentLayerStatusName,
     DocumentMaterializationLayerStatus,
     DocumentProcessingConfig,
+    DocumentReviewEditsRequest,
     DocumentStats,
     DocumentSummary,
     DocumentTableCellTextEdit,
@@ -83,6 +84,9 @@ from app.schemas.document import (
     UploadResult,
 )
 from app.schemas.extraction import (
+    MARKDOWN_HEADING,
+    NUMBERED_HEADING,
+    SEARCHABLE_ELEMENT_KINDS,
     DocumentElement,
     DocumentNavigationNode,
     ExtractionAsset,
@@ -1543,10 +1547,22 @@ async def approve_document(
     return ApiResponse(data=job)
 
 
+@router.patch("/{document_id}/review-edits", response_model=ApiResponse[DocumentDetail])
+async def save_document_review_edits(
+    http_request: Request,
+    document_id: str,
+    body: DocumentReviewEditsRequest,
+) -> ApiResponse[DocumentDetail]:
+    """REVIEW 中の構造化要素修正を保存し、文書状態は REVIEW のまま維持する。"""
+    enforce_rate_limit("ingest", http_request)
+    detail = await _apply_review_text_edits(document_id, body)
+    return ApiResponse(data=detail)
+
+
 async def _apply_review_text_edits(
     document_id: str,
-    edits: DocumentApproveRequest,
-) -> None:
+    edits: DocumentReviewEditsRequest | DocumentApproveRequest,
+) -> DocumentDetail:
     """REVIEW 中の人手テキスト修正を保存済み抽出へ適用する(テキストのみ)。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
@@ -1582,13 +1598,195 @@ async def _apply_review_text_edits(
         extraction = extraction.model_copy(update={"elements": updated_elements})
     if edits.table_cell_edits:
         extraction = _apply_table_cell_edits(extraction, edits.table_cell_edits)
-    if edits.raw_text is not None:
-        extraction = extraction.model_copy(update={"raw_text": edits.raw_text})
-    # 正規化(raw_text/element の整合補完)を再実行してから保存する。
-    normalized = StructuredExtraction.model_validate(extraction.model_dump())
-    await oracle.save_extraction(document_id, normalized)
-    # extraction 層(正本)もレビュー編集に追従させる(無ければ 0 件更新で legacy へ縮退)。
-    await oracle.update_document_extractions_payload(document_id=document_id, extraction=normalized)
+    normalized = _canonicalize_reviewed_extraction(extraction)
+    # 旧クライアントの approve(raw_text) は受理を継続する。新しい保存 API は構造編集のみ。
+    if isinstance(edits, DocumentApproveRequest) and edits.raw_text is not None:
+        normalized = StructuredExtraction.model_validate(
+            normalized.model_copy(update={"raw_text": edits.raw_text}).model_dump()
+        )
+    return await oracle.save_review_extraction(document_id, normalized)
+
+
+def _canonicalize_reviewed_extraction(
+    extraction: StructuredExtraction,
+) -> StructuredExtraction:
+    """構造化要素を正本として表・章節・offset・raw_text を再同期する。"""
+    table_by_key: dict[str, ExtractionTable] = {}
+    for extraction_table in extraction.tables:
+        table_by_key[extraction_table.table_id] = extraction_table
+        if extraction_table.element_id:
+            table_by_key[extraction_table.element_id] = extraction_table
+    table_elements = [element for element in extraction.elements if element.kind == "table"]
+    fallback_table = (
+        extraction.tables[0] if len(extraction.tables) == len(table_elements) == 1 else None
+    )
+
+    matched_table_ids: set[str] = set()
+    source_elements: list[DocumentElement] = []
+    for element in extraction.elements:
+        if element.kind != "table":
+            source_elements.append(element)
+            continue
+        table_key = _review_table_key(element)
+        table = table_by_key.get(table_key) if table_key else fallback_table
+        if table is None:
+            source_elements.append(element)
+            continue
+        matched_table_ids.add(table.table_id)
+        source_elements.append(element.model_copy(update={"text": _review_table_text(table)}))
+
+    for extraction_table in extraction.tables:
+        if extraction_table.table_id in matched_table_ids:
+            continue
+        row_count, column_count = _review_table_shape(extraction_table)
+        source_elements.append(
+            DocumentElement(
+                kind="table",
+                text=_review_table_text(extraction_table),
+                order=len(source_elements),
+                element_id=extraction_table.element_id or extraction_table.table_id,
+                content_kind="table",
+                page_number=extraction_table.page_number,
+                bbox=_review_table_bbox(extraction_table),
+                metadata={
+                    "table_id": extraction_table.table_id,
+                    "row_count": row_count,
+                    "column_count": column_count,
+                },
+            )
+        )
+
+    path_by_level: dict[int, str] = {}
+    current_path: list[str] = []
+    raw_parts: list[str] = []
+    cursor = 0
+    elements: list[DocumentElement] = []
+    for element in sorted(source_elements, key=lambda item: item.order):
+        metadata = dict(element.metadata)
+        text = element.text.strip()
+        if element.kind == "title":
+            level, title = _review_heading(element, text)
+            path_by_level = {
+                existing_level: existing_title
+                for existing_level, existing_title in path_by_level.items()
+                if existing_level < level
+            }
+            path_by_level[level] = title
+            current_path = [path_by_level[key] for key in sorted(path_by_level)]
+            metadata["section_level"] = level
+        elif not current_path and element.section_path:
+            current_path = list(element.section_path)
+
+        metadata.pop("raw_start", None)
+        metadata.pop("raw_end", None)
+        if element.kind in SEARCHABLE_ELEMENT_KINDS and text:
+            if raw_parts:
+                cursor += 1
+            metadata["raw_start"] = cursor
+            cursor += len(text)
+            metadata["raw_end"] = cursor
+            raw_parts.append(text)
+
+        elements.append(
+            element.model_copy(
+                update={
+                    "text": text,
+                    "section_path": list(current_path),
+                    "metadata": metadata,
+                }
+            )
+        )
+
+    element_page = {
+        element.element_id: element.page_number
+        for element in elements
+        if element.element_id and element.page_number is not None
+    }
+    pages = [
+        page.model_copy(
+            update={
+                "element_ids": [
+                    *page.element_ids,
+                    *[
+                        element_id
+                        for element_id, page_number in element_page.items()
+                        if page_number == page.page_number and element_id not in page.element_ids
+                    ],
+                ]
+            }
+        )
+        for page in extraction.pages
+    ]
+    normalized = StructuredExtraction.model_validate(
+        extraction.model_copy(
+            update={
+                "elements": elements,
+                "pages": pages,
+                "raw_text": "\n".join(raw_parts),
+                "navigation": [],
+            }
+        ).model_dump()
+    )
+    return normalized.model_copy(update={"navigation": build_navigation_tree(normalized)})
+
+
+def _review_table_key(element: DocumentElement) -> str | None:
+    value = element.metadata.get("table_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return element.element_id
+
+
+def _review_table_text(table: ExtractionTable) -> str:
+    if not table.cells:
+        return table.caption or ""
+    row_count, column_count = _review_table_shape(table)
+    rows = [["" for _ in range(column_count)] for _ in range(row_count)]
+    for cell in table.cells:
+        rows[cell.row][cell.col] = cell.text
+    markdown = "\n".join(
+        "| " + " | ".join(value.replace("|", "\\|").strip() for value in row) + " |"
+        for row in rows
+        if any(value.strip() for value in row)
+    )
+    return "\n".join(part for part in (table.caption, markdown) if part).strip()
+
+
+def _review_table_shape(table: ExtractionTable) -> tuple[int, int]:
+    if not table.cells:
+        return 0, 0
+    return (
+        max(cell.row + cell.row_span for cell in table.cells),
+        max(cell.col + cell.col_span for cell in table.cells),
+    )
+
+
+def _review_table_bbox(table: ExtractionTable) -> list[float] | None:
+    boxes = [cell.bbox for cell in table.cells if cell.bbox and len(cell.bbox) >= 4]
+    if not boxes:
+        return None
+    return [
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    ]
+
+
+def _review_heading(element: DocumentElement, text: str) -> tuple[int, str]:
+    level_value = element.metadata.get("section_level")
+    level = (
+        int(level_value)
+        if isinstance(level_value, int) and not isinstance(level_value, bool) and level_value > 0
+        else max(1, len(element.section_path))
+    )
+    title = text
+    if match := MARKDOWN_HEADING.match(text):
+        level = len(match.group("marks"))
+        title = match.group("title")
+    elif match := NUMBERED_HEADING.match(text):
+        title = match.group("title")
+    return min(6, level), re.sub(r"\s+", " ", title).strip().strip("#")[:80]
 
 
 def _apply_table_cell_edits(
@@ -2984,7 +3182,7 @@ def _extraction_html(extraction: StructuredExtraction) -> str:
         if element.page_number is not None and element.page_number != current_page:
             current_page = element.page_number
             lines.append(
-                f'  <p class="page-marker" data-page="{current_page}">' f"page {current_page}</p>"
+                f'  <p class="page-marker" data-page="{current_page}">page {current_page}</p>'
             )
         rendered = _element_html(element, tables_by_element_id=tables_by_element_id)
         if rendered:
@@ -2993,7 +3191,7 @@ def _extraction_html(extraction: StructuredExtraction) -> str:
         if asset.page_number is not None and asset.page_number != current_page:
             current_page = asset.page_number
             lines.append(
-                f'  <p class="page-marker" data-page="{current_page}">' f"page {current_page}</p>"
+                f'  <p class="page-marker" data-page="{current_page}">page {current_page}</p>'
             )
         lines.append(_asset_html(asset))
     lines.append("</article>")

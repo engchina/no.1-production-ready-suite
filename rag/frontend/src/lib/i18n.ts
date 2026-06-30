@@ -1984,7 +1984,7 @@ export const ja = {
   "flow.segments.status.succeeded": "完了",
   "flow.segments.status.failed": "失敗",
   "flow.segments.status.cancelled": "取消済み",
-  "flow.extraction.title": "抽出本文",
+  "flow.extraction.title": "構造化要素",
   "flow.extraction.empty": "まだ抽出結果がありません。取込を実行してください。",
   "flow.extraction.documentType": "文書種別",
   "flow.extraction.confidence": "信頼度",
@@ -2174,14 +2174,28 @@ export const ja = {
   "flow.rejectConfirm.title": "この抽出結果を却下しますか?",
   "flow.rejectConfirm.description":
     "却下すると文書はアップロード済みに戻ります。再度確認するには取込をやり直す必要があります。",
-  "flow.review.edit.open": "抽出テキストを修正",
-  "flow.review.edit.close": "修正を閉じる",
-  "flow.review.edit.hint":
-    "テキストのみ修正できます(bbox・表構造・ページ情報はそのまま保持されます)。修正後に「承認して Chunk 作成」で反映します。",
+  "flow.review.edit.structuredOpen": "構造化要素を修正",
+  "flow.review.edit.close": "編集を閉じる",
+  "flow.review.edit.structuredHint":
+    "要素・表セルのテキストのみ修正できます(bbox・表構造・ページ情報は保持されます)。変更後に「変更を保存」で反映してください。",
+  "flow.review.edit.pending":
+    "未保存の変更があります。変更を保存してから承認してください。",
+  "flow.review.edit.save": "変更を保存",
+  "flow.review.edit.saved": "変更を保存しました。",
+  "flow.review.edit.saveError":
+    "変更を保存できませんでした。入力内容を確認して再試行してください。",
+  "flow.review.edit.discard": "変更を破棄",
+  "flow.review.edit.discardTitle": "未保存の変更を破棄しますか?",
+  "flow.review.edit.discardDescription":
+    "保存していない変更は元に戻せません。Oracle に保存済みの内容へ戻します。",
+  "flow.review.edit.discardConfirm": "変更を破棄",
+  "flow.review.edit.leaveTitle": "未保存の変更を破棄しますか?",
+  "flow.review.edit.leaveDescription":
+    "このページを離れると未保存の変更は失われます。変更を保存する場合はキャンセルしてください。",
+  "flow.review.edit.leaveConfirm": "破棄して移動",
   "flow.review.edit.elements": "要素テキスト",
   "flow.review.edit.tableCells": "表セル",
   "flow.review.edit.tableCellLabel": "{row} 行 {col} 列のセル",
-  "flow.review.edit.rawText": "本文テキスト(raw text)",
 
   "preview.fetchError": "プレビューを取得できませんでした。",
   "preview.bboxFocus": "位置: p.{page} / bbox x={x}% y={y}% w={width}% h={height}%",
@@ -2201,7 +2215,7 @@ export const ja = {
     "文書は 1 件以上の有効な知識ベースに所属させてください。",
   "documents.knowledgeBases.noneSelected": "所属先が未選択です。",
   "documents.knowledgeBases.required": "1 件以上の知識ベースを選択してください。",
-  "documents.knowledgeBases.save": "保存",
+  "documents.knowledgeBases.save": "所属先を保存",
   "documents.knowledgeBases.saved": "所属知識ベースを保存しました。",
   "documents.knowledgeBases.saveError":
     "所属知識ベースの保存に失敗しました。状態を確認して再試行してください。",

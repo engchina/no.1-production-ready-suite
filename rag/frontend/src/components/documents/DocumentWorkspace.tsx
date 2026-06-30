@@ -26,7 +26,7 @@ import { ChunkSetExperimentPanel } from "./ChunkSetExperimentPanel";
 import { DocumentPreview } from "./DocumentPreview";
 import { DocumentProcessingConfigPanel } from "./DocumentProcessingConfigPanel";
 import { IngestionConfigDriftBanner } from "@/components/knowledge-bases/IngestionConfigDriftBanner";
-import { DocumentExtraction } from "./DocumentExtraction";
+import { DocumentExtraction, DocumentRawText } from "./DocumentExtraction";
 import { ExtractedText, IndexBadge, InfoChip } from "./extraction-bits";
 import {
   type IngestionParserDisplay,
@@ -55,10 +55,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   api,
   ApiError,
-  type DocumentApproveRequest,
   type DocumentElement,
   type DocumentChunkView,
   type DocumentExtractionExportFormat,
+  type DocumentReviewEditsRequest,
   type ExtractionTable,
   type ExtractionTableCell,
   type IngestionJob,
@@ -85,6 +85,7 @@ import {
   useRejectDocument,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
+  useSaveDocumentReviewEdits,
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
@@ -119,6 +120,10 @@ import {
 import { cn } from "@/lib/utils";
 
 const DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS = 4000;
+
+function emptyReviewEdits(): DocumentReviewEditsRequest {
+  return { element_edits: [], table_cell_edits: [] };
+}
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -193,7 +198,7 @@ type UrlFallbackFocus = {
   pageSize: BboxPageSize | null;
 };
 
-/** 文書プレビュー作業領域：原本プレビュー｜抽出本文＋取込アクション。 */
+/** 文書プレビュー作業領域：原本プレビュー｜本文・構造化要素＋取込アクション。 */
 export function DocumentWorkspace({
   documentId,
   watchProcessing = false,
@@ -215,6 +220,7 @@ export function DocumentWorkspace({
   const [searchParams] = useSearchParams();
   const enqueueIngestion = useEnqueueDocumentIngestionJob();
   const approveDocument = useApproveDocument();
+  const saveReviewEdits = useSaveDocumentReviewEdits();
   const rejectDocument = useRejectDocument();
   const confirm = useConfirm();
   const retryFailedSegments = useRetryFailedDocumentIngestionSegments();
@@ -223,7 +229,8 @@ export function DocumentWorkspace({
   const retriedSegmentJob = useIngestionJob(retryFailedSegments.data?.id ?? null);
   const [localWatchProcessing, setLocalWatchProcessing] = useState(false);
   const [editingReview, setEditingReview] = useState(false);
-  const [reviewEdits, setReviewEdits] = useState<DocumentApproveRequest | null>(null);
+  const [reviewEdits, setReviewEdits] =
+    useState<DocumentReviewEditsRequest>(emptyReviewEdits);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
   const [selectedTableCellKey, setSelectedTableCellKey] = useState<string | null>(null);
@@ -241,11 +248,56 @@ export function DocumentWorkspace({
   const requestedCellRef = requestedFormulaCellRef ?? requestedCellRefParam;
   const requestedCellRow = integerSearchParam(searchParams.get("cell_row"));
   const requestedCellCol = integerSearchParam(searchParams.get("cell_col"));
-  // インスペクタ右ペインのタブ。要素/表セル指定の deep-link は構造化(抽出本文)を、
+  const hasReviewEdits =
+    (reviewEdits.element_edits?.length ?? 0) > 0 ||
+    (reviewEdits.table_cell_edits?.length ?? 0) > 0;
+  const allowReviewNavigationRef = useRef(false);
+  useEffect(() => {
+    if (!hasReviewEdits) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (allowReviewNavigationRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const handleLinkClick = (event: MouseEvent) => {
+      if (allowReviewNavigationRef.current || event.defaultPrevented || event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const anchor = target?.closest<HTMLAnchorElement>("a[href]");
+      if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+      const next = new URL(anchor.href, window.location.href);
+      const current = new URL(window.location.href);
+      if (
+        next.origin === current.origin &&
+        next.pathname === current.pathname &&
+        next.search === current.search
+      ) {
+        return;
+      }
+      event.preventDefault();
+      void confirm({
+        title: t("flow.review.edit.leaveTitle"),
+        description: t("flow.review.edit.leaveDescription"),
+        confirmLabel: t("flow.review.edit.leaveConfirm"),
+        tone: "warning",
+      }).then((confirmed) => {
+        if (!confirmed) return;
+        allowReviewNavigationRef.current = true;
+        window.location.assign(next.href);
+      });
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("click", handleLinkClick, true);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("click", handleLinkClick, true);
+    };
+  }, [confirm, hasReviewEdits]);
+  // インスペクタ右ペインのタブ。要素/表セル指定の deep-link は構造化要素を、
   // chunk のみの引用 deep-link は Chunk タブを初期表示する。
-  const [inspectorTab, setInspectorTab] = useState<"extraction" | "chunks" | "export">(() => {
+  const [inspectorTab, setInspectorTab] = useState<"text" | "extraction" | "chunks" | "export">(() => {
     if (requestedElementId || requestedTableId || requestedCellRef) return "extraction";
-    return requestedChunkId ? "chunks" : "extraction";
+    return requestedChunkId ? "chunks" : "text";
   });
   const requestedUrlFocus = useMemo<UrlFallbackFocus | null>(() => {
     const page = integerSearchParam(searchParams.get("page"));
@@ -374,6 +426,9 @@ export function DocumentWorkspace({
   }, [diagnosticsHasActivity]);
   const approveErrorText = approveDocument.isError
     ? errorMessage(approveDocument.error, t("flow.approveFailed"))
+    : "";
+  const saveReviewErrorText = saveReviewEdits.isError
+    ? errorMessage(saveReviewEdits.error, t("flow.review.edit.saveError"))
     : "";
   const approveNeedsReingest =
     approveErrorText.includes("再取込") || approveErrorText.includes("再取り込み");
@@ -903,7 +958,7 @@ export function DocumentWorkspace({
           <section className="min-w-0 xl:sticky xl:top-4 xl:self-start">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-foreground">{t("flow.preview")}</h3>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <div
                   role="group"
                   aria-label={t("flow.preview")}
@@ -913,6 +968,7 @@ export function DocumentWorkspace({
                     type="button"
                     size="sm"
                     variant={selectedPreviewVariant === "original" ? "secondary" : "ghost"}
+                    className="whitespace-nowrap"
                     onClick={() => setPreviewVariant("original")}
                   >
                     {t("flow.preview.before")}
@@ -921,6 +977,7 @@ export function DocumentWorkspace({
                     type="button"
                     size="sm"
                     variant={selectedPreviewVariant === "prepared" ? "secondary" : "ghost"}
+                    className="whitespace-nowrap"
                     onClick={() => setPreviewVariant("prepared")}
                     disabled={!hasPreparedArtifact}
                     title={!hasPreparedArtifact ? t("flow.preview.preparedUnavailable") : undefined}
@@ -931,7 +988,7 @@ export function DocumentWorkspace({
                 <a
                   href={selectedPreviewDownloadUrl}
                   download={selectedPreviewFileName}
-                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                 >
                   <Download size={14} aria-hidden />
                   {t("flow.preview.download")}
@@ -952,13 +1009,21 @@ export function DocumentWorkspace({
             />
           </section>
 
-          {/* 右ペイン: 抽出本文 / Chunk / エクスポート をタブ切替(1つずつ全幅表示) */}
+          {/* 右ペイン: 本文 / 構造化要素 / Chunk / エクスポート をタブ切替 */}
           <section className="min-w-0">
             <div
               role="tablist"
               aria-label={t("flow.inspector.tabs")}
               className="mb-3 flex flex-wrap items-center gap-1"
             >
+              <InspectorTab
+                id="inspector-tab-text"
+                controls="inspector-panel-text"
+                active={inspectorTab === "text"}
+                onSelect={() => setInspectorTab("text")}
+              >
+                {t("flow.extraction.rawText")}
+              </InspectorTab>
               <InspectorTab
                 id="inspector-tab-extraction"
                 controls="inspector-panel-extraction"
@@ -990,30 +1055,118 @@ export function DocumentWorkspace({
               </InspectorTab>
             </div>
 
+            {inspectorTab === "text" ? (
+              <div
+                role="tabpanel"
+                id="inspector-panel-text"
+                aria-labelledby="inspector-tab-text"
+                tabIndex={0}
+                className="xl:h-[60vh] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:[scrollbar-gutter:stable]"
+              >
+                <DocumentRawText extraction={doc.extraction} />
+              </div>
+            ) : null}
+
             {inspectorTab === "extraction" ? (
               <div
                 role="tabpanel"
                 id="inspector-panel-extraction"
                 aria-labelledby="inspector-tab-extraction"
                 tabIndex={0}
+                className="xl:h-[60vh] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 {doc.status === "REVIEW" ? (
-                  <div className="mb-2 flex justify-end">
-                    <Button
-                      size="sm"
-                      variant={editingReview ? "secondary" : "ghost"}
-                      onClick={() => setEditingReview((prev) => !prev)}
-                      aria-pressed={editingReview}
-                    >
-                      <Pencil size={14} aria-hidden />
-                      {editingReview
-                        ? t("flow.review.edit.close")
-                        : t("flow.review.edit.open")}
-                    </Button>
+                  <div className="mb-2 xl:sticky xl:top-0 xl:z-10 xl:bg-background xl:pb-2">
+                    {editingReview ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          {hasReviewEdits ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={saveReviewEdits.isPending}
+                              onClick={async () => {
+                                const confirmed = await confirm({
+                                  title: t("flow.review.edit.discardTitle"),
+                                  description: t("flow.review.edit.discardDescription"),
+                                  confirmLabel: t("flow.review.edit.discardConfirm"),
+                                  tone: "warning",
+                                });
+                                if (!confirmed) return;
+                                saveReviewEdits.reset();
+                                setReviewEdits(emptyReviewEdits());
+                                setEditingReview(false);
+                              }}
+                            >
+                              <RotateCcw size={14} aria-hidden />
+                              {t("flow.review.edit.discard")}
+                            </Button>
+                          ) : null}
+                        </div>
+                        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              saveReviewEdits.mutate(
+                                { id: documentId, payload: reviewEdits },
+                                {
+                                  onSuccess: () => {
+                                    setReviewEdits(emptyReviewEdits());
+                                    toast.success(t("flow.review.edit.saved"));
+                                  },
+                                }
+                              )
+                            }
+                            loading={saveReviewEdits.isPending}
+                            disabled={
+                              !hasReviewEdits ||
+                              approveDocument.isPending ||
+                              rejectDocument.isPending
+                            }
+                          >
+                            {!saveReviewEdits.isPending ? <Save size={14} aria-hidden /> : null}
+                            {t("flow.review.edit.save")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={saveReviewEdits.isPending}
+                            onClick={() => setEditingReview(false)}
+                          >
+                            <X size={14} aria-hidden />
+                            {t("flow.review.edit.close")}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setEditingReview(true)}
+                        >
+                          <Pencil size={14} aria-hidden />
+                          {t("flow.review.edit.structuredOpen")}
+                        </Button>
+                      </div>
+                    )}
+                    {editingReview && saveReviewEdits.isError ? (
+                      <div className="mt-2">
+                        <FormStatus tone="danger" message={saveReviewErrorText} />
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 {doc.status === "REVIEW" && editingReview ? (
-                  <ReviewTextEditor extraction={doc.extraction} onChange={setReviewEdits} />
+                  <ReviewTextEditor
+                    extraction={doc.extraction}
+                    edits={reviewEdits}
+                    onChange={(edits) => {
+                      saveReviewEdits.reset();
+                      setReviewEdits(edits);
+                    }}
+                  />
                 ) : (
                   <DocumentExtraction
                     extraction={doc.extraction}
@@ -1035,6 +1188,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-chunks"
                 aria-labelledby="inspector-tab-chunks"
                 tabIndex={0}
+                className="xl:h-[60vh] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentChunksPanel
                   chunks={chunksQuery.data ?? []}
@@ -1059,6 +1213,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-export"
                 aria-labelledby="inspector-tab-export"
                 tabIndex={0}
+                className="xl:h-[60vh] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentExtractionExportPanel
                   format={exportFormat}
@@ -1179,6 +1334,10 @@ export function DocumentWorkspace({
           </Banner>
         ) : null}
 
+        {doc.status === "REVIEW" && hasReviewEdits ? (
+          <FormStatus tone="warning" message={t("flow.review.edit.pending")} />
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
           {((doc.status === "PREPROCESSED" && !preparedArtifactMissing) ||
             doc.status === "REVIEW" ||
@@ -1187,30 +1346,25 @@ export function DocumentWorkspace({
               <Button
                 onClick={() =>
                   approveDocument.mutate(
-                    {
-                      id: documentId,
-                      payload:
-                        doc.status === "REVIEW" &&
-                        editingReview &&
-                        reviewEdits &&
-                        ((reviewEdits.element_edits?.length ?? 0) > 0 ||
-                          (reviewEdits.table_cell_edits?.length ?? 0) > 0 ||
-                          reviewEdits.raw_text != null)
-                          ? reviewEdits
-                          : undefined,
-                    },
+                    { id: documentId },
                     {
                       onSuccess: (job) => {
                         setLocalWatchProcessing(
                           job.status === "QUEUED" || job.status === "RUNNING"
                         );
+                        setEditingReview(false);
+                        setReviewEdits(emptyReviewEdits());
                         toast.success(t("flow.approved"));
                       },
                     }
                   )
                 }
                 loading={approveDocument.isPending}
-                disabled={rejectDocument.isPending}
+                disabled={
+                  rejectDocument.isPending ||
+                  saveReviewEdits.isPending ||
+                  (doc.status === "REVIEW" && hasReviewEdits)
+                }
               >
                 {!approveDocument.isPending ? <Check size={15} aria-hidden /> : null}
                 {approveDocument.isPending
@@ -1234,11 +1388,17 @@ export function DocumentWorkspace({
                     if (!confirmed) return;
                     rejectDocument.mutate(
                       { id: documentId },
-                      { onSuccess: () => toast.success(t("flow.rejected")) }
+                      {
+                        onSuccess: () => {
+                          setEditingReview(false);
+                          setReviewEdits(emptyReviewEdits());
+                          toast.success(t("flow.rejected"));
+                        },
+                      }
                     );
                   }}
                   loading={rejectDocument.isPending}
-                  disabled={approveDocument.isPending}
+                  disabled={approveDocument.isPending || saveReviewEdits.isPending}
                 >
                   {!rejectDocument.isPending ? <X size={15} aria-hidden /> : null}
                   {rejectDocument.isPending ? t("action.processing") : t("flow.reject")}
@@ -1770,7 +1930,7 @@ function formatJobElapsed(job: IngestionJob, nowMs = Date.now()): string {
     : t("flow.jobs.elapsedMinutes", { minutes });
 }
 
-/** インスペクタ右ペインのタブ(抽出本文 / Chunk / エクスポート切替)。 */
+/** インスペクタ右ペインのタブ(本文 / 構造化要素 / Chunk / エクスポート切替)。 */
 function InspectorTab({
   id,
   controls,

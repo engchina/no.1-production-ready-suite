@@ -69,12 +69,22 @@ test("Dashboard で取込品質を確認できる", async ({ page }) => {
   await expectNoHorizontalOverflow(page);
 });
 
-test("文書詳細で構造化抽出要素と raw text を確認できる", async ({ page }) => {
+test("文書詳細で本文テキストと構造化抽出要素を確認できる", async ({ page }) => {
   await mockDocumentDetail(page);
 
   await page.goto("/documents/doc-1");
 
-  // 抽出本文タブが既定で開いており、その tabpanel に内容が表示される。
+  // 本文テキストが既定で開き、構造化要素側には重複表示しない。
+  await expect(page.getByRole("tab", { name: "本文テキスト" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  );
+  const textPanel = page.getByRole("tabpanel");
+  await expect(textPanel.getByText("# 経費申請")).toBeVisible();
+  await expect(textPanel.getByText("| 項目 | 金額 |")).toBeVisible();
+  await expect(textPanel.getByRole("button", { name: "本文をコピー" })).toBeVisible();
+
+  await page.getByRole("tab", { name: "構造化要素" }).click();
   const extractionPanel = page.getByRole("tabpanel");
   await expect(extractionPanel).toBeVisible();
   await expect(extractionPanel.getByText("構造化要素")).toBeVisible();
@@ -84,7 +94,7 @@ test("文書詳細で構造化抽出要素と raw text を確認できる", asyn
   await expect(extractionPanel.getByText("| 交通費 | 1000 |")).toBeVisible();
   await expect(extractionPanel.getByText("表セル")).toBeVisible();
   await expect(extractionPanel.getByRole("button", { name: /料金表 B2 1000/ })).toBeVisible();
-  await expect(extractionPanel.getByText("本文テキスト")).toBeVisible();
+  await expect(extractionPanel.getByText("本文テキスト")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -134,18 +144,27 @@ test("文書詳細で埋め込み base64 を畳んで本文を読みやすく表
 
   await page.goto("/documents/doc-1");
 
-  // 既定の抽出本文タブ(tabpanel)。
-  const extractionPanel = page.getByRole("tabpanel");
-  await expect(extractionPanel).toBeVisible();
+  // 既定の本文テキストタブでも base64 を読みやすく畳む。
+  const textPanel = page.getByRole("tabpanel");
+  await expect(textPanel).toBeVisible();
 
   // base64 の生文字列は本文テキストとして現れない。
   await expect(page.getByText(/iVBORw0KGgo/)).toHaveCount(0);
   await expect(page.getByText(BASE64_FRAGMENT)).toHaveCount(0);
   // 画像はサムネイル(alt 付き <img>)で描画される。
   await expect(
-    extractionPanel.getByRole("img", { name: "抽出された埋め込み画像" }).first()
+    textPanel.getByRole("img", { name: "抽出された埋め込み画像" }).first()
   ).toBeVisible();
   // 読める本文は残る。
+  await expect(textPanel.getByText("本文の冒頭。")).toBeVisible();
+  await expect(textPanel.getByText("本文の続き。")).toBeVisible();
+
+  // 構造化要素タブでも element 内の画像と本文を確認できる。
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  const extractionPanel = page.getByRole("tabpanel");
+  await expect(
+    extractionPanel.getByRole("img", { name: "抽出された埋め込み画像" }).first()
+  ).toBeVisible();
   await expect(extractionPanel.getByText("図1")).toBeVisible();
 
   // Chunk タブへ切替えると、base64 断片はチップに畳まれて表示される。
@@ -174,7 +193,7 @@ test("文書詳細で所属知識ベースを更新できる", async ({ page }) 
   await page.getByRole("checkbox", { name: "空のKBを隠す" }).uncheck();
   await page.getByRole("option", { name: /FAQ/ }).click();
   await kbCombo.press("Escape");
-  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByRole("button", { name: "所属先を保存" }).click();
 
   await expect
     .poll(() => state.lastReplacePayload)
@@ -248,7 +267,11 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await expect(page).toHaveURL(
     /\/documents\/doc-1\?chunk_id=doc-1%3A1&page=2&element_id=tbl-1&cell_ref=B2&formula_cell_ref=B2/
   );
-  // セル指定付き deep-link では抽出本文タブが初期表示され、対象セルがフォーカスされる。
+  // セル指定付き deep-link では構造化要素タブが初期表示され、対象セルがフォーカスされる。
+  await expect(page.getByRole("tab", { name: "構造化要素" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  );
   const linkedCellButton = page.getByRole("button", { name: /料金表 B2 1000/ });
   await expect(linkedCellButton).toHaveAttribute("aria-pressed", "true");
   await expect(linkedCellButton).toBeFocused();

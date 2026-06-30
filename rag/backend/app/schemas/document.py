@@ -408,17 +408,19 @@ class DocumentTableCellTextEdit(BaseModel):
     text: str = Field(default="", max_length=200000)
 
 
-class DocumentApproveRequest(BaseModel):
-    """承認(index)リクエスト。任意で REVIEW 中のテキスト修正を伴う。
+class DocumentReviewEditsRequest(BaseModel):
+    """REVIEW 中に保存する構造化要素・表セルのテキスト修正。"""
 
-    bbox・構造・section などはサーバ側の抽出結果を保持し、テキストのみ差し替える。
-    """
-
-    raw_text: str | None = Field(default=None, max_length=2000000)
     element_edits: list[DocumentElementTextEdit] = Field(default_factory=list, max_length=5000)
     table_cell_edits: list[DocumentTableCellTextEdit] = Field(
         default_factory=list, max_length=20000
     )
+
+
+class DocumentApproveRequest(DocumentReviewEditsRequest):
+    """承認リクエスト。raw_text は旧クライアントとの後方互換用。"""
+
+    raw_text: str | None = Field(default=None, max_length=2000000)
 
 
 class DocumentDeleteResult(BaseModel):
