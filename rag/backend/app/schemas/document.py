@@ -78,6 +78,8 @@ class IngestionJob(BaseModel):
 
     id: str
     document_id: str
+    recipe_id: str | None = None
+    recipe_revision: int | None = Field(default=None, ge=1)
     status: IngestionJobStatus
     phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS
     parser_profile: str
@@ -324,6 +326,71 @@ class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
     model_config = ConfigDict(extra="forbid")
 
 
+class DocumentRecipeStepStatus(StrEnum):
+    """文書レシピの各工程の表示状態。"""
+
+    PENDING = "PENDING"
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class DocumentRecipeStep(BaseModel):
+    """文書レシピ 1 工程の状態。"""
+
+    phase: IngestionJobPhase
+    status: DocumentRecipeStepStatus
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+
+
+class DocumentRecipeView(BaseModel):
+    """文書に属する 1〜3 件の処理レシピ。"""
+
+    recipe_id: str
+    document_id: str
+    slot_no: int = Field(ge=1, le=3)
+    status: FileStatus
+    failed_phase: IngestionJobPhase | None = None
+    processing_config: DocumentProcessingConfig = Field(default_factory=DocumentProcessingConfig)
+    effective_processing_config: DocumentProcessingConfig = Field(
+        default_factory=DocumentProcessingConfig
+    )
+    preprocess_artifact: DocumentPreprocessArtifact | None = None
+    active_extraction_recipe_id: str | None = None
+    active_chunk_set_id: str | None = None
+    chunk_count: int = Field(default=0, ge=0)
+    vector_count: int = Field(default=0, ge=0)
+    config_revision: int = Field(default=1, ge=1)
+    materialized_revision: int | None = Field(default=None, ge=1)
+    searchable: bool = False
+    needs_reprocessing: bool = False
+    error_message: str | None = None
+    steps: list[DocumentRecipeStep] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class DocumentRecipeCreateRequest(BaseModel):
+    """文書レシピ追加。指定があれば既存レシピの明示設定を複製する。"""
+
+    copy_from_recipe_id: str | None = Field(default=None, max_length=64)
+
+
+class DocumentRecipeDeleteResult(BaseModel):
+    """文書レシピ削除結果。"""
+
+    recipe_id: str
+    document_id: str
+    removed_chunk_set_count: int = Field(default=0, ge=0)
+
+
 class DocumentIngestionConfigData(BaseModel):
     """文書の取込設定スナップショット(3 層モデル: 文書単位の単一レシピ)。"""
 
@@ -378,6 +445,7 @@ class IngestionSegment(BaseModel):
 
     segment_id: str
     document_id: str
+    recipe_id: str | None = None
     status: str
     parser_backend: str = "enterprise_ai"
     parser_profile: str = "enterprise_ai_generic"

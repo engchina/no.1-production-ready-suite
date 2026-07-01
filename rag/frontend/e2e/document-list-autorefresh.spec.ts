@@ -47,7 +47,7 @@ test("取込中の文書がポーリングで索引済みに自動遷移する",
     await route.fulfill({
       json: {
         data: {
-          items: [{ id: "kb-default", name: "既定", document_count: 1 }],
+          items: [{ id: "kb-default", name: "既定", document_count: 2 }],
           total: 1,
           limit: 100,
           offset: 0,
@@ -66,8 +66,11 @@ test("取込中の文書がポーリングで索引済みに自動遷移する",
       await route.fulfill({
         json: {
           data: {
-            items: [documentSummary("doc-1", "report.pdf", statusFor())],
-            total: 1,
+            items: [
+              documentSummary("doc-1", "report.pdf", statusFor()),
+              documentSummary("doc-error", "failed.pdf", "ERROR"),
+            ],
+            total: 2,
             limit: 20,
             offset: 0,
             has_next: false,
@@ -84,7 +87,9 @@ test("取込中の文書がポーリングで索引済みに自動遷移する",
   await page.goto("/file-list");
 
   const row = page.locator("tbody tr").filter({ hasText: "report.pdf" });
-  await expect(row).toContainText("取込中");
+  await expect(row).toContainText("解析（抽出）中");
+  const errorRow = page.locator("tbody tr").filter({ hasText: "failed.pdf" });
+  await expect(errorRow.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
 
   // クリックやリロードなしで、ポーリングにより索引済みへ更新される。
   await expect(row).toContainText("索引済み", { timeout: 15000 });

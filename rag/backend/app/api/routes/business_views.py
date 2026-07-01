@@ -33,6 +33,7 @@ async def list_business_views(
     settings = get_settings()
 
     async def _load() -> Page[BusinessViewSummary]:
+        await oracle.ensure_default_business_view()
         items = await oracle.list_business_views(status=status, query=q, limit=limit, offset=offset)
         total = await oracle.count_business_views(status=status, query=q)
         return Page(
@@ -101,6 +102,8 @@ async def update_business_view(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="業務ビューが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     detail = await OracleClient().get_business_view(business_view_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="業務ビューが見つかりません。")
@@ -116,5 +119,7 @@ async def archive_business_view(
         await OracleClient().archive_business_view(business_view_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="業務ビューが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     detail = await OracleClient().get_business_view(business_view_id)
     return ApiResponse(data=detail)

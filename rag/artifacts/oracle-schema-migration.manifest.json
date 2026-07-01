@@ -1,6 +1,6 @@
 {
   "artifact_type": "migration",
-  "migration_artifact_version": "20260630_001",
+  "migration_artifact_version": "20260630_003",
   "migrations": [
     {
       "name": "20260615_001_ingestion_jobs_attempt_counters",
@@ -145,10 +145,22 @@
       "sha256": "bfdc46351934c2ffb5af8712d93c628aee783109389d65462c03d1e04679906a",
       "statement_count": 2,
       "table_name": "rag_knowledge_bases"
+    },
+    {
+      "name": "20260630_002_default_business_view",
+      "sha256": "e4f94e38bea44e33f1f323838f209d5289d6e025a11c9f56ce57b35c522f90cb",
+      "statement_count": 3,
+      "table_name": "rag_business_views"
+    },
+    {
+      "name": "20260630_003_document_recipes",
+      "sha256": "457d14b65991c0685f0dc6424cb26cbb78d62fd0167da36883d7fad02eeb6547",
+      "statement_count": 13,
+      "table_name": "rag_document_recipes"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "1",
-  "sha256": "7d132ac69fe54a1d88d0a2829616a9bebcca71e23106ba2d4bc17a76fdf6e031",
-  "statement_count": 29
+  "sha256": "f88c3f687f736a7ddff9bc1e40cb781b7c680a22fc64ab86d76b8390c9f07836",
+  "statement_count": 45
 }

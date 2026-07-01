@@ -38,6 +38,8 @@ function searchStreamBody(chunkId: string): string {
       keyword_score: 0.82,
       rrf_score: 0.032,
       rerank_rank: 1,
+      recipe_id: "recipe-1",
+      recipe_slot_no: 1,
     },
   };
   return [
@@ -215,7 +217,7 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page })
   await expect(page.getByText("Vector #1")).toBeVisible();
   await expect(page.getByText("Keyword #1")).toBeVisible();
   await expect(page.getByText("Rerank #1")).toBeVisible();
-  // variant バッジ(短縮 chunk_set id)が引用カードに表示される。
-  await expect(page.getByText("variant cs_recip")).toBeVisible();
+  // レシピバッジ(recipe_slot_no)が引用カードに表示される。
+  await expect(page.getByText("レシピ1")).toBeVisible();
   await expectNoPageOverflow(page);
 });

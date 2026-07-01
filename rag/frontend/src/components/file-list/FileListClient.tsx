@@ -490,7 +490,7 @@ function Row({
               onClick={() => onIngest(false)}
             >
               {!ingesting ? <Sparkles size={14} aria-hidden /> : null}
-              {t("action.enqueueIngestion")}
+              {t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion")}
             </Button>
           )}
           <Button

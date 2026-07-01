@@ -88,6 +88,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [section["name"] for section in manifest["sections"]] == [
         "documents",
+        "document_recipes",
         "knowledge_bases",
         "business_views",
         "conversations",
@@ -225,9 +226,17 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260630_001_default_knowledge_base_name" in sql
     assert "WHERE name = '既定ナレッジベース'" in sql
     assert "name = 'DEFAULT'" in sql
-    assert len(statements) == 29
+    assert "-- migration: 20260630_002_default_business_view" in sql
+    assert "JSON_MERGEPATCH" in sql
+    assert "JSON_ARRAY(kb.knowledge_base_id RETURNING JSON)" in sql
+    assert "INSERT INTO rag_business_views" in sql
+    assert "-- migration: 20260630_003_document_recipes" in sql
+    assert "CREATE TABLE rag_document_recipes" in sql
+    assert "RAG_CHUNK_SETS_RECIPE_ACTIVE_UIDX" in sql
+    assert len(statements) == 45
     assert all(
-        statement.startswith(("-- migration:", "DECLARE", "COMMIT")) for statement in statements
+        statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
+        for statement in statements
     )
 
 
@@ -240,7 +249,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260630_001"
+    assert manifest["migration_artifact_version"] == "20260630_003"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -268,6 +277,8 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260629_003_ingestion_jobs_settings_overrides",
         "20260629_004_documents_processing_config",
         "20260630_001_default_knowledge_base_name",
+        "20260630_002_default_business_view",
+        "20260630_003_document_recipes",
     ]
 
 

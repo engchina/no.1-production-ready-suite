@@ -105,14 +105,14 @@ def test_retrieval_where_rejects_unknown_filter_key() -> None:
         _oracle_retrieval_where({"totally_unknown": "x"})
 
 
-def test_retrieval_where_adds_serving_chunk_set_filter_for_kb_scope() -> None:
-    """KB スコープ検索では文書単位 serving(rag_chunk_sets.is_serving)で配信中 chunk_set を選ぶ。"""
+def test_retrieval_where_adds_active_recipe_filter_for_kb_scope() -> None:
+    """KB スコープ検索でも各レシピの active + INDEXED 出力だけを選ぶ。"""
     sql, binds = _oracle_retrieval_where({"knowledge_base_id": "kb-1"})
-    # 3 層モデル: serving は per-KB binding ではなく文書単位の chunk_set フラグ。
     assert "rag_kb_chunk_set_bindings" not in sql
-    assert "cs.is_serving = 1" in sql
-    assert "cs.chunk_set_id = c.chunk_set_id" in sql
-    assert "cs2.document_id = c.document_id" in sql
+    assert "active_cs.is_active = 1" in sql
+    assert "active_cs.status = 'INDEXED'" in sql
+    assert "active_cs.chunk_set_id = c.chunk_set_id" in sql
+    assert "JOIN rag_document_recipes active_r" in sql
     assert any(name.startswith("filter_knowledge_base_id") for name in binds)
 
 
@@ -125,24 +125,27 @@ def test_retrieval_where_allows_duplicate_kb_membership_to_reuse_canonical_chunk
     assert "duplicate_d.duplicate_of_document_id = d.document_id" in sql
 
 
-def test_retrieval_where_omits_chunk_set_filter_without_kb_scope() -> None:
-    """KB 未指定のグローバル検索では chunk_set フィルタを足さない(現行挙動と同一)。"""
+def test_retrieval_where_keeps_active_recipe_filter_without_kb_scope() -> None:
+    """KB 未指定でも stale chunk_set を混ぜず active レシピだけを検索する。"""
     sql, _ = _oracle_retrieval_where({})
     assert "rag_kb_chunk_set_bindings" not in sql
+    assert "active_cs.is_active = 1" in sql
 
 
-def test_retrieval_where_omits_chunk_set_filter_for_fused_serving_mode() -> None:
-    """fused 配信では KB スコープでも chunk_set 制限(NOT EXISTS)を足さず全 chunk_set を横断する。"""
+def test_retrieval_where_fused_reads_all_active_recipes() -> None:
+    """fused は全 chunk_set ではなく、各レシピの active 出力だけを横断する。"""
     sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "fused"})
     assert "rag_kb_chunk_set_bindings b" not in sql
+    assert "active_cs.is_active = 1" in sql
     # KB スコープ自体(所属 KB の EXISTS)は維持する。
     assert "rag_document_knowledge_bases dkb" in sql
 
 
-def test_retrieval_where_keeps_chunk_set_filter_for_single_serving_mode() -> None:
-    """single(既定)では従来どおり配信中 chunk_set 制限(文書単位 is_serving)を足す。"""
+def test_retrieval_where_normalizes_legacy_single_to_active_recipe_filter() -> None:
+    """互換入力 single も runtime では全 active レシピ融合へ正規化する。"""
     sql, _ = _oracle_retrieval_where({"knowledge_base_id": "kb-1", "serving_mode": "single"})
-    assert "cs.is_serving = 1" in sql
+    assert "active_cs.is_active = 1" in sql
+    assert "is_serving = 1" not in sql
 
 
 def test_retrieval_where_explicit_chunk_set_filters_and_bypasses_serving() -> None:

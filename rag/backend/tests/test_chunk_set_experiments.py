@@ -25,6 +25,7 @@ from app.schemas.document import (
     DocumentProcessingConfig,
     FileStatus,
 )
+from app.schemas.extraction import StructuredExtraction
 
 _SERVING_ID = "cs_serving_existing0"
 
@@ -50,10 +51,29 @@ class FakeExperimentOracle:
         self.serving_calls: list[str] = []
         self.deleted_keep: list[list[str]] = []
         self.indexed_marks: list[str] = []
+        self.activated: list[tuple[str, str]] = []
         self.chunk_sets: dict[str, dict[str, object]] = {
             _SERVING_ID: {"chunk_set_id": _SERVING_ID, "status": "INDEXED"}
         }
         self.processing_config = DocumentProcessingConfig()
+        self.recipes = [
+            {
+                "recipe_id": "recipe-1",
+                "document_id": "doc-1",
+                "slot_no": 1,
+                "config_revision": 1,
+                "active_extraction_recipe_id": "er-shared",
+            }
+        ]
+        self.extraction_artifacts: dict[str, dict[str, object]] = {
+            "er-shared": {
+                "extraction_json": StructuredExtraction(
+                    raw_text="共有抽出本文"
+                ).to_document_payload(),
+                "recipe_subset": {},
+                "status": "materialized",
+            }
+        }
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.detail if document_id == self.detail.id else None
@@ -65,6 +85,64 @@ class FakeExperimentOracle:
     async def count_chunk_set_chunks(self, chunk_set_id: str) -> int:
         _ = chunk_set_id
         return 5
+
+    async def list_document_recipes(self, document_id: str) -> list[dict[str, object]]:
+        _ = document_id
+        return self.recipes
+
+    async def create_document_recipe(
+        self, document_id: str, *, copy_from_recipe_id: str | None = None
+    ) -> dict[str, object]:
+        _ = document_id, copy_from_recipe_id
+        created: dict[str, object] = {
+            "recipe_id": "recipe-2",
+            "document_id": "doc-1",
+            "slot_no": 2,
+            "config_revision": 1,
+        }
+        self.recipes.append(created)
+        return created
+
+    async def update_document_recipe_config(
+        self,
+        document_id: str,
+        recipe_id: str,
+        config: DocumentProcessingConfig,
+    ) -> dict[str, object]:
+        _ = document_id
+        self.processing_config = config
+        row = next(recipe for recipe in self.recipes if recipe["recipe_id"] == recipe_id)
+        row["config_revision"] = 2
+        return row
+
+    async def get_document_extraction_artifact(
+        self, *, document_id: str, extraction_recipe_id: str
+    ) -> dict[str, object] | None:
+        _ = document_id
+        return self.extraction_artifacts.get(extraction_recipe_id)
+
+    async def upsert_document_extraction_artifact(
+        self, *, extraction_recipe_id: str, extraction: dict[str, object], **kwargs: Any
+    ) -> None:
+        self.extraction_artifacts[extraction_recipe_id] = {
+            "extraction_json": extraction,
+            **kwargs,
+        }
+
+    async def update_document_recipe_status(
+        self,
+        *,
+        recipe_id: str,
+        active_extraction_recipe_id: str | None = None,
+        **_kwargs: object,
+    ) -> None:
+        row = next(recipe for recipe in self.recipes if recipe["recipe_id"] == recipe_id)
+        row["active_extraction_recipe_id"] = active_extraction_recipe_id
+
+    async def activate_recipe_chunk_set(
+        self, *, recipe_id: str, chunk_set_id: str, **_kwargs: object
+    ) -> None:
+        self.activated.append((recipe_id, chunk_set_id))
 
     async def upsert_chunk_set(self, *, chunk_set_id: str, **kwargs: Any) -> None:
         self.chunk_sets.setdefault(chunk_set_id, {"chunk_set_id": chunk_set_id})
@@ -129,9 +207,18 @@ class FakeExperimentPipeline:
 
     last_chunk_set_id: str | None = None
 
-    def __init__(self, *, oracle: object, settings: object) -> None:
+    def __init__(
+        self,
+        *,
+        oracle: object,
+        settings: object,
+        recipe_id: str | None = None,
+        recipe_revision: int | None = None,
+    ) -> None:
         self._oracle = oracle
         self._settings = settings
+        self._recipe_id = recipe_id
+        self._recipe_revision = recipe_revision
 
     async def index_reviewed(
         self, document_id: str, *, chunk_set_id: str, record_outcome: bool = True
@@ -150,7 +237,7 @@ def _patch(monkeypatch: pytest.MonkeyPatch, oracle: FakeExperimentOracle) -> Non
 async def test_create_experiment_materializes_candidate_without_promoting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """候補は別 chunk_set に materialize し、現 serving 再アサートで is_serving=0 に落とす。"""
+    """旧実験作成は新しいレシピを作り、その active chunk_set として公開する。"""
     oracle = FakeExperimentOracle()
     _patch(monkeypatch, oracle)
 
@@ -163,8 +250,8 @@ async def test_create_experiment_materializes_candidate_without_promoting(
     # 候補レシピで re-chunk→index した(index_reviewed が候補 id で呼ばれた)。
     assert FakeExperimentPipeline.last_chunk_set_id == candidate_id
     assert oracle.indexed_marks == [candidate_id]
-    # 配信は候補に切り替えず、現 serving を再アサートして候補を demote する。
-    assert oracle.serving_calls == [_SERVING_ID]
+    assert oracle.activated == [("recipe-2", candidate_id)]
+    assert oracle.serving_calls == []
 
 
 async def test_create_experiment_rejects_non_indexed_document(
@@ -180,7 +267,7 @@ async def test_create_experiment_rejects_non_indexed_document(
 async def test_promote_switches_serving_and_gcs_losers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """昇格は候補を serving に切替え、敗者 chunk_set を keep=候補のみで GC する。"""
+    """全レシピ融合モードでは旧昇格 API は操作せず 409 を返す。"""
     oracle = FakeExperimentOracle()
     candidate_id = "cs_candidate_aaaaaa0"
     oracle.chunk_sets[candidate_id] = {
@@ -192,16 +279,11 @@ async def test_promote_switches_serving_and_gcs_losers(
     }
     _patch(monkeypatch, oracle)
 
-    response = await promote_chunk_set_experiment("doc-1", candidate_id)
-
-    assert response.data is not None
-    assert response.data.chunk_set_id == candidate_id
-    assert oracle.serving_calls == [candidate_id]
-    assert oracle.deleted_keep == [[candidate_id]]
-    assert oracle.processing_config.chunking_strategy == "page_level"
-    assert oracle.processing_config.chunk_size == 512
-    # 敗者(旧 serving)は GC 済み。
-    assert _SERVING_ID not in oracle.chunk_sets
+    with pytest.raises(HTTPException) as exc:
+        await promote_chunk_set_experiment("doc-1", candidate_id)
+    assert exc.value.status_code == 409
+    assert oracle.serving_calls == []
+    assert oracle.deleted_keep == []
 
 
 async def test_promote_rejects_chunk_set_not_on_document(
@@ -211,7 +293,7 @@ async def test_promote_rejects_chunk_set_not_on_document(
     _patch(monkeypatch, oracle)
     with pytest.raises(HTTPException) as exc:
         await promote_chunk_set_experiment("doc-1", "cs_not_here_00000000")
-    assert exc.value.status_code == 404
+    assert exc.value.status_code == 409
 
 
 def test_experiment_request_requires_at_least_one_override() -> None:

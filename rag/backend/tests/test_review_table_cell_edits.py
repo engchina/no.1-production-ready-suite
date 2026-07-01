@@ -116,9 +116,11 @@ def test_canonicalize_reviewed_extraction_syncs_structure_and_raw_text() -> None
     """要素・表セル修正から章節、offset、表要素、raw_text を一貫して再生成する。"""
     extraction = _extraction_with_table()
     elements = [
-        element.model_copy(update={"text": "# 新しい料金表"})
-        if element.element_id == "title-1"
-        else element
+        (
+            element.model_copy(update={"text": "# 新しい料金表"})
+            if element.element_id == "title-1"
+            else element
+        )
         for element in extraction.elements
     ]
     edited = _apply_table_cell_edits(

@@ -6,7 +6,7 @@ import json
 import logging
 import mimetypes
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from html import escape
@@ -49,6 +49,7 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.rag.source_profile import build_source_profile
 from app.rag.variant_keys import (
     compute_chunk_set_id,
+    compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
 )
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
@@ -68,7 +69,13 @@ from app.schemas.document import (
     DocumentIngestionConfigData,
     DocumentLayerStatusName,
     DocumentMaterializationLayerStatus,
+    DocumentPreprocessArtifact,
     DocumentProcessingConfig,
+    DocumentRecipeCreateRequest,
+    DocumentRecipeDeleteResult,
+    DocumentRecipeStep,
+    DocumentRecipeStepStatus,
+    DocumentRecipeView,
     DocumentReviewEditsRequest,
     DocumentStats,
     DocumentSummary,
@@ -560,11 +567,13 @@ async def list_document_ingestion_jobs(
 async def retry_failed_document_ingestion_segments(
     http_request: Request,
     document_id: str,
+    recipe_id: str | None = Query(default=None),
 ) -> ApiResponse[IngestionJob]:
     """FAILED checkpoint がある文書だけ、失敗 segment 再試行 job として再投入する。"""
     enforce_rate_limit("ingest", http_request)
     job = await _enqueue_failed_segment_retry_job_for_document(
         document_id,
+        recipe_id=recipe_id,
     )
     return ApiResponse(data=job)
 
@@ -576,6 +585,455 @@ async def list_document_chunks(document_id: str) -> ApiResponse[list[DocumentChu
     if await oracle.get_document(document_id) is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return ApiResponse(data=await oracle.list_document_chunks(document_id))
+
+
+_RECIPE_PHASES = (
+    IngestionJobPhase.PREPROCESS,
+    IngestionJobPhase.EXTRACT,
+    IngestionJobPhase.CHUNK,
+    IngestionJobPhase.INDEX,
+)
+
+
+def _inferred_recipe_step_status(
+    recipe_status: FileStatus,
+    phase: IngestionJobPhase,
+    failed_phase: IngestionJobPhase | None,
+) -> DocumentRecipeStepStatus:
+    if recipe_status == FileStatus.ERROR and failed_phase == phase:
+        return DocumentRecipeStepStatus.FAILED
+    running = {
+        FileStatus.PREPROCESSING: IngestionJobPhase.PREPROCESS,
+        FileStatus.INGESTING: IngestionJobPhase.EXTRACT,
+        FileStatus.CHUNKING: IngestionJobPhase.CHUNK,
+        FileStatus.INDEXING: IngestionJobPhase.INDEX,
+    }
+    if running.get(recipe_status) == phase:
+        return DocumentRecipeStepStatus.RUNNING
+    completed: dict[FileStatus, int] = {
+        FileStatus.PREPROCESSED: 1,
+        FileStatus.REVIEW: 2,
+        FileStatus.CHUNKED: 3,
+        FileStatus.INDEXED: 4,
+    }
+    index = _RECIPE_PHASES.index(phase) + 1
+    if index <= completed.get(recipe_status, 0):
+        if recipe_status == FileStatus.REVIEW and phase == IngestionJobPhase.EXTRACT:
+            return DocumentRecipeStepStatus.NEEDS_REVIEW
+        if recipe_status == FileStatus.CHUNKED and phase == IngestionJobPhase.CHUNK:
+            return DocumentRecipeStepStatus.NEEDS_REVIEW
+        return DocumentRecipeStepStatus.SUCCEEDED
+    return DocumentRecipeStepStatus.PENDING
+
+
+def _recipe_steps(row: Mapping[str, object], jobs: list[IngestionJob]) -> list[DocumentRecipeStep]:
+    recipe_status = FileStatus(str(row.get("status") or FileStatus.UPLOADED.value))
+    raw_failed_phase = row.get("failed_phase")
+    failed_phase = IngestionJobPhase(str(raw_failed_phase)) if raw_failed_phase else None
+    latest_by_phase: dict[IngestionJobPhase, IngestionJob] = {}
+    for job in jobs:
+        latest_by_phase.setdefault(job.phase, job)
+    result: list[DocumentRecipeStep] = []
+    for phase in _RECIPE_PHASES:
+        latest_job = latest_by_phase.get(phase)
+        if latest_job is None:
+            status = _inferred_recipe_step_status(recipe_status, phase, failed_phase)
+        else:
+            status = {
+                IngestionJobStatus.QUEUED: DocumentRecipeStepStatus.QUEUED,
+                IngestionJobStatus.RUNNING: DocumentRecipeStepStatus.RUNNING,
+                IngestionJobStatus.SUCCEEDED: DocumentRecipeStepStatus.SUCCEEDED,
+                IngestionJobStatus.FAILED: DocumentRecipeStepStatus.FAILED,
+                IngestionJobStatus.CANCELLED: DocumentRecipeStepStatus.CANCELLED,
+                IngestionJobStatus.SKIPPED: DocumentRecipeStepStatus.PENDING,
+            }[latest_job.status]
+        result.append(
+            DocumentRecipeStep(
+                phase=phase,
+                status=status,
+                started_at=latest_job.started_at if latest_job is not None else None,
+                finished_at=latest_job.finished_at if latest_job is not None else None,
+                error_message=latest_job.error_message if latest_job is not None else None,
+            )
+        )
+    return result
+
+
+async def _document_recipe_view(
+    oracle: OracleClient,
+    row: Mapping[str, object],
+    *,
+    document_jobs: Sequence[IngestionJob] | None = None,
+) -> DocumentRecipeView:
+    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+    _, effective = _merge_document_processing_config(config)
+    recipe_id = str(row["recipe_id"])
+    all_jobs = (
+        document_jobs
+        if document_jobs is not None
+        else await oracle.list_document_ingestion_jobs(str(row["document_id"]))
+    )
+    jobs = [job for job in all_jobs if job.recipe_id == recipe_id]
+    active_chunk_set_id = (
+        str(row["active_chunk_set_id"]) if row.get("active_chunk_set_id") is not None else None
+    )
+    config_revision = int(str(row.get("config_revision") or 1))
+    materialized_revision = (
+        int(str(row["materialized_revision"]))
+        if row.get("materialized_revision") is not None
+        else None
+    )
+    return DocumentRecipeView(
+        recipe_id=recipe_id,
+        document_id=str(row["document_id"]),
+        slot_no=int(str(row["slot_no"])),
+        status=FileStatus(str(row.get("status") or FileStatus.UPLOADED.value)),
+        failed_phase=(
+            IngestionJobPhase(str(row["failed_phase"]))
+            if row.get("failed_phase") is not None
+            else None
+        ),
+        processing_config=config,
+        effective_processing_config=effective,
+        preprocess_artifact=(
+            DocumentPreprocessArtifact.model_validate(row["preprocess_artifact"])
+            if row.get("preprocess_artifact")
+            else None
+        ),
+        active_extraction_recipe_id=(
+            str(row["active_extraction_recipe_id"])
+            if row.get("active_extraction_recipe_id") is not None
+            else None
+        ),
+        active_chunk_set_id=active_chunk_set_id,
+        chunk_count=int(str(row.get("chunk_count") or 0)),
+        vector_count=int(str(row.get("vector_count") or 0)),
+        config_revision=config_revision,
+        materialized_revision=materialized_revision,
+        searchable=(
+            active_chunk_set_id is not None and str(row.get("chunk_set_status")) == "INDEXED"
+        ),
+        needs_reprocessing=(
+            materialized_revision is not None and config_revision != materialized_revision
+        ),
+        error_message=(str(row["error_message"]) if row.get("error_message") else None),
+        steps=_recipe_steps(row, jobs),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        started_at=row.get("started_at"),
+        finished_at=row.get("finished_at"),
+    )
+
+
+@router.get("/{document_id}/recipes", response_model=ApiResponse[list[DocumentRecipeView]])
+async def list_document_recipes(document_id: str) -> ApiResponse[list[DocumentRecipeView]]:
+    """文書の 1〜3 件の独立レシピを返す。"""
+    oracle = OracleClient()
+    try:
+        rows = await oracle.list_document_recipes(document_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。") from exc
+    jobs = await oracle.list_document_ingestion_jobs(document_id)
+    return ApiResponse(
+        data=[await _document_recipe_view(oracle, row, document_jobs=jobs) for row in rows]
+    )
+
+
+@router.post("/{document_id}/recipes", response_model=ApiResponse[DocumentRecipeView])
+async def create_document_recipe(
+    document_id: str, request: DocumentRecipeCreateRequest
+) -> ApiResponse[DocumentRecipeView]:
+    """空き slot にレシピを追加する。"""
+    oracle = OracleClient()
+    try:
+        row = await oracle.create_document_recipe(
+            document_id, copy_from_recipe_id=request.copy_from_recipe_id
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(data=await _document_recipe_view(oracle, row))
+
+
+@router.put("/{document_id}/recipes/{recipe_id}", response_model=ApiResponse[DocumentRecipeView])
+async def update_document_recipe(
+    document_id: str, recipe_id: str, request: DocumentProcessingConfig
+) -> ApiResponse[DocumentRecipeView]:
+    """選択レシピの明示設定を保存する。"""
+    try:
+        _merge_document_processing_config(request)
+    except KbAdapterConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    oracle = OracleClient()
+    try:
+        await oracle.update_document_recipe_config(document_id, recipe_id, request)
+        row = await oracle.get_document_recipe(document_id, recipe_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    return ApiResponse(data=await _document_recipe_view(oracle, row))
+
+
+@router.delete(
+    "/{document_id}/recipes/{recipe_id}",
+    response_model=ApiResponse[DocumentRecipeDeleteResult],
+)
+async def delete_document_recipe(
+    document_id: str, recipe_id: str
+) -> ApiResponse[DocumentRecipeDeleteResult]:
+    """最後の1件を保護してレシピと固有索引を削除する。"""
+    oracle = OracleClient()
+    try:
+        removed = await oracle.delete_document_recipe(document_id, recipe_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(
+        data=DocumentRecipeDeleteResult(
+            recipe_id=recipe_id,
+            document_id=document_id,
+            removed_chunk_set_count=removed,
+        )
+    )
+
+
+@router.post(
+    "/{document_id}/recipes/{recipe_id}/ingestion-jobs",
+    response_model=ApiResponse[IngestionJob],
+)
+async def enqueue_document_recipe_job(
+    document_id: str,
+    recipe_id: str,
+    phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS,
+) -> ApiResponse[IngestionJob]:
+    """レシピ設定の snapshot を持つ独立 job を投入する。文書内実行は worker が直列化する。"""
+    try:
+        job = await _enqueue_ingestion_job_for_recipe(document_id, recipe_id, phase=phase)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(data=job)
+
+
+async def _enqueue_ingestion_job_for_recipe(
+    document_id: str,
+    recipe_id: str,
+    *,
+    phase: IngestionJobPhase,
+) -> IngestionJob:
+    """snapshot を作り、Oracle 側の行ロック検証後に recipe job を投入する。"""
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    detail = await oracle.get_document(document_id)
+    if row is None or detail is None:
+        raise KeyError("レシピが見つかりません。")
+    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+    effective_settings, _ = _merge_document_processing_config(config)
+    source_profile = _source_profile_for_detail(detail)
+    job = await _create_ingestion_job_record(
+        oracle=oracle,
+        document_id=document_id,
+        recipe_id=recipe_id,
+        recipe_revision=int(str(row.get("config_revision") or 1)),
+        parser_profile=source_profile.parser_profile,
+        quality_warnings=source_profile.quality_warnings,
+        phase=phase,
+        settings_overrides={
+            "processing_config": config.model_dump(mode="json", exclude_none=True),
+            "rag_preprocess_profile": effective_settings.rag_preprocess_profile,
+            "rag_parser_adapter_backend": effective_settings.rag_parser_adapter_backend,
+        },
+    )
+    _dispatch_ingestion_job(job.id)
+    return job
+
+
+@router.get(
+    "/{document_id}/recipes/{recipe_id}/chunks",
+    response_model=ApiResponse[list[DocumentChunkView]],
+)
+async def list_document_recipe_chunks(
+    document_id: str, recipe_id: str
+) -> ApiResponse[list[DocumentChunkView]]:
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    chunk_set_id = row.get("active_chunk_set_id")
+    return ApiResponse(
+        data=(await oracle.list_chunk_set_chunks(str(chunk_set_id)) if chunk_set_id else [])
+    )
+
+
+@router.get("/{document_id}/recipes/{recipe_id}/content")
+async def document_recipe_content(
+    document_id: str,
+    recipe_id: str,
+    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
+    disposition: Annotated[Literal["inline", "attachment"], Query()] = "inline",
+) -> Response:
+    """選択レシピの原本または固有のファイル準備 artifact を返す。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if detail is None or row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    artifact = (
+        DocumentPreprocessArtifact.model_validate(row["preprocess_artifact"])
+        if row.get("preprocess_artifact")
+        else None
+    )
+    return await _document_content_response(
+        detail,
+        variant=variant,
+        disposition=disposition,
+        preprocess_artifact=artifact,
+    )
+
+
+@router.get(
+    "/{document_id}/recipes/{recipe_id}/extraction-export",
+    response_model=ApiResponse[DocumentExtractionExport],
+)
+async def export_document_recipe_extraction(
+    document_id: str,
+    recipe_id: str,
+    format: Annotated[DocumentExtractionExportFormat, Query()] = (
+        DocumentExtractionExportFormat.MARKDOWN
+    ),
+) -> ApiResponse[DocumentExtractionExport]:
+    """選択レシピの抽出・active chunks を監査用に返す。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if detail is None or row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    extraction_recipe_id = row.get("active_extraction_recipe_id")
+    artifact = (
+        await oracle.get_document_extraction_artifact(
+            document_id=document_id,
+            extraction_recipe_id=str(extraction_recipe_id),
+        )
+        if extraction_recipe_id
+        else None
+    )
+    if artifact is None or not artifact.get("extraction_json"):
+        raise HTTPException(status_code=404, detail="抽出結果が見つかりません。")
+    extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
+    payload = extraction.to_document_payload()
+    chunks: list[DocumentChunkView] = []
+    if format == DocumentExtractionExportFormat.CHUNKS:
+        chunk_set_id = row.get("active_chunk_set_id")
+        chunks = await oracle.list_chunk_set_chunks(str(chunk_set_id)) if chunk_set_id else []
+        payload = {"chunks": [chunk.model_dump(mode="json") for chunk in chunks]}
+    content = _document_extraction_export_content(format, extraction, payload)
+    return ApiResponse(
+        data=DocumentExtractionExport(
+            document_id=document_id,
+            file_name=detail.file_name,
+            format=format,
+            content_type=_document_extraction_export_content_type(format),
+            content=content,
+            payload=(
+                payload
+                if format
+                not in {
+                    DocumentExtractionExportFormat.MARKDOWN,
+                    DocumentExtractionExportFormat.HTML,
+                }
+                else {}
+            ),
+            chunks=chunks,
+            parser_backend=_extraction_parser_backend(extraction),
+            parser_profile=_extraction_parser_profile(extraction),
+            page_count=len(extraction.pages),
+            element_count=len(extraction.elements),
+            table_count=len(extraction.tables),
+            asset_count=len(extraction.assets),
+        )
+    )
+
+
+@router.post(
+    "/{document_id}/recipes/{recipe_id}/approve",
+    response_model=ApiResponse[IngestionJob],
+)
+async def approve_document_recipe(
+    http_request: Request,
+    document_id: str,
+    recipe_id: str,
+    body: DocumentApproveRequest | None = None,
+) -> ApiResponse[IngestionJob]:
+    """選択レシピの確認待ち工程を承認して次工程を投入する。"""
+    enforce_rate_limit("ingest", http_request)
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    status = FileStatus(str(row.get("status") or FileStatus.UPLOADED.value))
+    if status == FileStatus.PREPROCESSED:
+        phase = IngestionJobPhase.EXTRACT
+    elif status == FileStatus.REVIEW:
+        if body is not None and (
+            body.element_edits or body.table_cell_edits or body.raw_text is not None
+        ):
+            await _apply_recipe_review_text_edits(document_id, recipe_id, body)
+        phase = IngestionJobPhase.CHUNK
+    elif status == FileStatus.CHUNKED:
+        phase = IngestionJobPhase.INDEX
+    else:
+        raise HTTPException(status_code=409, detail="確認待ちのレシピのみ承認できます。")
+    return await enqueue_document_recipe_job(document_id, recipe_id, phase)
+
+
+@router.patch(
+    "/{document_id}/recipes/{recipe_id}/review-edits",
+    response_model=ApiResponse[DocumentRecipeView],
+)
+async def save_document_recipe_review_edits(
+    http_request: Request,
+    document_id: str,
+    recipe_id: str,
+    body: DocumentReviewEditsRequest,
+) -> ApiResponse[DocumentRecipeView]:
+    enforce_rate_limit("ingest", http_request)
+    await _apply_recipe_review_text_edits(document_id, recipe_id, body)
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    return ApiResponse(data=await _document_recipe_view(oracle, row))
+
+
+@router.post(
+    "/{document_id}/recipes/{recipe_id}/reject",
+    response_model=ApiResponse[DocumentRecipeView],
+)
+async def reject_document_recipe(
+    http_request: Request,
+    document_id: str,
+    recipe_id: str,
+) -> ApiResponse[DocumentRecipeView]:
+    enforce_rate_limit("ingest", http_request)
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    if FileStatus(str(row.get("status"))) != FileStatus.REVIEW:
+        raise HTTPException(status_code=409, detail="確認待ちのレシピのみ却下できます。")
+    await oracle.update_document_recipe_status(
+        recipe_id=recipe_id,
+        status=FileStatus.UPLOADED,
+    )
+    updated = await oracle.get_document_recipe(document_id, recipe_id)
+    assert updated is not None
+    return ApiResponse(data=await _document_recipe_view(oracle, updated))
 
 
 @router.get("/{document_id}/chunk-sets", response_model=ApiResponse[list[DocumentChunkSet]])
@@ -684,33 +1142,100 @@ async def create_chunk_set_experiment(
         update={field: value for field, value in request.model_dump().items() if value is not None}
     )
     _, effective_candidate_config = _merge_document_processing_config(candidate_config)
-    candidate_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
-    if candidate_chunk_set_id == serving_chunk_set_id:
+    base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
+    if base_chunk_set_id == serving_chunk_set_id:
         raise HTTPException(
             status_code=409,
             detail="現在配信中のレシピと同じ設定です。別の chunking 設定を指定してください。",
         )
-    pipeline = IngestionPipeline(oracle=oracle, settings=candidate_settings)
+    recipes = await oracle.list_document_recipes(document_id)
+    source_recipe = recipes[0] if recipes else None
+    source_recipe_id = str(source_recipe["recipe_id"]) if source_recipe else None
+    source_extraction_recipe_id = (
+        str(source_recipe.get("active_extraction_recipe_id"))
+        if source_recipe and source_recipe.get("active_extraction_recipe_id")
+        else None
+    )
+    source_extraction = (
+        await oracle.get_document_extraction_artifact(
+            document_id=document_id,
+            extraction_recipe_id=source_extraction_recipe_id,
+        )
+        if source_extraction_recipe_id is not None
+        else None
+    )
+    if source_extraction is None or not source_extraction.get("extraction_json"):
+        raise HTTPException(status_code=409, detail="再利用できる抽出結果がありません。")
+    try:
+        created_recipe = await oracle.create_document_recipe(
+            document_id,
+            copy_from_recipe_id=source_recipe_id,
+        )
+        created_recipe = await oracle.update_document_recipe_config(
+            document_id,
+            str(created_recipe["recipe_id"]),
+            candidate_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    recipe_id = str(created_recipe["recipe_id"])
+    recipe_revision = int(str(created_recipe.get("config_revision") or 1))
+    extraction_recipe_id = compute_document_recipe_extraction_id(
+        compute_extraction_recipe_id(detail.content_sha256, candidate_settings),
+        recipe_id,
+        recipe_revision,
+    )
+    raw_recipe_subset = source_extraction.get("recipe_subset")
+    await oracle.upsert_document_extraction_artifact(
+        document_id=document_id,
+        extraction_recipe_id=extraction_recipe_id,
+        source_sha256=detail.content_sha256,
+        recipe_subset=(
+            {str(key): value for key, value in raw_recipe_subset.items()}
+            if isinstance(raw_recipe_subset, Mapping)
+            else None
+        ),
+        extraction=StructuredExtraction.model_validate(
+            source_extraction["extraction_json"]
+        ).to_document_payload(),
+        status=str(source_extraction.get("status") or "materialized"),
+    )
+    await oracle.update_document_recipe_status(
+        recipe_id=recipe_id,
+        status=FileStatus.REVIEW,
+        active_extraction_recipe_id=extraction_recipe_id,
+    )
+    candidate_chunk_set_id = hashlib.sha256(
+        f"{base_chunk_set_id}:{recipe_id}:compat".encode()
+    ).hexdigest()
+    pipeline = IngestionPipeline(
+        oracle=oracle,
+        settings=candidate_settings,
+        recipe_id=recipe_id,
+        recipe_revision=recipe_revision,
+    )
     try:
         await pipeline.index_reviewed(
             document_id, chunk_set_id=candidate_chunk_set_id, record_outcome=False
         )
     except IngestionUserError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    extraction_recipe_id = compute_extraction_recipe_id(detail.content_sha256, candidate_settings)
     chunk_count = await oracle.count_chunk_set_chunks(candidate_chunk_set_id)
     await oracle.upsert_chunk_set(
         chunk_set_id=candidate_chunk_set_id,
         document_id=document_id,
+        recipe_id=recipe_id,
         extraction_recipe_id=extraction_recipe_id,
         recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
     )
     await oracle.mark_chunk_set_indexed(
         chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
     )
-    # 候補は配信に載せない: 現 serving を再アサートして新 chunk_set を is_serving=0 に落とす。
-    await oracle.set_document_serving_chunk_set(
-        document_id=document_id, chunk_set_id=serving_chunk_set_id
+    await oracle.activate_recipe_chunk_set(
+        recipe_id=recipe_id,
+        chunk_set_id=candidate_chunk_set_id,
+        extraction_recipe_id=extraction_recipe_id,
+        materialized_revision=recipe_revision,
     )
     return ApiResponse(
         data=await _chunk_set_experiment_view(oracle, document_id, candidate_chunk_set_id)
@@ -724,34 +1249,12 @@ async def create_chunk_set_experiment(
 async def promote_chunk_set_experiment(
     document_id: str, chunk_set_id: str
 ) -> ApiResponse[DocumentChunkSet]:
-    """候補 chunk_set を配信(serving)に昇格し、敗者 chunk_set を GC する。
-
-    定常状態は 1 文書 = 1 chunk_set。昇格後はその chunk_set だけが検索対象になる。
-    """
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if chunk_set_id not in await oracle.list_document_chunk_set_ids(document_id):
-        raise HTTPException(status_code=404, detail="この文書の chunk_set ではありません。")
-    chunk_set = await oracle.get_chunk_set(chunk_set_id)
-    if chunk_set is None or str(chunk_set.get("status")) != "INDEXED":
-        raise HTTPException(
-            status_code=409, detail="索引済み(INDEXED)の chunk_set のみ昇格できます。"
-        )
-    recipe_subset = chunk_set.get("recipe_subset")
-    if isinstance(recipe_subset, Mapping) and isinstance(
-        recipe_subset.get("processing_config"), Mapping
-    ):
-        await oracle.update_document_processing_config(
-            document_id,
-            DocumentProcessingConfig.model_validate(recipe_subset["processing_config"]),
-        )
-    await oracle.set_document_serving_chunk_set(document_id=document_id, chunk_set_id=chunk_set_id)
-    await oracle.delete_document_chunk_sets_except(
-        document_id=document_id, keep_chunk_set_ids=[chunk_set_id]
+    """互換 API。全レシピ融合では昇格操作を行わない。"""
+    _ = (document_id, chunk_set_id)
+    raise HTTPException(
+        status_code=409,
+        detail="全レシピ融合モードでは昇格は不要です。処理レシピから管理してください。",
     )
-    return ApiResponse(data=await _chunk_set_experiment_view(oracle, document_id, chunk_set_id))
 
 
 @router.post(
@@ -794,12 +1297,28 @@ async def create_parser_extraction_experiment(
             status_code=409,
             detail="現在配信中の前処理/解析と同じ設定です。分割だけ変える場合は別レシピ実験を使ってください。",
         )
+    recipes = await oracle.list_document_recipes(document_id)
+    source_recipe_id = str(recipes[0]["recipe_id"]) if recipes else None
+    try:
+        created_recipe = await oracle.create_document_recipe(
+            document_id,
+            copy_from_recipe_id=source_recipe_id,
+        )
+        created_recipe = await oracle.update_document_recipe_config(
+            document_id,
+            str(created_recipe["recipe_id"]),
+            candidate_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     job = await _create_ingestion_job_record(
         oracle=oracle,
         document_id=document_id,
+        recipe_id=str(created_recipe["recipe_id"]),
+        recipe_revision=int(str(created_recipe.get("config_revision") or 1)),
         parser_profile=_source_profile_for_detail(detail).parser_profile,
         quality_warnings=[],
-        phase=IngestionJobPhase.EXTRACT,
+        phase=IngestionJobPhase.PREPROCESS,
         settings_overrides={
             **overrides,
             "processing_config": candidate_config.model_dump(mode="json", exclude_none=True),
@@ -822,15 +1341,23 @@ async def _materialize_experiment_candidate(
     *,
     cancel_checker: Callable[[], Awaitable[bool]] | None = None,
 ) -> None:
-    """parser/前処理 候補 chunk_set を candidate モードで隔離 materialize する(Phase 3b)。"""
+    """設定 snapshot から新しい chunk_set を隔離構築する。
+
+    ``recipe_id`` 付き job は正式な文書レシピ実行であり、既存 active 出力を構築中に
+    変更しない。成功時だけ active を原子的に差し替える。recipe_id が無い呼び出しは
+    旧実験 API の互換経路として従来の serving を維持する。
+    """
     detail = await oracle.get_document(job.document_id)
     if detail is None:
         raise IngestionUserError("ドキュメントが見つかりません。")
-    if detail.status != FileStatus.INDEXED or not detail.content_sha256:
-        raise IngestionUserError("索引済み文書のみレシピ実験できます。")
+    if not detail.content_sha256:
+        raise IngestionUserError("文書のソースハッシュが未確定です。")
     serving_chunk_set_id = await oracle.get_document_serving_chunk_set_id(job.document_id)
-    if serving_chunk_set_id is None:
-        raise IngestionUserError("配信中の chunk_set がありません。")
+    if job.recipe_id is None:
+        if detail.status != FileStatus.INDEXED:
+            raise IngestionUserError("索引済み文書のみレシピ実験できます。")
+        if serving_chunk_set_id is None:
+            raise IngestionUserError("配信中の chunk_set がありません。")
     base_settings, current_config = await _resolve_ingestion_settings(oracle, job.document_id)
     raw_config = (job.settings_overrides or {}).get("processing_config")
     if isinstance(raw_config, Mapping):
@@ -844,38 +1371,170 @@ async def _materialize_experiment_candidate(
             base_settings, job.settings_overrides or {}
         )
         _, effective_candidate_config = _merge_document_processing_config(candidate_config)
-    candidate_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
-    if candidate_chunk_set_id == serving_chunk_set_id:
+    base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
+    candidate_chunk_set_id = (
+        hashlib.sha256(
+            f"{base_chunk_set_id}:{job.recipe_id}:{job.recipe_revision}:{job.id}".encode()
+        ).hexdigest()
+        if job.recipe_id is not None
+        else base_chunk_set_id
+    )
+    if job.recipe_id is None and candidate_chunk_set_id == serving_chunk_set_id:
         raise IngestionUserError("現在配信中のレシピと同じ設定です。")
-    data, source_profile = await _load_source_bytes(oracle, job.document_id, detail)
-    pipeline = IngestionPipeline(oracle=oracle, settings=candidate_settings)
-    await pipeline.ingest(
-        document_id=job.document_id,
-        image_bytes=data,
-        prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
-        content_type=detail.content_type or "application/octet-stream",
-        source_profile=source_profile,
-        chunk_set_id=candidate_chunk_set_id,
-        record_outcome=False,
-        original_object_storage_path=detail.object_storage_path,
-        manage_document_state=False,
-        cancel_checker=cancel_checker,
+    if job.recipe_id is not None:
+        await oracle.update_document_recipe_status(
+            recipe_id=job.recipe_id,
+            status={
+                IngestionJobPhase.PREPROCESS: FileStatus.PREPROCESSING,
+                IngestionJobPhase.EXTRACT: FileStatus.INGESTING,
+                IngestionJobPhase.CHUNK: FileStatus.CHUNKING,
+                IngestionJobPhase.INDEX: FileStatus.INDEXING,
+            }[job.phase],
+        )
+    pipeline = IngestionPipeline(
+        oracle=oracle,
+        settings=candidate_settings,
+        recipe_id=job.recipe_id,
+        recipe_revision=job.recipe_revision,
     )
     extraction_recipe_id = compute_extraction_recipe_id(detail.content_sha256, candidate_settings)
+    if job.recipe_id is not None and job.phase in {
+        IngestionJobPhase.CHUNK,
+        IngestionJobPhase.INDEX,
+    }:
+        recipe_row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
+        active_extraction_recipe_id = (
+            recipe_row.get("active_extraction_recipe_id") if recipe_row is not None else None
+        )
+        if active_extraction_recipe_id is None:
+            raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+        extraction_recipe_id = str(active_extraction_recipe_id)
+
+    if job.recipe_id is not None and job.phase == IngestionJobPhase.INDEX:
+        pending = await oracle.get_latest_recipe_chunk_set(
+            job.recipe_id,
+            status="CHUNKED",
+            active=False,
+        )
+        if pending is None:
+            raise IngestionUserError(
+                "索引対象の Chunk が見つかりません。Chunk 作成から再開してください。"
+            )
+        candidate_chunk_set_id = str(pending["chunk_set_id"])
+        await pipeline.index_chunked(
+            job.document_id,
+            chunk_set_id=candidate_chunk_set_id,
+            record_outcome=False,
+            cancel_checker=cancel_checker,
+        )
+    elif job.recipe_id is not None and job.phase == IngestionJobPhase.CHUNK:
+        await pipeline.chunk_reviewed(
+            job.document_id,
+            chunk_set_id=candidate_chunk_set_id,
+            record_outcome=False,
+            cancel_checker=cancel_checker,
+        )
+        chunk_count = await oracle.count_chunk_set_chunks(candidate_chunk_set_id)
+        await oracle.upsert_chunk_set(
+            chunk_set_id=candidate_chunk_set_id,
+            document_id=job.document_id,
+            recipe_id=job.recipe_id,
+            extraction_recipe_id=extraction_recipe_id,
+            recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
+            status="CHUNKED",
+        )
+        await oracle.mark_chunk_set_chunked(
+            chunk_set_id=candidate_chunk_set_id,
+            chunk_count=chunk_count,
+        )
+        if not candidate_settings.rag_auto_index_after_chunk_enabled:
+            return
+        await pipeline.index_chunked(
+            job.document_id,
+            chunk_set_id=candidate_chunk_set_id,
+            record_outcome=False,
+            cancel_checker=cancel_checker,
+        )
+    else:
+        prepared_artifact: DocumentPreprocessArtifact | None = None
+        if job.recipe_id is not None and job.phase == IngestionJobPhase.EXTRACT:
+            recipe_row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
+            if recipe_row is None or not recipe_row.get("preprocess_artifact"):
+                raise IngestionUserError(
+                    "処理後ファイルが見つかりません。ファイル準備から再処理してください。"
+                )
+            prepared_artifact = DocumentPreprocessArtifact.model_validate(
+                recipe_row["preprocess_artifact"]
+            )
+            if not prepared_artifact.object_storage_path:
+                raise IngestionUserError(
+                    "処理後ファイルが見つかりません。ファイル準備から再処理してください。"
+                )
+            try:
+                data = await ObjectStorageClient().get(prepared_artifact.object_storage_path)
+            except (FileNotFoundError, ValueError) as exc:
+                raise IngestionUserError("処理後ファイルを読み込めませんでした。") from exc
+            source_profile = _source_profile_for_detail(detail)
+        else:
+            data, source_profile = await _load_source_bytes(oracle, job.document_id, detail)
+        await pipeline.ingest(
+            document_id=job.document_id,
+            image_bytes=data,
+            prompt="ドキュメントを日本語で OCR し、本文テキストを抽出してください。",
+            content_type=(
+                prepared_artifact.content_type
+                if prepared_artifact is not None and prepared_artifact.content_type
+                else detail.content_type or "application/octet-stream"
+            ),
+            source_profile=source_profile,
+            chunk_set_id=candidate_chunk_set_id,
+            record_outcome=False,
+            original_object_storage_path=detail.object_storage_path,
+            prepared_artifact=prepared_artifact,
+            manage_document_state=False,
+            cancel_checker=cancel_checker,
+        )
+        if job.recipe_id is not None:
+            recipe_row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
+            recipe_status = (
+                FileStatus(str(recipe_row.get("status")))
+                if recipe_row is not None
+                else FileStatus.ERROR
+            )
+            if recipe_status in {FileStatus.PREPROCESSED, FileStatus.REVIEW}:
+                return
+            active_extraction_recipe_id = (
+                recipe_row.get("active_extraction_recipe_id") if recipe_row is not None else None
+            )
+            if active_extraction_recipe_id is None:
+                raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+            extraction_recipe_id = str(active_extraction_recipe_id)
+
     chunk_count = await oracle.count_chunk_set_chunks(candidate_chunk_set_id)
     await oracle.upsert_chunk_set(
         chunk_set_id=candidate_chunk_set_id,
         document_id=job.document_id,
+        recipe_id=job.recipe_id,
         extraction_recipe_id=extraction_recipe_id,
         recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
     )
     await oracle.mark_chunk_set_indexed(
         chunk_set_id=candidate_chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
     )
-    # 候補は配信に載せない: 現 serving を再アサートして新 chunk_set を is_serving=0 に落とす。
-    await oracle.set_document_serving_chunk_set(
-        document_id=job.document_id, chunk_set_id=serving_chunk_set_id
-    )
+    if job.recipe_id is not None:
+        await oracle.activate_recipe_chunk_set(
+            recipe_id=job.recipe_id,
+            chunk_set_id=candidate_chunk_set_id,
+            extraction_recipe_id=extraction_recipe_id,
+            materialized_revision=job.recipe_revision,
+        )
+        # 文書一覧の legacy 集約状態。少なくとも1レシピが検索可能なら INDEXED とする。
+        await oracle.update_document_status(job.document_id, FileStatus.INDEXED)
+    elif serving_chunk_set_id is not None:
+        # 旧実験 API は互換期間中だけ候補を serving に載せない。
+        await oracle.set_document_serving_chunk_set(
+            document_id=job.document_id, chunk_set_id=serving_chunk_set_id
+        )
 
 
 async def _materialization_plan_for_document(
@@ -1575,7 +2234,79 @@ async def _apply_review_text_edits(
         )
     if not detail.extraction:
         raise HTTPException(status_code=409, detail="修正対象の抽出結果がありません。")
-    extraction = StructuredExtraction.model_validate(detail.extraction)
+    extraction = _reviewed_extraction_with_edits(
+        StructuredExtraction.model_validate(detail.extraction),
+        edits,
+    )
+    return await oracle.save_review_extraction(document_id, extraction)
+
+
+async def _apply_recipe_review_text_edits(
+    document_id: str,
+    recipe_id: str,
+    edits: DocumentReviewEditsRequest | DocumentApproveRequest,
+) -> None:
+    """選択レシピの extraction artifact だけを構造保持で修正する。"""
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if detail is None or row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    if FileStatus(str(row.get("status"))) != FileStatus.REVIEW:
+        raise HTTPException(status_code=409, detail="確認待ちのレシピのみ修正できます。")
+    extraction_recipe_id = row.get("active_extraction_recipe_id")
+    if extraction_recipe_id is None:
+        raise HTTPException(status_code=409, detail="修正対象の抽出結果がありません。")
+    artifact = await oracle.get_document_extraction_artifact(
+        document_id=document_id,
+        extraction_recipe_id=str(extraction_recipe_id),
+    )
+    if artifact is None or not artifact.get("extraction_json"):
+        raise HTTPException(status_code=409, detail="修正対象の抽出結果がありません。")
+    extraction = _reviewed_extraction_with_edits(
+        StructuredExtraction.model_validate(artifact["extraction_json"]),
+        edits,
+    )
+    raw_recipe_subset = artifact.get("recipe_subset")
+    recipe_subset = (
+        {str(key): value for key, value in raw_recipe_subset.items()}
+        if isinstance(raw_recipe_subset, Mapping)
+        else None
+    )
+    if not detail.content_sha256:
+        raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
+    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+    recipe_settings, _ = _merge_document_processing_config(config)
+    if recipe_subset and isinstance(recipe_subset.get("rag_preprocess_profile"), str):
+        recipe_settings = recipe_settings.model_copy(
+            update={"rag_preprocess_profile": recipe_subset["rag_preprocess_profile"]}
+        )
+    base_extraction_recipe_id = compute_extraction_recipe_id(detail.content_sha256, recipe_settings)
+    scoped_extraction_recipe_id = compute_document_recipe_extraction_id(
+        base_extraction_recipe_id,
+        recipe_id,
+        int(str(row.get("config_revision") or 1)),
+    )
+    await oracle.upsert_document_extraction_artifact(
+        document_id=document_id,
+        extraction_recipe_id=scoped_extraction_recipe_id,
+        source_sha256=detail.content_sha256,
+        recipe_subset=recipe_subset,
+        extraction=extraction.to_document_payload(),
+        status=str(artifact.get("status") or "materialized"),
+    )
+    await oracle.update_document_recipe_status(
+        recipe_id=recipe_id,
+        status=FileStatus.REVIEW,
+        active_extraction_recipe_id=scoped_extraction_recipe_id,
+    )
+
+
+def _reviewed_extraction_with_edits(
+    extraction: StructuredExtraction,
+    edits: DocumentReviewEditsRequest | DocumentApproveRequest,
+) -> StructuredExtraction:
+    """構造・bbox を維持し、許可されたテキストだけを差し替える。"""
     text_by_element_id = {edit.element_id: edit.text for edit in edits.element_edits}
     unknown_ids = sorted(
         text_by_element_id.keys()
@@ -1604,7 +2335,7 @@ async def _apply_review_text_edits(
         normalized = StructuredExtraction.model_validate(
             normalized.model_copy(update={"raw_text": edits.raw_text}).model_dump()
         )
-    return await oracle.save_review_extraction(document_id, normalized)
+    return normalized
 
 
 def _canonicalize_reviewed_extraction(
@@ -2742,12 +3473,43 @@ async def _enqueue_chunk_phase_job_for_document(
 
 async def _enqueue_failed_segment_retry_job_for_document(
     document_id: str,
+    *,
+    recipe_id: str | None = None,
 ) -> IngestionJob:
     """FAILED segment checkpoint のみを対象にした再試行 job を投入する。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    if recipe_id is not None:
+        recipe = await oracle.get_document_recipe(document_id, recipe_id)
+        if recipe is None:
+            raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+        raw_artifact = recipe.get("preprocess_artifact")
+        artifact = DocumentPreprocessArtifact.model_validate(raw_artifact) if raw_artifact else None
+        if artifact is None or not artifact.object_storage_path:
+            raise HTTPException(
+                status_code=409,
+                detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+            )
+        segments = await oracle.list_ingestion_segments(document_id)
+        if not any(
+            segment.recipe_id == recipe_id and segment.status == "FAILED" for segment in segments
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="再試行対象の失敗 segment がありません。",
+            )
+        try:
+            return await _enqueue_ingestion_job_for_recipe(
+                document_id,
+                recipe_id,
+                phase=IngestionJobPhase.EXTRACT,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     if detail.status in (
         FileStatus.PREPROCESSING,
         FileStatus.INGESTING,
@@ -2803,8 +3565,16 @@ async def _create_ingestion_job_record(
     phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS,
     skip_reason: str | None = None,
     settings_overrides: dict[str, object] | None = None,
+    recipe_id: str | None = None,
+    recipe_revision: int | None = None,
 ) -> IngestionJob:
     """取込 job を永続化する。``settings_overrides`` 付きはレシピ実験(Phase 3b)ジョブ。"""
+    if recipe_id is None:
+        ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
+        if callable(ensure_recipe):
+            recipe = await ensure_recipe(document_id)
+            recipe_id = str(recipe["recipe_id"])
+            recipe_revision = int(str(recipe.get("config_revision") or 1))
     queued_at = datetime.now(UTC)
     settings = get_settings()
     job = IngestionJob(
@@ -2815,6 +3585,8 @@ async def _create_ingestion_job_record(
         parser_profile=parser_profile,
         quality_warnings=quality_warnings,
         settings_overrides=settings_overrides,
+        recipe_id=recipe_id,
+        recipe_revision=recipe_revision,
         skip_reason=skip_reason,
         max_attempts=settings.ingestion_job_max_attempts,
         queued_at=queued_at,
@@ -3456,15 +4228,25 @@ async def _run_ingestion_job(
     job = await oracle.claim_ingestion_job(job_id, started_at=datetime.now(UTC))
     if job is None:
         return
+    if job.recipe_id is not None:
+        phase_status = {
+            IngestionJobPhase.PREPROCESS: FileStatus.PREPROCESSING,
+            IngestionJobPhase.EXTRACT: FileStatus.INGESTING,
+            IngestionJobPhase.CHUNK: FileStatus.CHUNKING,
+            IngestionJobPhase.INDEX: FileStatus.INDEXING,
+        }[job.phase]
+        await oracle.update_document_recipe_status(
+            recipe_id=job.recipe_id,
+            status=phase_status,
+        )
 
     async def is_cancelled() -> bool:
         current = await oracle.get_ingestion_job(job_id)
         return current is not None and current.status == IngestionJobStatus.CANCELLED
 
     try:
-        if job.settings_overrides is not None:
-            # Phase 3b: parser/前処理を変えた候補 chunk_set を再抽出で隔離 materialize する。
-            # candidate モードで配信中文書の status/serving を一切触らない(失敗もジョブ側で記録)。
+        if job.recipe_id is not None or job.settings_overrides is not None:
+            # 正式レシピは旧 active を維持した隔離 materialize。recipe_id 無しは旧実験互換。
             await _materialize_experiment_candidate(oracle, job, cancel_checker=is_cancelled)
         elif job.phase == IngestionJobPhase.CHUNK:
             detail = await _chunk_reviewed_document(
@@ -3511,6 +4293,7 @@ async def _run_ingestion_job(
             )
             await _enqueue_auto_advance_job(job, detail)
     except HTTPException as exc:
+        await _mark_recipe_job_failed(oracle, job, str(exc.detail))
         await _finish_ingestion_job_unless_cancelled(
             oracle,
             job_id,
@@ -3528,6 +4311,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionCancelledError:
+        await _restore_recipe_status_after_cancel(oracle, job)
         logger.info(
             "ingestion_job_cancelled",
             extra={"job_id": job_id, "document_id": job.document_id},
@@ -3535,6 +4319,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionTimeoutError as exc:
+        await _mark_recipe_job_failed(oracle, job, str(exc))
         await _finish_ingestion_job_unless_cancelled(
             oracle,
             job_id,
@@ -3548,6 +4333,7 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except IngestionUserError as exc:
+        await _mark_recipe_job_failed(oracle, job, str(exc))
         await _finish_ingestion_job_unless_cancelled(
             oracle,
             job_id,
@@ -3561,11 +4347,13 @@ async def _run_ingestion_job(
         if propagate_errors:
             raise
     except Exception as exc:
+        safe_error = _safe_ingestion_job_error_message(exc)
+        await _mark_recipe_job_failed(oracle, job, safe_error)
         await _finish_ingestion_job_unless_cancelled(
             oracle,
             job_id,
             status=IngestionJobStatus.FAILED,
-            error_message=_safe_ingestion_job_error_message(exc),
+            error_message=safe_error,
         )
         logger.exception(
             "ingestion_job_failed",
@@ -3579,6 +4367,40 @@ async def _run_ingestion_job(
             job_id,
             status=IngestionJobStatus.SUCCEEDED,
         )
+
+
+async def _mark_recipe_job_failed(
+    oracle: OracleClient,
+    job: IngestionJob,
+    error_message: str,
+) -> None:
+    """レシピ失敗だけを記録する。既存 active chunk_set は変更しない。"""
+    if job.recipe_id is None:
+        return
+    await oracle.update_document_recipe_status(
+        recipe_id=job.recipe_id,
+        status=FileStatus.ERROR,
+        failed_phase=job.phase,
+        error_message=error_message[:2000],
+    )
+
+
+async def _restore_recipe_status_after_cancel(
+    oracle: OracleClient,
+    job: IngestionJob,
+) -> None:
+    """取消後は旧 active があれば検索対象、無ければ未処理へ戻す。"""
+    if job.recipe_id is None:
+        return
+    row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
+    await oracle.update_document_recipe_status(
+        recipe_id=job.recipe_id,
+        status=(
+            FileStatus.INDEXED
+            if row is not None and row.get("active_chunk_set_id") is not None
+            else FileStatus.UPLOADED
+        ),
+    )
 
 
 def _safe_ingestion_job_error_message(error: Exception) -> str:
@@ -3683,8 +4505,25 @@ async def document_content(
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    return await _document_content_response(
+        detail,
+        variant=variant,
+        disposition=disposition,
+        preprocess_artifact=detail.preprocess_artifact,
+    )
+
+
+async def _document_content_response(
+    detail: DocumentDetail,
+    *,
+    variant: Literal["original", "prepared"],
+    disposition: Literal["inline", "attachment"],
+    preprocess_artifact: DocumentPreprocessArtifact | None,
+) -> Response:
+    if detail.object_storage_path is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     if variant == "prepared":
-        artifact = detail.preprocess_artifact
+        artifact = preprocess_artifact
         if artifact is None or not artifact.object_storage_path:
             raise HTTPException(
                 status_code=404,

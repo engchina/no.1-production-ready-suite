@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import type { DocumentProcessingConfig } from "../src/lib/api";
+import type { DocumentProcessingConfig, DocumentRecipeStep } from "../src/lib/api";
 import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
@@ -71,33 +71,58 @@ const effectiveBase: DocumentProcessingConfig = {
   auto_index_after_chunk_enabled: false,
 };
 
+function recipeSteps(status: string): DocumentRecipeStep[] {
+  const phases = ["PREPROCESS", "EXTRACT", "CHUNK", "INDEX"] as const;
+  const completedCount: Record<string, number> = {
+    UPLOADED: 0,
+    REVIEW: 2,
+    INDEXED: 4,
+  };
+  return phases.map((phase, index) => ({
+    phase,
+    status: index < (completedCount[status] ?? 0) ? "SUCCEEDED" : "PENDING",
+    started_at: null,
+    finished_at: null,
+    error_message: null,
+  }));
+}
+
 async function mockWorkspace(
   page: Page,
   options: { documentStatus?: string; putFails?: boolean } = {}
 ) {
+  const status = options.documentStatus ?? "INDEXED";
   let processing = config();
   let saved: DocumentProcessingConfig | null = null;
   let ingestionPosts = 0;
-  const response = () => {
+  const recipeResponse = () => {
     const effective = { ...effectiveBase };
     for (const [key, value] of Object.entries(processing)) {
       if (value !== null) Object.assign(effective, { [key]: value });
     }
-    const parserChanged = processing.parser_adapter_backend === "mineru";
     return {
+      recipe_id: "recipe-1",
       document_id: "doc-1",
-      is_indexed: true,
+      slot_no: 1 as const,
+      status,
+      failed_phase: null,
       processing_config: processing,
       effective_processing_config: effective,
-      effective_preprocess_profile: effective.preprocess_profile,
-      effective_chunking_strategy: effective.chunking_strategy,
-      effective_parser_adapter_backend: effective.parser_adapter_backend,
-      observed_chunking_strategy: "page_level",
-      observed_parser_backend: "docling",
-      chunking_drift: false,
-      parser_drift: parserChanged,
-      config_drift: parserChanged,
-      drift_fields: parserChanged ? ["parser_adapter_backend"] : [],
+      preprocess_artifact: null,
+      active_extraction_recipe_id: status === "INDEXED" ? "er-recipe-1-r1" : null,
+      active_chunk_set_id: status === "INDEXED" ? "chunk-set-recipe-1" : null,
+      chunk_count: status === "INDEXED" ? 2 : 0,
+      vector_count: status === "INDEXED" ? 2 : 0,
+      config_revision: 1,
+      materialized_revision: status === "INDEXED" ? 1 : null,
+      searchable: status === "INDEXED",
+      needs_reprocessing: false,
+      error_message: null,
+      steps: recipeSteps(status),
+      created_at: "2026-06-15T00:00:00Z",
+      updated_at: "2026-06-15T00:00:20Z",
+      started_at: null,
+      finished_at: status === "INDEXED" ? "2026-06-15T00:00:20Z" : null,
     };
   };
 
@@ -112,7 +137,13 @@ async function mockWorkspace(
       }),
     })
   );
-  await page.route("**/api/documents/doc-1/ingestion-config", (route) => {
+  await page.route("**/api/documents/doc-1/recipes", (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ json: ok([recipeResponse()]) });
+    }
+    return route.fulfill({ status: 404, json: { data: null, error_messages: [], warning_messages: [] } });
+  });
+  await page.route("**/api/documents/doc-1/recipes/recipe-1", (route) => {
     if (route.request().method() === "PUT") {
       if (options.putFails) {
         return route.fulfill({
@@ -127,21 +158,16 @@ async function mockWorkspace(
       saved = route.request().postDataJSON() as DocumentProcessingConfig;
       processing = saved;
     }
-    return route.fulfill({ json: ok(response()) });
+    return route.fulfill({ json: ok(recipeResponse()) });
   });
-  await page.route("**/api/documents/doc-1/ingestion-jobs**", (route) => {
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**", (route) => {
     if (route.request().method() === "POST") ingestionPosts += 1;
     route.fulfill({ json: ok([]) });
   });
-  await page.route("**/api/documents/doc-1/chunks", (route) => route.fulfill({ json: ok([]) }));
-  await page.route("**/api/documents/doc-1/chunk-sets", (route) => route.fulfill({ json: ok([]) }));
-  await page.route("**/api/documents/doc-1/ingestion-segments", (route) =>
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/chunks", (route) =>
     route.fulfill({ json: ok([]) })
   );
-  await page.route("**/api/documents/doc-1/knowledge-bases", (route) =>
-    route.fulfill({ json: ok([{ id: "kb-1", name: "社内規程" }]) })
-  );
-  await page.route("**/api/documents/doc-1/extraction-export**", (route) =>
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/extraction-export**", (route) =>
     route.fulfill({
       json: ok({
         document_id: "doc-1",
@@ -160,12 +186,25 @@ async function mockWorkspace(
       }),
     })
   );
+  await page.route("**/api/documents/doc-1/ingestion-jobs**", (route) =>
+    route.fulfill({ json: ok([]) })
+  );
+  await page.route("**/api/documents/doc-1/chunk-sets", (route) => route.fulfill({ json: ok([]) }));
+  await page.route("**/api/documents/doc-1/ingestion-segments", (route) =>
+    route.fulfill({ json: ok([]) })
+  );
+  await page.route("**/api/documents/doc-1/knowledge-bases", (route) =>
+    route.fulfill({ json: ok([{ id: "kb-1", name: "社内規程" }]) })
+  );
   await page.route("**/api/documents/doc-1/content**", (route) =>
+    route.fulfill({ status: 204, body: "" })
+  );
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/content**", (route) =>
     route.fulfill({ status: 204, body: "" })
   );
   await page.route("**/api/documents/doc-1", (route) =>
     route.fulfill({
-      json: ok({ ...documentDetail, status: options.documentStatus ?? documentDetail.status }),
+      json: ok({ ...documentDetail, status }),
     })
   );
 
@@ -184,7 +223,7 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   const state = await mockWorkspace(page);
   await page.goto("/documents/doc-1");
 
-  const panel = page.getByRole("region", { name: "この文書のレシピ" });
+  const panel = page.getByRole("region", { name: "処理レシピ" });
   await expect(panel).toContainText("Office→PDF");
   await expect(panel).toContainText("Docling");
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
@@ -195,7 +234,6 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await panel.getByRole("button", { name: "構築設定を保存" }).click();
 
   await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
-  await expect(page.getByText("取込設定が更新されています")).toBeVisible();
   expect(state.saved()).toMatchObject({ parser_adapter_backend: "mineru", chunk_size: 800 });
   expect(state.ingestionPosts()).toBe(0);
   await expectNoPageOverflow(page);
@@ -205,7 +243,7 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await mockWorkspace(page, { putFails: true });
   await page.goto("/documents/doc-1");
 
-  const panel = page.getByRole("region", { name: "この文書のレシピ" });
+  const panel = page.getByRole("region", { name: "処理レシピ" });
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();
   await panel.getByRole("combobox", { name: "文書解析" }).click();
@@ -220,10 +258,10 @@ test("処理途中の文書は設定を編集できない", async ({ page }) => 
   await mockWorkspace(page, { documentStatus: "REVIEW" });
   await page.goto("/documents/doc-1");
 
-  const panel = page.getByRole("region", { name: "この文書のレシピ" });
+  const panel = page.getByRole("region", { name: "処理レシピ" });
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
 
-  await expect(panel).toContainText("処理途中または取込ジョブ実行中は設定を変更できません");
+  await expect(panel).toContainText("処理途中または文書処理の実行中は設定を変更できません");
   await expect(
     panel.getByRole("group", { name: "文書解析" }).getByText("上書き")
   ).toBeDisabled();

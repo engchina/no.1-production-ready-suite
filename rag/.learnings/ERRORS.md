@@ -32,6 +32,294 @@ document status=INGESTING error_message=None  # 固着
 
 ---
 
+## [ERR-20260701-001] vitest_run_in_band_option
+
+**Logged**: 2026-07-01T00:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+Vitest に Jest 専用の `--runInBand` を渡したため、テスト実行前に CLI が終了した。
+
+### Error
+```text
+CACError: Unknown option `--runInBand`
+```
+
+### Context
+- Command attempted: `npm run test -- --runInBand`
+- `package.json` の test script は `vitest run` を使用している。
+
+### Suggested Fix
+このリポジトリでは追加引数なしの `npm run test` を使用する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/package.json
+
+### Resolution
+- **Resolved**: 2026-07-01T00:00:00+09:00
+- **Notes**: リポジトリ標準の `npm run test` で再実行する。
+
+---
+
+## [ERR-20260630-012] recipe_migration_redundant_unique_index
+
+**Logged**: 2026-06-30T21:58:05+09:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+recipe migration の 44 番目が UNIQUE 制約と同じ列の索引を重複作成して失敗した。
+
+### Error
+```text
+ORA-01408: such column list already indexed
+```
+
+### Context
+- `rag_document_recipes` は `UNIQUE(document_id, slot_no)` により索引を既に持つ。
+- migration と初期 schema が同じ列へ `rag_document_recipes_document_idx` を追加していた。
+- 43/45 まで適用後に失敗したが、DDL は冪等なため修正後に全体を再実行できた。
+
+### Suggested Fix
+UNIQUE 制約の索引を再利用し、同列の非一意索引を作らない。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/rag/oracle_schema.py, backend/app/clients/oracle.py, artifacts/oracle-schema-migration.sql
+
+### Resolution
+- **Resolved**: 2026-06-30T21:58:05+09:00
+- **Notes**: 重複索引 DDL を削除し、migration 45/45 と post-migration checks を完了した。
+
+---
+
+## [ERR-20260630-007] oracle_migration_statement_prefix_test
+
+**Logged**: 2026-06-30T17:02:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Oracle migration テストが、新規 migration の通常 `INSERT` 文を許可していなかった。
+
+### Error
+```text
+assert all(statement.startswith(("-- migration:", "DECLARE", "COMMIT")) ...)
+E assert False
+```
+
+### Context
+- Command attempted: `uv run pytest tests/test_business_views_api.py tests/test_oracle_schema_cli.py -q`
+- DEFAULT 業務ビュー補完 migration は `UPDATE`、`INSERT`、`COMMIT` の3文で構成される。
+- 先頭の `UPDATE` は migration コメントを含むため許可済みだが、2文目の `INSERT` が旧許可リスト外だった。
+
+### Suggested Fix
+Migration 文の安全性チェックで通常の `INSERT` も許可する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_oracle_schema_cli.py
+
+### Resolution
+- **Resolved**: 2026-06-30T17:02:00+09:00
+- **Notes**: 許可する文頭へ `INSERT` を追加した。
+
+---
+
+## [ERR-20260630-008] uv_cache_read_only
+
+**Logged**: 2026-06-30T17:03:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Sandbox 内の `uv run` が `/root/.cache/uv` に一時ファイルを作成できなかった。
+
+### Error
+```text
+Could not acquire lock: Read-only file system at /root/.cache/uv/.tmp...
+```
+
+### Context
+- Command attempted: backend の対象 pytest と Ruff。
+- workspace 外にある共有 uv cache が sandbox では読み取り専用だった。
+
+### Suggested Fix
+重要な検証は承認済み `uv run` を sandbox 外で再実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/uv.lock
+
+### Resolution
+- **Resolved**: 2026-06-30T17:03:00+09:00
+- **Notes**: 同じコマンドを承認付きで再実行し、pytest は成功した。
+
+---
+
+## [ERR-20260630-009] overlapping_sed_boundary_misread
+
+**Logged**: 2026-06-30T17:05:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+連続する `sed` 範囲が同じ境界行を表示し、重複 JSX と誤認して patch が失敗した。
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected duplicate lines
+```
+
+### Context
+- `sed -n '250,410p'` と `sed -n '410,660p'` が410行目を二度表示した。
+- 実ファイルには同じ prop の重複はなかった。
+
+### Suggested Fix
+重複を疑う場合は非重複範囲か `rg` / 行番号付き表示で確認する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/components/business-views/BusinessViewManagementClient.tsx
+
+### Resolution
+- **Resolved**: 2026-06-30T17:05:00+09:00
+- **Notes**: 実ファイルを再確認し、必要な整形だけ適用した。
+
+---
+
+## [ERR-20260630-010] ruff_import_order_business_view_test
+
+**Logged**: 2026-06-30T17:08:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Oracle adapter テストへ追加した schema import の順序が Ruff I001 に違反した。
+
+### Error
+```text
+I001 Import block is un-sorted or un-formatted
+```
+
+### Context
+- `app.schemas.business_view` を `app.schemas.document` より後ろへ追加していた。
+
+### Suggested Fix
+同一 import group はモジュール名の辞書順に維持する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_oracle_adapter.py
+
+### Resolution
+- **Resolved**: 2026-06-30T17:08:00+09:00
+- **Notes**: business_view import を document import より前へ移動した。
+
+---
+
+## [ERR-20260630-011] backend_full_pytest_environment_drift
+
+**Logged**: 2026-06-30T17:12:00+09:00
+**Priority**: medium
+**Status**: pending
+**Area**: tests
+
+### Summary
+Backend 全体 pytest は DEFAULT 業務ビュー対象外の既存環境・処理フロー差分で35件失敗した。
+
+### Error
+```text
+35 failed, 1431 passed, 17 skipped
+```
+
+### Context
+- `Settings()` が preprocess service enabled を読み、テスト既定値 `False` と不一致。
+- 多数の RAG flow テストは旧単一パスの `INDEXED` / `EXTRACT` を期待する一方、現行処理は `REVIEW` / `PREPROCESS` で停止した。
+- 実 Oracle テスト1件は既存 extraction 行の status が期待値と不一致だった。
+- 今回変更した business view、Oracle adapter、schema migration の対象テストは全件成功している。
+
+### Suggested Fix
+全体テストの環境変数隔離と、現行の段階処理フローに合わせた既存期待値を別作業で整合させる。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_preprocess.py, backend/tests/test_rag_flow.py, backend/tests/test_two_phase_review.py
+
+---
+
+## [ERR-20260630-005] playwright_status_label_strict_locator
+
+**Logged**: 2026-06-30T14:57:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+状態バッジの文言を長くした後、部分一致の Playwright locator が step 名とバッジ名の両方に一致した。
+
+### Error
+```text
+strict mode violation: getByText('準備確認') resolved to 2 elements
+```
+
+### Context
+- `準備確認` と `ファイル準備確認待ち`、`抽出確認` と `抽出確認待ち` が同じ画面に共存する。
+- 状態名の統一自体は正しく、テスト locator の部分一致が曖昧だった。
+
+### Suggested Fix
+短い工程名を検証するときは `getByText(label, { exact: true })` を使い、状態バッジとの部分一致を避ける。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/e2e/document-workspace-file-processing.spec.ts, frontend/e2e/upload-storage-settings.spec.ts
+
+### Resolution
+- **Resolved**: 2026-06-30T14:57:00+09:00
+- **Notes**: 該当 locator を exact match に変更し、desktop/mobile で再実行した。
+
+---
+
+## [ERR-20260630-006] playwright_background_job_transition_race
+
+**Logged**: 2026-06-30T14:57:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+バックグラウンド失敗の mock が POST 直後から FAILED を返し、QUEUED の開始 message を検証する前に消える競合が起きた。
+
+### Error
+```text
+Expected ファイル準備を開始しました... to be visible; element not found
+```
+
+### Context
+- 検証対象は `QUEUED → FAILED` で旧 FormStatus が消える遷移。
+- mock が中間状態を持たず、端末速度によって最初から FAILED に見えた。
+
+### Suggested Fix
+非同期状態遷移の E2E mock は poll 回数など明示的な状態機械を持ち、少なくとも1回 QUEUED を返してから FAILED へ進める。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/e2e/document-workspace-file-processing.spec.ts
+
+### Resolution
+- **Resolved**: 2026-06-30T14:57:00+09:00
+- **Notes**: mock に poll counter と backgroundFailed を追加し、desktop/mobile で安定して通過した。
+
+---
+
 ## [ERR-20260630-003] nightly_missing_shared_backend_core
 
 **Logged**: 2026-06-30T07:42:39+09:00
@@ -160,6 +448,8 @@ Prefer `uv --cache-dir ../.uv-cache run ...` for backend test/lint/type commands
 - Reproducible: yes
 - Related Files: backend/pyproject.toml
 - See Also: ERR-20260615-001
+- Recurrence-Count: 2
+- Last-Seen: 2026-06-30
 
 ---
 
@@ -1637,5 +1927,100 @@ Accept both historical index names and create only the canonical `...DOCUMENT_ST
 ### Resolution
 - **Resolved**: 2026-06-30T06:54:00+09:00
 - **Notes**: 两处历史索引名均已兼容；迁移 29/29 执行完成，验证 `DEFAULT=1`、legacy=0。
+
+---
+
+## [ERR-20260630-003] pytest_evaluation_asgi_request_hang
+
+**Logged**: 2026-06-30T23:18:00+09:00
+**Priority**: medium
+**Status**: unresolved
+**Area**: backend tests
+
+### Summary
+DB 接続を無効化した full pytest が evaluation API の ASGI request で停止する。
+
+### Error
+```text
+test_run_evaluation_applies_suite_thresholds_when_request_omits
+tests/support.py:77 in request (anyio event loop wait)
+```
+
+### Context
+- `ORACLE_DSN=` と 600 秒 timeout を指定して full suite を実行。
+- Recipe 対象テスト、Ruff、mypy は完了するが、上記既存テストは単独でも request 待機する。
+- 実 DB や業務データには接続・書込していない。
+
+### Suggested Fix
+evaluation route が fake runner の完了後に待っている永続化処理を特定し、unit test では Oracle
+artifact persistence も明示的に fake 化する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_evaluation.py, backend/tests/support.py
+
+---
+
+## [ERR-20260701-002] playwright_webserver_sandbox_binding
+
+**Logged**: 2026-07-01T07:08:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+直接実行した `npx playwright test` はサンドボックス内で一時 Vite server を起動できなかった。
+
+### Error
+```text
+Error: Process from config.webServer was not able to start. Exit code: 1
+```
+
+### Context
+- Command attempted: `npx playwright test ... --trace=on`
+- 承認済みの `npm run test:e2e -- ...` では同じテストと trace 生成が成功する。
+
+### Suggested Fix
+この環境では Playwright を package script の `npm run test:e2e -- ...` 経由で実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/playwright.config.ts, frontend/package.json
+
+### Resolution
+- **Resolved**: 2026-07-01T07:09:00+09:00
+- **Notes**: package script 経由で desktop/mobile trace を生成し、最終フレームを確認した。
+
+---
+
+## [ERR-20260701-003] eslint_playwright_test_results_race
+
+**Logged**: 2026-07-01T07:24:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+ESLint と Playwright を並列実行すると、Playwright が `test-results` を再作成する瞬間に ESLint の走査が失敗することがある。
+
+### Error
+```text
+Error: ENOENT: no such file or directory, scandir 'frontend/test-results'
+```
+
+### Context
+- Commands attempted concurrently: `npm run lint` and `npm run test:e2e -- ... --trace=on`
+- Playwright のテスト自体と TypeScript/Vite build は成功した。
+
+### Suggested Fix
+ESLint と Playwright は直列に実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/eslint.config.mjs, frontend/playwright.config.ts
+
+### Resolution
+- **Resolved**: 2026-07-01T07:25:00+09:00
+- **Notes**: Playwright 完了後に `npm run lint` を単独で再実行する。
 
 ---

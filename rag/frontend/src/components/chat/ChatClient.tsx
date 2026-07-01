@@ -1,4 +1,4 @@
-import { Plus, SendHorizontal, Square } from "lucide-react";
+import { ChevronDown, Plus, SendHorizontal, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { CitationCard, scoreMaximaForCitations } from "@/components/search/CitationCard";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { ToggleChip } from "@/components/ui/toggle-chip";
 import type { ChatMessage, RetrievedChunk } from "@/lib/api";
@@ -69,6 +70,7 @@ function AssistantColumn({
   streaming,
   errorMessage,
   showLabel,
+  className,
 }: {
   label: string | null;
   answer: string;
@@ -77,21 +79,33 @@ function AssistantColumn({
   streaming: boolean;
   errorMessage: string | null;
   showLabel: boolean;
+  className?: string;
 }) {
   const scoreMaxima = useMemo(() => scoreMaximaForCitations(citations), [citations]);
   return (
-    <div className="flex min-w-0 flex-col gap-2 rounded-md border border-border bg-card p-3">
+    <div
+      className={cn(
+        "flex h-full min-w-0 flex-col gap-2 rounded-md border border-border bg-card p-3",
+        className
+      )}
+    >
       {showLabel && label ? (
-        <div className="truncate text-xs font-medium text-muted" title={label}>
+        <h3
+          className="truncate border-b border-border pb-2 text-sm font-semibold text-foreground"
+          title={label}
+        >
           {label}
-        </div>
+        </h3>
       ) : null}
       {errorMessage ? (
         <p className="text-sm text-destructive" role="alert">
           {errorMessage}
         </p>
       ) : (
-        <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground" aria-live="polite">
+        <p
+          className="max-w-prose whitespace-pre-wrap text-sm leading-relaxed text-foreground"
+          aria-live="polite"
+        >
           {answer}
           {streaming ? (
             <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span>
@@ -99,21 +113,26 @@ function AssistantColumn({
         </p>
       )}
       {citations.length > 0 ? (
-        <div className="mt-1 space-y-2">
-          <p className="text-xs font-medium text-muted">{t("chat.citations.title")}</p>
-          <ul className="space-y-2">
+        <details className="group mt-auto border-t border-border pt-1">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-2 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+            <span>{t("chat.citations.summary", { count: citations.length })}</span>
+            <ChevronDown
+              className="size-4 shrink-0 text-muted transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
+              aria-hidden
+            />
+          </summary>
+          <ul className="space-y-2 pt-2">
             {citations.map((chunk, index) => (
-              <li key={chunk.chunk_id}>
-                <CitationCard
-                  chunk={chunk}
-                  index={index}
-                  traceId={traceId}
-                  scoreMaxima={scoreMaxima}
-                />
-              </li>
+              <CitationCard
+                key={chunk.chunk_id}
+                chunk={chunk}
+                index={index}
+                traceId={traceId}
+                scoreMaxima={scoreMaxima}
+              />
             ))}
           </ul>
-        </div>
+        </details>
       ) : null}
     </div>
   );
@@ -144,12 +163,14 @@ function MessageTurn({
         </div>
       </div>
       <div
-        className={cn(
-          "grid gap-3",
-          compare ? "sm:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"
-        )}
+        className="grid grid-cols-1 gap-3"
+        style={
+          compare
+            ? { gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 40rem), 1fr))" }
+            : undefined
+        }
       >
-        {columns.map((column) => (
+        {columns.map((column, index) => (
           <AssistantColumn
             key={column.key}
             label={column.label}
@@ -159,6 +180,11 @@ function MessageTurn({
             streaming={column.streaming}
             errorMessage={column.errorMessage}
             showLabel={compare}
+            className={
+              compare && columns.length % 2 === 1 && index === columns.length - 1
+                ? "col-span-full"
+                : undefined
+            }
           />
         ))}
       </div>
@@ -345,89 +371,112 @@ export function ChatClient() {
     : [];
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
       <PageHeader title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
-      {/* 業務ビュー scope（左寄せツールバー） */}
-      {businessViewLoading ? (
-        <LoadingState rows={1} label={t("chat.businessView.label")} />
-      ) : noBusinessViews ? (
-        <EmptyState
-          title={t("chat.businessView.empty")}
-          action={
-            <Button onClick={() => navigate(APP_ROUTES.businessViews)} variant="secondary">
-              {t("chat.businessView.open")}
-            </Button>
-          }
-        />
-      ) : (
-        <div className="max-w-md">
-          <SelectField
-            id="chat-business-view"
-            label={t("chat.businessView.label")}
-            value={businessViewId ?? ""}
-            options={businessViewOptions}
-            onValueChange={(value) => setBusinessViewId(value || null)}
-          />
-        </div>
-      )}
-
-      {!businessViewId ? (
-        <EmptyState title={t("chat.businessView.required")} />
-      ) : (
-        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-          {/* 会話一覧サイドバー */}
-          <aside className="flex min-h-0 flex-col gap-3 rounded-md border border-border bg-card p-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-foreground">{t("chat.sessions.title")}</span>
-              <Button
-                size="sm"
-                onClick={() => void startNewConversation()}
-                disabled={createConversation.isPending}
-              >
-                <Plus className="size-4" aria-hidden />
-                {t("chat.sessions.new")}
-              </Button>
-            </div>
-            {conversationsQuery.isLoading ? (
-              <LoadingState rows={3} label={t("chat.sessions.title")} />
-            ) : conversationsQuery.isError ? (
-              <ErrorState
-                message={t("chat.sessions.error")}
-                onRetry={() => void conversationsQuery.refetch()}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 sm:p-6 lg:p-8">
+        {/* 業務ビュー scope */}
+        <Card className="shrink-0">
+          <CardContent className="p-4 sm:p-5">
+            {businessViewLoading ? (
+              <LoadingState rows={1} label={t("chat.businessView.label")} />
+            ) : noBusinessViews ? (
+              <EmptyState
+                title={t("chat.businessView.empty")}
+                action={
+                  <Button onClick={() => navigate(APP_ROUTES.businessViews)} variant="secondary">
+                    {t("chat.businessView.open")}
+                  </Button>
+                }
               />
-            ) : conversations.length === 0 ? (
-              <p className="px-1 text-sm text-muted">{t("chat.sessions.empty")}</p>
             ) : (
-              <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto" aria-label={t("chat.sessions.title")}>
-                {conversations.map((conversation) => (
-                  <li key={conversation.id}>
-                    <button
-                      type="button"
-                      onClick={() => selectConversation(conversation.id)}
-                      aria-current={conversation.id === activeId}
-                      className={cn(
-                        "flex w-full flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm transition-colors",
-                        conversation.id === activeId
-                          ? "bg-primary/10 text-foreground"
-                          : "text-muted hover:bg-muted/30 hover:text-foreground"
-                      )}
-                    >
-                      <span className="truncate font-medium">
-                        {conversation.title ?? t("chat.sessions.untitled")}
-                      </span>
-                      <span className="text-xs text-muted">
-                        {t("chat.sessions.messageCount", { count: conversation.message_count })}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <div className="max-w-md">
+                <SelectField
+                  id="chat-business-view"
+                  label={t("chat.businessView.label")}
+                  value={businessViewId ?? ""}
+                  options={businessViewOptions}
+                  onValueChange={(value) => setBusinessViewId(value || null)}
+                />
+              </div>
             )}
-          </aside>
+          </CardContent>
+        </Card>
 
-          {/* 会話エリア */}
-          <section className="flex min-h-0 flex-col gap-3 rounded-md border border-border bg-card">
+        {businessViewLoading || noBusinessViews ? null : !businessViewId ? (
+          <Card className="min-h-0 flex-1">
+            <CardContent className="p-4 sm:p-5">
+              <EmptyState title={t("chat.businessView.required")} />
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[280px_minmax(0,1fr)]">
+            {/* 会話一覧サイドバー */}
+            <aside
+              aria-label={t("chat.sessions.title")}
+              className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-3 shadow-sm lg:min-h-0"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-foreground">
+                  {t("chat.sessions.title")}
+                </span>
+                <Button
+                  size="sm"
+                  className="h-11 sm:h-8"
+                  onClick={() => void startNewConversation()}
+                  disabled={createConversation.isPending}
+                >
+                  <Plus className="size-4" aria-hidden />
+                  {t("chat.sessions.new")}
+                </Button>
+              </div>
+              {conversationsQuery.isLoading ? (
+                <LoadingState rows={3} label={t("chat.sessions.title")} />
+              ) : conversationsQuery.isError ? (
+                <ErrorState
+                  message={t("chat.sessions.error")}
+                  onRetry={() => void conversationsQuery.refetch()}
+                />
+              ) : conversations.length === 0 ? (
+                <p className="px-1 text-sm text-muted">{t("chat.sessions.empty")}</p>
+              ) : (
+                <ul
+                  className="max-h-56 min-h-0 flex-1 space-y-1 overflow-y-auto lg:max-h-none"
+                  aria-label={t("chat.sessions.title")}
+                >
+                  {conversations.map((conversation) => (
+                    <li key={conversation.id}>
+                      <button
+                        type="button"
+                        onClick={() => selectConversation(conversation.id)}
+                        aria-current={conversation.id === activeId}
+                        className={cn(
+                          "flex w-full flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm transition-colors",
+                          conversation.id === activeId
+                            ? "bg-primary/10 text-foreground"
+                            : "text-muted hover:bg-muted/30 hover:text-foreground"
+                        )}
+                      >
+                        <span className="truncate font-medium">
+                          {conversation.title ?? t("chat.sessions.untitled")}
+                        </span>
+                        <span className="text-xs text-muted">
+                          {t("chat.sessions.messageCount", {
+                            count: conversation.message_count,
+                          })}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </aside>
+
+            {/* 会話エリア */}
+            <section
+              aria-label={t("chat.title")}
+              className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col gap-3 overflow-hidden rounded-lg border border-border bg-card shadow-sm lg:h-auto lg:min-h-0"
+            >
             <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
               {!activeId ? (
                 <EmptyState
@@ -481,7 +530,7 @@ export function ChatClient() {
                   ))}
                 </div>
               ) : null}
-              <div className="flex items-end gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                 <label htmlFor="chat-composer" className="sr-only">
                   {t("chat.composer.placeholder")}
                 </label>
@@ -500,16 +549,23 @@ export function ChatClient() {
                     activeId ? t("chat.composer.placeholder") : t("chat.composer.selectConversation")
                   }
                   disabled={!activeId || sending}
-                  className="min-h-11 flex-1 resize-y rounded-md border border-border bg-background p-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                  className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border bg-background p-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
                 />
                 {sending ? (
-                  <Button type="button" variant="secondary" onClick={stop} aria-label={t("chat.composer.stop")}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="h-11 w-full shrink-0 sm:h-9 sm:w-auto"
+                    onClick={stop}
+                    aria-label={t("chat.composer.stop")}
+                  >
                     <Square className="size-4" aria-hidden />
                     {t("chat.composer.stop")}
                   </Button>
                 ) : (
                   <Button
                     type="button"
+                    className="h-11 w-full shrink-0 sm:h-9 sm:w-auto"
                     onClick={() => void send()}
                     disabled={!activeId || composer.trim().length === 0}
                     aria-label={t("chat.composer.send")}
@@ -525,9 +581,10 @@ export function ChatClient() {
                 </p>
               ) : null}
             </div>
-          </section>
-        </div>
-      )}
+            </section>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

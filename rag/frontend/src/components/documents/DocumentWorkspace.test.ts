@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   ingestConflictBannerIsStale,
+  phaseLabelKey,
+  phaseRetryLabelKey,
+  phaseRunningMessageKey,
+  phaseStartedMessageKey,
+  resolveDocumentActionPlan,
   resolveIngestionParserDisplay,
   resolveIngestionProgressSummary,
   shouldShowProcessingWatchBanner,
@@ -10,6 +15,195 @@ import {
   resolveDocumentFailureView,
   resolveIngestionErrorDisplayPlan,
 } from "./ingestion-error-display";
+import { t } from "@/lib/i18n";
+import type { FileStatus, IngestionJobPhase } from "@/lib/api";
+
+describe("文書処理の表示名", () => {
+  it.each<[FileStatus, string]>([
+    ["UPLOADED", "ファイル準備待ち"],
+    ["PREPROCESSING", "ファイル準備中"],
+    ["PREPROCESSED", "ファイル準備確認待ち"],
+    ["INGESTING", "解析（抽出）中"],
+    ["REVIEW", "抽出確認待ち"],
+    ["CHUNKING", "Chunk 作成中"],
+    ["CHUNKED", "Chunk 確認待ち"],
+    ["INDEXING", "Embedding / 索引中"],
+    ["INDEXED", "索引済み"],
+    ["ERROR", "エラー"],
+  ])("%s を %s と表示する", (status, label) => {
+    expect(t(`status.${status}`)).toBe(label);
+  });
+
+  it.each<[IngestionJobPhase, string, string, string, string]>([
+    [
+      "PREPROCESS",
+      "ファイル準備",
+      "ファイル準備を開始しました。完了まで状態を更新します。",
+      "ファイル準備を実行しています。完了まで状態を更新します。",
+      "ファイル準備を再実行",
+    ],
+    [
+      "EXTRACT",
+      "解析（抽出）",
+      "解析（抽出）を開始しました。完了まで状態を更新します。",
+      "解析（抽出）を実行しています。完了まで状態を更新します。",
+      "抽出を再実行",
+    ],
+    [
+      "CHUNK",
+      "Chunk 作成",
+      "Chunk 作成を開始しました。完了まで状態を更新します。",
+      "Chunk 作成を実行しています。完了まで状態を更新します。",
+      "Chunk 作成を再実行",
+    ],
+    [
+      "INDEX",
+      "Embedding / 索引",
+      "Embedding / 索引を開始しました。完了まで状態を更新します。",
+      "Embedding / 索引を実行しています。完了まで状態を更新します。",
+      "Embedding / 索引を再実行",
+    ],
+  ])("%s の phase 文言を統一する", (phase, label, started, running, retry) => {
+    expect(t(phaseLabelKey(phase))).toBe(label);
+    expect(t(phaseStartedMessageKey(phase))).toBe(started);
+    expect(t(phaseRunningMessageKey(phase))).toBe(running);
+    expect(t(phaseRetryLabelKey(phase))).toBe(retry);
+  });
+});
+
+describe("resolveDocumentActionPlan", () => {
+  const resolve = (
+    status: FileStatus,
+    overrides: Partial<Parameters<typeof resolveDocumentActionPlan>[0]> = {}
+  ) =>
+    resolveDocumentActionPlan({
+      status,
+      activeJob: false,
+      latestFailedPhase: null,
+      hasPreparedArtifact: true,
+      hasExtraction: true,
+      hasChunkSet: true,
+      ...overrides,
+    });
+
+  it("UPLOADED はファイル準備だけを実行できる", () => {
+    expect(resolve("UPLOADED")).toEqual({
+      primary: { kind: "enqueue", phase: "PREPROCESS" },
+      reprocessPhases: [],
+    });
+  });
+
+  it.each<FileStatus>(["PREPROCESSING", "INGESTING", "CHUNKING", "INDEXING"])(
+    "%s の処理中は操作を表示しない",
+    (status) => {
+      expect(resolve(status)).toEqual({
+        primary: null,
+        reprocessPhases: [],
+      });
+    }
+  );
+
+  it("active job があれば安定状態でも操作を表示しない", () => {
+    expect(resolve("INDEXED", { activeJob: true })).toEqual({
+      primary: null,
+      reprocessPhases: [],
+    });
+  });
+
+  it("選択中レシピが無ければ status に関わらず操作を表示しない", () => {
+    expect(resolve("REVIEW", { hasSelectedRecipe: false })).toEqual({
+      primary: null,
+      reprocessPhases: [],
+    });
+    expect(resolve("UPLOADED", { hasSelectedRecipe: false })).toEqual({
+      primary: null,
+      reprocessPhases: [],
+    });
+  });
+
+  it("PREPROCESSED の成果物が有効なら承認の直後にファイル準備再処理を出す", () => {
+    expect(resolve("PREPROCESSED")).toEqual({
+      primary: { kind: "approve" },
+      reprocessPhases: ["PREPROCESS"],
+    });
+  });
+
+  it("PREPROCESSED の成果物が無ければファイル準備の再実行だけを出す", () => {
+    expect(resolve("PREPROCESSED", { hasPreparedArtifact: false })).toEqual({
+      primary: { kind: "retry", phase: "PREPROCESS" },
+      reprocessPhases: [],
+    });
+  });
+
+  it("REVIEW は承認と、前提を満たす再処理だけを出す", () => {
+    expect(resolve("REVIEW")).toEqual({
+      primary: { kind: "approve" },
+      reprocessPhases: ["PREPROCESS", "EXTRACT"],
+    });
+    expect(resolve("REVIEW", { hasPreparedArtifact: false })).toEqual({
+      primary: { kind: "approve" },
+      reprocessPhases: ["PREPROCESS"],
+    });
+  });
+
+  it("CHUNKED と INDEXED は前提を満たす段階だけ再処理できる", () => {
+    expect(resolve("CHUNKED")).toEqual({
+      primary: { kind: "approve" },
+      reprocessPhases: ["PREPROCESS", "EXTRACT", "CHUNK"],
+    });
+    expect(resolve("INDEXED")).toEqual({
+      primary: null,
+      reprocessPhases: ["PREPROCESS", "EXTRACT", "CHUNK", "INDEX"],
+    });
+    expect(
+      resolve("INDEXED", {
+        hasPreparedArtifact: false,
+        hasExtraction: false,
+        hasChunkSet: false,
+      })
+    ).toEqual({
+      primary: null,
+      reprocessPhases: ["PREPROCESS"],
+    });
+  });
+
+  it.each<[IngestionJobPhase, IngestionJobPhase, IngestionJobPhase[]]>([
+    ["PREPROCESS", "PREPROCESS", []],
+    ["EXTRACT", "EXTRACT", ["PREPROCESS"]],
+    ["CHUNK", "CHUNK", ["PREPROCESS", "EXTRACT"]],
+    ["INDEX", "INDEX", ["PREPROCESS", "EXTRACT", "CHUNK"]],
+  ])("ERROR(%s) は %s と前段の再処理を出す", (failedPhase, retryPhase, earlierPhases) => {
+    expect(resolve("ERROR", { latestFailedPhase: failedPhase })).toEqual({
+      primary: { kind: "retry", phase: retryPhase },
+      reprocessPhases: earlierPhases,
+    });
+  });
+
+  it("ERROR は不足成果物に応じて前段へ戻し、不明 phase はファイル準備へ戻す", () => {
+    expect(
+      resolve("ERROR", {
+        latestFailedPhase: "INDEX",
+        hasChunkSet: false,
+      }).primary
+    ).toEqual({ kind: "retry", phase: "CHUNK" });
+    expect(
+      resolve("ERROR", {
+        latestFailedPhase: "CHUNK",
+        hasExtraction: false,
+      }).primary
+    ).toEqual({ kind: "retry", phase: "EXTRACT" });
+    expect(
+      resolve("ERROR", {
+        latestFailedPhase: "EXTRACT",
+        hasPreparedArtifact: false,
+      }).primary
+    ).toEqual({ kind: "retry", phase: "PREPROCESS" });
+    expect(resolve("ERROR", { latestFailedPhase: null }).primary).toEqual({
+      kind: "retry",
+      phase: "PREPROCESS",
+    });
+  });
+});
 
 describe("resolveIngestionParserDisplay", () => {
   it("取込 segment の parser を source profile より優先して表示する", () => {

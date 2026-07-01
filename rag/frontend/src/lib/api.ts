@@ -320,6 +320,8 @@ export interface DocumentApproveRequest extends DocumentReviewEditsRequest {
 export interface IngestionJob {
   id: string;
   document_id: string;
+  recipe_id: string | null;
+  recipe_revision: number | null;
   status: IngestionJobStatus;
   phase: IngestionJobPhase;
   parser_profile: string;
@@ -576,6 +578,7 @@ export interface DocumentExtractionExport {
 export interface IngestionSegment {
   segment_id: string;
   document_id: string;
+  recipe_id: string | null;
   status: string;
   parser_backend: string;
   parser_profile: string;
@@ -713,6 +716,8 @@ export interface KnowledgeBaseUpdateRequest {
 
 export type BusinessViewStatus = "ACTIVE" | "ARCHIVED";
 
+export const DEFAULT_BUSINESS_VIEW_NAME = "DEFAULT";
+
 export interface BusinessViewRef {
   id: string;
   name: string;
@@ -775,6 +780,54 @@ export interface DocumentIngestionConfigData {
 }
 
 export type DocumentProcessingConfig = KnowledgeBaseIngestionConfig;
+
+export type DocumentRecipeStepStatus =
+  | "PENDING"
+  | "QUEUED"
+  | "RUNNING"
+  | "NEEDS_REVIEW"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "CANCELLED";
+
+export interface DocumentRecipeStep {
+  phase: IngestionJobPhase;
+  status: DocumentRecipeStepStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  error_message: string | null;
+}
+
+export interface DocumentRecipeView {
+  recipe_id: string;
+  document_id: string;
+  slot_no: 1 | 2 | 3;
+  status: FileStatus;
+  failed_phase: IngestionJobPhase | null;
+  processing_config: DocumentProcessingConfig;
+  effective_processing_config: DocumentProcessingConfig;
+  preprocess_artifact: DocumentPreprocessArtifact | null;
+  active_extraction_recipe_id: string | null;
+  active_chunk_set_id: string | null;
+  chunk_count: number;
+  vector_count: number;
+  config_revision: number;
+  materialized_revision: number | null;
+  searchable: boolean;
+  needs_reprocessing: boolean;
+  error_message: string | null;
+  steps: DocumentRecipeStep[];
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface DocumentRecipeDeleteResult {
+  recipe_id: string;
+  document_id: string;
+  removed_chunk_set_count: number;
+}
 
 export interface KnowledgeBaseDocumentAssignmentRequest {
   document_ids: string[];
@@ -2126,6 +2179,39 @@ export const api = {
     request<DocumentChunkView[]>(`/api/documents/${encodeURIComponent(id)}/chunks`),
   listDocumentChunkSets: (id: string) =>
     request<DocumentChunkSet[]>(`/api/documents/${encodeURIComponent(id)}/chunk-sets`),
+  listDocumentRecipes: (id: string) =>
+    request<DocumentRecipeView[]>(`/api/documents/${encodeURIComponent(id)}/recipes`),
+  createDocumentRecipe: (id: string, copyFromRecipeId: string | null) =>
+    request<DocumentRecipeView>(
+      `/api/documents/${encodeURIComponent(id)}/recipes`,
+      jsonBody({ copy_from_recipe_id: copyFromRecipeId })
+    ),
+  updateDocumentRecipe: (id: string, recipeId: string, body: DocumentProcessingConfig) =>
+    request<DocumentRecipeView>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}`,
+      { ...jsonBody(body), method: "PUT" }
+    ),
+  deleteDocumentRecipe: (id: string, recipeId: string) =>
+    request<DocumentRecipeDeleteResult>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}`,
+      { method: "DELETE" }
+    ),
+  listDocumentRecipeChunks: (id: string, recipeId: string) =>
+    request<DocumentChunkView[]>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunks`
+    ),
+  exportDocumentRecipeExtraction: (
+    id: string,
+    recipeId: string,
+    format: DocumentExtractionExportFormat = "markdown"
+  ) => {
+    const search = new URLSearchParams({ format });
+    return request<DocumentExtractionExport>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/extraction-export?${search.toString()}`
+    );
+  },
   createChunkSetExperiment: (id: string, body: ChunkSetExperimentRequest) =>
     request<DocumentChunkSet>(
       `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments`,
@@ -2220,9 +2306,22 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
       { method: "POST" }
     ),
-  retryFailedDocumentIngestionSegments: (id: string) =>
+  enqueueDocumentRecipeJob: (
+    id: string,
+    recipeId: string,
+    phase: IngestionJobPhase = "PREPROCESS"
+  ) =>
     request<IngestionJob>(
-      `/api/documents/${encodeURIComponent(id)}/ingestion-segments/retry`,
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/ingestion-jobs?phase=${encodeURIComponent(phase)}`,
+      { method: "POST" }
+    ),
+  retryFailedDocumentIngestionSegments: (id: string, recipeId?: string | null) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-segments/retry${
+        recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : ""
+      }`,
       { method: "POST" }
     ),
   /** 現在の確認段階を承認し、次の取込 stage を投入する。任意で抽出テキスト修正を伴う。 */
@@ -2231,12 +2330,30 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}/approve`,
       payload ? jsonBody(payload) : { method: "POST" }
     ),
+  approveDocumentRecipe: (id: string, recipeId: string, payload?: DocumentApproveRequest) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/approve`,
+      payload ? jsonBody(payload) : { method: "POST" }
+    ),
   /** REVIEW 中の構造化要素修正を保存する。Chunk job は開始しない。 */
   saveDocumentReviewEdits: (id: string, payload: DocumentReviewEditsRequest) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/review-edits`, {
       ...jsonBody(payload),
       method: "PATCH",
     }),
+  saveDocumentRecipeReviewEdits: (
+    id: string,
+    recipeId: string,
+    payload: DocumentReviewEditsRequest
+  ) =>
+    request<DocumentRecipeView>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/review-edits`,
+      { ...jsonBody(payload), method: "PATCH" }
+    ),
   /** REVIEW(確認待ち)文書を却下し、UPLOADED へ戻す。 */
   rejectDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/reject`, {
@@ -2284,6 +2401,22 @@ export const api = {
     if (options.disposition) search.set("disposition", options.disposition);
     const qs = search.toString();
     return `/api/documents/${encodeURIComponent(id)}/content${qs ? `?${qs}` : ""}`;
+  },
+  documentRecipeContentUrl: (
+    id: string,
+    recipeId: string,
+    options: {
+      variant?: "original" | "prepared";
+      disposition?: "inline" | "attachment";
+    } = {}
+  ) => {
+    const search = new URLSearchParams();
+    if (options.variant) search.set("variant", options.variant);
+    if (options.disposition) search.set("disposition", options.disposition);
+    const qs = search.toString();
+    return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+      recipeId
+    )}/content${qs ? `?${qs}` : ""}`;
   },
 
   // ナレッジベース

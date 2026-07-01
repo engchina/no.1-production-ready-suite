@@ -54,12 +54,8 @@ class BusinessViewConfig(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=MAX_SYSTEM_PROMPT_CHARS)
     default_language: str | None = Field(default=None, max_length=MAX_DEFAULT_LANGUAGE_CHARS)
     serving_mode: ServingMode = Field(
-        default="single",
-        description=(
-            "配信モード。1 文書が複数 chunk_set を持つときの検索時配信方法。single(既定)は "
-            "is_serving の単一 chunk_set のみ、fused は複数 chunk_set を RRF 融合 + source-span "
-            "重複除去、routed は Router で query ごと選択(後続)。"
-        ),
+        default="fused",
+        description="互換読取用。保存・runtime は全レシピ融合(fused)へ正規化する。",
     )
 
     def normalized_knowledge_base_ids(self) -> list[str]:
@@ -91,7 +87,7 @@ def parse_business_view_config(raw: Mapping[str, object] | None) -> BusinessView
 
 def dump_business_view_config(config: BusinessViewConfig) -> dict[str, object]:
     """業務ビュー設定を ``view_config`` カラムへ保存する dict へ変換する。"""
-    return config.model_dump(mode="json")
+    return config.model_copy(update={"serving_mode": "fused"}).model_dump(mode="json")
 
 
 def resolve_business_view_settings(
@@ -109,8 +105,8 @@ def resolve_business_view_settings(
     persona = config.resolved_system_prompt()
     if persona is not None:
         updates["rag_generation_system_prompt_override"] = persona
-    if config.serving_mode != merged.rag_serving_mode:
-        updates["rag_serving_mode"] = config.serving_mode
+    if merged.rag_serving_mode != "fused":
+        updates["rag_serving_mode"] = "fused"
     if updates:
         merged = merged.model_copy(update=updates)
         applied = True

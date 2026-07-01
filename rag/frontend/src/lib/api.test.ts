@@ -318,7 +318,7 @@ describe("api.request envelope", () => {
     await api.exportDocumentExtraction("doc-1", "html");
     await api.listDocumentIngestionJobs("doc-1");
     await api.listDocumentIngestionSegments("doc-1");
-    await api.retryFailedDocumentIngestionSegments("doc-1");
+    await api.retryFailedDocumentIngestionSegments("doc-1", "recipe-2");
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/chunks");
     expect(fetchMock.mock.calls[1][0]).toBe(
@@ -329,8 +329,23 @@ describe("api.request envelope", () => {
     );
     expect(fetchMock.mock.calls[3][0]).toBe("/api/documents/doc-1/ingestion-jobs");
     expect(fetchMock.mock.calls[4][0]).toBe("/api/documents/doc-1/ingestion-segments");
-    expect(fetchMock.mock.calls[5][0]).toBe("/api/documents/doc-1/ingestion-segments/retry");
+    expect(fetchMock.mock.calls[5][0]).toBe(
+      "/api/documents/doc-1/ingestion-segments/retry?recipe_id=recipe-2"
+    );
     expect(fetchMock.mock.calls[5][1]).toMatchObject({ method: "POST" });
+  });
+
+  it("segment retry は recipe 未指定の legacy URL も維持する", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ data: {}, error_messages: [], warning_messages: [] })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.retryFailedDocumentIngestionSegments("legacy-doc");
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/documents/legacy-doc/ingestion-segments/retry"
+    );
   });
 
   it("文書処理設定 API は GET と PUT を同じ resource に送る", async () => {

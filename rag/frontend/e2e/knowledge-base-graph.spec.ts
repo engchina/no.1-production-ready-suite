@@ -110,6 +110,23 @@ test("関係情報グラフを展開して entity ノードを表示する", asy
   await expect(graph).toBeVisible();
   await expect(graph.getByText("就業規則")).toBeVisible();
   await expect(graph.getByText("有給休暇")).toBeVisible();
+
+  const main = page.locator("main");
+  await graph.scrollIntoViewIfNeeded();
+  const mainScrollTop = await main.evaluate((element) => element.scrollTop);
+  await graph.hover();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(mainScrollTop);
+
+  await page.getByRole("button", { name: "パイプライン図を表示" }).click();
+  const pipeline = page.getByRole("region", { name: "構築パイプライン図(高度な診断)" });
+  await pipeline.scrollIntoViewIfNeeded();
+  const mainScrollTopAtPipeline = await main.evaluate((element) => element.scrollTop);
+  await pipeline.hover();
+  await page.mouse.wheel(0, -600);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(
+    mainScrollTopAtPipeline
+  );
 });
 
 test("関係情報が無い KB は空状態を出す", async ({ page }) => {

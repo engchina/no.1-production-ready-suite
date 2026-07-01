@@ -22,10 +22,8 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { ChunkSetExperimentPanel } from "./ChunkSetExperimentPanel";
 import { DocumentPreview } from "./DocumentPreview";
-import { DocumentProcessingConfigPanel } from "./DocumentProcessingConfigPanel";
-import { IngestionConfigDriftBanner } from "@/components/knowledge-bases/IngestionConfigDriftBanner";
+import { DocumentRecipeManager } from "./DocumentRecipeManager";
 import { DocumentExtraction, DocumentRawText } from "./DocumentExtraction";
 import { ExtractedText, IndexBadge, InfoChip } from "./extraction-bits";
 import {
@@ -33,6 +31,12 @@ import {
   type IngestionProgressSummary,
   type ProgressUnit,
   ingestConflictBannerIsStale,
+  phaseForDocumentStatus,
+  phaseLabelKey,
+  phaseRetryLabelKey,
+  phaseRunningMessageKey,
+  phaseStartedMessageKey,
+  resolveDocumentActionPlan,
   resolveIngestionParserDisplay,
   resolveIngestionProgressSummary,
   shouldShowProcessingWatchBanner,
@@ -44,10 +48,9 @@ import {
 } from "./ingestion-error-display";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
-import { FlowStepper, STEP_LABEL_KEY } from "@/components/upload/FlowStepper";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormStatus } from "@/components/ui/form-status";
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -72,20 +75,19 @@ import {
   documentWorkspaceShouldRefresh,
   ingestionJobIsActive,
   useDocument,
-  useDocumentChunks,
   useDocumentChunkSets,
-  useDocumentExtractionExport,
-  useDocumentIngestionConfig,
+  useDocumentRecipeChunks,
+  useDocumentRecipeExtractionExport,
+  useDocumentRecipes,
   useDocumentIngestionJobs,
   useDocumentIngestionSegments,
   useDocumentKnowledgeBases,
-  useApproveDocument,
-  useEnqueueDocumentIngestionJob,
+  useApproveDocumentRecipe,
+  useEnqueueDocumentRecipeJob,
   useIngestionJob,
-  useRejectDocument,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
-  useSaveDocumentReviewEdits,
+  useSaveDocumentRecipeReviewEdits,
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
@@ -209,19 +211,49 @@ export function DocumentWorkspace({
   initialSourceProfile?: SourceProfile | null;
 }) {
   const query = useDocument(documentId);
-  const chunksQuery = useDocumentChunks(documentId);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const recipesQuery = useDocumentRecipes(documentId);
+  const requestedRecipeId = searchParams.get("recipe");
+  const selectedRecipe =
+    recipesQuery.data?.find((recipe) => recipe.recipe_id === requestedRecipeId) ??
+    recipesQuery.data?.[0] ??
+    null;
+  const selectedRecipeId = selectedRecipe?.recipe_id ?? null;
+  const hasSelectedRecipeExtraction = Boolean(selectedRecipe?.active_extraction_recipe_id);
+  useEffect(() => {
+    if (!selectedRecipeId || requestedRecipeId === selectedRecipeId) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("recipe", selectedRecipeId);
+    setSearchParams(next, { replace: true });
+  }, [requestedRecipeId, searchParams, selectedRecipeId, setSearchParams]);
+  const selectRecipe = (recipeId: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("recipe", recipeId);
+    next.delete("chunk_id");
+    next.delete("element_id");
+    setSearchParams(next, { replace: true });
+    setSelectedChunkId(null);
+    setSelectedElementId(null);
+  };
+  const chunksQuery = useDocumentRecipeChunks(documentId, selectedRecipeId);
   const chunkSetsQuery = useDocumentChunkSets(documentId);
-  const ingestionConfigQuery = useDocumentIngestionConfig(documentId);
   const documentJobsQuery = useDocumentIngestionJobs(documentId);
   const segmentsQuery = useDocumentIngestionSegments(documentId);
   const [exportFormat, setExportFormat] =
     useState<DocumentExtractionExportFormat>("markdown");
-  const extractionExportQuery = useDocumentExtractionExport(documentId, exportFormat);
-  const [searchParams] = useSearchParams();
-  const enqueueIngestion = useEnqueueDocumentIngestionJob();
-  const approveDocument = useApproveDocument();
-  const saveReviewEdits = useSaveDocumentReviewEdits();
-  const rejectDocument = useRejectDocument();
+  const extractionExportQuery = useDocumentRecipeExtractionExport(
+    documentId,
+    hasSelectedRecipeExtraction ? selectedRecipeId : null,
+    exportFormat
+  );
+  const extractionJsonQuery = useDocumentRecipeExtractionExport(
+    documentId,
+    hasSelectedRecipeExtraction ? selectedRecipeId : null,
+    "json"
+  );
+  const enqueueIngestion = useEnqueueDocumentRecipeJob();
+  const approveDocument = useApproveDocumentRecipe();
+  const saveReviewEdits = useSaveDocumentRecipeReviewEdits();
   const confirm = useConfirm();
   const retryFailedSegments = useRetryFailedDocumentIngestionSegments();
   const queuedJob = useIngestionJob(enqueueIngestion.data?.id ?? null);
@@ -336,8 +368,17 @@ export function DocumentWorkspace({
     requestedTableId,
     searchParams,
   ]);
-  const status = query.data?.status;
-  const latestDocumentJob = documentJobsQuery.data?.[0] ?? null;
+  const recipeJobs = useMemo(
+    () =>
+      documentJobsQuery.data?.filter((job) => job.recipe_id === selectedRecipeId) ?? [],
+    [documentJobsQuery.data, selectedRecipeId]
+  );
+  const recipeSegments = useMemo(
+    () => segmentsQuery.data?.filter((segment) => segment.recipe_id === selectedRecipeId) ?? [],
+    [segmentsQuery.data, selectedRecipeId]
+  );
+  const status = selectedRecipe?.status ?? query.data?.status ?? "UPLOADED";
+  const latestDocumentJob = recipeJobs[0] ?? null;
   const latestDocumentJobActive = ingestionJobIsActive(latestDocumentJob?.status);
   const [elapsedNowMs, setElapsedNowMs] = useState(() => Date.now());
   const queuedIngestionJobStatus = queuedJob.data?.status ?? enqueueIngestion.data?.status;
@@ -357,6 +398,10 @@ export function DocumentWorkspace({
     approvedIngestionJobStatus,
     retriedSegmentJobStatus,
   ].some(ingestionJobIsActive);
+  const failedDocumentJob =
+    [latestDocumentJob, queuedJob.data, approvedJob.data, retriedSegmentJob.data].find(
+      (job) => job?.status === "FAILED"
+    ) ?? null;
   const autoRefreshActive = documentWorkspaceShouldRefresh({
     documentStatus: status,
     watchProcessing,
@@ -367,25 +412,30 @@ export function DocumentWorkspace({
       approvedIngestionJobStatus,
       retriedSegmentJobStatus,
     ],
-    segmentStatuses: segmentsQuery.data?.map((segment) => segment.status) ?? [],
+    segmentStatuses: recipeSegments.map((segment) => segment.status),
   });
   // 文書失敗を 1 本化（messaging-spec §9 P2/P5）: 原因 1 本 + 失敗工程の導出。
   const documentFailure = useMemo(
     () =>
       resolveDocumentFailureView({
         documentStatus: status,
-        latestJobStatus: latestDocumentJob?.status,
-        latestJobPhase: latestDocumentJob?.phase,
-        latestJobErrorMessage: latestDocumentJob?.error_message,
-        segments: segmentsQuery.data ?? [],
-        documentErrorMessage: query.data?.error_message,
+        latestJobStatus: failedDocumentJob?.status ?? latestDocumentJob?.status,
+        latestJobPhase: failedDocumentJob?.phase ?? latestDocumentJob?.phase,
+        latestJobErrorMessage:
+          failedDocumentJob?.error_message ?? latestDocumentJob?.error_message,
+        segments: recipeSegments,
+        documentErrorMessage: selectedRecipe?.error_message ?? query.data?.error_message,
       }),
     [
       status,
+      failedDocumentJob?.status,
+      failedDocumentJob?.phase,
+      failedDocumentJob?.error_message,
       latestDocumentJob?.status,
       latestDocumentJob?.phase,
       latestDocumentJob?.error_message,
-      segmentsQuery.data,
+      recipeSegments,
+      selectedRecipe?.error_message,
       query.data?.error_message,
     ]
   );
@@ -393,8 +443,8 @@ export function DocumentWorkspace({
     () =>
       resolveIngestionErrorDisplayPlan({
         latestJobErrorMessage: latestDocumentJob?.error_message,
-        segments: segmentsQuery.data ?? [],
-        documentErrorMessage: query.data?.error_message,
+        segments: recipeSegments,
+        documentErrorMessage: selectedRecipe?.error_message ?? query.data?.error_message,
         queuedJobErrorMessage,
         retriedSegmentJobErrorMessage,
         // 上部の原因バナーに昇格した本文は詳細側で再掲しない（§9 P2）。
@@ -402,7 +452,8 @@ export function DocumentWorkspace({
       }),
     [
       latestDocumentJob?.error_message,
-      segmentsQuery.data,
+      recipeSegments,
+      selectedRecipe?.error_message,
       query.data?.error_message,
       queuedJobErrorMessage,
       retriedSegmentJobErrorMessage,
@@ -433,24 +484,30 @@ export function DocumentWorkspace({
   const approveNeedsReingest =
     approveErrorText.includes("再取込") || approveErrorText.includes("再取り込み");
   const parsedExtraction = useMemo(
-    () => parseStructuredExtraction(query.data?.extraction ?? {}),
-    [query.data?.extraction]
+    () =>
+      parseStructuredExtraction(
+        selectedRecipe ? (extractionJsonQuery.data?.payload ?? {}) : {}
+      ),
+    [extractionJsonQuery.data?.payload, selectedRecipe]
   );
-  const latestChunkSet = chunkSetsQuery.data?.[chunkSetsQuery.data.length - 1] ?? null;
-  const handleReprocessPhase = async (phase: IngestionJobPhase) => {
+  const latestChunkSet = selectedRecipe?.active_chunk_set_id ?? null;
+  const handlePhaseRestart = async (
+    phase: IngestionJobPhase,
+    mode: "reprocess" | "retry"
+  ) => {
+    if (!selectedRecipeId) return;
     const confirmed = await confirm({
-      title: t(`flow.reprocess.${phase}.title` as I18nKey),
-      description: t(`flow.reprocess.${phase}.description` as I18nKey),
-      confirmLabel: t("flow.reprocess.confirm"),
+      title: t(`flow.${mode}.${phase}.title` as I18nKey),
+      description: t(`flow.${mode}.${phase}.description` as I18nKey),
+      confirmLabel: t(mode === "retry" ? "flow.retry.confirm" : "flow.reprocess.confirm"),
       tone: "warning",
     });
     if (!confirmed) return;
     enqueueIngestion.mutate(
-      { id: documentId, force: true, phase },
+      { id: documentId, recipeId: selectedRecipeId, phase },
       {
         onSuccess: (job) => {
           setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
-          toast.success(t("flow.reingestQueued"));
         },
       }
     );
@@ -460,12 +517,14 @@ export function DocumentWorkspace({
   const refetchChunkSets = chunkSetsQuery.refetch;
   const refetchDocumentJobs = documentJobsQuery.refetch;
   const refetchSegments = segmentsQuery.refetch;
+  const refetchRecipes = recipesQuery.refetch;
   const refetchExtractionExport = extractionExportQuery.refetch;
+  const refetchExtractionJson = extractionJsonQuery.refetch;
   useEffect(() => {
-    if (!query.data?.preprocess_artifact && previewVariant === "prepared") {
+    if (!selectedRecipe?.preprocess_artifact && previewVariant === "prepared") {
       setPreviewVariant("original");
     }
-  }, [previewVariant, query.data?.preprocess_artifact]);
+  }, [previewVariant, selectedRecipe?.preprocess_artifact]);
   const resetEnqueueIngestion = enqueueIngestion.reset;
   useEffect(() => {
     const errorStatus =
@@ -613,7 +672,11 @@ export function DocumentWorkspace({
       void refetchSegments();
       void refetchChunks();
       void refetchChunkSets();
-      void refetchExtractionExport();
+      void refetchRecipes();
+      if (selectedRecipe?.active_extraction_recipe_id) {
+        void refetchExtractionExport();
+        void refetchExtractionJson();
+      }
     }, DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [
@@ -623,7 +686,10 @@ export function DocumentWorkspace({
     refetchDocument,
     refetchDocumentJobs,
     refetchExtractionExport,
+    refetchExtractionJson,
+    refetchRecipes,
     refetchSegments,
+    selectedRecipe?.active_extraction_recipe_id,
   ]);
 
   useEffect(() => {
@@ -796,18 +862,14 @@ export function DocumentWorkspace({
   }
 
   const doc = query.data;
+  const selectedExtraction = selectedRecipe ? (extractionJsonQuery.data?.payload ?? {}) : {};
   const sourceProfile = doc.source_profile ?? initialSourceProfile;
-  const preparedArtifact = doc.preprocess_artifact;
+  const preparedArtifact = selectedRecipe?.preprocess_artifact ?? null;
   const hasPreparedArtifact = Boolean(preparedArtifact?.object_storage_path);
   // PREPROCESSED なのに使える処理後ファイル(object_storage_path)が無い状態。承認(EXTRACT)は
-  // 必ず 409 になるため、converted の真偽や artifact の有無に関わらず「ファイル準備から再処理」へ
+  // 必ず 409 になるため、converted の真偽や artifact の有無に関わらず「ファイル準備を再実行」へ
   // 誘導する(null artifact / passthrough・path欠落 / 変換成功・保存失敗 を全て包含)。
   const preparedArtifactMissing = !hasPreparedArtifact;
-  const preprocessStepSkipped =
-    ingestionConfigQuery.data?.effective_preprocess_profile === "passthrough" ||
-    (preparedArtifact?.profile === "passthrough" && preparedArtifact.converted === false) ||
-    (parsedExtraction.sourceDerivation?.preprocessProfile === "passthrough" &&
-      parsedExtraction.sourceDerivation.converted === false);
   const selectedPreviewVariant = previewVariant === "prepared" && hasPreparedArtifact
     ? "prepared"
     : "original";
@@ -815,10 +877,15 @@ export function DocumentWorkspace({
     selectedPreviewVariant === "prepared" ? preparedArtifact?.file_name ?? doc.file_name : doc.file_name;
   const selectedPreviewSourceProfile =
     selectedPreviewVariant === "original" ? sourceProfile : null;
-  const selectedPreviewDownloadUrl = api.documentContentUrl(documentId, {
+  const selectedPreviewDownloadUrl = selectedRecipeId
+    ? api.documentRecipeContentUrl(documentId, selectedRecipeId, {
+        ...(selectedPreviewVariant === "prepared" ? { variant: selectedPreviewVariant } : {}),
+        disposition: "attachment",
+      })
+    : api.documentContentUrl(documentId, {
     ...(selectedPreviewVariant === "prepared" ? { variant: selectedPreviewVariant } : {}),
     disposition: "attachment",
-  });
+      });
   const duplicateSource = doc.duplicate_source;
   const duplicateMessage = duplicateSource
     ? t("upload.duplicateDetail", {
@@ -828,23 +895,72 @@ export function DocumentWorkspace({
       })
     : t("upload.duplicate");
   const ingestionParser = resolveIngestionParserDisplay({
-    segments: segmentsQuery.data ?? [],
+    segments: recipeSegments,
     extractionBackend: extractionExportQuery.data?.parser_backend,
     extractionProfile: extractionExportQuery.data?.parser_profile,
-    loading: segmentsQuery.isPending || extractionExportQuery.isPending,
+    loading:
+      segmentsQuery.isPending || (hasSelectedRecipeExtraction && extractionExportQuery.isPending),
   });
+  const hasExtraction = Boolean(selectedRecipe?.active_extraction_recipe_id);
+  const hasChunkSet = Boolean(latestChunkSet);
+  const actionPlan = resolveDocumentActionPlan({
+    status,
+    activeJob: activeSubmittedJob,
+    latestFailedPhase: failedDocumentJob?.phase,
+    hasPreparedArtifact,
+    hasExtraction,
+    hasChunkSet,
+    hasSelectedRecipe: Boolean(selectedRecipeId),
+  });
+  const activeProcessingJob = [
+    queuedJob.data,
+    approvedJob.data,
+    retriedSegmentJob.data,
+    latestDocumentJob,
+    enqueueIngestion.data,
+    approveDocument.data,
+    retryFailedSegments.data,
+  ].find((job) => ingestionJobIsActive(job?.status));
+  const currentProcessingPhase =
+    activeProcessingJob?.phase ??
+    phaseForDocumentStatus(status) ??
+    latestDocumentJob?.phase ??
+    "PREPROCESS";
+  const submittedIngestionJob = queuedJob.data ?? enqueueIngestion.data;
+  const showSubmittedIngestionStatus =
+    !documentFailure.errored &&
+    submittedIngestionJob != null &&
+    ["QUEUED", "RUNNING", "SKIPPED"].includes(submittedIngestionJob.status);
+  const retryPhase = actionPlan.primary?.kind === "retry" ? actionPlan.primary.phase : null;
+  const failedSubmissionPhase = enqueueIngestion.variables?.phase ?? "PREPROCESS";
+  const phaseStartFailedMessage = t("flow.phase.startFailed", {
+    phase: t(phaseLabelKey(failedSubmissionPhase)),
+  });
+  const submissionErrorDetail =
+    enqueueIngestion.error instanceof Error ? enqueueIngestion.error.message.trim() : "";
+  const submissionErrorMessage =
+    submissionErrorDetail && submissionErrorDetail !== phaseStartFailedMessage
+      ? `${phaseStartFailedMessage} ${submissionErrorDetail}`
+      : phaseStartFailedMessage;
+  const showActionBar =
+    Boolean(selectedRecipeId) &&
+    (actionPlan.primary != null ||
+      actionPlan.reprocessPhases.length > 0 ||
+      enqueueIngestion.isError ||
+      showSubmittedIngestionStatus ||
+      Boolean(ingestionErrorDisplays.queuedJobMessage));
 
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="flex items-center gap-2 text-base">
+          <CardTitle className="flex min-w-0 flex-1 items-center gap-2 text-base">
             <FileText size={18} className="text-primary" aria-hidden />
             <span className="truncate" title={doc.file_name}>
               {doc.file_name}
             </span>
           </CardTitle>
-          <StatusBadge status={doc.status} />
+          <StatusBadge status={status} />
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -857,41 +973,22 @@ export function DocumentWorkspace({
           </Banner>
         ) : null}
 
-        <FlowStepper
-          status={doc.status}
-          skippedSteps={preprocessStepSkipped ? ["PREPROCESSING"] : []}
-          failedStep={documentFailure.failedStep}
-        />
-        {documentFailure.errored ? (
-          <Banner
-            severity="danger"
-            title={
-              documentFailure.failedStep
-                ? t("flow.error.atStep", { step: t(STEP_LABEL_KEY[documentFailure.failedStep]) })
-                : t("flow.error.title")
-            }
-          >
-            {documentFailure.primaryMessage ?? t("flow.error.fallback")}
-          </Banner>
-        ) : null}
-        <DocumentProcessingConfigPanel
+        <DocumentRecipeManager
           documentId={documentId}
-          data={ingestionConfigQuery.data ?? null}
-          loading={ingestionConfigQuery.isPending}
-          error={ingestionConfigQuery.error}
-          onRetry={() => void ingestionConfigQuery.refetch()}
-          disabled={
-            activeSubmittedJob || !["UPLOADED", "INDEXED", "ERROR"].includes(doc.status)
-          }
+          recipes={recipesQuery.data ?? []}
+          selectedRecipeId={selectedRecipeId}
+          onSelect={selectRecipe}
+          loading={recipesQuery.isPending}
+          error={recipesQuery.error}
+          onRetry={() => void recipesQuery.refetch()}
         />
         {shouldShowProcessingWatchBanner({
           watchProcessing,
-          documentStatus: doc.status,
+          documentStatus: status,
           latestJobStatus: latestDocumentJob?.status,
         }) ? (
-          <Banner severity="info">{t("upload.ingestion.watch")}</Banner>
+          <Banner severity="info">{t(phaseRunningMessageKey(currentProcessingPhase))}</Banner>
         ) : null}
-        <IngestionConfigDriftBanner documentId={documentId} />
 
         <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
           <div>
@@ -918,40 +1015,6 @@ export function DocumentWorkspace({
           documentId={documentId}
           initialKnowledgeBases={doc.knowledge_bases}
         />
-
-        {/* 文書失敗の原因は上部の原因バナー(documentFailure)に集約済み（§9 P2）。 */}
-        {enqueueIngestion.isError ? (
-          <Banner severity="danger">
-            {errorMessage(enqueueIngestion.error, t("flow.ingestFailed"))}
-          </Banner>
-        ) : null}
-        {enqueueIngestion.data ? (
-          <FormStatus
-            tone={enqueueIngestion.data.status === "SKIPPED" ? "warning" : "success"}
-            message={
-              enqueueIngestion.data.status === "SKIPPED"
-                ? t("flow.ingestionSkipped")
-                : t("flow.ingestionQueued")
-            }
-          />
-        ) : null}
-        {ingestionErrorDisplays.queuedJobMessage ? (
-          <Banner severity="danger">{ingestionErrorDisplays.queuedJobMessage}</Banner>
-        ) : null}
-        {retryFailedSegments.isError ? (
-          <Banner severity="danger">
-            {errorMessage(retryFailedSegments.error, t("flow.segments.retryFailedError"))}
-          </Banner>
-        ) : null}
-        {retryFailedSegments.data ? (
-          <FormStatus
-            tone="success"
-            message={t("flow.segments.retryQueued")}
-          />
-        ) : null}
-        {ingestionErrorDisplays.retriedSegmentJobMessage ? (
-          <Banner severity="danger">{ingestionErrorDisplays.retriedSegmentJobMessage}</Banner>
-        ) : null}
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
           {/* 左ペイン: 原本プレビュー(desktop は引用照合のアンカーとして sticky 固定) */}
@@ -988,7 +1051,10 @@ export function DocumentWorkspace({
                 <a
                   href={selectedPreviewDownloadUrl}
                   download={selectedPreviewFileName}
-                  className="inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className={cn(
+                    buttonVariants({ variant: "secondary", size: "sm" }),
+                    "whitespace-nowrap"
+                  )}
                 >
                   <Download size={14} aria-hidden />
                   {t("flow.preview.download")}
@@ -997,10 +1063,12 @@ export function DocumentWorkspace({
             </div>
             <DocumentPreview
               documentId={documentId}
+              recipeId={selectedRecipeId}
               fileName={selectedPreviewFileName}
               variant={selectedPreviewVariant}
               sourceProfile={selectedPreviewSourceProfile}
-              preparedPdfAvailable={hasPreparedArtifact}
+              preparedArtifact={preparedArtifact}
+              showFallbackDownload={false}
               focusPage={effectiveFocusPage}
               focusBbox={effectiveFocusBbox}
               focusBboxMode={effectiveFocusBboxMode}
@@ -1061,9 +1129,9 @@ export function DocumentWorkspace({
                 id="inspector-panel-text"
                 aria-labelledby="inspector-tab-text"
                 tabIndex={0}
-                className="xl:h-[60vh] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
-                <DocumentRawText extraction={doc.extraction} />
+                <DocumentRawText extraction={selectedExtraction} />
               </div>
             ) : null}
 
@@ -1073,9 +1141,9 @@ export function DocumentWorkspace({
                 id="inspector-panel-extraction"
                 aria-labelledby="inspector-tab-extraction"
                 tabIndex={0}
-                className="xl:h-[60vh] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
-                {doc.status === "REVIEW" ? (
+                {status === "REVIEW" && selectedRecipeId ? (
                   <div className="mb-2 xl:sticky xl:top-0 xl:z-10 xl:bg-background xl:pb-2">
                     {editingReview ? (
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1109,7 +1177,11 @@ export function DocumentWorkspace({
                             variant="secondary"
                             onClick={() =>
                               saveReviewEdits.mutate(
-                                { id: documentId, payload: reviewEdits },
+                                {
+                                  id: documentId,
+                                  recipeId: selectedRecipeId as string,
+                                  payload: reviewEdits,
+                                },
                                 {
                                   onSuccess: () => {
                                     setReviewEdits(emptyReviewEdits());
@@ -1121,8 +1193,7 @@ export function DocumentWorkspace({
                             loading={saveReviewEdits.isPending}
                             disabled={
                               !hasReviewEdits ||
-                              approveDocument.isPending ||
-                              rejectDocument.isPending
+                              approveDocument.isPending
                             }
                           >
                             {!saveReviewEdits.isPending ? <Save size={14} aria-hidden /> : null}
@@ -1158,9 +1229,9 @@ export function DocumentWorkspace({
                     ) : null}
                   </div>
                 ) : null}
-                {doc.status === "REVIEW" && editingReview ? (
+                {status === "REVIEW" && editingReview ? (
                   <ReviewTextEditor
-                    extraction={doc.extraction}
+                    extraction={selectedExtraction}
                     edits={reviewEdits}
                     onChange={(edits) => {
                       saveReviewEdits.reset();
@@ -1169,7 +1240,7 @@ export function DocumentWorkspace({
                   />
                 ) : (
                   <DocumentExtraction
-                    extraction={doc.extraction}
+                    extraction={selectedExtraction}
                     selectedElementId={selectedElementId}
                     selectedTableCellKey={selectedTableCellKey}
                     focusRequestKey={focusRequest?.key ?? null}
@@ -1188,7 +1259,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-chunks"
                 aria-labelledby="inspector-tab-chunks"
                 tabIndex={0}
-                className="xl:h-[60vh] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentChunksPanel
                   chunks={chunksQuery.data ?? []}
@@ -1213,13 +1284,13 @@ export function DocumentWorkspace({
                 id="inspector-panel-export"
                 aria-labelledby="inspector-tab-export"
                 tabIndex={0}
-                className="xl:h-[60vh] xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentExtractionExportPanel
                   format={exportFormat}
                   onFormatChange={setExportFormat}
                   content={extractionExportQuery.data?.content ?? ""}
-                  loading={extractionExportQuery.isPending}
+                  loading={hasSelectedRecipeExtraction && extractionExportQuery.isPending}
                   error={extractionExportQuery.isError}
                   pageCount={extractionExportQuery.data?.page_count ?? 0}
                   elementCount={extractionExportQuery.data?.element_count ?? 0}
@@ -1250,21 +1321,42 @@ export function DocumentWorkspace({
               />
             ) : null}
             <IngestionJobsPanel
-              jobs={documentJobsQuery.data ?? []}
-              segments={segmentsQuery.data ?? []}
+              jobs={recipeJobs}
+              segments={recipeSegments}
               loading={documentJobsQuery.isPending}
               error={documentJobsQuery.isError}
               nowMs={elapsedNowMs}
               suppressMessage={documentFailure.primaryMessage}
             />
             <IngestionSegmentsPanel
-              segments={segmentsQuery.data ?? []}
+              segments={recipeSegments}
               loading={segmentsQuery.isPending}
               error={segmentsQuery.isError}
               retrying={retryFailedSegments.isPending}
               visibleErrorSegmentIds={ingestionErrorDisplays.segmentIds}
+              retryStatus={
+                retryFailedSegments.isError
+                  ? {
+                      tone: "danger",
+                      message: errorMessage(
+                        retryFailedSegments.error,
+                        t("flow.segments.retryFailedError")
+                      ),
+                    }
+                  : ingestionErrorDisplays.retriedSegmentJobMessage
+                    ? {
+                        tone: "danger",
+                        message: ingestionErrorDisplays.retriedSegmentJobMessage,
+                      }
+                    : retryFailedSegments.data &&
+                        ["QUEUED", "RUNNING"].includes(
+                          retriedSegmentJob.data?.status ?? retryFailedSegments.data.status
+                        )
+                      ? { tone: "success", message: t("flow.segments.retryQueued") }
+                      : null
+              }
               onRetryFailedSegments={() =>
-                retryFailedSegments.mutate(documentId, {
+                retryFailedSegments.mutate({ id: documentId, recipeId: selectedRecipeId }, {
                   onSuccess: (job) => {
                     setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
                   },
@@ -1274,13 +1366,12 @@ export function DocumentWorkspace({
           </div>
         </details>
 
-        {doc.status === "INDEXED" ? (
+        {status === "INDEXED" ? (
           <Banner severity="success">{t("flow.indexed")}</Banner>
         ) : null}
 
-        {doc.status === "INDEXED" ? <ChunkSetExperimentPanel documentId={doc.id} /> : null}
 
-        {doc.status === "PREPROCESSED" ? (
+        {status === "PREPROCESSED" ? (
           preparedArtifactMissing ? (
             <Banner severity="danger">
               {preparedArtifact?.converted
@@ -1291,10 +1382,10 @@ export function DocumentWorkspace({
             <Banner severity="info">{t("flow.preprocessed.description")}</Banner>
           )
         ) : null}
-        {doc.status === "REVIEW" ? (
+        {status === "REVIEW" ? (
           <Banner severity="info">{t("flow.review.description")}</Banner>
         ) : null}
-        {doc.status === "CHUNKED" ? (
+        {status === "CHUNKED" ? (
           <Banner severity="info">{t("flow.chunked.description")}</Banner>
         ) : null}
 
@@ -1302,20 +1393,24 @@ export function DocumentWorkspace({
           <Banner severity={approveNeedsReingest ? "warning" : "danger"}>
             <div className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 flex-1">{approveErrorText}</span>
-              {approveNeedsReingest ? (
+              {approveNeedsReingest && selectedRecipeId ? (
                 <Button
                   type="button"
                   variant="secondary"
                   size="sm"
                   onClick={() =>
                     enqueueIngestion.mutate(
-                      { id: documentId, force: true },
+                      {
+                        id: documentId,
+                        recipeId: selectedRecipeId,
+                        phase: "PREPROCESS",
+                      },
                       {
                         onSuccess: (job) => {
                           setLocalWatchProcessing(
                             job.status === "QUEUED" || job.status === "RUNNING"
                           );
-                          toast.success(t("flow.reingestQueued"));
+                          toast.success(t(phaseStartedMessageKey(job.phase)));
                         },
                       }
                     )
@@ -1328,167 +1423,130 @@ export function DocumentWorkspace({
             </div>
           </Banner>
         ) : null}
-        {rejectDocument.isError ? (
-          <Banner severity="danger">
-            {errorMessage(rejectDocument.error, t("flow.rejectFailed"))}
-          </Banner>
-        ) : null}
-
-        {doc.status === "REVIEW" && hasReviewEdits ? (
+        {status === "REVIEW" && hasReviewEdits ? (
           <FormStatus tone="warning" message={t("flow.review.edit.pending")} />
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-          {((doc.status === "PREPROCESSED" && !preparedArtifactMissing) ||
-            doc.status === "REVIEW" ||
-            doc.status === "CHUNKED") && (
-            <>
-              <Button
-                onClick={() =>
-                  approveDocument.mutate(
-                    { id: documentId },
-                    {
-                      onSuccess: (job) => {
-                        setLocalWatchProcessing(
-                          job.status === "QUEUED" || job.status === "RUNNING"
-                        );
-                        setEditingReview(false);
-                        setReviewEdits(emptyReviewEdits());
-                        toast.success(t("flow.approved"));
-                      },
-                    }
-                  )
-                }
-                loading={approveDocument.isPending}
-                disabled={
-                  rejectDocument.isPending ||
-                  saveReviewEdits.isPending ||
-                  (doc.status === "REVIEW" && hasReviewEdits)
-                }
-              >
-                {!approveDocument.isPending ? <Check size={15} aria-hidden /> : null}
-                {approveDocument.isPending
-                  ? t("action.queueing")
-                  : doc.status === "PREPROCESSED"
-                    ? t("flow.approvePreprocess")
-                    : doc.status === "CHUNKED"
-                      ? t("flow.approveChunks")
-                      : t("flow.approveExtraction")}
-              </Button>
-              {doc.status === "REVIEW" ? (
+        {showActionBar ? (
+          <div className="space-y-3 border-t border-border pt-4">
+            <div className="flex flex-wrap items-center gap-2">
+              {actionPlan.primary?.kind === "approve" ? (
                 <Button
-                  variant="secondary"
-                  onClick={async () => {
-                    const confirmed = await confirm({
-                      title: t("flow.rejectConfirm.title"),
-                      description: t("flow.rejectConfirm.description"),
-                      confirmLabel: t("flow.reject"),
-                      tone: "warning",
-                    });
-                    if (!confirmed) return;
-                    rejectDocument.mutate(
-                      { id: documentId },
+                  onClick={() =>
+                    approveDocument.mutate(
+                      { id: documentId, recipeId: selectedRecipeId as string },
                       {
-                        onSuccess: () => {
+                        onSuccess: (job) => {
+                          setLocalWatchProcessing(
+                            job.status === "QUEUED" || job.status === "RUNNING"
+                          );
                           setEditingReview(false);
                           setReviewEdits(emptyReviewEdits());
-                          toast.success(t("flow.rejected"));
+                          toast.success(t(phaseStartedMessageKey(job.phase)));
                         },
                       }
-                    );
-                  }}
-                  loading={rejectDocument.isPending}
-                  disabled={approveDocument.isPending || saveReviewEdits.isPending}
+                    )
+                  }
+                  loading={approveDocument.isPending}
+                  disabled={
+                    saveReviewEdits.isPending ||
+                    enqueueIngestion.isPending ||
+                    (status === "REVIEW" && hasReviewEdits)
+                  }
                 >
-                  {!rejectDocument.isPending ? <X size={15} aria-hidden /> : null}
-                  {rejectDocument.isPending ? t("action.processing") : t("flow.reject")}
+                  {!approveDocument.isPending ? <Check size={15} aria-hidden /> : null}
+                  {approveDocument.isPending
+                    ? t("action.queueing")
+                    : status === "PREPROCESSED"
+                      ? t("flow.approvePreprocess")
+                      : status === "CHUNKED"
+                        ? t("flow.approveChunks")
+                        : t("flow.approveExtraction")}
                 </Button>
               ) : null}
-            </>
-          )}
-          {doc.status === "PREPROCESSED" && preparedArtifactMissing && (
-            <Button
-              variant="primary"
-              onClick={() => void handleReprocessPhase("PREPROCESS")}
-              disabled={enqueueIngestion.isPending}
-            >
-              <RotateCcw size={15} aria-hidden />
-              {t("flow.reprocess.preprocess")}
-            </Button>
-          )}
-          {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
-            <Button
-              onClick={() =>
-                enqueueIngestion.mutate(
-                  { id: documentId, force: Boolean(doc.duplicate_of_document_id) },
-                  {
-                    onSuccess: (job) => {
-                      setLocalWatchProcessing(job.status === "QUEUED" || job.status === "RUNNING");
-                    },
+              {actionPlan.primary?.kind === "enqueue" ? (
+                <Button
+                  onClick={() =>
+                    enqueueIngestion.mutate(
+                      {
+                        id: documentId,
+                        recipeId: selectedRecipeId as string,
+                        phase: "PREPROCESS",
+                      },
+                      {
+                        onSuccess: (job) => {
+                          setLocalWatchProcessing(
+                            job.status === "QUEUED" || job.status === "RUNNING"
+                          );
+                        },
+                      }
+                    )
                   }
-                )
-              }
-              loading={enqueueIngestion.isPending}
-            >
-              {!enqueueIngestion.isPending ? <Send size={15} aria-hidden /> : null}
-              {enqueueIngestion.isPending
-                ? t("action.queueing")
-                : doc.duplicate_of_document_id
-                  ? t("action.enqueueDuplicateIngestion")
-                  : t("action.enqueueIngestion")}
-            </Button>
-          )}
-          {(doc.status === "REVIEW" ||
-            doc.status === "CHUNKED" ||
-            doc.status === "INDEXED" ||
-            doc.status === "ERROR") && (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void handleReprocessPhase("PREPROCESS")}
-                disabled={enqueueIngestion.isPending}
-              >
-                <RotateCcw size={15} aria-hidden />
-                {t("flow.reprocess.preprocess")}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void handleReprocessPhase("EXTRACT")}
-                disabled={enqueueIngestion.isPending || !hasPreparedArtifact}
-                title={!hasPreparedArtifact ? t("flow.preview.preparedUnavailable") : undefined}
-              >
-                <RotateCcw size={15} aria-hidden />
-                {t("flow.reprocess.extract")}
-              </Button>
-              {(doc.status === "CHUNKED" ||
-                doc.status === "INDEXED" ||
-                (doc.status === "ERROR" && Boolean(parsedExtraction.rawText))) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void handleReprocessPhase("CHUNK")}
-                  disabled={enqueueIngestion.isPending}
+                  loading={enqueueIngestion.isPending}
                 >
-                  <RotateCcw size={15} aria-hidden />
-                  {t("flow.reprocess.chunk")}
+                  {!enqueueIngestion.isPending ? <Send size={15} aria-hidden /> : null}
+                  {enqueueIngestion.isPending
+                    ? t("action.queueing")
+                    : doc.duplicate_of_document_id
+                      ? t("action.enqueueDuplicateIngestion")
+                      : t("action.enqueueIngestion")}
                 </Button>
-              )}
-              {(doc.status === "INDEXED" || (doc.status === "ERROR" && latestChunkSet)) && (
+              ) : null}
+              {retryPhase ? (
                 <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void handleReprocessPhase("INDEX")}
-                  disabled={enqueueIngestion.isPending}
+                  onClick={() => void handlePhaseRestart(retryPhase, "retry")}
+                  loading={
+                    enqueueIngestion.isPending &&
+                    enqueueIngestion.variables?.phase === retryPhase
+                  }
                 >
-                  <RotateCcw size={15} aria-hidden />
-                  {t("flow.reprocess.index")}
+                  {!enqueueIngestion.isPending ? <RotateCcw size={15} aria-hidden /> : null}
+                  {t(phaseRetryLabelKey(retryPhase))}
                 </Button>
-              )}
-            </>
-          )}
-        </div>
+              ) : null}
+              {actionPlan.reprocessPhases.map((phase) => (
+                <Button
+                  key={phase}
+                  variant="ghost"
+                  onClick={() => void handlePhaseRestart(phase, "reprocess")}
+                  loading={
+                    enqueueIngestion.isPending && enqueueIngestion.variables?.phase === phase
+                  }
+                  disabled={
+                    approveDocument.isPending ||
+                    (enqueueIngestion.isPending && enqueueIngestion.variables?.phase !== phase)
+                  }
+                >
+                  {!enqueueIngestion.isPending || enqueueIngestion.variables?.phase !== phase ? (
+                    <RotateCcw size={15} aria-hidden />
+                  ) : null}
+                  {t(`flow.reprocess.${phase.toLowerCase()}` as I18nKey)}
+                </Button>
+              ))}
+            </div>
+            {enqueueIngestion.isError && !documentFailure.errored ? (
+              <FormStatus
+                tone="danger"
+                message={submissionErrorMessage}
+              />
+            ) : null}
+            {showSubmittedIngestionStatus ? (
+              <FormStatus
+                tone={submittedIngestionJob.status === "SKIPPED" ? "warning" : "success"}
+                message={
+                  submittedIngestionJob.status === "SKIPPED"
+                    ? t("flow.phase.skipped", {
+                        phase: t(phaseLabelKey(submittedIngestionJob.phase)),
+                      })
+                    : t(phaseStartedMessageKey(submittedIngestionJob.phase))
+                }
+              />
+            ) : null}
+            {ingestionErrorDisplays.queuedJobMessage && !documentFailure.errored ? (
+              <Banner severity="danger">{ingestionErrorDisplays.queuedJobMessage}</Banner>
+            ) : null}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -1682,6 +1740,7 @@ function IngestionSegmentsPanel({
   error,
   retrying,
   visibleErrorSegmentIds,
+  retryStatus,
   onRetryFailedSegments,
 }: {
   segments: IngestionSegment[];
@@ -1689,6 +1748,7 @@ function IngestionSegmentsPanel({
   error: boolean;
   retrying: boolean;
   visibleErrorSegmentIds: ReadonlySet<string>;
+  retryStatus: { tone: "success" | "danger"; message: string } | null;
   onRetryFailedSegments: () => void;
 }) {
   if (loading) return <Skeleton className="h-24 w-full rounded-md" />;
@@ -1728,6 +1788,11 @@ function IngestionSegmentsPanel({
           ) : null}
         </div>
       </div>
+      {retryStatus ? (
+        <div className="mt-3">
+          <FormStatus tone={retryStatus.tone} message={retryStatus.message} />
+        </div>
+      ) : null}
       <ol
         aria-label={t("flow.segments.title")}
         className="bounded-scroll-area mt-3 grid grid-cols-1 gap-2 rounded-md border border-border bg-card/40 p-2 lg:grid-cols-2"

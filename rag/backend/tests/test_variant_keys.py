@@ -3,6 +3,7 @@
 from app.config import get_settings
 from app.rag.variant_keys import (
     compute_chunk_set_id,
+    compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
     compute_graph_layer_id,
     compute_layer_ids,
@@ -33,6 +34,16 @@ def test_extraction_recipe_id_is_deterministic() -> None:
     recipe_id = compute_extraction_recipe_id(SRC, settings)
     assert recipe_id == compute_extraction_recipe_id(SRC, settings)
     assert recipe_id.startswith("er_")
+
+
+def test_document_recipe_extraction_id_is_isolated_by_recipe_and_revision() -> None:
+    """同じ抽出設定でも recipe/revision が違えば成果物を共有しない。"""
+    base = compute_extraction_recipe_id(SRC, get_settings())
+    first = compute_document_recipe_extraction_id(base, "recipe-1", 2)
+
+    assert first == compute_document_recipe_extraction_id(base, "recipe-1", 2)
+    assert first != compute_document_recipe_extraction_id(base, "recipe-2", 2)
+    assert first != compute_document_recipe_extraction_id(base, "recipe-1", 3)
 
 
 def test_extraction_recipe_id_ignores_chunk_axis() -> None:

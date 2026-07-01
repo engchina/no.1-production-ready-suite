@@ -90,6 +90,14 @@ export const queryKeys = {
   document: (id: string) => ["documents", id] as const,
   documentChunks: (id: string) => ["documents", id, "chunks"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
+  documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
+  documentRecipeChunks: (id: string, recipeId: string) =>
+    ["documents", id, "recipes", recipeId, "chunks"] as const,
+  documentRecipeExtractionExport: (
+    id: string,
+    recipeId: string,
+    format: DocumentExtractionExportFormat
+  ) => ["documents", id, "recipes", recipeId, "extraction-export", format] as const,
   documentExtractionExport: (id: string, format: DocumentExtractionExportFormat) =>
     ["documents", id, "extraction-export", format] as const,
   documentIngestionJobs: (id: string) => ["documents", id, "ingestion-jobs"] as const,
@@ -448,11 +456,13 @@ export function useDocumentIngestionJobs(id: string | null) {
 export function useRetryFailedDocumentIngestionSegments() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.retryFailedDocumentIngestionSegments(id),
-    onSuccess: (job, documentId) => {
-      qc.invalidateQueries({ queryKey: queryKeys.document(documentId) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(documentId) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(documentId) });
+    mutationFn: ({ id, recipeId }: { id: string; recipeId: string | null }) =>
+      api.retryFailedDocumentIngestionSegments(id, recipeId),
+    onSuccess: (job, variables) => {
+      qc.invalidateQueries({ queryKey: queryKeys.document(variables.id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentRecipes(variables.id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(variables.id) });
+      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(variables.id) });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs", job.id] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -478,6 +488,142 @@ export function useDocumentIngestionConfig(id: string | null) {
     // 404(削除済み/未登録の文書)はリトライしても無意味。兄弟の文書スコープ
     // クエリ(chunks / extraction-export / ingestion-segments)と挙動を揃える。
     retry: false,
+  });
+}
+
+/** 文書の1〜3件の独立処理レシピ。 */
+export function useDocumentRecipes(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.documentRecipes(id ?? ""),
+    queryFn: () => api.listDocumentRecipes(id as string),
+    enabled: id != null,
+    retry: false,
+    refetchInterval: (query) => {
+      const recipes = query.state.data;
+      return recipes?.some((recipe) =>
+        recipe.steps.some((step) => step.status === "QUEUED" || step.status === "RUNNING")
+      )
+        ? 1_500
+        : false;
+    },
+  });
+}
+
+export function useDocumentRecipeChunks(id: string | null, recipeId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.documentRecipeChunks(id ?? "", recipeId ?? ""),
+    queryFn: () => api.listDocumentRecipeChunks(id as string, recipeId as string),
+    enabled: id != null && recipeId != null,
+    retry: false,
+  });
+}
+
+export function useDocumentRecipeExtractionExport(
+  id: string | null,
+  recipeId: string | null,
+  format: DocumentExtractionExportFormat
+) {
+  return useQuery({
+    queryKey: queryKeys.documentRecipeExtractionExport(id ?? "", recipeId ?? "", format),
+    queryFn: () => api.exportDocumentRecipeExtraction(id as string, recipeId as string, format),
+    enabled: id != null && recipeId != null,
+    retry: false,
+  });
+}
+
+function invalidateDocumentRecipeQueries(qc: QueryClient, documentId: string) {
+  qc.invalidateQueries({ queryKey: queryKeys.documentRecipes(documentId) });
+  qc.invalidateQueries({ queryKey: ["documents", documentId, "recipes"] });
+  qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(documentId) });
+  qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(documentId) });
+  qc.invalidateQueries({ queryKey: queryKeys.document(documentId) });
+}
+
+export function useCreateDocumentRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, copyFrom }: { id: string; copyFrom: string | null }) =>
+      api.createDocumentRecipe(id, copyFrom),
+    onSuccess: (_recipe, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+  });
+}
+
+export function useDeleteDocumentRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, recipeId }: { id: string; recipeId: string }) =>
+      api.deleteDocumentRecipe(id, recipeId),
+    onSuccess: (_result, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+  });
+}
+
+export function useUpdateDocumentRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      recipeId,
+      config,
+    }: {
+      id: string;
+      recipeId: string;
+      config: DocumentProcessingConfig;
+    }) => api.updateDocumentRecipe(id, recipeId, config),
+    onSuccess: (recipe, variables) => {
+      qc.setQueryData(
+        queryKeys.documentRecipes(variables.id),
+        (current: Array<typeof recipe> | undefined) =>
+          current?.map((item) => (item.recipe_id === recipe.recipe_id ? recipe : item))
+      );
+    },
+  });
+}
+
+export function useEnqueueDocumentRecipeJob() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      recipeId,
+      phase,
+    }: {
+      id: string;
+      recipeId: string;
+      phase: IngestionJobPhase;
+    }) => api.enqueueDocumentRecipeJob(id, recipeId, phase),
+    onSuccess: (_job, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+  });
+}
+
+export function useApproveDocumentRecipe() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      recipeId,
+      payload,
+    }: {
+      id: string;
+      recipeId: string;
+      payload?: DocumentApproveRequest;
+    }) => api.approveDocumentRecipe(id, recipeId, payload),
+    onSuccess: (_job, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+  });
+}
+
+export function useSaveDocumentRecipeReviewEdits() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      recipeId,
+      payload,
+    }: {
+      id: string;
+      recipeId: string;
+      payload: DocumentReviewEditsRequest;
+    }) => api.saveDocumentRecipeReviewEdits(id, recipeId, payload),
+    onSuccess: (_recipe, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
   });
 }
 

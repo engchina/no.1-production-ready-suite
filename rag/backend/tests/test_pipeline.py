@@ -2458,7 +2458,7 @@ class BusinessContextOracleClient(OracleClient):
             "source_acl": "support",
             "document_version": "2024.05",
             "knowledge_base_id": "kb-a",
-            "serving_mode": "single",
+            "serving_mode": "fused",
         }
         return [
             RetrievedChunk(
@@ -2502,7 +2502,7 @@ class BusinessContextOracleClient(OracleClient):
             "source_acl": "support",
             "document_version": "2024.05",
             "knowledge_base_id": "kb-a",
-            "serving_mode": "single",
+            "serving_mode": "fused",
         }
         return [
             RetrievedChunk(
@@ -2539,7 +2539,7 @@ class ScopedAgentMemoryOracleClient(OracleClient):
             "knowledge_base_id": "kb-scope",
             "source_acl": "support",
             "document_version": "2024.05",
-            "serving_mode": "single",
+            "serving_mode": "fused",
         }
         return [
             RetrievedChunk(
@@ -2570,7 +2570,7 @@ class ScopedAgentMemoryOracleClient(OracleClient):
             "knowledge_base_id": "kb-scope",
             "source_acl": "support",
             "document_version": "2024.05",
-            "serving_mode": "single",
+            "serving_mode": "fused",
         }
         return [
             RetrievedChunk(

@@ -95,6 +95,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
                   nodesConnectable={false}
                   elementsSelectable={false}
                   zoomOnScroll={false}
+                  preventScrolling={false}
                 >
                   <Background />
                   <Controls showInteractive={false} />

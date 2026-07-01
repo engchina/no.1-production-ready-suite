@@ -169,6 +169,7 @@ export function KnowledgeBasePipelineCanvas({ config }: { config: KnowledgeBaseA
               nodesConnectable={false}
               elementsSelectable={false}
               zoomOnScroll={false}
+              preventScrolling={false}
             >
               <Background />
               <Controls showInteractive={false} />

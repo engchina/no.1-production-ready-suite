@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 from app.rag.business_view_config import BusinessViewConfig
 from app.schemas.knowledge_base import KnowledgeBaseRef
 
+DEFAULT_BUSINESS_VIEW_NAME = "DEFAULT"
+
 
 class BusinessViewStatus(StrEnum):
     """業務ビューの運用状態。"""
@@ -58,7 +60,7 @@ class BusinessViewCreateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def normalize_name(cls, value: str) -> str:
-        return _required_clean_text(value, "名前を入力してください。")
+        return _business_view_name(value)
 
     @field_validator("description")
     @classmethod
@@ -81,7 +83,7 @@ class BusinessViewUpdateRequest(BaseModel):
     def normalize_name(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return _required_clean_text(value, "名前を入力してください。")
+        return _business_view_name(value)
 
     @field_validator("description")
     @classmethod
@@ -93,6 +95,13 @@ def _required_clean_text(value: str, message: str) -> str:
     cleaned = value.strip()
     if not cleaned:
         raise ValueError(message)
+    return cleaned
+
+
+def _business_view_name(value: str) -> str:
+    cleaned = _required_clean_text(value, "名前を入力してください。")
+    if cleaned.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold():
+        raise ValueError("DEFAULT は予約名のため使用できません。")
     return cleaned
 
 

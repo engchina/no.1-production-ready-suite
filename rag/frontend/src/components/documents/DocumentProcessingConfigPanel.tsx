@@ -19,7 +19,10 @@ import {
   type PreprocessProfileName,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
-import { useUpdateDocumentIngestionConfig } from "@/lib/queries";
+import {
+  useUpdateDocumentIngestionConfig,
+  useUpdateDocumentRecipe,
+} from "@/lib/queries";
 import { parserBackendLabel } from "@/lib/source-profile-labels";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -190,6 +193,7 @@ function stagesFor(
 
 export function DocumentProcessingConfigPanel({
   documentId,
+  recipeId,
   data,
   loading,
   error,
@@ -197,13 +201,17 @@ export function DocumentProcessingConfigPanel({
   disabled,
 }: {
   documentId: string;
+  recipeId?: string;
   data: DocumentIngestionConfigData | null;
   loading: boolean;
   error: unknown;
   onRetry: () => void;
   disabled: boolean;
 }) {
-  const save = useUpdateDocumentIngestionConfig();
+  const saveLegacy = useUpdateDocumentIngestionConfig();
+  const saveRecipe = useUpdateDocumentRecipe();
+  const savePending = recipeId ? saveRecipe.isPending : saveLegacy.isPending;
+  const saveError = recipeId ? saveRecipe.error : saveLegacy.error;
   const [expanded, setExpanded] = useState(false);
   const configs = useMemo(() => (data ? resolvedConfigs(data) : null), [data]);
   const [form, setForm] = useState<DocumentProcessingConfig>(emptyConfig);
@@ -223,12 +231,14 @@ export function DocumentProcessingConfigPanel({
     setForm((current) => ({ ...current, ...patch }));
 
   const handleSave = () => {
-    save.mutate(
-      { id: documentId, config: form },
-      {
-        onSuccess: () => toast.success(t("documents.processingConfig.toast.saved")),
-      }
-    );
+    const options = {
+      onSuccess: () => toast.success(t("documents.processingConfig.toast.saved")),
+    };
+    if (recipeId) {
+      saveRecipe.mutate({ id: documentId, recipeId, config: form }, options);
+      return;
+    }
+    saveLegacy.mutate({ id: documentId, config: form }, options);
   };
 
   return (
@@ -279,7 +289,7 @@ export function DocumentProcessingConfigPanel({
         </Banner>
       ) : configs ? (
         <>
-          <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-5">
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
             {stages.map((stage) => (
               <div
                 key={stage.key}
@@ -409,12 +419,12 @@ export function DocumentProcessingConfigPanel({
                 />
               </div>
 
-              {save.isError ? (
+              {saveError ? (
                 <FormStatus
                   tone="danger"
                   message={
-                    save.error instanceof ApiError
-                      ? save.error.message
+                    saveError instanceof ApiError
+                      ? saveError.message
                       : t("documents.processingConfig.error.save")
                   }
                 />
@@ -426,7 +436,7 @@ export function DocumentProcessingConfigPanel({
                   variant="ghost"
                   size="md"
                   onClick={() => setForm(configs.processing)}
-                  disabled={!dirty || save.isPending || disabled}
+                  disabled={!dirty || savePending || disabled}
                 >
                   <RotateCcw size={15} aria-hidden />
                   {t("knowledgeBases.adapter.actions.reset")}
@@ -435,7 +445,7 @@ export function DocumentProcessingConfigPanel({
                   type="button"
                   size="md"
                   onClick={handleSave}
-                  loading={save.isPending}
+                  loading={savePending}
                   disabled={!dirty || disabled}
                 >
                   <Save size={15} aria-hidden />

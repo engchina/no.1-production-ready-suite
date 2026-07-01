@@ -8,7 +8,11 @@ import pytest
 from app.api.routes import business_views as business_views_route
 from app.main import app
 from app.rag.business_view_config import BusinessViewConfig, parse_business_view_config
-from app.schemas.business_view import BusinessViewDetail, BusinessViewStatus
+from app.schemas.business_view import (
+    DEFAULT_BUSINESS_VIEW_NAME,
+    BusinessViewDetail,
+    BusinessViewStatus,
+)
 from app.schemas.knowledge_base import KnowledgeBaseRef
 from tests.support import AsgiTestClient
 
@@ -20,7 +24,11 @@ class FakeBusinessViewOracle:
 
     def __init__(self) -> None:
         self.views: dict[str, BusinessViewDetail] = {}
-        self.knowledge_bases: dict[str, str] = {"kb-1": "社内規程", "kb-2": "製品 FAQ"}
+        self.knowledge_bases: dict[str, str] = {
+            "kb-default": "DEFAULT",
+            "kb-1": "社内規程",
+            "kb-2": "製品 FAQ",
+        }
 
     async def create_business_view(
         self,
@@ -44,6 +52,33 @@ class FakeBusinessViewOracle:
         self.views[detail.id] = detail
         return detail
 
+    async def ensure_default_business_view(self) -> BusinessViewDetail:
+        existing = next(
+            (
+                view
+                for view in self.views.values()
+                if view.name.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold()
+            ),
+            None,
+        )
+        if existing is None:
+            return await self.create_business_view(
+                name=DEFAULT_BUSINESS_VIEW_NAME,
+                config=BusinessViewConfig(knowledge_base_ids=["kb-default"]),
+            )
+        config = existing.config.model_copy(update={"knowledge_base_ids": ["kb-default"]})
+        normalized = existing.model_copy(
+            update={
+                "status": BusinessViewStatus.ACTIVE,
+                "archived_at": None,
+                "config": config,
+                "knowledge_base_count": 1,
+                "knowledge_bases": self._refs(config),
+            }
+        )
+        self.views[existing.id] = normalized
+        return normalized
+
     async def list_business_views(
         self,
         *,
@@ -58,6 +93,7 @@ class FakeBusinessViewOracle:
             if (status is None or view.status == status)
             and (query is None or query.casefold() in view.name.casefold())
         ]
+        items.sort(key=lambda view: view.name.casefold() != DEFAULT_BUSINESS_VIEW_NAME.casefold())
         return items[offset : (offset + limit) if limit is not None else None]
 
     async def count_business_views(
@@ -84,6 +120,15 @@ class FakeBusinessViewOracle:
         if existing is None:
             raise KeyError(business_view_id)
         fields = update_fields or set()
+        if existing.name.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold():
+            if "name" in fields:
+                raise ValueError("DEFAULT 業務ビューの名前は変更できません。")
+            if (
+                "config" in fields
+                and config is not None
+                and config.knowledge_base_ids != ["kb-default"]
+            ):
+                raise ValueError("DEFAULT 業務ビューの参照 KB は変更できません。")
         updates: dict[str, object] = {}
         if "name" in fields and name is not None:
             updates["name"] = name
@@ -101,6 +146,8 @@ class FakeBusinessViewOracle:
         existing = self.views.get(business_view_id)
         if existing is None:
             raise KeyError(business_view_id)
+        if existing.name.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold():
+            raise ValueError("DEFAULT 業務ビューはアーカイブできません。")
         archived = existing.model_copy(update={"status": BusinessViewStatus.ARCHIVED})
         self.views[business_view_id] = archived
         return archived
@@ -159,6 +206,32 @@ def test_list_business_views(fake_oracle: FakeBusinessViewOracle) -> None:
     assert page["items"][0]["name"] == "経理アシスタント"
 
 
+def test_list_ensures_default_business_view(fake_oracle: FakeBusinessViewOracle) -> None:
+    """初回一覧で DEFAULT KB だけを参照する DEFAULT 業務ビューを冪等に保証する。"""
+    client.post("/api/business-views", json={"name": "経理アシスタント"})
+    first = client.get("/api/business-views").json()["data"]
+    second = client.get("/api/business-views").json()["data"]
+
+    assert first["total"] == second["total"] == 2
+    assert first["items"][0]["name"] == "DEFAULT"
+    default = next(view for view in fake_oracle.views.values() if view.name == "DEFAULT")
+    assert default.status == BusinessViewStatus.ACTIVE
+    assert default.config.knowledge_base_ids == ["kb-default"]
+    assert [kb.name for kb in default.knowledge_bases] == ["DEFAULT"]
+
+
+@pytest.mark.parametrize("reserved_name", ["DEFAULT", "default", " DEFAULT "])
+def test_default_is_a_reserved_business_view_name(
+    fake_oracle: FakeBusinessViewOracle,
+    reserved_name: str,
+) -> None:
+    """DEFAULT は大文字小文字・前後空白にかかわらずユーザー名に使えない。"""
+    response = client.post("/api/business-views", json={"name": reserved_name})
+
+    assert response.status_code == 422
+    assert "DEFAULT は予約名のため使用できません。" in response.json()["error_messages"][0]
+
+
 def test_update_and_archive_business_view(fake_oracle: FakeBusinessViewOracle) -> None:
     """業務ビューの更新とアーカイブができる。"""
     detail = client.post("/api/business-views", json={"name": "FAQ ビュー"}).json()["data"]
@@ -173,6 +246,50 @@ def test_update_and_archive_business_view(fake_oracle: FakeBusinessViewOracle) -
     archive_resp = client.post(f"/api/business-views/{detail['id']}/archive")
     assert archive_resp.status_code == 200
     assert archive_resp.json()["data"]["status"] == "ARCHIVED"
+
+
+def test_default_business_view_allows_settings_but_protects_identity_and_scope(
+    fake_oracle: FakeBusinessViewOracle,
+) -> None:
+    """DEFAULT は設定だけ更新でき、名前・参照 KB・アーカイブは変更できない。"""
+    default = client.get("/api/business-views").json()["data"]["items"][0]
+    business_view_id = default["id"]
+
+    update = client.patch(
+        f"/api/business-views/{business_view_id}",
+        json={
+            "description": "全社共通の検索設定",
+            "config": {
+                "knowledge_base_ids": ["kb-default"],
+                "query": {"generation_profile": "detailed_cited"},
+                "default_language": "日本語",
+            },
+        },
+    )
+    assert update.status_code == 200
+    assert update.json()["data"]["description"] == "全社共通の検索設定"
+    assert update.json()["data"]["config"]["knowledge_base_ids"] == ["kb-default"]
+    assert update.json()["data"]["config"]["query"]["generation_profile"] == "detailed_cited"
+
+    rename = client.patch(
+        f"/api/business-views/{business_view_id}",
+        json={"name": "全社ビュー"},
+    )
+    assert rename.status_code == 409
+    assert rename.json()["error_messages"] == ["DEFAULT 業務ビューの名前は変更できません。"]
+
+    replace_scope = client.patch(
+        f"/api/business-views/{business_view_id}",
+        json={"config": {"knowledge_base_ids": ["kb-1"]}},
+    )
+    assert replace_scope.status_code == 409
+    assert replace_scope.json()["error_messages"] == [
+        "DEFAULT 業務ビューの参照 KB は変更できません。"
+    ]
+
+    archive = client.post(f"/api/business-views/{business_view_id}/archive")
+    assert archive.status_code == 409
+    assert archive.json()["error_messages"] == ["DEFAULT 業務ビューはアーカイブできません。"]
 
 
 def test_get_missing_business_view_returns_404(fake_oracle: FakeBusinessViewOracle) -> None:

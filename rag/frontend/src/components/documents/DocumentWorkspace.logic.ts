@@ -1,4 +1,191 @@
-import type { IngestionJobStatus, IngestionSegment } from "@/lib/api";
+import type {
+  FileStatus,
+  IngestionJobPhase,
+  IngestionJobStatus,
+  IngestionSegment,
+} from "@/lib/api";
+import type { I18nKey } from "@/lib/i18n";
+
+export type DocumentPrimaryAction =
+  | { kind: "enqueue"; phase: "PREPROCESS" }
+  | { kind: "approve" }
+  | { kind: "retry"; phase: IngestionJobPhase };
+
+export type DocumentActionPlan = {
+  primary: DocumentPrimaryAction | null;
+  reprocessPhases: IngestionJobPhase[];
+};
+
+const NO_DOCUMENT_ACTIONS: DocumentActionPlan = {
+  primary: null,
+  reprocessPhases: [],
+};
+
+const PROCESSING_STATUSES: ReadonlySet<FileStatus> = new Set([
+  "PREPROCESSING",
+  "INGESTING",
+  "CHUNKING",
+  "INDEXING",
+]);
+
+const PHASE_LABEL_KEYS: Record<IngestionJobPhase, I18nKey> = {
+  PREPROCESS: "flow.jobs.phase.preprocess",
+  EXTRACT: "flow.jobs.phase.extract",
+  CHUNK: "flow.jobs.phase.chunk",
+  INDEX: "flow.jobs.phase.index",
+};
+
+const PHASE_STARTED_MESSAGE_KEYS: Record<IngestionJobPhase, I18nKey> = {
+  PREPROCESS: "flow.phase.started.preprocess",
+  EXTRACT: "flow.phase.started.extract",
+  CHUNK: "flow.phase.started.chunk",
+  INDEX: "flow.phase.started.index",
+};
+
+const PHASE_RUNNING_MESSAGE_KEYS: Record<IngestionJobPhase, I18nKey> = {
+  PREPROCESS: "flow.phase.running.preprocess",
+  EXTRACT: "flow.phase.running.extract",
+  CHUNK: "flow.phase.running.chunk",
+  INDEX: "flow.phase.running.index",
+};
+
+const PHASE_RETRY_LABEL_KEYS: Record<IngestionJobPhase, I18nKey> = {
+  PREPROCESS: "flow.retry.preprocess",
+  EXTRACT: "flow.retry.extract",
+  CHUNK: "flow.retry.chunk",
+  INDEX: "flow.retry.index",
+};
+
+export function phaseLabelKey(phase: IngestionJobPhase): I18nKey {
+  return PHASE_LABEL_KEYS[phase];
+}
+
+export function phaseStartedMessageKey(phase: IngestionJobPhase): I18nKey {
+  return PHASE_STARTED_MESSAGE_KEYS[phase];
+}
+
+export function phaseRunningMessageKey(phase: IngestionJobPhase): I18nKey {
+  return PHASE_RUNNING_MESSAGE_KEYS[phase];
+}
+
+export function phaseRetryLabelKey(phase: IngestionJobPhase): I18nKey {
+  return PHASE_RETRY_LABEL_KEYS[phase];
+}
+
+export function phaseForDocumentStatus(status: FileStatus): IngestionJobPhase | null {
+  if (status === "PREPROCESSING") return "PREPROCESS";
+  if (status === "INGESTING") return "EXTRACT";
+  if (status === "CHUNKING") return "CHUNK";
+  if (status === "INDEXING") return "INDEX";
+  return null;
+}
+
+/** 文書状態と保存済み成果物から、画面に出してよい操作だけを解決する。 */
+export function resolveDocumentActionPlan({
+  status,
+  activeJob,
+  latestFailedPhase,
+  hasPreparedArtifact,
+  hasExtraction,
+  hasChunkSet,
+  hasSelectedRecipe = true,
+}: {
+  status: FileStatus;
+  activeJob: boolean;
+  latestFailedPhase?: IngestionJobPhase | null;
+  hasPreparedArtifact: boolean;
+  hasExtraction: boolean;
+  hasChunkSet: boolean;
+  hasSelectedRecipe?: boolean;
+}): DocumentActionPlan {
+  if (!hasSelectedRecipe || activeJob || PROCESSING_STATUSES.has(status)) {
+    return NO_DOCUMENT_ACTIONS;
+  }
+
+  if (status === "UPLOADED") {
+    return {
+      primary: { kind: "enqueue", phase: "PREPROCESS" },
+      reprocessPhases: [],
+    };
+  }
+
+  if (status === "PREPROCESSED") {
+    return hasPreparedArtifact
+      ? {
+          primary: { kind: "approve" },
+          reprocessPhases: ["PREPROCESS"],
+        }
+      : {
+          primary: { kind: "retry", phase: "PREPROCESS" },
+          reprocessPhases: [],
+        };
+  }
+
+  if (status === "REVIEW") {
+    return {
+      primary: { kind: "approve" },
+      reprocessPhases: ["PREPROCESS", ...(hasPreparedArtifact ? (["EXTRACT"] as const) : [])],
+    };
+  }
+
+  if (status === "CHUNKED" || status === "INDEXED") {
+    return {
+      primary: status === "CHUNKED" ? { kind: "approve" } : null,
+      reprocessPhases: [
+        "PREPROCESS",
+        ...(hasPreparedArtifact ? (["EXTRACT"] as const) : []),
+        ...(hasExtraction ? (["CHUNK"] as const) : []),
+        ...(status === "INDEXED" && hasChunkSet ? (["INDEX"] as const) : []),
+      ],
+    };
+  }
+
+  if (status === "ERROR") {
+    const retryPhase = resolveRetryPhase({
+      failedPhase: latestFailedPhase,
+      hasPreparedArtifact,
+      hasExtraction,
+      hasChunkSet,
+    });
+    return {
+      primary: {
+        kind: "retry",
+        phase: retryPhase,
+      },
+      reprocessPhases: [
+        ...(retryPhase !== "PREPROCESS" ? (["PREPROCESS"] as const) : []),
+        ...(hasPreparedArtifact && (retryPhase === "CHUNK" || retryPhase === "INDEX")
+          ? (["EXTRACT"] as const)
+          : []),
+        ...(hasExtraction && retryPhase === "INDEX" ? (["CHUNK"] as const) : []),
+      ],
+    };
+  }
+
+  return NO_DOCUMENT_ACTIONS;
+}
+
+function resolveRetryPhase({
+  failedPhase,
+  hasPreparedArtifact,
+  hasExtraction,
+  hasChunkSet,
+}: {
+  failedPhase?: IngestionJobPhase | null;
+  hasPreparedArtifact: boolean;
+  hasExtraction: boolean;
+  hasChunkSet: boolean;
+}): IngestionJobPhase {
+  if (failedPhase === "INDEX" && hasChunkSet) return "INDEX";
+  if ((failedPhase === "INDEX" || failedPhase === "CHUNK") && hasExtraction) return "CHUNK";
+  if (
+    (failedPhase === "INDEX" || failedPhase === "CHUNK" || failedPhase === "EXTRACT") &&
+    hasPreparedArtifact
+  ) {
+    return "EXTRACT";
+  }
+  return "PREPROCESS";
+}
 
 export type IngestionParserDisplay = {
   backend: string | null;

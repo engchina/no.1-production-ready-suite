@@ -3,7 +3,12 @@
 import { Download, FileQuestion } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 
-import { api, type SourcePreviewKind, type SourceProfile } from "@/lib/api";
+import {
+  api,
+  type DocumentPreprocessArtifact,
+  type SourcePreviewKind,
+  type SourceProfile,
+} from "@/lib/api";
 import {
   type BboxCoordinateMode,
   type BboxOverlayRect,
@@ -15,6 +20,7 @@ import {
 } from "@/lib/bbox";
 import { t } from "@/lib/i18n";
 import { charsetFromContentType, decodeText } from "@/lib/text-decode";
+import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 type Kind = SourcePreviewKind;
@@ -39,13 +45,28 @@ export function pdfPreviewUrl(url: string, focusPage?: number | null): string {
   return `${baseUrl}#${params.toString()}`;
 }
 
+export function isPreparedPdfArtifact(
+  artifact:
+    | Pick<DocumentPreprocessArtifact, "object_storage_path" | "content_type" | "file_name">
+    | null
+    | undefined
+): boolean {
+  if (!artifact?.object_storage_path) return false;
+  const contentType = artifact.content_type?.split(";", 1)[0].trim().toLowerCase();
+  return contentType
+    ? contentType === "application/pdf"
+    : artifact.file_name.toLowerCase().endsWith(".pdf");
+}
+
 /** 原本ファイルのプレビュー（画像 / PDF / テキスト）。 */
 export function DocumentPreview({
   documentId,
+  recipeId = null,
   fileName,
   variant = "original",
   sourceProfile = null,
-  preparedPdfAvailable = false,
+  preparedArtifact = null,
+  showFallbackDownload = true,
   focusPage = null,
   focusBbox = null,
   focusBboxMode = null,
@@ -53,22 +74,29 @@ export function DocumentPreview({
   focusPageSize = null,
 }: {
   documentId: string;
+  recipeId?: string | null;
   fileName: string;
   variant?: DocumentContentVariant;
   sourceProfile?: SourceProfile | null;
-  /** Office 原本のとき、変換済 prepared PDF が利用可能なら原本でなく PDF を表示する。 */
-  preparedPdfAvailable?: boolean;
+  preparedArtifact?: DocumentPreprocessArtifact | null;
+  showFallbackDownload?: boolean;
   focusPage?: number | null;
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
   focusBboxUnit?: BboxOverlayUnit | null;
   focusPageSize?: BboxPageSize | null;
 }) {
+  const contentUrl = (
+    options: { variant?: DocumentContentVariant; disposition?: "inline" | "attachment" } = {}
+  ) =>
+    recipeId
+      ? api.documentRecipeContentUrl(documentId, recipeId, options)
+      : api.documentContentUrl(documentId, options);
   const url =
     variant === "prepared"
-      ? api.documentContentUrl(documentId, { variant })
-      : api.documentContentUrl(documentId);
-  const downloadUrl = api.documentContentUrl(documentId, {
+      ? contentUrl({ variant })
+      : contentUrl();
+  const downloadUrl = contentUrl({
     ...(variant === "prepared" ? { variant } : {}),
     disposition: "attachment",
   });
@@ -124,9 +152,9 @@ export function DocumentPreview({
   if (kind === "office") {
     // 原本(docx/pptx/xlsx 等)はブラウザで直接描画できないため、preprocess が生成した
     // 変換済 PDF があればそれを表示する(抽出 bbox も prepared PDF 座標系で整合)。
-    if (preparedPdfAvailable && variant !== "prepared") {
+    if (isPreparedPdfArtifact(preparedArtifact) && variant !== "prepared") {
       const preparedPdfUrl = pdfPreviewUrl(
-        api.documentContentUrl(documentId, { variant: "prepared" }),
+        contentUrl({ variant: "prepared" }),
         focusPage
       );
       return (
@@ -146,12 +174,22 @@ export function DocumentPreview({
       );
     }
     return (
-      <UnsupportedPreview fileName={fileName} url={downloadUrl} message={t("preview.office")} />
+      <UnsupportedPreview
+        fileName={fileName}
+        url={downloadUrl}
+        message={t("preview.office")}
+        showDownload={showFallbackDownload}
+      />
     );
   }
 
   return (
-    <UnsupportedPreview fileName={fileName} url={downloadUrl} message={t("preview.unsupported")} />
+    <UnsupportedPreview
+      fileName={fileName}
+      url={downloadUrl}
+      message={t("preview.unsupported")}
+      showDownload={showFallbackDownload}
+    />
   );
 }
 
@@ -415,23 +453,27 @@ function UnsupportedPreview({
   fileName,
   url,
   message,
+  showDownload,
 }: {
   fileName: string;
   url: string;
   message: string;
+  showDownload: boolean;
 }) {
   return (
     <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-md border border-border bg-card p-4 text-center text-muted">
       <FileQuestion size={24} aria-hidden />
       <p className="text-sm">{message}</p>
-      <a
-        href={url}
-        download={fileName}
-        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        <Download size={15} aria-hidden />
-        {t("preview.download")}
-      </a>
+      {showDownload ? (
+        <a
+          href={url}
+          download={fileName}
+          className={buttonVariants({ variant: "secondary", size: "md" })}
+        >
+          <Download size={15} aria-hidden />
+          {t("preview.download")}
+        </a>
+      ) : null}
     </div>
   );
 }

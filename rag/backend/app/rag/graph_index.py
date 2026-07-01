@@ -101,6 +101,7 @@ def build_graph_index(
     knowledge_base_ids: list[str],
     extraction: StructuredExtraction,
     chunks: list[Chunk],
+    chunk_set_id: str | None = None,
     build_claims: bool = True,
     build_community_summaries: bool = True,
 ) -> GraphIndex:
@@ -120,6 +121,8 @@ def build_graph_index(
     for knowledge_base_id in kb_ids:
         kb_index = _build_graph_index_for_kb(
             document_id=document_id,
+            identity_scope=chunk_set_id or document_id,
+            chunk_set_id=chunk_set_id,
             knowledge_base_id=knowledge_base_id,
             extraction=extraction,
             chunks=chunks,
@@ -143,6 +146,8 @@ def build_graph_index(
 def _build_graph_index_for_kb(
     *,
     document_id: str,
+    identity_scope: str,
+    chunk_set_id: str | None,
     knowledge_base_id: str | None,
     extraction: StructuredExtraction,
     chunks: list[Chunk],
@@ -151,6 +156,7 @@ def _build_graph_index_for_kb(
 ) -> GraphIndex:
     document_entity = _document_entity(
         document_id=document_id,
+        identity_scope=identity_scope,
         knowledge_base_id=knowledge_base_id,
         extraction=extraction,
     )
@@ -166,6 +172,7 @@ def _build_graph_index_for_kb(
             if entity is None and len(entity_by_name) < GRAPH_ENTITY_MAX_PER_KB:
                 entity = _section_entity(
                     document_id=document_id,
+                    identity_scope=identity_scope,
                     knowledge_base_id=knowledge_base_id,
                     chunk=chunk,
                     canonical_name=name,
@@ -173,6 +180,7 @@ def _build_graph_index_for_kb(
                 entity_by_name[name] = entity
                 relationship = _contains_relationship(
                     document_id=document_id,
+                    identity_scope=identity_scope,
                     knowledge_base_id=knowledge_base_id,
                     source_entity_id=document_entity.entity_id,
                     target_entity_id=entity.entity_id,
@@ -181,9 +189,10 @@ def _build_graph_index_for_kb(
                 relationships[relationship.relationship_id] = relationship
             if entity is None:
                 continue
-            links[(entity.entity_id, _chunk_id(document_id, chunk))] = GraphEntityChunkLink(
+            chunk_id = _chunk_id(document_id, chunk, chunk_set_id=chunk_set_id)
+            links[(entity.entity_id, chunk_id)] = GraphEntityChunkLink(
                 entity_id=entity.entity_id,
-                chunk_id=_chunk_id(document_id, chunk),
+                chunk_id=chunk_id,
                 document_id=document_id,
                 relevance_score=_chunk_relevance(chunk),
             )
@@ -191,6 +200,8 @@ def _build_graph_index_for_kb(
                 claims.append(
                     _claim_for_chunk(
                         document_id=document_id,
+                        identity_scope=identity_scope,
+                        chunk_set_id=chunk_set_id,
                         knowledge_base_id=knowledge_base_id,
                         entity_id=entity.entity_id,
                         chunk=chunk,
@@ -202,6 +213,7 @@ def _build_graph_index_for_kb(
         community_summaries.append(
             _community_summary(
                 document_id=document_id,
+                identity_scope=identity_scope,
                 knowledge_base_id=knowledge_base_id,
                 extraction=extraction,
                 entities=list(entity_by_name.values()),
@@ -220,13 +232,14 @@ def _build_graph_index_for_kb(
 def _document_entity(
     *,
     document_id: str,
+    identity_scope: str,
     knowledge_base_id: str | None,
     extraction: StructuredExtraction,
 ) -> GraphEntity:
     document_type = _clean_label(extraction.document_type) or "ドキュメント"
     canonical_name = f"文書全体: {document_type}"
     return GraphEntity(
-        entity_id=_graph_id("entity", document_id, knowledge_base_id, canonical_name),
+        entity_id=_graph_id("entity", identity_scope, knowledge_base_id, canonical_name),
         knowledge_base_id=knowledge_base_id,
         canonical_name=canonical_name,
         entity_type="document",
@@ -239,6 +252,7 @@ def _document_entity(
 def _section_entity(
     *,
     document_id: str,
+    identity_scope: str,
     knowledge_base_id: str | None,
     chunk: Chunk,
     canonical_name: str,
@@ -249,7 +263,7 @@ def _section_entity(
     if page:
         description_parts.append(f"page={page}")
     return GraphEntity(
-        entity_id=_graph_id("entity", document_id, knowledge_base_id, canonical_name),
+        entity_id=_graph_id("entity", identity_scope, knowledge_base_id, canonical_name),
         knowledge_base_id=knowledge_base_id,
         canonical_name=canonical_name,
         entity_type=_entity_type_for_content_kind(content_kind),
@@ -262,6 +276,7 @@ def _section_entity(
 def _contains_relationship(
     *,
     document_id: str,
+    identity_scope: str,
     knowledge_base_id: str | None,
     source_entity_id: str,
     target_entity_id: str,
@@ -269,7 +284,7 @@ def _contains_relationship(
 ) -> GraphRelationship:
     relationship_id = _graph_id(
         "relationship",
-        document_id,
+        identity_scope,
         knowledge_base_id,
         source_entity_id,
         target_entity_id,
@@ -290,6 +305,8 @@ def _contains_relationship(
 def _claim_for_chunk(
     *,
     document_id: str,
+    identity_scope: str,
+    chunk_set_id: str | None,
     knowledge_base_id: str | None,
     entity_id: str,
     chunk: Chunk,
@@ -298,10 +315,10 @@ def _claim_for_chunk(
     return GraphClaim(
         claim_id=_graph_id(
             "claim",
-            document_id,
+            identity_scope,
             knowledge_base_id,
             entity_id,
-            _chunk_id(document_id, chunk),
+            _chunk_id(document_id, chunk, chunk_set_id=chunk_set_id),
             claim_text,
         ),
         knowledge_base_id=knowledge_base_id,
@@ -309,13 +326,14 @@ def _claim_for_chunk(
         claim_text=claim_text,
         confidence=_confidence(_metadata_float(chunk, "confidence")),
         source_document_id=document_id,
-        source_chunk_id=_chunk_id(document_id, chunk),
+        source_chunk_id=_chunk_id(document_id, chunk, chunk_set_id=chunk_set_id),
     )
 
 
 def _community_summary(
     *,
     document_id: str,
+    identity_scope: str,
     knowledge_base_id: str | None,
     extraction: StructuredExtraction,
     entities: list[GraphEntity],
@@ -332,7 +350,7 @@ def _community_summary(
         chunks=chunks,
     )
     return GraphCommunitySummary(
-        community_id=_graph_id("community", document_id, knowledge_base_id, title),
+        community_id=_graph_id("community", identity_scope, knowledge_base_id, title),
         knowledge_base_id=knowledge_base_id,
         level_no=0,
         title=title,
@@ -402,7 +420,14 @@ def _unique_claims(claims: list[GraphClaim]) -> list[GraphClaim]:
     return unique
 
 
-def _chunk_id(document_id: str, chunk: Chunk) -> str:
+def _chunk_id(
+    document_id: str,
+    chunk: Chunk,
+    *,
+    chunk_set_id: str | None,
+) -> str:
+    if chunk_set_id is not None:
+        return f"{document_id}:{chunk_set_id}:{chunk.index}"
     return f"{document_id}:{chunk.index}"
 
 

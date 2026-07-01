@@ -35,6 +35,7 @@ from app.clients.oracle import (
     reset_local_store,
 )
 from app.config import Settings
+from app.rag.business_view_config import BusinessViewConfig, dump_business_view_config
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
     GraphClaim,
@@ -49,10 +50,13 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
+from app.schemas.business_view import BusinessViewStatus
 from app.schemas.document import (
     DocumentDetail,
+    DocumentProcessingConfig,
     FileStatus,
     IngestionJob,
+    IngestionJobPhase,
     IngestionJobStatus,
     IngestionSegment,
 )
@@ -85,6 +89,63 @@ def test_datetime_value_attaches_utc_to_naive_database_values() -> None:
 
     assert value.tzinfo is UTC
     assert value.isoformat() == "2026-06-23T00:34:00+00:00"
+
+
+@pytest.mark.anyio
+async def test_ensure_default_business_view_preserves_settings_and_fixes_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """既存 DEFAULT の検索設定を保持し、DEFAULT KB と有効状態だけを正規化する。"""
+    client = OracleClient(settings=Settings.model_construct())
+    connection = FakeOracleConnection([])
+    now = datetime.now(UTC)
+    knowledge_base = oracle_module.StoredKnowledgeBase(
+        id="kb-default",
+        name="DEFAULT",
+        status=KnowledgeBaseStatus.ACTIVE,
+        created_at=now,
+        updated_at=now,
+    )
+    existing = oracle_module.StoredBusinessView(
+        id="bv-default",
+        name="DEFAULT",
+        status=BusinessViewStatus.ARCHIVED,
+        created_at=now,
+        updated_at=now,
+        view_config=dump_business_view_config(
+            BusinessViewConfig(
+                knowledge_base_ids=["kb-old"],
+                query={"generation_profile": "detailed_cited"},
+                system_prompt="全社共通の回答担当です。",
+            )
+        ),
+        archived_at=now,
+    )
+
+    async def run_transaction(operation: Callable[[object], object]) -> object:
+        return operation(connection)
+
+    monkeypatch.setattr(client, "_run_transaction", run_transaction)
+    monkeypatch.setattr(
+        oracle_module,
+        "_ensure_default_knowledge_base",
+        lambda *_: knowledge_base,
+    )
+    monkeypatch.setattr(
+        oracle_module,
+        "_select_business_view_by_name",
+        lambda *_: existing,
+    )
+
+    detail = await client.ensure_default_business_view()
+
+    assert detail.status == BusinessViewStatus.ACTIVE
+    assert detail.archived_at is None
+    assert detail.config.knowledge_base_ids == ["kb-default"]
+    assert detail.config.query.generation_profile == "detailed_cited"
+    assert detail.config.system_prompt == "全社共通の回答担当です。"
+    assert len(connection.calls) == 1
+    assert "UPDATE rag_business_views" in connection.calls[0].statement
 
 
 @pytest.mark.anyio
@@ -527,6 +588,98 @@ async def test_oracle_client_persists_ingestion_job() -> None:
     assert insert_call.parameters["max_attempts"] == 3
 
 
+async def test_oracle_client_creates_recipe_job_after_locked_revision_check() -> None:
+    """recipe job はアクセス条件付き row lock と active/revision 検証後に作る。"""
+    pool = FakeOraclePool(execute_results=[[{"config_revision": 3}], []])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    job = IngestionJob(
+        id="job-recipe",
+        document_id="doc-1",
+        recipe_id="recipe-1",
+        recipe_revision=3,
+        status=IngestionJobStatus.QUEUED,
+        phase=IngestionJobPhase.EXTRACT,
+        parser_profile="enterprise_ai_pdf_layout",
+        queued_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    await client.create_ingestion_job(job)
+
+    lock_call = pool.connection.calls[0]
+    assert "JOIN rag_documents d" in lock_call.statement
+    assert "r.document_id = :document_id" in lock_call.statement
+    assert "r.recipe_id = :recipe_id" in lock_call.statement
+    assert "FOR UPDATE OF r.recipe_id" in lock_call.statement
+    assert any("INSERT INTO rag_ingestion_jobs" in call.statement for call in pool.connection.calls)
+
+
+@pytest.mark.parametrize(
+    ("execute_results", "message"),
+    [
+        ([], "レシピが見つかりません"),
+        ([{"config_revision": 4}], "レシピ設定が更新されました"),
+        ([{"config_revision": 3}], "処理中または待機中"),
+    ],
+)
+async def test_oracle_client_rejects_recipe_job_before_insert(
+    execute_results: list[dict[str, object]],
+    message: str,
+) -> None:
+    """scope/revision/active 競合時は同一 transaction で INSERT 前に拒否する。"""
+    results = [execute_results]
+    if message == "処理中または待機中":
+        results.append([{"job_id": "active-job"}])
+    pool = FakeOraclePool(execute_results=results)
+    client = OracleClient(
+        settings=_oci_settings(),
+        pool=pool,
+        db_call_runner=_run_inline,
+    )
+    job = IngestionJob(
+        id="job-recipe",
+        document_id="doc-1",
+        recipe_id="recipe-1",
+        recipe_revision=3,
+        status=IngestionJobStatus.QUEUED,
+        phase=IngestionJobPhase.EXTRACT,
+        parser_profile="enterprise_ai_pdf_layout",
+        queued_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    with pytest.raises((KeyError, ValueError), match=message):
+        await client.create_ingestion_job(job)
+
+    assert not any(
+        "INSERT INTO rag_ingestion_jobs" in call.statement for call in pool.connection.calls
+    )
+
+
+async def test_oracle_client_rejects_recipe_update_before_dml_when_scope_mismatches() -> None:
+    """document/recipe scope が一致しなければ設定 UPDATE を行わない。"""
+    pool = FakeOraclePool(execute_results=[[]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with pytest.raises(KeyError, match="レシピが見つかりません"):
+        await client.update_document_recipe_config(
+            "doc-1", "recipe-other-document", DocumentProcessingConfig()
+        )
+
+    assert not any(
+        "UPDATE rag_document_recipes" in call.statement for call in pool.connection.calls
+    )
+
+
+async def test_oracle_client_rejects_recipe_delete_before_dml_when_scope_mismatches() -> None:
+    """document は見えても recipe が別文書なら削除 DML を行わない。"""
+    pool = FakeOraclePool(execute_results=[[{"document_id": "doc-1"}], []])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    with pytest.raises(KeyError, match="レシピが見つかりません"):
+        await client.delete_document_recipe("doc-1", "recipe-other-document")
+
+    assert not any("DELETE FROM" in call.statement for call in pool.connection.calls)
+
+
 async def test_oracle_client_persists_ingestion_job_without_max_attempts_column() -> None:
     """旧 queue table では max_attempts 列を省いて取込 job を保存する。"""
     pool = FakeOraclePool(
@@ -683,6 +836,76 @@ async def test_oracle_client_recovers_stale_ingestion_jobs() -> None:
     assert not any("DELETE FROM rag_chunks" in call.statement for call in pool.connection.calls)
 
 
+async def test_oracle_client_recovers_stale_recipe_jobs_without_touching_document() -> None:
+    """recipe job の再試行/上限超過は対象 recipe の状態だけを復旧する。"""
+    stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
+    retry_job = {
+        **_oracle_ingestion_job_row(
+            status="RUNNING",
+            attempt_count=1,
+            max_attempts=3,
+            started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+        ),
+        "recipe_id": "recipe-retry",
+        "recipe_revision": 2,
+        "phase": "EXTRACT",
+    }
+    maxed_job = {
+        **_oracle_ingestion_job_row(
+            job_id="job-maxed",
+            status="RUNNING",
+            attempt_count=3,
+            max_attempts=3,
+            started_at=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
+        ),
+        "recipe_id": "recipe-maxed",
+        "recipe_revision": 4,
+        "phase": "INDEX",
+    }
+    pool = FakeOraclePool(execute_results=[[retry_job, maxed_job], [], []])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.recover_stale_ingestion_jobs(stale_before=stale_at, limit=10)
+
+    recipe_updates = [
+        call for call in pool.connection.calls if "UPDATE rag_document_recipes r" in call.statement
+    ]
+    assert {call.parameters["recipe_id"] for call in recipe_updates} == {
+        "recipe-retry",
+        "recipe-maxed",
+    }
+    retry_update = next(
+        call for call in recipe_updates if call.parameters["recipe_id"] == "recipe-retry"
+    )
+    assert retry_update.parameters["status"] == "PREPROCESSED"
+    maxed_update = next(
+        call for call in recipe_updates if call.parameters["recipe_id"] == "recipe-maxed"
+    )
+    assert maxed_update.parameters["status"] == "ERROR"
+    assert maxed_update.parameters["phase"] == "INDEX"
+    assert not any("UPDATE rag_documents" in call.statement for call in pool.connection.calls)
+
+
+async def test_oracle_client_recovers_orphaned_recipe_only() -> None:
+    """active job の無い processing recipe を ERROR にして文書集約は維持する。"""
+    pool = FakeOraclePool(
+        execute_results=[[], [], [{"recipe_id": "recipe-stuck", "status": "CHUNKING"}]]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.recover_stale_ingestion_jobs(
+        stale_before=datetime(2026, 1, 2, 1, 0, tzinfo=UTC), limit=10
+    )
+
+    recipe_update = next(
+        call for call in pool.connection.calls if "UPDATE rag_document_recipes r" in call.statement
+    )
+    assert recipe_update.parameters["recipe_id"] == "recipe-stuck"
+    assert recipe_update.parameters["status"] == "ERROR"
+    assert recipe_update.parameters["phase"] == "CHUNK"
+    assert not any("UPDATE rag_documents" in call.statement for call in pool.connection.calls)
+
+
 async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
     """active な job が無いのに INGESTING で取り残された文書を ERROR へ復旧する。"""
     stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
@@ -761,7 +984,13 @@ async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_
 async def test_oracle_client_claims_ingestion_job_with_row_lock() -> None:
     """取込 job 実行前に QUEUED 行を row lock 付きで claim する。"""
     started_at = datetime(2026, 1, 2, 0, 2, tzinfo=UTC)
-    pool = FakeOraclePool(execute_results=[[_oracle_ingestion_job_row()]])
+    pool = FakeOraclePool(
+        execute_results=[
+            [{"document_id": "doc-1"}],
+            [{"document_id": "doc-1"}],
+            [_oracle_ingestion_job_row()],
+        ]
+    )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     claimed = await client.claim_ingestion_job("job-1", started_at=started_at)
@@ -770,8 +999,11 @@ async def test_oracle_client_claims_ingestion_job_with_row_lock() -> None:
     assert claimed.status == IngestionJobStatus.RUNNING
     assert claimed.attempt_count == 1
     assert claimed.started_at == started_at
-    select_call = pool.connection.calls[0]
-    update_call = pool.connection.calls[1]
+    parent_lock_call = pool.connection.calls[1]
+    select_call = pool.connection.calls[2]
+    update_call = pool.connection.calls[3]
+    assert "FROM rag_documents" in parent_lock_call.statement
+    assert "FOR UPDATE" in parent_lock_call.statement
     assert "FOR UPDATE SKIP LOCKED" in select_call.statement
     assert "j.status = 'QUEUED'" in select_call.statement
     assert "SET status = 'RUNNING'" in update_call.statement
@@ -1142,6 +1374,25 @@ async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitte
     assert (
         call.input_sizes["extraction_json"]
         == oracle_module._json_input_sizes("extraction_json")["extraction_json"]
+    )
+
+
+async def test_upsert_chunk_set_binds_recipe_subset_as_json() -> None:
+    """COALESCE で既存 JSON 列と比較できるよう recipe を JSON bind する。"""
+    pool = FakeOraclePool()
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.upsert_chunk_set(
+        chunk_set_id="cs-1",
+        document_id="doc-1",
+        recipe_subset={"chunking_strategy": "structure_aware"},
+    )
+
+    call = pool.connection.calls[0]
+    assert call.parameters["recipe_subset"] == {"chunking_strategy": "structure_aware"}
+    assert (
+        call.input_sizes["recipe_subset"]
+        == oracle_module._json_input_sizes("recipe_subset")["recipe_subset"]
     )
 
 

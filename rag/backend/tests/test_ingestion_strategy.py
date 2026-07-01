@@ -54,6 +54,8 @@ class FakeOracle:
         self.statuses: list[FileStatus] = []
         self.error_messages: list[str | None] = []
         self.segments: dict[str, IngestionSegment] = {}
+        self.extraction_artifacts: dict[str, dict[str, object]] = {}
+        self.recipe_rows: dict[str, dict[str, object]] = {}
 
     async def update_document_status(
         self,
@@ -106,7 +108,39 @@ class FakeOracle:
         self.saved_chunk_count = len(chunks)
 
     async def upsert_document_extraction_artifact(self, **kwargs: object) -> None:
-        _ = kwargs
+        extraction_recipe_id = str(kwargs["extraction_recipe_id"])
+        self.extraction_artifacts[extraction_recipe_id] = dict(kwargs)
+
+    async def get_document_extraction_artifact(
+        self,
+        *,
+        document_id: str,
+        extraction_recipe_id: str,
+    ) -> dict[str, object] | None:
+        _ = document_id
+        artifact = self.extraction_artifacts.get(extraction_recipe_id)
+        if artifact is None:
+            return None
+        return {**artifact, "extraction_json": artifact.get("extraction")}
+
+    async def get_document_recipe(
+        self, document_id: str, recipe_id: str
+    ) -> dict[str, object] | None:
+        _ = document_id
+        return self.recipe_rows.get(recipe_id)
+
+    async def update_document_recipe_status(
+        self,
+        *,
+        recipe_id: str,
+        status: FileStatus,
+        active_extraction_recipe_id: str | None = None,
+        **_kwargs: object,
+    ) -> None:
+        row = self.recipe_rows.setdefault(recipe_id, {"recipe_id": recipe_id})
+        row["status"] = status.value
+        if active_extraction_recipe_id is not None:
+            row["active_extraction_recipe_id"] = active_extraction_recipe_id
 
     async def list_document_knowledge_bases(
         self,
@@ -119,7 +153,10 @@ class FakeOracle:
         self,
         document_id: str,
         graph_index: GraphIndex,
+        *,
+        chunk_set_id: str | None = None,
     ) -> None:
+        _ = chunk_set_id
         self.graph_document_id = document_id
         self.saved_graph_index = graph_index
 
@@ -511,6 +548,103 @@ def test_raw_vlm_trace_structure_attributes_read_first_class_payload_fields() ->
         "page_count": 5,
         "asset_count": 3,
     }
+
+
+async def test_recipe_extraction_artifacts_are_isolated_and_pointer_switches_after_write() -> None:
+    """同じ設定でも recipe ごとに別 artifact を保存してから pointer を切り替える。"""
+    oracle = FakeOracle()
+    source_profile = _pdf_source_profile(file_size_bytes=7)
+    extraction = _canned_extraction()
+    settings = Settings(rag_parser_adapter_backend="local")
+
+    first = IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, FakeObjectStorage()),
+        document_understanding=cast(Any, object()),
+        speech=cast(Any, object()),
+        settings=settings,
+        recipe_id="recipe-1",
+        recipe_revision=2,
+    )
+    second = IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, FakeObjectStorage()),
+        document_understanding=cast(Any, object()),
+        speech=cast(Any, object()),
+        settings=settings,
+        recipe_id="recipe-2",
+        recipe_revision=2,
+    )
+
+    first_id = await first._persist_extraction_layer("doc-1", source_profile, extraction)
+    second_id = await second._persist_extraction_layer("doc-1", source_profile, extraction)
+
+    assert first_id is not None and second_id is not None
+    assert first_id != second_id
+    assert set(oracle.extraction_artifacts) == {first_id, second_id}
+    assert oracle.recipe_rows["recipe-1"]["active_extraction_recipe_id"] == first_id
+    assert oracle.recipe_rows["recipe-2"]["active_extraction_recipe_id"] == second_id
+
+
+async def test_recipe_extraction_persistence_failure_is_fatal() -> None:
+    """recipe artifact を保存できなければ legacy の best-effort と違って失敗させる。"""
+
+    class FailingRecipeOracle(FakeOracle):
+        async def upsert_document_extraction_artifact(self, **kwargs: object) -> None:
+            _ = kwargs
+            raise RuntimeError("write failed")
+
+    pipeline = IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, FailingRecipeOracle()),
+        object_storage=cast(Any, FakeObjectStorage()),
+        document_understanding=cast(Any, object()),
+        speech=cast(Any, object()),
+        settings=Settings(rag_parser_adapter_backend="local"),
+        recipe_id="recipe-1",
+        recipe_revision=1,
+    )
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        await pipeline._persist_extraction_layer(
+            "doc-1", _pdf_source_profile(file_size_bytes=7), _canned_extraction()
+        )
+
+
+async def test_recipe_review_load_does_not_fall_back_to_document_extraction() -> None:
+    """recipe pointer が無い場合は他 recipe 相当の legacy 本文を読まない。"""
+    oracle = FakeOracle()
+    oracle.recipe_rows["recipe-empty"] = {
+        "recipe_id": "recipe-empty",
+        "active_extraction_recipe_id": None,
+    }
+    pipeline = IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, FakeObjectStorage()),
+        document_understanding=cast(Any, object()),
+        speech=cast(Any, object()),
+        settings=Settings(rag_parser_adapter_backend="local"),
+        recipe_id="recipe-empty",
+        recipe_revision=1,
+    )
+    detail = DocumentDetail(
+        id="doc-1",
+        file_name="layout.pdf",
+        status=FileStatus.REVIEW,
+        uploaded_at=datetime.now(UTC),
+        content_sha256="a" * 64,
+        extraction={"raw_text": "別レシピの本文"},
+    )
+
+    with pytest.raises(IngestionUserError, match="抽出結果が見つかりません"):
+        await pipeline._load_reviewed_extraction(detail)
 
 
 async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpoint() -> None:
@@ -938,6 +1072,7 @@ async def test_ingestion_pipeline_writes_graph_index_when_enabled() -> None:
         vlm=CapturingVlm(),
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
+        object_storage=cast(Any, FakeObjectStorage()),
         settings=settings,
     )
 

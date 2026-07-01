@@ -1309,3 +1309,388 @@ BEGIN
 END;
 /
 COMMIT;
+
+-- migration: 20260630_002_default_business_view
+UPDATE rag_business_views bv
+SET
+    status = 'ACTIVE',
+    view_config = (
+        SELECT JSON_MERGEPATCH(
+            COALESCE(bv.view_config, JSON_OBJECT('version' VALUE 1 RETURNING JSON)),
+            JSON_OBJECT(
+                'knowledge_base_ids' VALUE
+                    JSON_ARRAY(kb.knowledge_base_id RETURNING JSON)
+                RETURNING JSON
+            )
+            RETURNING JSON
+        )
+        FROM rag_knowledge_bases kb
+        WHERE LOWER(kb.name) = 'default'
+          AND NVL(kb.tenant_id_hash, '__GLOBAL__') =
+              NVL(bv.tenant_id_hash, '__GLOBAL__')
+    ),
+    updated_at = SYSTIMESTAMP,
+    archived_at = NULL
+WHERE LOWER(bv.name) = 'default'
+  AND EXISTS (
+      SELECT 1
+      FROM rag_knowledge_bases kb
+      WHERE LOWER(kb.name) = 'default'
+        AND NVL(kb.tenant_id_hash, '__GLOBAL__') =
+            NVL(bv.tenant_id_hash, '__GLOBAL__')
+  );
+
+INSERT INTO rag_business_views (
+    business_view_id,
+    tenant_id_hash,
+    name,
+    description,
+    status,
+    view_config,
+    created_at,
+    updated_at,
+    archived_at
+)
+SELECT
+    LOWER(RAWTOHEX(SYS_GUID())),
+    kb.tenant_id_hash,
+    'DEFAULT',
+    NULL,
+    'ACTIVE',
+    JSON_OBJECT(
+        'version' VALUE 1,
+        'knowledge_base_ids' VALUE JSON_ARRAY(kb.knowledge_base_id RETURNING JSON),
+        'query' VALUE JSON_OBJECT(RETURNING JSON),
+        'system_prompt' VALUE NULL,
+        'default_language' VALUE NULL,
+        'serving_mode' VALUE 'single'
+        RETURNING JSON
+    ),
+    SYSTIMESTAMP,
+    SYSTIMESTAMP,
+    NULL
+FROM rag_knowledge_bases kb
+WHERE LOWER(kb.name) = 'default'
+  AND kb.status = 'ACTIVE'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM rag_business_views bv
+      WHERE LOWER(bv.name) = 'default'
+        AND NVL(bv.tenant_id_hash, '__GLOBAL__') =
+            NVL(kb.tenant_id_hash, '__GLOBAL__')
+  );
+
+COMMIT;
+
+-- migration: 20260630_003_document_recipes
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables
+    WHERE table_name = 'RAG_DOCUMENT_RECIPES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE q'[
+            CREATE TABLE rag_document_recipes (
+                recipe_id VARCHAR2(64) PRIMARY KEY,
+                document_id VARCHAR2(64) NOT NULL,
+                slot_no NUMBER(1) NOT NULL,
+                tenant_id_hash CHAR(64),
+                processing_config JSON,
+                status VARCHAR2(32) DEFAULT 'UPLOADED' NOT NULL,
+                failed_phase VARCHAR2(16),
+                preprocess_artifact JSON,
+                active_extraction_recipe_id VARCHAR2(64),
+                config_revision NUMBER(10) DEFAULT 1 NOT NULL,
+                materialized_revision NUMBER(10),
+                error_message VARCHAR2(2000),
+                started_at TIMESTAMP WITH TIME ZONE,
+                finished_at TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+                CONSTRAINT rag_document_recipes_document_fk
+                    FOREIGN KEY (document_id) REFERENCES rag_documents (document_id)
+                    ON DELETE CASCADE,
+                CONSTRAINT rag_document_recipes_slot_ck CHECK (slot_no BETWEEN 1 AND 3),
+                CONSTRAINT rag_document_recipes_status_ck CHECK (
+                    status IN ('UPLOADED','PREPROCESSING','PREPROCESSED','INGESTING','REVIEW',
+                               'CHUNKING','CHUNKED','INDEXING','INDEXED','ERROR')
+                ),
+                CONSTRAINT rag_document_recipes_phase_ck CHECK (
+                    failed_phase IS NULL OR failed_phase IN ('PREPROCESS','EXTRACT','CHUNK','INDEX')
+                ),
+                CONSTRAINT rag_document_recipes_revision_ck CHECK (
+                    config_revision >= 1
+                    AND (materialized_revision IS NULL OR materialized_revision >= 1)
+                ),
+                CONSTRAINT rag_document_recipes_slot_uq UNIQUE (document_id, slot_no)
+            )
+        ]';
+    END IF;
+END;
+/
+
+MERGE INTO rag_document_recipes r
+USING (
+    SELECT
+        LOWER(RAWTOHEX(STANDARD_HASH(document_id || ':recipe:1', 'SHA256'))) AS recipe_id,
+        document_id,
+        tenant_id_hash,
+        processing_config,
+        status,
+        preprocess_artifact,
+        error_message,
+        uploaded_at,
+        indexed_at
+    FROM rag_documents
+) d
+ON (r.document_id = d.document_id AND r.slot_no = 1)
+WHEN NOT MATCHED THEN INSERT (
+    recipe_id, document_id, slot_no, tenant_id_hash, processing_config, status,
+    preprocess_artifact, config_revision, materialized_revision, error_message,
+    created_at, updated_at, finished_at
+) VALUES (
+    d.recipe_id, d.document_id, 1, d.tenant_id_hash, d.processing_config, d.status,
+    d.preprocess_artifact, 1, CASE WHEN d.status = 'INDEXED' THEN 1 END, d.error_message,
+    d.uploaded_at, SYSTIMESTAMP, d.indexed_at
+);
+
+DECLARE
+    PROCEDURE add_column_if_missing(
+        p_table_name IN VARCHAR2,
+        p_column_name IN VARCHAR2,
+        p_definition IN VARCHAR2
+    ) IS
+        v_count NUMBER;
+    BEGIN
+        SELECT COUNT(*) INTO v_count FROM user_tab_columns
+        WHERE table_name = p_table_name AND column_name = p_column_name;
+        IF v_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE ' || p_table_name || ' ADD (' || p_definition || ')';
+        END IF;
+    END;
+BEGIN
+    add_column_if_missing('RAG_CHUNK_SETS', 'RECIPE_ID', 'recipe_id VARCHAR2(64)');
+    add_column_if_missing(
+        'RAG_CHUNK_SETS', 'IS_ACTIVE', 'is_active NUMBER(1) DEFAULT 0 NOT NULL'
+    );
+    add_column_if_missing('RAG_INGESTION_JOBS', 'RECIPE_ID', 'recipe_id VARCHAR2(64)');
+    add_column_if_missing(
+        'RAG_INGESTION_JOBS', 'RECIPE_REVISION', 'recipe_revision NUMBER(10)'
+    );
+    add_column_if_missing('RAG_INGESTION_SEGMENTS', 'RECIPE_ID', 'recipe_id VARCHAR2(64)');
+    add_column_if_missing('RAG_GRAPH_ENTITIES', 'CHUNK_SET_ID', 'chunk_set_id VARCHAR2(64)');
+    add_column_if_missing(
+        'RAG_GRAPH_RELATIONSHIPS', 'CHUNK_SET_ID', 'chunk_set_id VARCHAR2(64)'
+    );
+    add_column_if_missing('RAG_GRAPH_CLAIMS', 'CHUNK_SET_ID', 'chunk_set_id VARCHAR2(64)');
+    add_column_if_missing(
+        'RAG_GRAPH_COMMUNITY_SUMMARIES', 'CHUNK_SET_ID', 'chunk_set_id VARCHAR2(64)'
+    );
+    add_column_if_missing(
+        'RAG_GRAPH_ENTITY_CHUNKS', 'CHUNK_SET_ID', 'chunk_set_id VARCHAR2(64)'
+    );
+END;
+/
+
+MERGE INTO rag_document_recipes r
+USING (
+    SELECT
+        LOWER(RAWTOHEX(STANDARD_HASH(
+            ranked.document_id || ':recipe:' || TO_CHAR(ranked.slot_no), 'SHA256'
+        ))) AS recipe_id,
+        ranked.document_id,
+        ranked.slot_no,
+        ranked.tenant_id_hash,
+        JSON_QUERY(ranked.recipe_subset, '$.processing_config' RETURNING CLOB) AS processing_config,
+        ranked.extraction_recipe_id,
+        ranked.updated_at
+    FROM (
+        SELECT
+            cs.document_id,
+            cs.tenant_id_hash,
+            cs.recipe_subset,
+            cs.extraction_recipe_id,
+            cs.updated_at,
+            ROW_NUMBER() OVER (
+                PARTITION BY cs.document_id
+                ORDER BY cs.updated_at DESC, cs.chunk_set_id DESC
+            ) + 1 AS slot_no
+        FROM rag_chunk_sets cs
+        WHERE cs.status = 'INDEXED' AND cs.is_serving = 0
+    ) ranked
+    WHERE ranked.slot_no <= 3
+) candidate
+ON (r.document_id = candidate.document_id AND r.slot_no = candidate.slot_no)
+WHEN NOT MATCHED THEN INSERT (
+    recipe_id, document_id, slot_no, tenant_id_hash, processing_config, status,
+    active_extraction_recipe_id, config_revision, materialized_revision,
+    created_at, updated_at, finished_at
+) VALUES (
+    candidate.recipe_id, candidate.document_id, candidate.slot_no, candidate.tenant_id_hash,
+    candidate.processing_config, 'INDEXED', candidate.extraction_recipe_id, 1, 1,
+    candidate.updated_at, SYSTIMESTAMP, candidate.updated_at
+);
+
+MERGE INTO rag_chunk_sets cs
+USING (
+    SELECT ranked.chunk_set_id, r.recipe_id
+    FROM (
+        SELECT
+            candidate.chunk_set_id,
+            candidate.document_id,
+            ROW_NUMBER() OVER (
+                PARTITION BY candidate.document_id
+                ORDER BY candidate.updated_at DESC, candidate.chunk_set_id DESC
+            ) AS candidate_rank
+        FROM rag_chunk_sets candidate
+        WHERE candidate.status = 'INDEXED' AND candidate.is_serving = 0
+    ) ranked
+    JOIN rag_document_recipes r
+      ON r.document_id = ranked.document_id
+     AND r.slot_no = ranked.candidate_rank + 1
+    WHERE ranked.candidate_rank <= 2
+) mapped
+ON (cs.chunk_set_id = mapped.chunk_set_id)
+WHEN MATCHED THEN UPDATE SET cs.recipe_id = mapped.recipe_id, cs.is_active = 1;
+
+UPDATE rag_chunk_sets cs
+SET
+    recipe_id = (
+        SELECT r.recipe_id FROM rag_document_recipes r
+        WHERE r.document_id = cs.document_id AND r.slot_no = 1
+    ),
+    is_active = CASE WHEN cs.status = 'INDEXED' THEN 1 ELSE 0 END
+WHERE cs.recipe_id IS NULL AND cs.is_serving = 1;
+
+UPDATE rag_graph_entity_chunks ec
+SET chunk_set_id = (
+    SELECT c.chunk_set_id FROM rag_chunks c WHERE c.chunk_id = ec.chunk_id
+)
+WHERE ec.chunk_set_id IS NULL;
+
+UPDATE rag_graph_claims claim
+SET chunk_set_id = (
+    SELECT c.chunk_set_id FROM rag_chunks c WHERE c.chunk_id = claim.source_chunk_id
+)
+WHERE claim.chunk_set_id IS NULL;
+
+UPDATE rag_graph_entities entity
+SET chunk_set_id = (
+    SELECT MIN(ec.chunk_set_id)
+    FROM rag_graph_entity_chunks ec
+    WHERE ec.entity_id = entity.entity_id
+)
+WHERE entity.chunk_set_id IS NULL;
+
+UPDATE rag_graph_relationships relationship
+SET chunk_set_id = (
+    SELECT entity.chunk_set_id
+    FROM rag_graph_entities entity
+    WHERE entity.entity_id = relationship.source_entity_id
+)
+WHERE relationship.chunk_set_id IS NULL;
+
+UPDATE rag_graph_community_summaries community
+SET chunk_set_id = (
+    SELECT MIN(cs.chunk_set_id)
+    FROM rag_chunk_sets cs
+    WHERE cs.is_active = 1
+      AND cs.status = 'INDEXED'
+      AND JSON_EXISTS(
+          community.source_document_ids,
+          '$[*]?(@ == $document_id)'
+          PASSING cs.document_id AS "document_id"
+      )
+)
+WHERE community.chunk_set_id IS NULL;
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_GRAPH_ENTITIES_CHUNK_SET_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_graph_entities_chunk_set_idx '
+            || 'ON rag_graph_entities (chunk_set_id)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_GRAPH_COMMUNITY_CHUNK_SET_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_graph_community_chunk_set_idx '
+            || 'ON rag_graph_community_summaries (chunk_set_id)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_INGESTION_JOBS_RECIPE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_ingestion_jobs_recipe_idx '
+            || 'ON rag_ingestion_jobs (recipe_id, status, queued_at DESC)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_INGESTION_SEGMENTS_RECIPE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_ingestion_segments_recipe_idx '
+            || 'ON rag_ingestion_segments (recipe_id, status, updated_at DESC)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_CHUNK_SETS_RECIPE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_chunk_sets_recipe_idx '
+            || 'ON rag_chunk_sets (recipe_id, status, updated_at DESC)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_CHUNK_SETS_RECIPE_ACTIVE_UIDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE UNIQUE INDEX rag_chunk_sets_recipe_active_uidx '
+            || 'ON rag_chunk_sets (CASE WHEN is_active = 1 THEN recipe_id END)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_constraints
+    WHERE constraint_name = 'RAG_CHUNK_SETS_RECIPE_FK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_chunk_sets ADD CONSTRAINT rag_chunk_sets_recipe_fk '
+            || 'FOREIGN KEY (recipe_id) REFERENCES rag_document_recipes (recipe_id) '
+            || 'ON DELETE CASCADE';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_constraints
+    WHERE constraint_name = 'RAG_CHUNK_SETS_ACTIVE_CK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_chunk_sets ADD CONSTRAINT rag_chunk_sets_active_ck '
+            || 'CHECK (is_active IN (0, 1))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_constraints
+    WHERE constraint_name = 'RAG_INGESTION_JOBS_RECIPE_FK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_jobs ADD CONSTRAINT rag_ingestion_jobs_recipe_fk '
+            || 'FOREIGN KEY (recipe_id) REFERENCES rag_document_recipes (recipe_id) '
+            || 'ON DELETE CASCADE';
+    END IF;
+
+    SELECT COUNT(*) INTO v_count FROM user_constraints
+    WHERE constraint_name = 'RAG_INGESTION_SEGMENTS_RECIPE_FK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_ingestion_segments '
+            || 'ADD CONSTRAINT rag_ingestion_segments_recipe_fk '
+            || 'FOREIGN KEY (recipe_id) REFERENCES rag_document_recipes (recipe_id) '
+            || 'ON DELETE CASCADE';
+    END IF;
+END;
+/
+
+COMMIT;

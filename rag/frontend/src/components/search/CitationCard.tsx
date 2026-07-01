@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import { Button } from "@/components/ui/button";
 import { ApiError, api, type CitationFeedbackRating, type RetrievedChunk } from "@/lib/api";
-import { useDocument } from "@/lib/queries";
+import { useDocument, useDocumentRecipes } from "@/lib/queries";
 import {
   bboxCoordinateModeFromMetadata,
   bboxFromMetadata,
@@ -40,14 +40,16 @@ export function CitationCard({
   const maxima = scoreMaxima ?? { score: chunk.score, rerankScore: chunk.rerank_score ?? 0 };
   const chips = citationMetadataChips(chunk.metadata);
   const retrievalBadges = citationRetrievalBadges(chunk);
-  const variantId = variantIdFromChunkId(chunk.chunk_id);
+  const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
+  const recipeSlot = integerMetadataValue(chunk.metadata.recipe_slot_no);
   const previewUrl = citationPreviewUrl(chunk);
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   // ドロワーを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
   const previewDoc = useDocument(previewOpen ? chunk.document_id : null);
-  const preparedPdfAvailable = Boolean(previewDoc.data?.preprocess_artifact?.object_storage_path);
+  const previewRecipes = useDocumentRecipes(previewOpen ? chunk.document_id : null);
+  const previewRecipe = previewRecipes.data?.find((recipe) => recipe.recipe_id === recipeId);
   const focusPage = firstIntegerMetadata(chunk.metadata, ["page_start", "page"]);
   const focusBbox = bboxFromMetadata(chunk.metadata);
   const focusBboxMode = bboxCoordinateModeFromMetadata(chunk.metadata);
@@ -128,13 +130,12 @@ export function CitationCard({
           ))}
         </dl>
       ) : null}
-      {variantId ? (
+      {recipeSlot ? (
         <span
           className="mt-2 mr-2 inline-flex items-center gap-1 rounded-full bg-muted/10 px-2 py-0.5 text-xs text-muted"
-          title={t("search.citation.variantTitle", { id: variantId })}
         >
           <Layers size={11} aria-hidden />
-          {t("search.citation.variant", { id: variantId.slice(0, 8) })}
+          {t("documents.recipes.name", { slot: recipeSlot })}
         </span>
       ) : null}
       {chunk.category_name ? (
@@ -238,8 +239,13 @@ export function CitationCard({
             <div className="p-4">
               <DocumentPreview
                 documentId={chunk.document_id}
+                recipeId={recipeId}
                 fileName={previewFileName}
-                preparedPdfAvailable={preparedPdfAvailable}
+                preparedArtifact={
+                  recipeId
+                    ? (previewRecipe?.preprocess_artifact ?? null)
+                    : (previewDoc.data?.preprocess_artifact ?? null)
+                }
                 focusPage={focusPage}
                 focusBbox={focusBbox}
                 focusBboxMode={focusBboxMode}
@@ -368,6 +374,8 @@ export function scoreMeterPercent(value: number | null, max: number): number {
 
 export function citationPreviewUrl(chunk: RetrievedChunk): string {
   const params = new URLSearchParams({ chunk_id: chunk.chunk_id });
+  const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
+  if (recipeId) params.set("recipe", recipeId);
   const page = firstIntegerMetadata(chunk.metadata, ["page_start", "page"]);
   if (page != null) params.set("page", String(page));
   const bbox = bboxFromMetadata(chunk.metadata);

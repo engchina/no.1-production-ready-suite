@@ -16,6 +16,7 @@ import { ToggleChip } from "@/components/ui/toggle-chip";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
+  DEFAULT_BUSINESS_VIEW_NAME,
   type BusinessViewConfig,
   type BusinessViewDetail,
   type BusinessViewStatus,
@@ -26,7 +27,6 @@ import {
   type KnowledgeBaseQueryConfig,
   type PostRetrievalPipelineName,
   type RetrievalStrategyName,
-  type ServingMode,
   type VectorIndexProfileName,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 const LIMIT = 20;
 const FILTERS: (BusinessViewStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
 const NAME_ERROR_ID = "business-view-name-error";
+const NAME_HELPER_ID = "business-view-name-helper";
 const SCOPE_ERROR_ID = "business-view-scope-error";
 
 const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalStrategyName>[] = [
@@ -93,12 +94,6 @@ const EVALUATION_OPTIONS: SelectFieldOption<EvaluationSuiteName>[] = [
   { value: "strict_ci", label: t("settings.evaluation.suite.strict_ci") },
   { value: "ragas_like", label: t("settings.evaluation.suite.ragas_like") },
 ];
-const SERVING_MODE_OPTIONS: SelectFieldOption<ServingMode>[] = [
-  { value: "single", label: "単一(既定)" },
-  { value: "fused", label: "融合(複数の知識範囲を統合)" },
-  { value: "routed", label: "ルール分岐(質問ごとに切替)" },
-];
-
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {
     retrieval_strategy: null,
@@ -117,7 +112,7 @@ function emptyConfig(): BusinessViewConfig {
     query: emptyQueryConfig(),
     system_prompt: null,
     default_language: null,
-    serving_mode: "single",
+    serving_mode: "fused",
   };
 }
 
@@ -264,6 +259,7 @@ function BusinessViewCard({
   onArchive: () => void;
 }) {
   const isArchived = view.status === "ARCHIVED";
+  const isDefault = view.name === DEFAULT_BUSINESS_VIEW_NAME;
   return (
     <li className="flex min-w-0 flex-col rounded-lg border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-2">
@@ -295,7 +291,14 @@ function BusinessViewCard({
           {t("businessViews.actions.edit")}
         </Button>
         {!isArchived ? (
-          <Button size="sm" variant="ghost" onClick={onArchive} disabled={archiving}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onArchive}
+            disabled={archiving || isDefault}
+            aria-label={isDefault ? t("businessViews.default.archiveDisabled") : undefined}
+            title={isDefault ? t("businessViews.default.archiveDisabled") : undefined}
+          >
             <Archive size={14} aria-hidden />
             {t("businessViews.actions.archive")}
           </Button>
@@ -322,9 +325,10 @@ function BusinessViewForm({
   const [description, setDescription] = useState(initial?.description ?? "");
   const [config, setConfig] = useState<BusinessViewConfig>(initial?.config ?? emptyConfig());
   const [touched, setTouched] = useState(false);
+  const isDefault = initial?.name === DEFAULT_BUSINESS_VIEW_NAME;
 
   const pending = create.isPending || update.isPending;
-  const nameError = touched && !name.trim() ? t("businessViews.nameRequired") : null;
+  const nameError = touched && !isDefault ? validateBusinessViewName(name) : null;
   const scopeError =
     touched && config.knowledge_base_ids.length === 0
       ? t("businessViews.knowledgeBasesRequired")
@@ -336,15 +340,17 @@ function BusinessViewForm({
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setTouched(true);
-    if (!name.trim() || config.knowledge_base_ids.length === 0) return;
-    const payload = {
-      name: name.trim(),
-      description: description.trim() || null,
-      config,
-    };
+    if (validateBusinessViewName(name, isDefault) || config.knowledge_base_ids.length === 0) return;
     if (mode === "edit" && initial) {
       update.mutate(
-        { id: initial.id, payload },
+        {
+          id: initial.id,
+          payload: {
+            ...(!isDefault ? { name: name.trim() } : {}),
+            description: description.trim() || null,
+            config,
+          },
+        },
         {
           onSuccess: (detail) => {
             toast.success(t("businessViews.toast.updated"));
@@ -358,18 +364,21 @@ function BusinessViewForm({
       );
       return;
     }
-    create.mutate(payload, {
-      onSuccess: (detail) => {
-        setName("");
-        setDescription("");
-        setConfig(emptyConfig());
-        setTouched(false);
-        toast.success(t("businessViews.toast.created"));
-        onDone(detail.id);
-      },
-      onError: (error) =>
-        toast.error(error instanceof ApiError ? error.message : t("businessViews.error.create")),
-    });
+    create.mutate(
+      { name: name.trim(), description: description.trim() || null, config },
+      {
+        onSuccess: (detail) => {
+          setName("");
+          setDescription("");
+          setConfig(emptyConfig());
+          setTouched(false);
+          toast.success(t("businessViews.toast.created"));
+          onDone(detail.id);
+        },
+        onError: (error) =>
+          toast.error(error instanceof ApiError ? error.message : t("businessViews.error.create")),
+      }
+    );
   };
 
   return (
@@ -392,11 +401,25 @@ function BusinessViewForm({
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 onBlur={() => setTouched(true)}
+                readOnly={isDefault}
+                aria-readonly={isDefault || undefined}
                 placeholder={t("businessViews.field.namePlaceholder")}
                 aria-invalid={Boolean(nameError)}
-                aria-describedby={nameError ? NAME_ERROR_ID : undefined}
-                className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary"
+                aria-describedby={
+                  [isDefault ? NAME_HELPER_ID : "", nameError ? NAME_ERROR_ID : ""]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
+                className={cn(
+                  "mt-1 h-9 w-full rounded-md border border-border px-3 text-sm outline-none focus-visible:border-primary",
+                  isDefault ? "cursor-default bg-background text-muted" : "bg-background"
+                )}
               />
+              {isDefault ? (
+                <p id={NAME_HELPER_ID} className="mt-1 text-xs text-muted">
+                  {t("businessViews.default.nameFixed")}
+                </p>
+              ) : null}
               <FieldError id={NAME_ERROR_ID} message={nameError} className="mt-1" />
             </div>
             <div>
@@ -420,9 +443,13 @@ function BusinessViewForm({
             <KnowledgeBaseScopePicker
               selectedIds={config.knowledge_base_ids}
               onChange={(ids) => setConfig((current) => ({ ...current, knowledge_base_ids: ids }))}
-              disabled={pending}
+              disabled={pending || isDefault}
               label={t("businessViews.field.knowledgeBases")}
-              helper={t("businessViews.field.knowledgeBasesHelper")}
+              helper={
+                isDefault
+                  ? t("businessViews.default.knowledgeBaseFixed")
+                  : t("businessViews.field.knowledgeBasesHelper")
+              }
               emptySelectionText={t("businessViews.knowledgeBasesRequired")}
             />
             <FieldError id={SCOPE_ERROR_ID} message={scopeError} className="mt-1" />
@@ -481,18 +508,6 @@ function BusinessViewForm({
               {t("businessViews.query.title")}
             </legend>
             <p className="text-xs text-muted">{t("businessViews.query.helper")}</p>
-            <div className="max-w-sm">
-              <SelectField
-                id="business-view-serving-mode"
-                label={t("businessViews.field.servingMode")}
-                value={config.serving_mode}
-                options={SERVING_MODE_OPTIONS}
-                onValueChange={(value) =>
-                  setConfig((current) => ({ ...current, serving_mode: value }))
-                }
-                helper={t("businessViews.field.servingModeHelper")}
-              />
-            </div>
             <div className="grid gap-3 md:grid-cols-2">
               <QuerySelectRow
                 id="business-view-retrieval"
@@ -582,6 +597,15 @@ function BusinessViewForm({
       </CardContent>
     </Card>
   );
+}
+
+function validateBusinessViewName(name: string, allowDefault = false) {
+  const cleaned = name.trim();
+  if (!cleaned) return t("businessViews.nameRequired");
+  if (!allowDefault && cleaned.toUpperCase() === DEFAULT_BUSINESS_VIEW_NAME) {
+    return t("businessViews.nameReserved");
+  }
+  return null;
 }
 
 /** 継承/上書きトグル + 上書き時のみ表示する選択欄(段階的開示)。 */

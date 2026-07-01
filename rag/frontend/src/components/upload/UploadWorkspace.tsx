@@ -199,7 +199,10 @@ function uploadSkipReasonLabel(reason: string): string {
     case "duplicate_content":
       return t("sourceProfile.warning.duplicate");
     default:
-      return unsupportedReasonLabel(reason) || t("flow.ingestionSkipped");
+      return (
+        unsupportedReasonLabel(reason) ||
+        t("flow.phase.skipped", { phase: t("flow.jobs.phase.preprocess") })
+      );
   }
 }
 

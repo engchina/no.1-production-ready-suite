@@ -363,24 +363,9 @@ async function mockDocumentDetail(
       },
     });
   });
-  await page.route("**/api/documents/doc-1", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          id: "doc-1",
-          file_name: "policy.txt",
-          status: "INDEXED",
-          category_name: null,
-          content_type: "text/plain",
-          file_size_bytes: 120,
-          content_sha256: "a".repeat(64),
-          duplicate_of_document_id: null,
-          knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
-          uploaded_at: "2026-06-14T00:00:00Z",
-          indexed_at: "2026-06-14T00:01:00Z",
-          object_storage_path: "local://policy.txt",
-          error_message: null,
-          extraction: overrides?.extraction ?? {
+  const extraction =
+    overrides?.extraction ??
+    {
             raw_text: "# 経費申請\n| 項目 | 金額 |",
             document_type: "規程",
             confidence: 0.92,
@@ -463,7 +448,25 @@ async function mockDocumentDetail(
             ],
             assets: [],
             parser_artifacts: { parser_backend: "local_partition" },
-          },
+          };
+  await page.route("**/api/documents/doc-1", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          id: "doc-1",
+          file_name: "policy.txt",
+          status: "INDEXED",
+          category_name: null,
+          content_type: "text/plain",
+          file_size_bytes: 120,
+          content_sha256: "a".repeat(64),
+          duplicate_of_document_id: null,
+          knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
+          uploaded_at: "2026-06-14T00:00:00Z",
+          indexed_at: "2026-06-14T00:01:00Z",
+          object_storage_path: "local://policy.txt",
+          error_message: null,
+          extraction,
           source_profile: {
             original_file_name: "policy.txt",
             sanitized_file_name: "policy.txt",
@@ -489,7 +492,124 @@ async function mockDocumentDetail(
       },
     });
   });
-  await page.route("**/api/documents/doc-1/content", async (route) => {
+  await page.route("**/api/documents/doc-1/recipes", async (route) => {
+    await route.fulfill({
+      json: {
+        data: [
+          {
+            recipe_id: "recipe-1",
+            document_id: "doc-1",
+            slot_no: 1,
+            status: "INDEXED",
+            failed_phase: null,
+            processing_config: {},
+            effective_processing_config: {},
+            preprocess_artifact: null,
+            active_extraction_recipe_id: "er-recipe-1-r1",
+            active_chunk_set_id: "chunk-set-recipe-1",
+            chunk_count: (overrides?.chunks ?? []).length || 2,
+            vector_count: (overrides?.chunks ?? []).length || 2,
+            config_revision: 1,
+            materialized_revision: 1,
+            searchable: true,
+            needs_reprocessing: false,
+            error_message: null,
+            steps: [
+              { phase: "PREPROCESS", status: "SUCCEEDED", started_at: null, finished_at: null, error_message: null },
+              { phase: "EXTRACT", status: "SUCCEEDED", started_at: null, finished_at: null, error_message: null },
+              { phase: "CHUNK", status: "SUCCEEDED", started_at: null, finished_at: null, error_message: null },
+              { phase: "INDEX", status: "SUCCEEDED", started_at: null, finished_at: null, error_message: null },
+            ],
+            created_at: "2026-06-14T00:00:00Z",
+            updated_at: "2026-06-14T00:01:00Z",
+            started_at: null,
+            finished_at: "2026-06-14T00:01:00Z",
+          },
+        ],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/extraction-export**", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          document_id: "doc-1",
+          file_name: "policy.txt",
+          format: "markdown",
+          content_type: "text/markdown; charset=utf-8",
+          content: extraction.raw_text as string,
+          payload: extraction,
+          chunks: [],
+          parser_backend: "local_partition",
+          parser_profile: "local_text_structure",
+          page_count: 1,
+          element_count: (extraction.elements as unknown[]).length,
+          table_count: (extraction.tables as unknown[]).length,
+          asset_count: 0,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/chunks", async (route) => {
+    await route.fulfill({
+      json: {
+        data: overrides?.chunks ?? [
+          {
+            document_id: "doc-1",
+            chunk_id: "doc-1:0",
+            chunk_index: 0,
+            text: "# 経費申請",
+            page_start: 1,
+            page_end: 1,
+            bbox: [0, 0, 100, 20],
+            section_path: "経費申請",
+            content_kind: "text",
+            chunk_group_id: "grp-1",
+            source_parser: "local_text_structure",
+            element_ids: ["el-0000"],
+            metadata: { chunk_profile: "structure_v1", element_ids: "el-0000" },
+          },
+          {
+            document_id: "doc-1",
+            chunk_id: "doc-1:1",
+            chunk_index: 1,
+            text: "料金表の交通費は 1000 円です。",
+            page_start: 2,
+            page_end: 2,
+            bbox: null,
+            section_path: "経費申請 > 料金表",
+            content_kind: "table",
+            chunk_group_id: "grp-2",
+            source_parser: "local_text_structure",
+            element_ids: ["tbl-1"],
+            metadata: {
+              chunk_profile: "structure_v1",
+              element_ids: "tbl-1",
+              bbox_json: "[0,0,612,316.8]",
+              bbox_coordinate_mode: "xyxy",
+              bbox_unit: "absolute",
+              page_width: 612,
+              page_height: 792,
+            },
+          },
+        ],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/content**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/plain" },
+      body: "# 経費申請\n| 項目 | 金額 |",
+    });
+  });
+  await page.route("**/api/documents/doc-1/content**", async (route) => {
     await route.fulfill({
       status: 200,
       headers: { "content-type": "text/plain" },
@@ -539,6 +659,24 @@ async function mockDocumentDetail(
             },
           },
         ],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/chunk-sets", async (route) => {
+    await route.fulfill({
+      json: {
+        data: [],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/ingestion-jobs**", async (route) => {
+    await route.fulfill({
+      json: {
+        data: [],
         error_messages: [],
         warning_messages: [],
       },

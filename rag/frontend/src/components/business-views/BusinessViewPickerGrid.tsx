@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import { MultiSelectCombobox } from "@/components/ui/multi-select-combobox";
-import type { BusinessViewSummary } from "@/lib/api";
+import { DEFAULT_BUSINESS_VIEW_NAME, type BusinessViewSummary } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 /** 業務ビューの複数選択コンボボックス。 */
@@ -65,6 +65,8 @@ export function BusinessViewPickerGrid({
 
 function sortBusinessViews(items: BusinessViewSummary[]) {
   return [...items].sort((a, b) => {
+    if (a.name === DEFAULT_BUSINESS_VIEW_NAME) return -1;
+    if (b.name === DEFAULT_BUSINESS_VIEW_NAME) return 1;
     if (b.knowledge_base_count !== a.knowledge_base_count) {
       return b.knowledge_base_count - a.knowledge_base_count;
     }

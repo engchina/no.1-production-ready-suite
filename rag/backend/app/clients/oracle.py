@@ -46,6 +46,7 @@ from app.rag.request_context import current_audit_request_context
 from app.rag.source_profile import build_source_profile
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
 from app.schemas.business_view import (
+    DEFAULT_BUSINESS_VIEW_NAME,
     BusinessViewDetail,
     BusinessViewStatus,
     BusinessViewSummary,
@@ -768,6 +769,526 @@ class OracleClient:
     # 本メソッド群はその計画を Oracle へ反映する手。refcount は binding 件数から導出する。
     # ------------------------------------------------------------------
 
+    async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
+        """既存文書にレシピ1が無ければ文書 legacy 状態から補完する。"""
+        tenant = current_audit_request_context().tenant_id_hash
+        recipe_id = hashlib.sha256(f"{document_id}:recipe:1".encode()).hexdigest()
+
+        def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
+            document = _select_document(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            config_row = _fetch_one(
+                connection,
+                "SELECT processing_config FROM rag_documents WHERE document_id = :document_id",
+                {"document_id": document_id},
+            )
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_document_recipes r
+                USING (SELECT :document_id AS document_id, 1 AS slot_no FROM dual) s
+                ON (r.document_id = s.document_id AND r.slot_no = s.slot_no)
+                WHEN NOT MATCHED THEN INSERT (
+                    recipe_id, document_id, slot_no, tenant_id_hash, processing_config,
+                    status, preprocess_artifact, config_revision, materialized_revision,
+                    error_message, created_at, updated_at, finished_at
+                ) VALUES (
+                    :recipe_id, :document_id, 1, :tenant_id_hash, :processing_config,
+                    :status, :preprocess_artifact, 1, :materialized_revision,
+                    :error_message, :created_at, SYSTIMESTAMP, :finished_at
+                )
+                """,
+                {
+                    "recipe_id": recipe_id,
+                    "document_id": document_id,
+                    "tenant_id_hash": tenant,
+                    "processing_config": _json_bind(
+                        _json_loads((config_row or {}).get("processing_config"))
+                    ),
+                    "status": document.status.value,
+                    "preprocess_artifact": _json_bind(document.preprocess_artifact),
+                    "materialized_revision": 1 if document.status == FileStatus.INDEXED else None,
+                    "error_message": document.error_message,
+                    "created_at": document.uploaded_at,
+                    "finished_at": document.indexed_at,
+                },
+                input_sizes=_json_input_sizes("processing_config", "preprocess_artifact"),
+            )
+            row = _fetch_one(
+                connection,
+                """
+                SELECT r.* FROM rag_document_recipes r
+                WHERE r.document_id = :document_id AND r.slot_no = 1
+                """,
+                {"document_id": document_id},
+            )
+            if row is None:
+                raise RuntimeError("レシピ1の作成に失敗しました。")
+            return _document_recipe_row(row)
+
+        return await self._run_transaction(operation)
+
+    async def list_document_recipes(self, document_id: str) -> list[dict[str, object]]:
+        """文書レシピを active chunk_set の件数とともに返す。"""
+        await self.ensure_default_document_recipe(document_id)
+        rows = await self._fetch_all(
+            """
+            SELECT
+                r.recipe_id, r.document_id, r.slot_no, r.processing_config, r.status,
+                r.failed_phase, r.preprocess_artifact, r.active_extraction_recipe_id,
+                r.config_revision, r.materialized_revision, r.error_message,
+                r.started_at, r.finished_at, r.created_at, r.updated_at,
+                cs.chunk_set_id AS active_chunk_set_id,
+                NVL(cs.chunk_count, 0) AS chunk_count,
+                NVL(cs.vector_count, 0) AS vector_count,
+                cs.status AS chunk_set_status
+            FROM rag_document_recipes r
+            LEFT JOIN rag_chunk_sets cs
+              ON cs.recipe_id = r.recipe_id AND cs.is_active = 1
+            JOIN rag_documents d ON d.document_id = r.document_id
+            WHERE r.document_id = :document_id
+              AND {document_access_sql}
+            ORDER BY r.slot_no
+            """.format(document_access_sql=_oracle_access_predicate_sql(alias="d")),
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        return [_document_recipe_row(row) for row in rows]
+
+    async def get_document_recipe(
+        self, document_id: str, recipe_id: str
+    ) -> dict[str, object] | None:
+        """文書内の指定レシピを返す。"""
+        row = await self._fetch_one(
+            """
+            SELECT
+                r.recipe_id, r.document_id, r.slot_no, r.processing_config, r.status,
+                r.failed_phase, r.preprocess_artifact, r.active_extraction_recipe_id,
+                r.config_revision, r.materialized_revision, r.error_message,
+                r.started_at, r.finished_at, r.created_at, r.updated_at,
+                cs.chunk_set_id AS active_chunk_set_id,
+                NVL(cs.chunk_count, 0) AS chunk_count,
+                NVL(cs.vector_count, 0) AS vector_count,
+                cs.status AS chunk_set_status
+            FROM rag_document_recipes r
+            LEFT JOIN rag_chunk_sets cs
+              ON cs.recipe_id = r.recipe_id AND cs.is_active = 1
+            JOIN rag_documents d ON d.document_id = r.document_id
+            WHERE r.document_id = :document_id
+              AND r.recipe_id = :recipe_id
+              AND {document_access_sql}
+            """.format(document_access_sql=_oracle_access_predicate_sql(alias="d")),
+            _with_tenant_bind({"document_id": document_id, "recipe_id": recipe_id}),
+        )
+        return _document_recipe_row(row) if row is not None else None
+
+    async def get_latest_recipe_chunk_set(
+        self,
+        recipe_id: str,
+        *,
+        status: str | None = None,
+        active: bool | None = None,
+    ) -> dict[str, object] | None:
+        """レシピの最新 chunk_set を工程再開用に返す。"""
+        clauses = ["recipe_id = :recipe_id"]
+        binds: dict[str, object] = {"recipe_id": recipe_id}
+        if status is not None:
+            clauses.append("status = :status")
+            binds["status"] = status
+        if active is not None:
+            clauses.append("is_active = :is_active")
+            binds["is_active"] = 1 if active else 0
+        return await self._fetch_one(
+            f"""
+            SELECT chunk_set_id, document_id, recipe_id, extraction_recipe_id,
+                   recipe_subset, status, chunk_count, vector_count, is_active,
+                   created_at, updated_at
+            FROM rag_chunk_sets
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC, chunk_set_id DESC
+            FETCH FIRST 1 ROWS ONLY
+            """,
+            binds,
+        )
+
+    async def create_document_recipe(
+        self, document_id: str, *, copy_from_recipe_id: str | None = None
+    ) -> dict[str, object]:
+        """親文書をロックして最大3件を保証し、新しい空き slot にレシピを作る。"""
+        await self.ensure_default_document_recipe(document_id)
+
+        def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
+            document = _select_document_for_update(connection, document_id)
+            if document is None:
+                raise KeyError(f"document_id={document_id} は存在しません。")
+            rows = _fetch_all(
+                connection,
+                """
+                SELECT recipe_id, slot_no, processing_config
+                FROM rag_document_recipes
+                WHERE document_id = :document_id
+                ORDER BY slot_no
+                """,
+                {"document_id": document_id},
+            )
+            if len(rows) >= 3:
+                raise ValueError("レシピは最大3件です。")
+            used = {_int_value(row.get("slot_no")) for row in rows}
+            slot_no = next(slot for slot in (1, 2, 3) if slot not in used)
+            processing_config: dict[str, object] = {}
+            if copy_from_recipe_id is not None:
+                source = next(
+                    (row for row in rows if str(row.get("recipe_id")) == copy_from_recipe_id),
+                    None,
+                )
+                if source is None:
+                    raise KeyError("複製元レシピが見つかりません。")
+                processing_config = _json_loads(source.get("processing_config"))
+            now = datetime.now(UTC)
+            recipe_id = uuid4().hex
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_document_recipes (
+                    recipe_id, document_id, slot_no, tenant_id_hash, processing_config,
+                    status, config_revision, created_at, updated_at
+                ) VALUES (
+                    :recipe_id, :document_id, :slot_no, :tenant_id_hash, :processing_config,
+                    'UPLOADED', 1, :created_at, :updated_at
+                )
+                """,
+                {
+                    "recipe_id": recipe_id,
+                    "document_id": document_id,
+                    "slot_no": slot_no,
+                    "tenant_id_hash": _current_tenant_id_hash(),
+                    "processing_config": _json_bind(processing_config),
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                input_sizes=_json_input_sizes("processing_config"),
+            )
+            row = _fetch_one(
+                connection,
+                "SELECT * FROM rag_document_recipes WHERE recipe_id = :recipe_id",
+                {"recipe_id": recipe_id},
+            )
+            assert row is not None
+            return _document_recipe_row(row)
+
+        return await self._run_transaction(operation)
+
+    async def update_document_recipe_config(
+        self,
+        document_id: str,
+        recipe_id: str,
+        config: DocumentProcessingConfig,
+    ) -> dict[str, object]:
+        """活動中 job が無いレシピの明示設定を保存し revision を進める。"""
+
+        def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
+            recipe = _select_document_recipe_for_update(connection, document_id, recipe_id)
+            if recipe is None:
+                raise KeyError("レシピが見つかりません。")
+            active = _fetch_one(
+                connection,
+                """
+                SELECT job_id FROM rag_ingestion_jobs
+                WHERE recipe_id = :recipe_id
+                  AND document_id = :document_id
+                  AND status IN ('QUEUED', 'RUNNING')
+                FETCH FIRST 1 ROWS ONLY
+                """,
+                {"recipe_id": recipe_id, "document_id": document_id},
+            )
+            if active is not None:
+                raise ValueError("処理中または待機中のレシピは編集できません。")
+            _execute(
+                connection,
+                """
+                UPDATE rag_document_recipes
+                SET processing_config = :processing_config,
+                    config_revision = config_revision + 1,
+                    error_message = NULL,
+                    failed_phase = NULL,
+                    updated_at = SYSTIMESTAMP
+                WHERE recipe_id = :recipe_id AND document_id = :document_id
+                """,
+                {
+                    "recipe_id": recipe_id,
+                    "document_id": document_id,
+                    "processing_config": _json_bind(
+                        config.model_dump(mode="json", exclude_none=True)
+                    ),
+                },
+                input_sizes=_json_input_sizes("processing_config"),
+            )
+            row = _fetch_one(
+                connection,
+                "SELECT * FROM rag_document_recipes WHERE recipe_id = :recipe_id",
+                {"recipe_id": recipe_id},
+            )
+            if row is None:
+                raise KeyError("レシピが見つかりません。")
+            return _document_recipe_row(row)
+
+        return await self._run_transaction(operation)
+
+    async def delete_document_recipe(self, document_id: str, recipe_id: str) -> int:
+        """最後の1件と活動中 job を保護し、レシピ固有の chunk を削除する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            document = _select_document_for_update(connection, document_id)
+            if document is None:
+                raise KeyError("ドキュメントが見つかりません。")
+            if _select_document_recipe_for_update(connection, document_id, recipe_id) is None:
+                raise KeyError("レシピが見つかりません。")
+            count_row = _fetch_one(
+                connection,
+                "SELECT COUNT(*) AS cnt FROM rag_document_recipes WHERE document_id = :document_id",
+                {"document_id": document_id},
+            )
+            if _int_value((count_row or {}).get("cnt")) <= 1:
+                raise ValueError("レシピは少なくとも1件必要です。")
+            active = _fetch_one(
+                connection,
+                """
+                SELECT job_id FROM rag_ingestion_jobs
+                WHERE recipe_id = :recipe_id
+                  AND document_id = :document_id
+                  AND status IN ('QUEUED', 'RUNNING')
+                FETCH FIRST 1 ROWS ONLY
+                """,
+                {"recipe_id": recipe_id, "document_id": document_id},
+            )
+            if active is not None:
+                raise ValueError("処理中または待機中のレシピは削除できません。")
+            count_chunks = _fetch_one(
+                connection,
+                "SELECT COUNT(*) AS cnt FROM rag_chunk_sets WHERE recipe_id = :recipe_id",
+                {"recipe_id": recipe_id},
+            )
+            stale_sets = _fetch_all(
+                connection,
+                "SELECT chunk_set_id FROM rag_chunk_sets WHERE recipe_id = :recipe_id",
+                {"recipe_id": recipe_id},
+            )
+            for stale_set in stale_sets:
+                stale_chunk_set_id = str(stale_set["chunk_set_id"])
+                entity_rows = _fetch_all(
+                    connection,
+                    "SELECT entity_id FROM rag_graph_entities WHERE chunk_set_id = :chunk_set_id",
+                    {"chunk_set_id": stale_chunk_set_id},
+                )
+                _delete_graph_rows_for_chunk_set(
+                    connection,
+                    chunk_set_id=stale_chunk_set_id,
+                    entity_ids=[str(row["entity_id"]) for row in entity_rows],
+                )
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunks
+                WHERE chunk_set_id IN (
+                    SELECT chunk_set_id FROM rag_chunk_sets WHERE recipe_id = :recipe_id
+                )
+                """,
+                {"recipe_id": recipe_id},
+            )
+            _execute(
+                connection,
+                "DELETE FROM rag_chunk_sets WHERE recipe_id = :recipe_id",
+                {"recipe_id": recipe_id},
+            )
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_document_recipes
+                WHERE recipe_id = :recipe_id AND document_id = :document_id
+                """,
+                {"recipe_id": recipe_id, "document_id": document_id},
+            )
+            return _int_value((count_chunks or {}).get("cnt"))
+
+        return await self._run_transaction(operation)
+
+    async def update_document_recipe_status(
+        self,
+        *,
+        recipe_id: str,
+        status: FileStatus,
+        failed_phase: IngestionJobPhase | None = None,
+        error_message: str | None = None,
+        preprocess_artifact: DocumentPreprocessArtifact | None = None,
+        active_extraction_recipe_id: str | None = None,
+    ) -> None:
+        """レシピ単位の工程状態と成果物ポインタを更新する。"""
+        updates = {
+            "recipe_id": recipe_id,
+            "status": status.value,
+            "failed_phase": failed_phase.value if failed_phase is not None else None,
+            "error_message": error_message,
+            "preprocess_artifact": (
+                _json_bind(preprocess_artifact.model_dump(mode="json"))
+                if preprocess_artifact is not None
+                else None
+            ),
+            "active_extraction_recipe_id": active_extraction_recipe_id,
+            "started_at": (
+                datetime.now(UTC)
+                if status
+                in {
+                    FileStatus.PREPROCESSING,
+                    FileStatus.INGESTING,
+                    FileStatus.CHUNKING,
+                    FileStatus.INDEXING,
+                }
+                else None
+            ),
+            "finished_at": (
+                datetime.now(UTC) if status in {FileStatus.INDEXED, FileStatus.ERROR} else None
+            ),
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_document_recipes
+                SET status = :status,
+                    failed_phase = :failed_phase,
+                    error_message = :error_message,
+                    preprocess_artifact = COALESCE(:preprocess_artifact, preprocess_artifact),
+                    active_extraction_recipe_id = COALESCE(
+                        :active_extraction_recipe_id, active_extraction_recipe_id
+                    ),
+                    started_at = COALESCE(:started_at, started_at),
+                    finished_at = :finished_at,
+                    updated_at = SYSTIMESTAMP
+                WHERE recipe_id = :recipe_id
+                """,
+                updates,
+                input_sizes=_json_input_sizes("preprocess_artifact"),
+            )
+
+        await self._run_transaction(operation)
+
+    async def activate_recipe_chunk_set(
+        self,
+        *,
+        recipe_id: str,
+        chunk_set_id: str,
+        extraction_recipe_id: str | None = None,
+        materialized_revision: int | None = None,
+    ) -> None:
+        """成功出力を active に原子切替し、同レシピの旧出力を GC する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            locked_recipe = _fetch_one(
+                connection,
+                """
+                SELECT recipe_id FROM rag_document_recipes
+                WHERE recipe_id = :recipe_id
+                FOR UPDATE
+                """,
+                {"recipe_id": recipe_id},
+            )
+            if locked_recipe is None:
+                raise KeyError("レシピが見つかりません。")
+            selected = _fetch_one(
+                connection,
+                """
+                SELECT chunk_set_id FROM rag_chunk_sets
+                WHERE chunk_set_id = :chunk_set_id AND status = 'INDEXED'
+                """,
+                {"chunk_set_id": chunk_set_id},
+            )
+            if selected is None:
+                raise ValueError("索引済みの出力のみ active にできます。")
+            _execute(
+                connection,
+                """
+                UPDATE rag_chunk_sets
+                SET recipe_id = :recipe_id, updated_at = SYSTIMESTAMP
+                WHERE chunk_set_id = :chunk_set_id
+                """,
+                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
+            _execute(
+                connection,
+                """
+                UPDATE rag_chunk_sets
+                SET is_active = CASE WHEN chunk_set_id = :chunk_set_id THEN 1 ELSE 0 END,
+                    updated_at = SYSTIMESTAMP
+                WHERE recipe_id = :recipe_id
+                """,
+                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
+            _execute(
+                connection,
+                """
+                UPDATE rag_document_recipes
+                SET status = 'INDEXED',
+                    failed_phase = NULL,
+                    error_message = NULL,
+                    active_extraction_recipe_id = COALESCE(
+                        :extraction_recipe_id, active_extraction_recipe_id
+                    ),
+                    materialized_revision = COALESCE(
+                        :materialized_revision, config_revision
+                    ),
+                    finished_at = SYSTIMESTAMP,
+                    updated_at = SYSTIMESTAMP
+                WHERE recipe_id = :recipe_id
+                """,
+                {
+                    "recipe_id": recipe_id,
+                    "extraction_recipe_id": extraction_recipe_id,
+                    "materialized_revision": materialized_revision,
+                },
+            )
+            stale_sets = _fetch_all(
+                connection,
+                """
+                SELECT chunk_set_id FROM rag_chunk_sets
+                WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
+                """,
+                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
+            for stale_set in stale_sets:
+                stale_chunk_set_id = str(stale_set["chunk_set_id"])
+                entity_rows = _fetch_all(
+                    connection,
+                    "SELECT entity_id FROM rag_graph_entities WHERE chunk_set_id = :chunk_set_id",
+                    {"chunk_set_id": stale_chunk_set_id},
+                )
+                _delete_graph_rows_for_chunk_set(
+                    connection,
+                    chunk_set_id=stale_chunk_set_id,
+                    entity_ids=[str(row["entity_id"]) for row in entity_rows],
+                )
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunks
+                WHERE chunk_set_id IN (
+                    SELECT chunk_set_id FROM rag_chunk_sets
+                    WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
+                )
+                """,
+                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunk_sets
+                WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
+                """,
+                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
+
+        await self._run_transaction(operation)
+
     async def upsert_document_extraction(
         self,
         *,
@@ -948,6 +1469,7 @@ class OracleClient:
         *,
         chunk_set_id: str,
         document_id: str,
+        recipe_id: str | None = None,
         extraction_recipe_id: str | None = None,
         recipe_subset: Mapping[str, object] | None = None,
         status: str = "INGESTING",
@@ -960,9 +1482,10 @@ class OracleClient:
         binds = {
             "chunk_set_id": chunk_set_id,
             "document_id": document_id,
+            "recipe_id": recipe_id,
             "extraction_recipe_id": extraction_recipe_id,
             "tenant_id_hash": tenant,
-            "recipe_subset": (_json_dumps(recipe_subset) if recipe_subset is not None else None),
+            "recipe_subset": _json_bind(recipe_subset),
             "status": status,
         }
 
@@ -974,17 +1497,21 @@ class OracleClient:
                 USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
                 ON (t.chunk_set_id = s.chunk_set_id)
                 WHEN MATCHED THEN UPDATE SET
+                    t.recipe_id = COALESCE(:recipe_id, t.recipe_id),
                     t.extraction_recipe_id =
                         COALESCE(:extraction_recipe_id, t.extraction_recipe_id),
                     t.recipe_subset = COALESCE(:recipe_subset, t.recipe_subset),
                     t.updated_at = SYSTIMESTAMP
                 WHEN NOT MATCHED THEN INSERT
-                    (chunk_set_id, document_id, extraction_recipe_id, tenant_id_hash,
+                    (chunk_set_id, document_id, recipe_id, extraction_recipe_id, tenant_id_hash,
                      recipe_subset, status)
-                    VALUES (:chunk_set_id, :document_id, :extraction_recipe_id, :tenant_id_hash,
-                            :recipe_subset, :status)
+                    VALUES (
+                        :chunk_set_id, :document_id, :recipe_id, :extraction_recipe_id,
+                        :tenant_id_hash, :recipe_subset, :status
+                    )
                 """,
                 binds,
+                input_sizes=_json_input_sizes("recipe_subset"),
             )
 
         await self._run_transaction(operation)
@@ -1084,8 +1611,8 @@ class OracleClient:
         """chunk_set の状態(status/件数/親 extraction_id/is_serving)を返す。キーは小文字化。"""
         row = await self._fetch_one(
             """
-            SELECT chunk_set_id, document_id, extraction_recipe_id, recipe_subset,
-                   status, chunk_count, vector_count, is_serving
+            SELECT chunk_set_id, document_id, recipe_id, extraction_recipe_id, recipe_subset,
+                   status, chunk_count, vector_count, is_serving, is_active
             FROM rag_chunk_sets WHERE chunk_set_id = :chunk_set_id
             """,
             {"chunk_set_id": chunk_set_id},
@@ -1340,11 +1867,13 @@ class OracleClient:
         rows = await self._fetch_all(
             """
             SELECT cs.chunk_set_id AS chunk_set_id,
+                   cs.recipe_id AS recipe_id,
                    cs.extraction_recipe_id AS extraction_recipe_id,
                    cs.status AS status,
                    cs.chunk_count AS chunk_count,
                    cs.vector_count AS vector_count,
                    cs.is_serving AS is_serving,
+                   cs.is_active AS is_active,
                    ex.recipe_subset AS extraction_recipe
             FROM rag_chunk_sets cs
             LEFT JOIN rag_document_extractions ex
@@ -1364,6 +1893,9 @@ class OracleClient:
             result.append(
                 {
                     "chunk_set_id": str(norm["chunk_set_id"]),
+                    "recipe_id": (
+                        str(norm["recipe_id"]) if norm.get("recipe_id") is not None else None
+                    ),
                     "extraction_recipe_id": (
                         str(norm["extraction_recipe_id"])
                         if norm.get("extraction_recipe_id") is not None
@@ -1373,6 +1905,7 @@ class OracleClient:
                     "chunk_count": int(str(norm["chunk_count"] or 0)),
                     "vector_count": int(str(norm["vector_count"] or 0)),
                     "is_serving": is_serving,
+                    "is_active": int(str(norm.get("is_active") or 0)) == 1,
                     "extraction_id": None,
                     "parser": recipe.get("rag_parser_adapter_backend"),
                     "preprocess": recipe.get("rag_preprocess_profile"),
@@ -1517,6 +2050,10 @@ class OracleClient:
             description=description,
             config=config or BusinessViewConfig(),
         )
+
+    async def ensure_default_business_view(self) -> BusinessViewDetail:
+        """tenant ごとの DEFAULT KB と DEFAULT 業務ビューを取得または作成する。"""
+        return await self._run_transaction(_ensure_default_business_view)
 
     async def list_business_views(
         self,
@@ -2256,9 +2793,15 @@ class OracleClient:
         self,
         document_id: str,
         graph_index: GraphIndex,
+        *,
+        chunk_set_id: str | None = None,
     ) -> None:
-        """指定 document の GraphRAG-lite index を置換する。"""
-        await self._replace_document_graph_index_with_oracle(document_id, graph_index)
+        """指定 chunk_set（legacy は document）の GraphRAG-lite index を置換する。"""
+        await self._replace_document_graph_index_with_oracle(
+            document_id,
+            graph_index,
+            chunk_set_id=chunk_set_id,
+        )
 
     async def save_search_audit_event(self, event: Mapping[str, object]) -> None:
         """脱機密化済み検索監査イベントを Oracle audit table へ保存する。"""
@@ -2698,11 +3241,15 @@ class OracleClient:
                 c.chunk_text,
                 c.metadata_json,
                 c.chunk_index,
+                cs.recipe_id,
+                r.slot_no AS recipe_slot_no,
                 d.file_name,
                 d.category_name,
                 1 - VECTOR_DISTANCE(c.embedding, :embedding, COSINE) AS score
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
+            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
             WHERE {where_sql}
               AND 1 - VECTOR_DISTANCE(c.embedding, :embedding, COSINE) >= :min_similarity
             ORDER BY
@@ -2747,11 +3294,15 @@ class OracleClient:
                     c.chunk_text,
                     c.metadata_json,
                     c.chunk_index,
+                    cs.recipe_id,
+                    r.slot_no AS recipe_slot_no,
                     d.file_name,
                     d.category_name,
                     SCORE(1) / 100 AS score
                 FROM rag_chunks c
                 JOIN rag_documents d ON d.document_id = c.document_id
+                LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
                 WHERE {where_sql}
                   AND CONTAINS(c.chunk_text, :query, 1) > 0
                 ORDER BY
@@ -2798,6 +3349,8 @@ class OracleClient:
                     c.chunk_text,
                     c.metadata_json,
                     c.chunk_index,
+                    cs.recipe_id,
+                    r.slot_no AS recipe_slot_no,
                     d.file_name,
                     d.category_name,
                     e.entity_id,
@@ -2817,6 +3370,8 @@ class OracleClient:
                  AND c.document_id = ec.document_id
                 JOIN rag_documents d
                   ON d.document_id = c.document_id
+                LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
                 WHERE {where_sql}
                   AND {match_sql}
                 ORDER BY
@@ -2866,12 +3421,14 @@ class OracleClient:
             SELECT *
             FROM (
                 SELECT
-                    community_id,
-                    knowledge_base_id,
-                    level_no,
-                    title,
-                    summary_text,
-                    source_document_ids,
+                    g.community_id,
+                    g.knowledge_base_id,
+                    g.level_no,
+                    g.title,
+                    g.summary_text,
+                    g.source_document_ids,
+                    cs.recipe_id,
+                    r.slot_no AS recipe_slot_no,
                     (
                         CASE
                             WHEN LOWER(title) LIKE :graph_title_exact ESCAPE '\\' THEN 1
@@ -2880,6 +3437,8 @@ class OracleClient:
                         + 0.75
                     ) AS score
                 FROM rag_graph_community_summaries g
+                LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = g.chunk_set_id
+                LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
                 WHERE {where_sql}
                   AND {match_sql}
                 ORDER BY
@@ -3543,33 +4102,7 @@ class OracleClient:
         )
 
         def operation(connection: OracleConnectionProtocol) -> BusinessViewDetail:
-            _execute(
-                connection,
-                """
-                INSERT INTO rag_business_views (
-                    business_view_id,
-                    tenant_id_hash,
-                    name,
-                    description,
-                    status,
-                    view_config,
-                    created_at,
-                    updated_at,
-                    archived_at
-                ) VALUES (
-                    :business_view_id,
-                    :tenant_id_hash,
-                    :name,
-                    :description,
-                    :status,
-                    :view_config,
-                    :created_at,
-                    :updated_at,
-                    :archived_at
-                )
-                """,
-                _business_view_binds(view),
-            )
+            _insert_business_view(connection, view)
             return _to_business_view_detail(view)
 
         return await self._run_transaction(operation)
@@ -3605,7 +4138,10 @@ class OracleClient:
                 bv.archived_at
             FROM rag_business_views bv
             WHERE {where_sql}
-            ORDER BY bv.updated_at DESC, bv.name ASC
+            ORDER BY
+                CASE WHEN UPPER(bv.name) = 'DEFAULT' THEN 0 ELSE 1 END,
+                bv.updated_at DESC,
+                bv.name ASC
             {paging_sql}
             """,
                 where_sql=where_sql,
@@ -3690,6 +4226,18 @@ class OracleClient:
             existing = _select_business_view(connection, business_view_id)
             if existing is None:
                 raise KeyError(f"business_view_id={business_view_id} は存在しません。")
+            is_default = existing.name.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold()
+            if is_default and "name" in fields:
+                raise ValueError("DEFAULT 業務ビューの名前は変更できません。")
+            if is_default and "config" in fields and config is not None:
+                default_knowledge_base = _select_knowledge_base_by_name(
+                    connection,
+                    DEFAULT_KNOWLEDGE_BASE_NAME,
+                )
+                if default_knowledge_base is None or config.knowledge_base_ids != [
+                    default_knowledge_base.id
+                ]:
+                    raise ValueError("DEFAULT 業務ビューの参照 KB は変更できません。")
             updated = existing
             now = datetime.now(UTC)
             if fields:
@@ -3734,6 +4282,8 @@ class OracleClient:
             existing = _select_business_view(connection, business_view_id)
             if existing is None:
                 raise KeyError(f"business_view_id={business_view_id} は存在しません。")
+            if existing.name.casefold() == DEFAULT_BUSINESS_VIEW_NAME.casefold():
+                raise ValueError("DEFAULT 業務ビューはアーカイブできません。")
             now = datetime.now(UTC)
             archived = updated_copy_business_view(
                 existing,
@@ -4064,14 +4614,40 @@ class OracleClient:
         """Oracle ingestion job table へ job を作成する。"""
 
         def operation(connection: OracleConnectionProtocol) -> IngestionJob:
-            if _select_document(connection, job.document_id) is None:
-                raise KeyError(f"document_id={job.document_id} は存在しません。")
+            if job.recipe_id is None:
+                if _select_document(connection, job.document_id) is None:
+                    raise KeyError(f"document_id={job.document_id} は存在しません。")
+            else:
+                recipe = _select_document_recipe_for_update(
+                    connection, job.document_id, job.recipe_id
+                )
+                if recipe is None:
+                    raise KeyError("レシピが見つかりません。")
+                current_revision = _int_value(recipe.get("config_revision"))
+                if job.recipe_revision is None or job.recipe_revision != current_revision:
+                    raise ValueError("レシピ設定が更新されました。再読み込みしてください。")
+                active = _fetch_one(
+                    connection,
+                    """
+                    SELECT job_id
+                    FROM rag_ingestion_jobs
+                    WHERE document_id = :document_id
+                      AND recipe_id = :recipe_id
+                      AND status IN ('QUEUED', 'RUNNING')
+                    FETCH FIRST 1 ROWS ONLY
+                    """,
+                    {"document_id": job.document_id, "recipe_id": job.recipe_id},
+                )
+                if active is not None:
+                    raise ValueError("このレシピは処理中または待機中です。")
             _execute_ingestion_job_insert(
                 connection,
                 """
                 INSERT INTO rag_ingestion_jobs (
                     job_id,
                     document_id,
+                    recipe_id,
+                    recipe_revision,
                     tenant_id_hash,
                     status,
                     phase,
@@ -4088,6 +4664,8 @@ class OracleClient:
                 ) VALUES (
                     :job_id,
                     :document_id,
+                    :recipe_id,
+                    :recipe_revision,
                     :tenant_id_hash,
                     :status,
                     :phase,
@@ -4117,6 +4695,8 @@ class OracleClient:
             SELECT
                 j.job_id,
                 j.document_id,
+                j.recipe_id,
+                j.recipe_revision,
                 j.status,
                 j.phase,
                 j.parser_profile,
@@ -4170,6 +4750,8 @@ class OracleClient:
             SELECT
                 j.job_id,
                 j.document_id,
+                j.recipe_id,
+                j.recipe_revision,
                 j.status,
                 j.phase,
                 j.parser_profile,
@@ -4217,6 +4799,8 @@ class OracleClient:
             SELECT
                 j.job_id,
                 j.document_id,
+                j.recipe_id,
+                j.recipe_revision,
                 j.status,
                 j.phase,
                 j.parser_profile,
@@ -4253,16 +4837,25 @@ class OracleClient:
         normalized_segments = [
             segment.model_copy(update={"document_id": document_id}) for segment in segments
         ]
+        recipe_id = next(
+            (segment.recipe_id for segment in normalized_segments if segment.recipe_id is not None),
+            None,
+        )
 
         def operation(connection: OracleConnectionProtocol) -> list[IngestionSegment]:
             if _select_document(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
+            recipe_scope_sql = "AND recipe_id = :recipe_id" if recipe_id is not None else ""
+            delete_binds: dict[str, object] = {"document_id": document_id}
+            if recipe_id is not None:
+                delete_binds["recipe_id"] = recipe_id
             _execute(
                 connection,
                 _render_sql(
                     """
                 DELETE FROM rag_ingestion_segments
                 WHERE document_id = :document_id
+                  {recipe_scope_sql}
                   AND EXISTS (
                       SELECT 1
                       FROM rag_documents d
@@ -4271,8 +4864,9 @@ class OracleClient:
                   )
                 """,
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                    recipe_scope_sql=recipe_scope_sql,
                 ),
-                _with_tenant_bind({"document_id": document_id}),
+                _with_tenant_bind(delete_binds),
             )
             if normalized_segments:
                 _executemany(
@@ -4281,6 +4875,7 @@ class OracleClient:
                     INSERT INTO rag_ingestion_segments (
                         segment_id,
                         document_id,
+                        recipe_id,
                         tenant_id_hash,
                         status,
                         parser_backend,
@@ -4294,6 +4889,7 @@ class OracleClient:
                     ) VALUES (
                         :segment_id,
                         :document_id,
+                        :recipe_id,
                         :tenant_id_hash,
                         :status,
                         :parser_backend,
@@ -4323,6 +4919,7 @@ class OracleClient:
             SELECT
                 s.segment_id,
                 s.document_id,
+                s.recipe_id,
                 s.status,
                 s.parser_backend,
                 s.parser_profile,
@@ -4404,6 +5001,7 @@ class OracleClient:
                 SELECT
                     s.segment_id,
                     s.document_id,
+                    s.recipe_id,
                     s.status,
                     s.parser_backend,
                     s.parser_profile,
@@ -4437,6 +5035,7 @@ class OracleClient:
             SELECT
                 s.segment_id,
                 s.document_id,
+                s.recipe_id,
                 s.status,
                 s.parser_backend,
                 s.parser_profile,
@@ -4518,12 +5117,13 @@ class OracleClient:
                 SELECT
                     j.job_id,
                     j.document_id,
+                    j.recipe_id,
+                    j.recipe_revision,
                     j.status,
                     j.phase,
                     j.parser_profile,
                     j.quality_warnings,
                     j.settings_overrides,
-                j.settings_overrides,
                     j.skip_reason,
                     j.error_message,
                     j.attempt_count,
@@ -4574,13 +5174,21 @@ class OracleClient:
                             }
                         ),
                     )
-                    # 試行上限超過: 文書を ERROR へ戻し固着を解消する。
-                    self._reset_document_status_inline(
-                        connection,
-                        document_id=job.document_id,
-                        status=FileStatus.ERROR,
-                        error_message=stale_error_message,
-                    )
+                    if job.recipe_id is not None:
+                        self._reset_document_recipe_status_inline(
+                            connection,
+                            recipe_id=job.recipe_id,
+                            phase=job.phase,
+                            status=FileStatus.ERROR,
+                            error_message=stale_error_message,
+                        )
+                    else:
+                        self._reset_document_status_inline(
+                            connection,
+                            document_id=job.document_id,
+                            status=FileStatus.ERROR,
+                            error_message=stale_error_message,
+                        )
                     continue
                 _execute(
                     connection,
@@ -4603,13 +5211,21 @@ class OracleClient:
                     ),
                     _with_tenant_bind({"job_id": job.id}),
                 )
-                # 再キュー: 文書も再実行可能な状態へ戻し、取込中ガードでの再失敗を防ぐ。
-                self._reset_document_status_inline(
-                    connection,
-                    document_id=job.document_id,
-                    status=_restore_status_for_job_phase(job.phase),
-                    error_message=None,
-                )
+                if job.recipe_id is not None:
+                    self._reset_document_recipe_status_inline(
+                        connection,
+                        recipe_id=job.recipe_id,
+                        phase=job.phase,
+                        status=_restore_recipe_status_for_job_phase(job.phase),
+                        error_message=None,
+                    )
+                else:
+                    self._reset_document_status_inline(
+                        connection,
+                        document_id=job.document_id,
+                        status=_restore_status_for_job_phase(job.phase),
+                        error_message=None,
+                    )
 
             # QUEUED/RUNNING の job が無いのに active status で取り残された文書を
             # ERROR へ戻す(過去のデッドロックで固着した文書の自己復旧)。
@@ -4627,6 +5243,12 @@ class OracleClient:
                       WHERE j.document_id = d.document_id
                         AND j.status IN ('QUEUED', 'RUNNING')
                   )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM rag_document_recipes r
+                      WHERE r.document_id = d.document_id
+                        AND r.status IN ('PREPROCESSING', 'INGESTING', 'CHUNKING', 'INDEXING')
+                  )
                 """,
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 ),
@@ -4639,6 +5261,37 @@ class OracleClient:
                 self._reset_document_status_inline(
                     connection,
                     document_id=orphan_document_id,
+                    status=FileStatus.ERROR,
+                    error_message=orphan_error_message,
+                )
+            orphan_recipe_rows = _fetch_all(
+                connection,
+                _render_sql(
+                    """
+                SELECT r.recipe_id, r.status
+                FROM rag_document_recipes r
+                JOIN rag_documents d ON d.document_id = r.document_id
+                WHERE r.status IN ('PREPROCESSING', 'INGESTING', 'CHUNKING', 'INDEXING')
+                  AND {document_access_sql}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM rag_ingestion_jobs j
+                      WHERE j.recipe_id = r.recipe_id
+                        AND j.status IN ('QUEUED', 'RUNNING')
+                  )
+                """,
+                    document_access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({}),
+            )
+            for orphan_recipe in orphan_recipe_rows:
+                recipe_id = orphan_recipe.get("recipe_id")
+                if not isinstance(recipe_id, str):
+                    continue
+                self._reset_document_recipe_status_inline(
+                    connection,
+                    recipe_id=recipe_id,
+                    phase=_failed_phase_for_recipe_status(orphan_recipe.get("status")),
                     status=FileStatus.ERROR,
                     error_message=orphan_error_message,
                 )
@@ -4681,6 +5334,58 @@ class OracleClient:
             ),
         )
 
+    @staticmethod
+    def _reset_document_recipe_status_inline(
+        connection: OracleConnectionProtocol,
+        *,
+        recipe_id: str,
+        phase: IngestionJobPhase,
+        status: FileStatus,
+        error_message: str | None,
+    ) -> None:
+        """固着した対象 recipe だけを安定状態または ERROR へ戻す。"""
+        _execute(
+            connection,
+            _render_sql(
+                """
+            UPDATE rag_document_recipes r
+            SET status = CASE
+                    WHEN :status = 'UPLOADED'
+                     AND :phase = 'PREPROCESS'
+                     AND EXISTS (
+                         SELECT 1 FROM rag_chunk_sets cs
+                         WHERE cs.recipe_id = r.recipe_id
+                           AND cs.is_active = 1
+                           AND cs.status = 'INDEXED'
+                     )
+                    THEN 'INDEXED'
+                    ELSE :status
+                END,
+                failed_phase = CASE WHEN :status = 'ERROR' THEN :phase ELSE NULL END,
+                error_message = :error_message,
+                started_at = NULL,
+                finished_at = CASE WHEN :status = 'ERROR' THEN SYSTIMESTAMP ELSE NULL END,
+                updated_at = SYSTIMESTAMP
+            WHERE r.recipe_id = :recipe_id
+              AND r.status IN ('PREPROCESSING', 'INGESTING', 'CHUNKING', 'INDEXING')
+              AND EXISTS (
+                  SELECT 1 FROM rag_documents d
+                  WHERE d.document_id = r.document_id
+                    AND {document_access_sql}
+              )
+            """,
+                document_access_sql=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(
+                {
+                    "recipe_id": recipe_id,
+                    "phase": phase.value,
+                    "status": status.value,
+                    "error_message": error_message,
+                }
+            ),
+        )
+
     async def _claim_ingestion_job_with_oracle(
         self,
         job_id: str,
@@ -4690,6 +5395,26 @@ class OracleClient:
         """QUEUED job をロックして RUNNING へ遷移する。"""
 
         def operation(connection: OracleConnectionProtocol) -> IngestionJob | None:
+            queued = _fetch_one(
+                connection,
+                """
+                SELECT document_id FROM rag_ingestion_jobs
+                WHERE job_id = :job_id AND status = 'QUEUED'
+                """,
+                {"job_id": job_id},
+            )
+            if queued is None:
+                return None
+            # 同一文書の別 job と同時 claim されないよう親行を直列化する。
+            _fetch_one(
+                connection,
+                """
+                SELECT document_id FROM rag_documents
+                WHERE document_id = :document_id
+                FOR UPDATE
+                """,
+                {"document_id": queued["document_id"]},
+            )
             rows = _fetch_ingestion_job_rows(
                 connection,
                 _render_sql(
@@ -4697,12 +5422,13 @@ class OracleClient:
                 SELECT
                     j.job_id,
                     j.document_id,
+                    j.recipe_id,
+                    j.recipe_revision,
                     j.status,
                     j.phase,
                     j.parser_profile,
                     j.quality_warnings,
                     j.settings_overrides,
-                j.settings_overrides,
                     j.skip_reason,
                     j.error_message,
                     j.attempt_count,
@@ -4715,6 +5441,12 @@ class OracleClient:
                   ON d.document_id = j.document_id
                 WHERE j.job_id = :job_id
                   AND j.status = 'QUEUED'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM rag_ingestion_jobs active_job
+                      WHERE active_job.document_id = j.document_id
+                        AND active_job.status = 'RUNNING'
+                        AND active_job.job_id <> j.job_id
+                  )
                   AND {document_access_sql}
                 FOR UPDATE SKIP LOCKED
                 """,
@@ -4851,12 +5583,13 @@ class OracleClient:
                 SELECT
                     j.job_id,
                     j.document_id,
+                    j.recipe_id,
+                    j.recipe_revision,
                     j.status,
                     j.phase,
                     j.parser_profile,
                     j.quality_warnings,
                     j.settings_overrides,
-                j.settings_overrides,
                     j.skip_reason,
                     j.error_message,
                     j.attempt_count,
@@ -6122,24 +6855,42 @@ class OracleClient:
         self,
         document_id: str,
         graph_index: GraphIndex,
+        *,
+        chunk_set_id: str | None = None,
     ) -> None:
-        """Oracle GraphRAG-lite tables の document scope を置換する。"""
+        """Oracle GraphRAG-lite tables の chunk_set scope を置換する。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
             if _select_document(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
-            existing_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
-            _delete_graph_rows_for_document(
-                connection,
-                document_id=document_id,
-                entity_ids=existing_entity_ids,
-            )
+            if chunk_set_id is not None:
+                rows = _fetch_all(
+                    connection,
+                    "SELECT entity_id FROM rag_graph_entities WHERE chunk_set_id = :chunk_set_id",
+                    {"chunk_set_id": chunk_set_id},
+                )
+                existing_entity_ids = [
+                    str(row["entity_id"]) for row in rows if row.get("entity_id")
+                ]
+                _delete_graph_rows_for_chunk_set(
+                    connection,
+                    chunk_set_id=chunk_set_id,
+                    entity_ids=existing_entity_ids,
+                )
+            else:
+                existing_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
+                _delete_graph_rows_for_document(
+                    connection,
+                    document_id=document_id,
+                    entity_ids=existing_entity_ids,
+                )
             if graph_index.entities:
                 _executemany(
                     connection,
                     """
                     INSERT INTO rag_graph_entities (
                         entity_id,
+                        chunk_set_id,
                         tenant_id_hash,
                         knowledge_base_id,
                         canonical_name,
@@ -6149,6 +6900,7 @@ class OracleClient:
                         source_document_ids
                     ) VALUES (
                         :entity_id,
+                        :chunk_set_id,
                         :tenant_id_hash,
                         :knowledge_base_id,
                         :canonical_name,
@@ -6158,7 +6910,10 @@ class OracleClient:
                         :source_document_ids
                     )
                     """,
-                    [_graph_entity_binds(entity) for entity in graph_index.entities],
+                    [
+                        {**_graph_entity_binds(entity), "chunk_set_id": chunk_set_id}
+                        for entity in graph_index.entities
+                    ],
                 )
             if graph_index.relationships:
                 _executemany(
@@ -6166,6 +6921,7 @@ class OracleClient:
                     """
                     INSERT INTO rag_graph_relationships (
                         relationship_id,
+                        chunk_set_id,
                         tenant_id_hash,
                         knowledge_base_id,
                         source_entity_id,
@@ -6176,6 +6932,7 @@ class OracleClient:
                         source_document_ids
                     ) VALUES (
                         :relationship_id,
+                        :chunk_set_id,
                         :tenant_id_hash,
                         :knowledge_base_id,
                         :source_entity_id,
@@ -6187,7 +6944,10 @@ class OracleClient:
                     )
                     """,
                     [
-                        _graph_relationship_binds(relationship)
+                        {
+                            **_graph_relationship_binds(relationship),
+                            "chunk_set_id": chunk_set_id,
+                        }
                         for relationship in graph_index.relationships
                     ],
                 )
@@ -6197,6 +6957,7 @@ class OracleClient:
                     """
                     INSERT INTO rag_graph_claims (
                         claim_id,
+                        chunk_set_id,
                         tenant_id_hash,
                         knowledge_base_id,
                         entity_id,
@@ -6206,6 +6967,7 @@ class OracleClient:
                         source_chunk_id
                     ) VALUES (
                         :claim_id,
+                        :chunk_set_id,
                         :tenant_id_hash,
                         :knowledge_base_id,
                         :entity_id,
@@ -6215,7 +6977,10 @@ class OracleClient:
                         :source_chunk_id
                     )
                     """,
-                    [_graph_claim_binds(claim) for claim in graph_index.claims],
+                    [
+                        {**_graph_claim_binds(claim), "chunk_set_id": chunk_set_id}
+                        for claim in graph_index.claims
+                    ],
                 )
             if graph_index.community_summaries:
                 _executemany(
@@ -6223,6 +6988,7 @@ class OracleClient:
                     """
                     INSERT INTO rag_graph_community_summaries (
                         community_id,
+                        chunk_set_id,
                         tenant_id_hash,
                         knowledge_base_id,
                         level_no,
@@ -6232,6 +6998,7 @@ class OracleClient:
                         source_document_ids
                     ) VALUES (
                         :community_id,
+                        :chunk_set_id,
                         :tenant_id_hash,
                         :knowledge_base_id,
                         :level_no,
@@ -6242,7 +7009,10 @@ class OracleClient:
                     )
                     """,
                     [
-                        _graph_community_summary_binds(summary)
+                        {
+                            **_graph_community_summary_binds(summary),
+                            "chunk_set_id": chunk_set_id,
+                        }
                         for summary in graph_index.community_summaries
                     ],
                 )
@@ -6253,19 +7023,24 @@ class OracleClient:
                     INSERT INTO rag_graph_entity_chunks (
                         entity_id,
                         chunk_id,
+                        chunk_set_id,
                         document_id,
                         tenant_id_hash,
                         relevance_score
                     ) VALUES (
                         :entity_id,
                         :chunk_id,
+                        :chunk_set_id,
                         :document_id,
                         :tenant_id_hash,
                         :relevance_score
                     )
                     """,
                     [
-                        _graph_entity_chunk_link_binds(link)
+                        {
+                            **_graph_entity_chunk_link_binds(link),
+                            "chunk_set_id": chunk_set_id,
+                        }
                         for link in graph_index.entity_chunk_links
                     ],
                 )
@@ -6440,6 +7215,15 @@ def _fetch_all(
         return result
 
 
+def _fetch_one(
+    connection: OracleConnectionProtocol,
+    statement: str,
+    binds: Mapping[str, object],
+) -> dict[str, object] | None:
+    rows = _fetch_all(connection, statement, binds)
+    return rows[0] if rows else None
+
+
 def _execute(
     connection: OracleConnectionProtocol,
     statement: str,
@@ -6507,6 +7291,56 @@ def _select_graph_entity_ids_for_document(
         _with_tenant_bind({"document_id": document_id}),
     )
     return [str(row["entity_id"]) for row in rows if row.get("entity_id")]
+
+
+def _delete_graph_rows_for_chunk_set(
+    connection: OracleConnectionProtocol,
+    *,
+    chunk_set_id: str,
+    entity_ids: Sequence[str],
+) -> None:
+    """指定 chunk_set の GraphRAG 行だけを FK 順に削除する。"""
+    binds = _with_tenant_bind({"chunk_set_id": chunk_set_id})
+    for table in (
+        "rag_graph_relationships",
+        "rag_graph_entity_chunks",
+        "rag_graph_claims",
+        "rag_graph_community_summaries",
+    ):
+        _execute(
+            connection,
+            _render_sql(
+                f"""
+                DELETE FROM {table}
+                WHERE chunk_set_id = :chunk_set_id
+                  AND {{graph_access_sql}}
+                """,
+                graph_access_sql=_oracle_tenant_predicate(),
+            ),
+            binds,
+        )
+    unique_entity_ids = _unique_optional_sequence(entity_ids)
+    if not unique_entity_ids:
+        return
+    entity_sql, entity_binds = _oracle_in_predicate(
+        "entity_id",
+        "graph_entity_id",
+        unique_entity_ids,
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+            DELETE FROM rag_graph_entities
+            WHERE chunk_set_id = :chunk_set_id
+              AND {entity_sql}
+              AND {graph_access_sql}
+            """,
+            entity_sql=entity_sql,
+            graph_access_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"chunk_set_id": chunk_set_id, **entity_binds}),
+    )
 
 
 def _delete_graph_rows_for_document(
@@ -7018,6 +7852,49 @@ def _select_document(
     return None if not rows else _stored_document_from_row(rows[0])
 
 
+def _select_document_for_update(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> dict[str, object] | None:
+    return _fetch_one(
+        connection,
+        _render_sql(
+            """
+        SELECT document_id
+        FROM rag_documents
+        WHERE document_id = :document_id
+          AND {access_predicate}
+        FOR UPDATE
+        """,
+            access_predicate=_oracle_access_predicate_sql(),
+        ),
+        _with_tenant_bind({"document_id": document_id}),
+    )
+
+
+def _select_document_recipe_for_update(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+    recipe_id: str,
+) -> dict[str, object] | None:
+    return _fetch_one(
+        connection,
+        _render_sql(
+            """
+        SELECT r.*
+        FROM rag_document_recipes r
+        JOIN rag_documents d ON d.document_id = r.document_id
+        WHERE r.document_id = :document_id
+          AND r.recipe_id = :recipe_id
+          AND {access_predicate}
+        FOR UPDATE OF r.recipe_id
+        """,
+            access_predicate=_oracle_access_predicate_sql(alias="d"),
+        ),
+        _with_tenant_bind({"document_id": document_id, "recipe_id": recipe_id}),
+    )
+
+
 def _select_knowledge_base(
     connection: OracleConnectionProtocol,
     knowledge_base_id: str,
@@ -7077,6 +7954,35 @@ def _select_business_view(
             tenant_sql=_oracle_tenant_predicate(),
         ),
         _with_tenant_bind({"business_view_id": business_view_id}),
+    )
+    return None if not rows else _stored_business_view_from_row(rows[0])
+
+
+def _select_business_view_by_name(
+    connection: OracleConnectionProtocol,
+    name: str,
+) -> StoredBusinessView | None:
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """
+        SELECT
+            business_view_id,
+            tenant_id_hash,
+            name,
+            description,
+            status,
+            view_config,
+            created_at,
+            updated_at,
+            archived_at
+        FROM rag_business_views
+        WHERE LOWER(name) = :business_view_name
+          AND {tenant_sql}
+        """,
+            tenant_sql=_oracle_tenant_predicate(),
+        ),
+        _with_tenant_bind({"business_view_name": name.casefold()}),
     )
     return None if not rows else _stored_business_view_from_row(rows[0])
 
@@ -7179,6 +8085,39 @@ def _insert_knowledge_base(
     )
 
 
+def _insert_business_view(
+    connection: OracleConnectionProtocol,
+    view: StoredBusinessView,
+) -> None:
+    _execute(
+        connection,
+        """
+        INSERT INTO rag_business_views (
+            business_view_id,
+            tenant_id_hash,
+            name,
+            description,
+            status,
+            view_config,
+            created_at,
+            updated_at,
+            archived_at
+        ) VALUES (
+            :business_view_id,
+            :tenant_id_hash,
+            :name,
+            :description,
+            :status,
+            :view_config,
+            :created_at,
+            :updated_at,
+            :archived_at
+        )
+        """,
+        _business_view_binds(view),
+    )
+
+
 def _ensure_default_knowledge_base(
     connection: OracleConnectionProtocol,
     name: str,
@@ -7202,6 +8141,62 @@ def _ensure_default_knowledge_base(
     )
     _insert_knowledge_base(connection, knowledge_base)
     return knowledge_base
+
+
+def _ensure_default_business_view(connection: OracleConnectionProtocol) -> BusinessViewDetail:
+    knowledge_base = _ensure_default_knowledge_base(connection, DEFAULT_KNOWLEDGE_BASE_NAME)
+    existing = _select_business_view_by_name(connection, DEFAULT_BUSINESS_VIEW_NAME)
+    now = datetime.now(UTC)
+    if existing is None:
+        view = StoredBusinessView(
+            id=uuid4().hex,
+            tenant_id_hash=_current_tenant_id_hash(),
+            name=DEFAULT_BUSINESS_VIEW_NAME,
+            description=None,
+            status=BusinessViewStatus.ACTIVE,
+            view_config=dump_business_view_config(
+                BusinessViewConfig(knowledge_base_ids=[knowledge_base.id])
+            ),
+            created_at=now,
+            updated_at=now,
+        )
+        _insert_business_view(connection, view)
+        return _to_business_view_detail(view)
+
+    config = parse_business_view_config(existing.view_config)
+    normalized_config = config.model_copy(update={"knowledge_base_ids": [knowledge_base.id]})
+    if (
+        existing.status == BusinessViewStatus.ACTIVE
+        and existing.archived_at is None
+        and config == normalized_config
+    ):
+        return _to_business_view_detail(existing)
+
+    normalized = updated_copy_business_view(
+        existing,
+        status=BusinessViewStatus.ACTIVE,
+        view_config=dump_business_view_config(normalized_config),
+        updated_at=now,
+        archived_at=None,
+    )
+    _execute(
+        connection,
+        _render_sql(
+            """
+        UPDATE rag_business_views
+        SET
+            status = :status,
+            view_config = :view_config,
+            updated_at = :updated_at,
+            archived_at = :archived_at
+        WHERE business_view_id = :business_view_id
+          AND {tenant_sql}
+        """,
+            tenant_sql=_oracle_tenant_predicate(),
+        ),
+        _business_view_binds(normalized),
+    )
+    return _to_business_view_detail(normalized)
 
 
 def _require_active_knowledge_base(
@@ -7433,9 +8428,32 @@ def _oracle_business_view_where(
 def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
-    serving_mode = (filters.get("serving_mode") or "single").strip().lower()
+    _ = (filters.get("serving_mode") or "fused").strip().lower()
     # 実験: chunk_set_id を明示すると is_serving に関係なくその chunk_set だけを検索する。
     explicit_chunk_set_id = (filters.get("chunk_set_id") or "").strip()
+    if not explicit_chunk_set_id:
+        # 1 文書 1〜3 レシピ: 各レシピの直近成功出力だけを常に融合検索する。
+        # 旧 schema の未タグ chunk はレシピ行がまだ無い文書に限り後方互換で採用する。
+        clauses.append("""
+            (
+                EXISTS (
+                    SELECT 1
+                    FROM rag_chunk_sets active_cs
+                    JOIN rag_document_recipes active_r
+                      ON active_r.recipe_id = active_cs.recipe_id
+                    WHERE active_cs.chunk_set_id = c.chunk_set_id
+                      AND active_cs.is_active = 1
+                      AND active_cs.status = 'INDEXED'
+                )
+                OR (
+                    c.chunk_set_id IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM rag_document_recipes legacy_r
+                        WHERE legacy_r.document_id = c.document_id
+                    )
+                )
+            )
+            """)
     knowledge_base_ids = _filter_id_values(filters.get("knowledge_base_id"))
     knowledge_base_filter_sql = ""
     if knowledge_base_ids:
@@ -7446,28 +8464,6 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
         )
         binds.update(knowledge_base_binds)
         knowledge_base_filter_sql = f"AND {knowledge_base_filter_sql}"
-        # variant: 配信中(serving)の chunk_set だけを検索対象にする(single/routed)。
-        # 3 層モデル: serving は文書単位(rag_chunk_sets.is_serving)で per-KB ではない。
-        # chunk は次のいずれかで採用する: ① chunk_set 未タグ(NULL=後方互換)/
-        # ② その chunk_set が serving / ③ 文書に serving chunk_set が 1 つも無い(安全側で全採用)。
-        # 単一 materialization では当該 chunk_set が serving なので従来どおり全採用(回帰なし)。
-        # fused は全 serving chunk_set を横断検索するため、この制限をかけない(重複は
-        # アプリ側の source-span dedup で除去する)。chunk_set_id 明示時(実験)も
-        # 配信中以外の候補を対象にするため serving 制限を外す(下の述語で1つに絞る)。
-        if serving_mode != "fused" and not explicit_chunk_set_id:
-            clauses.append("""
-            (
-                c.chunk_set_id IS NULL
-                OR EXISTS (
-                    SELECT 1 FROM rag_chunk_sets cs
-                    WHERE cs.chunk_set_id = c.chunk_set_id AND cs.is_serving = 1
-                )
-                OR NOT EXISTS (
-                    SELECT 1 FROM rag_chunk_sets cs2
-                    WHERE cs2.document_id = c.document_id AND cs2.is_serving = 1
-                )
-            )
-            """)
     if knowledge_base_ids or current_audit_request_context().allowed_knowledge_base_ids is not None:
         clauses.append(
             """
@@ -7646,8 +8642,9 @@ def _oracle_graph_community_where(
     """community summary table 用の tenant / KB scope predicate を作る。"""
     clauses = _oracle_knowledge_base_access_predicates(alias="g")
     binds = _with_tenant_bind({}, alias="g")
+    supported_filters = {"knowledge_base_id", "serving_mode", "chunk_set_id"}
     unsupported_global_filters = {
-        key for key, value in filters.items() if key != "knowledge_base_id" and value.strip()
+        key for key, value in filters.items() if key not in supported_filters and value.strip()
     }
     if unsupported_global_filters:
         clauses.append("1 = 0")
@@ -7660,6 +8657,18 @@ def _oracle_graph_community_where(
         )
         clauses.append(knowledge_base_filter_sql)
         binds.update(knowledge_base_binds)
+    explicit_chunk_set_id = (filters.get("chunk_set_id") or "").strip()
+    if explicit_chunk_set_id:
+        clauses.append("g.chunk_set_id = :graph_chunk_set_id")
+        binds["graph_chunk_set_id"] = explicit_chunk_set_id
+    else:
+        clauses.append(
+            "EXISTS ("
+            "SELECT 1 FROM rag_chunk_sets active_cs "
+            "WHERE active_cs.chunk_set_id = g.chunk_set_id "
+            "AND active_cs.is_active = 1 AND active_cs.status = 'INDEXED'"
+            ")"
+        )
     return " AND ".join(clauses), binds
 
 
@@ -7974,6 +8983,8 @@ def _ingestion_job_binds(job: IngestionJob) -> dict[str, object]:
     return {
         "job_id": job.id,
         "document_id": job.document_id,
+        "recipe_id": job.recipe_id,
+        "recipe_revision": job.recipe_revision,
         "tenant_id_hash": _current_tenant_id_hash(),
         "status": job.status.value,
         "phase": job.phase.value,
@@ -7996,6 +9007,7 @@ def _ingestion_segment_binds(segment: IngestionSegment) -> dict[str, object]:
     return {
         "segment_id": segment.segment_id,
         "document_id": segment.document_id,
+        "recipe_id": segment.recipe_id,
         "tenant_id_hash": _current_tenant_id_hash(),
         "status": segment.status,
         "parser_backend": segment.parser_backend,
@@ -8099,6 +9111,8 @@ def _ingestion_job_from_row(row: Mapping[str, object]) -> IngestionJob:
     return IngestionJob(
         id=str(row["job_id"]),
         document_id=str(row["document_id"]),
+        recipe_id=_optional_str(row.get("recipe_id")),
+        recipe_revision=_optional_int(row.get("recipe_revision")),
         status=_ingestion_job_status(row.get("status")),
         phase=_ingestion_job_phase(row.get("phase")),
         parser_profile=str(row.get("parser_profile") or "enterprise_ai_generic"),
@@ -8118,6 +9132,7 @@ def _ingestion_segment_from_row(row: Mapping[str, object]) -> IngestionSegment:
     return IngestionSegment(
         segment_id=str(row["segment_id"]),
         document_id=str(row["document_id"]),
+        recipe_id=_optional_str(row.get("recipe_id")),
         status=str(row.get("status") or "QUEUED"),
         parser_backend=str(row.get("parser_backend") or "enterprise_ai"),
         parser_profile=str(row.get("parser_profile") or "enterprise_ai_generic"),
@@ -8130,9 +9145,41 @@ def _ingestion_segment_from_row(row: Mapping[str, object]) -> IngestionSegment:
     )
 
 
+def _document_recipe_row(row: Mapping[str, object]) -> dict[str, object]:
+    """Oracle のレシピ行を API 組み立て用の小文字 dict へ正規化する。"""
+    normalized = {str(key).lower(): value for key, value in row.items()}
+    return {
+        "recipe_id": str(normalized["recipe_id"]),
+        "document_id": str(normalized["document_id"]),
+        "slot_no": _int_value(normalized.get("slot_no")),
+        "processing_config": _json_loads(normalized.get("processing_config")),
+        "status": str(normalized.get("status") or FileStatus.UPLOADED.value),
+        "failed_phase": _optional_str(normalized.get("failed_phase")),
+        "preprocess_artifact": _json_loads(normalized.get("preprocess_artifact")) or None,
+        "active_extraction_recipe_id": _optional_str(normalized.get("active_extraction_recipe_id")),
+        "active_chunk_set_id": _optional_str(normalized.get("active_chunk_set_id")),
+        "chunk_count": _int_value(normalized.get("chunk_count")),
+        "vector_count": _int_value(normalized.get("vector_count")),
+        "chunk_set_status": _optional_str(normalized.get("chunk_set_status")),
+        "config_revision": max(1, _int_value(normalized.get("config_revision")) or 1),
+        "materialized_revision": _optional_int(normalized.get("materialized_revision")),
+        "error_message": _optional_str(normalized.get("error_message")),
+        "started_at": _optional_datetime(normalized.get("started_at")),
+        "finished_at": _optional_datetime(normalized.get("finished_at")),
+        "created_at": _datetime_value(normalized.get("created_at")),
+        "updated_at": _datetime_value(normalized.get("updated_at")),
+    }
+
+
 def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
     metadata = _metadata_from_json(row.get("metadata_json"))
     metadata.setdefault("document_id", str(row["document_id"]))
+    recipe_id = _optional_str(row.get("recipe_id"))
+    recipe_slot_no = _optional_int(row.get("recipe_slot_no"))
+    if recipe_id is not None:
+        metadata["recipe_id"] = recipe_id
+    if recipe_slot_no is not None:
+        metadata["recipe_slot_no"] = recipe_slot_no
     metadata.setdefault("chunk_id", str(row["chunk_id"]))
     chunk_index = row.get("chunk_index")
     if "chunk_index" not in metadata and chunk_index is not None:
@@ -8234,6 +9281,8 @@ def _graph_community_chunk_from_row(row: Mapping[str, object], *, rank: int) -> 
         "graph_knowledge_base_id": _optional_str(row.get("knowledge_base_id")),
         "graph_source_document_count": len(source_document_ids),
         "graph_source_document_ids": _audit_json(source_document_ids),
+        "recipe_id": _optional_str(row.get("recipe_id")),
+        "recipe_slot_no": _optional_int(row.get("recipe_slot_no")),
     }
     return RetrievedChunk(
         document_id=primary_document_id,
@@ -8459,6 +9508,25 @@ def _restore_status_for_job_phase(phase: IngestionJobPhase) -> FileStatus:
     if phase == IngestionJobPhase.CHUNK:
         return FileStatus.REVIEW
     return FileStatus.UPLOADED
+
+
+def _restore_recipe_status_for_job_phase(phase: IngestionJobPhase) -> FileStatus:
+    if phase == IngestionJobPhase.INDEX:
+        return FileStatus.CHUNKED
+    if phase == IngestionJobPhase.CHUNK:
+        return FileStatus.REVIEW
+    if phase == IngestionJobPhase.EXTRACT:
+        return FileStatus.PREPROCESSED
+    return FileStatus.UPLOADED
+
+
+def _failed_phase_for_recipe_status(value: object) -> IngestionJobPhase:
+    return {
+        FileStatus.PREPROCESSING.value: IngestionJobPhase.PREPROCESS,
+        FileStatus.INGESTING.value: IngestionJobPhase.EXTRACT,
+        FileStatus.CHUNKING.value: IngestionJobPhase.CHUNK,
+        FileStatus.INDEXING.value: IngestionJobPhase.INDEX,
+    }.get(str(value), IngestionJobPhase.PREPROCESS)
 
 
 def _knowledge_base_status(value: object) -> KnowledgeBaseStatus:
@@ -8965,15 +10033,60 @@ CREATE INDEX {table_name}_reply_to_idx
 """.strip()
 
 
+def oracle_document_recipe_schema_sql() -> str:
+    """文書ごとに 1〜3 件の独立した処理レシピを保持する DDL。"""
+    return """
+CREATE TABLE rag_document_recipes (
+    recipe_id                   VARCHAR2(64) PRIMARY KEY,
+    document_id                 VARCHAR2(64) NOT NULL,
+    slot_no                     NUMBER(1) NOT NULL,
+    tenant_id_hash              CHAR(64),
+    processing_config           JSON,
+    status                      VARCHAR2(32) DEFAULT 'UPLOADED' NOT NULL,
+    failed_phase                VARCHAR2(16),
+    preprocess_artifact         JSON,
+    active_extraction_recipe_id VARCHAR2(64),
+    config_revision             NUMBER(10) DEFAULT 1 NOT NULL,
+    materialized_revision       NUMBER(10),
+    error_message               VARCHAR2(2000),
+    started_at                  TIMESTAMP WITH TIME ZONE,
+    finished_at                 TIMESTAMP WITH TIME ZONE,
+    created_at                  TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_at                  TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT rag_document_recipes_document_fk
+        FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_document_recipes_slot_ck CHECK (slot_no BETWEEN 1 AND 3),
+    CONSTRAINT rag_document_recipes_status_ck CHECK (
+        status IN ('UPLOADED', 'PREPROCESSING', 'PREPROCESSED', 'INGESTING', 'REVIEW',
+                   'CHUNKING', 'CHUNKED', 'INDEXING', 'INDEXED', 'ERROR')
+    ),
+    CONSTRAINT rag_document_recipes_phase_ck CHECK (
+        failed_phase IS NULL OR failed_phase IN ('PREPROCESS', 'EXTRACT', 'CHUNK', 'INDEX')
+    ),
+    CONSTRAINT rag_document_recipes_revision_ck CHECK (
+        config_revision >= 1
+        AND (materialized_revision IS NULL OR materialized_revision >= 1)
+    ),
+    CONSTRAINT rag_document_recipes_slot_uq UNIQUE (document_id, slot_no)
+);
+
+CREATE INDEX rag_document_recipes_status_idx
+    ON rag_document_recipes (tenant_id_hash, status, updated_at DESC);
+""".strip()
+
+
 def oracle_ingestion_job_schema_sql(
     table_name: str = "rag_ingestion_jobs",
     document_table: str = "rag_documents",
+    recipe_table: str = "rag_document_recipes",
 ) -> str:
     """Oracle ingestion job table の DDL 例を返す。"""
     return f"""
 CREATE TABLE {table_name} (
     job_id           VARCHAR2(64) PRIMARY KEY,
     document_id      VARCHAR2(64) NOT NULL,
+    recipe_id        VARCHAR2(64),
+    recipe_revision  NUMBER(10),
     tenant_id_hash   CHAR(64),
     status           VARCHAR2(32) NOT NULL,
     phase            VARCHAR2(16) DEFAULT 'PREPROCESS' NOT NULL,
@@ -8996,6 +10109,10 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_document_fk
         FOREIGN KEY (document_id)
         REFERENCES {document_table} (document_id)
+        ON DELETE CASCADE,
+    CONSTRAINT {table_name}_recipe_fk
+        FOREIGN KEY (recipe_id)
+        REFERENCES {recipe_table} (recipe_id)
         ON DELETE CASCADE
 );
 
@@ -9004,18 +10121,23 @@ CREATE INDEX {table_name}_tenant_queued_idx
 
 CREATE INDEX {table_name}_document_idx
     ON {table_name} (document_id, queued_at DESC);
+
+CREATE INDEX {table_name}_recipe_idx
+    ON {table_name} (recipe_id, status, queued_at DESC);
 """.strip()
 
 
 def oracle_ingestion_segment_schema_sql(
     table_name: str = "rag_ingestion_segments",
     document_table: str = "rag_documents",
+    recipe_table: str = "rag_document_recipes",
 ) -> str:
     """Oracle ingestion segment checkpoint table の DDL 例を返す。"""
     return f"""
 CREATE TABLE {table_name} (
     segment_id     VARCHAR2(128) PRIMARY KEY,
     document_id    VARCHAR2(64) NOT NULL,
+    recipe_id      VARCHAR2(64),
     tenant_id_hash CHAR(64),
     status         VARCHAR2(32) DEFAULT 'QUEUED' NOT NULL,
     parser_backend VARCHAR2(80) DEFAULT 'enterprise_ai' NOT NULL,
@@ -9037,6 +10159,10 @@ CREATE TABLE {table_name} (
     CONSTRAINT {table_name}_document_fk
         FOREIGN KEY (document_id)
         REFERENCES {document_table} (document_id)
+        ON DELETE CASCADE,
+    CONSTRAINT {table_name}_recipe_fk
+        FOREIGN KEY (recipe_id)
+        REFERENCES {recipe_table} (recipe_id)
         ON DELETE CASCADE
 );
 
@@ -9045,6 +10171,9 @@ CREATE INDEX {table_name}_document_status_idx
 
 CREATE INDEX {table_name}_tenant_status_idx
     ON {table_name} (tenant_id_hash, status, updated_at DESC);
+
+CREATE INDEX {table_name}_recipe_status_idx
+    ON {table_name} (recipe_id, status, updated_at DESC);
 """.strip()
 
 
@@ -9155,6 +10284,7 @@ def oracle_chunk_set_schema_sql() -> str:
 CREATE TABLE rag_chunk_sets (
     chunk_set_id    VARCHAR2(64) PRIMARY KEY,
     document_id     VARCHAR2(64) NOT NULL,
+    recipe_id       VARCHAR2(64),
     extraction_recipe_id VARCHAR2(64),
     tenant_id_hash  CHAR(64),
     recipe_subset   JSON,
@@ -9162,14 +10292,18 @@ CREATE TABLE rag_chunk_sets (
     chunk_count     NUMBER(10) DEFAULT 0 NOT NULL,
     vector_count    NUMBER(10) DEFAULT 0 NOT NULL,
     is_serving      NUMBER(1) DEFAULT 1 NOT NULL,
+    is_active       NUMBER(1) DEFAULT 0 NOT NULL,
     metrics_json    JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_chunk_sets_document_fk
         FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE,
+    CONSTRAINT rag_chunk_sets_recipe_fk
+        FOREIGN KEY (recipe_id) REFERENCES rag_document_recipes (recipe_id) ON DELETE CASCADE,
     CONSTRAINT rag_chunk_sets_status_ck
         CHECK (status IN ('INGESTING', 'CHUNKED', 'INDEXED', 'ERROR')),
-    CONSTRAINT rag_chunk_sets_serving_ck CHECK (is_serving IN (0, 1))
+    CONSTRAINT rag_chunk_sets_serving_ck CHECK (is_serving IN (0, 1)),
+    CONSTRAINT rag_chunk_sets_active_ck CHECK (is_active IN (0, 1))
 );
 
 CREATE INDEX rag_chunk_sets_document_idx
@@ -9177,6 +10311,12 @@ CREATE INDEX rag_chunk_sets_document_idx
 
 CREATE INDEX rag_chunk_sets_serving_idx
     ON rag_chunk_sets (document_id, is_serving);
+
+CREATE INDEX rag_chunk_sets_recipe_idx
+    ON rag_chunk_sets (recipe_id, status, updated_at DESC);
+
+CREATE UNIQUE INDEX rag_chunk_sets_recipe_active_uidx
+    ON rag_chunk_sets (CASE WHEN is_active = 1 THEN recipe_id END);
 
 CREATE INDEX rag_chunk_sets_extraction_idx
     ON rag_chunk_sets (document_id, extraction_recipe_id);
@@ -9443,6 +10583,7 @@ def oracle_knowledge_graph_schema_sql() -> str:
     return """
 CREATE TABLE rag_graph_entities (
     entity_id          VARCHAR2(64) PRIMARY KEY,
+    chunk_set_id       VARCHAR2(64),
     tenant_id_hash     CHAR(64),
     knowledge_base_id  VARCHAR2(64),
     canonical_name     VARCHAR2(512) NOT NULL,
@@ -9454,11 +10595,15 @@ CREATE TABLE rag_graph_entities (
     updated_at         TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
 );
 
+CREATE INDEX rag_graph_entities_chunk_set_idx
+    ON rag_graph_entities (chunk_set_id);
+
 CREATE INDEX rag_graph_entities_tenant_name_idx
     ON rag_graph_entities (tenant_id_hash, canonical_name);
 
 CREATE TABLE rag_graph_relationships (
     relationship_id    VARCHAR2(64) PRIMARY KEY,
+    chunk_set_id       VARCHAR2(64),
     tenant_id_hash     CHAR(64),
     knowledge_base_id  VARCHAR2(64),
     source_entity_id   VARCHAR2(64) NOT NULL,
@@ -9482,6 +10627,7 @@ CREATE INDEX rag_graph_rel_target_idx
 
 CREATE TABLE rag_graph_claims (
     claim_id           VARCHAR2(64) PRIMARY KEY,
+    chunk_set_id       VARCHAR2(64),
     tenant_id_hash     CHAR(64),
     knowledge_base_id  VARCHAR2(64),
     entity_id          VARCHAR2(64),
@@ -9499,6 +10645,7 @@ CREATE INDEX rag_graph_claim_entity_idx
 
 CREATE TABLE rag_graph_community_summaries (
     community_id       VARCHAR2(64) PRIMARY KEY,
+    chunk_set_id       VARCHAR2(64),
     tenant_id_hash     CHAR(64),
     knowledge_base_id  VARCHAR2(64),
     level_no           NUMBER(5) DEFAULT 0 NOT NULL,
@@ -9513,9 +10660,13 @@ CREATE TABLE rag_graph_community_summaries (
 CREATE INDEX rag_graph_community_tenant_idx
     ON rag_graph_community_summaries (tenant_id_hash, knowledge_base_id, level_no);
 
+CREATE INDEX rag_graph_community_chunk_set_idx
+    ON rag_graph_community_summaries (chunk_set_id);
+
 CREATE TABLE rag_graph_entity_chunks (
     entity_id          VARCHAR2(64) NOT NULL,
     chunk_id           VARCHAR2(128) NOT NULL,
+    chunk_set_id       VARCHAR2(64),
     document_id        VARCHAR2(64) NOT NULL,
     tenant_id_hash     CHAR(64),
     relevance_score    NUMBER(8, 6) DEFAULT 1 NOT NULL,
@@ -9527,6 +10678,9 @@ CREATE TABLE rag_graph_entity_chunks (
 
 CREATE INDEX rag_graph_entity_chunks_chunk_idx
     ON rag_graph_entity_chunks (tenant_id_hash, chunk_id);
+
+CREATE INDEX rag_graph_entity_chunks_chunk_set_idx
+    ON rag_graph_entity_chunks (chunk_set_id);
 """.strip()
 
 

@@ -771,12 +771,8 @@ class Settings(BaseSettings):
         ),
     )
     rag_serving_mode: ServingMode = Field(
-        default="single",
-        description=(
-            "配信モード(業務ビュー層)。1 文書が複数 chunk_set を持つときの検索時配信。"
-            "single(既定)は is_serving の単一 chunk_set のみ(現挙動)、fused は複数 chunk_set を "
-            "RRF 融合 + source-span 重複除去、routed は Router で query ごと選択(後続)。"
-        ),
+        default="fused",
+        description="文書内の全 active レシピを RRF 融合し source-span 重複除去する。",
     )
     rag_post_retrieval_pipeline: PostRetrievalPipeline = Field(
         default="custom",

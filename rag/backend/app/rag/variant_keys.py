@@ -93,6 +93,23 @@ def compute_extraction_recipe_id(source_sha256: str, settings: Settings) -> str:
     return _digest("er", payload)
 
 
+def compute_document_recipe_extraction_id(
+    extraction_recipe_id: str,
+    recipe_id: str,
+    config_revision: int,
+) -> str:
+    """文書レシピと revision に閉じた extraction artifact ID。"""
+    return _digest(
+        "er",
+        {
+            "v": KEY_VERSION,
+            "base": extraction_recipe_id,
+            "recipe_id": recipe_id,
+            "config_revision": config_revision,
+        },
+    )
+
+
 def compute_chunk_set_id(source_sha256: str, settings: Settings) -> str:
     """chunk 集合(text + embedding 層)の決定論 ID。
 

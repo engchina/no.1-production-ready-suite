@@ -32,7 +32,7 @@ describe("FlowStepper", () => {
     // 全工程が残る。
     expect(html).toContain("ファイル準備");
     expect(html).toContain("抽出");
-    expect(html).toContain("索引中");
+    expect(html).toContain("Embedding / 索引");
     // 失敗工程は danger 強調 + 「エラー」チップ（色のみに頼らない）。
     expect(html).toContain("text-danger");
     expect(html).toContain("エラー");

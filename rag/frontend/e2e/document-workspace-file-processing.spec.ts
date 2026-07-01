@@ -128,7 +128,53 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
   await expectNoHorizontalOverflow(page);
 });
 
-test("desktop の右ペインは原本プレビューと同じ高さで独立スクロールする", async ({ page }) => {
+test("成果物の無い recipe は文書レベルの抽出・処理後ファイルへ fallback しない", async ({
+  page,
+}) => {
+  const state = await mockDocumentWorkspace(page, {
+    documentStatus: "UPLOADED",
+    documentOnlyPreparedArtifact: true,
+  });
+
+  await page.goto("/documents/doc-1");
+
+  const previewPanel = page
+    .getByRole("heading", { name: "原本プレビュー" })
+    .locator("xpath=ancestor::section[1]");
+  await expect(previewPanel.getByRole("button", { name: "処理後" })).toBeDisabled();
+  await expect(page.getByRole("tabpanel").getByText("交通費は1000円です。")).toHaveCount(0);
+  await expect.poll(() => state.extractionExportRequests).toBe(0);
+});
+
+test("desktop の空の右ペイン上でも主ページをスクロールできる", async ({ page }) => {
+  await mockDocumentWorkspace(page, { documentStatus: "UPLOADED", pdfPreview: true });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/documents/doc-1");
+
+  const panel = page.getByRole("tabpanel");
+  const panelMetrics = await panel.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      overscrollBehaviorY: style.overscrollBehaviorY,
+    };
+  });
+  expect(panelMetrics.scrollHeight).toBeLessThanOrEqual(panelMetrics.clientHeight);
+  expect(panelMetrics.overscrollBehaviorY).toBe("auto");
+
+  await panel.scrollIntoViewIfNeeded();
+  const main = page.locator("main");
+  const mainScrollTop = await main.evaluate((element) => element.scrollTop);
+  await panel.hover();
+  await page.mouse.wheel(0, -800);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(mainScrollTop);
+});
+
+test("desktop の右ペインは高さを保ち、境界で主ページへスクロールを引き継ぐ", async ({
+  page,
+}) => {
   await mockDocumentWorkspace(page, { pdfPreview: true });
 
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -149,7 +195,7 @@ test("desktop の右ペインは原本プレビューと同じ高さで独立ス
 
   expect(textPanelMetrics.clientHeight).toBeCloseTo(previewHeight, 0);
   expect(textPanelMetrics.overflowY).toBe("auto");
-  expect(textPanelMetrics.overscrollBehaviorY).toBe("contain");
+  expect(textPanelMetrics.overscrollBehaviorY).toBe("auto");
   expect(textPanelMetrics.scrollbarGutter).toContain("stable");
 
   await page.getByRole("tab", { name: "構造化要素" }).click();
@@ -166,17 +212,26 @@ test("desktop の右ペインは原本プレビューと同じ高さで独立ス
   expect(panelMetrics.clientHeight).toBeCloseTo(previewHeight, 0);
   expect(panelMetrics.scrollHeight).toBeGreaterThan(panelMetrics.clientHeight + 1);
   expect(panelMetrics.overflowY).toBe("auto");
-  expect(panelMetrics.overscrollBehaviorY).toBe("contain");
+  expect(panelMetrics.overscrollBehaviorY).toBe("auto");
 
   await panel.scrollIntoViewIfNeeded();
+  const main = page.locator("main");
+  const mainScrollTopBeforePanelScroll = await main.evaluate((element) => element.scrollTop);
+  await panel.hover();
+  await page.mouse.wheel(0, 400);
+  await expect.poll(() => panel.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(
+    mainScrollTopBeforePanelScroll
+  );
+
   await panel.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
-  const main = page.locator("main");
   const mainScrollTop = await main.evaluate((element) => element.scrollTop);
-  await panel.hover();
   await page.mouse.wheel(0, 800);
-  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(mainScrollTop);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeGreaterThan(
+    mainScrollTop
+  );
 
   for (const tabName of ["Chunk / Citation", "抽出エクスポート"]) {
     await page.getByRole("tab", { name: tabName, exact: false }).click();
@@ -190,7 +245,7 @@ test("desktop の右ペインは原本プレビューと同じ高さで独立ス
     });
     expect(tabPanelMetrics.clientHeight).toBeCloseTo(previewHeight, 0);
     expect(tabPanelMetrics.overflowY).toBe("auto");
-    expect(tabPanelMetrics.overscrollBehaviorY).toBe("contain");
+    expect(tabPanelMetrics.overscrollBehaviorY).toBe("auto");
   }
 });
 
@@ -248,7 +303,7 @@ test("PDF 原本プレビューは左サイドバーを初期表示しない", a
   const pdfFrame = page.locator('iframe[title="policy.pdf"]');
   await expect(pdfFrame).toHaveAttribute(
     "src",
-    /\/api\/documents\/doc-1\/content#page=1&pagemode=none&navpanes=0$/
+    /\/api\/documents\/doc-1\/recipes\/recipe-1\/content#page=1&pagemode=none&navpanes=0$/
   );
   await expectNoHorizontalOverflow(page);
 });
@@ -268,7 +323,7 @@ test("原本プレビューで処理前/処理後を切り替え、ファイル�
   await expect(previewPanel.getByText("経費申請")).toBeVisible();
   await expect(previewPanel.getByRole("link", { name: "ダウンロード" })).toHaveAttribute(
     "href",
-    /\/api\/documents\/doc-1\/content\?disposition=attachment$/
+    /\/api\/documents\/doc-1\/recipes\/recipe-1\/content\?disposition=attachment$/
   );
 
   await previewPanel.getByRole("button", { name: "処理後" }).click();
@@ -276,7 +331,7 @@ test("原本プレビューで処理前/処理後を切り替え、ファイル�
   await expect(previewPanel.getByText("準備後ファイル")).toBeVisible();
   await expect(previewPanel.getByRole("link", { name: "ダウンロード" })).toHaveAttribute(
     "href",
-    /\/api\/documents\/doc-1\/content\?variant=prepared&disposition=attachment$/
+    /\/api\/documents\/doc-1\/recipes\/recipe-1\/content\?variant=prepared&disposition=attachment$/
   );
 
   await page.getByRole("button", { name: "ファイル準備から再処理" }).click();
@@ -284,14 +339,14 @@ test("原本プレビューで処理前/処理後を切り替え、ファイル�
 
   expect(state.enqueueRequest).toEqual({
     method: "POST",
-    path: "/api/documents/doc-1/ingestion-jobs",
-    force: "true",
+    path: "/api/documents/doc-1/recipes/recipe-1/ingestion-jobs",
+    force: null,
     phase: "PREPROCESS",
   });
   await expectNoPageOverflow(page);
 });
 
-test("変換なしではファイル準備 step を skip として表示し、REVIEW で人手確認する", async ({
+test("変換なしでも REVIEW では抽出確認を促す", async ({
   page,
 }) => {
   await mockDocumentWorkspace(page, {
@@ -301,26 +356,56 @@ test("変換なしではファイル準備 step を skip として表示し、RE
 
   await page.goto("/documents/doc-1");
 
-  const preprocessStep = page.getByText("ファイル準備").locator("xpath=ancestor::span[1]");
-  await expect(preprocessStep.getByText("skip")).toBeVisible();
-  await expect(page.getByText("抽出確認")).toBeVisible();
-  await expect(page.getByRole("button", { name: "抽出から再処理" })).toBeDisabled();
+  await expect(page.getByText("抽出確認待ち", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "抽出から再処理" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
 test("PREPROCESSED ではファイル準備を確認し、解析へ進む承認を促す", async ({ page }) => {
-  await mockDocumentWorkspace(page, {
+  const state = await mockDocumentWorkspace(page, {
     documentStatus: "PREPROCESSED",
     preparedArtifact: true,
   });
 
   await page.goto("/documents/doc-1");
 
-  await expect(page.getByText("準備確認")).toBeVisible();
+  await expect(page.getByText("ファイル準備確認待ち", { exact: true })).toBeVisible();
   await expect(
     page.getByText("ファイル準備が完了しました。処理後ファイルを確認し、問題なければ解析(抽出)へ進めてください。")
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "承認して解析へ" })).toBeVisible();
+  const approve = page.getByRole("button", { name: "承認して解析へ" });
+  const actionButtons = approve.locator("xpath=parent::div").getByRole("button");
+  await expect(actionButtons.nth(0)).toHaveText("承認して解析へ");
+  await expect(actionButtons.nth(1)).toHaveText("ファイル準備から再処理");
+  await expect(page.getByRole("button", { name: "却下" })).toHaveCount(0);
+  await actionButtons.nth(1).click();
+  await page.getByRole("button", { name: "再処理する" }).click();
+  await expect.poll(() => state.enqueueRequest).toEqual({
+    method: "POST",
+    path: "/api/documents/doc-1/recipes/recipe-1/ingestion-jobs",
+    force: null,
+    phase: "PREPROCESS",
+  });
+  await expectNoPageOverflow(page);
+});
+
+test("CHUNKED では承認と段階別再処理だけを表示する", async ({ page }) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "CHUNKED",
+    preparedArtifact: true,
+  });
+
+  await page.goto("/documents/doc-1");
+
+  const approve = page.getByRole("button", { name: "承認して Embedding / 索引" });
+  const actionButtons = approve.locator("xpath=parent::div").getByRole("button");
+  await expect(actionButtons).toHaveText([
+    "承認して Embedding / 索引",
+    "ファイル準備から再処理",
+    "抽出から再処理",
+    "Chunk から再処理",
+  ]);
+  await expect(page.getByRole("button", { name: "却下" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -334,16 +419,17 @@ test("PREPROCESSED で処理後ファイルが未保存なら危険バナーと�
 
   await page.goto("/documents/doc-1");
 
-  await expect(page.getByText("準備確認")).toBeVisible();
+  await expect(page.getByText("ファイル準備確認待ち", { exact: true })).toBeVisible();
   // 変換成功なのに保存パス欠落 → 危険バナーで明示。
   await expect(
     page.getByText(
-      "ファイル準備で変換した処理後ファイルを保存できませんでした。このままでは解析(抽出)へ進めません。ストレージ設定を確認し、ファイル準備から再処理してください。"
+      "ファイル準備で変換した処理後ファイルを保存できませんでした。このままでは解析(抽出)へ進めません。ストレージ設定を確認し、ファイル準備を再実行してください。"
     )
   ).toBeVisible();
   // 409 になる承認は出さず、復旧導線(再処理)を出す。
   await expect(page.getByRole("button", { name: "承認して解析へ" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
   // 「処理後」プレビューは保存物が無いので無効。
   await expect(page.getByRole("button", { name: "処理後" })).toBeDisabled();
   await expectNoPageOverflow(page);
@@ -357,15 +443,16 @@ test("PREPROCESSED で処理後ファイルが欠落(converted以外)でも再�
 
   await page.goto("/documents/doc-1");
 
-  await expect(page.getByText("準備確認")).toBeVisible();
+  await expect(page.getByText("ファイル準備確認待ち", { exact: true })).toBeVisible();
   // converted フラグが無くても「見つからない」旨を明示。
   await expect(
     page.getByText(
-      "処理後ファイルが見つかりません。このままでは解析(抽出)へ進めません。ファイル準備から再処理してください。"
+      "処理後ファイルが見つかりません。このままでは解析(抽出)へ進めません。ファイル準備を再実行してください。"
     )
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "承認して解析へ" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -560,12 +647,14 @@ test("取込セグメント失敗時は原因と復旧導線を表示する", as
   await expect.poll(() => state.retryRequest).toEqual({
     method: "POST",
     path: "/api/documents/doc-1/ingestion-segments/retry",
+    recipeId: "recipe-1",
   });
   await expectNoHorizontalOverflow(page);
 });
 
 test("文書 workspace はこの文書の取込 job と時間線を表示する", async ({ page }) => {
   await mockDocumentWorkspace(page, {
+    documentStatus: "INGESTING",
     latestJobStatus: "RUNNING",
     latestJobStartedAt: new Date(Date.now() - 2_000).toISOString(),
     pdfPreview: true,
@@ -576,8 +665,10 @@ test("文書 workspace はこの文書の取込 job と時間線を表示する"
   const panel = page
     .getByRole("heading", { name: "この文書の取込ジョブ" })
     .locator("xpath=ancestor::section[1]");
-  await expect(panel.getByText("取込中")).toBeVisible();
-  await expect(panel.getByText("抽出", { exact: true })).toBeVisible();
+  await expect(page.getByText("解析（抽出）中")).toBeVisible();
+  await expect(page.getByText("取込中", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("実行中")).toBeVisible();
+  await expect(panel.getByText("解析（抽出）", { exact: true })).toBeVisible();
   await expect(panel.getByText(/job: job-runn/)).toBeVisible();
   await expect(panel.getByText("投入")).toBeVisible();
   await expect(panel.getByText("開始")).toBeVisible();
@@ -600,7 +691,9 @@ test("失敗した取込 job は取込中 banner を残さず原因を表示す�
 
   await page.goto("/documents/doc-1");
 
-  await expect(page.getByText("取込ジョブの状態を更新しています。")).toHaveCount(0);
+  await expect(
+    page.getByText("解析（抽出）を実行しています。完了まで状態を更新します。")
+  ).toHaveCount(0);
   const panel = page
     .getByRole("heading", { name: "この文書の取込ジョブ" })
     .locator("xpath=ancestor::section[1]");
@@ -670,8 +763,13 @@ test("ページ数が取れない原本は原本全体の解析中として表�
   await expectNoHorizontalOverflow(page);
 });
 
-test("取込ジョブ投入後に workspace の本文 export と chunk を自動更新する", async ({ page }) => {
-  await mockDocumentWorkspace(page, { autoRefreshAfterEnqueue: true });
+test("ファイル準備の開始 message を操作欄に表示し、本文 export と chunk を自動更新する", async ({
+  page,
+}) => {
+  await mockDocumentWorkspace(page, {
+    autoRefreshAfterEnqueue: true,
+    documentStatus: "UPLOADED",
+  });
 
   await page.goto("/documents/doc-1");
 
@@ -682,7 +780,12 @@ test("取込ジョブ投入後に workspace の本文 export と chunk を自動
   await expect(page.getByText("表示できる抽出エクスポートはありません。")).toBeVisible();
 
   await page.getByRole("button", { name: "ファイル準備を実行" }).click();
-  await expect(page.getByText("取込ジョブをキューに投入しました。")).toBeVisible();
+  const actionStatus = page.getByText(
+    "ファイル準備を開始しました。完了まで状態を更新します。"
+  );
+  await expect(actionStatus).toBeVisible();
+  await expect(page.getByText(/取込ジョブをキューに投入/)).toHaveCount(0);
+  await expect(actionStatus.locator("xpath=ancestor::div[contains(@class, 'border-t')][1]")).toBeVisible();
 
   // 取込後、エクスポート(現在のタブ)が自動更新される。
   await expect(page.getByText("<!-- page: 1 -->")).toBeVisible({ timeout: 9_000 });
@@ -692,7 +795,61 @@ test("取込ジョブ投入後に workspace の本文 export と chunk を自動
   await expectNoHorizontalOverflow(page);
 });
 
-test("重複文書は重複元を表示し、明示操作では force 取込する", async ({ page }) => {
+test("バックグラウンド失敗後は開始 message を消し、失敗原因と単一の再実行だけを残す", async ({
+  page,
+}) => {
+  await mockDocumentWorkspace(page, { backgroundFailureAfterEnqueue: true });
+
+  await page.goto("/documents/doc-1");
+  await page.getByRole("button", { name: "ファイル準備を実行" }).click();
+  const startedMessage = page.getByText(
+    "ファイル準備を開始しました。完了まで状態を更新します。"
+  );
+  await expect(startedMessage).toBeVisible();
+
+  await expect(page.getByRole("alert").filter({ hasText: "取込処理に失敗しました。" })).toBeVisible({
+    timeout: 9_000,
+  });
+  await expect(startedMessage).toHaveCount(0);
+  await expect(page.getByText("取込処理に失敗しました。")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
+test("ERROR は失敗 phase と前段の再処理ボタンを表示する", async ({ page }) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "ERROR",
+    latestJobStatus: "FAILED",
+    latestJobPhase: "CHUNK",
+    preparedArtifact: true,
+  });
+
+  await page.goto("/documents/doc-1");
+
+  await expect(page.getByRole("button", { name: "Chunk 作成を再実行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ファイル準備から再処理" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "抽出から再処理" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
+test("ERROR は前提 artifact が無ければファイル準備の再実行だけに戻す", async ({ page }) => {
+  await mockDocumentWorkspace(page, {
+    documentStatus: "ERROR",
+    latestJobStatus: "FAILED",
+    latestJobPhase: "EXTRACT",
+  });
+
+  await page.goto("/documents/doc-1");
+
+  await expect(page.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "抽出を再実行" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /から再処理/ })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
+test("重複文書は重複元を表示し、明示操作では recipe のファイル準備を投入する", async ({ page }) => {
   const state = await mockDocumentWorkspace(page, {
     chunksEmpty: true,
     duplicate: true,
@@ -706,7 +863,10 @@ test("重複文書は重複元を表示し、明示操作では force 取込す�
   ).toBeVisible();
   await expect(page.getByText("内容が同じでも別文書として処理したい場合")).toBeVisible();
   await page.getByRole("button", { name: "重複を無視してファイル準備" }).click();
-  await expect.poll(() => state.enqueueRequest?.force).toBe("true");
+  await expect.poll(() => state.enqueueRequest).toMatchObject({
+    path: "/api/documents/doc-1/recipes/recipe-1/ingestion-jobs",
+    phase: "PREPROCESS",
+  });
   await expectNoHorizontalOverflow(page);
 });
 
@@ -741,19 +901,22 @@ async function mockDocumentWorkspace(
     segmentCount?: number;
     mineruSegment?: boolean;
     latestJobStatus?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+    latestJobPhase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
     latestJobStartedAt?: string;
     autoRefreshAfterEnqueue?: boolean;
+    backgroundFailureAfterEnqueue?: boolean;
     documentStatus?: string;
     duplicate?: boolean;
     progressScenario?: "pdf17" | "source";
     preparedArtifact?: boolean;
+    documentOnlyPreparedArtifact?: boolean;
     brokenPreparedArtifact?: boolean;
     preprocessProfile?: "passthrough" | "text_normalize";
     sharedErrorMessage?: string;
   } = {}
 ) {
   const state: {
-    retryRequest: { method: string; path: string } | null;
+    retryRequest: { method: string; path: string; recipeId: string | null } | null;
     enqueueRequest: {
       method: string;
       path: string;
@@ -761,11 +924,19 @@ async function mockDocumentWorkspace(
       phase: string | null;
     } | null;
     enqueued: boolean;
+    backgroundJobPolls: number;
+    backgroundFailed: boolean;
+    extractionExportRequests: number;
   } = {
     retryRequest: null,
     enqueueRequest: null,
     enqueued: false,
+    backgroundJobPolls: 0,
+    backgroundFailed: false,
+    extractionExportRequests: 0,
   };
+  const segmentFailureMessage =
+    "OCI Enterprise AI VLM response が StructuredExtraction schema と一致しません。失敗項目: confidence: less_than_equal。";
   await page.route("**/api/documents/doc-1/ingestion-config", async (route) => {
     await route.fulfill({
       json: {
@@ -793,26 +964,104 @@ async function mockDocumentWorkspace(
         data: documentDetail({
           imagePreview: options.imagePreview,
           pdfPreview: options.pdfPreview,
-          status:
-            options.documentStatus ??
-            (options.segmentError || (options.autoRefreshAfterEnqueue && !state.enqueued)
-              ? "ERROR"
-              : "INDEXED"),
+          status: currentDocumentStatus(options, state),
           duplicate: options.duplicate,
-          preparedArtifact: options.preparedArtifact,
+          preparedArtifact: options.preparedArtifact || options.documentOnlyPreparedArtifact,
           brokenPreparedArtifact: options.brokenPreparedArtifact,
-          errorMessage: options.sharedErrorMessage,
+          errorMessage:
+            options.sharedErrorMessage ?? (options.segmentError ? segmentFailureMessage : undefined),
         }),
         error_messages: [],
         warning_messages: [],
       },
     });
   });
-  await page.route("**/api/documents/doc-1/ingestion-segments/retry", async (route) => {
+  await page.route("**/api/documents/doc-1/recipes", async (route) => {
+    const status = currentDocumentStatus(options, state);
+    const detail = documentDetail({
+      imagePreview: options.imagePreview,
+      pdfPreview: options.pdfPreview,
+      status,
+      preparedArtifact: options.preparedArtifact || options.segmentError,
+      brokenPreparedArtifact: options.brokenPreparedArtifact,
+      errorMessage:
+        options.sharedErrorMessage ?? (options.segmentError ? segmentFailureMessage : undefined),
+    });
+    const hasExtraction = ["REVIEW", "CHUNKED", "INDEXED"].includes(status) ||
+      (status === "ERROR" && ["CHUNK", "INDEX"].includes(options.latestJobPhase ?? ""));
+    await route.fulfill({
+      json: {
+        data: [
+          {
+            recipe_id: "recipe-1",
+            document_id: "doc-1",
+            slot_no: 1,
+            status,
+            failed_phase: status === "ERROR" ? (options.latestJobPhase ?? "PREPROCESS") : null,
+            processing_config: {},
+            effective_processing_config: {},
+            preprocess_artifact: detail.preprocess_artifact,
+            active_extraction_recipe_id: hasExtraction ? "er-recipe-1-r1" : null,
+            active_chunk_set_id: status === "INDEXED" ? "chunk-set-recipe-1" : null,
+            chunk_count: status === "INDEXED" ? 2 : 0,
+            vector_count: status === "INDEXED" ? 2 : 0,
+            config_revision: 1,
+            materialized_revision: status === "INDEXED" ? 1 : null,
+            searchable: status === "INDEXED",
+            needs_reprocessing: false,
+            error_message:
+              status === "ERROR"
+                ? (options.sharedErrorMessage ??
+                  (options.segmentError ? segmentFailureMessage : "取込処理に失敗しました。"))
+                : null,
+            steps: recipeSteps(status, options.latestJobPhase),
+            created_at: "2026-06-15T00:00:00Z",
+            updated_at: "2026-06-15T00:00:20Z",
+            started_at: null,
+            finished_at: status === "INDEXED" || status === "ERROR" ? "2026-06-15T00:00:20Z" : null,
+          },
+        ],
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**", async (route) => {
+    const url = new URL(route.request().url());
+    state.enqueueRequest = {
+      method: route.request().method(),
+      path: url.pathname,
+      force: url.searchParams.get("force"),
+      phase: url.searchParams.get("phase"),
+    };
+    state.enqueued = true;
+    await route.fulfill({
+      json: {
+        data: ingestionJob("QUEUED", {
+          phase: (url.searchParams.get("phase") as "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX" | null) ?? "PREPROCESS",
+        }),
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/approve", async (route) => {
+    const status = currentDocumentStatus(options, state);
+    const phase = status === "PREPROCESSED" ? "EXTRACT" : status === "CHUNKED" ? "INDEX" : "CHUNK";
+    await route.fulfill({
+      json: {
+        data: ingestionJob("QUEUED", { phase }),
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+  await page.route("**/api/documents/doc-1/ingestion-segments/retry**", async (route) => {
     const url = new URL(route.request().url());
     state.retryRequest = {
       method: route.request().method(),
       path: url.pathname,
+      recipeId: url.searchParams.get("recipe_id"),
     };
     await route.fulfill({
       json: {
@@ -834,7 +1083,15 @@ async function mockDocumentWorkspace(
       state.enqueued = true;
       await route.fulfill({
         json: {
-          data: ingestionJob("QUEUED"),
+          data: ingestionJob("QUEUED", {
+            phase:
+              (url.searchParams.get("phase") as
+                | "PREPROCESS"
+                | "EXTRACT"
+                | "CHUNK"
+                | "INDEX"
+                | null) ?? "PREPROCESS",
+          }),
           error_messages: [],
           warning_messages: [],
         },
@@ -844,10 +1101,18 @@ async function mockDocumentWorkspace(
     await route.fulfill({
       json: {
         data: [
-          ingestionJob(options.latestJobStatus ?? "SUCCEEDED", {
+          ingestionJob(
+            options.backgroundFailureAfterEnqueue && state.backgroundFailed
+              ? "FAILED"
+              : options.latestJobStatus ?? "SUCCEEDED",
+            {
             startedAt: options.latestJobStartedAt,
             errorMessage: options.sharedErrorMessage,
-          }),
+              phase: options.backgroundFailureAfterEnqueue
+                ? "PREPROCESS"
+                : options.latestJobPhase,
+            }
+          ),
         ],
         error_messages: [],
         warning_messages: [],
@@ -855,9 +1120,24 @@ async function mockDocumentWorkspace(
     });
   });
   await page.route("**/api/documents/ingestion-jobs/job-retry-segments", async (route) => {
+    if (options.backgroundFailureAfterEnqueue) {
+      state.backgroundFailed = state.backgroundJobPolls > 0;
+      state.backgroundJobPolls += 1;
+    }
     await route.fulfill({
       json: {
-        data: retrySegmentsJob(),
+        data: ingestionJob(
+          options.backgroundFailureAfterEnqueue && state.backgroundFailed ? "FAILED" : "QUEUED",
+          {
+          phase:
+            (state.enqueueRequest?.phase as
+              | "PREPROCESS"
+              | "EXTRACT"
+              | "CHUNK"
+              | "INDEX"
+              | null) ?? "EXTRACT",
+          }
+        ),
         error_messages: [],
         warning_messages: [],
       },
@@ -872,7 +1152,9 @@ async function mockDocumentWorkspace(
       },
     });
   });
-  await page.route("**/api/documents/doc-1/content**", async (route) => {
+  await page.route(
+    /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/content/,
+    async (route) => {
     const variant = new URL(route.request().url()).searchParams.get("variant");
     if (variant === "prepared") {
       await route.fulfill({
@@ -910,8 +1192,11 @@ async function mockDocumentWorkspace(
       headers: { "content-type": "text/plain; charset=utf-8" },
       body: "経費申請\n交通費は1000円です。",
     });
-  });
-  await page.route("**/api/documents/doc-1/chunks", async (route) => {
+    }
+  );
+  await page.route(
+    /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/chunks(?:\?|$)/,
+    async (route) => {
     if (options.chunksError) {
       await route.fulfill({
         status: 500,
@@ -983,7 +1268,8 @@ async function mockDocumentWorkspace(
         warning_messages: [],
       },
     });
-  });
+    }
+  );
   await page.route("**/api/documents/doc-1/chunk-sets", async (route) => {
     await route.fulfill({
       json: {
@@ -993,7 +1279,10 @@ async function mockDocumentWorkspace(
       },
     });
   });
-  await page.route("**/api/documents/doc-1/extraction-export**", async (route) => {
+  await page.route(
+    /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/extraction-export/,
+    async (route) => {
+    state.extractionExportRequests += 1;
     const url = new URL(route.request().url());
     const format = url.searchParams.get("format") ?? "markdown";
     const exportData =
@@ -1016,11 +1305,13 @@ async function mockDocumentWorkspace(
         warning_messages: [],
       },
     });
-  });
+    }
+  );
   await page.route("**/api/documents/doc-1/ingestion-segments", async (route) => {
     const failedSegment = {
       segment_id: "doc-1:p1-10",
       document_id: "doc-1",
+      recipe_id: "recipe-1",
       status: "FAILED",
       parser_backend: "enterprise_ai",
       parser_profile: "enterprise_ai_pdf_layout",
@@ -1031,7 +1322,7 @@ async function mockDocumentWorkspace(
       error_code: "enterprise_ai_response_validation_error",
       error_message:
         options.sharedErrorMessage ??
-        "OCI Enterprise AI VLM response が StructuredExtraction schema と一致しません。失敗項目: confidence: less_than_equal。",
+        segmentFailureMessage,
     };
     await route.fulfill({
       json: {
@@ -1049,6 +1340,66 @@ async function mockDocumentWorkspace(
   return state;
 }
 
+function currentDocumentStatus(
+  options: {
+    backgroundFailureAfterEnqueue?: boolean;
+    documentStatus?: string;
+    segmentError?: boolean;
+    autoRefreshAfterEnqueue?: boolean;
+  },
+  state: { backgroundFailed: boolean; enqueued: boolean }
+) {
+  if (options.backgroundFailureAfterEnqueue) {
+    return state.backgroundFailed ? "ERROR" : "UPLOADED";
+  }
+  if (options.autoRefreshAfterEnqueue) {
+    return state.enqueued ? "INDEXED" : (options.documentStatus ?? "ERROR");
+  }
+  return options.documentStatus ??
+    (options.segmentError || (options.autoRefreshAfterEnqueue && !state.enqueued)
+      ? "ERROR"
+      : "INDEXED");
+}
+
+function recipeSteps(
+  status: string,
+  failedPhase: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX" | undefined
+) {
+  const phases = ["PREPROCESS", "EXTRACT", "CHUNK", "INDEX"] as const;
+  const completedCount: Record<string, number> = {
+    UPLOADED: 0,
+    PREPROCESSING: 0,
+    PREPROCESSED: 1,
+    INGESTING: 1,
+    REVIEW: 2,
+    CHUNKING: 2,
+    CHUNKED: 3,
+    INDEXING: 3,
+    INDEXED: 4,
+  };
+  const runningPhase: Record<string, (typeof phases)[number]> = {
+    PREPROCESSING: "PREPROCESS",
+    INGESTING: "EXTRACT",
+    CHUNKING: "CHUNK",
+    INDEXING: "INDEX",
+  };
+  const failedIndex = status === "ERROR" ? phases.indexOf(failedPhase ?? "PREPROCESS") : -1;
+  return phases.map((phase, index) => ({
+    phase,
+    status:
+      index < (completedCount[status] ?? failedIndex)
+        ? "SUCCEEDED"
+        : runningPhase[status] === phase
+          ? "RUNNING"
+          : failedIndex === index
+            ? "FAILED"
+            : "PENDING",
+    started_at: null,
+    finished_at: null,
+    error_message: failedIndex === index ? "取込処理に失敗しました。" : null,
+  }));
+}
+
 function ingestionSegments(
   count: number,
   options: { mineru?: boolean; progressScenario?: "pdf17" | "source" } = {}
@@ -1058,6 +1409,7 @@ function ingestionSegments(
       {
         segment_id: "doc-1:source",
         document_id: "doc-1",
+        recipe_id: "recipe-1",
         status: "RUNNING",
         parser_backend: "local_partition",
         parser_profile: "local_text_structure",
@@ -1083,6 +1435,7 @@ function ingestionSegments(
     return ranges.map(([range, status, start, end]) => ({
       segment_id: `doc-1:p${range}`,
       document_id: "doc-1",
+      recipe_id: "recipe-1",
       status,
       parser_backend: "enterprise_ai",
       parser_profile: "enterprise_ai_pdf_layout",
@@ -1105,6 +1458,7 @@ function ingestionSegments(
     return {
       segment_id: `doc-1:p${start}-${end}`,
       document_id: "doc-1",
+      recipe_id: "recipe-1",
       status,
       parser_backend: mineru ? "mineru" : index === 0 ? "local_partition" : "enterprise_ai",
       parser_profile: mineru
@@ -1143,11 +1497,7 @@ function extractionExport(format: string) {
       metadata: { chunk_profile: "structure_v1" },
     },
   ];
-  const payload = {
-    raw_text: "経費申請\n交通費は1000円です。",
-    document_type: "規程",
-    elements: documentDetail().extraction.elements,
-  };
+  const payload = documentDetail().extraction;
   const htmlContent = [
     "<article>",
     "  <h1>経費申請</h1>",
@@ -1204,13 +1554,16 @@ function ingestionJob(
     startedAt?: string;
     finishedAt?: string;
     errorMessage?: string;
+    phase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
   } = {}
 ) {
   return {
     id: status === "RUNNING" ? "job-running-0001" : "job-retry-segments",
     document_id: "doc-1",
+    recipe_id: "recipe-1",
+    recipe_revision: 1,
     status,
-    phase: "EXTRACT",
+    phase: options.phase ?? "EXTRACT",
     parser_profile: "enterprise_ai_pdf_layout",
     quality_warnings: [],
     skip_reason: null,

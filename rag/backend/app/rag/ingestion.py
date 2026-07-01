@@ -70,7 +70,10 @@ from app.rag.observability import (
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import resolve_preprocess_profile
-from app.rag.variant_keys import compute_extraction_recipe_id
+from app.rag.variant_keys import (
+    compute_document_recipe_extraction_id,
+    compute_extraction_recipe_id,
+)
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -176,8 +179,12 @@ class IngestionPipeline:
         document_understanding: OciDocumentUnderstandingClient | None = None,
         speech: OciSpeechClient | None = None,
         settings: Settings | None = None,
+        recipe_id: str | None = None,
+        recipe_revision: int | None = None,
     ) -> None:
         self._settings = settings or get_settings()
+        self._recipe_id = recipe_id
+        self._recipe_revision = recipe_revision
         self._vlm = vlm or OciEnterpriseAiClient(settings=self._settings)
         self._genai = genai or OciGenAiClient(settings=self._settings)
         self._oracle = oracle or OracleClient(settings=self._settings)
@@ -320,8 +327,8 @@ class IngestionPipeline:
                     content_type=content_type,
                     source_profile=source_profile,
                 )
-                if manage_document_state:
-                    # candidate モードは配信中文書の preprocess artifact を上書きしない。
+                if manage_document_state or self._recipe_id is not None:
+                    # 文書レシピは legacy 文書列を上書きせず、レシピ固有 artifact を保存する。
                     await self._save_preprocess_artifact(
                         document_id=document_id,
                         source_derivation=source_derivation,
@@ -334,18 +341,31 @@ class IngestionPipeline:
                         fallback_content_type=parse_content_type,
                     )
                 if (
-                    manage_document_state
-                    and not self._settings.rag_auto_parse_after_preprocess_enabled
-                ):
+                    manage_document_state or self._recipe_id is not None
+                ) and not self._settings.rag_auto_parse_after_preprocess_enabled:
                     # ファイル準備ゲート: PREPROCESSED で停止し、人の承認(または KB/全体
                     # 設定で自動進行)で EXTRACT ジョブを別途投入して parse へ進む。
                     # candidate モードはゲートを無視して必ず索引まで進める。
-                    detail = await self._oracle.update_document_status(
-                        document_id, FileStatus.PREPROCESSED
-                    )
+                    if self._recipe_id is not None:
+                        await self._oracle.update_document_recipe_status(
+                            recipe_id=self._recipe_id,
+                            status=FileStatus.PREPROCESSED,
+                        )
+                        detail = await self._oracle.get_document(document_id)
+                        if detail is None:
+                            raise IngestionUserError("ドキュメントが見つかりません。")
+                    else:
+                        detail = await self._oracle.update_document_status(
+                            document_id, FileStatus.PREPROCESSED
+                        )
                     record_ingestion("preprocessed", 0)
                     return detail
-                if manage_document_state:
+                if self._recipe_id is not None:
+                    await self._oracle.update_document_recipe_status(
+                        recipe_id=self._recipe_id,
+                        status=FileStatus.INGESTING,
+                    )
+                elif manage_document_state:
                     await self._oracle.update_document_status(document_id, FileStatus.INGESTING)
             else:
                 parse_bytes = image_bytes
@@ -403,6 +423,7 @@ class IngestionPipeline:
                 source_profile=source_profile,
                 parser_backend=_checkpoint_parser_backend(parser_result, source_profile),
                 parser_profile=effective_parser_profile,
+                recipe_id=self._recipe_id,
             )
             await _raise_if_cancelled(cancel_checker)
             # 音声文字起こしが成功していれば以降の parser/VLM 経路は短絡する。
@@ -499,12 +520,28 @@ class IngestionPipeline:
             if not text:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
             # extraction 層(rag_document_extractions)へ正本として書く(両ゲート共通)。
-            await self._persist_extraction_layer(document_id, source_profile, extraction)
-            if manage_document_state and self._settings.rag_review_gate_enabled:
+            extraction_recipe_id = await self._persist_extraction_layer(
+                document_id, source_profile, extraction
+            )
+            if (
+                manage_document_state or self._recipe_id is not None
+            ) and self._settings.rag_review_gate_enabled:
                 # REVIEW で停止する前に抽出本文を永続化し、プレビュー・後段 CHUNK で再利用する。
                 # candidate モードは REVIEW で止めず索引まで進める。
-                await self._oracle.save_extraction(document_id, extraction)
-                detail = await self._oracle.update_document_status(document_id, FileStatus.REVIEW)
+                if self._recipe_id is not None:
+                    await self._oracle.update_document_recipe_status(
+                        recipe_id=self._recipe_id,
+                        status=FileStatus.REVIEW,
+                        active_extraction_recipe_id=extraction_recipe_id,
+                    )
+                    detail = await self._oracle.get_document(document_id)
+                    if detail is None:
+                        raise IngestionUserError("ドキュメントが見つかりません。")
+                else:
+                    await self._oracle.save_extraction(document_id, extraction)
+                    detail = await self._oracle.update_document_status(
+                        document_id, FileStatus.REVIEW
+                    )
                 record_ingestion("review", 0)
                 return detail
             return await self._run_index_phase(
@@ -562,16 +599,19 @@ class IngestionPipeline:
         document_id: str,
         source_profile: SourceProfile | None,
         extraction: StructuredExtraction,
-    ) -> None:
+    ) -> str | None:
         """抽出を extraction 層(rag_document_extractions)へ正本として upsert する。
 
         extraction_recipe_id = hash(source_sha256, preprocess, parser)。chunk_set の親キーで、
         index 時は同じキーで読み戻す(単一 materialization では owning 抽出と一致)。
-        書込失敗は取込を止めない(best-effort、legacy 列にも別途保存される)。
+        recipe job はレシピ固有 ID に保存してから pointer を切り替える。legacy 経路だけは
+        書込失敗時に従来どおり取込を継続する。
         """
         source_sha256 = source_profile.content_sha256 if source_profile is not None else None
         if not source_sha256:
-            return
+            if self._recipe_id is not None:
+                raise IngestionUserError("抽出成果物のソースハッシュが未確定です。")
+            return None
         try:
             preprocess_profile = _source_derivation_profile(extraction)
             recipe_settings = (
@@ -580,6 +620,14 @@ class IngestionPipeline:
                 else self._settings
             )
             extraction_recipe_id = compute_extraction_recipe_id(source_sha256, recipe_settings)
+            if self._recipe_id is not None:
+                if self._recipe_revision is None:
+                    raise IngestionUserError("レシピ revision が未確定です。")
+                extraction_recipe_id = compute_document_recipe_extraction_id(
+                    extraction_recipe_id,
+                    self._recipe_id,
+                    self._recipe_revision,
+                )
             recipe = {
                 "rag_preprocess_profile": recipe_settings.rag_preprocess_profile,
                 "rag_parser_adapter_backend": self._settings.rag_parser_adapter_backend,
@@ -592,12 +640,22 @@ class IngestionPipeline:
                 extraction=extraction.to_document_payload(),
                 status="materialized",
             )
-        except Exception:  # noqa: BLE001 — 取込継続のため握り潰し、警告のみ。
+            if self._recipe_id is not None:
+                await self._oracle.update_document_recipe_status(
+                    recipe_id=self._recipe_id,
+                    status=FileStatus.INGESTING,
+                    active_extraction_recipe_id=extraction_recipe_id,
+                )
+            return extraction_recipe_id
+        except Exception:
+            if self._recipe_id is not None:
+                raise
             logger.warning(
                 "extraction 層への書込に失敗(取込は継続)。document_id=%s",
                 document_id,
                 exc_info=True,
             )
+            return None
 
     async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
         """承認済み文書の抽出を extraction 層(正本)から読む。無ければ legacy 列へ縮退。
@@ -605,6 +663,24 @@ class IngestionPipeline:
         index 時の設定から extraction_recipe_id を再計算して新表を引く。単一 materialization では
         extract 時の owning 抽出と一致。読み失敗・未登録は detail.extraction(legacy)へ縮退。
         """
+        if self._recipe_id is not None:
+            recipe = await self._oracle.get_document_recipe(detail.id, self._recipe_id)
+            extraction_recipe_id = (
+                str(recipe.get("active_extraction_recipe_id"))
+                if recipe is not None and recipe.get("active_extraction_recipe_id")
+                else None
+            )
+            if extraction_recipe_id is None:
+                raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+            row = await self._oracle.get_document_extraction_artifact(
+                document_id=detail.id,
+                extraction_recipe_id=extraction_recipe_id,
+            )
+            payload = _coerce_extraction_payload(row.get("extraction_json")) if row else None
+            if payload is None:
+                raise IngestionUserError("索引対象の抽出結果が見つかりません。")
+            return _validate_structured_extraction_payload(payload)
+
         source_sha256 = detail.content_sha256
         if source_sha256:
             try:
@@ -645,7 +721,13 @@ class IngestionPipeline:
             raise IngestionUserError("ドキュメントが見つかりません。")
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
-        await self._oracle.update_document_status(document_id, FileStatus.INDEXING)
+        if self._recipe_id is not None:
+            await self._oracle.update_document_recipe_status(
+                recipe_id=self._recipe_id,
+                status=FileStatus.INDEXING,
+            )
+        else:
+            await self._oracle.update_document_status(document_id, FileStatus.INDEXING)
         checkpoint_segments = await self._safe_list_ingestion_segments(document_id)
         try:
             return await self._run_index_phase(
@@ -659,6 +741,7 @@ class IngestionPipeline:
                 started_at=started_at,
                 chunk_set_id=chunk_set_id,
                 record_outcome=record_outcome,
+                manage_document_state=self._recipe_id is None,
                 cancel_checker=cancel_checker,
             )
         except IngestionCancelledError as exc:
@@ -676,11 +759,12 @@ class IngestionPipeline:
             raise
         except Exception as exc:
             record_ingestion("error", 0)
-            await self._oracle.update_document_status(
-                document_id,
-                FileStatus.ERROR,
-                _safe_persistent_error_message(exc),
-            )
+            if self._recipe_id is None:
+                await self._oracle.update_document_status(
+                    document_id,
+                    FileStatus.ERROR,
+                    _safe_persistent_error_message(exc),
+                )
             record_rag_ingestion_audit(
                 trace_id=trace_id,
                 document_id=document_id,
@@ -709,7 +793,13 @@ class IngestionPipeline:
             raise IngestionUserError("ドキュメントが見つかりません。")
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
-        await self._oracle.update_document_status(document_id, FileStatus.CHUNKING)
+        if self._recipe_id is not None:
+            await self._oracle.update_document_recipe_status(
+                recipe_id=self._recipe_id,
+                status=FileStatus.CHUNKING,
+            )
+        else:
+            await self._oracle.update_document_status(document_id, FileStatus.CHUNKING)
         checkpoint_segments = await self._safe_list_ingestion_segments(document_id)
         try:
             chunks = await self._build_chunks_for_extraction(
@@ -732,7 +822,16 @@ class IngestionPipeline:
                 attributes={"chunk_count": len(chunks)},
             )
             await _raise_if_cancelled(cancel_checker)
-            detail = await self._oracle.update_document_status(document_id, FileStatus.CHUNKED)
+            if self._recipe_id is not None:
+                await self._oracle.update_document_recipe_status(
+                    recipe_id=self._recipe_id,
+                    status=FileStatus.CHUNKED,
+                )
+                detail = await self._oracle.get_document(document_id)
+                if detail is None:
+                    raise IngestionUserError("ドキュメントが見つかりません。")
+            else:
+                detail = await self._oracle.update_document_status(document_id, FileStatus.CHUNKED)
             if record_outcome:
                 record_ingestion("review", len(chunks))
                 record_rag_ingestion_audit(
@@ -767,11 +866,12 @@ class IngestionPipeline:
             raise
         except Exception as exc:
             record_ingestion("error", 0)
-            await self._oracle.update_document_status(
-                document_id,
-                FileStatus.ERROR,
-                _safe_persistent_error_message(exc),
-            )
+            if self._recipe_id is None:
+                await self._oracle.update_document_status(
+                    document_id,
+                    FileStatus.ERROR,
+                    _safe_persistent_error_message(exc),
+                )
             record_rag_ingestion_audit(
                 trace_id=trace_id,
                 document_id=document_id,
@@ -800,7 +900,13 @@ class IngestionPipeline:
             raise IngestionUserError("ドキュメントが見つかりません。")
         extraction = await self._load_reviewed_extraction(detail)
         quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
-        await self._oracle.update_document_status(document_id, FileStatus.INDEXING)
+        if self._recipe_id is not None:
+            await self._oracle.update_document_recipe_status(
+                recipe_id=self._recipe_id,
+                status=FileStatus.INDEXING,
+            )
+        else:
+            await self._oracle.update_document_status(document_id, FileStatus.INDEXING)
         checkpoint_segments = await self._safe_list_ingestion_segments(document_id)
         try:
             chunk_views = await self._oracle.list_chunk_set_chunks(chunk_set_id)
@@ -818,6 +924,7 @@ class IngestionPipeline:
                 started_at=started_at,
                 chunk_set_id=chunk_set_id,
                 record_outcome=record_outcome,
+                manage_document_state=self._recipe_id is None,
                 cancel_checker=cancel_checker,
                 reuse_saved_chunks=True,
             )
@@ -836,11 +943,12 @@ class IngestionPipeline:
             raise
         except Exception as exc:
             record_ingestion("error", 0)
-            await self._oracle.update_document_status(
-                document_id,
-                FileStatus.ERROR,
-                _safe_persistent_error_message(exc),
-            )
+            if self._recipe_id is None:
+                await self._oracle.update_document_status(
+                    document_id,
+                    FileStatus.ERROR,
+                    _safe_persistent_error_message(exc),
+                )
             record_rag_ingestion_audit(
                 trace_id=trace_id,
                 document_id=document_id,
@@ -1163,10 +1271,7 @@ class IngestionPipeline:
         original_file_name: str,
         original_object_storage_path: str | None,
         fallback_content_type: str,
-    ) -> None:
-        save_artifact = getattr(self._oracle, "save_preprocess_artifact", None)
-        if not callable(save_artifact):
-            return
+    ) -> DocumentPreprocessArtifact:
         content_type = (
             source_derivation.derived_content_type
             or source_derivation.source_content_type
@@ -1192,6 +1297,16 @@ class IngestionPipeline:
             page_map={str(key): int(value) for key, value in source_derivation.page_map.items()},
             warnings=list(source_derivation.warnings),
         )
+        if self._recipe_id is not None:
+            await self._oracle.update_document_recipe_status(
+                recipe_id=self._recipe_id,
+                status=FileStatus.PREPROCESSED,
+                preprocess_artifact=artifact,
+            )
+            return artifact
+        save_artifact = getattr(self._oracle, "save_preprocess_artifact", None)
+        if not callable(save_artifact):
+            return artifact
         await save_artifact(document_id, artifact)
         if artifact.object_storage_path:
             # 保存検証: ファイル準備 artifact(JSON 列)の書き込みが永続化したか読み戻して確認する。
@@ -1213,6 +1328,7 @@ class IngestionPipeline:
                         "ファイル準備の処理後ファイル情報を保存できませんでした。"
                         "時間をおいてファイル準備から再処理してください。"
                     )
+        return artifact
 
     async def _cache_canonical_artifact(
         self,
@@ -1265,6 +1381,7 @@ class IngestionPipeline:
         source_profile: SourceProfile | None,
         parser_backend: str,
         parser_profile: str,
+        recipe_id: str | None = None,
     ) -> list[IngestionSegment]:
         """segment checkpoint を作成し、既存 failed segment があれば再試行対象にする。"""
         if not getattr(self._settings, "rag_segment_checkpoint_enabled", True):
@@ -1300,6 +1417,7 @@ class IngestionPipeline:
             source_profile=source_profile,
             parser_backend=parser_backend,
             parser_profile=parser_profile,
+            recipe_id=recipe_id,
             max_pages_per_segment=self._settings.rag_pdf_max_pages_per_segment,
             max_segments=self._settings.rag_pdf_max_segments,
             segmentation_enabled=self._settings.rag_pdf_segmentation_enabled,
@@ -1759,7 +1877,10 @@ class IngestionPipeline:
         if not callable(list_segments):
             return []
         try:
-            return list(await list_segments(document_id))
+            segments = list(await list_segments(document_id))
+            if self._recipe_id is not None:
+                return [segment for segment in segments if segment.recipe_id == self._recipe_id]
+            return segments
         except Exception as exc:
             logger.info(
                 "ingestion_segment_checkpoint_list_skipped",
@@ -1949,7 +2070,12 @@ class IngestionPipeline:
             await _observe_ingestion_stage(
                 trace_id,
                 "graph_indexing",
-                self._save_graph_index(document_id, extraction, chunks),
+                self._save_graph_index(
+                    document_id,
+                    extraction,
+                    chunks,
+                    chunk_set_id=chunk_set_id,
+                ),
                 attributes={
                     "chunk_count": len(chunks),
                     "element_count": len(extraction.elements),
@@ -1991,7 +2117,12 @@ class IngestionPipeline:
             await _observe_ingestion_stage(
                 trace_id,
                 "graph_indexing",
-                self._save_graph_index(document_id, extraction, chunks),
+                self._save_graph_index(
+                    document_id,
+                    extraction,
+                    chunks,
+                    chunk_set_id=chunk_set_id,
+                ),
                 attributes={
                     "chunk_count": len(chunks),
                     "element_count": len(extraction.elements),
@@ -2013,6 +2144,8 @@ class IngestionPipeline:
         document_id: str,
         extraction: StructuredExtraction,
         chunks: list[Chunk],
+        *,
+        chunk_set_id: str | None = None,
     ) -> GraphIndex:
         """構造化抽出から GraphRAG-lite index を作り Oracle へ保存する。"""
         graph_params = resolve_graph_adapter(self._settings)
@@ -2023,10 +2156,15 @@ class IngestionPipeline:
             knowledge_base_ids=[knowledge_base.id for knowledge_base in knowledge_bases],
             extraction=extraction,
             chunks=chunks,
+            chunk_set_id=chunk_set_id,
             build_claims=graph_params.build_claims,
             build_community_summaries=graph_params.build_community_summaries,
         )
-        await self._oracle.replace_document_graph_index(document_id, graph_index)
+        await self._oracle.replace_document_graph_index(
+            document_id,
+            graph_index,
+            chunk_set_id=chunk_set_id,
+        )
         return graph_index
 
 
@@ -2541,6 +2679,7 @@ def _checkpoint_segments_for_source(
     source_profile: SourceProfile | None,
     parser_backend: str,
     parser_profile: str,
+    recipe_id: str | None,
     max_pages_per_segment: int,
     max_segments: int,
     segmentation_enabled: bool,
@@ -2556,8 +2695,9 @@ def _checkpoint_segments_for_source(
     if pdf_segments and not (len(pdf_segments) == 1 and pdf_segments[0].page_count <= 1):
         return [
             IngestionSegment(
-                segment_id=_pdf_checkpoint_segment_id(document_id, segment),
+                segment_id=_pdf_checkpoint_segment_id(document_id, segment, recipe_id=recipe_id),
                 document_id=document_id,
+                recipe_id=recipe_id,
                 status="QUEUED",
                 parser_backend=parser_backend,
                 parser_profile=parser_profile,
@@ -2576,6 +2716,7 @@ def _checkpoint_segments_for_source(
         source_profile=source_profile,
         parser_backend=parser_backend,
         parser_profile=parser_profile,
+        recipe_id=recipe_id,
         max_segments=max_segments,
     )
     if office_segments:
@@ -2586,8 +2727,9 @@ def _checkpoint_segments_for_source(
     )
     return [
         IngestionSegment(
-            segment_id=f"{document_id}:source",
+            segment_id=f"{_segment_scope(document_id, recipe_id)}:source",
             document_id=document_id,
+            recipe_id=recipe_id,
             status="QUEUED",
             parser_backend=parser_backend,
             parser_profile=parser_profile,
@@ -2608,6 +2750,7 @@ def _office_checkpoint_segments_for_source(
     source_profile: SourceProfile | None,
     parser_backend: str,
     parser_profile: str,
+    recipe_id: str | None,
     max_segments: int,
 ) -> list[IngestionSegment]:
     """OpenXML Office を slide/sheet 単位の checkpoint にする。"""
@@ -2630,8 +2773,9 @@ def _office_checkpoint_segments_for_source(
         )
     return [
         IngestionSegment(
-            segment_id=f"{document_id}:{office_kind}{number}",
+            segment_id=f"{_segment_scope(document_id, recipe_id)}:{office_kind}{number}",
             document_id=document_id,
+            recipe_id=recipe_id,
             status="QUEUED",
             parser_backend=parser_backend,
             parser_profile=parser_profile,
@@ -2845,8 +2989,17 @@ def _checkpoint_for_pdf_segment(
     )
 
 
-def _pdf_checkpoint_segment_id(document_id: str, segment: PdfPageSegment) -> str:
-    return f"{document_id}:p{segment.page_start}-{segment.page_end}"
+def _segment_scope(document_id: str, recipe_id: str | None) -> str:
+    return document_id if recipe_id is None else f"{document_id}:{recipe_id[:12]}"
+
+
+def _pdf_checkpoint_segment_id(
+    document_id: str,
+    segment: PdfPageSegment,
+    *,
+    recipe_id: str | None = None,
+) -> str:
+    return f"{_segment_scope(document_id, recipe_id)}:p{segment.page_start}-{segment.page_end}"
 
 
 def _safe_artifact_key_part(value: str) -> str:

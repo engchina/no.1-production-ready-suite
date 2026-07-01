@@ -88,7 +88,7 @@ test("取込ジョブ一覧から実行中 job をキャンセルできる", asy
 
   await page.goto("/upload");
 
-  await expect(page.getByText("取込中")).toBeVisible();
+  await expect(page.getByText("実行中")).toBeVisible();
   await page.getByRole("button", { name: "キャンセル" }).click();
 
   await expect.poll(() => cancelRequested).toBe(true);

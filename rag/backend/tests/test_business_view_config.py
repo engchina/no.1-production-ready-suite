@@ -64,25 +64,25 @@ def test_dump_parse_roundtrip() -> None:
     assert restored.normalized_knowledge_base_ids() == ["kb-1", "kb-2"]
 
 
-def test_serving_mode_defaults_to_single() -> None:
-    """配信モードの既定は single(現挙動)で、上書きを強制しない。"""
+def test_serving_mode_defaults_to_fused() -> None:
+    """全 active レシピ融合が既定で、不要な上書きを作らない。"""
     settings = get_settings()
     config = BusinessViewConfig()
-    assert config.serving_mode == "single"
+    assert config.serving_mode == "fused"
     merged, applied = resolve_business_view_settings(settings, config)
     assert applied is False
-    assert merged.rag_serving_mode == "single"
-
-
-def test_serving_mode_fused_overrides_global() -> None:
-    """serving_mode=fused は rag_serving_mode をグローバルへ上書きする(破壊しない)。"""
-    settings = get_settings()
-    assert settings.rag_serving_mode == "single"
-    config = BusinessViewConfig(serving_mode="fused")
-    merged, applied = resolve_business_view_settings(settings, config)
-    assert applied is True
     assert merged.rag_serving_mode == "fused"
-    assert settings.rag_serving_mode == "single"
+
+
+def test_legacy_single_is_normalized_to_fused() -> None:
+    """互換読取した single も runtime と次回保存では fused へ正規化する。"""
+    settings = get_settings()
+    assert settings.rag_serving_mode == "fused"
+    config = BusinessViewConfig(serving_mode="single")
+    merged, _applied = resolve_business_view_settings(settings, config)
+    assert merged.rag_serving_mode == "fused"
+    assert dump_business_view_config(config)["serving_mode"] == "fused"
+    assert settings.rag_serving_mode == "fused"
 
 
 def test_parse_tolerates_broken_payload() -> None:
