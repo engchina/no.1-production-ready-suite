@@ -48,7 +48,9 @@ test.describe("サイドナビのセクション折りたたみ", () => {
     await page.goto("/dashboard");
 
     const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-    const evalLink = sidebar.getByRole("link", { name: "品質評価", exact: true });
+    const evalLink = sidebar
+      .getByRole("link", { name: "品質評価", exact: true })
+      .and(sidebar.locator('a[href="/evaluation"]'));
     await expect(evalLink).toHaveCount(1);
 
     // 折りたたむと visibility:hidden + inert で a11y ツリーから外れ、role として見えなくなる。

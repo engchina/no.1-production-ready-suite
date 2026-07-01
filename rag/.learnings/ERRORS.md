@@ -26,6 +26,40 @@ feedback route 側で入力を具体型へ検証・narrowing してから `int()
 
 ---
 
+## [ERR-20260702-005] frontend_ci_timezone_and_nav_locator
+
+**Logged**: 2026-07-02T07:54:39+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+Frontend CI が、ローカル時区に固定された会話時刻と重複したナビゲーション名の locator により失敗した。
+
+### Error
+```text
+Expected: 2件・01/01 09:00; CI actual used UTC formatting
+getByRole('link', { name: '品質評価' }) resolved to 2 elements
+```
+
+### Context
+- `chat.spec.ts` は `2026-01-01T00:00:02Z` の表示を JST の `09:00` に固定していた。
+- フィードバック導線と設定名整理後、サイドナビ内に同名の「品質評価」リンクが2件存在した。
+- GitHub Actions の Frontend E2E は 482 passed、上記2テストの desktop/mobile 展開6件だけが失敗した。
+
+### Suggested Fix
+時刻は locale 形式を検証しつつ具体時区へ固定せず、同名ナビは対象 href で絞り込む。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/e2e/chat.spec.ts, frontend/e2e/sidebar-accordion.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-02T07:54:39+09:00
+- **Notes**: 時刻を形式正規表現へ変更し、業務ビューの品質評価リンクを `/evaluation` で限定した。
+
+---
+
 ## [ERR-20260702-004] git_branch_workspace_permission
 
 **Logged**: 2026-07-02T08:00:00+09:00

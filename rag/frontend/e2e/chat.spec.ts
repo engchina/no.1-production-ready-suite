@@ -336,7 +336,7 @@ for (const viewport of [
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
     const sessions = page.getByRole("complementary", { name: "会話" });
     await expect(sessions.getByText("経費の上限は？", { exact: true })).toBeVisible();
-    await expect(sessions.getByText("2件・01/01 09:00", { exact: true })).toBeVisible();
+    await expect(sessions.getByText(/^2件・\d{2}\/\d{2} \d{2}:\d{2}$/)).toBeVisible();
     const citationSummary = page
       .locator("summary")
       .filter({ hasText: "根拠（引用） 1 件" })
