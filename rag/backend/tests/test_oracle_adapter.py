@@ -2774,6 +2774,13 @@ def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> N
     assert "CREATE TABLE rag_graph_community_summaries" in graph_ddl
     assert "CREATE TABLE rag_graph_entity_chunks" in graph_ddl
     assert "CREATE TABLE rag_citation_feedback" in feedback_ddl
+    assert "target_type       VARCHAR2(16)" in feedback_ddl
+    assert "source_surface    VARCHAR2(16)" in feedback_ddl
+    assert "business_view_id  VARCHAR2(64)" in feedback_ddl
+    assert "RAG_FEEDBACK_USER_TRACE_IDX" in feedback_ddl.upper()
+    assert "rating = 'helpful' AND reason IS NULL" in feedback_ddl
+    assert "target_type = 'answer' AND reason IN" in feedback_ddl
+    assert "target_type = 'citation' AND reason IN" in feedback_ddl
     assert "comment_hash      CHAR(64)" in feedback_ddl
     assert "comment_text" not in feedback_ddl.lower()
     assert "comment_body" not in feedback_ddl.lower()
@@ -2783,6 +2790,98 @@ def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> N
     assert "result_sha256     CHAR(64) NOT NULL" in artifact_ddl
     assert "rag_evaluation_runs_result_hash_idx" in artifact_ddl
     assert "NEO4J" not in (graph_ddl + feedback_ddl + artifact_ddl).upper()
+
+
+@pytest.mark.anyio
+async def test_feedback_write_and_current_read_use_append_only_latest_vote() -> None:
+    """投票は INSERT し、current は利用者・対象ごとの最新行だけを返す。"""
+    created_at = datetime(2026, 7, 1, tzinfo=UTC)
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "feedback_id": "feedback-2",
+                    "trace_id": "trace-1",
+                    "business_view_id": "bv-1",
+                    "target_type": "answer",
+                    "source_surface": "chat",
+                    "document_id": None,
+                    "chunk_id": None,
+                    "rating": "not_helpful",
+                    "reason": "incorrect",
+                    "created_at": created_at,
+                    "feedback_rank": 1,
+                }
+            ]
+        ]
+    )
+    client = OracleClient(
+        settings=Settings.model_construct(), pool=pool, db_call_runner=_run_inline
+    )
+    token = set_audit_request_context(
+        AuditRequestContext(tenant_id_hash="a" * 64, user_id_hash="b" * 64)
+    )
+    try:
+        feedback_id = await client.save_feedback(
+            {
+                "feedback_id": "feedback-1",
+                "trace_id": "trace-1",
+                "business_view_id": "bv-1",
+                "target_type": "answer",
+                "source_surface": "chat",
+                "rating": "helpful",
+            }
+        )
+        current = await client.list_current_feedback("trace-1")
+    finally:
+        reset_audit_request_context(token)
+
+    insert = pool.connection.calls[0]
+    select = pool.connection.calls[1]
+    assert feedback_id == "feedback-1"
+    assert "INSERT INTO rag_citation_feedback" in insert.statement
+    assert insert.parameters["target_type"] == "answer"
+    assert insert.parameters["business_view_id"] == "bv-1"
+    assert insert.parameters["document_id"] is None
+    assert insert.parameters["tenant_id_hash"] == "a" * 64
+    assert insert.parameters["user_id_hash"] == "b" * 64
+    assert "ROW_NUMBER() OVER" in select.statement
+    assert "f.user_id_hash = :user_id_hash" in select.statement
+    assert current[0]["feedback_id"] == "feedback-2"
+    assert "feedback_rank" not in current[0]
+
+
+@pytest.mark.anyio
+async def test_feedback_dashboard_filters_tenant_and_aggregates_latest_votes() -> None:
+    """一覧・件数・集計は同じ latest CTE と tenant/filter を使う。"""
+    pool = FakeOraclePool(execute_results=[[], [{"total": 2}], []])
+    client = OracleClient(
+        settings=Settings.model_construct(), pool=pool, db_call_runner=_run_inline
+    )
+    token = set_audit_request_context(AuditRequestContext(tenant_id_hash="a" * 64))
+    try:
+        rows, total, groups = await client.list_feedback_dashboard_rows(
+            business_view_id="bv-1",
+            target_type="citation",
+            rating="not_helpful",
+            reason="not_relevant",
+            period_days=30,
+            limit=20,
+            offset=0,
+        )
+    finally:
+        reset_audit_request_context(token)
+
+    assert rows == []
+    assert total == 2
+    assert groups == []
+    assert len(pool.connection.calls) == 3
+    for call in pool.connection.calls:
+        assert "latest_feedback" in call.statement
+        assert "f.tenant_id_hash = :tenant_id_hash" in call.statement
+        assert call.parameters["tenant_id_hash"] == "a" * 64
+        assert call.parameters["business_view_id"] == "bv-1"
+        assert call.parameters["period_days"] == 30
 
 
 async def test_vector_search_rejects_wrong_embedding_dimension() -> None:
@@ -3287,7 +3386,9 @@ class FakeOracleCursor:
             or ("UPDATE rag_ingestion_jobs" in statement and "max_attempts" in statement)
         ):
             raise RuntimeError('ORA-00904: "J"."MAX_ATTEMPTS": invalid identifier')
-        self._rows = self._connection.next_rows() if statement.startswith("SELECT") else []
+        self._rows = (
+            self._connection.next_rows() if statement.startswith(("SELECT", "WITH")) else []
+        )
 
     def executemany(
         self,

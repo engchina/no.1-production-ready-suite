@@ -216,16 +216,25 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
       body: searchStreamBody(),
     });
   });
-  await page.route("**/api/search/citation-feedback", async (route) => {
+  await page.route("**/api/feedback/current?*", async (route) => {
+    await route.fulfill({
+      json: { data: [], error_messages: [], warning_messages: [] },
+    });
+  });
+  await page.route("**/api/feedback", async (route) => {
     feedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({
       json: {
         data: {
           feedback_id: "feedback-1",
           trace_id: "trace-1",
+          business_view_id: "bv-1",
+          target_type: "citation",
+          source_surface: "search",
           document_id: "doc-1",
           chunk_id: "doc-1:1",
           rating: "helpful",
+          reason: null,
         },
         error_messages: [],
         warning_messages: [],
@@ -266,6 +275,9 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await citation.getByRole("button", { name: "この引用は役に立った" }).click();
   await expect.poll(() => feedbackPayload).toEqual({
     trace_id: "trace-1",
+    business_view_id: "bv-1",
+    target_type: "citation",
+    source_surface: "search",
     document_id: "doc-1",
     chunk_id: "doc-1:1",
     rating: "helpful",

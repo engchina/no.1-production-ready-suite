@@ -1,3 +1,128 @@
+## [ERR-20260701-010] mypy_unrelated_feedback_route
+
+**Logged**: 2026-07-01T23:12:00+09:00
+**Priority**: low
+**Status**: pending
+**Area**: backend typecheck
+
+### Summary
+全 backend mypy が、並行作業で追加された未追跡の feedback route の型エラー1件で失敗した。
+
+### Error
+```text
+app/api/routes/feedback.py:102: error: No overload variant of "int" matches argument type "object"  [call-overload]
+```
+
+### Context
+- Business View 設定変更とは無関係な `backend/app/api/routes/feedback.py` で発生した。
+- 当該ファイルは本タスク開始後に別作業から追加されており、変更を上書きしない方針で触れていない。
+
+### Suggested Fix
+feedback route 側で入力を具体型へ検証・narrowing してから `int()` へ渡す。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/api/routes/feedback.py
+
+---
+
+## [ERR-20260702-004] git_branch_workspace_permission
+
+**Logged**: 2026-07-02T08:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Codex の workspace sandbox では `.git` が読み取り専用のため、通常権限での分岐作成に失敗した。
+
+### Error
+```text
+fatal: cannot lock ref 'refs/heads/codex/feedback-and-chat-improvements': unable to create directory for .git/refs/heads/codex/feedback-and-chat-improvements
+```
+
+### Context
+- `git switch -c codex/feedback-and-chat-improvements` を workspace sandbox 内で実行した。
+- ソースは書き込み可能だが `.git` は読み取り専用として公開されている。
+
+### Suggested Fix
+分岐・commit など `.git` を更新する Git 操作は承認付き権限で実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: .git
+
+### Resolution
+- **Resolved**: 2026-07-02T08:00:00+09:00
+- **Notes**: 承認付き Git 操作へ切り替えた。
+
+---
+
+## [ERR-20260702-001] frontend_css_entry_path_assumption
+
+**Logged**: 2026-07-02T07:11:13+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+全局样式排查时假定入口为 `src/index.css`，导致读取命令提前失败。
+
+### Error
+```text
+sed: can't read src/index.css: No such file or directory
+```
+
+### Context
+- 设置页滚动问题排查中读取全局 CSS 与应用外壳。
+- 本项目实际入口样式为 `frontend/src/globals.css`。
+
+### Suggested Fix
+读取样式入口前先用 `rg --files src` 确认文件名，并避免将独立读取通过 shell 控制符串联。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/globals.css
+
+### Resolution
+- **Resolved**: 2026-07-02T07:11:13+09:00
+- **Notes**: 已通过 `rg --files` 确认实际文件路径后继续排查。
+
+---
+
+## [ERR-20260701-009] playwright_multiselect_remained_open
+
+**Logged**: 2026-07-01T23:10:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+業務ビュー作成 E2E で、KB 選択直後の「業務ビューで上書き」クリックが状態を変更しなかった。
+
+### Error
+```text
+Expected aria-pressed="true", received "false"
+```
+
+### Context
+- KB picker は複数選択のため、option 選択後も listbox を開いたままにする。
+- 展開中にフォーム下部をクリックすると、最初のクリックは outside-click として listbox を閉じるために消費される。
+- トグル単体の実画面操作では正常に状態が変わることを確認した。
+
+### Suggested Fix
+複数選択後に別のコントロールを操作する E2E は、`Escape` で listbox を閉じてから次へ進む。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/e2e/business-views.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-01T23:10:00+09:00
+- **Notes**: KB 選択後に combobox へ `Escape` を送り、上書きトグルと payload を検証する。
+
+---
+
 ## [ERR-20260618-001] multipage_ingestion_stuck_in_ingesting_deadlock
 
 **Logged**: 2026-06-18T00:00:00+09:00
@@ -29,6 +154,198 @@ document status=INGESTING error_message=None  # 固着
 ### Resolution
 - **Resolved**: 2026-06-18
 - **Notes**: oracle 復旧 + worker 定期回復 + 新 config を実装。test_oracle_adapter(orphan/stale)・test_ingestion_worker(定期回復)緑。固着済み文書は backend 再起動の startup recovery、または最大 60s のアイドル回復で ERROR へ遷移し再試行可能になる。
+
+---
+
+## [ERR-20260701-012] chat_playwright_selector_and_retry_drift
+
+**Logged**: 2026-07-01T00:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+会話行へ編集ボタンを追加したことで旧 locator が複数ボタンに一致し、一覧エラー表示も Query retry の時間差で不安定になった。
+
+### Error
+```text
+strict mode violation: getByRole('list', { name: '会話' }).getByRole('button') resolved to 2 elements
+会話一覧を読み込めませんでした。: element(s) not found
+```
+
+### Context
+- 会話選択と名前変更を兄弟ボタンへ分離した後の `chat.spec.ts` で再現した。
+- 一覧エラー mock は既定 retry の完了が10秒を超える場合があった。
+
+### Suggested Fix
+選択 locator は件数・日時を含むボタンへ限定し、会話一覧 query は手動再試行UIがあるため自動 retry を無効化する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/e2e/chat.spec.ts, frontend/src/lib/queries.ts
+
+### Resolution
+- **Resolved**: 2026-07-01T00:00:00+09:00
+- **Notes**: semantic locator を限定し、`useConversations` を `retry: false` にして対象エラー試験を desktop/mobile で通した。
+
+---
+
+## [ERR-20260701-011] pytest_general_feedback_base_schema_drift
+
+**Logged**: 2026-07-01T00:00:00+09:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend tests
+
+### Summary
+実 Oracle を使う pytest session setup が、general feedback の新規索引と既存表の列差分で停止した。
+
+### Error
+```text
+ORA-00904: "BUSINESS_VIEW_ID": invalid identifier
+```
+
+### Context
+- Command attempted: `uv run pytest tests/test_chat_api.py tests/test_oracle_schema_cli.py -q`
+- `tests/_oracle_test_db.py::ensure_schema()` が既存 `rag_citation_feedback` 表へ、未追加の `business_view_id` を含む索引DDLを適用した。
+- 会話一覧変更のテスト本体へ入る前の session fixture で再現した。
+
+### Suggested Fix
+general feedback の base-schema 適用を既存表にも冪等に列追加してから索引作成するか、test schema setup で対応 migration を先に適用する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/clients/oracle.py, backend/app/rag/oracle_schema.py, backend/tests/_oracle_test_db.py
+- See Also: ERR-20260701-008
+
+### Resolution
+- **Resolved**: 2026-07-01T00:00:00+09:00
+- **Notes**: `ORACLE_DSN=` で外部DBを無効化し、対象36件とfull suiteを再実行した。
+
+---
+
+## [ERR-20260701-008] pytest_real_oracle_schema_drift
+
+**Logged**: 2026-07-01T00:00:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend tests
+
+### Summary
+対象単体テストの再実行が、並行中の実 Oracle schema 変更により setup で失敗した。
+
+### Error
+```text
+ORA-00904: "BUSINESS_VIEW_ID": invalid identifier
+```
+
+### Context
+- `tests/conftest.py` の session fixture が利用可能な実 DB へ自動接続した。
+- 今回の Business View 設定変更より前の schema 初期化段階で全テストが停止した。
+
+### Suggested Fix
+外部DBを必要としない対象テストは `ORACLE_DSN=` で決定論モードに固定する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/conftest.py, backend/tests/_oracle_test_db.py
+
+### Resolution
+- **Resolved**: 2026-07-01T00:00:00+09:00
+- **Notes**: 外部DBを無効化して対象テストを再実行する。
+
+---
+
+## [ERR-20260701-007] apply_patch_multi_file_context_mismatch
+
+**Logged**: 2026-07-01T00:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+複数ファイルの一括 patch が、設計コメントの単語差分により全体未適用になった。
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected lines in backend/app/rag/business_view_config.py
+```
+
+### Context
+- Business View の legacy 設定互換とテストを一括更新しようとした。
+- 想定は「文書の物理索引方法」、実ファイルは「KB の物理索引方法」だった。
+
+### Suggested Fix
+関連箇所を直前に再表示し、意味単位の小さい patch に分割する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/rag/business_view_config.py
+
+### Resolution
+- **Resolved**: 2026-07-01T00:00:00+09:00
+- **Notes**: 現行行を再確認し、patch を分割して再実行した。
+
+---
+
+## [ERR-20260701-006] ingestion_strategy_test_timeout
+
+**Logged**: 2026-07-01T22:38:00+09:00
+**Priority**: low
+**Status**: pending
+**Area**: backend tests
+
+### Summary
+追加実行した extraction artifact 統合テストが完了せず、60秒で timeout した。
+
+### Error
+```text
+test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpoint
+Process exited with code 124 after 60 seconds
+```
+
+### Context
+- 対象テストは `rag_review_gate_enabled=False` と auto-parse 有効を明示しており、今回変更した段階自動進行の既定値には依存しない。
+- 直接関連する config、effective config、document recipe/workspace の164テストは合格済み。
+
+### Suggested Fix
+別タスクで当該テストの待機箇所を特定し、外部処理または process executor を決定論 fake に置換する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_ingestion_strategy.py
+
+---
+
+## [ERR-20260701-005] apply_patch_context_mismatch
+
+**Logged**: 2026-07-01T22:31:21+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+`test_config.py` の推測したテスト名をコンテキストに使い、パッチ検証が失敗した。
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected lines in backend/tests/test_config.py
+```
+
+### Context
+- 変更前に対象付近を確認せず、`test_default_graph_profile_is_off` という実在しない名前を指定した。
+- パッチは原子的に失敗し、ファイル変更は発生しなかった。
+
+### Suggested Fix
+パッチ対象の直前・直後を先に読み、実在する最小コンテキストで適用する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_config.py
+
+### Resolution
+- **Resolved**: 2026-07-01T22:31:21+09:00
+- **Notes**: 実在する `test_graph_profile_defaults_to_off` を確認して再適用した。
 
 ---
 
@@ -2056,5 +2373,166 @@ ESLint と Playwright は直列に実行する。
 ### Resolution
 - **Resolved**: 2026-07-01T07:25:00+09:00
 - **Notes**: Playwright 完了後に `npm run lint` を単独で再実行する。
+
+---
+
+## [ERR-20260701-007] nullable_search_diagnostics_feedback_build
+
+**Logged**: 2026-07-01T23:30:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+フィードバックへ業務ビューIDを渡す際、nullableな検索 diagnostics を直接参照して型チェックに失敗した。
+
+### Error
+```text
+SearchClient.tsx: 'meta.diagnostics' is possibly 'null'.
+```
+
+### Context
+- `npm run build` で回答・引用フィードバック追加箇所の2件を検出した。
+- runtime metadata には通常 diagnostics があるが、公開型は null を許容する。
+
+### Suggested Fix
+検索結果の補助情報は optional access を使い、選択中の業務ビューIDへ安全にfallbackする。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/components/search/SearchClient.tsx
+
+### Resolution
+- **Resolved**: 2026-07-01T23:30:00+09:00
+- **Notes**: optional chaining と既存 businessViewIds fallback に修正した。
+
+---
+
+## [ERR-20260701-008] feedback_e2e_strict_locator
+
+**Logged**: 2026-07-01T23:35:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+理由名が集計と明細の両方へ表示され、部分一致Playwright locatorがstrict modeで失敗した。
+
+### Error
+```text
+getByText('内容が正しくない') resolved to 2 elements
+```
+
+### Context
+- 専用フィードバック画面のdesktop/mobileテストで同じ理由ラベルを検証した。
+- UIは意図どおりで、テストlocatorだけが曖昧だった。
+
+### Suggested Fix
+集計側の理由ラベルは `{ exact: true }` または対象sectionで絞り込む。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/e2e/feedback.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-01T23:35:00+09:00
+- **Notes**: 完全一致locatorへ修正した。
+
+---
+
+## [ERR-20260701-009] feedback_oracle_count_mypy
+
+**Logged**: 2026-07-01T23:40:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Oracle集計行の `object` 値を直接 `int` 化し、mypyのoverload検証に失敗した。
+
+### Error
+```text
+No overload variant of "int" matches argument type "object"
+```
+
+### Context
+- `uv run mypy .` がフィードバック理由別件数の変換を検出した。
+- 実Oracleでは件数がDecimalで返る可能性がある。
+
+### Suggested Fix
+`int | float | str | Decimal` を型確認してから整数化する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/api/routes/feedback.py
+
+### Resolution
+- **Resolved**: 2026-07-01T23:40:00+09:00
+- **Notes**: Oracle Decimalを含む明示的な型guardを追加した。
+
+---
+
+## [ERR-20260702-002] playwright_grep_literal_parentheses
+
+**Logged**: 2026-07-02T07:14:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+Playwright 标题筛选中的字面括号未被 shell 保留，导致没有匹配到测试。
+
+### Error
+```text
+Error: No tests found.
+```
+
+### Context
+- 仅重跑标题以 `(desktop)` 结尾的模型与 OCI 设置测试。
+- `--grep \(desktop\)$` 经 shell 处理后成为分组正则，而不是字面括号。
+
+### Suggested Fix
+将 Playwright grep 表达式整体放入单引号，并在正则内转义字面括号。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/e2e/model-settings-switch.spec.ts, frontend/e2e/oci-settings-layout.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-02T07:14:00+09:00
+- **Notes**: 改用 `--grep '\\(desktop\\)$'` 与对应 mobile 表达式。
+
+---
+
+## [ERR-20260702-003] feedback_migration_nullable_reapply
+
+**Logged**: 2026-07-02T07:20:00+09:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+フィードバックmigrationのNULL可変更が、2回目の実行でORA-01451になった。
+
+### Error
+```text
+ORA-01451: column to be modified to NULL cannot be modified to NULL
+ORA-06512: at line 46
+```
+
+### Context
+- `20260701_001_general_feedback` を実Oracleへ初回適用後、再実行安全性を確認した。
+- `document_id` と `chunk_id` は既にNULL可だったが、同じ `ALTER TABLE ... NULL` を再実行していた。
+
+### Suggested Fix
+`user_tab_columns.nullable = 'N'` の列だけをNULL可へ変更する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/rag/oracle_schema.py, backend/tests/test_oracle_schema_cli.py
+
+### Resolution
+- **Resolved**: 2026-07-02T07:20:00+09:00
+- **Notes**: 対象2列をdata dictionaryから列挙し、NOT NULLの列だけALTERするよう修正した。
 
 ---

@@ -179,7 +179,6 @@ function emptyAdapterConfig() {
       post_retrieval_pipeline: null,
       generation_profile: null,
       guardrail_policy: null,
-      vector_index_profile: null,
       evaluation_suite: null,
     },
   };

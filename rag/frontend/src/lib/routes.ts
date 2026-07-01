@@ -10,6 +10,7 @@ export const APP_ROUTES = {
   chat: "/chat",
   search: "/search",
   evaluation: "/evaluation",
+  feedback: "/feedback",
   settingsPipeline: "/settings/pipeline",
   settingsOci: "/settings/oci",
   settingsUploadStorage: "/settings/upload-storage",

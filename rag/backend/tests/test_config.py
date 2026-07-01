@@ -108,6 +108,13 @@ def test_graph_profile_defaults_to_off() -> None:
     assert Settings().rag_graph_profile == "off"
 
 
+def test_automatic_document_stage_progression_is_enabled_by_default() -> None:
+    settings = Settings()
+    assert settings.rag_auto_parse_after_preprocess_enabled is True
+    assert settings.rag_auto_chunk_after_extract_enabled is True
+    assert settings.rag_auto_index_after_chunk_enabled is True
+
+
 def test_unknown_graph_profile_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(rag_graph_profile="neo4j")

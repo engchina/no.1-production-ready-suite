@@ -29,6 +29,8 @@ import {
   type EvaluationCompareRequestBody,
   type EvaluationRunRequestBody,
   type FileStatus,
+  type FeedbackListParams,
+  type FeedbackRequestBody,
   type IngestionJobPhase,
   type IngestionJobStatus,
   type KnowledgeBaseCreateRequest,
@@ -38,6 +40,7 @@ import {
   type BusinessViewStatus,
   type BusinessViewUpdateRequest,
   type ConversationCreateBody,
+  type ConversationUpdateBody,
   type ModelSettingsPayload,
   type ModelSettingsTestRequest,
   type ParserAdapterContractData,
@@ -127,6 +130,8 @@ export const queryKeys = {
   conversations: (params: { business_view_id?: string; limit?: number; offset?: number }) =>
     ["conversations", params] as const,
   conversation: (id: string) => ["conversations", id] as const,
+  currentFeedback: (traceId: string) => ["feedback", "current", traceId] as const,
+  feedback: (params: FeedbackListParams) => ["feedback", params] as const,
   compareModels: ["chat", "models"] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
@@ -865,6 +870,7 @@ export function useConversations(params: {
     queryKey: queryKeys.conversations(params),
     queryFn: () => api.listConversations(params),
     enabled: params.business_view_id != null,
+    retry: false,
   });
 }
 
@@ -882,8 +888,61 @@ export function useCreateConversation() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: ConversationCreateBody) => api.createConversation(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["conversations"] });
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+}
+
+/** trace ごとの自分の最新フィードバック。 */
+export function useCurrentFeedback(traceId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.currentFeedback(traceId ?? ""),
+    queryFn: () => api.getCurrentFeedback(traceId as string),
+    enabled: Boolean(traceId),
+  });
+}
+
+/** 回答/引用フィードバックを追記する。 */
+export function useSubmitFeedback() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: FeedbackRequestBody) => api.submitFeedback(payload),
+    onSuccess: (saved) => {
+      qc.setQueryData(queryKeys.currentFeedback(saved.trace_id), (current: unknown) => {
+        const items = Array.isArray(current) ? current : [];
+        const remaining = items.filter((item) => {
+          if (!item || typeof item !== "object") return false;
+          const candidate = item as Partial<typeof saved>;
+          return !(
+            candidate.target_type === saved.target_type &&
+            (candidate.document_id ?? null) === (saved.document_id ?? null) &&
+            (candidate.chunk_id ?? null) === (saved.chunk_id ?? null)
+          );
+        });
+        return [...remaining, { ...saved, created_at: new Date().toISOString() }];
+      });
+      qc.invalidateQueries({ queryKey: ["feedback"] });
+    },
+  });
+}
+
+/** 管理者向けフィードバック集計。 */
+export function useFeedbackDashboard(params: FeedbackListParams) {
+  return useQuery({
+    queryKey: queryKeys.feedback(params),
+    queryFn: () => api.listFeedback(params),
+  });
+}
+
+/** チャット会話名更新。 */
+export function useUpdateConversation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: ConversationUpdateBody }) =>
+      api.updateConversation(id, payload),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
     },
   });
 }

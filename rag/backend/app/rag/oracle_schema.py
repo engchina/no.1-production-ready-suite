@@ -38,7 +38,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260630_003"
+MIGRATION_ARTIFACT_VERSION = "20260701_002"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -323,6 +323,16 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260630_003_document_recipes",
             table_name="rag_document_recipes",
             sql=_document_recipes_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260701_001_general_feedback",
+            table_name="rag_citation_feedback",
+            sql=_general_feedback_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260701_002_conversation_titles",
+            table_name="rag_conversations",
+            sql=_conversation_titles_migration_sql(),
         ),
     ]
 
@@ -951,6 +961,52 @@ COMMIT;
 """.strip()
 
 
+def _conversation_titles_migration_sql() -> str:
+    """未命名会話を最初のユーザーメッセージから冪等に補完する。"""
+    return """
+MERGE INTO rag_conversations c
+USING (
+    SELECT
+        conversation_id,
+        CASE
+            WHEN LENGTH(normalized_title) > 80
+            THEN SUBSTR(normalized_title, 1, 79) || '…'
+            ELSE normalized_title
+        END AS title
+    FROM (
+        SELECT
+            conversation_id,
+            NULLIF(
+                REGEXP_REPLACE(
+                    TRIM(DBMS_LOB.SUBSTR(content, 400, 1)),
+                    '[[:space:]]+',
+                    ' '
+                ),
+                ''
+            ) AS normalized_title
+        FROM (
+            SELECT
+                m.conversation_id,
+                m.content,
+                ROW_NUMBER() OVER (
+                    PARTITION BY m.conversation_id
+                    ORDER BY m.created_at, m.message_id
+                ) AS message_order
+            FROM rag_messages m
+            WHERE m.role = 'USER'
+        ) ranked_messages
+        WHERE message_order = 1
+    ) first_messages
+    WHERE normalized_title IS NOT NULL
+) first_message
+ON (c.conversation_id = first_message.conversation_id)
+WHEN MATCHED THEN UPDATE SET c.title = first_message.title
+WHERE c.title IS NULL;
+
+COMMIT;
+""".strip()
+
+
 def _document_recipes_migration_sql() -> str:
     """文書レシピ表を追加し、serving + 最新候補2件を最大3レシピへ移す。"""
     return """
@@ -1320,6 +1376,116 @@ BEGIN
             'CREATE INDEX rag_evaluation_runs_result_hash_idx '
             || 'ON rag_evaluation_runs (result_sha256)';
     END IF;
+END;
+/
+""".strip()
+
+
+def _general_feedback_migration_sql() -> str:
+    """既存の引用 feedback 表を回答/引用共通の追記履歴へ拡張する。"""
+    return """
+DECLARE
+    v_count NUMBER;
+
+    PROCEDURE add_column_if_missing(p_name VARCHAR2, p_definition VARCHAR2) IS
+    BEGIN
+        SELECT COUNT(*) INTO v_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_CITATION_FEEDBACK' AND column_name = UPPER(p_name);
+        IF v_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_citation_feedback ADD (' || p_definition || ')';
+        END IF;
+    END;
+
+    PROCEDURE drop_constraint_if_exists(p_name VARCHAR2) IS
+    BEGIN
+        SELECT COUNT(*) INTO v_count
+        FROM user_constraints
+        WHERE table_name = 'RAG_CITATION_FEEDBACK' AND constraint_name = UPPER(p_name);
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_citation_feedback DROP CONSTRAINT ' || p_name;
+        END IF;
+    END;
+
+    PROCEDURE add_constraint_if_missing(p_name VARCHAR2, p_definition VARCHAR2) IS
+    BEGIN
+        SELECT COUNT(*) INTO v_count
+        FROM user_constraints
+        WHERE table_name = 'RAG_CITATION_FEEDBACK' AND constraint_name = UPPER(p_name);
+        IF v_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_citation_feedback ADD CONSTRAINT '
+                || p_name || ' ' || p_definition;
+        END IF;
+    END;
+
+    PROCEDURE add_index_if_missing(p_name VARCHAR2, p_columns VARCHAR2) IS
+    BEGIN
+        SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = UPPER(p_name);
+        IF v_count = 0 THEN
+            EXECUTE IMMEDIATE 'CREATE INDEX ' || p_name
+                || ' ON rag_citation_feedback (' || p_columns || ')';
+        END IF;
+    END;
+BEGIN
+    add_column_if_missing('BUSINESS_VIEW_ID', 'business_view_id VARCHAR2(64)');
+    add_column_if_missing(
+        'TARGET_TYPE',
+        'target_type VARCHAR2(16) DEFAULT ''citation'' NOT NULL'
+    );
+    add_column_if_missing('SOURCE_SURFACE', 'source_surface VARCHAR2(16)');
+
+    FOR column_row IN (
+        SELECT column_name
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_CITATION_FEEDBACK'
+          AND column_name IN ('DOCUMENT_ID', 'CHUNK_ID')
+          AND nullable = 'N'
+    ) LOOP
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_citation_feedback MODIFY ('
+            || column_row.column_name || ' NULL)';
+    END LOOP;
+
+    UPDATE rag_citation_feedback
+    SET reason = NULL
+    WHERE rating = 'helpful' AND reason IS NOT NULL;
+
+    UPDATE rag_citation_feedback
+    SET reason = 'answer_untrusted'
+    WHERE rating = 'not_helpful' AND reason IS NULL;
+
+    drop_constraint_if_exists('RAG_CITATION_FEEDBACK_REASON_CK');
+    add_constraint_if_missing(
+        'RAG_CITATION_FEEDBACK_REASON_CK',
+        'CHECK ((rating = ''helpful'' AND reason IS NULL) OR '
+        || '(rating = ''not_helpful'' AND ('
+        || '(target_type = ''answer'' AND reason IN ('
+        || '''incorrect'', ''incomplete'', ''not_relevant'', ''answer_untrusted'')) OR '
+        || '(target_type = ''citation'' AND reason IN ('
+        || '''missing_evidence'', ''not_relevant'', ''answer_untrusted'')))))'
+    );
+    add_constraint_if_missing(
+        'RAG_CITATION_FEEDBACK_TARGET_CK',
+        'CHECK (target_type IN (''answer'', ''citation''))'
+    );
+    add_constraint_if_missing(
+        'RAG_CITATION_FEEDBACK_SURFACE_CK',
+        'CHECK (source_surface IS NULL OR source_surface IN (''search'', ''chat''))'
+    );
+    add_constraint_if_missing(
+        'RAG_CITATION_FEEDBACK_SHAPE_CK',
+        'CHECK ((target_type = ''answer'' AND document_id IS NULL AND chunk_id IS NULL) '
+        || 'OR (target_type = ''citation'' AND document_id IS NOT NULL '
+        || 'AND chunk_id IS NOT NULL))'
+    );
+
+    add_index_if_missing(
+        'RAG_FEEDBACK_BUSINESS_CREATED_IDX',
+        'tenant_id_hash, business_view_id, created_at DESC'
+    );
+    add_index_if_missing(
+        'RAG_FEEDBACK_USER_TRACE_IDX',
+        'tenant_id_hash, user_id_hash, trace_id, created_at DESC'
+    );
 END;
 /
 """.strip()

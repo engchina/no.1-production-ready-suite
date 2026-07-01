@@ -1,10 +1,10 @@
-import { Eye, FileText, Layers, LocateFixed, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { Eye, FileText, Layers, LocateFixed, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
-import { Button } from "@/components/ui/button";
-import { ApiError, api, type CitationFeedbackRating, type RetrievedChunk } from "@/lib/api";
+import { FeedbackControls } from "@/components/feedback/FeedbackControls";
+import type { FeedbackSourceSurface, RetrievedChunk } from "@/lib/api";
 import { useDocument, useDocumentRecipes } from "@/lib/queries";
 import {
   bboxCoordinateModeFromMetadata,
@@ -22,7 +22,6 @@ import {
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { firstMetadataToken, integerMetadataValue } from "@/lib/table-cell-focus";
-import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 /** 引用チャンク1件の表示。retrieval 由来の score/metadata を併記。 */
@@ -30,11 +29,15 @@ export function CitationCard({
   chunk,
   index,
   traceId,
+  businessViewId,
+  sourceSurface = "search",
   scoreMaxima,
 }: {
   chunk: RetrievedChunk;
   index: number;
   traceId?: string | null;
+  businessViewId?: string | null;
+  sourceSurface?: FeedbackSourceSurface;
   scoreMaxima?: CitationScoreMaxima;
 }) {
   const maxima = scoreMaxima ?? { score: chunk.score, rerankScore: chunk.rerank_score ?? 0 };
@@ -58,9 +61,6 @@ export function CitationCard({
     bboxPageSizeFromMetadata(chunk.metadata),
     bboxPageRotationFromMetadata(chunk.metadata)
   );
-  const [pendingRating, setPendingRating] = useState<CitationFeedbackRating | null>(null);
-  const [submittedRating, setSubmittedRating] = useState<CitationFeedbackRating | null>(null);
-  const canSubmitFeedback = Boolean(traceId);
 
   function openPreview() {
     setPreviewOpen(true);
@@ -68,28 +68,6 @@ export function CitationCard({
   }
   function closePreview() {
     dialogRef.current?.close();
-  }
-
-  async function submitFeedback(rating: CitationFeedbackRating) {
-    if (!traceId || pendingRating) return;
-    setPendingRating(rating);
-    try {
-      await api.submitCitationFeedback({
-        trace_id: traceId,
-        document_id: chunk.document_id,
-        chunk_id: chunk.chunk_id,
-        rating,
-        reason: rating === "not_helpful" ? "answer_untrusted" : null,
-      });
-      setSubmittedRating(rating);
-      toast.success(t("search.citation.feedback.saved"));
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : t("search.citation.feedback.failed")
-      );
-    } finally {
-      setPendingRating(null);
-    }
   }
 
   return (
@@ -164,42 +142,17 @@ export function CitationCard({
             {t("search.citation.openPreviewShort")}
           </Link>
         </div>
-        <div
-          className="flex justify-end gap-1"
-          role="group"
-          aria-label={t("search.citation.feedback.group")}
-        >
-          <Button
-            type="button"
-            variant={submittedRating === "helpful" ? "secondary" : "ghost"}
-            size="sm"
-            className={cn("size-8 px-0", submittedRating === "helpful" && "text-success")}
-            aria-label={t("search.citation.feedback.helpful")}
-            aria-pressed={submittedRating === "helpful"}
-            title={t("search.citation.feedback.helpful")}
-            disabled={!canSubmitFeedback || (pendingRating !== null && pendingRating !== "helpful")}
-            loading={pendingRating === "helpful"}
-            onClick={() => void submitFeedback("helpful")}
-          >
-            {pendingRating === "helpful" ? null : <ThumbsUp size={15} aria-hidden />}
-          </Button>
-          <Button
-            type="button"
-            variant={submittedRating === "not_helpful" ? "secondary" : "ghost"}
-            size="sm"
-            className={cn("size-8 px-0", submittedRating === "not_helpful" && "text-danger")}
-            aria-label={t("search.citation.feedback.notHelpful")}
-            aria-pressed={submittedRating === "not_helpful"}
-            title={t("search.citation.feedback.notHelpful")}
-            disabled={
-              !canSubmitFeedback || (pendingRating !== null && pendingRating !== "not_helpful")
-            }
-            loading={pendingRating === "not_helpful"}
-            onClick={() => void submitFeedback("not_helpful")}
-          >
-            {pendingRating === "not_helpful" ? null : <ThumbsDown size={15} aria-hidden />}
-          </Button>
-        </div>
+        {traceId && businessViewId ? (
+          <FeedbackControls
+            traceId={traceId}
+            businessViewId={businessViewId}
+            targetType="citation"
+            sourceSurface={sourceSurface}
+            documentId={chunk.document_id}
+            chunkId={chunk.chunk_id}
+            compact
+          />
+        ) : null}
       </div>
       <dialog
         ref={dialogRef}

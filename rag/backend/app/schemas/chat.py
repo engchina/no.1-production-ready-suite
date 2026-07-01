@@ -94,6 +94,23 @@ class ConversationCreateRequest(BaseModel):
         return cleaned or None
 
 
+class ConversationUpdateRequest(BaseModel):
+    """会話タイトル更新リクエスト。"""
+
+    title: str = Field(..., min_length=1, max_length=80)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def strip_title(cls, value: object) -> object:
+        """空白だけのタイトルを拒否し、前後空白を除去する。"""
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("会話名を入力してください。")
+        return cleaned
+
+
 class ChatMessageRequest(BaseModel):
     """会話へのメッセージ送信リクエスト。"""
 

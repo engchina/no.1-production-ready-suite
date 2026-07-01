@@ -1297,14 +1297,18 @@ def test_document_ingestion_config_returns_effective_preprocess_profile(
     resp = client.get(f"/api/documents/{document_id}/ingestion-config")
 
     assert resp.status_code == 200
-    assert resp.json()["data"]["effective_preprocess_profile"] == "passthrough"
+    data = resp.json()["data"]
+    assert data["effective_preprocess_profile"] == "passthrough"
+    assert data["effective_processing_config"]["auto_parse_after_preprocess_enabled"] is True
+    assert data["effective_processing_config"]["auto_chunk_after_extract_enabled"] is True
+    assert data["effective_processing_config"]["auto_index_after_chunk_enabled"] is True
 
 
-def test_preprocess_auto_advance_waits_for_manual_review_by_default(
+def test_preprocess_auto_advance_waits_for_manual_review_when_disabled(
     fake_document_dependencies: FakeWorkspaceOracle,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PREPROCESS 完了後は既定では REVIEW に留まり、Chunk は自動投入しない。"""
+    """自動進行が無効なら PREPROCESS 完了後は REVIEW に留まり、Chunk は投入しない。"""
     monkeypatch.setattr(
         documents_route,
         "get_settings",

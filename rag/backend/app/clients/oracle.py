@@ -85,6 +85,7 @@ ORACLE_TEXT_MAX_TERMS = 12  # ponytail: safety cap, tune with retrieval evals if
 ORACLE_TEXT_LEXER_PREFERENCE = "RAG_TEXT_WORLD_LEXER"
 ORACLE_TEXT_STOPLIST = "RAG_TEXT_STOPLIST"
 ORACLE_TEXT_LEXER = "WORLD_LEXER"
+CONVERSATION_TITLE_MAX_CHARS = 80
 ORACLE_TEXT_STOP_WORDS = (
     "の",
     "は",
@@ -2165,7 +2166,7 @@ class OracleClient:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[StoredConversation]:
-        """会話一覧を更新が新しい順に返す(tenant scope で絞る)。"""
+        """会話一覧を更新が新しい順に返す(tenant/user scope で絞る)。"""
         where_sql, binds = _oracle_conversation_where(business_view_id=business_view_id)
         binds["offset"] = offset
         if limit is not None:
@@ -2215,7 +2216,7 @@ class OracleClient:
         return _row_count_value(row)
 
     async def get_conversation(self, conversation_id: str) -> StoredConversation | None:
-        """会話の現在状態を返す(tenant scope)。"""
+        """会話の現在状態を返す(tenant/user scope)。"""
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -2231,11 +2232,11 @@ class OracleClient:
                 c.updated_at
             FROM rag_conversations c
             WHERE c.conversation_id = :conversation_id
-              AND {tenant_sql}
+              AND {access_sql}
             """,
-                tenant_sql=_oracle_tenant_predicate(alias="c"),
+                access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
             ),
-            _with_tenant_bind({"conversation_id": conversation_id}),
+            _with_conversation_access_bind({"conversation_id": conversation_id}),
         )
         if not rows:
             return None
@@ -2256,13 +2257,48 @@ class OracleClient:
                 UPDATE rag_conversations
                 SET status = 'ARCHIVED', updated_at = :updated_at
                 WHERE conversation_id = :conversation_id
-                  AND {tenant_sql}
+                  AND {access_sql}
                 """,
-                    tenant_sql=_oracle_tenant_predicate(),
+                    access_sql=_oracle_conversation_access_predicate_sql(),
                 ),
-                _with_tenant_bind({"conversation_id": conversation_id, "updated_at": now}),
+                _with_conversation_access_bind(
+                    {"conversation_id": conversation_id, "updated_at": now}
+                ),
             )
             existing.status = "ARCHIVED"
+            existing.updated_at = now
+            return existing
+
+        return await self._run_transaction(operation)
+
+    async def rename_conversation(self, conversation_id: str, title: str) -> StoredConversation:
+        """会話タイトルを変更する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> StoredConversation:
+            existing = _select_conversation(connection, conversation_id)
+            if existing is None:
+                raise KeyError(f"conversation_id={conversation_id} は存在しません。")
+            now = datetime.now(UTC)
+            _execute(
+                connection,
+                _render_sql(
+                    """
+                UPDATE rag_conversations
+                SET title = :title, updated_at = :updated_at
+                WHERE conversation_id = :conversation_id
+                  AND {access_sql}
+                """,
+                    access_sql=_oracle_conversation_access_predicate_sql(),
+                ),
+                _with_conversation_access_bind(
+                    {
+                        "conversation_id": conversation_id,
+                        "title": title,
+                        "updated_at": now,
+                    }
+                ),
+            )
+            existing.title = title
             existing.updated_at = now
             return existing
 
@@ -2289,6 +2325,8 @@ class OracleClient:
         )
 
         def operation(connection: OracleConnectionProtocol) -> StoredMessage:
+            if _select_conversation(connection, stored.conversation_id) is None:
+                raise KeyError(f"conversation_id={stored.conversation_id} は存在しません。")
             _execute(
                 connection,
                 """
@@ -2331,13 +2369,38 @@ class OracleClient:
                 _render_sql(
                     """
                 UPDATE rag_conversations
-                SET message_count = message_count + 1, updated_at = :updated_at
+                SET title = CASE
+                        WHEN title IS NULL
+                         AND :generated_title IS NOT NULL
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM rag_messages previous
+                             WHERE previous.conversation_id = :conversation_id
+                               AND previous.role = 'USER'
+                               AND previous.message_id <> :message_id
+                         )
+                        THEN :generated_title
+                        ELSE title
+                    END,
+                    message_count = message_count + 1,
+                    updated_at = :updated_at
                 WHERE conversation_id = :conversation_id
-                  AND {tenant_sql}
+                  AND {access_sql}
                 """,
-                    tenant_sql=_oracle_tenant_predicate(),
+                    access_sql=_oracle_conversation_access_predicate_sql(),
                 ),
-                _with_tenant_bind({"conversation_id": stored.conversation_id, "updated_at": now}),
+                _with_conversation_access_bind(
+                    {
+                        "conversation_id": stored.conversation_id,
+                        "message_id": stored.id,
+                        "generated_title": (
+                            _conversation_title_from_message(stored.content)
+                            if stored.role == "USER"
+                            else None
+                        ),
+                        "updated_at": now,
+                    }
+                ),
             )
             return stored
 
@@ -2349,8 +2412,8 @@ class OracleClient:
         *,
         limit: int | None = None,
     ) -> list[StoredMessage]:
-        """会話のメッセージを作成順に返す(tenant scope)。"""
-        binds = _with_tenant_bind({"conversation_id": conversation_id})
+        """会話のメッセージを作成順に返す(tenant/user scope)。"""
+        binds: dict[str, object] = {"conversation_id": conversation_id}
         if limit is not None:
             binds["limit"] = limit
             paging_sql = "FETCH NEXT :limit ROWS ONLY"
@@ -2375,15 +2438,17 @@ class OracleClient:
                 m.elapsed_ms,
                 m.created_at
             FROM rag_messages m
+            JOIN rag_conversations c
+              ON c.conversation_id = m.conversation_id
             WHERE m.conversation_id = :conversation_id
-              AND {tenant_sql}
+              AND {access_sql}
             ORDER BY m.created_at ASC, m.message_id ASC
             {paging_sql}
             """,
-                tenant_sql=_oracle_tenant_predicate(alias="m"),
+                access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
                 paging_sql=paging_sql,
             ),
-            binds,
+            _with_conversation_access_bind(binds),
         )
         return [_stored_message_from_row(row) for row in rows]
 
@@ -2952,8 +3017,8 @@ class OracleClient:
             )
         )
 
-    async def save_citation_feedback(self, feedback: Mapping[str, object]) -> str:
-        """引用 feedback を低機密 metadata だけで Oracle へ保存する。"""
+    async def save_feedback(self, feedback: Mapping[str, object]) -> str:
+        """回答/引用 feedback を低機密 metadata だけで Oracle へ追記する。"""
         feedback_id = _audit_str(feedback, "feedback_id", uuid4().hex)
         binds = _citation_feedback_binds(feedback, feedback_id=feedback_id)
         await self._run_transaction(
@@ -2963,6 +3028,9 @@ class OracleClient:
                 INSERT INTO rag_citation_feedback (
                     feedback_id,
                     trace_id,
+                    business_view_id,
+                    target_type,
+                    source_surface,
                     document_id,
                     chunk_id,
                     tenant_id_hash,
@@ -2974,6 +3042,9 @@ class OracleClient:
                 ) VALUES (
                     :feedback_id,
                     :trace_id,
+                    :business_view_id,
+                    :target_type,
+                    :source_surface,
                     :document_id,
                     :chunk_id,
                     :tenant_id_hash,
@@ -2988,6 +3059,151 @@ class OracleClient:
             )
         )
         return feedback_id
+
+    async def save_citation_feedback(self, feedback: Mapping[str, object]) -> str:
+        """旧 API の引用 feedback を一般化した保存経路へ委譲する。"""
+        return await self.save_feedback(
+            {
+                "target_type": "citation",
+                "source_surface": "search",
+                **feedback,
+            }
+        )
+
+    async def list_current_feedback(self, trace_id: str) -> list[dict[str, object]]:
+        """現在の利用者・trace について対象ごとの最新 feedback を返す。"""
+        context = current_audit_request_context()
+        if context.user_id_hash is None:
+            return []
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            SELECT * FROM (
+                SELECT
+                    f.feedback_id,
+                    f.trace_id,
+                    f.business_view_id,
+                    f.target_type,
+                    f.source_surface,
+                    f.document_id,
+                    f.chunk_id,
+                    f.rating,
+                    f.reason,
+                    f.created_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY f.target_type, NVL(f.document_id, '-'), NVL(f.chunk_id, '-')
+                        ORDER BY f.created_at DESC, f.feedback_id DESC
+                    ) AS feedback_rank
+                FROM rag_citation_feedback f
+                WHERE f.trace_id = :trace_id
+                  AND f.user_id_hash = :user_id_hash
+                  AND {tenant_sql}
+            )
+            WHERE feedback_rank = 1
+            ORDER BY target_type, document_id, chunk_id
+            """,
+                tenant_sql=_oracle_tenant_predicate(alias="f"),
+            ),
+            _with_tenant_bind({"trace_id": trace_id, "user_id_hash": context.user_id_hash}),
+        )
+        return [
+            {key: value for key, value in row.items() if key != "feedback_rank"} for row in rows
+        ]
+
+    async def list_feedback_dashboard_rows(
+        self,
+        *,
+        business_view_id: str | None,
+        target_type: str | None,
+        rating: str | None,
+        reason: str | None,
+        period_days: int | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, object]], int, list[dict[str, object]]]:
+        """有効な最新 feedback の明細、総数、集計 group を返す。"""
+        where_sql, binds = _feedback_dashboard_filters(
+            business_view_id=business_view_id,
+            target_type=target_type,
+            rating=rating,
+            reason=reason,
+            period_days=period_days,
+        )
+        cte = _feedback_latest_cte()
+        rows = await self._fetch_all(
+            f"""
+            {cte},
+            assistant_messages AS (
+                SELECT
+                    m.message_id,
+                    m.conversation_id,
+                    m.trace_id,
+                    m.model,
+                    m.tenant_id_hash,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY m.trace_id
+                        ORDER BY m.created_at DESC, m.message_id DESC
+                    ) AS message_rank
+                FROM rag_messages m
+                WHERE m.role = 'ASSISTANT'
+            )
+            SELECT
+                f.feedback_id,
+                f.trace_id,
+                f.business_view_id,
+                bv.name AS business_view_name,
+                f.target_type,
+                f.source_surface,
+                f.document_id,
+                f.chunk_id,
+                d.file_name,
+                f.rating,
+                f.reason,
+                f.created_at,
+                m.message_id,
+                m.model,
+                c.conversation_id,
+                c.title AS conversation_title
+            FROM latest_feedback f
+            LEFT JOIN rag_business_views bv
+              ON bv.business_view_id = f.business_view_id
+             AND NVL(bv.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+            LEFT JOIN assistant_messages m
+              ON m.trace_id = f.trace_id
+             AND m.message_rank = 1
+             AND NVL(m.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+            LEFT JOIN rag_conversations c
+              ON c.conversation_id = m.conversation_id
+             AND NVL(c.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+            LEFT JOIN rag_documents d
+              ON d.document_id = f.document_id
+             AND NVL(d.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+            WHERE {where_sql}
+            ORDER BY f.created_at DESC, f.feedback_id DESC
+            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            """,
+            _with_tenant_bind({**binds, "offset": offset, "limit": limit}),
+        )
+        count_row = await self._fetch_one(
+            f"""
+            {cte}
+            SELECT COUNT(*) AS total
+            FROM latest_feedback f
+            WHERE {where_sql}
+            """,
+            _with_tenant_bind(binds),
+        )
+        groups = await self._fetch_all(
+            f"""
+            {cte}
+            SELECT f.target_type, f.rating, f.reason, COUNT(*) AS item_count
+            FROM latest_feedback f
+            WHERE {where_sql}
+            GROUP BY f.target_type, f.rating, f.reason
+            """,
+            _with_tenant_bind(binds),
+        )
+        return rows, _int_value((count_row or {}).get("total")), groups
 
     async def save_evaluation_artifact(self, artifact: Mapping[str, object]) -> str:
         """nightly / staging 評価 artifact を query 原文なしで Oracle へ保存する。"""
@@ -7534,8 +7750,11 @@ def _citation_feedback_binds(
     return {
         "feedback_id": feedback_id,
         "trace_id": _audit_str(feedback, "trace_id", ""),
-        "document_id": _audit_str(feedback, "document_id", ""),
-        "chunk_id": _audit_str(feedback, "chunk_id", ""),
+        "business_view_id": _audit_optional_str(feedback, "business_view_id"),
+        "target_type": _audit_str(feedback, "target_type", "citation"),
+        "source_surface": _audit_optional_str(feedback, "source_surface"),
+        "document_id": _audit_optional_str(feedback, "document_id"),
+        "chunk_id": _audit_optional_str(feedback, "chunk_id"),
         "tenant_id_hash": _audit_optional_str(feedback, "tenant_id_hash") or context.tenant_id_hash,
         "user_id_hash": _audit_optional_str(feedback, "user_id_hash") or context.user_id_hash,
         "rating": _audit_str(feedback, "rating", "not_helpful"),
@@ -7543,6 +7762,63 @@ def _citation_feedback_binds(
         "comment_hash": _audit_optional_str(feedback, "comment_hash"),
         "comment_chars": _audit_int(feedback, "comment_chars"),
     }
+
+
+def _feedback_latest_cte() -> str:
+    """追記履歴から利用者・対象ごとの最新票だけを選ぶ CTE。"""
+    return _render_sql(
+        """
+        WITH ranked_feedback AS (
+            SELECT
+                f.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        NVL(f.tenant_id_hash, '__GLOBAL__'),
+                        CASE
+                            WHEN f.user_id_hash IS NULL THEN f.feedback_id
+                            ELSE f.user_id_hash
+                        END,
+                        f.trace_id,
+                        f.target_type,
+                        NVL(f.document_id, '-'),
+                        NVL(f.chunk_id, '-')
+                    ORDER BY f.created_at DESC, f.feedback_id DESC
+                ) AS feedback_rank
+            FROM rag_citation_feedback f
+            WHERE {tenant_sql}
+        ),
+        latest_feedback AS (
+            SELECT * FROM ranked_feedback WHERE feedback_rank = 1
+        )
+        """,
+        tenant_sql=_oracle_tenant_predicate(alias="f"),
+    )
+
+
+def _feedback_dashboard_filters(
+    *,
+    business_view_id: str | None,
+    target_type: str | None,
+    rating: str | None,
+    reason: str | None,
+    period_days: int | None,
+) -> tuple[str, dict[str, object]]:
+    """列名を固定した feedback 一覧 filter を組み立てる。"""
+    clauses = ["1 = 1"]
+    binds: dict[str, object] = {}
+    for column, value in (
+        ("business_view_id", business_view_id),
+        ("target_type", target_type),
+        ("rating", rating),
+        ("reason", reason),
+    ):
+        if value is not None:
+            clauses.append(f"f.{column} = :{column}")
+            binds[column] = value
+    if period_days is not None:
+        clauses.append("f.created_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:period_days, 'DAY')")
+        binds["period_days"] = period_days
+    return " AND ".join(clauses), binds
 
 
 def _evaluation_artifact_binds(
@@ -7998,11 +8274,11 @@ def _select_conversation(
             updated_at
         FROM rag_conversations
         WHERE conversation_id = :conversation_id
-          AND {tenant_sql}
+          AND {access_sql}
         """,
-            tenant_sql=_oracle_tenant_predicate(),
+            access_sql=_oracle_conversation_access_predicate_sql(),
         ),
-        _with_tenant_bind({"conversation_id": conversation_id}),
+        _with_conversation_access_bind({"conversation_id": conversation_id}),
     )
     return None if not rows else _stored_conversation_from_row(rows[0])
 
@@ -8744,6 +9020,16 @@ def _oracle_tenant_predicate(*, alias: str | None = None) -> str:
     return f"{column} = :tenant_id_hash"
 
 
+def _oracle_conversation_access_predicate_sql(*, alias: str | None = None) -> str:
+    """会話を tenant と、認証時は作成ユーザーへ閉じる。"""
+    predicates = [_oracle_tenant_predicate(alias=alias)]
+    context = current_audit_request_context()
+    if context.user_id_hash is not None:
+        column = f"{alias}.user_id_hash" if alias else "user_id_hash"
+        predicates.append(f"{column} = :conversation_user_id_hash")
+    return " AND ".join(predicates)
+
+
 def _oracle_access_predicates(*, alias: str | None = None) -> list[str]:
     """tenant と認可済み document/category scope を SQL predicate にする。"""
     context = current_audit_request_context()
@@ -8836,6 +9122,15 @@ def _with_tenant_bind(
     return resolved
 
 
+def _with_conversation_access_bind(binds: Mapping[str, object]) -> dict[str, object]:
+    """会話 access predicate 用の tenant/user bind を足す。"""
+    resolved = _with_tenant_bind(binds)
+    user_id_hash = current_audit_request_context().user_id_hash
+    if user_id_hash is not None:
+        resolved["conversation_user_id_hash"] = user_id_hash
+    return resolved
+
+
 def _like_pattern(value: str) -> str:
     escaped = value.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
@@ -8924,6 +9219,16 @@ def _conversation_binds(conversation: StoredConversation) -> dict[str, object]:
     }
 
 
+def _conversation_title_from_message(content: str) -> str | None:
+    """最初の質問を一覧向けの短い会話タイトルへ整える。"""
+    title = " ".join(content.split())
+    if not title:
+        return None
+    if len(title) <= CONVERSATION_TITLE_MAX_CHARS:
+        return title
+    return f"{title[: CONVERSATION_TITLE_MAX_CHARS - 1]}…"
+
+
 def _message_binds(message: StoredMessage) -> dict[str, object]:
     return {
         "message_id": message.id,
@@ -8947,8 +9252,8 @@ def _oracle_conversation_where(
     *,
     business_view_id: str | None = None,
 ) -> tuple[str, dict[str, object]]:
-    clauses = [_oracle_tenant_predicate(alias="c")]
-    binds = _with_tenant_bind({})
+    clauses = [_oracle_conversation_access_predicate_sql(alias="c")]
+    binds = _with_conversation_access_bind({})
     if business_view_id is not None:
         clauses.append("c.business_view_id = :business_view_id")
         binds["business_view_id"] = business_view_id
@@ -10730,13 +11035,16 @@ CREATE INDEX {table_name}_trace_idx
 
 
 def oracle_feedback_schema_sql(table_name: str = "rag_citation_feedback") -> str:
-    """citation feedback の低機密保存 table DDL を返す。"""
+    """回答/引用 feedback の低機密保存 table DDL を返す。"""
     return f"""
 CREATE TABLE {table_name} (
     feedback_id       VARCHAR2(64) DEFAULT RAWTOHEX(SYS_GUID()) PRIMARY KEY,
     trace_id          VARCHAR2(64) NOT NULL,
-    document_id       VARCHAR2(64) NOT NULL,
-    chunk_id          VARCHAR2(128) NOT NULL,
+    business_view_id  VARCHAR2(64),
+    target_type       VARCHAR2(16) DEFAULT 'citation' NOT NULL,
+    source_surface    VARCHAR2(16),
+    document_id       VARCHAR2(64),
+    chunk_id          VARCHAR2(128),
     tenant_id_hash    CHAR(64),
     user_id_hash      CHAR(64),
     rating            VARCHAR2(32) NOT NULL,
@@ -10746,8 +11054,30 @@ CREATE TABLE {table_name} (
     created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_rating_ck
         CHECK (rating IN ('helpful', 'not_helpful')),
+    CONSTRAINT {table_name}_target_ck
+        CHECK (target_type IN ('answer', 'citation')),
+    CONSTRAINT {table_name}_surface_ck
+        CHECK (source_surface IS NULL OR source_surface IN ('search', 'chat')),
+    CONSTRAINT {table_name}_shape_ck
+        CHECK (
+            (target_type = 'answer' AND document_id IS NULL AND chunk_id IS NULL)
+            OR (target_type = 'citation' AND document_id IS NOT NULL AND chunk_id IS NOT NULL)
+        ),
     CONSTRAINT {table_name}_reason_ck
-        CHECK (reason IS NULL OR reason IN ('missing_evidence', 'not_relevant', 'answer_untrusted'))
+        CHECK (
+            (rating = 'helpful' AND reason IS NULL)
+            OR (
+                rating = 'not_helpful'
+                AND (
+                    (target_type = 'answer' AND reason IN (
+                        'incorrect', 'incomplete', 'not_relevant', 'answer_untrusted'
+                    ))
+                    OR (target_type = 'citation' AND reason IN (
+                        'missing_evidence', 'not_relevant', 'answer_untrusted'
+                    ))
+                )
+            )
+        )
 );
 
 CREATE INDEX {table_name}_trace_idx
@@ -10755,6 +11085,12 @@ CREATE INDEX {table_name}_trace_idx
 
 CREATE INDEX {table_name}_tenant_created_idx
     ON {table_name} (tenant_id_hash, created_at DESC);
+
+CREATE INDEX rag_feedback_business_created_idx
+    ON {table_name} (tenant_id_hash, business_view_id, created_at DESC);
+
+CREATE INDEX rag_feedback_user_trace_idx
+    ON {table_name} (tenant_id_hash, user_id_hash, trace_id, created_at DESC);
 """.strip()
 
 

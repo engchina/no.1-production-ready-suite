@@ -18,7 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
 from app.api.router import api_router
-from app.auth import attach_refreshed_auth_cookie, prepare_auth_request
+from app.auth import attach_refreshed_auth_cookie, auth_is_enabled, prepare_auth_request
 from app.clients.oracle import close_oracle_pool
 from app.config import get_settings
 from app.logging_config import configure_logging
@@ -129,14 +129,20 @@ def create_app() -> FastAPI:
         # request id の検証/採番は共有インフラへ委譲（認証/監査は RAG 固有のまま）。
         request_id = generate_request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
+        response = prepare_auth_request(request, settings)
+        session = getattr(request.state, "auth_session", None)
+        session_user_id = getattr(session, "user_id", None)
+        auth_enabled = auth_is_enabled(settings)
         context = audit_request_context_from_headers(
             request.headers,
             request_id=request_id,
             settings=settings,
+            authenticated_user_id=session_user_id if auth_enabled else None,
+            default_user_id=session_user_id if not auth_enabled else None,
+            allow_user_header=not auth_enabled,
         )
         context_token = set_audit_request_context(context)
         try:
-            response = prepare_auth_request(request, settings)
             if response is None:
                 response = await call_next(request)
         except Exception:

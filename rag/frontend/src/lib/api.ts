@@ -45,9 +45,13 @@ export type SearchStrategy = "hybrid" | "graph_local" | "graph_global";
 export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
 export type CitationFeedbackRating = "helpful" | "not_helpful";
 export type CitationFeedbackReason =
+  | "incorrect"
+  | "incomplete"
   | "missing_evidence"
   | "not_relevant"
   | "answer_untrusted";
+export type FeedbackTargetType = "answer" | "citation";
+export type FeedbackSourceSurface = "search" | "chat";
 export type UploadIngestionMode = "manual";
 export type SourceModality =
   | "pdf"
@@ -654,7 +658,6 @@ export interface KnowledgeBaseQueryConfig {
   post_retrieval_pipeline: PostRetrievalPipelineName | null;
   generation_profile: GenerationProfileName | null;
   guardrail_policy: GuardrailPolicyName | null;
-  vector_index_profile: VectorIndexProfileName | null;
   evaluation_suite: EvaluationSuiteName | null;
 }
 
@@ -899,6 +902,10 @@ export interface ConversationCreateBody {
   title?: string | null;
 }
 
+export interface ConversationUpdateBody {
+  title: string;
+}
+
 export interface ChatMessageRequestBody {
   content: string;
   model_ids?: string[];
@@ -1000,6 +1007,69 @@ export interface CitationFeedbackResponse {
   document_id: string;
   chunk_id: string;
   rating: CitationFeedbackRating;
+}
+
+export interface FeedbackRequestBody {
+  trace_id: string;
+  business_view_id: string;
+  target_type: FeedbackTargetType;
+  source_surface: FeedbackSourceSurface;
+  document_id?: string | null;
+  chunk_id?: string | null;
+  rating: CitationFeedbackRating;
+  reason?: CitationFeedbackReason | null;
+}
+
+export interface FeedbackSubmissionResponse extends FeedbackRequestBody {
+  feedback_id: string;
+}
+
+export interface CurrentFeedbackItem
+  extends Omit<FeedbackSubmissionResponse, "business_view_id" | "source_surface"> {
+  business_view_id: string | null;
+  source_surface: FeedbackSourceSurface | null;
+  created_at: string;
+}
+
+export interface FeedbackReasonCount {
+  reason: CitationFeedbackReason;
+  count: number;
+}
+
+export interface FeedbackSummary {
+  total: number;
+  helpful_count: number;
+  not_helpful_count: number;
+  helpful_rate: number;
+  answer_total: number;
+  answer_helpful_rate: number;
+  citation_total: number;
+  citation_helpful_rate: number;
+  reason_counts: FeedbackReasonCount[];
+}
+
+export interface FeedbackItem extends CurrentFeedbackItem {
+  business_view_name: string | null;
+  conversation_id: string | null;
+  conversation_title: string | null;
+  message_id: string | null;
+  model: string | null;
+  file_name: string | null;
+}
+
+export interface FeedbackDashboard {
+  summary: FeedbackSummary;
+  items: Page<FeedbackItem>;
+}
+
+export interface FeedbackListParams {
+  business_view_id?: string;
+  target_type?: FeedbackTargetType;
+  rating?: CitationFeedbackRating;
+  reason?: CitationFeedbackReason;
+  period_days?: number | null;
+  limit?: number;
+  offset?: number;
 }
 
 // --- 評価 ---
@@ -2517,6 +2587,12 @@ export const api = {
     request<ConversationDetail>("/api/chat/conversations", jsonBody(body)),
   getConversation: (id: string) =>
     request<ConversationDetail>(`/api/chat/conversations/${encodeURIComponent(id)}`),
+  updateConversation: (id: string, body: ConversationUpdateBody) =>
+    request<ConversationSummary>(`/api/chat/conversations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   archiveConversation: (id: string) =>
     request<ConversationSummary>(`/api/chat/conversations/${encodeURIComponent(id)}/archive`, {
       method: "POST",
@@ -2527,6 +2603,24 @@ export const api = {
   search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
   submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
     request<CitationFeedbackResponse>("/api/search/citation-feedback", jsonBody(body)),
+  submitFeedback: (body: FeedbackRequestBody) =>
+    request<FeedbackSubmissionResponse>("/api/feedback", jsonBody(body)),
+  getCurrentFeedback: (traceId: string) => {
+    const search = new URLSearchParams({ trace_id: traceId });
+    return request<CurrentFeedbackItem[]>(`/api/feedback/current?${search.toString()}`);
+  },
+  listFeedback: (params: FeedbackListParams = {}) => {
+    const search = new URLSearchParams();
+    if (params.business_view_id) search.set("business_view_id", params.business_view_id);
+    if (params.target_type) search.set("target_type", params.target_type);
+    if (params.rating) search.set("rating", params.rating);
+    if (params.reason) search.set("reason", params.reason);
+    if (params.period_days != null) search.set("period_days", String(params.period_days));
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return request<FeedbackDashboard>(`/api/feedback${qs ? `?${qs}` : ""}`);
+  },
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>

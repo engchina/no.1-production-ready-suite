@@ -239,9 +239,7 @@ def test_compose_query_settings_empty_returns_global() -> None:
 def test_compose_query_settings_higher_precedence_wins_per_field() -> None:
     """後の overlay(高優先)が同一フィールドを上書きし、別フィールドは両方効く。"""
     settings = get_settings()
-    kb = KnowledgeBaseQueryConfig(
-        vector_index_profile="accurate", generation_profile="detailed_cited"
-    )
+    kb = KnowledgeBaseQueryConfig(guardrail_policy="strict", generation_profile="detailed_cited")
     view = KnowledgeBaseQueryConfig(generation_profile="strict_extractive")
 
     # 低優先=kb, 高優先=view の順で渡す。
@@ -250,8 +248,8 @@ def test_compose_query_settings_higher_precedence_wins_per_field() -> None:
     assert applied is True
     # 同一フィールド(generation)は高優先 view が勝つ。
     assert merged.rag_generation_profile == "strict_extractive"
-    # view が触れていない vector_index は kb の値が残る(per-field merge の肝)。
-    assert merged.rag_vector_index_profile == "accurate"
+    # view が触れていない guardrail は下位 overlay の値が残る(per-field merge の肝)。
+    assert merged.rag_guardrail_policy == "strict"
 
 
 def test_compose_query_settings_null_does_not_wipe_lower_layer() -> None:

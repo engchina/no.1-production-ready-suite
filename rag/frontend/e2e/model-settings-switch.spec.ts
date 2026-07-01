@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { expectMainScrollEndsAtContent, expectNoPageOverflow } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -164,6 +165,8 @@ for (const viewport of [
         "svg"
       );
     }
+    await expectNoPageOverflow(page);
+    await expectMainScrollEndsAtContent(page);
   });
 }
 

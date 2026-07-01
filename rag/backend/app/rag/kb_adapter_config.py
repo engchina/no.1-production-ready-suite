@@ -81,7 +81,6 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "post_retrieval_pipeline": "rag_post_retrieval_pipeline",
     "generation_profile": "rag_generation_profile",
     "guardrail_policy": "rag_guardrail_policy",
-    "vector_index_profile": "rag_vector_index_profile",
     "evaluation_suite": "rag_evaluation_suite",
 }
 
@@ -146,7 +145,11 @@ class KnowledgeBaseQueryConfig(BaseModel):
     post_retrieval_pipeline: PostRetrievalPipeline | None = None
     generation_profile: GenerationProfile | None = None
     guardrail_policy: GuardrailPolicyName | None = None
-    vector_index_profile: VectorIndexProfile | None = None
+    vector_index_profile: VectorIndexProfile | None = Field(
+        default=None,
+        exclude=True,
+        description="legacy 読み取り専用。共有検索インデックスは Business View で上書きしない。",
+    )
     evaluation_suite: EvaluationSuiteName | None = None
 
 
