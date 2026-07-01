@@ -1,5 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
+import {
+  expectMainScrollEndsAtContent,
+  expectNoPageOverflow,
+  mockDatabaseReady,
+} from "./_helpers";
 
 // 1x1 透明 PNG。`<img>` で実際に描画できる有効な data URI。
 const PNG_PIXEL =
@@ -249,6 +253,11 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await expect(citation.locator("dl").getByText("表", { exact: true })).toBeVisible();
   await expect(citation.getByText("経費申請 > 料金表")).toBeVisible();
   await expect(citation.getByText("structure_v1")).toBeVisible();
+  const citationList = page.locator("ul.bounded-scroll-area-lg");
+  await expect
+    .poll(() => citationList.evaluate((element) => element.scrollHeight > element.clientHeight))
+    .toBe(true);
+  await expectMainScrollEndsAtContent(page);
   const previewLink = citation.getByRole("link", { name: "policy.txt の引用位置を開く" });
   await expect(previewLink).toHaveAttribute(
     "href",
@@ -773,15 +782,26 @@ function searchStreamBody(): string {
         '{"table_id":"tbl-1","cells":[{"metadata":{"formula_cell_ref":"B2"}}]}',
     },
   };
+  const citations = [
+    citation,
+    ...Array.from({ length: 7 }, (_, index) => ({
+      ...citation,
+      document_id: `doc-${index + 2}`,
+      chunk_id: `doc-${index + 2}:1`,
+      text: `補足の根拠テキスト ${index + 2}`,
+      file_name: `policy-${index + 2}.txt`,
+      metadata: {},
+    })),
+  ];
   return [
     `event: metadata\ndata: ${JSON.stringify({
       trace_id: "trace-1",
       elapsed_ms: 12,
       guardrail_warnings: [],
       diagnostics: {
-        retrieved_count: 6,
-        reranked_count: 3,
-        citation_count: 1,
+        retrieved_count: citations.length,
+        reranked_count: citations.length,
+        citation_count: citations.length,
         context_adaptive_expanded_count: 2,
         context_dependency_promoted_count: 1,
         context_group_expanded_count: 0,
@@ -790,7 +810,7 @@ function searchStreamBody(): string {
       },
     })}\n\n`,
     `event: delta\ndata: ${JSON.stringify({ text: "料金表を確認しました。" })}\n\n`,
-    `event: citations\ndata: ${JSON.stringify([citation])}\n\n`,
+    `event: citations\ndata: ${JSON.stringify(citations)}\n\n`,
     `event: done\ndata: ${JSON.stringify({ trace_id: "trace-1" })}\n\n`,
   ].join("");
 }

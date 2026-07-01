@@ -1134,20 +1134,6 @@ class OracleClient:
                 else None
             ),
             "active_extraction_recipe_id": active_extraction_recipe_id,
-            "started_at": (
-                datetime.now(UTC)
-                if status
-                in {
-                    FileStatus.PREPROCESSING,
-                    FileStatus.INGESTING,
-                    FileStatus.CHUNKING,
-                    FileStatus.INDEXING,
-                }
-                else None
-            ),
-            "finished_at": (
-                datetime.now(UTC) if status in {FileStatus.INDEXED, FileStatus.ERROR} else None
-            ),
         }
 
         def operation(connection: OracleConnectionProtocol) -> None:
@@ -1162,8 +1148,13 @@ class OracleClient:
                     active_extraction_recipe_id = COALESCE(
                         :active_extraction_recipe_id, active_extraction_recipe_id
                     ),
-                    started_at = COALESCE(:started_at, started_at),
-                    finished_at = :finished_at,
+                    started_at = CASE
+                        WHEN :status IN ('PREPROCESSING', 'INGESTING', 'CHUNKING', 'INDEXING')
+                        THEN SYSTIMESTAMP ELSE started_at
+                    END,
+                    finished_at = CASE
+                        WHEN :status IN ('INDEXED', 'ERROR') THEN SYSTIMESTAMP ELSE NULL
+                    END,
                     updated_at = SYSTIMESTAMP
                 WHERE recipe_id = :recipe_id
                 """,

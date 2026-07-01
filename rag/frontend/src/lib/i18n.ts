@@ -2040,6 +2040,7 @@ export const ja = {
   "flow.preview.after": "処理後",
   "flow.preview.download": "ダウンロード",
   "flow.preview.preparedUnavailable": "処理後ファイルがありません。ファイル準備を再実行してください。",
+  "flow.preview.preparedSkipped": "ファイル準備は変換されていないため、処理後ファイルはありません。",
   "flow.step.upload": "アップロード",
   "flow.step.preprocess": "ファイル準備",
   "flow.step.preprocessReview": "準備確認",

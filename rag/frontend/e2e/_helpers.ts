@@ -44,3 +44,23 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
     .poll(measure, { message: "ページ全体(documentElement / main)の横はみ出し", timeout: 2000 })
     .toBeLessThanOrEqual(1);
 }
+
+/** main を末尾までスクロールしたとき、実コンテンツの後ろに空白が残らないことを検証する。 */
+export async function expectMainScrollEndsAtContent(page: Page): Promise<void> {
+  const main = page.getByRole("main", { name: "メイン領域" });
+  await expect
+    .poll(
+      () =>
+        main.evaluate((element) => {
+          const content = element.firstElementChild;
+          if (!content) return Number.POSITIVE_INFINITY;
+          element.scrollTo({ top: element.scrollHeight, left: 0, behavior: "auto" });
+          return Math.max(
+            0,
+            element.getBoundingClientRect().bottom - content.getBoundingClientRect().bottom
+          );
+        }),
+      { message: "main の末尾に実コンテンツを超える空白がないこと", timeout: 2000 }
+    )
+    .toBeLessThanOrEqual(1);
+}

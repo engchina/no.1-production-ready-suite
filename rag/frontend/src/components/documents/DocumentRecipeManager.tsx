@@ -7,6 +7,7 @@ import {
   Circle,
   Clock3,
   Copy,
+  Eye,
   LoaderCircle,
   Plus,
   RotateCcw,
@@ -322,8 +323,11 @@ export function DocumentRecipeManager({
 
       <dialog
         ref={dialogRef}
-        className="w-[calc(100%-2rem)] max-w-lg rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-slate-950/45"
+        className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-slate-950/45"
         onClose={() => setAddMode("clone")}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) dialogRef.current?.close();
+        }}
       >
         <div className="p-5">
           <h2 className="text-base font-semibold">{t("documents.recipes.addTitle")}</h2>
@@ -456,7 +460,7 @@ function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
     return <LoaderCircle size={13} className="animate-spin" aria-hidden />;
   }
   if (step?.status === "FAILED") return <AlertCircle size={13} aria-hidden />;
-  if (step?.status === "NEEDS_REVIEW") return <Clock3 size={13} aria-hidden />;
+  if (step?.status === "NEEDS_REVIEW") return <Eye size={13} aria-hidden />;
   if (step?.status === "SUCCEEDED") return <Check size={13} aria-hidden />;
   return <Circle size={10} aria-hidden />;
 }
