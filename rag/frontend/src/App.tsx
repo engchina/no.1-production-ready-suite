@@ -140,7 +140,7 @@ function ProtectedLayout() {
       <CommandPalette />
       <main
         ref={mainRef}
-        className="h-screen min-w-0 flex-1 overflow-y-auto [contain:layout] focus:outline-none"
+        className="h-screen min-w-0 flex-1 overflow-y-auto focus:outline-none"
         aria-label="メイン領域"
         tabIndex={-1}
       >

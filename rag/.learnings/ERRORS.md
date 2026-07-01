@@ -32,6 +32,40 @@ document status=INGESTING error_message=None  # 固着
 
 ---
 
+## [ERR-20260701-004] uv_cache_read_only
+
+**Logged**: 2026-07-01T11:49:49+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend tests
+
+### Summary
+管理環境では既定の `/root/.cache/uv` が読み取り専用のため `uv run` が開始前に失敗する。
+
+### Error
+```text
+error: Could not acquire lock
+Caused by: Could not create temporary file
+Caused by: Read-only file system (os error 30) at path "/root/.cache/uv/..."
+```
+
+### Context
+- Command attempted: `uv run pytest tests/test_oracle_adapter.py -q`
+- Workspace と `/tmp` は書き込み可能だが、既定の uv cache は書き込み不可。
+
+### Suggested Fix
+この管理環境では `UV_CACHE_DIR=/tmp/uv-cache` を指定して `uv run` を実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pyproject.toml
+
+### Resolution
+- **Resolved**: 2026-07-01T11:49:49+09:00
+- **Notes**: 後続の検証コマンドを `/tmp/uv-cache` に切り替えた。
+
+---
+
 ## [ERR-20260701-001] vitest_run_in_band_option
 
 **Logged**: 2026-07-01T00:00:00+09:00

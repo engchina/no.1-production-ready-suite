@@ -1340,12 +1340,16 @@ async def _materialize_experiment_candidate(
     job: IngestionJob,
     *,
     cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-) -> None:
+) -> IngestionJobPhase | None:
     """設定 snapshot から新しい chunk_set を隔離構築する。
 
     ``recipe_id`` 付き job は正式な文書レシピ実行であり、既存 active 出力を構築中に
     変更しない。成功時だけ active を原子的に差し替える。recipe_id が無い呼び出しは
     旧実験 API の互換経路として従来の serving を維持する。
+
+    戻り値は「現在ジョブ完了後に自動投入すべき次フェーズ」。自動進行不要なら ``None``。
+    現在ジョブが RUNNING のまま新ジョブを作るとレシピ行ロックのガードで弾かれるため、
+    投入自体は呼び出し側(``_run_ingestion_job``)が現在ジョブ SUCCEEDED 後に行う。
     """
     detail = await oracle.get_document(job.document_id)
     if detail is None:
@@ -1448,7 +1452,7 @@ async def _materialize_experiment_candidate(
             chunk_count=chunk_count,
         )
         if not candidate_settings.rag_auto_index_after_chunk_enabled:
-            return
+            return None
         await pipeline.index_chunked(
             job.document_id,
             chunk_set_id=candidate_chunk_set_id,
@@ -1501,8 +1505,16 @@ async def _materialize_experiment_candidate(
                 if recipe_row is not None
                 else FileStatus.ERROR
             )
+            if (
+                recipe_status == FileStatus.REVIEW
+                and candidate_settings.rag_auto_chunk_after_extract_enabled
+            ):
+                # 現在の EXTRACT ジョブがまだ RUNNING のため、ここで CHUNK ジョブを作ると
+                # レシピ行ロックのガード(同一レシピの QUEUED/RUNNING 拒否)で弾かれる。
+                # 投入は呼び出し側が現在ジョブ SUCCEEDED 後に行うので、決定だけ返す。
+                return IngestionJobPhase.CHUNK
             if recipe_status in {FileStatus.PREPROCESSED, FileStatus.REVIEW}:
-                return
+                return None
             active_extraction_recipe_id = (
                 recipe_row.get("active_extraction_recipe_id") if recipe_row is not None else None
             )
@@ -1535,6 +1547,8 @@ async def _materialize_experiment_candidate(
         await oracle.set_document_serving_chunk_set(
             document_id=job.document_id, chunk_set_id=serving_chunk_set_id
         )
+    # INDEX まで到達した経路は自動進行の追加投入不要(CHUNK→INDEX はここで完結)。
+    return None
 
 
 async def _materialization_plan_for_document(
@@ -4244,10 +4258,15 @@ async def _run_ingestion_job(
         current = await oracle.get_ingestion_job(job_id)
         return current is not None and current.status == IngestionJobStatus.CANCELLED
 
+    # レシピ経路で「現在ジョブ完了後に自動投入すべき次フェーズ」を受け取る。投入は現在ジョブが
+    # SUCCEEDED になった後(レシピ行ロックのガードを通過できる状態)に行う。
+    next_recipe_phase: IngestionJobPhase | None = None
     try:
         if job.recipe_id is not None or job.settings_overrides is not None:
             # 正式レシピは旧 active を維持した隔離 materialize。recipe_id 無しは旧実験互換。
-            await _materialize_experiment_candidate(oracle, job, cancel_checker=is_cancelled)
+            next_recipe_phase = await _materialize_experiment_candidate(
+                oracle, job, cancel_checker=is_cancelled
+            )
         elif job.phase == IngestionJobPhase.CHUNK:
             detail = await _chunk_reviewed_document(
                 job.document_id,
@@ -4367,6 +4386,24 @@ async def _run_ingestion_job(
             job_id,
             status=IngestionJobStatus.SUCCEEDED,
         )
+        if next_recipe_phase is not None and job.recipe_id is not None:
+            # 現在ジョブは SUCCEEDED になったので、同一レシピの次フェーズ job を投入できる
+            # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は
+            # 握りつぶして warning に留め、人手の「承認して Chunk 作成」で続行可能にする。
+            try:
+                await _enqueue_ingestion_job_for_recipe(
+                    job.document_id, job.recipe_id, phase=next_recipe_phase
+                )
+            except Exception:
+                logger.warning(
+                    "recipe_auto_advance_enqueue_failed",
+                    extra={
+                        "document_id": job.document_id,
+                        "recipe_id": job.recipe_id,
+                        "phase": next_recipe_phase.value,
+                    },
+                    exc_info=True,
+                )
 
 
 async def _mark_recipe_job_failed(

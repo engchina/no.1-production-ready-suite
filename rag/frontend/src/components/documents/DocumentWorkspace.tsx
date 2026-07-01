@@ -870,7 +870,10 @@ export function DocumentWorkspace({
   // 必ず 409 になるため、converted の真偽や artifact の有無に関わらず「ファイル準備を再実行」へ
   // 誘導する(null artifact / passthrough・path欠落 / 変換成功・保存失敗 を全て包含)。
   const preparedArtifactMissing = !hasPreparedArtifact;
-  const selectedPreviewVariant = previewVariant === "prepared" && hasPreparedArtifact
+  // 変換なし(passthrough)の場合、object_storage_path は EXTRACT 再開用に元ファイルパスを
+  // 再利用しており「別ファイルが存在する」ことを意味しない。プレビュー切替は converted も見る。
+  const hasConvertedPreview = Boolean(preparedArtifact?.converted && preparedArtifact?.object_storage_path);
+  const selectedPreviewVariant = previewVariant === "prepared" && hasConvertedPreview
     ? "prepared"
     : "original";
   const selectedPreviewFileName =
@@ -1042,8 +1045,14 @@ export function DocumentWorkspace({
                     variant={selectedPreviewVariant === "prepared" ? "secondary" : "ghost"}
                     className="whitespace-nowrap"
                     onClick={() => setPreviewVariant("prepared")}
-                    disabled={!hasPreparedArtifact}
-                    title={!hasPreparedArtifact ? t("flow.preview.preparedUnavailable") : undefined}
+                    disabled={!hasConvertedPreview}
+                    title={
+                      hasConvertedPreview
+                        ? undefined
+                        : preparedArtifact && !preparedArtifact.converted
+                          ? t("flow.preview.preparedSkipped")
+                          : t("flow.preview.preparedUnavailable")
+                    }
                   >
                     {t("flow.preview.after")}
                   </Button>

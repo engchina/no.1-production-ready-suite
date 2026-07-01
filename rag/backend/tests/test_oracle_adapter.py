@@ -669,6 +669,24 @@ async def test_oracle_client_rejects_recipe_update_before_dml_when_scope_mismatc
     )
 
 
+async def test_oracle_client_updates_recipe_status_without_null_timestamp_binds() -> None:
+    """日時は DB 側で設定し、Oracle が NULL bind を CHAR と推論するのを避ける。"""
+    pool = FakeOraclePool(execute_results=[])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    await client.update_document_recipe_status(
+        recipe_id="recipe-1",
+        status=FileStatus.PREPROCESSED,
+    )
+
+    call = pool.connection.calls[0]
+    assert "COALESCE(:started_at" not in call.statement
+    assert "THEN SYSTIMESTAMP ELSE started_at" in call.statement
+    assert "WHEN :status IN ('INDEXED', 'ERROR') THEN SYSTIMESTAMP" in call.statement
+    assert "started_at" not in call.parameters
+    assert "finished_at" not in call.parameters
+
+
 async def test_oracle_client_rejects_recipe_delete_before_dml_when_scope_mismatches() -> None:
     """document は見えても recipe が別文書なら削除 DML を行わない。"""
     pool = FakeOraclePool(execute_results=[[{"document_id": "doc-1"}], []])
