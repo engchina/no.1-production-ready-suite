@@ -27,7 +27,6 @@ import {
   type KnowledgeBaseQueryConfig,
   type PostRetrievalPipelineName,
   type RetrievalStrategyName,
-  type VectorIndexProfileName,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -48,7 +47,7 @@ const NAME_HELPER_ID = "business-view-name-helper";
 const SCOPE_ERROR_ID = "business-view-scope-error";
 
 const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalStrategyName>[] = [
-  { value: "hybrid_rrf", label: `${t("settings.retrieval.strategy.hybrid_rrf")}(既定)` },
+  { value: "hybrid_rrf", label: t("settings.retrieval.strategy.hybrid_rrf") },
   { value: "vector", label: t("settings.retrieval.strategy.vector") },
   { value: "keyword", label: t("settings.retrieval.strategy.keyword") },
   { value: "graph_augmented", label: t("settings.retrieval.strategy.graph_augmented") },
@@ -62,7 +61,7 @@ const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalStrategyName>[] = [
   },
 ];
 const GROUNDING_OPTIONS: SelectFieldOption<PostRetrievalPipelineName>[] = [
-  { value: "custom", label: `${t("settings.grounding.pipeline.custom")}(既定)` },
+  { value: "custom", label: t("settings.grounding.pipeline.custom") },
   { value: "lean", label: t("settings.grounding.pipeline.lean") },
   { value: "verified_context", label: t("settings.grounding.pipeline.verified_context") },
   { value: "context_enrich", label: t("settings.grounding.pipeline.context_enrich") },
@@ -70,25 +69,20 @@ const GROUNDING_OPTIONS: SelectFieldOption<PostRetrievalPipelineName>[] = [
   { value: "full_governed", label: t("settings.grounding.pipeline.full_governed") },
 ];
 const GENERATION_OPTIONS: SelectFieldOption<GenerationProfileName>[] = [
-  { value: "grounded_concise", label: `${t("settings.generation.profile.grounded_concise")}(既定)` },
+  { value: "grounded_concise", label: t("settings.generation.profile.grounded_concise") },
   { value: "detailed_cited", label: t("settings.generation.profile.detailed_cited") },
   { value: "strict_extractive", label: t("settings.generation.profile.strict_extractive") },
   { value: "structured_json", label: t("settings.generation.profile.structured_json") },
   { value: "bilingual_ja_en", label: t("settings.generation.profile.bilingual_ja_en") },
 ];
 const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
-  { value: "standard", label: `${t("settings.guardrail.policy.standard")}(既定)` },
+  { value: "standard", label: t("settings.guardrail.policy.standard") },
   { value: "strict", label: t("settings.guardrail.policy.strict") },
   { value: "lenient", label: t("settings.guardrail.policy.lenient") },
   { value: "regulated", label: t("settings.guardrail.policy.regulated") },
 ];
-const VECTOR_INDEX_OPTIONS: SelectFieldOption<VectorIndexProfileName>[] = [
-  { value: "balanced", label: `${t("settings.vectorIndex.profile.balanced")}(既定)` },
-  { value: "accurate", label: t("settings.vectorIndex.profile.accurate") },
-  { value: "fast", label: t("settings.vectorIndex.profile.fast") },
-];
 const EVALUATION_OPTIONS: SelectFieldOption<EvaluationSuiteName>[] = [
-  { value: "request_only", label: `${t("settings.evaluation.suite.request_only")}(既定)` },
+  { value: "request_only", label: t("settings.evaluation.suite.request_only") },
   { value: "retrieval_focused", label: t("settings.evaluation.suite.retrieval_focused") },
   { value: "balanced", label: t("settings.evaluation.suite.balanced") },
   { value: "strict_ci", label: t("settings.evaluation.suite.strict_ci") },
@@ -100,7 +94,6 @@ function emptyQueryConfig(): KnowledgeBaseQueryConfig {
     post_retrieval_pipeline: null,
     generation_profile: null,
     guardrail_policy: null,
-    vector_index_profile: null,
     evaluation_suite: null,
   };
 }
@@ -456,59 +449,11 @@ function BusinessViewForm({
           </div>
 
           <fieldset className="space-y-3 rounded-lg border border-border p-4">
-            <legend className="px-1 text-sm font-semibold text-foreground">persona</legend>
-            <div>
-              <label
-                htmlFor="business-view-system-prompt"
-                className="text-sm font-medium text-foreground"
-              >
-                {t("businessViews.field.systemPrompt")}
-              </label>
-              <textarea
-                id="business-view-system-prompt"
-                value={config.system_prompt ?? ""}
-                onChange={(event) =>
-                  setConfig((current) => ({
-                    ...current,
-                    system_prompt: event.target.value || null,
-                  }))
-                }
-                placeholder={t("businessViews.field.systemPromptPlaceholder")}
-                rows={3}
-                className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-primary"
-              />
-              <p className="mt-1 text-xs text-muted">
-                {t("businessViews.field.systemPromptHelper")}
-              </p>
-            </div>
-            <div className="max-w-xs">
-              <label
-                htmlFor="business-view-language"
-                className="text-sm font-medium text-foreground"
-              >
-                {t("businessViews.field.defaultLanguage")}
-              </label>
-              <input
-                id="business-view-language"
-                value={config.default_language ?? ""}
-                onChange={(event) =>
-                  setConfig((current) => ({
-                    ...current,
-                    default_language: event.target.value || null,
-                  }))
-                }
-                placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
-                className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary"
-              />
-            </div>
-          </fieldset>
-
-          <fieldset className="space-y-3 rounded-lg border border-border p-4">
             <legend className="px-1 text-sm font-semibold text-foreground">
               {t("businessViews.query.title")}
             </legend>
             <p className="text-xs text-muted">{t("businessViews.query.helper")}</p>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-3">
               <QuerySelectRow
                 id="business-view-retrieval"
                 label={t("businessViews.field.retrieval")}
@@ -536,6 +481,59 @@ function BusinessViewForm({
                 disabled={pending}
                 onChange={(value) => updateQuery({ generation_profile: value })}
               />
+              <div className="grid gap-3 rounded-lg border border-border bg-background p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+                <h3 className="text-sm font-medium text-foreground">
+                  {t("businessViews.field.prompt")}
+                </h3>
+                <div className="min-w-0 space-y-3">
+                  <div>
+                    <label
+                      htmlFor="business-view-system-prompt"
+                      className="text-sm font-medium text-foreground"
+                    >
+                      {t("businessViews.field.systemPrompt")}
+                    </label>
+                    <textarea
+                      id="business-view-system-prompt"
+                      value={config.system_prompt ?? ""}
+                      onChange={(event) =>
+                        setConfig((current) => ({
+                          ...current,
+                          system_prompt: event.target.value || null,
+                        }))
+                      }
+                      placeholder={t("businessViews.field.systemPromptPlaceholder")}
+                      rows={3}
+                      disabled={pending}
+                      className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                    <p className="mt-1 text-xs text-muted">
+                      {t("businessViews.field.systemPromptHelper")}
+                    </p>
+                  </div>
+                  <div className="max-w-xs">
+                    <label
+                      htmlFor="business-view-language"
+                      className="text-sm font-medium text-foreground"
+                    >
+                      {t("businessViews.field.defaultLanguage")}
+                    </label>
+                    <input
+                      id="business-view-language"
+                      value={config.default_language ?? ""}
+                      onChange={(event) =>
+                        setConfig((current) => ({
+                          ...current,
+                          default_language: event.target.value || null,
+                        }))
+                      }
+                      placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
+                      disabled={pending}
+                      className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                  </div>
+                </div>
+              </div>
               <QuerySelectRow
                 id="business-view-guardrail"
                 label={t("businessViews.field.guardrail")}
@@ -544,15 +542,6 @@ function BusinessViewForm({
                 defaultOnOverride="strict"
                 disabled={pending}
                 onChange={(value) => updateQuery({ guardrail_policy: value })}
-              />
-              <QuerySelectRow
-                id="business-view-vector-index"
-                label={t("businessViews.field.vectorIndex")}
-                value={config.query.vector_index_profile}
-                options={VECTOR_INDEX_OPTIONS}
-                defaultOnOverride="accurate"
-                disabled={pending}
-                onChange={(value) => updateQuery({ vector_index_profile: value })}
               />
               <QuerySelectRow
                 id="business-view-evaluation"
@@ -628,10 +617,10 @@ function QuerySelectRow<T extends string>({
 }) {
   const overriding = value !== null;
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-background p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium text-foreground">{label}</span>
-        <div className="flex gap-1" role="group" aria-label={label}>
+    <div className="grid gap-3 rounded-lg border border-border bg-background p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+      <h3 className="text-sm font-medium text-foreground">{label}</h3>
+      <div className="min-w-0 space-y-2">
+        <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
           <ToggleChip selected={!overriding} disabled={disabled} onClick={() => onChange(null)}>
             {t("businessViews.inherit")}
           </ToggleChip>
@@ -642,20 +631,20 @@ function QuerySelectRow<T extends string>({
               if (!overriding) onChange(defaultOnOverride);
             }}
           >
-            {options[0]?.label ?? label}
+            {t("businessViews.override")}
           </ToggleChip>
         </div>
+        {overriding ? (
+          <SelectField
+            id={id}
+            label={label}
+            value={value}
+            options={options}
+            onValueChange={(next) => onChange(next)}
+            className="[&>label]:sr-only"
+          />
+        ) : null}
       </div>
-      {overriding ? (
-        <SelectField
-          id={id}
-          label={label}
-          value={value}
-          options={options}
-          onValueChange={(next) => onChange(next)}
-          className="[&>label]:sr-only"
-        />
-      ) : null}
     </div>
   );
 }

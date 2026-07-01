@@ -1,17 +1,19 @@
-import { ChevronDown, Plus, SendHorizontal, Square } from "lucide-react";
+import { Check, ChevronDown, Pencil, Plus, SendHorizontal, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "@/components/PageHeader";
+import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { CitationCard, scoreMaximaForCitations } from "@/components/search/CitationCard";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { ToggleChip } from "@/components/ui/toggle-chip";
-import type { ChatMessage, RetrievedChunk } from "@/lib/api";
+import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
+import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
   useBusinessViews,
@@ -19,6 +21,7 @@ import {
   useConversation,
   useConversations,
   useCreateConversation,
+  useUpdateConversation,
 } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
 import { APP_ROUTES } from "@/lib/routes";
@@ -67,6 +70,8 @@ function AssistantColumn({
   answer,
   citations,
   traceId,
+  businessViewId,
+  messageId,
   streaming,
   errorMessage,
   showLabel,
@@ -76,6 +81,8 @@ function AssistantColumn({
   answer: string;
   citations: RetrievedChunk[];
   traceId: string | null;
+  businessViewId: string;
+  messageId: string | null;
   streaming: boolean;
   errorMessage: string | null;
   showLabel: boolean;
@@ -84,6 +91,7 @@ function AssistantColumn({
   const scoreMaxima = useMemo(() => scoreMaximaForCitations(citations), [citations]);
   return (
     <div
+      id={messageId ? `message-${messageId}` : undefined}
       className={cn(
         "flex h-full min-w-0 flex-col gap-2 rounded-md border border-border bg-card p-3",
         className
@@ -103,7 +111,7 @@ function AssistantColumn({
         </p>
       ) : (
         <p
-          className="max-w-prose whitespace-pre-wrap text-sm leading-relaxed text-foreground"
+          className="whitespace-pre-wrap text-sm leading-relaxed text-foreground"
           aria-live="polite"
         >
           {answer}
@@ -112,6 +120,14 @@ function AssistantColumn({
           ) : null}
         </p>
       )}
+      {!streaming && !errorMessage ? (
+        <FeedbackControls
+          traceId={traceId}
+          businessViewId={businessViewId}
+          targetType="answer"
+          sourceSurface="chat"
+        />
+      ) : null}
       {citations.length > 0 ? (
         <details className="group mt-auto border-t border-border pt-1">
           <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-2 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
@@ -128,6 +144,8 @@ function AssistantColumn({
                 chunk={chunk}
                 index={index}
                 traceId={traceId}
+                businessViewId={businessViewId}
+                sourceSurface="chat"
                 scoreMaxima={scoreMaxima}
               />
             ))}
@@ -142,14 +160,17 @@ function AssistantColumn({
 function MessageTurn({
   user,
   columns,
+  businessViewId,
 }: {
   user: ChatMessage;
+  businessViewId: string;
   columns: {
     key: string;
     label: string | null;
     answer: string;
     citations: RetrievedChunk[];
     traceId: string | null;
+    messageId: string | null;
     streaming: boolean;
     errorMessage: string | null;
   }[];
@@ -177,6 +198,8 @@ function MessageTurn({
             answer={column.answer}
             citations={column.citations}
             traceId={column.traceId}
+            businessViewId={businessViewId}
+            messageId={column.messageId}
             streaming={column.streaming}
             errorMessage={column.errorMessage}
             showLabel={compare}
@@ -194,11 +217,15 @@ function MessageTurn({
 
 export function ChatClient() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
   const businessViews = businessViewsQuery.data?.items ?? [];
-  const [businessViewId, setBusinessViewId] = useState<string | null>(null);
+  const [businessViewId, setBusinessViewId] = useState<string | null>(() =>
+    searchParams.get("business_view_id")
+  );
 
   const conversationsQuery = useConversations({
     business_view_id: businessViewId ?? undefined,
@@ -207,7 +234,9 @@ export function ChatClient() {
   });
   const conversations = conversationsQuery.data?.items ?? [];
 
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(() =>
+    searchParams.get("conversation_id")
+  );
   const conversationQuery = useConversation(activeId);
   const persistedMessages = useMemo(
     () => conversationQuery.data?.messages ?? [],
@@ -215,6 +244,7 @@ export function ChatClient() {
   );
 
   const createConversation = useCreateConversation();
+  const updateConversation = useUpdateConversation();
   const compareModelsQuery = useCompareModels();
   const compareModels = compareModelsQuery.data ?? [];
 
@@ -223,15 +253,25 @@ export function ChatClient() {
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   const [sending, setSending] = useState(false);
   const [errorText, setErrorText] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [titleError, setTitleError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const previousBusinessViewIdRef = useRef(businessViewId);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   // 業務ビューを切り替えたら会話選択と進行中ストリームをリセットする。
   useEffect(() => {
+    if (previousBusinessViewIdRef.current === businessViewId) return;
+    previousBusinessViewIdRef.current = businessViewId;
     abortRef.current?.abort();
     setActiveId(null);
     setLiveTurn(null);
     setErrorText("");
+    setEditingId(null);
+    setTitleError("");
   }, [businessViewId]);
 
   // メッセージが増えたら末尾までスクロールする。
@@ -239,9 +279,33 @@ export function ChatClient() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [persistedMessages.length, liveTurn]);
 
+  useEffect(() => {
+    const targetId = location.hash.slice(1);
+    if (!targetId || !persistedMessages.length) return;
+    const animationFrame = window.requestAnimationFrame(() => {
+      document.getElementById(targetId)?.scrollIntoView({ block: "center", behavior: "auto" });
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [location.hash, persistedMessages.length]);
+
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const turns = useMemo(() => buildTurns(persistedMessages), [persistedMessages]);
+  useEffect(() => {
+    if (editingId) titleInputRef.current?.focus();
+  }, [editingId]);
+
+  useEffect(() => {
+    if (titleError && !updateConversation.isPending) titleInputRef.current?.focus();
+  }, [titleError, updateConversation.isPending]);
+
+  const liveUserMessageId = liveTurn?.user.message_id;
+  const turns = useMemo(
+    () =>
+      buildTurns(persistedMessages).filter(
+        (turn) => turn.user.message_id !== liveUserMessageId
+      ),
+    [persistedMessages, liveUserMessageId]
+  );
 
   function selectConversation(id: string) {
     if (id === activeId) return;
@@ -251,15 +315,61 @@ export function ChatClient() {
     setActiveId(id);
   }
 
+  function focusComposer() {
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
   async function startNewConversation() {
     if (!businessViewId) return;
     setErrorText("");
+    const emptyConversation = conversations.find(
+      (conversation) => conversation.status === "ACTIVE" && conversation.message_count === 0
+    );
+    if (emptyConversation) {
+      selectConversation(emptyConversation.id);
+      focusComposer();
+      return;
+    }
     try {
       const created = await createConversation.mutateAsync({ business_view_id: businessViewId });
       setActiveId(created.id);
       setLiveTurn(null);
+      focusComposer();
     } catch {
       setErrorText(t("chat.error.send"));
+    }
+  }
+
+  function startRename(conversation: ConversationSummary) {
+    setEditingId(conversation.id);
+    setTitleDraft(conversation.title ?? t("chat.sessions.untitled"));
+    setTitleError("");
+  }
+
+  function cancelRename() {
+    setEditingId(null);
+    setTitleError("");
+  }
+
+  async function saveRename() {
+    if (!editingId || updateConversation.isPending) return;
+    const title = titleDraft.trim();
+    if (!title) {
+      setTitleError(t("chat.sessions.renameEmpty"));
+      titleInputRef.current?.focus();
+      return;
+    }
+    setTitleError("");
+    try {
+      await updateConversation.mutateAsync({ id: editingId, payload: { title } });
+      setEditingId(null);
+    } catch (error) {
+      setTitleError(
+        error instanceof ApiError
+          ? error.messages.join(" / ")
+          : t("chat.sessions.renameError")
+      );
+      titleInputRef.current?.focus();
     }
   }
 
@@ -297,6 +407,7 @@ export function ChatClient() {
         { content, model_ids: selectedModelIds },
         {
           onStart: ({ user_message, columns }) => {
+            void queryClient.invalidateQueries({ queryKey: ["conversations"] });
             setLiveTurn({
               user: user_message,
               columns: columns.map((column: ChatColumn) => ({
@@ -365,6 +476,7 @@ export function ChatClient() {
         answer: column.answer,
         citations: column.citations,
         traceId: column.traceId,
+        messageId: null,
         streaming: column.status === "streaming",
         errorMessage: column.errorMessage,
       }))
@@ -444,30 +556,112 @@ export function ChatClient() {
                   className="max-h-56 min-h-0 flex-1 space-y-1 overflow-y-auto lg:max-h-none"
                   aria-label={t("chat.sessions.title")}
                 >
-                  {conversations.map((conversation) => (
-                    <li key={conversation.id}>
-                      <button
-                        type="button"
-                        onClick={() => selectConversation(conversation.id)}
-                        aria-current={conversation.id === activeId}
-                        className={cn(
-                          "flex w-full flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm transition-colors",
-                          conversation.id === activeId
-                            ? "bg-primary/10 text-foreground"
-                            : "text-muted hover:bg-muted/30 hover:text-foreground"
+                  {conversations.map((conversation) => {
+                    const title = conversation.title ?? t("chat.sessions.untitled");
+                    const errorId = `conversation-title-${conversation.id}-error`;
+                    return (
+                      <li key={conversation.id} className="group">
+                        {editingId === conversation.id ? (
+                          <div className="space-y-1 rounded-md bg-primary/5 p-2">
+                            <div className="flex items-center gap-1">
+                              <label
+                                htmlFor={`conversation-title-${conversation.id}`}
+                                className="sr-only"
+                              >
+                                {t("chat.sessions.renameLabel")}
+                              </label>
+                              <input
+                                ref={titleInputRef}
+                                id={`conversation-title-${conversation.id}`}
+                                value={titleDraft}
+                                maxLength={80}
+                                disabled={updateConversation.isPending}
+                                aria-invalid={titleError ? true : undefined}
+                                aria-describedby={titleError ? errorId : undefined}
+                                onChange={(event) => setTitleDraft(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    void saveRename();
+                                  } else if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    cancelRename();
+                                  }
+                                }}
+                                className="h-11 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-base text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 sm:h-9 sm:text-sm"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="md"
+                                className="h-11 w-11 px-0 sm:h-9 sm:w-9"
+                                disabled={updateConversation.isPending}
+                                aria-label={t("chat.sessions.renameSave")}
+                                onClick={() => void saveRename()}
+                              >
+                                <Check className="size-4" aria-hidden />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="md"
+                                className="h-11 w-11 px-0 sm:h-9 sm:w-9"
+                                disabled={updateConversation.isPending}
+                                aria-label={t("chat.sessions.renameCancel")}
+                                onClick={cancelRename}
+                              >
+                                <X className="size-4" aria-hidden />
+                              </Button>
+                            </div>
+                            {titleError ? (
+                              <p id={errorId} className="px-1 text-xs text-destructive" role="alert">
+                                {titleError}
+                              </p>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div
+                            className={cn(
+                              "grid grid-cols-[minmax(0,1fr)_auto] rounded-md transition-colors",
+                              conversation.id === activeId
+                                ? "bg-primary/10 text-foreground"
+                                : "text-muted hover:bg-muted/30 hover:text-foreground"
+                            )}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => selectConversation(conversation.id)}
+                              aria-current={conversation.id === activeId}
+                              className="flex min-w-0 flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+                            >
+                              <span className="truncate font-medium" title={title}>
+                                {title}
+                              </span>
+                              <span className="text-xs tabular-nums text-muted">
+                                {t("chat.sessions.metadata", {
+                                  count: conversation.message_count,
+                                  updatedAt: formatDateTime(conversation.updated_at),
+                                })}
+                              </span>
+                            </button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="md"
+                              className={cn(
+                                "mr-1 h-11 w-11 self-center px-0 transition-opacity sm:h-9 sm:w-9 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100",
+                                conversation.id === activeId && "sm:opacity-100"
+                              )}
+                              aria-label={t("chat.sessions.rename", { title })}
+                              onClick={() => startRename(conversation)}
+                            >
+                              <Pencil className="size-4" aria-hidden />
+                            </Button>
+                          </div>
                         )}
-                      >
-                        <span className="truncate font-medium">
-                          {conversation.title ?? t("chat.sessions.untitled")}
-                        </span>
-                        <span className="text-xs text-muted">
-                          {t("chat.sessions.messageCount", {
-                            count: conversation.message_count,
-                          })}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </aside>
@@ -498,18 +692,26 @@ export function ChatClient() {
                     <MessageTurn
                       key={turn.user.message_id}
                       user={turn.user}
+                      businessViewId={businessViewId}
                       columns={turn.replies.map((reply) => ({
                         key: reply.message_id,
                         label: reply.model,
                         answer: reply.content,
                         citations: reply.citations,
                         traceId: reply.trace_id,
+                        messageId: reply.message_id,
                         streaming: false,
                         errorMessage: reply.status === "ERROR" ? reply.content : null,
                       }))}
                     />
                   ))}
-                  {liveTurn ? <MessageTurn user={liveTurn.user} columns={liveColumns} /> : null}
+                  {liveTurn ? (
+                    <MessageTurn
+                      user={liveTurn.user}
+                      columns={liveColumns}
+                      businessViewId={businessViewId}
+                    />
+                  ) : null}
                 </>
               )}
             </div>
@@ -535,6 +737,7 @@ export function ChatClient() {
                   {t("chat.composer.placeholder")}
                 </label>
                 <textarea
+                  ref={composerRef}
                   id="chat-composer"
                   value={composer}
                   onChange={(event) => setComposer(event.target.value)}

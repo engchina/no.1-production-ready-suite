@@ -23,6 +23,7 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
   await page.goto("/settings/retrieval");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const pipelineSection = sidebar.locator("#nav-section-nav-section-pipeline");
 
   // 新セクション見出し
   await expect(sidebar.getByText("検索・回答設定", { exact: true })).toBeVisible();
@@ -36,10 +37,11 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
     "検索方法",
     "根拠確認",
     "回答スタイル",
+    "回答プロンプト",
     "安全チェック",
-    "品質評価設定",
+    "品質評価",
   ]) {
-    await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
+    await expect(pipelineSection.getByText(label, { exact: true })).toBeVisible();
   }
 
   // システム設定の短縮ラベル

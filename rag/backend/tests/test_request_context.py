@@ -58,6 +58,56 @@ def test_audit_context_hash_salt_changes_identifier_hashes() -> None:
     assert first.tenant_id_hash != second.tenant_id_hash
 
 
+def test_authenticated_user_precedes_spoofable_header() -> None:
+    """認証済み user は client 指定 header より優先する。"""
+    settings = Settings(audit_context_hash_salt="salt-1")
+    context = audit_request_context_from_headers(
+        {"x-user-id": "spoofed-user"},
+        request_id="request-1",
+        settings=settings,
+        authenticated_user_id="signed-session-user",
+    )
+    expected = audit_request_context_from_headers(
+        {"x-user-id": "signed-session-user"},
+        request_id="request-1",
+        settings=settings,
+    )
+
+    assert context.user_id_hash == expected.user_id_hash
+
+
+def test_user_header_is_ignored_when_authentication_is_enabled() -> None:
+    """認証有効時は署名済みセッションがなければ user header を信頼しない。"""
+    context = audit_request_context_from_headers(
+        {"x-user-id": "spoofed-user"},
+        request_id="request-1",
+        settings=Settings(audit_context_hash_salt="salt-1"),
+        allow_user_header=False,
+    )
+
+    assert context.user_id_hash is None
+
+
+def test_default_user_is_used_only_without_header() -> None:
+    """local mode は明示 header を保ち、未指定時だけ仮想 user を補う。"""
+    settings = Settings(audit_context_hash_salt="salt-1")
+    explicit = audit_request_context_from_headers(
+        {"x-user-id": "service-user"},
+        request_id="request-1",
+        settings=settings,
+        default_user_id="local-user",
+    )
+    fallback = audit_request_context_from_headers(
+        {},
+        request_id="request-2",
+        settings=settings,
+        default_user_id="local-user",
+    )
+
+    assert explicit.user_id_hash != fallback.user_id_hash
+    assert fallback.user_id_hash is not None
+
+
 def test_audit_context_ignores_invalid_or_oversized_header_values() -> None:
     """制御文字や過大な header は監査 context へ入れない。"""
     context = audit_request_context_from_headers(

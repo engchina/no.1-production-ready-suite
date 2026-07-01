@@ -32,6 +32,28 @@ def test_query_overrides_apply() -> None:
     assert settings.rag_generation_profile == "grounded_concise"
 
 
+def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
+    """旧 vector index 値は読めるが、共有索引設定を上書きせず次回保存で除外する。"""
+    settings = get_settings()
+    config = parse_business_view_config(
+        {
+            "query": {
+                "generation_profile": "detailed_cited",
+                "vector_index_profile": "accurate",
+            }
+        }
+    )
+
+    assert config.query.vector_index_profile == "accurate"
+    merged, applied = resolve_business_view_settings(settings, config)
+    assert applied is True
+    assert merged.rag_generation_profile == "detailed_cited"
+    assert merged.rag_vector_index_profile == settings.rag_vector_index_profile
+    dumped_query = dump_business_view_config(config)["query"]
+    assert isinstance(dumped_query, dict)
+    assert "vector_index_profile" not in dumped_query
+
+
 def test_persona_injects_system_prompt_override() -> None:
     """persona(system_prompt + 既定言語)は generation 上書きへ注入される。"""
     settings = get_settings()

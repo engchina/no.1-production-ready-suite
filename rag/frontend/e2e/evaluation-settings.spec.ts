@@ -17,24 +17,25 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapse: false },
   { name: "mobile", width: 375, height: 812, collapse: true },
 ]) {
-  test(`品質評価設定は品質評価設定を表示する (${viewport.name})`, async ({ page }) => {
+  test(`品質評価は品質評価を表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapse) await collapseSidebar(page);
     await mockEvaluation(page, "request_only");
 
     await page.goto("/settings/evaluation");
 
-    await expect(page.getByRole("heading", { name: "品質評価設定" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "品質評価" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /リクエスト準拠/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /厳格 CI/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Ragas 観点/ })).toBeVisible();
     await expect(
       page.getByText("プリセット閾値なし(request の thresholds を使用)")
     ).toBeVisible();
-    await expect(page.getByRole("link", { name: "品質評価設定" })).toHaveAttribute(
-      "aria-current",
-      "page"
-    );
+    await expect(
+      page
+        .locator("#nav-section-nav-section-pipeline")
+        .getByRole("link", { name: "品質評価" })
+    ).toHaveAttribute("aria-current", "page");
     await expectNoHorizontalOverflow(page);
   });
 }

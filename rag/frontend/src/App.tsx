@@ -15,6 +15,7 @@ import { LoginPage } from "@/components/auth/LoginPage";
 import { DashboardClient } from "@/components/dashboard/DashboardClient";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
+import { FeedbackClient } from "@/components/feedback/FeedbackClient";
 import { FileListClient } from "@/components/file-list/FileListClient";
 import { KnowledgeBaseManagementClient } from "@/components/knowledge-bases/KnowledgeBaseManagementClient";
 import { KnowledgeBaseDetailClient } from "@/components/knowledge-bases/KnowledgeBaseDetailClient";
@@ -88,6 +89,7 @@ export function App() {
         <Route path={APP_ROUTES.chat} element={<ChatClient />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationClient />} />
+        <Route path={APP_ROUTES.feedback} element={<FeedbackClient />} />
         <Route path={APP_ROUTES.settingsPipeline} element={<SettingsPipelineRoute />} />
         <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
         <Route
@@ -135,12 +137,12 @@ function ProtectedLayout() {
   }
 
   return (
-    <div className="flex">
+    <div className="fixed inset-0 flex overflow-hidden">
       <Sidebar />
       <CommandPalette />
       <main
         ref={mainRef}
-        className="h-screen min-w-0 flex-1 overflow-y-auto focus:outline-none"
+        className="h-full min-h-0 min-w-0 flex-1 overflow-y-auto focus:outline-none"
         aria-label="メイン領域"
         tabIndex={-1}
       >

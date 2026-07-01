@@ -66,9 +66,9 @@ const effectiveBase: DocumentProcessingConfig = {
   field_extraction_enabled: false,
   asset_summary_enabled: false,
   navigation_summary_enabled: false,
-  auto_parse_after_preprocess_enabled: false,
-  auto_chunk_after_extract_enabled: false,
-  auto_index_after_chunk_enabled: false,
+  auto_parse_after_preprocess_enabled: true,
+  auto_chunk_after_extract_enabled: true,
+  auto_index_after_chunk_enabled: true,
 };
 
 function recipeSteps(status: string): DocumentRecipeStep[] {
@@ -226,6 +226,13 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   const panel = page.getByRole("region", { name: "処理レシピ" });
   await expect(panel).toContainText("Office→PDF");
   await expect(panel).toContainText("Docling");
+  for (const label of [
+    "ファイル準備後に抽出へ進む",
+    "抽出後に Chunk 作成へ進む",
+    "Chunk 後に Embedding / 索引へ進む",
+  ]) {
+    await expect(panel.getByText(label, { exact: true }).locator("../..")).toContainText("有効");
+  }
   await panel.getByRole("button", { name: "処理設定を編集" }).click();
 
   await panel.getByRole("group", { name: "文書解析" }).getByText("上書き").click();

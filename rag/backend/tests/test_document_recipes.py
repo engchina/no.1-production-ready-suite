@@ -438,7 +438,7 @@ async def test_recipe_extract_returns_chunk_phase_when_auto_chunk_enabled(
 async def test_recipe_extract_returns_none_when_auto_chunk_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """既定(auto_chunk 無効)では次フェーズを返さず REVIEW に留める。"""
+    """auto_chunk 無効時は次フェーズを返さず REVIEW に留める。"""
     next_phase = await _decide_next_phase(monkeypatch, auto_chunk_enabled=False)
     assert next_phase is None
 

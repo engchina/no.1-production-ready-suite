@@ -11,7 +11,12 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import chat as chat_route
-from app.clients.oracle import StoredConversation, StoredMessage
+from app.clients.oracle import (
+    StoredConversation,
+    StoredMessage,
+    _conversation_title_from_message,
+    _oracle_conversation_where,
+)
 from app.config import EnterpriseAiConfiguredModel, get_settings
 from app.main import app
 from app.rag import oracle_schema
@@ -20,6 +25,11 @@ from app.rag.pipeline import (
     SearchTokenDelta,
     _format_chat_history,
     _query_with_history,
+)
+from app.rag.request_context import (
+    AuditRequestContext,
+    reset_audit_request_context,
+    set_audit_request_context,
 )
 from app.schemas.search import RetrievedChunk, SearchResponse
 from tests.support import AsgiTestClient
@@ -54,6 +64,16 @@ def test_chat_sections_ordered_after_business_views() -> None:
     names = [section.name for section in oracle_schema.oracle_schema_sections()]
     assert names.index("business_views") < names.index("conversations")
     assert names.index("conversations") < names.index("messages")
+
+
+def test_conversation_title_migration_backfills_only_untitled_rows() -> None:
+    """migration は最初の USER 発話を使い、明示タイトルを上書きしない。"""
+    sql = oracle_schema.oracle_schema_migration_sql()
+    assert "-- migration: 20260701_002_conversation_titles" in sql
+    assert "ROW_NUMBER() OVER" in sql
+    assert "WHERE m.role = 'USER'" in sql
+    assert "WHEN LENGTH(normalized_title) > 80" in sql
+    assert "WHERE c.title IS NULL" in sql
 
 
 # --------------------------------------------------------------------------- #
@@ -114,6 +134,14 @@ class FakeChatOracle:
         existing.status = "ARCHIVED"
         return existing
 
+    async def rename_conversation(self, conversation_id: str, title: str) -> StoredConversation:
+        existing = self.conversations.get(conversation_id)
+        if existing is None:
+            raise KeyError(conversation_id)
+        existing.title = title
+        existing.updated_at = datetime(2026, 1, 2, tzinfo=UTC)
+        return existing
+
     async def append_message(self, message: StoredMessage) -> StoredMessage:
         stored = StoredMessage(
             id=message.id or uuid4().hex,
@@ -131,7 +159,16 @@ class FakeChatOracle:
         )
         self.messages.setdefault(stored.conversation_id, []).append(stored)
         if stored.conversation_id in self.conversations:
-            self.conversations[stored.conversation_id].message_count += 1
+            conversation = self.conversations[stored.conversation_id]
+            if stored.role == "USER" and conversation.title is None:
+                previous_users = [
+                    item
+                    for item in self.messages[stored.conversation_id]
+                    if item.role == "USER" and item.id != stored.id
+                ]
+                if not previous_users:
+                    conversation.title = _conversation_title_from_message(stored.content)
+            conversation.message_count += 1
         return stored
 
     async def list_messages(
@@ -185,6 +222,54 @@ def test_list_and_archive_conversation(fake_oracle: FakeChatOracle) -> None:
     archived = client.post(f"/api/chat/conversations/{created['id']}/archive")
     assert archived.status_code == 200
     assert archived.json()["data"]["status"] == "ARCHIVED"
+
+
+def test_rename_conversation_validates_and_updates_title(fake_oracle: FakeChatOracle) -> None:
+    created = client.post("/api/chat/conversations", json={"business_view_id": "bv-1"}).json()[
+        "data"
+    ]
+
+    renamed = client.patch(
+        f"/api/chat/conversations/{created['id']}", json={"title": " 経費精算の上限 "}
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["data"]["title"] == "経費精算の上限"
+    assert (
+        client.patch(f"/api/chat/conversations/{created['id']}", json={"title": " "}).status_code
+        == 422
+    )
+    assert (
+        client.patch(
+            f"/api/chat/conversations/{created['id']}", json={"title": "長" * 81}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.patch("/api/chat/conversations/missing", json={"title": "変更後"}).status_code == 404
+    )
+
+
+def test_conversation_title_normalizes_and_truncates_first_question() -> None:
+    assert _conversation_title_from_message(" \n\t ") is None
+    assert _conversation_title_from_message("  経費の\n\t上限は？  ") == "経費の 上限は？"
+    assert _conversation_title_from_message("あ" * 81) == f"{'あ' * 79}…"
+
+
+def test_conversation_scope_adds_user_predicate_only_when_authenticated() -> None:
+    token = set_audit_request_context(
+        AuditRequestContext(tenant_id_hash="tenant-hash", user_id_hash="user-hash")
+    )
+    try:
+        sql, binds = _oracle_conversation_where(business_view_id="bv-1")
+    finally:
+        reset_audit_request_context(token)
+    assert "c.tenant_id_hash = :tenant_id_hash" in sql
+    assert "c.user_id_hash = :conversation_user_id_hash" in sql
+    assert binds["conversation_user_id_hash"] == "user-hash"
+
+    sql, binds = _oracle_conversation_where()
+    assert "user_id_hash" not in sql
+    assert "conversation_user_id_hash" not in binds
 
 
 def test_chat_endpoints_return_404_when_disabled(
@@ -342,6 +427,7 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
     # USER + ASSISTANT が永続化される。
     roles = [m.role for m in fake.messages["conv-x"]]
     assert roles == ["USER", "ASSISTANT"]
+    assert fake.conversations["conv-x"].title == "経費の上限は?"
     assistant = fake.messages["conv-x"][1]
     assert assistant.content == "回答"
     assert assistant.reply_to_message_id == fake.messages["conv-x"][0].id

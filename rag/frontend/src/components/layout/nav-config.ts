@@ -9,6 +9,7 @@ import {
   Cloud,
   KeyRound,
   MessagesSquare,
+  MessageSquareHeart,
   LayoutDashboard,
   LayoutGrid,
   Boxes,
@@ -63,6 +64,7 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: UserCog,
       },
       { href: APP_ROUTES.evaluation, labelKey: "nav.evaluation", icon: FlaskConical },
+      { href: APP_ROUTES.feedback, labelKey: "nav.feedback", icon: MessageSquareHeart },
     ],
   },
   {

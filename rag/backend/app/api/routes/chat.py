@@ -39,6 +39,7 @@ from app.schemas.chat import (
     ConversationDetail,
     ConversationStatus,
     ConversationSummary,
+    ConversationUpdateRequest,
     MessageRole,
     MessageStatus,
 )
@@ -178,6 +179,21 @@ async def get_conversation(conversation_id: str) -> ApiResponse[ConversationDeta
         messages=[_to_chat_message(message) for message in messages],
     )
     return ApiResponse(data=detail)
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ApiResponse[ConversationSummary])
+async def rename_conversation(
+    conversation_id: str,
+    request: ConversationUpdateRequest,
+) -> ApiResponse[ConversationSummary]:
+    """会話タイトルを変更する。"""
+    settings = get_settings()
+    _require_chat_enabled(settings)
+    try:
+        conversation = await OracleClient().rename_conversation(conversation_id, request.title)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE) from exc
+    return ApiResponse(data=_to_conversation_summary(conversation))
 
 
 @router.post(

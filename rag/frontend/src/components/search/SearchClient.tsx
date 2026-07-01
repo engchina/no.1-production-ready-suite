@@ -13,6 +13,7 @@ import { useNavigate } from "react-router-dom";
 
 import { BusinessViewPickerGrid } from "@/components/business-views/BusinessViewPickerGrid";
 import { CitationCard, scoreMaximaForCitations } from "./CitationCard";
+import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { PageHeader } from "@/components/PageHeader";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
@@ -570,6 +571,16 @@ export function SearchClient() {
                     ) : null}
                   </p>
                   {meta && phase === "done" ? (
+                    <FeedbackControls
+                      traceId={meta.trace_id}
+                      businessViewId={
+                        meta.diagnostics?.business_view_applied ?? businessViewIds[0] ?? null
+                      }
+                      targetType="answer"
+                      sourceSurface="search"
+                    />
+                  ) : null}
+                  {meta && phase === "done" ? (
                     <SearchExecutionMeta meta={meta} />
                   ) : null}
                 </CardContent>
@@ -594,6 +605,10 @@ export function SearchClient() {
                         chunk={chunk}
                         index={i}
                         traceId={meta?.trace_id}
+                        businessViewId={
+                          meta?.diagnostics?.business_view_applied ?? businessViewIds[0] ?? null
+                        }
+                        sourceSurface="search"
                         scoreMaxima={citationScoreMaxima}
                       />
                     ))}

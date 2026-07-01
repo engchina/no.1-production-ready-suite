@@ -17,7 +17,7 @@ export async function mockDatabaseReady(page: Page): Promise<void> {
 }
 
 /**
- * ページ全体が横スクロール(崩れ)していないことを検証する。
+ * ページ全体が横スクロールせず、document に第2の縦スクロールがないことを検証する。
  *
  * `documentElement` だけでなく **`main`(`overflow-y-auto` で overflow-x も auto になる
  * スクロール領域)の内部はみ出し**も検査する。広いテーブルの `min-w-[…]` がグリッド子の
@@ -34,14 +34,26 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
     page.evaluate(() => {
       const root = document.documentElement;
       const main = document.querySelector("main");
-      return Math.max(
-        root.scrollWidth - root.clientWidth,
-        main ? main.scrollWidth - main.clientWidth : 0
-      );
+      return {
+        horizontal: Math.max(
+          root.scrollWidth - root.clientWidth,
+          main ? main.scrollWidth - main.clientWidth : 0
+        ),
+        documentVertical: root.scrollHeight - root.clientHeight,
+      };
     });
   // 1px はスクロールバー/小数丸めの許容。遷移沈静まで最大 2s リトライ。
   await expect
-    .poll(measure, { message: "ページ全体(documentElement / main)の横はみ出し", timeout: 2000 })
+    .poll(async () => (await measure()).horizontal, {
+      message: "ページ全体(documentElement / main)の横はみ出し",
+      timeout: 2000,
+    })
+    .toBeLessThanOrEqual(1);
+  await expect
+    .poll(async () => (await measure()).documentVertical, {
+      message: "documentElement に第2の縦スクロールがないこと",
+      timeout: 2000,
+    })
     .toBeLessThanOrEqual(1);
 }
 

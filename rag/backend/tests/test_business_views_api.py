@@ -177,7 +177,10 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
             "description": "経理規程の問い合わせ窓口",
             "config": {
                 "knowledge_base_ids": ["kb-1", "kb-2"],
-                "query": {"generation_profile": "detailed_cited"},
+                "query": {
+                    "generation_profile": "detailed_cited",
+                    "vector_index_profile": "accurate",
+                },
                 "system_prompt": "あなたは経理規程アシスタントです。",
                 "default_language": "日本語",
             },
@@ -189,6 +192,7 @@ def test_create_and_get_business_view(fake_oracle: FakeBusinessViewOracle) -> No
     assert data["name"] == "経理アシスタント"
     assert data["knowledge_base_count"] == 2
     assert data["config"]["query"]["generation_profile"] == "detailed_cited"
+    assert "vector_index_profile" not in data["config"]["query"]
     assert [ref["name"] for ref in data["knowledge_bases"]] == ["社内規程", "製品 FAQ"]
 
     get_resp = client.get(f"/api/business-views/{data['id']}")

@@ -233,7 +233,18 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "-- migration: 20260630_003_document_recipes" in sql
     assert "CREATE TABLE rag_document_recipes" in sql
     assert "RAG_CHUNK_SETS_RECIPE_ACTIVE_UIDX" in sql
-    assert len(statements) == 45
+    assert "-- migration: 20260701_001_general_feedback" in sql
+    assert "business_view_id VARCHAR2(64)" in sql
+    assert "RAG_FEEDBACK_USER_TRACE_IDX" in sql
+    assert "column_name IN ('DOCUMENT_ID', 'CHUNK_ID')" in sql
+    assert "AND nullable = 'N'" in sql
+    assert "column_row.column_name || ' NULL)'" in sql
+    assert "SET reason = 'answer_untrusted'" in sql
+    assert "target_type = ''answer'' AND reason IN" in sql
+    assert "target_type = ''citation'' AND reason IN" in sql
+    assert "-- migration: 20260701_002_conversation_titles" in sql
+    assert "WHEN LENGTH(normalized_title) > 80" in sql
+    assert len(statements) == 48
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -249,7 +260,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260630_003"
+    assert manifest["migration_artifact_version"] == "20260701_002"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -279,6 +290,8 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260630_001_default_knowledge_base_name",
         "20260630_002_default_business_view",
         "20260630_003_document_recipes",
+        "20260701_001_general_feedback",
+        "20260701_002_conversation_titles",
     ]
 
 

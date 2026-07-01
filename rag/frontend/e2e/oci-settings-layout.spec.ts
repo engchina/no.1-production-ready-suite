@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expectMainScrollEndsAtContent, expectNoPageOverflow } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -329,6 +330,8 @@ for (const viewport of [
     await expectActionInsideCard(page, "OCI 認証設定", authTestButton);
     await expectActionInsideCard(page, "Object Storage", storageSaveButton);
     await expectActionInsideCard(page, ".env プレビュー", copyButton);
+    await expectNoPageOverflow(page);
+    await expectMainScrollEndsAtContent(page);
   });
 }
 

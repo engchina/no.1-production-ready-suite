@@ -47,13 +47,18 @@ def audit_request_context_from_headers(
     *,
     request_id: str,
     settings: Settings | None = None,
+    authenticated_user_id: str | None = None,
+    default_user_id: str | None = None,
+    allow_user_header: bool = True,
 ) -> AuditRequestContext:
     """HTTP header から監査用 context を作る。raw id は保存しない。"""
     resolved_settings = settings or get_settings()
+    header_user_id = headers.get(USER_ID_HEADER) if allow_user_header else None
+    user_id = authenticated_user_id or header_user_id or default_user_id
     return AuditRequestContext(
         request_id=request_id,
         tenant_id_hash=_header_hash(headers.get(TENANT_ID_HEADER), resolved_settings),
-        user_id_hash=_header_hash(headers.get(USER_ID_HEADER), resolved_settings),
+        user_id_hash=_header_hash(user_id, resolved_settings),
         role_id_hash=_header_hash(headers.get(ROLE_ID_HEADER), resolved_settings),
         agent_id_hash=_header_hash(headers.get(AGENT_ID_HEADER), resolved_settings),
         thread_id_hash=_header_hash(headers.get(THREAD_ID_HEADER), resolved_settings),
