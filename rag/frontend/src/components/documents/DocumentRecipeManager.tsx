@@ -24,7 +24,9 @@ import {
   canDeleteRecipe,
   recipeConfigLocked,
   recipeIsActive,
+  recipeLayerStatuses,
   resolveSelectedRecipe,
+  type RecipeLayerStatusView,
 } from "./DocumentRecipeManager.logic";
 import { CitationCard, scoreMaximaForCitations } from "@/components/search/CitationCard";
 import { Banner } from "@/components/ui/banner";
@@ -36,7 +38,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   api,
+  type DocumentChunkSet,
   type DocumentIngestionConfigData,
+  type DocumentLayerStatusName,
   type DocumentRecipeStep,
   type DocumentRecipeView,
   type IngestionJobPhase,
@@ -85,6 +89,7 @@ export function DocumentRecipeManager({
   loading,
   error,
   onRetry,
+  chunkSets,
 }: {
   documentId: string;
   recipes: DocumentRecipeView[];
@@ -93,6 +98,7 @@ export function DocumentRecipeManager({
   loading: boolean;
   error: unknown;
   onRetry: () => void;
+  chunkSets?: DocumentChunkSet[];
 }) {
   const selected = resolveSelectedRecipe(recipes, selectedRecipeId);
   const createRecipe = useCreateDocumentRecipe();
@@ -261,6 +267,7 @@ export function DocumentRecipeManager({
                 </span>
               ) : null}
             </div>
+            <RecipeLayerStatusChips statuses={recipeLayerStatuses(selected, chunkSets)} />
             <p className="mt-1 text-xs text-muted">
               {t("documents.recipes.updated", { time: formatDateTime(selected.updated_at) })}
             </p>
@@ -473,6 +480,52 @@ function RecipeStatusBadge({ recipe }: { recipe: DocumentRecipeView }) {
       <Icon size={12} className={status.spin ? "animate-spin" : undefined} aria-hidden />
       {t(status.label)}
     </span>
+  );
+}
+
+const LAYER_LABEL_KEYS: Record<RecipeLayerStatusView["layer"], I18nKey> = {
+  metadata: "knowledgeBases.variant.layer.metadata",
+  graph: "knowledgeBases.variant.layer.graph",
+  navigation: "knowledgeBases.variant.layer.navigation",
+};
+
+const LAYER_STATUS_LABEL_KEYS: Record<DocumentLayerStatusName, I18nKey> = {
+  not_requested: "knowledgeBases.variant.layerStatus.not_requested",
+  planned_only: "knowledgeBases.variant.layerStatus.planned_only",
+  materialized: "knowledgeBases.variant.layerStatus.materialized",
+  needs_reingest: "knowledgeBases.variant.layerStatus.needs_reingest",
+  error: "knowledgeBases.variant.layerStatus.error",
+};
+
+const LAYER_STATUS_TONES: Record<DocumentLayerStatusName, string> = {
+  not_requested: "bg-muted/10 text-muted",
+  planned_only: "bg-warning-bg text-warning",
+  materialized: "bg-success-bg text-success",
+  needs_reingest: "bg-warning-bg text-warning",
+  error: "bg-danger-bg text-danger",
+};
+
+/** 派生 layer(項目抽出/関係情報/ナビ)の実体化状態チップ。reason は title で開示する。 */
+function RecipeLayerStatusChips({ statuses }: { statuses: RecipeLayerStatusView[] }) {
+  if (!statuses.length) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5" data-testid="recipe-layer-statuses">
+      {statuses.map((entry) => (
+        <span
+          key={entry.layer}
+          title={entry.reason ?? undefined}
+          data-testid={`recipe-layer-${entry.layer}`}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+            LAYER_STATUS_TONES[entry.status]
+          )}
+        >
+          {t(LAYER_LABEL_KEYS[entry.layer])}
+          <span aria-hidden>·</span>
+          {t(LAYER_STATUS_LABEL_KEYS[entry.status])}
+        </span>
+      ))}
+    </div>
   );
 }
 

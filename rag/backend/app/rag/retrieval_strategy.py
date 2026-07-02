@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 from app.config import Settings
-from app.rag.graph_adapter import resolve_graph_adapter
 from app.schemas.search import SearchMode, SearchRequest, SearchStrategy
 
 
@@ -24,55 +23,23 @@ def resolve_retrieval_strategy(
     settings: Settings,
     query: str,
 ) -> ResolvedRetrievalStrategy:
-    """SearchRequest.strategy を現行 retrieval 実装へ解決する。"""
-    _ = query
+    """SearchRequest.strategy を現行 retrieval 実装へ解決する。
+
+    graph 経路の可否はグローバル設定でゲートしない。構築深度は文書レシピ単位のため、
+    query 時の Settings(global + Business View overlay)では判定できない。明示要求
+    (request 明示 or 検索方法 graph_augmented の bias)はそのまま通し、実データの
+    有無は pipeline 側の graph SQL 実行結果で判断する(空なら hybrid へ縮退)。
+    """
+    _ = query, settings
     requested = request.strategy
-    if requested == SearchStrategy.HYBRID:
-        return ResolvedRetrievalStrategy(
-            strategy=SearchStrategy.HYBRID,
-            mode=request.mode,
-            route_reason="configured_hybrid",
-        )
     if requested in (SearchStrategy.GRAPH_LOCAL, SearchStrategy.GRAPH_GLOBAL):
-        return _resolve_graph_strategy(
-            requested,
-            settings=settings,
+        return ResolvedRetrievalStrategy(
+            strategy=requested,
+            mode=request.mode,
             route_reason=f"explicit_{requested.value}",
-            fallback_mode=request.mode,
         )
     return ResolvedRetrievalStrategy(
         strategy=SearchStrategy.HYBRID,
         mode=request.mode,
         route_reason="configured_hybrid",
-    )
-
-
-def _resolve_graph_strategy(
-    requested: SearchStrategy,
-    *,
-    settings: Settings,
-    route_reason: str,
-    fallback_mode: SearchMode = SearchMode.HYBRID,
-) -> ResolvedRetrievalStrategy:
-    """GraphRAG-lite が未有効、または要求経路の構築物が無ければ既存 retrieval へ戻す。"""
-    params = resolve_graph_adapter(settings)
-    if not params.enabled:
-        return ResolvedRetrievalStrategy(
-            strategy=SearchStrategy.HYBRID,
-            mode=fallback_mode,
-            route_reason=route_reason,
-            fallback_reason="graph_disabled",
-        )
-    # GRAPH_GLOBAL は community summary を引くため、entities では未構築になり空振りする。
-    if requested == SearchStrategy.GRAPH_GLOBAL and not params.build_community_summaries:
-        return ResolvedRetrievalStrategy(
-            strategy=SearchStrategy.HYBRID,
-            mode=fallback_mode,
-            route_reason=route_reason,
-            fallback_reason="graph_community_summary_unavailable",
-        )
-    return ResolvedRetrievalStrategy(
-        strategy=requested,
-        mode=fallback_mode,
-        route_reason=route_reason,
     )

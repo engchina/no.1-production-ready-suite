@@ -984,6 +984,7 @@ export function DocumentWorkspace({
           loading={recipesQuery.isPending}
           error={recipesQuery.error}
           onRetry={() => void recipesQuery.refetch()}
+          chunkSets={chunkSetsQuery.data}
         />
         {shouldShowProcessingWatchBanner({
           watchProcessing,

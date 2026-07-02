@@ -270,6 +270,113 @@ async def test_pipeline_falls_back_to_hybrid_when_graph_has_no_hits() -> None:
     assert response.diagnostics.fallback_reason == "graph_no_hits"
 
 
+async def test_pipeline_degrades_graph_global_to_local_when_community_missing() -> None:
+    """community summary 未構築(entities 構築)でも entity graph へ縮退して graph を使う。"""
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=GlobalEmptyLocalHitOracleClient(),
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_graph_profile="entities",
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="全体の関係をまとめて",
+            strategy=SearchStrategy.GRAPH_GLOBAL,
+            top_k=3,
+            rerank_top_n=1,
+        )
+    )
+
+    assert response.citations[0].metadata["retrieval_mode"] == "graph_local"
+    assert response.diagnostics.retrieval_strategy == "graph_local"
+    assert response.diagnostics.graph_hit_count == 1
+    assert response.diagnostics.fallback_reason == "graph_global_degraded_to_local"
+
+
+async def test_pipeline_uses_graph_local_even_when_global_profile_off() -> None:
+    """global rag_graph_profile=off でも、レシピ構築済み graph を明示要求で使える。"""
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=GraphLocalOracleClient(),
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_graph_profile="off",
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="承認条件の関係",
+            strategy=SearchStrategy.GRAPH_LOCAL,
+            top_k=3,
+            rerank_top_n=1,
+        )
+    )
+
+    assert response.citations[0].metadata["retrieval_mode"] == "graph_local"
+    assert response.diagnostics.retrieval_strategy == "graph_local"
+    assert response.diagnostics.graph_hit_count == 1
+    assert response.diagnostics.fallback_reason is None
+
+
+async def test_pipeline_graph_global_falls_back_to_hybrid_when_all_empty() -> None:
+    """global も local も空なら hybrid へ戻り graph_no_hits を報告する。"""
+    oracle = EmptyGraphOracleClient()
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=oracle,
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(
+            query="関係を説明して",
+            strategy=SearchStrategy.GRAPH_GLOBAL,
+            top_k=3,
+            rerank_top_n=1,
+        )
+    )
+
+    assert oracle.hybrid_called is True
+    assert response.diagnostics.retrieval_strategy == "hybrid"
+    assert response.diagnostics.graph_hit_count == 0
+    assert response.diagnostics.fallback_reason == "graph_no_hits"
+
+
+async def test_pipeline_graph_augmented_bias_reaches_entity_graph() -> None:
+    """検索方法 graph_augmented(BV 上書き相当)が entities 構築の graph まで届く。"""
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=GlobalEmptyLocalHitOracleClient(),
+        llm=GroundedLlm(),
+        settings=Settings.model_construct(
+            rag_retrieval_strategy="graph_augmented",
+            rag_graph_profile="off",
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+        ),
+    )
+
+    response = await pipeline.run(
+        SearchRequest(query="全体の関係をまとめて", top_k=3, rerank_top_n=1)
+    )
+
+    assert response.citations[0].metadata["retrieval_mode"] == "graph_local"
+    assert response.diagnostics.retrieval_strategy == "graph_local"
+    assert response.diagnostics.fallback_reason == "graph_global_degraded_to_local"
+
+
 async def test_pipeline_reranks_vector_search_results_with_oci_genai() -> None:
     """vector search の候補も OCI Generative AI rerank で並び替える。"""
     genai = VectorRerankGenAiClient()
@@ -1834,6 +1941,52 @@ class GraphGlobalOracleClient(OracleClient):
         raise AssertionError("graph hit がある場合は baseline fallback しない")
 
 
+class GraphLocalOracleClient(OracleClient):
+    """Graph local route の citation を返す Oracle client。"""
+
+    async def graph_local_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-graph",
+                chunk_id="entity:ent-1",
+                text="承認条件は 120000 円です。承認者はエンティティ経由で関連づく。",
+                score=0.95,
+                file_name="承認条件 entity",
+                metadata={"retrieval_mode": "graph_local", "graph_entity_id": "ent-1"},
+            )
+        ][:top_k]
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, top_k, mode, filters
+        raise AssertionError("graph hit がある場合は baseline fallback しない")
+
+
+class GlobalEmptyLocalHitOracleClient(GraphLocalOracleClient):
+    """community summary 未構築で global は空、entity graph は命中する Oracle client。"""
+
+    async def graph_global_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, top_k, filters
+        return []
+
+
 class EmptyGraphOracleClient(OracleClient):
     """Graph local が空で baseline に戻る Oracle client。"""
 
@@ -1842,6 +1995,15 @@ class EmptyGraphOracleClient(OracleClient):
         self.hybrid_called = False
 
     async def graph_local_search(
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, top_k, filters
+        return []
+
+    async def graph_global_search(
         self,
         query: str,
         top_k: int,

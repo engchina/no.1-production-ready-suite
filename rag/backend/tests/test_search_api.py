@@ -255,6 +255,13 @@ def test_search_request_rejects_unknown_content_kind_filter() -> None:
         SearchRequest(query="料金表", filters={"content_kind": "chart"})
 
 
+def test_search_request_accepts_synthetic_content_kind_filters() -> None:
+    """取込機能が生む合成 chunk(抽出項目/章節要約)も filter に指定できる。"""
+    for kind in ("field", "section_summary"):
+        request = SearchRequest(query="料金表", filters={"content_kind": kind})
+        assert request.filters == {"content_kind": kind}
+
+
 def test_search_request_normalizes_knowledge_base_ids() -> None:
     """knowledge_base_ids は重複排除され、既存 filters 経路にも同期される。"""
     request = SearchRequest(

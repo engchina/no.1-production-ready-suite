@@ -31,6 +31,7 @@ from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, OracleClient
 from app.config import CHUNKING_STRATEGIES_WITH_MIN_CHARS, Settings, get_settings
 from app.db_degradation import load_or_degrade
+from app.rag.extraction_field_adapter import load_field_schema
 from app.rag.ingestion import (
     IngestionCancelledError,
     IngestionPipeline,
@@ -3031,6 +3032,7 @@ async def _reconcile_plan_artifact_layers(
                     layer=layer,
                     user_label=user_label,
                     detail=detail,
+                    settings=effective_settings,
                 )
                 await oracle.upsert_artifact_layer(
                     layer_id=layer_id,
@@ -3049,6 +3051,7 @@ def _materialized_layer_state(
     layer: str,
     user_label: str,
     detail: DocumentDetail,
+    settings: Settings,
 ) -> tuple[DocumentLayerStatusName, str]:
     if not detail.extraction:
         return (
@@ -3058,11 +3061,8 @@ def _materialized_layer_state(
                 "現在の構築設定で再取込してください。"
             ),
         )
-    if layer == "metadata" and _metadata_layer_is_materialized(detail.extraction):
-        return (
-            DocumentLayerStatusName.MATERIALIZED,
-            f"{user_label}は保存済み抽出 artifact から実体化済みです。",
-        )
+    if layer == "metadata":
+        return _metadata_layer_state(user_label, detail.extraction, settings)
     if layer == "navigation":
         node_count = _navigation_node_count(detail.extraction)
         if node_count > 0:
@@ -3083,9 +3083,55 @@ def _materialized_layer_state(
     )
 
 
-def _metadata_layer_is_materialized(extraction: Mapping[str, object]) -> bool:
-    """field / asset summary 由来の metadata layer が実 payload を持つかを見る。"""
-    return any(bool(extraction.get(key)) for key in ("fields", "assets", "asset_summary"))
+def _metadata_layer_state(
+    user_label: str,
+    extraction: Mapping[str, object],
+    settings: Settings,
+) -> tuple[DocumentLayerStatusName, str]:
+    """項目抽出と図表要約を機能別に判定し、有効な機能すべてに成果物があれば実体化とする。"""
+    field_enabled = bool(getattr(settings, "rag_field_extraction_enabled", False))
+    asset_enabled = bool(getattr(settings, "rag_asset_summary_enabled", False))
+    reasons: list[str] = []
+    if field_enabled and not _fields_materialized(extraction):
+        if not load_field_schema().fields:
+            reasons.append(
+                "項目抽出は有効ですが、抽出する項目定義(スキーマ)が未設定のため実行されません。"
+                "検索・回答設定で項目定義を登録してから再取込してください"
+            )
+        else:
+            reasons.append("項目抽出の成果物がまだありません")
+    if asset_enabled and not _asset_summaries_materialized(extraction):
+        reasons.append("図表要約の成果物がまだありません")
+    if reasons:
+        return (DocumentLayerStatusName.PLANNED_ONLY, "。".join(reasons) + "。")
+    if field_enabled or asset_enabled:
+        return (
+            DocumentLayerStatusName.MATERIALIZED,
+            f"{user_label}は保存済み抽出 artifact から実体化済みです。",
+        )
+    # どちらも無効なのに layer が要求された場合は旧来の payload 有無で判定する。
+    if _fields_materialized(extraction) or _asset_summaries_materialized(extraction):
+        return (
+            DocumentLayerStatusName.MATERIALIZED,
+            f"{user_label}は保存済み抽出 artifact から実体化済みです。",
+        )
+    return (
+        DocumentLayerStatusName.PLANNED_ONLY,
+        f"{user_label}は構築計画に含まれていますが、まだ実体化していません。",
+    )
+
+
+def _fields_materialized(extraction: Mapping[str, object]) -> bool:
+    return bool(extraction.get("fields"))
+
+
+def _asset_summaries_materialized(extraction: Mapping[str, object]) -> bool:
+    assets = extraction.get("assets")
+    if isinstance(assets, Sequence):
+        for asset in assets:
+            if isinstance(asset, Mapping) and asset.get("summary"):
+                return True
+    return bool(extraction.get("asset_summary"))
 
 
 def _layer_metrics(layer: str, extraction: Mapping[str, object] | None) -> dict[str, object]:

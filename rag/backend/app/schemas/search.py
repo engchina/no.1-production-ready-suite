@@ -62,6 +62,9 @@ SUPPORTED_CONTENT_KIND_FILTERS = {
     "email",
     "slide",
     "sheet",
+    # 取込機能が生む合成 chunk(項目抽出 / 章節ナビゲーション要約)
+    "field",
+    "section_summary",
 }
 
 

@@ -1,4 +1,8 @@
-import type { DocumentRecipeView } from "@/lib/api";
+import type {
+  DocumentChunkSet,
+  DocumentLayerStatusName,
+  DocumentRecipeView,
+} from "@/lib/api";
 
 export function resolveSelectedRecipe(
   recipes: DocumentRecipeView[],
@@ -24,5 +28,30 @@ export function canAddRecipe(recipeCount: number) {
 
 export function canDeleteRecipe(recipeCount: number, active: boolean) {
   return recipeCount > 1 && !active;
+}
+
+const LAYER_ORDER = ["metadata", "graph", "navigation"] as const;
+
+export type RecipeLayerName = (typeof LAYER_ORDER)[number];
+
+export interface RecipeLayerStatusView {
+  layer: RecipeLayerName;
+  status: DocumentLayerStatusName;
+  reason: string | null;
+}
+
+/** 選択レシピの active chunk_set から派生 layer(項目抽出/関係情報/ナビ)の状態を引く。 */
+export function recipeLayerStatuses(
+  recipe: DocumentRecipeView,
+  chunkSets: DocumentChunkSet[] | undefined
+): RecipeLayerStatusView[] {
+  if (!recipe.active_chunk_set_id || !chunkSets?.length) return [];
+  const chunkSet = chunkSets.find((set) => set.chunk_set_id === recipe.active_chunk_set_id);
+  if (!chunkSet?.layer_statuses) return [];
+  return LAYER_ORDER.flatMap((layer) => {
+    const status = chunkSet.layer_statuses[layer];
+    if (!status?.requested || status.status === "not_requested") return [];
+    return [{ layer, status: status.status, reason: status.reason }];
+  });
 }
 

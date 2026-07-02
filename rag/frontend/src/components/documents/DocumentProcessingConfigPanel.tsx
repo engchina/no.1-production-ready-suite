@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
+  useExtractionFieldsSettings,
   useUpdateDocumentIngestionConfig,
   useUpdateDocumentRecipe,
 } from "@/lib/queries";
@@ -227,6 +228,13 @@ export function DocumentProcessingConfigPanel({
     [configs, form]
   );
 
+  // 項目抽出が実効 ON のときだけスキーマ定義を引き、空なら無言 no-op を警告する。
+  const fieldExtractionEffective =
+    form.field_extraction_enabled ?? configs?.effective.field_extraction_enabled ?? false;
+  const fieldSchemaQuery = useExtractionFieldsSettings(expanded && fieldExtractionEffective);
+  const fieldSchemaEmpty =
+    fieldExtractionEffective && fieldSchemaQuery.data?.fields.length === 0;
+
   const update = (patch: Partial<DocumentProcessingConfig>) =>
     setForm((current) => ({ ...current, ...patch }));
 
@@ -376,6 +384,9 @@ export function DocumentProcessingConfigPanel({
                   effectiveValue={configs.effective.field_extraction_enabled}
                   disabled={disabled}
                   onChange={(value) => update({ field_extraction_enabled: value })}
+                  warning={
+                    fieldSchemaEmpty ? t("documents.processingConfig.fieldSchemaEmpty") : null
+                  }
                 />
                 <BooleanRow
                   id={`document-asset-${documentId}`}
@@ -529,6 +540,7 @@ function BooleanRow({
   effectiveValue,
   disabled,
   onChange,
+  warning = null,
 }: {
   id: string;
   label: string;
@@ -536,6 +548,7 @@ function BooleanRow({
   effectiveValue: boolean | null;
   disabled: boolean;
   onChange: (value: boolean | null) => void;
+  warning?: string | null;
 }) {
   const overriding = value !== null;
   const lastOverride = useRef(value ?? effectiveValue ?? true);
@@ -575,6 +588,7 @@ function BooleanRow({
           {t("knowledgeBases.adapter.inheritResolved", { value: boolLabel(effectiveValue) })}
         </p>
       )}
+      {warning ? <FormStatus tone="warning" className="text-xs" message={warning} /> : null}
     </div>
   );
 }

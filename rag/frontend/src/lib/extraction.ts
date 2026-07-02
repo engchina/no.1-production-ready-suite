@@ -1,6 +1,8 @@
 import type {
   DocumentElement,
+  DocumentNavigationNode,
   ExtractionAsset,
+  ExtractionField,
   ExtractionPage,
   ExtractionTable,
   ExtractionTableCell,
@@ -30,6 +32,8 @@ export interface ParsedStructuredExtraction {
   pages: ExtractionPage[];
   tables: ExtractionTable[];
   assets: ExtractionAsset[];
+  navigation: DocumentNavigationNode[];
+  fields: ExtractionField[];
   parserArtifacts: Record<string, JsonScalar>;
   sourceDerivation: SourceDerivationView | null;
 }
@@ -56,6 +60,8 @@ export function parseStructuredExtraction(input: unknown): ParsedStructuredExtra
   const pages = parsePages(source.pages);
   const tables = parseTables(source.tables);
   const assets = parseAssets(source.assets);
+  const navigation = parseNavigation(source.navigation);
+  const fields = parseFields(source.fields);
 
   return {
     rawText,
@@ -66,6 +72,8 @@ export function parseStructuredExtraction(input: unknown): ParsedStructuredExtra
     pages,
     tables,
     assets,
+    navigation,
+    fields,
     parserArtifacts: metadataValue(source.parser_artifacts),
     sourceDerivation: parseSourceDerivation(source.parser_artifacts),
   };
@@ -223,10 +231,50 @@ function parseAssets(value: unknown): ExtractionAsset[] {
         page_number: integerValue(source.page_number, 1),
         bbox: numberArrayValue(source.bbox),
         alt_text: stringValue(source.alt_text) || null,
+        summary: stringValue(source.summary) || null,
         metadata: metadataValue(source.metadata),
       };
     })
     .filter((item): item is ExtractionAsset => item != null);
+}
+
+function parseNavigation(value: unknown): DocumentNavigationNode[] {
+  return arrayValue(value)
+    .map((item): DocumentNavigationNode | null => {
+      const source = recordValue(item);
+      const sectionId = stringValue(source.section_id);
+      const title = stringValue(source.title);
+      if (!sectionId || !title) return null;
+      return {
+        section_id: sectionId,
+        title,
+        section_path: arrayValue(source.section_path).map(String).filter(Boolean),
+        depth: integerValue(source.depth) ?? 0,
+        parent_section_id: stringValue(source.parent_section_id) || null,
+        page_start: integerValue(source.page_start, 1),
+        page_end: integerValue(source.page_end, 1),
+        summary: stringValue(source.summary) || null,
+      };
+    })
+    .filter((item): item is DocumentNavigationNode => item != null);
+}
+
+function parseFields(value: unknown): ExtractionField[] {
+  return arrayValue(value)
+    .map((item): ExtractionField | null => {
+      const source = recordValue(item);
+      const name = stringValue(source.name);
+      const fieldValue = stringValue(source.value);
+      if (!name || !fieldValue) return null;
+      return {
+        name,
+        value: fieldValue,
+        value_type: stringValue(source.value_type) || "string",
+        confidence: numberValue(source.confidence, 0, 1),
+        page_number: integerValue(source.page_number, 1),
+      };
+    })
+    .filter((item): item is ExtractionField => item != null);
 }
 
 function recordValue(value: unknown): Record<string, unknown> {
