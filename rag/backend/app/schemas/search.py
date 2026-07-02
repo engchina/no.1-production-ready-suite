@@ -227,6 +227,9 @@ class SearchDiagnostics(BaseModel):
     mode: str = ""
     retrieval_strategy: str = "hybrid"
     retrieval_strategy_adapter: str = "hybrid_rrf"
+    # 検索方法の有効トグル(query_expansion / gap_stop / corrective_retrieval /
+    # business_fit_weighting)。settings トグル OR legacy 強制トグルの合成結果。
+    retrieval_toggles: dict[str, bool] = Field(default_factory=dict)
     post_retrieval_pipeline: str = "custom"
     generation_profile: str = "grounded_concise"
     guardrail_policy: str = "standard"
@@ -394,7 +397,10 @@ def _validate_filter_range_consistency(filters: dict[str, str]) -> None:
     high = filters.get("page_number_max")
     if low and high and int(low) > int(high):
         raise ValueError("page_number_min は page_number_max 以下にしてください。")
-    for from_key, to_key in (("uploaded_from", "uploaded_to"), ("indexed_from", "indexed_to")):
+    for from_key, to_key in (
+        ("uploaded_from", "uploaded_to"),
+        ("indexed_from", "indexed_to"),
+    ):
         start = filters.get(from_key)
         end = filters.get(to_key)
         if start and end and _filter_date_sort_key(start) > _filter_date_sort_key(end):

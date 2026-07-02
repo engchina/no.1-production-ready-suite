@@ -23,6 +23,21 @@ RETRIEVAL_STRATEGIES: tuple[str, ...] = (
 )
 DEFAULT_RETRIEVAL_STRATEGY = "hybrid_rrf"
 
+# 検索モード(排他選択)。legacy 複合戦略(business_context_strict /
+# corrective_multi_query)は「モード + 合成トグル」へ分解して読み取る。
+RETRIEVAL_MODES: tuple[str, ...] = (
+    "hybrid_rrf",
+    "vector",
+    "keyword",
+    "graph_augmented",
+)
+
+# legacy 複合戦略 -> 分解先の強制トグル(モードは hybrid_rrf 固定)。
+_LEGACY_STRATEGY_FORCED_TOGGLES: dict[str, frozenset[str]] = {
+    "business_context_strict": frozenset({"gap_stop", "business_fit_weighting"}),
+    "corrective_multi_query": frozenset({"query_expansion", "corrective_retrieval"}),
+}
+
 
 @dataclass(frozen=True)
 class RetrievalSpec:
@@ -44,19 +59,19 @@ RETRIEVAL_SPECS: dict[str, RetrievalSpec] = {
     "hybrid_rrf": RetrievalSpec(
         "hybrid_rrf", "oracle_hybrid_rrf", ("general", "faq", "policy")
     ),
+    # vector/keyword でも query expansion(多 variant RRF 融合)はモード非依存に機能する
+    # ため強制 False にせず settings のトグルへ従う(合成可能トグル化)。
     "vector": RetrievalSpec(
         "vector",
         "oracle_ai_vector_search",
         ("semantic", "paraphrase"),
         mode_override="vector",
-        query_expansion=False,
     ),
     "keyword": RetrievalSpec(
         "keyword",
         "oracle_text",
         ("named_entity", "regulation"),
         mode_override="keyword",
-        query_expansion=False,
     ),
     "graph_augmented": RetrievalSpec(
         "graph_augmented",
@@ -99,6 +114,46 @@ RETRIEVAL_SPECS: dict[str, RetrievalSpec] = {
 WIRED_RETRIEVAL_STRATEGIES: tuple[str, ...] = tuple(
     name for name in RETRIEVAL_STRATEGIES if not RETRIEVAL_SPECS[name].pending_execution
 )
+
+# 設定 API が保存を受理する検索モード(すべて配線済み)。
+WIRED_RETRIEVAL_MODES: tuple[str, ...] = RETRIEVAL_MODES
+
+
+@dataclass(frozen=True)
+class RetrievalDecomposed:
+    """strategy 値を「モード + 強制トグル」へ分解した結果。
+
+    legacy 複合戦略のとき forced_* が立ち、呼び出し側が settings トグルと OR 合成する
+    (legacy 挙動の厳密再現)。legacy_strategy は分解元の複合戦略名(新形式なら None)。
+    """
+
+    mode: str
+    forced_query_expansion: bool = False
+    forced_gap_stop: bool = False
+    forced_corrective_retrieval: bool = False
+    forced_business_fit_weighting: bool = False
+    legacy_strategy: str | None = None
+
+
+def decompose_retrieval_strategy(value: object) -> RetrievalDecomposed:
+    """strategy 値(legacy 複合値・未知値込み)を検索モード + 強制トグルへ分解する。
+
+    保存は新形式(モード + トグル)のみだが、.env / Business View JSON /
+    per-request に残る legacy 値は読み取り互換で受ける。未配線・未知値は
+    既定モードへ縮退する(従来の normalize と同じ寛容さ)。
+    """
+    name = normalize_retrieval_strategy(value)
+    if name in RETRIEVAL_MODES:
+        return RetrievalDecomposed(mode=name)
+    forced = _LEGACY_STRATEGY_FORCED_TOGGLES.get(name, frozenset())
+    return RetrievalDecomposed(
+        mode=DEFAULT_RETRIEVAL_STRATEGY,
+        forced_query_expansion="query_expansion" in forced,
+        forced_gap_stop="gap_stop" in forced,
+        forced_corrective_retrieval="corrective_retrieval" in forced,
+        forced_business_fit_weighting="business_fit_weighting" in forced,
+        legacy_strategy=name if forced else None,
+    )
 
 
 @dataclass(frozen=True)

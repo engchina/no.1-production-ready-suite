@@ -697,8 +697,21 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
     assert "RAG_CHUNK_DELIMITER=---" in env_file.read_text(encoding="utf-8")
 
 
-def test_retrieval_settings_reports_runtime_strategy(monkeypatch: MonkeyPatch) -> None:
-    """Retrieval 設定 API は選択戦略・解決手法・戦略一覧を返す。"""
+def _patch_retrieval_toggle_fields(monkeypatch: MonkeyPatch, settings: object) -> None:
+    """PATCH が現在プロセスへ反映するトグル群をテスト間で汚さないよう退避する。"""
+    for field in (
+        "rag_query_expansion_enabled",
+        "rag_retrieval_gap_stop_enabled",
+        "rag_retrieval_corrective_enabled",
+        "rag_retrieval_business_fit_weighting_enabled",
+    ):
+        monkeypatch.setattr(settings, field, getattr(settings, field))
+
+
+def test_retrieval_settings_reports_legacy_strategy_as_mode_and_toggles(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """GET は legacy 複合値をモード + 有効トグルへ読み替え、読み替え元を提示する。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_retrieval_strategy", "business_context_strict")
 
@@ -706,35 +719,113 @@ def test_retrieval_settings_reports_runtime_strategy(monkeypatch: MonkeyPatch) -
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["strategy"] == "business_context_strict"
+    assert body["mode"] == "hybrid_rrf"
+    assert body["legacy_strategy"] == "business_context_strict"
     assert body["gap_stop"] is True
     assert body["business_fit_weighting"] is True
-    names = [item["name"] for item in body["strategies"]]
-    assert names[0] == "hybrid_rrf"
-    assert "corrective_multi_query" in names
+    mode_names = [item["name"] for item in body["modes"]]
+    assert mode_names == ["hybrid_rrf", "vector", "keyword", "graph_augmented"]
     # 未配線戦略は設定 API の一覧へ出さない。
+    names = [item["name"] for item in body["strategies"]]
     assert "reasoning_tree_search" not in names
     assert "colpali_visual_retrieval" not in names
-    selected = [item["name"] for item in body["strategies"] if item["selected"]]
-    assert selected == ["business_context_strict"]
+    selected_modes = [item["name"] for item in body["modes"] if item["selected"]]
+    assert selected_modes == ["hybrid_rrf"]
 
 
-def test_update_retrieval_settings_persists_env_and_mutates_runtime(
+def test_retrieval_settings_reports_new_form_without_legacy(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_retrieval_strategy", "keyword")
+    monkeypatch.setattr(settings, "rag_retrieval_corrective_enabled", True)
+
+    resp = client.get("/api/settings/retrieval")
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["mode"] == "keyword"
+    assert body["legacy_strategy"] is None
+    assert body["corrective_retrieval"] is True
+
+
+def test_update_retrieval_settings_persists_mode_and_toggles(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """新形式 payload(mode + トグル)が .env の 5 キーへ永続化される。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_retrieval_strategy", "hybrid_rrf")
+    _patch_retrieval_toggle_fields(monkeypatch, settings)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch(
+        "/api/settings/retrieval",
+        json={"mode": "graph_augmented", "corrective_retrieval": True, "gap_stop": False},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["mode"] == "graph_augmented"
+    assert body["corrective_retrieval"] is True
+    assert body["legacy_strategy"] is None
+    assert settings.rag_retrieval_strategy == "graph_augmented"
+    assert settings.rag_retrieval_corrective_enabled is True
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_RETRIEVAL_STRATEGY=graph_augmented" in env_text
+    assert "RAG_RETRIEVAL_CORRECTIVE_ENABLED=true" in env_text
+    assert "RAG_RETRIEVAL_GAP_STOP_ENABLED=false" in env_text
+    assert "RAG_QUERY_EXPANSION_ENABLED=" in env_text
+    assert "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED=" in env_text
+
+
+def test_update_retrieval_settings_accepts_legacy_payload_and_normalizes(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """移行期間の legacy payload(strategy)はモード + トグルへ分解して新形式で保存する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_retrieval_strategy", "hybrid_rrf")
+    _patch_retrieval_toggle_fields(monkeypatch, settings)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     resp = client.patch("/api/settings/retrieval", json={"strategy": "corrective_multi_query"})
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["strategy"] == "corrective_multi_query"
+    assert body["mode"] == "hybrid_rrf"
     assert body["corrective_retrieval"] is True
-    assert settings.rag_retrieval_strategy == "corrective_multi_query"
-    assert "RAG_RETRIEVAL_STRATEGY=corrective_multi_query" in env_file.read_text(encoding="utf-8")
+    assert body["query_expansion"] is True
+    # 保存後は新形式なので legacy 読み替え表示は不要になる。
+    assert body["legacy_strategy"] is None
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_RETRIEVAL_STRATEGY=hybrid_rrf" in env_text
+    assert "RAG_RETRIEVAL_CORRECTIVE_ENABLED=true" in env_text
+
+
+def test_update_retrieval_settings_normalizes_legacy_env_on_toggle_save(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """.env に legacy 複合値が残っていても、保存を通るとモードへ正規化される。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_retrieval_strategy", "business_context_strict")
+    _patch_retrieval_toggle_fields(monkeypatch, settings)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch("/api/settings/retrieval", json={"query_expansion": False})
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["mode"] == "hybrid_rrf"
+    assert body["legacy_strategy"] is None
+    # legacy の強制トグルは正規化時に明示 ON として引き継ぐ。
+    assert body["gap_stop"] is True
+    assert body["business_fit_weighting"] is True
+    assert body["query_expansion"] is False
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_RETRIEVAL_STRATEGY=hybrid_rrf" in env_text
+    assert "RAG_RETRIEVAL_GAP_STOP_ENABLED=true" in env_text
+    assert "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED=true" in env_text
+    assert "RAG_QUERY_EXPANSION_ENABLED=false" in env_text
 
 
 def test_update_retrieval_settings_rejects_unknown_strategy() -> None:
@@ -742,9 +833,19 @@ def test_update_retrieval_settings_rejects_unknown_strategy() -> None:
     assert resp.status_code == 422
 
 
+def test_update_retrieval_settings_rejects_unknown_mode() -> None:
+    resp = client.patch("/api/settings/retrieval", json={"mode": "business_context_strict"})
+    assert resp.status_code == 422
+
+
 def test_update_retrieval_settings_rejects_pending_strategy() -> None:
     """未配線(pending_execution)戦略は wired のみ受理のため 422。"""
     resp = client.patch("/api/settings/retrieval", json={"strategy": "reasoning_tree_search"})
+    assert resp.status_code == 422
+
+
+def test_update_retrieval_settings_rejects_empty_payload() -> None:
+    resp = client.patch("/api/settings/retrieval", json={})
     assert resp.status_code == 422
 
 

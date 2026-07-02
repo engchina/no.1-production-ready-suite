@@ -16,7 +16,10 @@ from app.config import Settings, enterprise_ai_default_model_id, get_settings
 from app.rag.agentic_adapter import resolve_agentic_adapter
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.generation_adapter import resolve_generation_adapter, validate_structured_answer
+from app.rag.generation_adapter import (
+    resolve_generation_adapter,
+    validate_structured_answer,
+)
 from app.rag.graph_adapter import resolve_graph_adapter
 from app.rag.grounding_adapter import GroundingAdapterParams, resolve_grounding_adapter
 from app.rag.guardrails import GuardrailPolicy
@@ -40,7 +43,10 @@ from app.rag.observability import (
 from app.rag.query_transform import expand_retrieval_queries
 from app.rag.request_context import current_audit_request_context
 from app.rag.retrieval_adapter import RetrievalAdapterParams, resolve_retrieval_adapter
-from app.rag.retrieval_strategy import ResolvedRetrievalStrategy, resolve_retrieval_strategy
+from app.rag.retrieval_strategy import (
+    ResolvedRetrievalStrategy,
+    resolve_retrieval_strategy,
+)
 from app.schemas.common import JsonValue
 from app.schemas.search import (
     RetrievedChunk,
@@ -270,6 +276,7 @@ class RagPipeline:
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 retrieval_strategy_adapter=retrieval_params.strategy,
+                retrieval_toggles=_retrieval_toggles(retrieval_params),
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -431,6 +438,7 @@ class RagPipeline:
                     retrieval_breakdown=retrieval_breakdown,
                     retrieval_candidates=retrieval_candidates,
                     retrieval_strategy_adapter=retrieval_params.strategy,
+                    retrieval_toggles=_retrieval_toggles(retrieval_params),
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
                     guardrail_policy=self._settings.rag_guardrail_policy,
@@ -746,6 +754,7 @@ class RagPipeline:
                     retrieval_breakdown=retrieval_breakdown,
                     retrieval_candidates=retrieval_candidates,
                     retrieval_strategy_adapter=retrieval_params.strategy,
+                    retrieval_toggles=_retrieval_toggles(retrieval_params),
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
                     guardrail_policy=self._settings.rag_guardrail_policy,
@@ -834,6 +843,7 @@ class RagPipeline:
                 retrieval_breakdown=retrieval_breakdown,
                 retrieval_candidates=retrieval_candidates,
                 retrieval_strategy_adapter=retrieval_params.strategy,
+                retrieval_toggles=_retrieval_toggles(retrieval_params),
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -981,6 +991,7 @@ class RagPipeline:
                 retrieval_breakdown=retrieval_breakdown,
                 retrieval_candidates=retrieval_candidates,
                 retrieval_strategy_adapter=retrieval_params.strategy,
+                retrieval_toggles=_retrieval_toggles(retrieval_params),
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -993,7 +1004,7 @@ class RagPipeline:
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
                 hyde_generated=hyde_generated,
-                memory_plan_id=retrieval_plan.plan_id if retrieval_plan is not None else None,
+                memory_plan_id=(retrieval_plan.plan_id if retrieval_plan is not None else None),
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
                 business_context=business_context.diagnostics(),
@@ -1078,7 +1089,9 @@ class RagPipeline:
         ]
         ranked_context = sorted(
             ranked,
-            key=lambda chunk: chunk.rerank_score if chunk.rerank_score is not None else chunk.score,
+            key=lambda chunk: (
+                chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+            ),
             reverse=True,
         )[:top_n]
         ranked_context = [
@@ -1395,7 +1408,10 @@ class RagPipeline:
         """GraphRAG-lite 経路を実行し、KG 未適用環境では空として扱う。"""
         try:
             if strategy == SearchStrategy.GRAPH_GLOBAL:
-                return await self._oracle.graph_global_search(query, top_k, filters), None
+                return (
+                    await self._oracle.graph_global_search(query, top_k, filters),
+                    None,
+                )
             return await self._oracle.graph_local_search(query, top_k, filters), None
         except Exception:
             return [], "graph_query_error"
@@ -1918,6 +1934,16 @@ def _metadata_text(value: object) -> str | None:
         joined = " > ".join(parts)
         return joined or None
     return None
+
+
+def _retrieval_toggles(params: RetrievalAdapterParams) -> dict[str, bool]:
+    """診断用: 検索方法の有効トグル snapshot。"""
+    return {
+        "query_expansion": params.query_expansion,
+        "gap_stop": params.gap_stop,
+        "corrective_retrieval": params.corrective_retrieval,
+        "business_fit_weighting": params.business_fit_weighting,
+    }
 
 
 def _apply_retrieval_adapter_request(

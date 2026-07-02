@@ -2938,7 +2938,10 @@ async def test_pipeline_gap_stop_returns_without_retrieval() -> None:
     assert response.answer == GAP_STOP_ANSWER
     assert response.citations == []
     assert response.diagnostics.gap_stopped is True
-    assert response.diagnostics.retrieval_strategy_adapter == "business_context_strict"
+    # legacy 複合値は診断でも分解後のモード + 有効トグルで報告する。
+    assert response.diagnostics.retrieval_strategy_adapter == "hybrid_rrf"
+    assert response.diagnostics.retrieval_toggles["gap_stop"] is True
+    assert response.diagnostics.retrieval_toggles["business_fit_weighting"] is True
     assert llm.context == ""
 
 

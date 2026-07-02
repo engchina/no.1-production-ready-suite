@@ -22,10 +22,13 @@ def test_health_ok() -> None:
     assert client.get("/health").json()["stage"] == "retrieval"
 
 
-def test_vector_forces_mode_and_disables_expansion() -> None:
+def test_vector_forces_mode_and_follows_settings_expansion() -> None:
+    # query expansion はモード非依存の合成トグル(強制 OFF を撤廃)。settings に従う。
     body = _run("vector", expansion=True)
     assert body["mode_override"] == "vector"
-    assert body["query_expansion"] is False
+    assert body["query_expansion"] is True
+    assert _run("vector", expansion=False)["query_expansion"] is False
+    assert _run("keyword", expansion=True)["query_expansion"] is True
 
 
 def test_hybrid_uses_settings_expansion() -> None:

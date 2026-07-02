@@ -15,33 +15,44 @@ from dataclasses import dataclass
 
 from rag_pipeline_core.retrieval import (
     RETRIEVAL_SPECS,
+    WIRED_RETRIEVAL_MODES,
     WIRED_RETRIEVAL_STRATEGIES,
+    decompose_retrieval_strategy,
     resolve_retrieval,
 )
 from rag_pipeline_core.retrieval import (
     normalize_retrieval_strategy as _core_normalize,
 )
 
-from app.config import RetrievalStrategy, Settings
+from app.config import RetrievalMode, RetrievalStrategy, Settings
 from app.schemas.search import SearchMode, SearchStrategy
 
 RetrievalStrategyName = RetrievalStrategy
+RetrievalModeName = RetrievalMode
 DEFAULT_RETRIEVAL_STRATEGY: RetrievalStrategyName = "hybrid_rrf"
 # 設定 API が公開する戦略順。未配線(pending_execution)戦略は除外する。
 RETRIEVAL_STRATEGY_ORDER: tuple[RetrievalStrategyName, ...] = WIRED_RETRIEVAL_STRATEGIES  # type: ignore[assignment]
+# 設定 API が保存を受理する検索モード順。
+RETRIEVAL_MODE_ORDER: tuple[RetrievalModeName, ...] = WIRED_RETRIEVAL_MODES  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
 class RetrievalAdapterParams:
-    """検索段階へ渡す解決済みパラメータ。"""
+    """検索段階へ渡す解決済みパラメータ。
 
-    strategy: RetrievalStrategyName
+    strategy は分解後の検索モード。legacy_strategy は .env / Business View に残る
+    legacy 複合戦略の読み替え元(新形式なら None)。トグル4値は
+    「settings トグル OR legacy 強制トグル」の合成結果(有効値)。
+    """
+
+    strategy: RetrievalModeName
     mode_override: SearchMode | None
     strategy_bias: SearchStrategy | None
     query_expansion: bool
     gap_stop: bool
     corrective_retrieval: bool
     business_fit_weighting: bool
+    legacy_strategy: RetrievalStrategyName | None = None
 
 
 @dataclass(frozen=True)
@@ -59,14 +70,22 @@ class RetrievalStrategyStatus:
 
 @dataclass(frozen=True)
 class RetrievalAdapterRuntimeSettings:
-    """Retrieval アダプターの非機密 runtime snapshot。"""
+    """Retrieval アダプターの非機密 runtime snapshot。
+
+    mode / modes が新形式(検索モード + 合成トグル)。strategy / strategies は
+    旧 UI 互換の併存フィールド(UI 移行完了後に削除予定)。トグル4値は有効値
+    (settings トグル OR legacy 強制トグル)。
+    """
 
     strategy: RetrievalStrategyName
+    mode: RetrievalModeName
+    legacy_strategy: RetrievalStrategyName | None
     query_expansion: bool
     gap_stop: bool
     corrective_retrieval: bool
     business_fit_weighting: bool
     strategies: tuple[RetrievalStrategyStatus, ...]
+    modes: tuple[RetrievalStrategyStatus, ...]
 
 
 def normalize_retrieval_strategy(value: object) -> RetrievalStrategyName:
@@ -85,22 +104,34 @@ def _as_strategy(value: str | None) -> SearchStrategy | None:
 def resolve_retrieval_adapter(settings: Settings) -> RetrievalAdapterParams:
     """Settings から Retrieval アダプターの解決済みパラメータを作る。
 
-    `rag_retrieval_service_enabled` のときは pipeline-retrieval サービスへ委譲する。
+    strategy 値(legacy 複合値込み)をモード + 強制トグルへ分解し、モードの静的解決
+    (mode_override / strategy_bias / query_expansion 既定)へ settings トグルを OR 合成する。
+    `rag_retrieval_service_enabled` のときはモード解決を pipeline-retrieval サービスへ委譲する。
     無効時と remote 未到達時は in-process(同一 rag_pipeline_core ロジック)へ縮退する。
+    トグルの最終合成は常に backend 側で行うため、新旧 service 混在でも結果は一致する。
     """
-    strategy = normalize_retrieval_strategy(
+    decomposed = decompose_retrieval_strategy(
         getattr(settings, "rag_retrieval_strategy", DEFAULT_RETRIEVAL_STRATEGY)
     )
     settings_expansion = bool(getattr(settings, "rag_query_expansion_enabled", True))
-    resolved = _resolve_static(settings, strategy, settings_expansion)
+    resolved = _resolve_static(settings, decomposed.mode, settings_expansion)
     return RetrievalAdapterParams(
-        strategy=strategy,
+        strategy=resolved.strategy,
         mode_override=_as_mode(resolved.mode_override),
         strategy_bias=_as_strategy(resolved.strategy_bias),
-        query_expansion=resolved.query_expansion,
-        gap_stop=resolved.gap_stop,
-        corrective_retrieval=resolved.corrective_retrieval,
-        business_fit_weighting=resolved.business_fit_weighting,
+        query_expansion=resolved.query_expansion or decomposed.forced_query_expansion,
+        gap_stop=bool(getattr(settings, "rag_retrieval_gap_stop_enabled", False))
+        or resolved.gap_stop
+        or decomposed.forced_gap_stop,
+        corrective_retrieval=bool(getattr(settings, "rag_retrieval_corrective_enabled", False))
+        or resolved.corrective_retrieval
+        or decomposed.forced_corrective_retrieval,
+        business_fit_weighting=bool(
+            getattr(settings, "rag_retrieval_business_fit_weighting_enabled", False)
+        )
+        or resolved.business_fit_weighting
+        or decomposed.forced_business_fit_weighting,
+        legacy_strategy=decomposed.legacy_strategy,  # type: ignore[arg-type]
     )
 
 
@@ -129,26 +160,36 @@ def _resolve_static(settings: Settings, strategy: str, settings_expansion: bool)
     return resolve_retrieval(strategy, settings_expansion)
 
 
-def retrieval_adapter_runtime_settings(settings: Settings) -> RetrievalAdapterRuntimeSettings:
-    """Settings から Retrieval アダプター readiness snapshot を作る。"""
-    params = resolve_retrieval_adapter(settings)
-    statuses = tuple(
+def _strategy_statuses(
+    names: tuple[str, ...], selected: str
+) -> tuple[RetrievalStrategyStatus, ...]:
+    return tuple(
         RetrievalStrategyStatus(
             name=spec.name,  # type: ignore[arg-type]
             origin=spec.origin,
             recommended_for=spec.recommended_for,
-            selected=spec.name == params.strategy,
+            selected=spec.name == selected,
             gap_stop=spec.gap_stop,
             corrective_retrieval=spec.corrective_retrieval,
             business_fit_weighting=spec.business_fit_weighting,
         )
-        for spec in (RETRIEVAL_SPECS[name] for name in WIRED_RETRIEVAL_STRATEGIES)
+        for spec in (RETRIEVAL_SPECS[name] for name in names)
     )
+
+
+def retrieval_adapter_runtime_settings(
+    settings: Settings,
+) -> RetrievalAdapterRuntimeSettings:
+    """Settings から Retrieval アダプター readiness snapshot を作る。"""
+    params = resolve_retrieval_adapter(settings)
     return RetrievalAdapterRuntimeSettings(
         strategy=params.strategy,
+        mode=params.strategy,
+        legacy_strategy=params.legacy_strategy,
         query_expansion=params.query_expansion,
         gap_stop=params.gap_stop,
         corrective_retrieval=params.corrective_retrieval,
         business_fit_weighting=params.business_fit_weighting,
-        strategies=statuses,
+        strategies=_strategy_statuses(WIRED_RETRIEVAL_STRATEGIES, params.strategy),
+        modes=_strategy_statuses(WIRED_RETRIEVAL_MODES, params.strategy),
     )

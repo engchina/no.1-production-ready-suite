@@ -6,7 +6,10 @@ from datetime import UTC, datetime
 from typing import Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from rag_pipeline_core.retrieval import WIRED_RETRIEVAL_STRATEGIES
+from rag_pipeline_core.retrieval import (
+    WIRED_RETRIEVAL_MODES,
+    WIRED_RETRIEVAL_STRATEGIES,
+)
 
 from app.config import (
     AgenticProfile,
@@ -32,7 +35,13 @@ DatabaseConnectionTestStatus = Literal["success", "failed"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 ParserAdapterBackendName = Literal[
-    "docling", "marker", "unstructured", "unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"
+    "docling",
+    "marker",
+    "unstructured",
+    "unlimited_ocr",
+    "mineru",
+    "dots_ocr",
+    "glm_ocr",
 ]
 ParserAdapterScoreBackendName = Literal[
     "local",
@@ -681,7 +690,7 @@ class ChunkingSettingsUpdate(BaseModel):
 
 
 RetrievalStrategyName = RetrievalStrategy
-# 設定 API から選択・保存できる戦略(未配線戦略は除外)。core の wired 集合と一致させる。
+# 読み取り互換で受理できる戦略(legacy 複合値込み・未配線戦略は除外)。core と一致させる。
 WiredRetrievalStrategy = Literal[
     "hybrid_rrf",
     "vector",
@@ -693,6 +702,16 @@ WiredRetrievalStrategy = Literal[
 assert set(get_args(WiredRetrievalStrategy)) == set(
     WIRED_RETRIEVAL_STRATEGIES
 ), "WiredRetrievalStrategy と core の WIRED_RETRIEVAL_STRATEGIES がずれています。"
+# 保存を受理する検索モード(新形式)。core の WIRED_RETRIEVAL_MODES と一致させる。
+WiredRetrievalMode = Literal[
+    "hybrid_rrf",
+    "vector",
+    "keyword",
+    "graph_augmented",
+]
+assert set(get_args(WiredRetrievalMode)) == set(
+    WIRED_RETRIEVAL_MODES
+), "WiredRetrievalMode と core の WIRED_RETRIEVAL_MODES がずれています。"
 PostRetrievalPipelineName = PostRetrievalPipeline
 ExpansionModeName = Literal["none", "neighbor", "group", "adaptive"]
 
@@ -710,21 +729,55 @@ class RetrievalStrategyStatusData(BaseModel):
 
 
 class RetrievalSettingsData(BaseModel):
-    """検索方法設定の非機密 runtime snapshot。"""
+    """検索方法設定の非機密 runtime snapshot。
+
+    mode / modes / legacy_strategy が新形式(検索モード + 合成トグル)。
+    strategy / strategies は旧 UI 互換の併存フィールド(UI 移行完了後に削除予定)。
+    トグル4値は有効値(settings トグル OR legacy 強制トグル)。
+    """
 
     strategy: RetrievalStrategyName
+    mode: WiredRetrievalMode
+    legacy_strategy: RetrievalStrategyName | None = None
     query_expansion: bool
     gap_stop: bool
     corrective_retrieval: bool
     business_fit_weighting: bool
     strategies: list[RetrievalStrategyStatusData] = Field(default_factory=list)
+    modes: list[RetrievalStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
 
 class RetrievalSettingsUpdate(BaseModel):
-    """検索方法設定の更新 payload。未配線戦略は受理しない(wired のみ)。"""
+    """検索方法設定の更新 payload(部分更新)。未配線戦略は受理しない。
 
-    strategy: WiredRetrievalStrategy
+    新形式は mode + トグル。legacy payload(strategy)は移行期間のみ受理し、
+    保存時にモード + トグルへ分解する(保存は常に新形式)。
+    """
+
+    mode: WiredRetrievalMode | None = None
+    query_expansion: bool | None = None
+    gap_stop: bool | None = None
+    corrective_retrieval: bool | None = None
+    business_fit_weighting: bool | None = None
+    strategy: WiredRetrievalStrategy | None = None
+
+    @model_validator(mode="after")
+    def validate_any_field(self) -> "RetrievalSettingsUpdate":
+        """空 payload の保存を拒否する。"""
+        if all(
+            value is None
+            for value in (
+                self.mode,
+                self.query_expansion,
+                self.gap_stop,
+                self.corrective_retrieval,
+                self.business_fit_weighting,
+                self.strategy,
+            )
+        ):
+            raise ValueError("更新する検索方法設定を 1 つ以上指定してください。")
+        return self
 
 
 class GroundingPipelineStatusData(BaseModel):
