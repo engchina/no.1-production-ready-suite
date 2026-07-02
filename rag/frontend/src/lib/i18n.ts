@@ -659,6 +659,23 @@ export const ja = {
   "settings.grounding.actions.saved": "根拠確認設定を保存しました。",
   "settings.grounding.actions.reset": "変更を破棄",
   "settings.grounding.actions.unsaved": "未保存の変更があります。",
+  "settings.grounding.crag.title": "補正検索(CRAG)のしきい値",
+  "settings.grounding.crag.description":
+    "検索方法の補正検索、または補正付き処理方式が有効なときの evidence grade 判定を調整します。",
+  "settings.grounding.crag.lowThreshold": "低しきい値",
+  "settings.grounding.crag.lowThreshold.helper":
+    "この値未満は低 grade(棄権の対象)。0 で補正検索全体を無効化します。",
+  "settings.grounding.crag.highThreshold": "高しきい値",
+  "settings.grounding.crag.highThreshold.helper":
+    "この値以上は再検索せずそのまま回答します。低しきい値以上にしてください。",
+  "settings.grounding.crag.maxHops": "再検索の上限回数",
+  "settings.grounding.crag.maxHops.helper":
+    "中間帯でのクエリ精緻化 + 再検索の回数(0-3)。0 は判定のみ。",
+  "settings.grounding.crag.abstain": "低 grade で回答を保留する",
+  "settings.grounding.crag.abstain.helper":
+    "再検索後も低しきい値未満のとき、回答せず保留メッセージを返します(既定 OFF)。",
+  "settings.grounding.crag.invalid":
+    "しきい値は 0〜1(高しきい値は低しきい値以上)、再検索回数は 0〜3 で入力してください。",
   "settings.grounding.loadError": "根拠確認設定を取得できませんでした。",
   "settings.grounding.saveError": "根拠確認設定を保存できませんでした。",
   "settings.generation.subtitle":

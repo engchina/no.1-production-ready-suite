@@ -114,6 +114,7 @@ function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {
     retrieval_strategy: null,
     retrieval_query_expansion: null,
+    retrieval_query_expansion_llm: null,
     retrieval_gap_stop: null,
     retrieval_corrective: null,
     retrieval_business_fit_weighting: null,
@@ -501,6 +502,12 @@ function BusinessViewForm({
                     value={config.query.retrieval_query_expansion}
                     disabled={pending}
                     onChange={(value) => updateQuery({ retrieval_query_expansion: value })}
+                  />
+                  <QueryToggleRow
+                    label={t("settings.retrieval.toggle.queryExpansionLlm")}
+                    value={config.query.retrieval_query_expansion_llm}
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ retrieval_query_expansion_llm: value })}
                   />
                   <QueryToggleRow
                     label={t("settings.retrieval.gapStop")}

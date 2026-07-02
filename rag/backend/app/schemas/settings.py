@@ -6,10 +6,7 @@ from datetime import UTC, datetime
 from typing import Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from rag_pipeline_core.retrieval import (
-    WIRED_RETRIEVAL_MODES,
-    WIRED_RETRIEVAL_STRATEGIES,
-)
+from rag_pipeline_core.retrieval import WIRED_RETRIEVAL_MODES
 
 from app.config import (
     AgenticProfile,
@@ -690,19 +687,9 @@ class ChunkingSettingsUpdate(BaseModel):
 
 
 RetrievalStrategyName = RetrievalStrategy
-# 読み取り互換で受理できる戦略(legacy 複合値込み・未配線戦略は除外)。core と一致させる。
-WiredRetrievalStrategy = Literal[
-    "hybrid_rrf",
-    "vector",
-    "keyword",
-    "graph_augmented",
-    "business_context_strict",
-    "corrective_multi_query",
-]
-assert set(get_args(WiredRetrievalStrategy)) == set(
-    WIRED_RETRIEVAL_STRATEGIES
-), "WiredRetrievalStrategy と core の WIRED_RETRIEVAL_STRATEGIES がずれています。"
 # 保存を受理する検索モード(新形式)。core の WIRED_RETRIEVAL_MODES と一致させる。
+# legacy 複合値(business_context_strict / corrective_multi_query)は .env / BV JSON の
+# 読み取り互換のみで、API payload では受理しない。
 WiredRetrievalMode = Literal[
     "hybrid_rrf",
     "vector",
@@ -731,12 +718,10 @@ class RetrievalStrategyStatusData(BaseModel):
 class RetrievalSettingsData(BaseModel):
     """検索方法設定の非機密 runtime snapshot。
 
-    mode / modes / legacy_strategy が新形式(検索モード + 合成トグル)。
-    strategy / strategies は旧 UI 互換の併存フィールド(UI 移行完了後に削除予定)。
-    トグル4値は有効値(settings トグル OR legacy 強制トグル)。
+    トグル4値は有効値(settings トグル OR legacy 強制トグル)。legacy_strategy は
+    .env / BV に残る legacy 複合値の読み替え元(新形式なら None)。
     """
 
-    strategy: RetrievalStrategyName
     mode: WiredRetrievalMode
     legacy_strategy: RetrievalStrategyName | None = None
     query_expansion: bool
@@ -744,7 +729,6 @@ class RetrievalSettingsData(BaseModel):
     gap_stop: bool
     corrective_retrieval: bool
     business_fit_weighting: bool
-    strategies: list[RetrievalStrategyStatusData] = Field(default_factory=list)
     modes: list[RetrievalStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
@@ -752,8 +736,7 @@ class RetrievalSettingsData(BaseModel):
 class RetrievalSettingsUpdate(BaseModel):
     """検索方法設定の更新 payload(部分更新)。未配線戦略は受理しない。
 
-    新形式は mode + トグル。legacy payload(strategy)は移行期間のみ受理し、
-    保存時にモード + トグルへ分解する(保存は常に新形式)。
+    mode + トグルの新形式のみ受理する(legacy strategy payload は廃止済み)。
     """
 
     mode: WiredRetrievalMode | None = None
@@ -762,7 +745,6 @@ class RetrievalSettingsUpdate(BaseModel):
     gap_stop: bool | None = None
     corrective_retrieval: bool | None = None
     business_fit_weighting: bool | None = None
-    strategy: WiredRetrievalStrategy | None = None
 
     @model_validator(mode="after")
     def validate_any_field(self) -> "RetrievalSettingsUpdate":
@@ -776,7 +758,6 @@ class RetrievalSettingsUpdate(BaseModel):
                 self.gap_stop,
                 self.corrective_retrieval,
                 self.business_fit_weighting,
-                self.strategy,
             )
         ):
             raise ValueError("更新する検索方法設定を 1 つ以上指定してください。")
@@ -798,21 +779,51 @@ class GroundingPipelineStatusData(BaseModel):
 
 
 class GroundingSettingsData(BaseModel):
-    """根拠確認設定の非機密 runtime snapshot。"""
+    """根拠確認設定の非機密 runtime snapshot。CRAG 閾値は補正検索の evidence grade 判定。"""
 
     pipeline: PostRetrievalPipelineName
     dependency_promotion_enabled: bool
     diversity_enabled: bool
     expansion_mode: ExpansionModeName
     compression_enabled: bool
+    crag_low_confidence_threshold: float
+    crag_high_confidence_threshold: float
+    crag_max_hops: int
+    crag_low_evidence_abstain: bool
     pipelines: list[GroundingPipelineStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
 
 class GroundingSettingsUpdate(BaseModel):
-    """根拠確認設定の更新 payload。"""
+    """根拠確認設定の更新 payload(部分更新)。"""
 
-    pipeline: PostRetrievalPipelineName
+    pipeline: PostRetrievalPipelineName | None = None
+    crag_low_confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    crag_high_confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    crag_max_hops: int | None = Field(default=None, ge=0, le=3)
+    crag_low_evidence_abstain: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_grounding_update(self) -> "GroundingSettingsUpdate":
+        """空 payload を拒否し、両閾値を同時指定した場合の逆転を防ぐ。"""
+        if all(
+            value is None
+            for value in (
+                self.pipeline,
+                self.crag_low_confidence_threshold,
+                self.crag_high_confidence_threshold,
+                self.crag_max_hops,
+                self.crag_low_evidence_abstain,
+            )
+        ):
+            raise ValueError("更新する根拠確認設定を 1 つ以上指定してください。")
+        if (
+            self.crag_low_confidence_threshold is not None
+            and self.crag_high_confidence_threshold is not None
+            and self.crag_high_confidence_threshold < self.crag_low_confidence_threshold
+        ):
+            raise ValueError("CRAG の高閾値は低閾値以上にしてください。")
+        return self
 
 
 GenerationProfileName = GenerationProfile

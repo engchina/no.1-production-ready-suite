@@ -58,6 +58,7 @@ describe("api 業務ビュー(Business View)", () => {
         query: {
           retrieval_strategy: null,
           retrieval_query_expansion: null,
+          retrieval_query_expansion_llm: null,
           retrieval_gap_stop: null,
           retrieval_corrective: null,
           retrieval_business_fit_weighting: null,

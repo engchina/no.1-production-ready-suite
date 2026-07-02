@@ -726,10 +726,9 @@ def test_retrieval_settings_reports_legacy_strategy_as_mode_and_toggles(
     assert body["business_fit_weighting"] is True
     mode_names = [item["name"] for item in body["modes"]]
     assert mode_names == ["hybrid_rrf", "vector", "keyword", "graph_augmented"]
-    # 未配線戦略は設定 API の一覧へ出さない。
-    names = [item["name"] for item in body["strategies"]]
-    assert "reasoning_tree_search" not in names
-    assert "colpali_visual_retrieval" not in names
+    # 併存フィールド(strategy / strategies)は廃止済み。
+    assert "strategy" not in body
+    assert "strategies" not in body
     selected_modes = [item["name"] for item in body["modes"] if item["selected"]]
     assert selected_modes == ["hybrid_rrf"]
 
@@ -778,28 +777,11 @@ def test_update_retrieval_settings_persists_mode_and_toggles(
     assert "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED=" in env_text
 
 
-def test_update_retrieval_settings_accepts_legacy_payload_and_normalizes(
-    monkeypatch: MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """移行期間の legacy payload(strategy)はモード + トグルへ分解して新形式で保存する。"""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_retrieval_strategy", "hybrid_rrf")
-    _patch_retrieval_toggle_fields(monkeypatch, settings)
-    env_file = _settings_env_file(monkeypatch, tmp_path)
-
+def test_update_retrieval_settings_rejects_legacy_strategy_payload() -> None:
+    """legacy payload(strategy)は受理しない(UI 移行完了により廃止)。"""
     resp = client.patch("/api/settings/retrieval", json={"strategy": "corrective_multi_query"})
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["mode"] == "hybrid_rrf"
-    assert body["corrective_retrieval"] is True
-    assert body["query_expansion"] is True
-    # 保存後は新形式なので legacy 読み替え表示は不要になる。
-    assert body["legacy_strategy"] is None
-    env_text = env_file.read_text(encoding="utf-8")
-    assert "RAG_RETRIEVAL_STRATEGY=hybrid_rrf" in env_text
-    assert "RAG_RETRIEVAL_CORRECTIVE_ENABLED=true" in env_text
+    # strategy フィールド自体が無いため未知キー扱い → 実質空 payload で 422。
+    assert resp.status_code == 422
 
 
 def test_update_retrieval_settings_normalizes_legacy_env_on_toggle_save(
@@ -850,20 +832,16 @@ def test_update_retrieval_settings_persists_llm_expansion_opt_in(
     assert "RAG_QUERY_EXPANSION_LLM_ENABLED=true" in env_file.read_text(encoding="utf-8")
 
 
-def test_update_retrieval_settings_rejects_unknown_strategy() -> None:
-    resp = client.patch("/api/settings/retrieval", json={"strategy": "hyde_fusion"})
-    assert resp.status_code == 422
-
-
 def test_update_retrieval_settings_rejects_unknown_mode() -> None:
     resp = client.patch("/api/settings/retrieval", json={"mode": "business_context_strict"})
     assert resp.status_code == 422
 
 
-def test_update_retrieval_settings_rejects_pending_strategy() -> None:
-    """未配線(pending_execution)戦略は wired のみ受理のため 422。"""
-    resp = client.patch("/api/settings/retrieval", json={"strategy": "reasoning_tree_search"})
-    assert resp.status_code == 422
+def test_update_retrieval_settings_rejects_pending_mode() -> None:
+    """未配線(pending_execution)戦略と legacy 複合値は mode として受理しない。"""
+    for value in ("colpali_visual_retrieval", "business_context_strict", "hyde_fusion"):
+        resp = client.patch("/api/settings/retrieval", json={"mode": value})
+        assert resp.status_code == 422
 
 
 def test_update_retrieval_settings_rejects_empty_payload() -> None:
@@ -890,12 +868,24 @@ def test_grounding_settings_reports_runtime_pipeline(monkeypatch: MonkeyPatch) -
     assert selected == ["full_governed"]
 
 
+def _patch_grounding_crag_fields(monkeypatch: MonkeyPatch, settings: object) -> None:
+    """PATCH が現在プロセスへ反映する CRAG 設定をテスト間で汚さないよう退避する。"""
+    for field in (
+        "rag_grounding_crag_confidence_threshold",
+        "rag_crag_high_confidence_threshold",
+        "rag_crag_max_hops",
+        "rag_crag_low_evidence_abstain_enabled",
+    ):
+        monkeypatch.setattr(settings, field, getattr(settings, field))
+
+
 def test_update_grounding_settings_persists_env_and_mutates_runtime(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_post_retrieval_pipeline", "custom")
+    _patch_grounding_crag_fields(monkeypatch, settings)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     resp = client.patch("/api/settings/grounding", json={"pipeline": "verified_context"})
@@ -908,8 +898,64 @@ def test_update_grounding_settings_persists_env_and_mutates_runtime(
     assert "RAG_POST_RETRIEVAL_PIPELINE=verified_context" in env_file.read_text(encoding="utf-8")
 
 
+def test_grounding_settings_reports_and_persists_crag_settings(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CRAG 閾値・hop 上限・棄権 opt-in を GET で提示し、PATCH で .env へ永続化する。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_post_retrieval_pipeline", "custom")
+    _patch_grounding_crag_fields(monkeypatch, settings)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.get("/api/settings/grounding")
+    body = resp.json()["data"]
+    assert body["crag_low_confidence_threshold"] == 0.35
+    assert body["crag_high_confidence_threshold"] == 0.7
+    assert body["crag_max_hops"] == 1
+    assert body["crag_low_evidence_abstain"] is False
+
+    resp = client.patch(
+        "/api/settings/grounding",
+        json={
+            "crag_low_confidence_threshold": 0.4,
+            "crag_high_confidence_threshold": 0.75,
+            "crag_max_hops": 2,
+            "crag_low_evidence_abstain": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["crag_low_confidence_threshold"] == 0.4
+    assert body["crag_high_confidence_threshold"] == 0.75
+    assert body["crag_max_hops"] == 2
+    assert body["crag_low_evidence_abstain"] is True
+    # pipeline 未指定の部分更新では処理方式を変えない。
+    assert body["pipeline"] == "custom"
+    assert settings.rag_crag_max_hops == 2
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "RAG_GROUNDING_CRAG_CONFIDENCE_THRESHOLD=0.4" in env_text
+    assert "RAG_CRAG_HIGH_CONFIDENCE_THRESHOLD=0.75" in env_text
+    assert "RAG_CRAG_MAX_HOPS=2" in env_text
+    assert "RAG_CRAG_LOW_EVIDENCE_ABSTAIN_ENABLED=true" in env_text
+
+
+def test_update_grounding_settings_rejects_inverted_crag_thresholds() -> None:
+    resp = client.patch(
+        "/api/settings/grounding",
+        json={"crag_low_confidence_threshold": 0.8, "crag_high_confidence_threshold": 0.5},
+    )
+    assert resp.status_code == 422
+
+
 def test_update_grounding_settings_rejects_unknown_pipeline() -> None:
     resp = client.patch("/api/settings/grounding", json={"pipeline": "agentic_loop"})
+    assert resp.status_code == 422
+
+
+def test_update_grounding_settings_rejects_empty_payload() -> None:
+    resp = client.patch("/api/settings/grounding", json={})
     assert resp.status_code == 422
 
 

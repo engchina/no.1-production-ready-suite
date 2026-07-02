@@ -122,6 +122,7 @@ def test_retrieval_toggle_overrides_apply() -> None:
             retrieval_strategy="graph_augmented",
             retrieval_corrective=True,
             retrieval_query_expansion=False,
+            retrieval_query_expansion_llm=True,
         )
     )
     merged, applied = resolve_business_view_settings(settings, config)
@@ -129,6 +130,7 @@ def test_retrieval_toggle_overrides_apply() -> None:
     assert merged.rag_retrieval_strategy == "graph_augmented"
     assert merged.rag_retrieval_corrective_enabled is True
     assert merged.rag_query_expansion_enabled is False
+    assert merged.rag_query_expansion_llm_enabled is True
     # グローバルは破壊しない。
     assert settings.rag_retrieval_corrective_enabled is False
 

@@ -165,8 +165,34 @@ test("根拠確認設定は処理方式を保存できる", async ({ page }) => 
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("根拠確認設定を保存しました。")).toBeVisible();
-  expect(savedPayload).toEqual({ pipeline: "full_governed" });
+  expect(savedPayload).toEqual({
+    pipeline: "full_governed",
+    crag_low_confidence_threshold: 0.35,
+    crag_high_confidence_threshold: 0.7,
+    crag_max_hops: 1,
+    crag_low_evidence_abstain: false,
+  });
   await expectNoHorizontalOverflow(page);
+});
+
+test("根拠確認設定は CRAG しきい値を編集・検証できる", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await mockGrounding(page);
+
+  await page.goto("/settings/grounding");
+
+  await expect(page.getByText("補正検索(CRAG)のしきい値")).toBeVisible();
+  const high = page.getByRole("spinbutton", { name: "高しきい値" });
+  await expect(high).toHaveValue("0.7");
+  // 高しきい値 < 低しきい値 は保存できない。
+  await high.fill("0.1");
+  await expect(
+    page.getByText(/高しきい値は低しきい値以上/)
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存" })).toBeDisabled();
+  await high.fill("0.8");
+  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
+  await expect(page.getByRole("switch", { name: "低 grade で回答を保留する" })).toBeVisible();
 });
 
 test("検索方法設定取得に失敗したら再試行できる", async ({ page }) => {
@@ -220,7 +246,6 @@ function retrievalEnvelope(
   }));
   return {
     data: {
-      strategy: mode,
       mode,
       legacy_strategy: null,
       query_expansion: true,
@@ -228,7 +253,6 @@ function retrievalEnvelope(
       gap_stop: false,
       corrective_retrieval: false,
       business_fit_weighting: false,
-      strategies: statuses,
       modes: statuses,
       config_source: "runtime",
       ...overrides,
@@ -255,6 +279,10 @@ function groundingEnvelope(pipeline: string) {
       diversity_enabled: selected.diversity,
       expansion_mode: selected.expansion_mode,
       compression_enabled: selected.compression,
+      crag_low_confidence_threshold: 0.35,
+      crag_high_confidence_threshold: 0.7,
+      crag_max_hops: 1,
+      crag_low_evidence_abstain: false,
       pipelines: specs.map((spec) => ({
         ...spec,
         origin: "x",

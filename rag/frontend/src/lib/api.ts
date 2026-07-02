@@ -682,6 +682,7 @@ export interface KnowledgeBaseQueryConfig {
   retrieval_strategy: RetrievalStrategyName | null;
   /** 検索方法の合成トグル(null はグローバル継承)。 */
   retrieval_query_expansion: boolean | null;
+  retrieval_query_expansion_llm: boolean | null;
   retrieval_gap_stop: boolean | null;
   retrieval_corrective: boolean | null;
   retrieval_business_fit_weighting: boolean | null;
@@ -1769,7 +1770,6 @@ export interface RetrievalStrategyStatusData {
 }
 
 export interface RetrievalSettingsData {
-  strategy: RetrievalStrategyName;
   mode: RetrievalModeName;
   legacy_strategy: RetrievalStrategyName | null;
   query_expansion: boolean;
@@ -1777,7 +1777,6 @@ export interface RetrievalSettingsData {
   gap_stop: boolean;
   corrective_retrieval: boolean;
   business_fit_weighting: boolean;
-  strategies: RetrievalStrategyStatusData[];
   modes: RetrievalStrategyStatusData[];
   config_source: "runtime";
 }
@@ -1821,12 +1820,22 @@ export interface GroundingSettingsData {
   diversity_enabled: boolean;
   expansion_mode: GroundingExpansionMode;
   compression_enabled: boolean;
+  /** CRAG(補正検索)の evidence grade 判定パラメータ。 */
+  crag_low_confidence_threshold: number;
+  crag_high_confidence_threshold: number;
+  crag_max_hops: number;
+  crag_low_evidence_abstain: boolean;
   pipelines: GroundingPipelineStatusData[];
   config_source: "runtime";
 }
 
+/** 部分更新。undefined のフィールドは変更しない。 */
 export interface GroundingSettingsUpdate {
-  pipeline: PostRetrievalPipelineName;
+  pipeline?: PostRetrievalPipelineName;
+  crag_low_confidence_threshold?: number;
+  crag_high_confidence_threshold?: number;
+  crag_max_hops?: number;
+  crag_low_evidence_abstain?: boolean;
 }
 
 // --- 設定: Generation アダプター ---

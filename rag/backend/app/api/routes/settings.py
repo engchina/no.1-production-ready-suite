@@ -554,8 +554,8 @@ async def update_retrieval_settings(
 ) -> ApiResponse[RetrievalSettingsData]:
     """検索方法設定を backend/.env と現在プロセスへ反映する。
 
-    保存は常に新形式(検索モード + トグル)。legacy payload(strategy)と
-    .env に残る legacy 複合値は、この保存を通るときモード + トグルへ正規化される。
+    保存は常に新形式(検索モード + トグル)。.env に残る legacy 複合値は、
+    この保存を通るときモード + トグルへ正規化される。
     """
     settings = get_settings()
     candidate = settings.model_copy(update=_retrieval_settings_updates(settings, payload))
@@ -574,13 +574,22 @@ async def get_grounding_settings() -> ApiResponse[GroundingSettingsData]:
 async def update_grounding_settings(
     payload: GroundingSettingsUpdate,
 ) -> ApiResponse[GroundingSettingsData]:
-    """根拠確認設定を backend/.env と現在プロセスへ反映する。"""
+    """根拠確認設定(処理方式 + CRAG 閾値)を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
-    candidate = settings.model_copy(
-        update={"rag_post_retrieval_pipeline": normalize_post_retrieval_pipeline(payload.pipeline)}
-    )
+    updates: dict[str, object] = {}
+    if payload.pipeline is not None:
+        updates["rag_post_retrieval_pipeline"] = normalize_post_retrieval_pipeline(payload.pipeline)
+    if payload.crag_low_confidence_threshold is not None:
+        updates["rag_grounding_crag_confidence_threshold"] = payload.crag_low_confidence_threshold
+    if payload.crag_high_confidence_threshold is not None:
+        updates["rag_crag_high_confidence_threshold"] = payload.crag_high_confidence_threshold
+    if payload.crag_max_hops is not None:
+        updates["rag_crag_max_hops"] = payload.crag_max_hops
+    if payload.crag_low_evidence_abstain is not None:
+        updates["rag_crag_low_evidence_abstain_enabled"] = payload.crag_low_evidence_abstain
+    candidate = settings.model_copy(update=updates)
     _persist_grounding_settings(candidate)
-    settings.rag_post_retrieval_pipeline = candidate.rag_post_retrieval_pipeline
+    _apply_grounding_settings(settings, candidate)
     return ApiResponse(data=_grounding_settings_data(settings))
 
 
@@ -2498,7 +2507,6 @@ def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
     """Settings から検索方法設定の表示用データを作る。"""
     runtime = retrieval_adapter_runtime_settings(settings)
     return RetrievalSettingsData(
-        strategy=runtime.strategy,
         mode=runtime.mode,
         legacy_strategy=runtime.legacy_strategy,
         query_expansion=runtime.query_expansion,
@@ -2506,7 +2514,6 @@ def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
         gap_stop=runtime.gap_stop,
         corrective_retrieval=runtime.corrective_retrieval,
         business_fit_weighting=runtime.business_fit_weighting,
-        strategies=_retrieval_status_data(runtime.strategies),
         modes=_retrieval_status_data(runtime.modes),
         config_source="runtime",
     )
@@ -2515,36 +2522,23 @@ def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
 def _retrieval_settings_updates(
     settings: Settings, payload: RetrievalSettingsUpdate
 ) -> dict[str, object]:
-    """更新 payload(新形式 + legacy)から Settings 更新 dict を作る。
+    """更新 payload(新形式)から Settings 更新 dict を作る。
 
-    legacy payload(strategy)はモード + 強制トグル ON へ分解する。.env に legacy
-    複合値が残っている場合も、この保存を通るとモードへ正規化される
-    (現在の有効トグルは _persist_retrieval_settings が書き出す)。
+    .env に legacy 複合値が残っている場合も、この保存を通るとモードへ正規化される
+    (legacy の強制トグルは明示 ON へ引き継ぎ、現在の有効トグルは
+    _persist_retrieval_settings が書き出す)。
     """
     updates: dict[str, object] = {}
-    if payload.strategy is not None:
-        decomposed = decompose_retrieval_strategy(payload.strategy)
-        updates["rag_retrieval_strategy"] = decomposed.mode
-        if decomposed.forced_query_expansion:
-            updates["rag_query_expansion_enabled"] = True
-        if decomposed.forced_gap_stop:
-            updates["rag_retrieval_gap_stop_enabled"] = True
-        if decomposed.forced_corrective_retrieval:
-            updates["rag_retrieval_corrective_enabled"] = True
-        if decomposed.forced_business_fit_weighting:
-            updates["rag_retrieval_business_fit_weighting_enabled"] = True
-    else:
-        # 保存は常に新形式: mode 未指定でも現在値をモードへ正規化して書き出す。
-        current = decompose_retrieval_strategy(settings.rag_retrieval_strategy)
-        updates["rag_retrieval_strategy"] = current.mode
-        if current.forced_query_expansion:
-            updates.setdefault("rag_query_expansion_enabled", True)
-        if current.forced_gap_stop:
-            updates.setdefault("rag_retrieval_gap_stop_enabled", True)
-        if current.forced_corrective_retrieval:
-            updates.setdefault("rag_retrieval_corrective_enabled", True)
-        if current.forced_business_fit_weighting:
-            updates.setdefault("rag_retrieval_business_fit_weighting_enabled", True)
+    current = decompose_retrieval_strategy(settings.rag_retrieval_strategy)
+    updates["rag_retrieval_strategy"] = current.mode
+    if current.forced_query_expansion:
+        updates["rag_query_expansion_enabled"] = True
+    if current.forced_gap_stop:
+        updates["rag_retrieval_gap_stop_enabled"] = True
+    if current.forced_corrective_retrieval:
+        updates["rag_retrieval_corrective_enabled"] = True
+    if current.forced_business_fit_weighting:
+        updates["rag_retrieval_business_fit_weighting_enabled"] = True
     if payload.mode is not None:
         updates["rag_retrieval_strategy"] = payload.mode
     if payload.query_expansion is not None:
@@ -2606,6 +2600,10 @@ def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
         diversity_enabled=runtime.diversity_enabled,
         expansion_mode=runtime.expansion_mode,
         compression_enabled=runtime.compression_enabled,
+        crag_low_confidence_threshold=settings.rag_grounding_crag_confidence_threshold,
+        crag_high_confidence_threshold=settings.rag_crag_high_confidence_threshold,
+        crag_max_hops=settings.rag_crag_max_hops,
+        crag_low_evidence_abstain=settings.rag_crag_low_evidence_abstain_enabled,
         pipelines=[
             GroundingPipelineStatusData(
                 name=status.name,
@@ -2624,11 +2622,30 @@ def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
     )
 
 
+def _apply_grounding_settings(target: Settings, source: Settings) -> None:
+    """保存済み根拠確認設定を現在プロセスへ反映する。"""
+    target.rag_post_retrieval_pipeline = source.rag_post_retrieval_pipeline
+    target.rag_grounding_crag_confidence_threshold = source.rag_grounding_crag_confidence_threshold
+    target.rag_crag_high_confidence_threshold = source.rag_crag_high_confidence_threshold
+    target.rag_crag_max_hops = source.rag_crag_max_hops
+    target.rag_crag_low_evidence_abstain_enabled = source.rag_crag_low_evidence_abstain_enabled
+
+
 def _persist_grounding_settings(settings: Settings) -> None:
-    """根拠確認設定を backend/.env へ永続化する。"""
+    """根拠確認設定(処理方式 + CRAG 閾値)を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
-        {"RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline},
+        {
+            "RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline,
+            "RAG_GROUNDING_CRAG_CONFIDENCE_THRESHOLD": str(
+                settings.rag_grounding_crag_confidence_threshold
+            ),
+            "RAG_CRAG_HIGH_CONFIDENCE_THRESHOLD": str(settings.rag_crag_high_confidence_threshold),
+            "RAG_CRAG_MAX_HOPS": str(settings.rag_crag_max_hops),
+            "RAG_CRAG_LOW_EVIDENCE_ABSTAIN_ENABLED": _format_env_bool(
+                settings.rag_crag_low_evidence_abstain_enabled
+            ),
+        },
         section_comment="# Grounding アダプター",
         error_detail="根拠確認設定を backend/.env へ保存できませんでした。",
     )

@@ -79,6 +79,7 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
 _QUERY_FIELD_MAP: dict[str, str] = {
     "retrieval_strategy": "rag_retrieval_strategy",
     "retrieval_query_expansion": "rag_query_expansion_enabled",
+    "retrieval_query_expansion_llm": "rag_query_expansion_llm_enabled",
     "retrieval_gap_stop": "rag_retrieval_gap_stop_enabled",
     "retrieval_corrective": "rag_retrieval_corrective_enabled",
     "retrieval_business_fit_weighting": "rag_retrieval_business_fit_weighting_enabled",
@@ -152,6 +153,7 @@ class KnowledgeBaseQueryConfig(BaseModel):
     retrieval_strategy: RetrievalStrategy | None = None
     # 検索方法の合成トグル(None はグローバル継承)。
     retrieval_query_expansion: bool | None = None
+    retrieval_query_expansion_llm: bool | None = None
     retrieval_gap_stop: bool | None = None
     retrieval_corrective: bool | None = None
     retrieval_business_fit_weighting: bool | None = None

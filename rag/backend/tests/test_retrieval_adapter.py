@@ -7,7 +7,6 @@ from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings
 from app.rag.retrieval_adapter import (
     RETRIEVAL_MODE_ORDER,
-    RETRIEVAL_STRATEGY_ORDER,
     normalize_retrieval_strategy,
     resolve_retrieval_adapter,
     retrieval_adapter_runtime_settings,
@@ -118,12 +117,11 @@ def test_runtime_settings_exposes_modes_and_legacy_strategy() -> None:
     runtime = retrieval_adapter_runtime_settings(
         Settings(rag_retrieval_strategy="business_context_strict")
     )
-    assert tuple(status.name for status in runtime.strategies) == RETRIEVAL_STRATEGY_ORDER
     assert tuple(status.name for status in runtime.modes) == RETRIEVAL_MODE_ORDER
-    # 未配線戦略は設定 API の表面から除外する。
-    names = {status.name for status in runtime.strategies}
-    assert "reasoning_tree_search" not in names
+    # 未配線戦略と legacy 複合値は設定 API の表面(モード一覧)から除外する。
+    names = {status.name for status in runtime.modes}
     assert "colpali_visual_retrieval" not in names
+    assert "business_context_strict" not in names
     # legacy 値は hybrid モードへ読み替え、読み替え元を legacy_strategy として提示する。
     assert runtime.mode == "hybrid_rrf"
     assert runtime.legacy_strategy == "business_context_strict"

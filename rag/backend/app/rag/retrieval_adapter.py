@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from rag_pipeline_core.retrieval import (
     RETRIEVAL_SPECS,
     WIRED_RETRIEVAL_MODES,
-    WIRED_RETRIEVAL_STRATEGIES,
     decompose_retrieval_strategy,
     resolve_retrieval,
 )
@@ -30,9 +29,7 @@ from app.schemas.search import SearchMode, SearchStrategy
 RetrievalStrategyName = RetrievalStrategy
 RetrievalModeName = RetrievalMode
 DEFAULT_RETRIEVAL_STRATEGY: RetrievalStrategyName = "hybrid_rrf"
-# 設定 API が公開する戦略順。未配線(pending_execution)戦略は除外する。
-RETRIEVAL_STRATEGY_ORDER: tuple[RetrievalStrategyName, ...] = WIRED_RETRIEVAL_STRATEGIES  # type: ignore[assignment]
-# 設定 API が保存を受理する検索モード順。
+# 設定 API が公開・保存を受理する検索モード順(未配線戦略と legacy 複合値は含まない)。
 RETRIEVAL_MODE_ORDER: tuple[RetrievalModeName, ...] = WIRED_RETRIEVAL_MODES  # type: ignore[assignment]
 
 
@@ -72,19 +69,16 @@ class RetrievalStrategyStatus:
 class RetrievalAdapterRuntimeSettings:
     """Retrieval アダプターの非機密 runtime snapshot。
 
-    mode / modes が新形式(検索モード + 合成トグル)。strategy / strategies は
-    旧 UI 互換の併存フィールド(UI 移行完了後に削除予定)。トグル4値は有効値
-    (settings トグル OR legacy 強制トグル)。
+    トグル4値は有効値(settings トグル OR legacy 強制トグル)。legacy_strategy は
+    legacy 複合値の読み替え元(新形式なら None)。
     """
 
-    strategy: RetrievalStrategyName
     mode: RetrievalModeName
     legacy_strategy: RetrievalStrategyName | None
     query_expansion: bool
     gap_stop: bool
     corrective_retrieval: bool
     business_fit_weighting: bool
-    strategies: tuple[RetrievalStrategyStatus, ...]
     modes: tuple[RetrievalStrategyStatus, ...]
 
 
@@ -183,13 +177,11 @@ def retrieval_adapter_runtime_settings(
     """Settings から Retrieval アダプター readiness snapshot を作る。"""
     params = resolve_retrieval_adapter(settings)
     return RetrievalAdapterRuntimeSettings(
-        strategy=params.strategy,
         mode=params.strategy,
         legacy_strategy=params.legacy_strategy,
         query_expansion=params.query_expansion,
         gap_stop=params.gap_stop,
         corrective_retrieval=params.corrective_retrieval,
         business_fit_weighting=params.business_fit_weighting,
-        strategies=_strategy_statuses(WIRED_RETRIEVAL_STRATEGIES, params.strategy),
         modes=_strategy_statuses(WIRED_RETRIEVAL_MODES, params.strategy),
     )
