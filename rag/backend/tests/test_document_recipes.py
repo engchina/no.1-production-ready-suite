@@ -1,6 +1,6 @@
 """1文書1〜3レシピの境界・工程状態・検索対象契約。"""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -87,6 +87,185 @@ def test_recipe_steps_keep_failure_isolated_to_its_phase() -> None:
 def test_indexed_recipe_reports_all_four_steps_succeeded_without_jobs() -> None:
     steps = _recipe_steps({"status": FileStatus.INDEXED.value}, [])
     assert [step.status for step in steps] == [DocumentRecipeStepStatus.SUCCEEDED] * 4
+
+
+def _recipe_job(
+    phase: IngestionJobPhase,
+    status: IngestionJobStatus,
+    *,
+    job_id: str = "job-1",
+    queued_at: datetime | None = None,
+    error_message: str | None = None,
+) -> IngestionJob:
+    return IngestionJob(
+        id=job_id,
+        document_id="doc-1",
+        recipe_id="recipe-1",
+        recipe_revision=1,
+        status=status,
+        phase=phase,
+        parser_profile="docling",
+        queued_at=queued_at or datetime.now(UTC),
+        error_message=error_message,
+    )
+
+
+_P = DocumentRecipeStepStatus.PENDING
+_R = DocumentRecipeStepStatus.RUNNING
+_S = DocumentRecipeStepStatus.SUCCEEDED
+_NR = DocumentRecipeStepStatus.NEEDS_REVIEW
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (FileStatus.UPLOADED, [_P, _P, _P, _P]),
+        (FileStatus.PREPROCESSING, [_R, _P, _P, _P]),
+        (FileStatus.PREPROCESSED, [_S, _P, _P, _P]),
+        (FileStatus.INGESTING, [_S, _R, _P, _P]),
+        (FileStatus.REVIEW, [_S, _NR, _P, _P]),
+        (FileStatus.CHUNKING, [_S, _S, _R, _P]),
+        (FileStatus.CHUNKED, [_S, _S, _NR, _P]),
+        (FileStatus.INDEXING, [_S, _S, _S, _R]),
+        (FileStatus.INDEXED, [_S, _S, _S, _S]),
+    ],
+)
+def test_recipe_steps_follow_recipe_status_matrix(
+    status: FileStatus, expected: list[DocumentRecipeStepStatus]
+) -> None:
+    """レシピ行 status が4工程表示の単一状態源。"""
+    steps = _recipe_steps({"status": status.value}, [])
+    assert [step.status for step in steps] == expected
+
+
+def test_recipe_steps_show_single_running_step_during_full_run() -> None:
+    """通しジョブ(phase=PREPROCESS)が抽出まで進んでも処理中表示は1工程だけ。"""
+    running = _recipe_job(IngestionJobPhase.PREPROCESS, IngestionJobStatus.RUNNING)
+    steps = _recipe_steps({"status": FileStatus.INGESTING.value}, [running])
+    assert [step.status for step in steps] == [_S, _R, _P, _P]
+
+
+def test_recipe_steps_attribute_full_run_failure_to_failed_phase() -> None:
+    """通しジョブの失敗は failed_phase の工程に出し、メッセージも引き継ぐ。"""
+    failed = _recipe_job(
+        IngestionJobPhase.PREPROCESS,
+        IngestionJobStatus.FAILED,
+        error_message="選択した文書解析サービス(MinerU)に接続できません。",
+    )
+    steps = _recipe_steps(
+        {
+            "status": FileStatus.ERROR.value,
+            "failed_phase": IngestionJobPhase.EXTRACT.value,
+        },
+        [failed],
+    )
+    assert [step.status for step in steps] == [_S, DocumentRecipeStepStatus.FAILED, _P, _P]
+    assert steps[1].error_message == "選択した文書解析サービス(MinerU)に接続できません。"
+    assert steps[0].error_message is None
+
+
+def test_recipe_steps_ignore_stale_jobs_from_previous_run() -> None:
+    """再処理中は前回実行のジョブ行(後続工程の SUCCEEDED 等)を表示しない。"""
+    now = datetime.now(UTC)
+    old = now - timedelta(hours=1)
+    jobs = [
+        _recipe_job(
+            IngestionJobPhase.PREPROCESS,
+            IngestionJobStatus.RUNNING,
+            job_id="job-new",
+            queued_at=now,
+        ),
+        _recipe_job(
+            IngestionJobPhase.EXTRACT,
+            IngestionJobStatus.SUCCEEDED,
+            job_id="job-old-1",
+            queued_at=old,
+        ),
+        _recipe_job(
+            IngestionJobPhase.CHUNK,
+            IngestionJobStatus.SUCCEEDED,
+            job_id="job-old-2",
+            queued_at=old,
+        ),
+        _recipe_job(
+            IngestionJobPhase.INDEX,
+            IngestionJobStatus.FAILED,
+            job_id="job-old-3",
+            queued_at=old,
+        ),
+    ]
+    steps = _recipe_steps({"status": FileStatus.PREPROCESSING.value}, jobs)
+    assert [step.status for step in steps] == [_R, _P, _P, _P]
+
+
+def test_recipe_steps_show_queued_overlay_for_newest_job() -> None:
+    """失敗した工程から再試行を投入した直後(claim 前)はその工程を QUEUED 表示する。"""
+    now = datetime.now(UTC)
+    jobs = [
+        _recipe_job(
+            IngestionJobPhase.EXTRACT,
+            IngestionJobStatus.QUEUED,
+            job_id="job-retry",
+            queued_at=now,
+        ),
+        _recipe_job(
+            IngestionJobPhase.PREPROCESS,
+            IngestionJobStatus.FAILED,
+            job_id="job-old",
+            queued_at=now - timedelta(minutes=5),
+        ),
+    ]
+    steps = _recipe_steps(
+        {
+            "status": FileStatus.ERROR.value,
+            "failed_phase": IngestionJobPhase.EXTRACT.value,
+        },
+        jobs,
+    )
+    assert [step.status for step in steps] == [_S, DocumentRecipeStepStatus.QUEUED, _P, _P]
+
+
+class _RecipeStatusOracle:
+    """_mark_recipe_job_failed 用: 現在 status を返し、更新引数を記録する。"""
+
+    def __init__(self, status: FileStatus) -> None:
+        self._status = status
+        self.recorded: dict[str, object] = {}
+
+    async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, object]:
+        return {"document_id": document_id, "recipe_id": recipe_id, "status": self._status.value}
+
+    async def update_document_recipe_status(self, **kwargs: object) -> None:
+        self.recorded = kwargs
+
+
+@pytest.mark.parametrize(
+    ("job_phase", "recipe_status", "expected"),
+    [
+        # 通しジョブが抽出まで進んで失敗 → EXTRACT に帰属(MinerU 接続失敗など)。
+        (IngestionJobPhase.PREPROCESS, FileStatus.INGESTING, IngestionJobPhase.EXTRACT),
+        # 前処理中の失敗はそのまま。
+        (IngestionJobPhase.PREPROCESS, FileStatus.PREPROCESSING, IngestionJobPhase.PREPROCESS),
+        # CHUNK ジョブが索引まで進んで失敗 → INDEX に帰属。
+        (IngestionJobPhase.CHUNK, FileStatus.INDEXING, IngestionJobPhase.INDEX),
+        # 非実行 status(ゲート停止等)は job.phase へフォールバック。
+        (IngestionJobPhase.CHUNK, FileStatus.REVIEW, IngestionJobPhase.CHUNK),
+        # ジョブ開始工程より前へは戻さない。
+        (IngestionJobPhase.CHUNK, FileStatus.PREPROCESSING, IngestionJobPhase.CHUNK),
+    ],
+)
+async def test_mark_recipe_job_failed_attributes_actual_stage(
+    job_phase: IngestionJobPhase,
+    recipe_status: FileStatus,
+    expected: IngestionJobPhase,
+) -> None:
+    """失敗工程はレシピ行の現在 status(工程ごとに更新)から導出する。"""
+    oracle = _RecipeStatusOracle(recipe_status)
+    job = _recipe_job(job_phase, IngestionJobStatus.RUNNING)
+    await documents_route._mark_recipe_job_failed(oracle, job, "boom")  # type: ignore[arg-type]
+    assert oracle.recorded["status"] == FileStatus.ERROR
+    assert oracle.recorded["failed_phase"] == expected
+    assert oracle.recorded["error_message"] == "boom"
 
 
 async def test_recipe_segment_retry_creates_extract_job_for_same_recipe(
