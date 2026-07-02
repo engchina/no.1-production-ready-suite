@@ -187,6 +187,26 @@ function resolveRetryPhase({
   return "PREPROCESS";
 }
 
+export const INGESTION_PHASE_ORDER: readonly IngestionJobPhase[] = [
+  "PREPROCESS",
+  "EXTRACT",
+  "CHUNK",
+  "INDEX",
+];
+
+/**
+ * 工程順(ファイル準備→抽出→Chunk 作成→Embedding/索引)に、各工程の最新ジョブを解決する。
+ * jobs は既存 API と同じく新しい順で渡す前提(各工程の先頭一致 = 最新)。未実行工程は null。
+ */
+export function resolveLatestJobsByPhase<T extends { phase: IngestionJobPhase }>(
+  jobs: T[]
+): Array<{ phase: IngestionJobPhase; job: T | null }> {
+  return INGESTION_PHASE_ORDER.map((phase) => ({
+    phase,
+    job: jobs.find((job) => job.phase === phase) ?? null,
+  }));
+}
+
 export type IngestionParserDisplay = {
   backend: string | null;
   profile: string | null;

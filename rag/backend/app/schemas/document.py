@@ -239,6 +239,7 @@ class DocumentChunkSet(BaseModel):
     chunk_count: int = 0
     vector_count: int = 0
     is_serving: bool = True
+    created_at: datetime | None = None
     extraction_id: str | None = None
     parser: str | None = None
     preprocess: str | None = None

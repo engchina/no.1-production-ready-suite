@@ -111,6 +111,8 @@ async def test_list_document_chunk_sets_derives_membership_and_serving() -> None
     # is_serving フラグは membership に依らず serving 判別できる(KB 未所属でも有効)。
     assert rows[cs_a]["is_serving"] is True
     assert rows[cs_b]["is_serving"] is False
+    # 作成日時は API(診断行の chunk_set 作成表示)向けに全行で返す。
+    assert all(row["created_at"] is not None for row in rows.values())
 
 
 @pytest.mark.usefixtures("oracle_db")
