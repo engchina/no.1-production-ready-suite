@@ -1866,6 +1866,7 @@ class OracleClient:
                    cs.vector_count AS vector_count,
                    cs.is_serving AS is_serving,
                    cs.is_active AS is_active,
+                   cs.created_at AS created_at,
                    ex.recipe_subset AS extraction_recipe
             FROM rag_chunk_sets cs
             LEFT JOIN rag_document_extractions ex
@@ -1898,6 +1899,7 @@ class OracleClient:
                     "vector_count": int(str(norm["vector_count"] or 0)),
                     "is_serving": is_serving,
                     "is_active": int(str(norm.get("is_active") or 0)) == 1,
+                    "created_at": norm.get("created_at"),
                     "extraction_id": None,
                     "parser": recipe.get("rag_parser_adapter_backend"),
                     "preprocess": recipe.get("rag_preprocess_profile"),

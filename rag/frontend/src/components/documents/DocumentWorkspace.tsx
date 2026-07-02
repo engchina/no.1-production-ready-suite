@@ -39,6 +39,7 @@ import {
   resolveDocumentActionPlan,
   resolveIngestionParserDisplay,
   resolveIngestionProgressSummary,
+  resolveLatestJobsByPhase,
   shouldShowProcessingWatchBanner,
 } from "./DocumentWorkspace.logic";
 import {
@@ -85,6 +86,7 @@ import {
   useApproveDocumentRecipe,
   useEnqueueDocumentRecipeJob,
   useIngestionJob,
+  useModelSettings,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
   useSaveDocumentRecipeReviewEdits,
@@ -109,8 +111,6 @@ import {
   isSameParserBackend,
   parserBackendLabel,
   parserProfileKey,
-  sourceModalityKey,
-  sourcePreviewKey,
   sourceWarningKey,
   unsupportedReasonLabel,
 } from "@/lib/source-profile-labels";
@@ -239,6 +239,9 @@ export function DocumentWorkspace({
   const chunkSetsQuery = useDocumentChunkSets(documentId);
   const documentJobsQuery = useDocumentIngestionJobs(documentId);
   const segmentsQuery = useDocumentIngestionSegments(documentId);
+  // embedding は global 単一固定。診断の付帯情報のため、取得失敗時はチップを出さないだけにする。
+  const modelSettingsQuery = useModelSettings();
+  const embeddingSettings = modelSettingsQuery.data?.settings.generative_ai ?? null;
   const [exportFormat, setExportFormat] =
     useState<DocumentExtractionExportFormat>("markdown");
   const extractionExportQuery = useDocumentRecipeExtractionExport(
@@ -1321,10 +1324,9 @@ export function DocumentWorkspace({
             {t("flow.inspector.details")}
           </summary>
           <div className="space-y-5 pb-3 pt-3">
-            {sourceProfile ? (
-              <SourceProfilePanel profile={sourceProfile} ingestionParser={ingestionParser} />
-            ) : null}
-            {parsedExtraction.sourceDerivation ? (
+            {sourceProfile ? <SourceProfilePanel profile={sourceProfile} /> : null}
+            {/* 派生系譜は変換あり時のみ。変換なしは工程行の「変換なし」チップに集約する。 */}
+            {parsedExtraction.sourceDerivation?.converted ? (
               <SourceDerivationPanel
                 derivation={parsedExtraction.sourceDerivation}
                 originalFileName={sourceProfile?.original_file_name ?? doc.file_name}
@@ -1337,6 +1339,27 @@ export function DocumentWorkspace({
               error={documentJobsQuery.isError}
               nowMs={elapsedNowMs}
               suppressMessage={documentFailure.primaryMessage}
+              ingestionParser={ingestionParser}
+              parserVersion={sourceProfile?.parser_version ?? null}
+              preprocessConverted={
+                preparedArtifact?.converted ??
+                parsedExtraction.sourceDerivation?.converted ??
+                null
+              }
+              chunkCount={latestChunkSet ? selectedRecipe?.chunk_count ?? null : null}
+              chunkSetCreatedAt={
+                chunkSetsQuery.data?.find((chunkSet) => chunkSet.chunk_set_id === latestChunkSet)
+                  ?.created_at ?? null
+              }
+              vectorCount={latestChunkSet ? selectedRecipe?.vector_count ?? null : null}
+              embeddingLabel={
+                embeddingSettings
+                  ? t("flow.jobs.embedding", {
+                      model: embeddingSettings.embedding_model,
+                      dim: embeddingSettings.embedding_dim,
+                    })
+                  : null
+              }
             />
             <IngestionSegmentsPanel
               segments={recipeSegments}
@@ -1569,6 +1592,13 @@ function IngestionJobsPanel({
   error,
   nowMs,
   suppressMessage,
+  ingestionParser,
+  parserVersion,
+  preprocessConverted,
+  chunkCount,
+  chunkSetCreatedAt,
+  vectorCount,
+  embeddingLabel,
 }: {
   jobs: IngestionJob[];
   segments: IngestionSegment[];
@@ -1577,6 +1607,14 @@ function IngestionJobsPanel({
   nowMs: number;
   /** 上部の原因バナーで表示済みの本文。一致時はここで再掲しない（§9 P2）。 */
   suppressMessage?: string | null;
+  ingestionParser: IngestionParserDisplay;
+  parserVersion: string | null;
+  preprocessConverted: boolean | null;
+  /** active chunk_set があるときのみ数値(無ければ null でチップ非表示)。 */
+  chunkCount: number | null;
+  chunkSetCreatedAt: string | null;
+  vectorCount: number | null;
+  embeddingLabel: string | null;
 }) {
   if (loading) return <Skeleton className="h-24 w-full rounded-md" />;
   if (error) {
@@ -1588,18 +1626,7 @@ function IngestionJobsPanel({
   }
   if (!jobs.length) return null;
 
-  const latest = jobs[0];
-  const active = ingestionJobIsActive(latest.status);
-  const normalizedLatestError = normalizeIngestionErrorMessage(latest.error_message);
-  const latestErrorMessage =
-    normalizedLatestError && normalizedLatestError !== suppressMessage
-      ? normalizedLatestError
-      : null;
-  const progressSummary =
-    latest.phase === "PREPROCESS" || latest.phase === "EXTRACT"
-      ? resolveIngestionProgressSummary(segments)
-      : null;
-
+  const rows = resolveLatestJobsByPhase(jobs);
   return (
     <section className="rounded-md border border-border bg-background p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1611,48 +1638,147 @@ function IngestionJobsPanel({
           {t("flow.jobs.count", { count: jobs.length })}
         </span>
       </div>
-      <div className="mt-3 rounded-md border border-border bg-card/40 p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className={jobStatusClass(latest.status)}>{t(jobStatusKey(latest.status))}</span>
-          <span className="rounded-full bg-background px-2 py-0.5 text-xs font-medium text-foreground">
-            {t(jobPhaseKey(latest.phase))}
-          </span>
-          <span className="tnum break-all text-xs text-muted" title={latest.id}>
-            {t("flow.jobs.jobId", { id: shortJobId(latest.id) })}
-          </span>
-        </div>
-        <dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-5">
-          <JobMetric label={t("flow.jobs.queuedAt")} value={formatDateTime(latest.queued_at)} />
-          <JobMetric label={t("flow.jobs.startedAt")} value={formatDateTime(latest.started_at)} />
-          <JobMetric
-            label={t("flow.jobs.finishedAt")}
-            value={formatDateTime(latest.finished_at)}
+      <ol className="mt-3 space-y-2" aria-label={t("flow.jobs.title")}>
+        {rows.map(({ phase, job }) => (
+          <PhaseJobRow
+            key={phase}
+            phase={phase}
+            job={job}
+            segments={segments}
+            nowMs={nowMs}
+            suppressMessage={suppressMessage}
+            ingestionParser={phase === "EXTRACT" ? ingestionParser : null}
+            parserVersion={phase === "EXTRACT" ? parserVersion : null}
+            preprocessConverted={phase === "PREPROCESS" ? preprocessConverted : null}
+            chunkCount={phase === "CHUNK" ? chunkCount : null}
+            chunkSetCreatedAt={phase === "CHUNK" ? chunkSetCreatedAt : null}
+            vectorCount={phase === "INDEX" ? vectorCount : null}
+            embeddingLabel={phase === "INDEX" ? embeddingLabel : null}
           />
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+/** 工程1件分の実行状況行。未実行工程はミュート表示のみ。 */
+function PhaseJobRow({
+  phase,
+  job,
+  segments,
+  nowMs,
+  suppressMessage,
+  ingestionParser,
+  parserVersion,
+  preprocessConverted,
+  chunkCount,
+  chunkSetCreatedAt,
+  vectorCount,
+  embeddingLabel,
+}: {
+  phase: IngestionJobPhase;
+  job: IngestionJob | null;
+  segments: IngestionSegment[];
+  nowMs: number;
+  suppressMessage?: string | null;
+  ingestionParser: IngestionParserDisplay | null;
+  parserVersion: string | null;
+  preprocessConverted: boolean | null;
+  chunkCount: number | null;
+  chunkSetCreatedAt: string | null;
+  vectorCount: number | null;
+  embeddingLabel: string | null;
+}) {
+  const engineLabel = ingestionParser?.backend
+    ? [parserBackendLabel(ingestionParser.backend), parserVersion].filter(Boolean).join(" ")
+    : null;
+  if (!job) {
+    return (
+      <li className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border bg-card/40 px-3 py-2 text-xs text-muted">
+        <span className="font-medium text-foreground/70">{t(jobPhaseKey(phase))}</span>
+        <span>{t("flow.jobs.notStarted")}</span>
+      </li>
+    );
+  }
+  const active = ingestionJobIsActive(job.status);
+  const normalizedError = normalizeIngestionErrorMessage(job.error_message);
+  const errorMessageText =
+    job.status === "FAILED" && normalizedError && normalizedError !== suppressMessage
+      ? normalizedError
+      : null;
+  const progressSummary =
+    active && (phase === "PREPROCESS" || phase === "EXTRACT")
+      ? resolveIngestionProgressSummary(segments)
+      : null;
+  const showAttempt = job.attempt_count > 1 || job.status === "FAILED";
+  return (
+    <li className="rounded-md border border-border bg-card/40 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold text-foreground">{t(jobPhaseKey(phase))}</span>
+        <span className={jobStatusClass(job.status)}>{t(jobStatusKey(job.status))}</span>
+        {preprocessConverted != null ? (
+          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+            {preprocessConverted ? t("provenance.converted") : t("provenance.passthrough")}
+          </span>
+        ) : null}
+        {engineLabel ? (
+          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+            {engineLabel}
+          </span>
+        ) : null}
+        {chunkCount != null ? (
+          <span className="tnum rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+            {t("flow.jobs.chunkCount", { count: chunkCount })}
+          </span>
+        ) : null}
+        {chunkSetCreatedAt ? (
+          <span className="tnum rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+            {t("flow.jobs.chunkSetCreatedAt", { time: formatDateTime(chunkSetCreatedAt) })}
+          </span>
+        ) : null}
+        {vectorCount != null ? (
+          <span className="tnum rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+            {t("flow.jobs.vectorCount", { count: vectorCount })}
+          </span>
+        ) : null}
+        {embeddingLabel ? (
+          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+            {embeddingLabel}
+          </span>
+        ) : null}
+        <span className="tnum ml-auto break-all text-xs text-muted" title={job.id}>
+          {t("flow.jobs.jobId", { id: shortJobId(job.id) })}
+        </span>
+      </div>
+      <dl className="mt-2 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+        <JobMetric label={t("flow.jobs.startedAt")} value={formatDateTime(job.started_at)} />
+        <JobMetric label={t("flow.jobs.finishedAt")} value={formatDateTime(job.finished_at)} />
+        <JobMetric
+          label={t("flow.jobs.elapsed")}
+          value={formatJobElapsed(job, nowMs)}
+          testId={`ingestion-job-elapsed-${phase.toLowerCase()}`}
+        />
+        {showAttempt ? (
           <JobMetric
             label={t("flow.jobs.attempt")}
             value={t("flow.jobs.attemptValue", {
-              count: latest.attempt_count,
-              max: latest.max_attempts,
+              count: job.attempt_count,
+              max: job.max_attempts,
             })}
           />
-          <JobMetric
-            label={t("flow.jobs.elapsed")}
-            value={formatJobElapsed(latest, nowMs)}
-            testId="ingestion-job-elapsed"
-          />
-        </dl>
-        {active ? (
-          <p className="mt-3 text-xs leading-relaxed text-info">{t("flow.jobs.activeHint")}</p>
         ) : null}
-        {progressSummary ? <IngestionProgressSummaryView summary={progressSummary} /> : null}
-        {latestErrorMessage ? (
-          <div className="mt-3 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
-            <p className="font-medium text-danger">{t("flow.jobs.errorReason")}</p>
-            <p className="mt-1 break-words text-danger/90">{latestErrorMessage}</p>
-          </div>
-        ) : null}
-      </div>
-    </section>
+      </dl>
+      {active ? (
+        <p className="mt-2 text-xs leading-relaxed text-info">{t("flow.jobs.activeHint")}</p>
+      ) : null}
+      {progressSummary ? <IngestionProgressSummaryView summary={progressSummary} /> : null}
+      {errorMessageText ? (
+        <div className="mt-2 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
+          <p className="font-medium text-danger">{t("flow.jobs.errorReason")}</p>
+          <p className="mt-1 break-words text-danger/90">{errorMessageText}</p>
+        </div>
+      ) : null}
+    </li>
   );
 }
 
@@ -1772,6 +1898,7 @@ function IngestionSegmentsPanel({
   if (!segments.length) return null;
 
   const hasFailedSegments = segments.some((segment) => segment.status === "FAILED");
+  const allSucceeded = segments.every((segment) => segment.status === "SUCCEEDED");
 
   return (
     <section className="rounded-md border border-border bg-background p-4">
@@ -1803,6 +1930,11 @@ function IngestionSegmentsPanel({
           <FormStatus tone={retryStatus.tone} message={retryStatus.message} />
         </div>
       ) : null}
+      {allSucceeded ? (
+        <p className="mt-3 rounded-md border border-border bg-card/40 px-3 py-2 text-xs text-muted">
+          {t("flow.segments.allSucceeded", { count: segments.length })}
+        </p>
+      ) : (
       <ol
         aria-label={t("flow.segments.title")}
         className="bounded-scroll-area mt-3 grid grid-cols-1 gap-2 rounded-md border border-border bg-card/40 p-2 lg:grid-cols-2"
@@ -1834,7 +1966,10 @@ function IngestionSegmentsPanel({
                 ) : null}
               </div>
               <p className="mt-2 break-all text-xs text-muted">
-                {segment.parser_backend} / {segment.parser_profile}
+                {parserBackendLabel(segment.parser_backend)}
+                {!isSameParserBackend(segment.parser_profile, segment.parser_backend)
+                  ? ` / ${segment.parser_profile}`
+                  : ""}
               </p>
               {segmentErrorMessage ? (
                 <div className="mt-2 space-y-1 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
@@ -1851,6 +1986,7 @@ function IngestionSegmentsPanel({
           );
         })}
       </ol>
+      )}
     </section>
   );
 }
@@ -2141,6 +2277,7 @@ function DocumentChunksPanel({
   );
 }
 
+/** 派生系譜(溯源)。変換あり時のみ呼び出し側で表示する(変換なしは工程行のチップに集約)。 */
 function SourceDerivationPanel({
   derivation,
   originalFileName,
@@ -2151,27 +2288,15 @@ function SourceDerivationPanel({
   const pageCount = Object.keys(derivation.pageMap).length;
   return (
     <section className="rounded-md border border-border bg-background p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <GitBranch size={16} className="text-primary" aria-hidden />
-          {t("provenance.title")}
-        </h3>
-        <span className="rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground">
-          {derivation.converted
-            ? t("provenance.converted")
-            : t("provenance.passthrough")}
-        </span>
-      </div>
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <GitBranch size={16} className="text-primary" aria-hidden />
+        {t("provenance.title")}
+      </h3>
       {/* 原本 → 正規化原本 → 抽出 の系譜(溯源)。原本は保全され、変換物から追跡できる。 */}
       <ol className="mt-3 space-y-2 text-sm">
         <li className="rounded-md border border-border bg-card px-3 py-2">
           <div className="text-xs text-muted">{t("provenance.original")}</div>
           <div className="mt-0.5 break-all font-medium text-foreground">{originalFileName}</div>
-          {derivation.sourceSha256 ? (
-            <div className="tnum mt-0.5 break-all text-xs text-muted">
-              sha256: {derivation.sourceSha256.slice(0, 16)}…
-            </div>
-          ) : null}
         </li>
         <li className="rounded-md border border-border bg-card px-3 py-2">
           <div className="flex items-center justify-between gap-2">
@@ -2180,22 +2305,16 @@ function SourceDerivationPanel({
               {t(`settings.preprocess.profile.${derivation.preprocessProfile}` as I18nKey)}
             </span>
           </div>
-          {derivation.converted ? (
-            <>
-              <div className="mt-0.5 break-all font-medium text-foreground">
-                {derivation.derivedObjectPath ?? derivation.derivedContentType ?? "-"}
-              </div>
-              <div className="tnum mt-0.5 break-all text-xs text-muted">
-                {derivation.converterName} {derivation.converterVersion}
-                {derivation.derivedSha256
-                  ? ` · sha256: ${derivation.derivedSha256.slice(0, 16)}…`
-                  : ""}
-                {pageCount ? ` · ${t("provenance.pageMap")}: ${pageCount}` : ""}
-              </div>
-            </>
-          ) : (
-            <div className="mt-0.5 text-xs text-muted">{t("provenance.noConversion")}</div>
-          )}
+          <div className="mt-0.5 break-all font-medium text-foreground">
+            {derivation.derivedObjectPath ?? derivation.derivedContentType ?? "-"}
+          </div>
+          <div className="tnum mt-0.5 break-all text-xs text-muted">
+            {derivation.converterName} {derivation.converterVersion}
+            {derivation.derivedSha256
+              ? ` · sha256: ${derivation.derivedSha256.slice(0, 16)}…`
+              : ""}
+            {pageCount ? ` · ${t("provenance.pageMap")}: ${pageCount}` : ""}
+          </div>
         </li>
       </ol>
       {derivation.warnings.length > 0 ? (
@@ -2209,55 +2328,20 @@ function SourceDerivationPanel({
   );
 }
 
-function SourceProfilePanel({
-  profile,
-  ingestionParser,
-}: {
-  profile: SourceProfile;
-  ingestionParser: IngestionParserDisplay;
-}) {
+/** 原本情報。原本のファクトのみ表示し、処理系の情報は工程行(IngestionJobsPanel)へ寄せる。 */
+function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
   const warnings = profile.quality_warnings ?? [];
-  const ingestionBackend = ingestionParser.backend
-    ? parserBackendLabel(ingestionParser.backend)
-    : ingestionParser.source === "pending"
-      ? t("sourceProfile.ingestionParser.pending")
-      : t("sourceProfile.ingestionParser.unavailable");
-  const ingestionProfile =
-    ingestionParser.profile &&
-    !isSameParserBackend(ingestionParser.profile, ingestionParser.backend)
-      ? ingestionParser.profile
-      : null;
   return (
     <section className="rounded-md border border-border bg-background p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <FileSearch size={16} className="text-primary" aria-hidden />
-          {t("sourceProfile.documentWorkspaceTitle")}
-        </h3>
-        <span className="rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground">
-          {t(sourceModalityKey(profile.modality))}
-        </span>
-      </div>
-      <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 xl:grid-cols-6">
-        <div>
-          <dt className="text-xs text-muted">{t("sourceProfile.parserBackend")}</dt>
-          <dd className="mt-0.5 font-medium text-foreground">
-            {ingestionBackend}
-          </dd>
-          {ingestionProfile ? (
-            <dd className="mt-0.5 break-all text-xs text-muted">{ingestionProfile}</dd>
-          ) : null}
-        </div>
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <FileSearch size={16} className="text-primary" aria-hidden />
+        {t("sourceProfile.documentWorkspaceTitle")}
+      </h3>
+      <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
         <div>
           <dt className="text-xs text-muted">{t("sourceProfile.parser")}</dt>
           <dd className="mt-0.5 font-medium text-foreground">
             {t(parserProfileKey(profile.parser_profile))}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted">{t("sourceProfile.parserVersion")}</dt>
-          <dd className="tnum mt-0.5 font-medium text-foreground">
-            {profile.parser_version}
           </dd>
         </div>
         <div>
@@ -2267,21 +2351,9 @@ function SourceProfilePanel({
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-muted">{t("sourceProfile.extension")}</dt>
-          <dd className="mt-0.5 font-medium text-foreground">
-            {profile.extension ?? "—"}
-          </dd>
-        </div>
-        <div>
           <dt className="text-xs text-muted">{t("sourceProfile.hash")}</dt>
           <dd className="tnum mt-0.5 font-medium text-foreground">
             {profile.content_sha256.slice(0, 12)}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted">{t("sourceProfile.previewKind")}</dt>
-          <dd className="mt-0.5 font-medium text-foreground">
-            {t(sourcePreviewKey(profile.preview_kind))}
           </dd>
         </div>
       </dl>

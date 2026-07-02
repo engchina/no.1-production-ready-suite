@@ -9,6 +9,7 @@ import {
   resolveDocumentActionPlan,
   resolveIngestionParserDisplay,
   resolveIngestionProgressSummary,
+  resolveLatestJobsByPhase,
   shouldShowProcessingWatchBanner,
 } from "./DocumentWorkspace.logic";
 import {
@@ -44,9 +45,9 @@ describe("文書処理の表示名", () => {
     ],
     [
       "EXTRACT",
-      "解析（抽出）",
-      "解析（抽出）を開始しました。完了まで状態を更新します。",
-      "解析（抽出）を実行しています。完了まで状態を更新します。",
+      "抽出",
+      "抽出を開始しました。完了まで状態を更新します。",
+      "抽出を実行しています。完了まで状態を更新します。",
       "抽出を再実行",
     ],
     [
@@ -202,6 +203,34 @@ describe("resolveDocumentActionPlan", () => {
       kind: "retry",
       phase: "PREPROCESS",
     });
+  });
+});
+
+describe("resolveLatestJobsByPhase", () => {
+  it("工程順に各工程の最新(先頭一致)ジョブを返す", () => {
+    const jobs = [
+      { id: "j4", phase: "INDEX" as IngestionJobPhase },
+      { id: "j3", phase: "CHUNK" as IngestionJobPhase },
+      { id: "j2b", phase: "EXTRACT" as IngestionJobPhase },
+      { id: "j2a", phase: "EXTRACT" as IngestionJobPhase },
+      { id: "j1", phase: "PREPROCESS" as IngestionJobPhase },
+    ];
+    const rows = resolveLatestJobsByPhase(jobs);
+    expect(rows.map((row) => row.phase)).toEqual([
+      "PREPROCESS",
+      "EXTRACT",
+      "CHUNK",
+      "INDEX",
+    ]);
+    expect(rows.map((row) => row.job?.id ?? null)).toEqual(["j1", "j2b", "j3", "j4"]);
+  });
+
+  it("未実行工程は job=null の行になる", () => {
+    const rows = resolveLatestJobsByPhase([
+      { id: "j1", phase: "PREPROCESS" as IngestionJobPhase },
+    ]);
+    expect(rows[0].job?.id).toBe("j1");
+    expect(rows.slice(1).every((row) => row.job === null)).toBe(true);
   });
 });
 

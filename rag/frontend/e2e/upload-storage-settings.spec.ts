@@ -195,9 +195,9 @@ test("アップロード画面で原本の処理情報を確認できる", async
   });
 
   await expect(page.getByText("取込ジョブの状態を更新しています")).toHaveCount(0);
-  // 原本/取込の処理情報は「取込・診断の詳細」を展開して確認する(既定は折りたたみ)。
-  await page.getByText("取込・診断の詳細").click();
-  await expect(page.getByRole("heading", { name: "原本と取込の処理情報" })).toBeVisible();
+  // 原本情報は「処理の詳細(診断)」を展開して確認する(既定は折りたたみ)。
+  await page.getByText("処理の詳細(診断)").click();
+  await expect(page.getByRole("heading", { name: "原本情報" })).toBeVisible();
   await expect(page.getByText("テキスト構造化", { exact: true })).toBeVisible();
   await expect(page.getByText("text/plain")).toBeVisible();
 });
@@ -217,9 +217,8 @@ test("未対応 audio は保存時に処理情報として表示する", async (
   });
 
   await expect(page.getByRole("heading", { name: "voice.mp3" })).toBeVisible();
-  // 原本の処理情報(音声未対応)は「取込・診断の詳細」を展開して確認する。
-  await page.getByText("取込・診断の詳細").click();
-  await expect(page.getByText("音声", { exact: true })).toBeVisible();
+  // 原本情報(音声未対応)は「処理の詳細(診断)」を展開して確認する。
+  await page.getByText("処理の詳細(診断)").click();
   await expect(page.getByText("音声未対応", { exact: true })).toBeVisible();
   await expect(page.getByText("音声ファイルは現在の取込対象外です。").first()).toBeVisible();
   await expect(page.getByText("取込ジョブの状態を更新しています")).toHaveCount(0);
