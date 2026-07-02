@@ -6,7 +6,7 @@ import json
 import math
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -49,10 +49,22 @@ from app.rag.observability import (
     record_rag_stage,
     record_trace_span,
 )
-from app.rag.query_transform import expand_retrieval_queries
+from app.rag.query_transform import (
+    expand_retrieval_queries,
+    expand_retrieval_queries_with_llm,
+)
+from app.rag.reasoning_tree import (
+    SECTION_SUMMARY_CONTENT_KIND,
+    build_section_candidates,
+    candidate_lines,
+    selected_section_paths,
+)
 from app.rag.request_context import current_audit_request_context
 from app.rag.retrieval_adapter import RetrievalAdapterParams, resolve_retrieval_adapter
-from app.rag.retrieval_strategy import ResolvedRetrievalStrategy, resolve_retrieval_strategy
+from app.rag.retrieval_strategy import (
+    ResolvedRetrievalStrategy,
+    resolve_retrieval_strategy,
+)
 from app.schemas.common import JsonValue
 from app.schemas.search import (
     RetrievedChunk,
@@ -74,6 +86,13 @@ GAP_STOP_ANSWER = (
     "確定していないため、根拠検索を実行しませんでした。スコープを指定して再検索してください。"
 )
 GAP_STOP_WARNING = "業務スコープが未確定のため検索を停止しました(gap-stop)。"
+# ツリー検索で LLM へ提示する navigation 要約の取得件数上限。
+MAX_TREE_SUMMARY_TOP_K = 24
+LOW_EVIDENCE_ANSWER = (
+    "取得できた根拠の信頼度が基準を満たさないため、回答を保留しました。"
+    "検索対象のナレッジベースや質問の言い回しを見直してから再度お試しください。"
+)
+LOW_EVIDENCE_WARNING = "根拠の信頼度が閾値未満のため回答を保留しました(CRAG 棄権)。"
 WHITESPACE_RE = re.compile(r"\s+")
 CONTEXT_SEGMENT_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
 QUERY_FEATURE_RE = re.compile(r"[a-z0-9_]{2,}|[ぁ-んァ-ン一-龯々ー]{2,}", re.IGNORECASE)
@@ -90,6 +109,8 @@ class RetrievalExecutionResult:
     graph_hit_count: int = 0
     agent_memory_hit_count: int = 0
     fallback_reason: str | None = None
+    # ツリー検索の踏破記録(選択 section 列)。tree 経路以外は空。
+    tree_search_path: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -298,7 +319,11 @@ class RagPipeline:
         corrective_retried = False
         crag_confidence_score: float | None = None
         crag_fallback_triggered = False
+        crag_hops = 0
+        crag_evidence_grade = "off"
         hyde_generated = False
+        query_expansion_source = "off"
+        tree_search_path: list[dict[str, object]] = []
         agentic_subquery_count = 0
         agentic_hops = 0
         graph_profile = resolve_graph_adapter(self._settings).profile
@@ -322,6 +347,9 @@ class RagPipeline:
                 settings=self._settings,
                 retrieval_strategy=runtime_retrieval_strategy,
                 retrieval_strategy_adapter=retrieval_params.strategy,
+                retrieval_toggles=_retrieval_toggles(retrieval_params),
+                query_expansion_source=query_expansion_source,
+                tree_search_path=tree_search_path,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -334,6 +362,8 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                crag_hops=crag_hops,
+                crag_evidence_grade=crag_evidence_grade,
                 hyde_generated=hyde_generated,
                 route_reason=resolved_strategy.route_reason,
                 keyword_terms=keyword_terms,
@@ -363,11 +393,24 @@ class RagPipeline:
                 diagnostics=diagnostics,
             )
         try:
-            query_variants = expand_retrieval_queries(
-                query_guardrail.sanitized_text,
-                enabled=retrieval_params.query_expansion,
-                max_variants=self._settings.rag_query_expansion_max_variants,
-            )
+            query_variants: list[str] = []
+            if retrieval_params.query_expansion and self._settings.rag_query_expansion_llm_enabled:
+                # opt-in の LLM マルチクエリ拡張。失敗・空応答は決定論展開へ縮退する。
+                query_variants = await expand_retrieval_queries_with_llm(
+                    query_guardrail.sanitized_text,
+                    llm=self._llm,
+                    max_variants=self._settings.rag_query_expansion_max_variants,
+                )
+                if query_variants:
+                    query_expansion_source = "llm"
+            if not query_variants:
+                query_variants = expand_retrieval_queries(
+                    query_guardrail.sanitized_text,
+                    enabled=retrieval_params.query_expansion,
+                    max_variants=self._settings.rag_query_expansion_max_variants,
+                )
+                if retrieval_params.query_expansion and len(query_variants) > 1:
+                    query_expansion_source = "deterministic"
             if not query_variants:
                 query_variants = [query_guardrail.sanitized_text]
             if agentic_params.enabled:
@@ -422,6 +465,7 @@ class RagPipeline:
                     vectors=vectors,
                     request=effective_request,
                     resolved_strategy=resolved_strategy,
+                    tree_search=retrieval_params.strategy == "reasoning_tree_search",
                 ),
                 attributes={
                     "mode": resolved_strategy.mode.value,
@@ -446,6 +490,7 @@ class RagPipeline:
             runtime_retrieval_strategy = retrieval_result.strategy.value
             runtime_fallback_reason = retrieval_result.fallback_reason
             runtime_graph_hit_count = retrieval_result.graph_hit_count
+            tree_search_path = retrieval_result.tree_search_path
             agent_memory_retrieved_count = retrieval_result.agent_memory_hit_count
             error_stage = "rerank"
             ranked = await _observe_stage(
@@ -485,23 +530,43 @@ class RagPipeline:
             )
             selected_retrieval_result = retrieval_result
             crag_confidence_score = _crag_confidence(grounded.ranked)
-            crag_threshold = float(
+            crag_low_threshold = float(
                 getattr(self._settings, "rag_grounding_crag_confidence_threshold", 0.0)
             )
-            if grounding_params.corrective_enabled and (
-                not grounded.ranked
-                or grounded.context_pack.evidence_count == 0
-                or (crag_threshold > 0.0 and crag_confidence_score < crag_threshold)
-            ):
-                corrective_retried = True
-                crag_fallback_triggered = True
-                error_stage = "crag_corrective"
-                rewritten = await self._llm.plan_query(
-                    query_guardrail.sanitized_text,
-                    mode="query_rewrite",
-                    max_subqueries=agentic_params.max_subqueries,
+            crag_high_threshold = max(
+                crag_low_threshold,
+                float(getattr(self._settings, "rag_crag_high_confidence_threshold", 0.7)),
+            )
+            crag_enabled = (
+                grounding_params.corrective_enabled or retrieval_params.corrective_retrieval
+            ) and crag_low_threshold > 0.0
+            if crag_enabled:
+                crag_evidence_grade = _crag_grade(
+                    crag_confidence_score, crag_low_threshold, crag_high_threshold
                 )
-                if rewritten:
+            should_refine = (
+                grounding_params.corrective_enabled
+                and (not grounded.ranked or grounded.context_pack.evidence_count == 0)
+            ) or (crag_enabled and crag_confidence_score < crag_high_threshold)
+            if should_refine:
+                error_stage = "crag_corrective"
+                refinement_limit = (
+                    int(getattr(self._settings, "rag_crag_max_hops", 1)) if crag_enabled else 1
+                )
+                refinement_attempts = 0
+                while refinement_attempts < refinement_limit:
+                    refinement_attempts += 1
+                    if crag_enabled:
+                        crag_hops += 1
+                    corrective_retried = True
+                    crag_fallback_triggered = True
+                    rewritten = await self._llm.plan_query(
+                        query_guardrail.sanitized_text,
+                        mode="query_rewrite",
+                        max_subqueries=agentic_params.max_subqueries,
+                    )
+                    if not rewritten:
+                        break
                     crag_variants = _dedupe_strings([*rewritten, *query_variants])
                     crag_vectors = (
                         []
@@ -532,11 +597,16 @@ class RagPipeline:
                         progress_callback=progress_callback,
                         stage_timings=stream_stage_timings,
                     )
-                    if _grounding_result_quality(crag_grounded) > _grounding_result_quality(
+                    if _grounding_result_quality(crag_grounded) <= _grounding_result_quality(
                         grounded
                     ):
-                        grounded = crag_grounded
-                        selected_retrieval_result = crag_result
+                        break
+                    grounded = crag_grounded
+                    selected_retrieval_result = crag_result
+                    crag_confidence_score = _crag_confidence(grounded.ranked)
+                    query_variants = crag_variants
+                    if not crag_enabled or crag_confidence_score >= crag_high_threshold:
+                        break
             elif (
                 retrieval_params.corrective_retrieval and grounded.context_pack.evidence_count == 0
             ):
@@ -618,6 +688,70 @@ class RagPipeline:
                         grounded = hop_grounded
                         selected_retrieval_result = hop_result
 
+            crag_confidence_score = _crag_confidence(grounded.ranked)
+            if crag_enabled:
+                crag_evidence_grade = _crag_grade(
+                    crag_confidence_score, crag_low_threshold, crag_high_threshold
+                )
+            if crag_evidence_grade == "low" and bool(
+                getattr(self._settings, "rag_crag_low_evidence_abstain_enabled", False)
+            ):
+                elapsed = elapsed_ms(started_at)
+                diagnostics = build_search_diagnostics(
+                    effective_request,
+                    settings=self._settings,
+                    retrieval_strategy=selected_retrieval_result.strategy.value,
+                    retrieval_strategy_adapter=retrieval_params.strategy,
+                    retrieval_toggles=_retrieval_toggles(retrieval_params),
+                    query_expansion_source=query_expansion_source,
+                    tree_search_path=tree_search_path,
+                    post_retrieval_pipeline=grounding_params.pipeline,
+                    generation_profile=self._settings.rag_generation_profile,
+                    guardrail_policy=self._settings.rag_guardrail_policy,
+                    vector_index_profile=self._settings.rag_vector_index_profile,
+                    graph_profile=graph_profile,
+                    agentic_profile=agentic_params.profile,
+                    agentic_subquery_count=agentic_subquery_count,
+                    agentic_hops=agentic_hops,
+                    corrective_retried=corrective_retried,
+                    crag_confidence_score=crag_confidence_score,
+                    crag_fallback_triggered=crag_fallback_triggered,
+                    crag_hops=crag_hops,
+                    crag_evidence_grade=crag_evidence_grade,
+                    hyde_generated=hyde_generated,
+                    route_reason=resolved_strategy.route_reason,
+                    keyword_terms=keyword_terms,
+                    fallback_reason="crag_low_evidence_abstain",
+                    business_context=business_context.diagnostics(),
+                    retrieval_plan=retrieval_plan.diagnostics(),
+                    retrieved_context_pack=grounded.context_pack.diagnostics(),
+                    stream_stage_timings=stream_stage_timings,
+                    retrieved_count=len(grounded.retrieved),
+                    reranked_count=grounded.reranked_count,
+                    query_variant_count=query_variant_count,
+                )
+                record_rag_request(resolved_strategy.mode.value, "no_results", elapsed / 1000, 0)
+                record_rag_search_audit(
+                    trace_id=trace_id,
+                    outcome="no_results",
+                    mode=resolved_strategy.mode,
+                    sanitized_query=query_guardrail.sanitized_text,
+                    filters=request.filters,
+                    findings=query_guardrail.findings,
+                    retrieved_count=len(grounded.retrieved),
+                    citations=[],
+                    elapsed_ms=elapsed,
+                    diagnostics=diagnostics,
+                )
+                return SearchResponse(
+                    answer=LOW_EVIDENCE_ANSWER,
+                    citations=[],
+                    trace_id=trace_id,
+                    guardrail_warnings=[*query_guardrail.warnings, LOW_EVIDENCE_WARNING],
+                    elapsed_ms=elapsed,
+                    diagnostics=diagnostics,
+                )
+
             retrieved = grounded.retrieved
             ranked = grounded.ranked
             context_pack = grounded.context_pack
@@ -669,6 +803,9 @@ class RagPipeline:
                     retrieval_breakdown=retrieval_breakdown,
                     retrieval_candidates=retrieval_candidates,
                     retrieval_strategy_adapter=retrieval_params.strategy,
+                    retrieval_toggles=_retrieval_toggles(retrieval_params),
+                    query_expansion_source=query_expansion_source,
+                    tree_search_path=tree_search_path,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
                     guardrail_policy=self._settings.rag_guardrail_policy,
@@ -681,6 +818,8 @@ class RagPipeline:
                     corrective_retried=corrective_retried,
                     crag_confidence_score=crag_confidence_score,
                     crag_fallback_triggered=crag_fallback_triggered,
+                    crag_hops=crag_hops,
+                    crag_evidence_grade=crag_evidence_grade,
                     hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
@@ -762,6 +901,9 @@ class RagPipeline:
                 retrieval_breakdown=retrieval_breakdown,
                 retrieval_candidates=retrieval_candidates,
                 retrieval_strategy_adapter=retrieval_params.strategy,
+                retrieval_toggles=_retrieval_toggles(retrieval_params),
+                query_expansion_source=query_expansion_source,
+                tree_search_path=tree_search_path,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -774,6 +916,8 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                crag_hops=crag_hops,
+                crag_evidence_grade=crag_evidence_grade,
                 hyde_generated=hyde_generated,
                 memory_plan_id=retrieval_plan.plan_id,
                 graph_hit_count=runtime_graph_hit_count,
@@ -931,6 +1075,9 @@ class RagPipeline:
                 retrieval_breakdown=retrieval_breakdown,
                 retrieval_candidates=retrieval_candidates,
                 retrieval_strategy_adapter=retrieval_params.strategy,
+                retrieval_toggles=_retrieval_toggles(retrieval_params),
+                query_expansion_source=query_expansion_source,
+                tree_search_path=tree_search_path,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -943,8 +1090,10 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                crag_hops=crag_hops,
+                crag_evidence_grade=crag_evidence_grade,
                 hyde_generated=hyde_generated,
-                memory_plan_id=retrieval_plan.plan_id if retrieval_plan is not None else None,
+                memory_plan_id=(retrieval_plan.plan_id if retrieval_plan is not None else None),
                 graph_hit_count=runtime_graph_hit_count,
                 fallback_reason=runtime_fallback_reason,
                 business_context=business_context.diagnostics(),
@@ -1029,7 +1178,9 @@ class RagPipeline:
         ]
         ranked_context = sorted(
             ranked,
-            key=lambda chunk: chunk.rerank_score if chunk.rerank_score is not None else chunk.score,
+            key=lambda chunk: (
+                chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+            ),
             reverse=True,
         )[:top_n]
         ranked_context = [
@@ -1432,12 +1583,36 @@ class RagPipeline:
         vectors: list[list[float]],
         request: SearchRequest,
         resolved_strategy: ResolvedRetrievalStrategy,
+        tree_search: bool = False,
     ) -> RetrievalExecutionResult:
-        """resolved strategy に応じて GraphRAG-lite または baseline retrieval を実行する。"""
+        """resolved strategy に応じて tree / GraphRAG-lite / baseline retrieval を実行する。"""
         if resolved_strategy.strategy not in (
             SearchStrategy.GRAPH_LOCAL,
             SearchStrategy.GRAPH_GLOBAL,
         ):
+            tree_fallback_reason: str | None = None
+            if tree_search:
+                tree_chunks, tree_path, tree_fallback_reason = (
+                    await self._retrieve_with_reasoning_tree(
+                        query_variants=query_variants,
+                        vectors=vectors,
+                        request=request,
+                    )
+                )
+                if tree_chunks:
+                    agent_memory_hits = await self._retrieve_agent_memory(
+                        query_variants=query_variants,
+                        vectors=vectors,
+                        request=request,
+                    )
+                    return RetrievalExecutionResult(
+                        chunks=[*tree_chunks, *agent_memory_hits],
+                        strategy=resolved_strategy.strategy,
+                        graph_hit_count=resolved_strategy.graph_hit_count,
+                        agent_memory_hit_count=len(agent_memory_hits),
+                        fallback_reason=resolved_strategy.fallback_reason,
+                        tree_search_path=tree_path,
+                    )
             chunks = await self._retrieve_with_query_variants(
                 query_variants=query_variants,
                 vectors=vectors,
@@ -1454,7 +1629,7 @@ class RagPipeline:
                 strategy=resolved_strategy.strategy,
                 graph_hit_count=resolved_strategy.graph_hit_count,
                 agent_memory_hit_count=len(agent_memory_hits),
-                fallback_reason=resolved_strategy.fallback_reason,
+                fallback_reason=resolved_strategy.fallback_reason or tree_fallback_reason,
             )
 
         graph_query = query_variants[0] if query_variants else request.query
@@ -1549,10 +1724,84 @@ class RagPipeline:
         """GraphRAG-lite 経路を実行し、KG 未適用環境では空として扱う。"""
         try:
             if strategy == SearchStrategy.GRAPH_GLOBAL:
-                return await self._oracle.graph_global_search(query, top_k, filters), None
+                return (
+                    await self._oracle.graph_global_search(query, top_k, filters),
+                    None,
+                )
             return await self._oracle.graph_local_search(query, top_k, filters), None
         except Exception:
             return [], "graph_query_error"
+
+    async def _retrieve_with_reasoning_tree(
+        self,
+        *,
+        query_variants: list[str],
+        vectors: list[list[float]],
+        request: SearchRequest,
+    ) -> tuple[list[RetrievedChunk], list[dict[str, object]], str | None]:
+        """ツリー検索(PageIndex-lite): navigation 要約から LLM が section を選び配下を検索する。
+
+        戻り値は (chunks, 踏破記録, 縮退理由)。navigation 要約未構築・LLM 失敗・選択なしの
+        ときは空 chunks + 縮退理由を返し、呼び出し側が hybrid baseline へ縮退する。
+        """
+        query = query_variants[0] if query_variants else request.query
+        vector = vectors[0] if vectors else []
+        if not vector:
+            return [], [], "tree_search_no_query_vector"
+        summary_hits = await self._oracle.hybrid_search(
+            query=query,
+            embedding=vector,
+            top_k=MAX_TREE_SUMMARY_TOP_K,
+            mode=SearchMode.HYBRID,
+            filters={**request.filters, "content_kind": SECTION_SUMMARY_CONTENT_KIND},
+        )
+        candidates = build_section_candidates(summary_hits)
+        if not candidates:
+            return [], [], "tree_search_no_navigation_summaries"
+        max_sections = int(getattr(self._settings, "rag_reasoning_tree_max_sections", 3))
+        try:
+            selected_numbers = await self._llm.select_relevant_sections(
+                query,
+                candidate_lines(candidates),
+                max_sections=max_sections,
+            )
+        except Exception:  # noqa: BLE001 - LLM 失敗は hybrid へ縮退する
+            return [], [], "tree_search_llm_failed"
+        paths = selected_section_paths(candidates, selected_numbers, max_sections=max_sections)
+        if not paths:
+            return [], [], "tree_search_no_section_selected"
+        section_filters = {key: value for key, value in request.filters.items()}
+        section_hits = await asyncio.gather(
+            *[
+                self._oracle.hybrid_search(
+                    query=query,
+                    embedding=vector,
+                    top_k=request.top_k,
+                    mode=SearchMode.HYBRID,
+                    filters={**section_filters, "section_path": path},
+                )
+                for path in paths
+            ]
+        )
+        chunks: list[RetrievedChunk] = []
+        seen_chunk_ids: set[str] = set()
+        for hits in section_hits:
+            for chunk in hits:
+                if chunk.chunk_id in seen_chunk_ids:
+                    continue
+                seen_chunk_ids.add(chunk.chunk_id)
+                chunks.append(chunk)
+        tree_path: list[dict[str, object]] = [
+            {
+                "section_path": candidate.section_path,
+                "title": candidate.title,
+                "decision": "selected" if candidate.section_path in paths else "candidate",
+            }
+            for candidate in candidates
+        ]
+        if not chunks:
+            return [], tree_path, "tree_search_sections_empty"
+        return chunks, tree_path, None
 
     async def _retrieve_with_query_variants(
         self,
@@ -2084,6 +2333,16 @@ def _metadata_text(value: object) -> str | None:
     return None
 
 
+def _retrieval_toggles(params: RetrievalAdapterParams) -> dict[str, bool]:
+    """診断用: 検索方法の有効トグル snapshot。"""
+    return {
+        "query_expansion": params.query_expansion,
+        "gap_stop": params.gap_stop,
+        "corrective_retrieval": params.corrective_retrieval,
+        "business_fit_weighting": params.business_fit_weighting,
+    }
+
+
 def _apply_retrieval_adapter_request(
     request: SearchRequest,
     params: RetrievalAdapterParams,
@@ -2114,6 +2373,15 @@ def _business_context_scope_pinned(business_context: BusinessContextPack) -> boo
             business_context.version_filter_present,
         )
     )
+
+
+def _crag_grade(confidence: float, low_threshold: float, high_threshold: float) -> str:
+    """CRAG evidence grade: high(そのまま生成)/ mid(精緻化)/ low(棄権 opt-in)。"""
+    if confidence >= high_threshold:
+        return "high"
+    if confidence < low_threshold:
+        return "low"
+    return "mid"
 
 
 def _crag_confidence(ranked: list[RetrievedChunk]) -> float:

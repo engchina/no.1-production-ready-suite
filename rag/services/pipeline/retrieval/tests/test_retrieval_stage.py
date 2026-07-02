@@ -22,10 +22,13 @@ def test_health_ok() -> None:
     assert client.get("/health").json()["stage"] == "retrieval"
 
 
-def test_vector_forces_mode_and_disables_expansion() -> None:
+def test_vector_forces_mode_and_follows_settings_expansion() -> None:
+    # query expansion はモード非依存の合成トグル(強制 OFF を撤廃)。settings に従う。
     body = _run("vector", expansion=True)
     assert body["mode_override"] == "vector"
-    assert body["query_expansion"] is False
+    assert body["query_expansion"] is True
+    assert _run("vector", expansion=False)["query_expansion"] is False
+    assert _run("keyword", expansion=True)["query_expansion"] is True
 
 
 def test_hybrid_uses_settings_expansion() -> None:
@@ -54,8 +57,10 @@ def test_unknown_strategy_falls_back() -> None:
 
 
 def test_pending_strategies_resolve_without_bias_for_hybrid_degrade() -> None:
-    # reasoning_tree_search / colpali_visual_retrieval は段階導入中。strategy_bias/mode_override を
-    # 持たないため実行は hybrid へ安全縮退する(戦略名は選択値として保持)。
+    # colpali_visual_retrieval は段階導入中。strategy_bias/mode_override を持たないため
+    # 実行は hybrid へ安全縮退する(戦略名は選択値として保持)。
+    # reasoning_tree_search は配線済みモード(実行は backend の tree 経路。core の静的解決は
+    # bias/override なしで同形)。
     for name in ("reasoning_tree_search", "colpali_visual_retrieval"):
         body = _run(name)
         assert body["strategy"] == name

@@ -23,6 +23,7 @@ import logging
 from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
+from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
 from app.config import ServingMode, Settings
 from app.rag.kb_adapter_config import (
@@ -78,9 +79,31 @@ def parse_business_view_config(raw: Mapping[str, object] | None) -> BusinessView
         return BusinessViewConfig()
 
 
+def _normalized_query(query: KnowledgeBaseQueryConfig) -> KnowledgeBaseQueryConfig:
+    """legacy 複合 retrieval_strategy をモード + トグルへ正規化する(保存は新形式のみ)。"""
+    if query.retrieval_strategy is None:
+        return query
+    decomposed = decompose_retrieval_strategy(query.retrieval_strategy)
+    if decomposed.legacy_strategy is None and decomposed.mode == query.retrieval_strategy:
+        return query
+    # 強制トグルは runtime の OR 合成で常に勝つため、正規化でも無条件に True を書く。
+    updates: dict[str, object] = {"retrieval_strategy": decomposed.mode}
+    if decomposed.forced_query_expansion:
+        updates["retrieval_query_expansion"] = True
+    if decomposed.forced_gap_stop:
+        updates["retrieval_gap_stop"] = True
+    if decomposed.forced_corrective_retrieval:
+        updates["retrieval_corrective"] = True
+    if decomposed.forced_business_fit_weighting:
+        updates["retrieval_business_fit_weighting"] = True
+    return query.model_copy(update=updates)
+
+
 def dump_business_view_config(config: BusinessViewConfig) -> dict[str, object]:
     """業務ビュー設定を ``view_config`` カラムへ保存する dict へ変換する。"""
-    return config.model_copy(update={"serving_mode": "fused"}).model_dump(mode="json")
+    return config.model_copy(
+        update={"serving_mode": "fused", "query": _normalized_query(config.query)}
+    ).model_dump(mode="json")
 
 
 def resolve_business_view_settings(

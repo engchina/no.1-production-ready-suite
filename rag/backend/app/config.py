@@ -71,6 +71,17 @@ CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "markdown_heading",
     "page_level",
 }
+# 検索モード(排他選択)。設定 API の保存はこの5値のみ。
+RetrievalMode = Literal[
+    "hybrid_rrf",
+    "vector",
+    "keyword",
+    "graph_augmented",
+    "reasoning_tree_search",
+]
+# 読み取り互換の全戦略。legacy 複合値(business_context_strict / corrective_multi_query)は
+# 既存 .env / Business View JSON の validation を落とさないため残し、解決時に
+# rag_pipeline_core.decompose_retrieval_strategy でモード + トグルへ読み替える。
 RetrievalStrategy = Literal[
     "hybrid_rrf",
     "vector",
@@ -646,9 +657,33 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         description=(
-            "CRAG: grounding preset が corrective(verified_context/full_governed)のとき、rerank の"
-            "最高スコアがこの閾値未満なら query を書き換えて 1 回だけ corrective 再検索する。"
-            "閾値 0.0 は実質無効(corrective 経路でも再検索しない)。"
+            "CRAG evidence grade の低閾値。rerank 最高スコアがこの値未満なら低 grade"
+            "(棄権 opt-in の対象)。閾値 0.0 は CRAG 全体を実質無効にする(互換)。"
+        ),
+    )
+    rag_crag_high_confidence_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "CRAG evidence grade の高閾値。rerank 最高スコアがこの値以上なら精緻化再検索を"
+            "行わずそのまま生成する。低閾値との間は中間帯(精緻化 + 再検索)。"
+        ),
+    )
+    rag_crag_max_hops: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        description=(
+            "CRAG 中間帯・低帯でのクエリ精緻化 + 再検索の hop 上限。1 は従来の 1 回リトライ相当。"
+            "0 は再検索なし(grade 判定と棄権のみ)。"
+        ),
+    )
+    rag_crag_low_evidence_abstain_enabled: bool = Field(
+        default=False,
+        description=(
+            "CRAG 低 grade(再検索後も低閾値未満)のとき回答を棄権する(opt-in)。"
+            "無効時は従来どおり best-effort で生成する。"
         ),
     )
     rag_context_compression_max_sentences: int = Field(
@@ -673,6 +708,13 @@ class Settings(BaseSettings):
     rag_query_expansion_enabled: bool = Field(
         default=True,
         description="retrieval 前に deterministic な業務同義語 query expansion を行う。",
+    )
+    rag_query_expansion_llm_enabled: bool = Field(
+        default=False,
+        description=(
+            "query expansion に OCI Enterprise AI のマルチクエリ生成を使う(opt-in)。"
+            "検索ごとに LLM 呼び出しが 1 回増える。失敗時は決定論の同義語展開へ縮退する。"
+        ),
     )
     rag_query_expansion_max_variants: int = Field(
         default=3,
@@ -770,11 +812,31 @@ class Settings(BaseSettings):
     rag_retrieval_strategy: RetrievalStrategy = Field(
         default="hybrid_rrf",
         description=(
-            "検索段階の Retrieval アダプター。hybrid_rrf は hybrid + query expansion + RRF、"
-            "vector/keyword は単一モード、graph_augmented は構造寄り、"
-            "business_context_strict は業務適合加重 + gap-stop、"
-            "corrective_multi_query は多 query + 不足時の再検索。"
+            "検索モード。hybrid_rrf は hybrid + RRF、vector/keyword は単一モード、"
+            "graph_augmented は構造寄り。legacy 複合値(business_context_strict / "
+            "corrective_multi_query)は読み取り互換でモード + トグルへ分解する(保存は新形式のみ)。"
             "per-request の strategy/mode を明示した場合はそちらを優先する。"
+        ),
+    )
+    rag_retrieval_gap_stop_enabled: bool = Field(
+        default=False,
+        description="スコープ未確定(tenant/ACL/KB 等が無指定)のとき検索を停止する gap-stop。",
+    )
+    rag_retrieval_business_fit_weighting_enabled: bool = Field(
+        default=False,
+        description="rerank 後スコアへ業務適合(版状態・ACL・版指定)の加重を掛ける。",
+    )
+    rag_retrieval_corrective_enabled: bool = Field(
+        default=False,
+        description="根拠不足時に条件緩和 + 再検索する補正検索(CRAG)。",
+    )
+    rag_reasoning_tree_max_sections: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        description=(
+            "ツリー検索(reasoning_tree_search)で LLM が選ぶ section 数の上限。"
+            "選んだ section ごとに section_path フィルタ付き検索を 1 回行う。"
         ),
     )
     rag_serving_mode: ServingMode = Field(
@@ -1581,7 +1643,9 @@ class Settings(BaseSettings):
 _MODEL_SETTINGS_STATE: dict[str, int | str | None] = {"path": None, "mtime_ns": None}
 
 
-def enterprise_ai_model_catalog(settings: Settings) -> list[EnterpriseAiConfiguredModel]:
+def enterprise_ai_model_catalog(
+    settings: Settings,
+) -> list[EnterpriseAiConfiguredModel]:
     """Enterprise AI の登録モデル一覧を返す。旧 LLM/VLM 設定からも補完する。"""
     configured = [
         model
@@ -1633,7 +1697,9 @@ def _coerce_enterprise_ai_model(
     return EnterpriseAiConfiguredModel.model_validate(value)
 
 
-def _legacy_enterprise_ai_model_catalog(settings: Settings) -> list[EnterpriseAiConfiguredModel]:
+def _legacy_enterprise_ai_model_catalog(
+    settings: Settings,
+) -> list[EnterpriseAiConfiguredModel]:
     """旧 LLM/VLM model ID から新しい model catalog を作る。"""
     llm_model = getattr(settings, "oci_enterprise_ai_llm_model", "").strip()
     vlm_model = getattr(settings, "oci_enterprise_ai_vlm_model", "").strip()

@@ -113,3 +113,45 @@ def test_parse_tolerates_broken_payload() -> None:
     restored = parse_business_view_config({"query": "not-a-dict"})
     assert restored.normalized_knowledge_base_ids() == []
     assert restored.system_prompt is None
+
+
+def test_retrieval_toggle_overrides_apply() -> None:
+    """検索方法の合成トグルは業務ビューからグローバルへ上書きできる(双方向)。"""
+    settings = get_settings()
+    config = BusinessViewConfig(
+        query=KnowledgeBaseQueryConfig(
+            retrieval_strategy="graph_augmented",
+            retrieval_corrective=True,
+            retrieval_query_expansion=False,
+            retrieval_query_expansion_llm=True,
+        )
+    )
+    merged, applied = resolve_business_view_settings(settings, config)
+    assert applied is True
+    assert merged.rag_retrieval_strategy == "graph_augmented"
+    assert merged.rag_retrieval_corrective_enabled is True
+    assert merged.rag_query_expansion_enabled is False
+    assert merged.rag_query_expansion_llm_enabled is True
+    # グローバルは破壊しない。
+    assert settings.rag_retrieval_corrective_enabled is False
+
+
+def test_legacy_retrieval_strategy_is_read_and_normalized_on_save() -> None:
+    """legacy 複合値は読み取り互換で効き、保存時にモード + トグルへ正規化される。"""
+    settings = get_settings()
+    config = parse_business_view_config(
+        {"query": {"retrieval_strategy": "business_context_strict"}}
+    )
+    assert config.query.retrieval_strategy == "business_context_strict"
+    # runtime: merged settings の strategy は legacy 値のまま渡り、
+    # resolve_retrieval_adapter が分解する(挙動は従来同等)。
+    merged, applied = resolve_business_view_settings(settings, config)
+    assert applied is True
+    assert merged.rag_retrieval_strategy == "business_context_strict"
+    # 保存: 新形式(モード + 明示トグル)のみを書き出す。
+    dumped_query = dump_business_view_config(config)["query"]
+    assert isinstance(dumped_query, dict)
+    assert dumped_query["retrieval_strategy"] == "hybrid_rrf"
+    assert dumped_query["retrieval_gap_stop"] is True
+    assert dumped_query["retrieval_business_fit_weighting"] is True
+    assert dumped_query["retrieval_corrective"] is None
