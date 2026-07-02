@@ -113,6 +113,12 @@ def ensure_schema() -> None:
                     continue
                 if code == 904 and "RAG_ARTIFACT_LAYERS_PARENT_IDX" in sql.upper():
                     continue
+                if (
+                    code == 904
+                    and "RAG_CHUNKS_TEXT_IDX" in sql.upper()
+                    and "SEARCH_TEXT" in sql.upper()
+                ):
+                    continue
                 if code == 904 and "RAG_INGESTION_AUDIT_PARSER_CREATED_IDX" in sql.upper():
                     continue
                 if (

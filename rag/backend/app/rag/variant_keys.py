@@ -24,7 +24,7 @@ import json
 from app.config import Settings
 
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
-KEY_VERSION = "v2"
+KEY_VERSION = "v3"
 
 # 1 文書あたりの抽出(preprocess x parser 組合せ)上限。組合せ暴発の安全弁。
 MAX_EXTRACTIONS_PER_DOCUMENT = 8
@@ -51,9 +51,9 @@ _CHUNK_SET_FIELDS: tuple[str, ...] = (
     "rag_chunk_size",
     "rag_chunk_overlap",
     "rag_chunk_child_size",
-    "rag_chunk_sentence_window_size",
     "rag_chunk_min_chars",
     "rag_chunk_delimiter",
+    "rag_chunk_context_header_enabled",
 )
 
 # 各派生層が「追加で」依存する軸(chunk_set_id に重ねて hash する)。

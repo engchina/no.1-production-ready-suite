@@ -5,10 +5,19 @@ import re
 from datetime import UTC, datetime
 from typing import Literal, get_args
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from rag_pipeline_core.retrieval import WIRED_RETRIEVAL_STRATEGIES
 
 from app.config import (
+    CHUNK_OVERLAP_MAX_CHARS,
+    CHUNK_SIZE_MAX_CHARS,
+    CHUNK_SIZE_MIN_CHARS,
     AgenticProfile,
     ChunkingStrategy,
     EnterpriseAiVlmInputMode,
@@ -32,7 +41,13 @@ DatabaseConnectionTestStatus = Literal["success", "failed"]
 OciConfigTestStatus = Literal["success", "failed"]
 OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 ParserAdapterBackendName = Literal[
-    "docling", "marker", "unstructured", "unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"
+    "docling",
+    "marker",
+    "unstructured",
+    "unlimited_ocr",
+    "mineru",
+    "dots_ocr",
+    "glm_ocr",
 ]
 ParserAdapterScoreBackendName = Literal[
     "local",
@@ -68,7 +83,6 @@ ParserAdapterScoreStatus = Literal[
 _CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "structure_aware",
     "recursive_character",
-    "sentence_window",
     "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
@@ -314,7 +328,6 @@ class DatabaseSettingsUpdate(BaseModel):
 class HuggingFaceSettingsData(BaseModel):
     """HuggingFace モデルダウンロード設定の表示用データ(token 実値は返さない)。"""
 
-    download_dir: str
     endpoint: str
     token_configured: bool
     config_source: Literal["runtime"]
@@ -326,24 +339,17 @@ class HuggingFaceSettingsUpdate(BaseModel):
     token は未指定または空文字なら既存値を保持する。clear_token が true の場合だけ削除する。
     """
 
-    download_dir: str = Field(default="", max_length=1024)
+    model_config = ConfigDict(extra="forbid")
+
     endpoint: str = Field(default="", max_length=512)
     token: str | None = Field(default=None, max_length=4096)
     clear_token: bool = False
 
-    @field_validator("download_dir", "endpoint")
+    @field_validator("endpoint")
     @classmethod
     def strip_text(cls, value: str) -> str:
         """前後空白を設定値へ混入させない。"""
         return value.strip()
-
-    @field_validator("download_dir")
-    @classmethod
-    def validate_absolute_dir(cls, value: str) -> str:
-        """ダウンロードディレクトリは bind マウントの基点になるため絶対パスに限定する。"""
-        if value and not value.startswith("/"):
-            raise ValueError("ダウンロードディレクトリは絶対パス(/ 始まり)で入力してください。")
-        return value
 
 
 class UploadStorageSettingsData(BaseModel):
@@ -551,6 +557,14 @@ class ParserServiceBackendData(BaseModel):
     warning_code: str | None = None
 
 
+class ParserBackendCapabilityData(BaseModel):
+    """backend が処理できる原本形式の宣言(rag_parser_core.capabilities 正本)。"""
+
+    backend: str
+    modalities: list[str] = Field(default_factory=list)
+    extensions: list[str] = Field(default_factory=list)
+
+
 class ParserAdapterSettingsData(BaseModel):
     """任意 parser adapter 設定の非機密 runtime snapshot。"""
 
@@ -561,6 +575,7 @@ class ParserAdapterSettingsData(BaseModel):
     scorecard: ParserAdapterScorecardData
     source_routes: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
     backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData
+    capabilities: list[ParserBackendCapabilityData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
 
@@ -626,7 +641,6 @@ class ChunkingStrategyStatusData(BaseModel):
     recommended_for: list[str] = Field(default_factory=list)
     selected: bool
     uses_child_size: bool = False
-    uses_sentence_window: bool = False
 
 
 class ChunkingSettingsData(BaseModel):
@@ -636,9 +650,9 @@ class ChunkingSettingsData(BaseModel):
     chunk_size: int
     overlap: int
     child_size: int
-    sentence_window_size: int
     min_chars: int
     delimiter: str
+    context_header_enabled: bool
     strategies: list[ChunkingStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
@@ -647,12 +661,16 @@ class ChunkingSettingsUpdate(BaseModel):
     """文書分割設定の更新 payload。"""
 
     strategy: ChunkingStrategyName
-    chunk_size: int = Field(default=800, ge=200, le=4000)
-    overlap: int = Field(default=120, ge=0, le=1000)
+    chunk_size: int = Field(
+        default=800,
+        ge=CHUNK_SIZE_MIN_CHARS,
+        le=CHUNK_SIZE_MAX_CHARS,
+    )
+    overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     child_size: int = Field(default=320, ge=80, le=4000)
-    sentence_window_size: int = Field(default=3, ge=1, le=20)
-    min_chars: int = Field(default=0, ge=0, le=2000)
+    min_chars: int = Field(default=120, ge=0, le=2000)
     delimiter: str = Field(default="\\n\\n", min_length=1, max_length=256)
+    context_header_enabled: bool = True
 
     @field_validator("delimiter")
     @classmethod
@@ -772,21 +790,28 @@ class GenerationProfileStatusData(BaseModel):
     recommended_for: list[str] = Field(default_factory=list)
     selected: bool
     structured_output: bool = False
+    contract_mode: Literal["groundedness", "format_validated", "json_schema", "custom"]
+    repair_enabled: bool
 
 
 class GenerationSettingsData(BaseModel):
-    """回答スタイル設定の非機密 runtime snapshot。"""
+    """Oracle を正本とする回答スタイル設定の非機密 snapshot。"""
 
     profile: GenerationProfileName
     structured_output: bool
     profiles: list[GenerationProfileStatusData] = Field(default_factory=list)
-    config_source: Literal["runtime"]
+    config_source: Literal["oracle"]
+    revision: int = Field(ge=1)
+    updated_at: datetime
+    active_prompt_version_id: str | None = None
+    custom_prompt_configured: bool
 
 
 class GenerationSettingsUpdate(BaseModel):
     """回答スタイル設定の更新 payload。"""
 
     profile: GenerationProfileName
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class PromptVersionData(BaseModel):
@@ -806,6 +831,7 @@ class PromptVersionsData(BaseModel):
 
     active_version_id: str | None = None
     versions: list[PromptVersionData] = Field(default_factory=list)
+    settings_revision: int = Field(ge=1)
 
 
 class PromptVersionCreate(BaseModel):

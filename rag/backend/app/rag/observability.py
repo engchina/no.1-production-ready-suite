@@ -226,6 +226,21 @@ RATE_LIMIT_DECISIONS = Counter(
     "高コスト API の rate limit 判定数",
     ["scope", "outcome"],
 )
+RAG_GENERATION_ATTEMPTS = Counter(
+    "rag_generation_attempts_total",
+    "回答生成の試行数",
+    ["profile", "outcome"],
+)
+RAG_GENERATION_REPAIRS = Counter(
+    "rag_generation_repairs_total",
+    "回答契約不一致による完全再生成数",
+    ["profile", "outcome"],
+)
+RAG_GENERATION_CONTRACT_FAILURES = Counter(
+    "rag_generation_contract_failures_total",
+    "回答生成契約の不一致コード数",
+    ["profile", "code"],
+)
 
 
 def new_trace_id() -> str:
@@ -297,6 +312,24 @@ def record_guardrail_findings(
 def record_rate_limit_decision(scope: str, outcome: str) -> None:
     """rate limit 判定を低 cardinality label で記録する。"""
     RATE_LIMIT_DECISIONS.labels(scope=scope, outcome=outcome).inc()
+
+
+def record_generation_contract(
+    *,
+    profile: str,
+    attempt_count: int,
+    repair_count: int,
+    validation_codes: Iterable[str],
+    outcome: str,
+) -> None:
+    """Prompt / 回答 / context を含めず契約検証メトリクスだけを記録する。"""
+
+    RAG_GENERATION_ATTEMPTS.labels(profile=profile, outcome=outcome).inc(attempt_count)
+    if repair_count:
+        RAG_GENERATION_REPAIRS.labels(profile=profile, outcome=outcome).inc(repair_count)
+    for code in dict.fromkeys(validation_codes):
+        if code != "contract_valid":
+            RAG_GENERATION_CONTRACT_FAILURES.labels(profile=profile, code=code).inc()
 
 
 def record_trace_span(

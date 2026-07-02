@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from app.api.routes import documents
 from app.api.routes.documents import (
-    _candidate_experiment_settings,
+    _candidate_chunking_settings,
     create_chunk_set_experiment,
     promote_chunk_set_experiment,
 )
@@ -304,5 +304,5 @@ def test_experiment_request_requires_at_least_one_override() -> None:
 def test_candidate_settings_rejects_overlap_not_smaller_than_size() -> None:
     request = ChunkSetExperimentRequest(chunk_size=300, chunk_overlap=300)
     with pytest.raises(HTTPException) as exc:
-        _candidate_experiment_settings(get_settings(), request)
+        _candidate_chunking_settings(get_settings(), request.settings_overrides())
     assert exc.value.status_code == 422

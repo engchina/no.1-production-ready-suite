@@ -8,7 +8,7 @@ type IngestionErrorDisplayPlan = {
   retriedSegmentJobMessage: string | null;
 };
 
-/** FlowStepper の工程キーのうち、取込ジョブの phase が対応しうるもの。 */
+/** 工程(レシピの処理段階)のうち、取込ジョブの phase が対応しうるもの。 */
 export type FailedFlowStep = "PREPROCESSING" | "INGESTING" | "CHUNKING" | "INDEXING";
 
 const PHASE_TO_STEP: Record<IngestionJobPhase, FailedFlowStep> = {

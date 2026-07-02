@@ -10,6 +10,8 @@ import pytest
 from app.clients.oci_auth import OciPrivateKeyPassPhraseRequiredError
 from app.clients.oci_genai import (
     EMBEDDING_INPUT_MAX_CHARS,
+    EMBEDDING_REQUEST_MAX_CHARS,
+    EMBEDDING_REQUEST_MAX_INPUTS,
     OciGenAiClient,
     OciGenAiConfigError,
 )
@@ -157,6 +159,35 @@ async def test_embed_cache_batches_misses_with_configured_batch_size() -> None:
         _vector_for_text("監査"),
         _vector_for_text("規程"),
     ]
+
+
+async def test_embed_batches_by_total_character_budget() -> None:
+    """件数上限内でも 1 request の総文字数上限を超える前に分割する。"""
+    client = CountingEmbeddingClient()
+    texts = [
+        "a" * 40_000,
+        "b" * 40_000,
+        "c" * 40_000,
+    ]
+
+    vectors = await client.embed(texts)
+
+    assert client.batches == [texts[:2], texts[2:]]
+    assert all(sum(map(len, batch)) <= EMBEDDING_REQUEST_MAX_CHARS for batch in client.batches)
+    assert vectors == [_vector_for_text(text) for text in texts]
+
+
+async def test_embed_batches_by_maximum_input_count() -> None:
+    """設定 object が検証を迂回しても OCI request は 96 入力を超えない。"""
+    client = CountingEmbeddingClient(
+        settings=_oci_settings().model_copy(update={"rag_embedding_batch_size": 1024})
+    )
+    texts = [f"text-{index}" for index in range(EMBEDDING_REQUEST_MAX_INPUTS + 1)]
+
+    vectors = await client.embed(texts)
+
+    assert [len(batch) for batch in client.batches] == [EMBEDDING_REQUEST_MAX_INPUTS, 1]
+    assert vectors == [_vector_for_text(text) for text in texts]
 
 
 async def test_embed_cache_can_be_disabled() -> None:

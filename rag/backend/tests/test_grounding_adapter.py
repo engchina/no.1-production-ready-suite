@@ -1,5 +1,8 @@
 """Grounding アダプター(検索後処理)のテスト。"""
 
+from pytest import MonkeyPatch
+
+from app.clients.pipeline_stage import PipelineStageClient
 from app.config import Settings
 from app.rag.grounding_adapter import (
     GROUNDING_PIPELINE_ORDER,
@@ -136,3 +139,21 @@ def test_status_surfaces_corrective_for_crag_presets() -> None:
 def test_normalize_post_retrieval_pipeline_defaults() -> None:
     assert normalize_post_retrieval_pipeline("nope") == "custom"
     assert normalize_post_retrieval_pipeline("full_governed") == "full_governed"
+
+
+def test_static_presets_never_call_grounding_service(monkeypatch: MonkeyPatch) -> None:
+    """service 設定に関係なく静的 preset は共有 core を in-process で解決する。"""
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("grounding preset resolution must not use HTTP")
+
+    monkeypatch.setattr(PipelineStageClient, "run_grounding", fail)
+    for enabled in (False, True):
+        for pipeline in GROUNDING_PIPELINE_ORDER:
+            params = resolve_grounding_adapter(
+                Settings(
+                    rag_post_retrieval_pipeline=pipeline,
+                    rag_grounding_service_enabled=enabled,
+                )
+            )
+            assert params.pipeline == pipeline

@@ -20,6 +20,11 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "CREATE TABLE rag_document_knowledge_bases" in sql
     assert "-- section: business_views" in sql
     assert "CREATE TABLE rag_business_views" in sql
+    assert "-- section: prompt_versions" in sql
+    assert "CREATE TABLE rag_prompt_versions" in sql
+    assert "-- section: generation_settings" in sql
+    assert "CREATE TABLE rag_generation_settings" in sql
+    assert "active_prompt_version_id" in sql
     assert "-- section: ingestion_jobs" in sql
     assert "CREATE TABLE rag_ingestion_jobs" in sql
     assert "-- section: ingestion_segments" in sql
@@ -61,6 +66,9 @@ def test_oracle_schema_sql_contains_required_rag_tables() -> None:
     assert "CREATE VECTOR INDEX rag_agent_memories_embedding_hnsw_idx" in sql
     assert "-- section: citation_feedback" in sql
     assert "CREATE TABLE rag_citation_feedback" in sql
+    assert "-- section: feedback_details" in sql
+    assert "CREATE TABLE rag_feedback_details" in sql
+    assert "CREATE INDEX rag_feedback_details_text_idx" in sql
     assert "-- section: evaluation_artifacts" in sql
     assert "CREATE TABLE rag_evaluation_runs" in sql
     assert "result_sha256     CHAR(64) NOT NULL" in sql
@@ -91,6 +99,8 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "document_recipes",
         "knowledge_bases",
         "business_views",
+        "prompt_versions",
+        "generation_settings",
         "conversations",
         "messages",
         "ingestion_jobs",
@@ -103,6 +113,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "knowledge_graph",
         "agent_memory",
         "citation_feedback",
+        "feedback_details",
         "evaluation_artifacts",
     ]
     assert all(section["statement_count"] > 0 for section in manifest["sections"])
@@ -244,7 +255,18 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "target_type = ''citation'' AND reason IN" in sql
     assert "-- migration: 20260701_002_conversation_titles" in sql
     assert "WHEN LENGTH(normalized_title) > 80" in sql
-    assert len(statements) == 48
+    assert "-- migration: 20260702_001_chunk_search_text" in sql
+    assert "ALTER TABLE rag_chunks ADD (search_text CLOB)" in sql
+    assert "SET search_text = chunk_text WHERE search_text IS NULL" in sql
+    assert "ON rag_chunks (search_text)" in sql
+    assert "-- migration: 20260703_001_generation_settings" in sql
+    assert "CREATE TABLE rag_prompt_versions" in sql
+    assert "CREATE TABLE rag_generation_settings" in sql
+    assert "-- migration: 20260703_002_feedback_details" in sql
+    assert "CREATE TABLE rag_feedback_details" in sql
+    assert "RAG_FEEDBACK_DETAILS_TEXT_IDX" in sql
+    assert "SYNC (ON COMMIT)" in sql
+    assert len(statements) == 55
     assert all(
         statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
         for statement in statements
@@ -260,7 +282,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
     assert manifest["schema_name"] == "production-ready-rag-oracle-26ai"
     assert manifest["schema_version"] == "1"
     assert manifest["artifact_type"] == "migration"
-    assert manifest["migration_artifact_version"] == "20260701_002"
+    assert manifest["migration_artifact_version"] == "20260703_002"
     assert manifest["sha256"] == hashlib.sha256(sql.encode("utf-8")).hexdigest()
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [migration["name"] for migration in manifest["migrations"]] == [
@@ -292,6 +314,9 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20260630_003_document_recipes",
         "20260701_001_general_feedback",
         "20260701_002_conversation_titles",
+        "20260702_001_chunk_search_text",
+        "20260703_001_generation_settings",
+        "20260703_002_feedback_details",
     ]
 
 

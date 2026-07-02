@@ -19,7 +19,8 @@ ENV PYTHONUNBUFFERED=1 \
 # dots.ocr の GitHub install と画像処理(PyMuPDF/opencv)に必要な system 依存。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git libgl1 libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /root/.cache
 
 # parser app の HTTP サーバ依存(FastAPI/gunicorn 等)を base の Python へ追加する。
 COPY packages/rag_parser_core /opt/rag_parser_core
@@ -40,7 +41,7 @@ RUN git clone --depth 1 https://github.com/rednote-hilab/dots.ocr.git /opt/dots.
     && rm -rf /opt/dots.ocr
 
 # モデルをビルド時に取得してイメージへ焼き込む(prod・配布向け。実行時 DL を排除)。
-# dev は `--build-arg BAKE_MODELS=0` で省き host マウントのキャッシュを使う。
+# dev は `--build-arg BAKE_MODELS=0` で省き named volume のキャッシュを使う。
 # 別モデルは `--build-arg DOTS_OCR_MODEL=...`、ミラーは HF_ENDPOINT build-arg、token は runtime env のみ(image 履歴へ残さない)。
 ARG DOTS_OCR_MODEL=rednote-hilab/dots.mocr
 ENV DOTS_OCR_MODEL=${DOTS_OCR_MODEL}

@@ -16,6 +16,16 @@ def test_chunk_text_respects_overlap_and_offsets() -> None:
     assert chunks[1].text.startswith(chunks[0].text[-4:])
 
 
+def test_chunk_text_does_not_apply_overlap_twice_to_long_sentence() -> None:
+    chunks = chunk_text("ABCDEFGHIJKLMNOPQRSTUV", chunk_size=10, overlap=2)
+
+    assert [chunk.text for chunk in chunks] == [
+        "ABCDEFGHIJ",
+        "IJ KLMNOPQRST",
+        "ST UV",
+    ]
+
+
 def test_chunk_text_rejects_invalid_overlap() -> None:
     with pytest.raises(ValueError):
         chunk_text("テスト", chunk_size=10, overlap=10)
@@ -564,3 +574,27 @@ def test_chunk_extraction_links_cross_page_table_continuity() -> None:
     assert [chunk.metadata["table_data_row_end"] for chunk in table_chunks] == [2, 4]
     assert table_chunks[0].metadata["table_header_repeated"] is False
     assert table_chunks[1].metadata["table_header_repeated"] is True
+
+
+def test_split_sentences_keeps_closing_brackets_with_sentence() -> None:
+    """終端句読点の後の閉じ括弧・閉じ引用は前の文に残す。"""
+    from rag_pipeline_core.chunking import _split_sentences
+
+    parts = _split_sentences("彼は「そうです。」と言った。次の文です。")
+    assert parts == ["彼は「そうです。」", "と言った。", "次の文です。"]
+
+
+def test_split_sentences_mixed_japanese_english() -> None:
+    """日英混在でも終端記号ごとに分割し、記号は前の文に付く。"""
+    from rag_pipeline_core.chunking import _split_sentences
+
+    parts = _split_sentences("これは日本語です。This is English! 最後の文?")
+    assert parts == ["これは日本語です。", "This is English!", "最後の文?"]
+
+
+def test_split_sentences_without_terminal_punctuation_returns_whole_text() -> None:
+    """終端句読点がないテキストは 1 文として返す。"""
+    from rag_pipeline_core.chunking import _split_sentences
+
+    parts = _split_sentences("句読点のないテキスト")
+    assert parts == ["句読点のないテキスト"]

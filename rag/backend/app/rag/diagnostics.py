@@ -6,6 +6,7 @@ import json
 from rag_pipeline_core.vector_index import resolve_vector_index
 
 from app.config import Settings, get_settings
+from app.rag.generation_adapter import generation_contract_mode
 from app.schemas.search import (
     SUPPORTED_SCALAR_SEARCH_FILTER_KEYS,
     SearchDiagnostics,
@@ -35,7 +36,11 @@ def build_search_diagnostics(
     retrieval_strategy_adapter: str | None = None,
     post_retrieval_pipeline: str | None = None,
     generation_profile: str | None = None,
+    generation_attempt_count: int = 0,
+    generation_repair_count: int = 0,
+    generation_validation_codes: list[str] | None = None,
     guardrail_policy: str | None = None,
+    guardrail_degraded: bool = False,
     vector_index_profile: str | None = None,
     graph_profile: str | None = None,
     agentic_profile: str | None = None,
@@ -84,13 +89,22 @@ def build_search_diagnostics(
 ) -> SearchDiagnostics:
     """検索実行の再現・調査に使う非機密メタデータを作る。"""
     resolved_settings = settings or get_settings()
+    resolved_generation_profile = generation_profile or "grounded_concise"
     return SearchDiagnostics(
         mode=request.mode.value,
         retrieval_strategy=retrieval_strategy or request.mode.value,
         retrieval_strategy_adapter=retrieval_strategy_adapter or "hybrid_rrf",
         post_retrieval_pipeline=post_retrieval_pipeline or "custom",
-        generation_profile=generation_profile or "grounded_concise",
+        generation_profile=resolved_generation_profile,
+        generation_config_source=resolved_settings.rag_generation_config_source,
+        generation_contract_mode=generation_contract_mode(resolved_generation_profile),
+        generation_attempt_count=generation_attempt_count,
+        generation_repair_count=generation_repair_count,
+        generation_validation_codes=generation_validation_codes or [],
+        custom_prompt_version_id=resolved_settings.rag_generation_custom_prompt_version_id,
         guardrail_policy=guardrail_policy or "standard",
+        guardrail_backend=resolved_settings.rag_guardrail_backend,
+        guardrail_degraded=guardrail_degraded,
         vector_index_profile=vector_index_profile or "balanced",
         graph_profile=graph_profile or "off",
         serving_mode=resolved_settings.rag_serving_mode,

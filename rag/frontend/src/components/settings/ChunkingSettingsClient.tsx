@@ -1,13 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, RotateCcw, Save, Scissors, SlidersHorizontal } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  RotateCcw,
+  Save,
+  Scissors,
+  SlidersHorizontal,
+} from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   ApiError,
   type ChunkingSettingsData,
@@ -15,6 +23,15 @@ import {
   type ChunkingStrategyName,
   type ChunkingStrategyStatusData,
 } from "@/lib/api";
+import {
+  CHUNK_OVERLAP_MAX_CHARS,
+  CHUNK_SIZE_MAX_CHARS,
+  CHUNK_SIZE_MIN_CHARS,
+  chunkSizeLabelKey,
+  chunkingStrategyPreset,
+  isSemanticBoundaryStrategy,
+  overlapLabelKey,
+} from "@/lib/chunking";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useChunkingSettings, useUpdateChunkingSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -24,14 +41,12 @@ type ChunkingParamField =
   | "chunk_size"
   | "overlap"
   | "child_size"
-  | "sentence_window_size"
   | "min_chars"
   | "delimiter";
 
 const STRATEGY_ORDER: ChunkingStrategyName[] = [
   "structure_aware",
   "recursive_character",
-  "sentence_window",
   "hierarchical_parent_child",
   "markdown_heading",
   "page_level",
@@ -42,7 +57,6 @@ const STRATEGY_ORDER: ChunkingStrategyName[] = [
 const STRATEGY_PARAM_FIELDS: Record<ChunkingStrategyName, ChunkingParamField[]> = {
   structure_aware: ["chunk_size", "overlap", "min_chars"],
   recursive_character: ["chunk_size", "overlap", "min_chars"],
-  sentence_window: ["sentence_window_size", "chunk_size", "overlap", "min_chars"],
   hierarchical_parent_child: ["chunk_size", "overlap", "child_size", "min_chars"],
   markdown_heading: ["chunk_size", "overlap", "min_chars"],
   page_level: ["chunk_size", "overlap", "min_chars"],
@@ -129,7 +143,14 @@ export function ChunkingSettingsClient() {
         validationError={validationError}
         successMessage={successMessage}
         errorMessage={save.isError ? saveError : null}
-        onStrategyChange={(strategy) => updateForm({ strategy })}
+        onStrategyChange={(strategy) => {
+          const preset = chunkingStrategyPreset(strategy);
+          updateForm({
+            strategy,
+            chunk_size: preset.chunkSize,
+            overlap: preset.overlap,
+          });
+        }}
         onReset={resetForm}
         onSubmit={submit}
       />
@@ -300,6 +321,38 @@ function ParamsCard({
 }) {
   const fields = STRATEGY_PARAM_FIELDS[form.strategy];
   const hasField = (field: ChunkingParamField) => fields.includes(field);
+  const semanticBoundary = isSemanticBoundaryStrategy(form.strategy);
+  const chunkSizeField = hasField("chunk_size") ? (
+    <NumberField
+      label={t(chunkSizeLabelKey(form.strategy))}
+      value={form.chunk_size}
+      min={CHUNK_SIZE_MIN_CHARS}
+      max={CHUNK_SIZE_MAX_CHARS}
+      disabled={saving}
+      onChange={(value) => onChange({ chunk_size: value })}
+    />
+  ) : null;
+  const overlapField = hasField("overlap") ? (
+    <NumberField
+      label={t(overlapLabelKey(form.strategy))}
+      value={form.overlap}
+      min={0}
+      max={CHUNK_OVERLAP_MAX_CHARS}
+      disabled={saving}
+      onChange={(value) => onChange({ overlap: value })}
+    />
+  ) : null;
+  const minCharsField = hasField("min_chars") ? (
+    <NumberField
+      label={t("settings.chunking.params.minChars")}
+      value={form.min_chars}
+      min={0}
+      max={2000}
+      disabled={saving}
+      helper={t("settings.chunking.params.minCharsHint")}
+      onChange={(value) => onChange({ min_chars: value })}
+    />
+  ) : null;
 
   return (
     <Card>
@@ -316,6 +369,22 @@ function ParamsCard({
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-card p-3 md:col-span-2">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-foreground">
+                {t("settings.chunking.params.contextHeader")}
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                {t("settings.chunking.params.contextHeaderHint")}
+              </p>
+            </div>
+            <Switch
+              checked={form.context_header_enabled}
+              disabled={saving}
+              aria-label={t("settings.chunking.params.contextHeader")}
+              onCheckedChange={(checked) => onChange({ context_header_enabled: checked })}
+            />
+          </div>
           {hasField("delimiter") ? (
             <TextField
               label={t("settings.chunking.params.delimiter")}
@@ -325,37 +394,34 @@ function ParamsCard({
               onChange={(value) => onChange({ delimiter: value })}
             />
           ) : null}
-          {hasField("sentence_window_size") ? (
-            <NumberField
-              label={t("settings.chunking.params.sentenceWindowSize")}
-              value={form.sentence_window_size}
-              min={1}
-              max={20}
-              disabled={saving}
-              helper={t("settings.chunking.params.sentenceWindowHint")}
-              onChange={(value) => onChange({ sentence_window_size: value })}
-            />
-          ) : null}
-          {hasField("chunk_size") ? (
-            <NumberField
-              label={t("settings.chunking.params.chunkSize")}
-              value={form.chunk_size}
-              min={200}
-              max={4000}
-              disabled={saving}
-              onChange={(value) => onChange({ chunk_size: value })}
-            />
-          ) : null}
-          {hasField("overlap") ? (
-            <NumberField
-              label={t("settings.chunking.params.overlap")}
-              value={form.overlap}
-              min={0}
-              max={1000}
-              disabled={saving}
-              onChange={(value) => onChange({ overlap: value })}
-            />
-          ) : null}
+          {semanticBoundary ? (
+            <details
+              key={form.strategy}
+              className="group rounded-md border border-border bg-background p-3 md:col-span-2"
+            >
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                <span>{t("settings.chunking.params.semanticDetails")}</span>
+                <ChevronDown
+                  size={16}
+                  className="shrink-0 text-muted transition-transform group-open:rotate-180"
+                  aria-hidden
+                />
+              </summary>
+              <p className="mb-3 text-xs leading-relaxed text-muted">
+                {paramsDescription(form.strategy)}
+              </p>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {chunkSizeField}
+                {overlapField}
+                {minCharsField}
+              </div>
+            </details>
+          ) : (
+            <>
+              {chunkSizeField}
+              {overlapField}
+            </>
+          )}
           {hasField("child_size") ? (
             <NumberField
               label={t("settings.chunking.params.childSize")}
@@ -367,17 +433,7 @@ function ParamsCard({
               onChange={(value) => onChange({ child_size: value })}
             />
           ) : null}
-          {hasField("min_chars") ? (
-            <NumberField
-              label={t("settings.chunking.params.minChars")}
-              value={form.min_chars}
-              min={0}
-              max={2000}
-              disabled={saving}
-              helper={t("settings.chunking.params.minCharsHint")}
-              onChange={(value) => onChange({ min_chars: value })}
-            />
-          ) : null}
+          {!semanticBoundary ? minCharsField : null}
         </div>
         {validationError ? (
           <div className="mt-4">
@@ -508,15 +564,6 @@ function chunkStrategyDiagramShapes(strategy: ChunkingStrategyName) {
           <rect x="4" y="24" width="34" height="6" rx="2" opacity="0.85" />
         </>
       );
-    case "sentence_window":
-      // 中心の文を周辺の文脈窓で挟む
-      return (
-        <>
-          <rect x="4" y="6" width="40" height="6" rx="2" opacity="0.3" />
-          <rect x="4" y="15" width="40" height="6" rx="2" opacity="1" />
-          <rect x="4" y="24" width="40" height="6" rx="2" opacity="0.3" />
-        </>
-      );
     case "hierarchical_parent_child":
       // 親ブロックの中に子チャンク
       return (
@@ -624,6 +671,12 @@ function strategyDescription(strategy: ChunkingStrategyName) {
 }
 
 function paramsDescription(strategy: ChunkingStrategyName) {
+  if (strategy === "markdown_heading") {
+    return t("settings.chunking.params.headingDescription");
+  }
+  if (strategy === "page_level") {
+    return t("settings.chunking.params.pageDescription");
+  }
   if (strategy === "fixed_delimiter") {
     return t("settings.chunking.params.delimiterDescription");
   }
@@ -638,7 +691,6 @@ function paramLabel(field: ChunkingParamField) {
     chunk_size: "settings.chunking.params.chunkSize",
     overlap: "settings.chunking.params.overlap",
     child_size: "settings.chunking.params.childSize",
-    sentence_window_size: "settings.chunking.params.sentenceWindowSize",
     min_chars: "settings.chunking.params.minChars",
     delimiter: "settings.chunking.params.delimiter",
   };
@@ -650,6 +702,17 @@ function paramValue(form: ChunkingForm, field: ChunkingParamField) {
 }
 
 function paramSummary(form: ChunkingForm) {
+  if (isSemanticBoundaryStrategy(form.strategy)) {
+    return t("settings.chunking.params.semanticSummary", {
+      size: form.chunk_size.toLocaleString("ja-JP"),
+      overlap:
+        form.overlap === 0
+          ? t("settings.chunking.params.noOverlap")
+          : t("settings.chunking.params.withOverlap", {
+              overlap: form.overlap.toLocaleString("ja-JP"),
+            }),
+    });
+  }
   return STRATEGY_PARAM_FIELDS[form.strategy]
     .map((field) => `${paramLabel(field)}: ${paramValue(form, field)}`)
     .join(" / ");
@@ -663,18 +726,22 @@ function validateForm(form: ChunkingForm): string | null {
   }
   if (
     hasField("chunk_size") &&
-    (!Number.isFinite(form.chunk_size) || form.chunk_size < 200 || form.chunk_size > 4000)
+    (!Number.isFinite(form.chunk_size) ||
+      form.chunk_size < CHUNK_SIZE_MIN_CHARS ||
+      form.chunk_size > CHUNK_SIZE_MAX_CHARS)
   ) {
-    return t("settings.chunking.params.chunkSize");
+    return t(chunkSizeLabelKey(form.strategy));
   }
   if (
     hasField("overlap") &&
-    (!Number.isFinite(form.overlap) || form.overlap < 0 || form.overlap > 1000)
+    (!Number.isFinite(form.overlap) ||
+      form.overlap < 0 ||
+      form.overlap > CHUNK_OVERLAP_MAX_CHARS)
   ) {
-    return t("settings.chunking.params.overlap");
+    return t(overlapLabelKey(form.strategy));
   }
   if (hasField("overlap") && form.overlap >= form.chunk_size) {
-    return t("settings.chunking.params.overlap") + " < " + t("settings.chunking.params.chunkSize");
+    return t(overlapLabelKey(form.strategy)) + " < " + t(chunkSizeLabelKey(form.strategy));
   }
   if (
     hasField("child_size") &&
@@ -686,14 +753,6 @@ function validateForm(form: ChunkingForm): string | null {
     return (
       t("settings.chunking.params.childSize") + " < " + t("settings.chunking.params.chunkSize")
     );
-  }
-  if (
-    hasField("sentence_window_size") &&
-    (!Number.isFinite(form.sentence_window_size) ||
-      form.sentence_window_size < 1 ||
-      form.sentence_window_size > 20)
-  ) {
-    return t("settings.chunking.params.sentenceWindowSize");
   }
   if (
     hasField("min_chars") &&
@@ -713,9 +772,9 @@ function formFromSettings(settings: ChunkingSettingsData): ChunkingForm {
     chunk_size: settings.chunk_size,
     overlap: settings.overlap,
     child_size: settings.child_size,
-    sentence_window_size: settings.sentence_window_size,
     min_chars: settings.min_chars,
     delimiter: settings.delimiter || "\\n\\n",
+    context_header_enabled: settings.context_header_enabled,
   };
 }
 
@@ -725,8 +784,8 @@ function serializeForm(form: ChunkingForm) {
     chunk_size: form.chunk_size,
     overlap: form.overlap,
     child_size: form.child_size,
-    sentence_window_size: form.sentence_window_size,
     min_chars: form.min_chars,
     delimiter: form.delimiter,
+    context_header_enabled: form.context_header_enabled,
   });
 }

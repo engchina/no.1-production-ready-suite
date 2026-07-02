@@ -17,6 +17,7 @@ from uuid import uuid4
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import OracleClient, close_oracle_pool
 from app.config import Settings, get_settings
+from app.rag.generation_config import resolve_oracle_generation_settings
 from app.rag.ingestion import IngestionPipeline
 from app.rag.pipeline import RagPipeline
 from app.readiness import READINESS_INVALID, readiness_checks, readiness_checks_are_ok
@@ -141,6 +142,10 @@ async def run_staging_smoke(
 
     storage = ObjectStorageClient(settings=resolved_settings)
     oracle = OracleClient(settings=resolved_settings)
+    resolved_settings = await resolve_oracle_generation_settings(
+        resolved_settings,
+        client=oracle,
+    )
 
     stage = "prepare"
     object_uri: str | None = None

@@ -9,13 +9,19 @@ from time import perf_counter
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import CustomPromptNotConfiguredError, OracleClient
 from app.config import Settings, get_settings
 from app.rag.audit import record_rag_search_audit
 from app.rag.business_view_config import resolve_business_view_settings
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.generation_config import (
+    apply_generation_profile,
+    resolve_oracle_generation_settings,
+    validate_effective_generation_settings,
+)
+from app.rag.generation_contract import GenerationContractError
 from app.rag.observability import elapsed_ms, new_trace_id, record_rag_request
-from app.rag.pipeline import RagPipeline, SearchStageProgress, SearchTokenDelta
+from app.rag.pipeline import RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
@@ -93,13 +99,27 @@ async def _resolve_query_context(
     KB はナレッジ構築設定だけを持つため、KB query legacy 値は検索 runtime へ反映しない。
     戻り値は (有効 request, 有効 Settings, 適用 KB id, 適用 Business View id)。
     """
+    oracle = OracleClient()
+    settings = await resolve_oracle_generation_settings(
+        global_settings,
+        client=oracle,
+    )
     if request.business_view_ids:
-        oracle = OracleClient()
         views = []
         for business_view_id in request.business_view_ids:
             view = await oracle.get_business_view(business_view_id)
-            if view is not None:
-                views.append(view)
+            if view is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"指定した業務ビューが見つかりません: {business_view_id}",
+                )
+            status = getattr(view, "status", None)
+            if getattr(status, "value", status) == "ARCHIVED":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"アーカイブ済みの業務ビューは検索に使用できません: {business_view_id}",
+                )
+            views.append(view)
         if views:
             effective_request = request
             kb_ids = _merge_business_view_knowledge_base_ids(
@@ -108,11 +128,37 @@ async def _resolve_query_context(
             # request 明示の KB があればそちらを優先し、無ければ参照 KB 群を展開する。
             if not request.knowledge_base_ids and kb_ids:
                 effective_request = _with_knowledge_base_ids(request, kb_ids)
-            settings, applied = resolve_business_view_settings(global_settings, views[0].config)
+            settings, applied = resolve_business_view_settings(settings, views[0].config)
+            try:
+                if views[0].config.query.generation_profile is not None:
+                    settings = apply_generation_profile(
+                        settings,
+                        views[0].config.query.generation_profile,
+                        source="business_view",
+                    )
+                if request.generation_profile is not None:
+                    settings = apply_generation_profile(
+                        settings,
+                        request.generation_profile,
+                        source="request",
+                    )
+                settings = validate_effective_generation_settings(settings)
+            except CustomPromptNotConfiguredError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             applied_view = ",".join(view.id for view in views) if (applied or kb_ids) else None
             return effective_request, settings, None, applied_view
 
-    return request, global_settings, None, None
+    try:
+        if request.generation_profile is not None:
+            settings = apply_generation_profile(
+                settings,
+                request.generation_profile,
+                source="request",
+            )
+        settings = validate_effective_generation_settings(settings)
+    except CustomPromptNotConfiguredError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return request, settings, None, None
 
 
 def _merge_business_view_knowledge_base_ids(
@@ -184,6 +230,8 @@ async def _run_search_with_timeout(request: SearchRequest) -> SearchResponse:
             error_stage="timeout",
         )
         raise HTTPException(status_code=504, detail=SEARCH_TIMEOUT_MESSAGE) from exc
+    except GenerationContractError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIterator[str]:
@@ -196,7 +244,6 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
     trace_id = new_trace_id()
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
     stage_timings: dict[str, float] = {}
-    realtime_delta_sent = False
 
     async def emit_progress(progress: SearchStageProgress) -> None:
         if progress.outcome != "started":
@@ -214,13 +261,6 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
             )
         )
 
-    async def emit_delta(delta: SearchTokenDelta) -> None:
-        nonlocal realtime_delta_sent
-        if not delta.text:
-            return
-        realtime_delta_sent = True
-        await queue.put(("delta", {"text": delta.text}))
-
     async def produce() -> None:
         try:
             result = await asyncio.wait_for(
@@ -228,7 +268,6 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
                     request,
                     trace_id=trace_id,
                     progress_callback=emit_progress,
-                    token_callback=(emit_delta if settings.rag_stream_realtime_enabled else None),
                 ),
                 timeout=timeout,
             )
@@ -273,6 +312,18 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
                     },
                 )
             )
+        except GenerationContractError as exc:
+            await queue.put(
+                (
+                    "error",
+                    {
+                        "trace_id": trace_id,
+                        "message": str(exc),
+                        "error_type": type(exc).__name__,
+                        "validation_codes": list(exc.codes),
+                    },
+                )
+            )
         except Exception as exc:
             await queue.put(
                 (
@@ -295,10 +346,7 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
                 break
             event_name, payload = event
             if event_name == "result" and isinstance(payload, SearchResponse):
-                async for item in _search_events(
-                    payload,
-                    include_answer_deltas=not realtime_delta_sent,
-                ):
+                async for item in _search_events(payload):
                     yield item
                 continue
             yield _sse_event(event_name, payload)
@@ -311,10 +359,8 @@ async def _stream_search_events_with_timeout(request: SearchRequest) -> AsyncIte
 
 async def _search_events(
     result: SearchResponse,
-    *,
-    include_answer_deltas: bool = True,
 ) -> AsyncIterator[str]:
-    """SearchResponse を SSE イベント列へ変換する。"""
+    """検証済み SearchResponse を SSE イベント列へ変換する。"""
     yield _sse_event(
         "metadata",
         {
@@ -324,14 +370,8 @@ async def _search_events(
             "diagnostics": result.diagnostics.model_dump(mode="json"),
         },
     )
-    if include_answer_deltas:
-        for chunk in _answer_chunks(result.answer):
-            yield _sse_event("delta", {"text": chunk})
-    elif result.answer_replaced:
-        # realtime stream 済みで回答ガードレールが本文をマスク/差し替えした場合は、
-        # 生トークンを置換するためマスク済み本文を 1 回送る。
-        # ponytail: 配信済みトークンの一瞬の露出窓は残る(完全防止は配信前バッファリングが必要)。
-        yield _sse_event("replace", {"text": result.answer})
+    for chunk in _answer_chunks(result.answer):
+        yield _sse_event("delta", {"text": chunk})
     yield _sse_event(
         "citations",
         [citation.model_dump(mode="json") for citation in result.citations],

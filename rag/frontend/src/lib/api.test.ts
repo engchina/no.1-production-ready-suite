@@ -348,6 +348,44 @@ describe("api.request envelope", () => {
     );
   });
 
+  it("レシピ分割プレビューは一時設定を POST する", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          chunks: [],
+          stats: {
+            chunk_count: 0,
+            min_chars: 0,
+            average_chars: 0,
+            max_chars: 0,
+            overflow_count: 0,
+            embedding_overflow_count: 0,
+          },
+          warnings: [],
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.previewDocumentRecipeChunks("doc-1", "recipe-1", {
+      chunking_strategy: "recursive_character",
+      chunk_size: 640,
+      chunk_context_header_enabled: true,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/documents/doc-1/recipes/recipe-1/chunk-preview"
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      chunking_strategy: "recursive_character",
+      chunk_size: 640,
+      chunk_context_header_enabled: true,
+    });
+  });
+
   it("文書処理設定 API は GET と PUT を同じ resource に送る", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({ data: {}, error_messages: [], warning_messages: [] })
@@ -369,8 +407,8 @@ describe("api.request envelope", () => {
       chunk_size: 512,
       chunk_overlap: null,
       chunk_child_size: null,
-      chunk_sentence_window_size: null,
       chunk_min_chars: null,
+      chunk_context_header_enabled: null,
       graph_profile: null,
       field_extraction_enabled: null,
       asset_summary_enabled: null,
@@ -750,6 +788,9 @@ describe("api.request envelope", () => {
         backend_source_kinds: { docling: ["pdf"] },
         route_evidence: [],
       },
+      capabilities: [
+        { backend: "marker", modalities: ["pdf", "image"], extensions: [".pdf", ".png"] },
+      ],
       config_source: "runtime",
     };
     const fetchMock = vi.fn().mockResolvedValue(
@@ -967,6 +1008,7 @@ describe("api.request envelope", () => {
         backend_source_kinds: {},
         route_evidence: [],
       },
+      capabilities: [],
       config_source: "runtime",
     };
     const fetchMock = vi.fn().mockResolvedValue(

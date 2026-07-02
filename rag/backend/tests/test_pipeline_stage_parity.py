@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import cast
 
+import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from rag_parser_core.extraction import StructuredExtraction
 from rag_pipeline_core.agentic import resolve_agentic
 from rag_pipeline_core.chunking import chunk_extraction_with_strategy
@@ -63,7 +64,7 @@ def test_chunking_service_matches_local_core() -> None:
     request = ChunkingStageRequest(
         extraction=StructuredExtraction(raw_text="第1章 概要\n本文です。"),
         strategy="fixed_size",
-        chunk_size=80,
+        chunk_size=200,
         overlap=0,
     )
     remote = _run(create_chunking_app(), request, ChunkingStageResponse)
@@ -73,12 +74,27 @@ def test_chunking_service_matches_local_core() -> None:
         chunk_size=request.chunk_size,
         overlap=request.overlap,
         child_size=request.child_size,
-        sentence_window_size=request.sentence_window_size,
         min_chars=request.min_chars,
         delimiter=request.delimiter,
     )
     local = ChunkingStageResponse.from_chunks(cast("list[object]", local_chunks))
     assert remote == local
+
+
+def test_chunking_stage_request_enforces_product_limits() -> None:
+    extraction = StructuredExtraction(raw_text="本文です。")
+    accepted = ChunkingStageRequest(
+        extraction=extraction,
+        chunk_size=32_000,
+        overlap=8_000,
+    )
+    assert accepted.chunk_size == 32_000
+    assert accepted.overlap == 8_000
+
+    with pytest.raises(ValidationError):
+        ChunkingStageRequest(extraction=extraction, chunk_size=32_001)
+    with pytest.raises(ValidationError):
+        ChunkingStageRequest(extraction=extraction, chunk_size=200, overlap=200)
 
 
 def test_vector_index_service_matches_local_core() -> None:

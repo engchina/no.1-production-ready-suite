@@ -103,6 +103,12 @@ def _search(query: str) -> dict[str, Any]:
     return cast(dict[str, Any], response.json()["data"])
 
 
+def _first_recipe_id(document_id: str) -> str:
+    response = client.get(f"/api/documents/{document_id}/recipes")
+    assert response.status_code == 200
+    return cast(str, response.json()["data"][0]["recipe_id"])
+
+
 def test_review_gate_stops_at_review_and_excludes_from_search(monkeypatch: MonkeyPatch) -> None:
     """EXTRACT 後は REVIEW で停止し、抽出は保持されるが検索対象外。"""
     _enable_review_gate(monkeypatch)
@@ -121,6 +127,62 @@ def test_review_gate_stops_at_review_and_excludes_from_search(monkeypatch: Monke
     # REVIEW 文書は検索対象に入らない。
     search = _search("経費申請の承認者は？")
     assert all(citation["document_id"] != document_id for citation in search["citations"])
+
+
+def test_chunk_preview_reuses_review_extraction_without_state_change(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """一時分割は抽出を再利用し、chunk 行も REVIEW 状態も変更しない。"""
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    recipe_id = _first_recipe_id(document_id)
+    job_response = client.post(f"/api/documents/{document_id}/recipes/{recipe_id}/ingestion-jobs")
+    assert job_response.status_code == 200
+    job = job_response.json()["data"]
+    assert job["phase"] == "PREPROCESS"
+    _run_job(cast(str, job["id"]))
+    recipe_before = client.get(f"/api/documents/{document_id}/recipes").json()["data"][0]
+    assert recipe_before["status"] == "REVIEW"
+
+    response = client.post(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/chunk-preview",
+        json={
+            "chunking_strategy": "recursive_character",
+            "chunk_size": 200,
+            "chunk_overlap": 20,
+            "chunk_min_chars": 0,
+            "chunk_context_header_enabled": True,
+        },
+    )
+
+    assert response.status_code == 200
+    preview = response.json()["data"]
+    assert preview["chunks"]
+    assert preview["stats"]["chunk_count"] == len(preview["chunks"])
+    assert preview["stats"]["min_chars"] > 0
+    assert preview["chunks"][0]["metadata"]["context_header"].startswith("two-phase-policy.txt")
+    recipe_after = client.get(f"/api/documents/{document_id}/recipes").json()["data"][0]
+    assert recipe_after["status"] == "REVIEW"
+    assert recipe_after["config_revision"] == recipe_before["config_revision"]
+    assert (
+        client.get(f"/api/documents/{document_id}/recipes/{recipe_id}/chunks").json()["data"] == []
+    )
+
+
+def test_chunk_preview_rejects_recipe_without_review_artifact(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """UPLOADED のレシピは dry-run 対象外。"""
+    _enable_review_gate(monkeypatch)
+    document_id = _upload_sample()
+    recipe_id = _first_recipe_id(document_id)
+
+    response = client.post(
+        f"/api/documents/{document_id}/recipes/{recipe_id}/chunk-preview",
+        json={},
+    )
+
+    assert response.status_code == 409
 
 
 def test_review_edits_save_without_chunking_and_feed_later_chunks(

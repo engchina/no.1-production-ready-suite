@@ -5,7 +5,7 @@ FROM python:3.12.11-slim AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_CACHE_DIR=/tmp/uv-cache \
-    # 焼き込み/host マウントのキャッシュ先を appuser 配下に固定する(dev の bind 先と一致)。
+    # 焼き込み/named volume のキャッシュ先を appuser 配下に固定する。
     HF_HOME=/home/appuser/.cache/huggingface
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
@@ -17,8 +17,8 @@ WORKDIR /build/services/parsers/docling
 COPY services/parsers/docling/pyproject.toml services/parsers/docling/README.md ./
 RUN uv sync --no-install-project \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /tmp/uv-cache \
-    && chown -R appuser:appuser /tmp/uv-cache /build
+    && mkdir -p /tmp/uv-cache /home/appuser/.cache \
+    && chown -R appuser:appuser /tmp/uv-cache /home/appuser/.cache /build
 
 COPY --chown=appuser:appuser services/parsers/docling/app ./app
 

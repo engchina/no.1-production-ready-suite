@@ -572,9 +572,33 @@ export interface ChunkSetExperimentRequest {
   chunk_size?: number;
   chunk_overlap?: number;
   chunk_child_size?: number;
-  chunk_sentence_window_size?: number;
   chunk_min_chars?: number;
   chunk_delimiter?: string;
+}
+
+export interface DocumentChunkPreviewRequest {
+  chunking_strategy?: ChunkingStrategyName;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  chunk_child_size?: number;
+  chunk_min_chars?: number;
+  chunk_delimiter?: string;
+  chunk_context_header_enabled?: boolean;
+}
+
+export interface DocumentChunkPreviewStats {
+  chunk_count: number;
+  min_chars: number;
+  average_chars: number;
+  max_chars: number;
+  overflow_count: number;
+  embedding_overflow_count: number;
+}
+
+export interface DocumentChunkPreviewResponse {
+  chunks: DocumentChunkView[];
+  stats: DocumentChunkPreviewStats;
+  warnings: string[];
 }
 
 /**
@@ -666,7 +690,6 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_size: number | null;
   chunk_overlap: number | null;
   chunk_child_size: number | null;
-  chunk_sentence_window_size: number | null;
   chunk_min_chars: number | null;
   graph_profile: GraphProfileName | null;
   field_extraction_enabled: boolean | null;
@@ -807,7 +830,9 @@ export interface DocumentIngestionConfigData {
   drift_fields: string[];
 }
 
-export type DocumentProcessingConfig = KnowledgeBaseIngestionConfig;
+export interface DocumentProcessingConfig extends KnowledgeBaseIngestionConfig {
+  chunk_context_header_enabled: boolean | null;
+}
 
 export type DocumentRecipeStepStatus =
   | "PENDING"
@@ -876,6 +901,7 @@ export interface SearchRequestBody {
   knowledge_base_ids?: string[];
   business_view_id?: string | null;
   business_view_ids?: string[];
+  generation_profile?: GenerationProfileName | null;
 }
 
 export interface RetrievedChunk {
@@ -947,6 +973,15 @@ export interface SearchDiagnostics {
   adapter: string;
   mode: string;
   retrieval_strategy: string;
+  generation_profile?: GenerationProfileName | string;
+  generation_config_source?: "request" | "business_view" | "global";
+  generation_contract_mode?: "groundedness" | "format_validated" | "json_schema" | "custom";
+  generation_attempt_count?: number;
+  generation_repair_count?: number;
+  generation_validation_codes?: string[];
+  custom_prompt_version_id?: string | null;
+  guardrail_backend?: GuardrailBackend;
+  guardrail_degraded?: boolean;
   route_reason: string;
   keyword_terms: string[];
   retrieval_breakdown: SearchRetrievalBreakdown;
@@ -1041,8 +1076,11 @@ export interface FeedbackRequestBody {
   source_surface: FeedbackSourceSurface;
   document_id?: string | null;
   chunk_id?: string | null;
+  message_id?: string | null;
+  content_snapshot?: FeedbackContentSnapshot | null;
   rating: CitationFeedbackRating;
   reason?: CitationFeedbackReason | null;
+  comment?: string | null;
 }
 
 export interface FeedbackSubmissionResponse extends FeedbackRequestBody {
@@ -1054,6 +1092,22 @@ export interface CurrentFeedbackItem
   business_view_id: string | null;
   source_surface: FeedbackSourceSurface | null;
   created_at: string;
+}
+
+export interface FeedbackCitationSnapshot {
+  document_id: string;
+  chunk_id: string;
+  file_name: string | null;
+  section_title: string | null;
+  page_number: number | null;
+  content_preview: string | null;
+  rerank_score: number | null;
+}
+
+export interface FeedbackContentSnapshot {
+  question: string;
+  answer: string;
+  citations: FeedbackCitationSnapshot[];
 }
 
 export interface FeedbackReasonCount {
@@ -1080,10 +1134,34 @@ export interface FeedbackItem extends CurrentFeedbackItem {
   message_id: string | null;
   model: string | null;
   file_name: string | null;
+  question_preview: string | null;
+  comment_preview: string | null;
+  has_comment: boolean;
+}
+
+export interface FeedbackExecutionInfo {
+  outcome: string | null;
+  search_mode: string | null;
+  elapsed_ms: number | null;
+  retrieved_count: number | null;
+  reranked_count: number | null;
+  citation_count: number | null;
+  guardrail_codes: string[];
+  config_fingerprint: string | null;
+}
+
+export interface FeedbackDetail extends FeedbackItem {
+  content_source: "chat_message" | "search_snapshot" | null;
+  question: string | null;
+  answer: string | null;
+  comment: string | null;
+  citations: FeedbackCitationSnapshot[];
+  execution: FeedbackExecutionInfo;
 }
 
 export interface FeedbackDashboard {
   summary: FeedbackSummary;
+  previous_summary: FeedbackSummary | null;
   items: Page<FeedbackItem>;
 }
 
@@ -1093,6 +1171,8 @@ export interface FeedbackListParams {
   rating?: CitationFeedbackRating;
   reason?: CitationFeedbackReason;
   period_days?: number | null;
+  q?: string;
+  sort_order?: "newest" | "oldest";
   limit?: number;
   offset?: number;
 }
@@ -1402,14 +1482,12 @@ export interface DatabaseConnectionTestResult {
 
 // --- 設定: HuggingFace モデルダウンロード ---
 export interface HuggingFaceSettingsData {
-  download_dir: string;
   endpoint: string;
   token_configured: boolean;
   config_source: "runtime";
 }
 
 export interface HuggingFaceSettingsUpdate {
-  download_dir: string;
   endpoint: string;
   token?: string;
   clear_token?: boolean;
@@ -1569,6 +1647,12 @@ export interface ParserServiceBackendData {
   warning_code: string | null;
 }
 
+export interface ParserBackendCapabilityData {
+  backend: string;
+  modalities: string[];
+  extensions: string[];
+}
+
 export interface ParserAdapterSettingsData {
   adapter_backend: ParserAdapterBackend;
   effective_order: ParserAdapterBackendName[];
@@ -1577,6 +1661,7 @@ export interface ParserAdapterSettingsData {
   scorecard: ParserAdapterScorecardData;
   source_routes: ParserAdapterSourceRouteData[];
   backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;
+  capabilities: ParserBackendCapabilityData[];
   config_source: "runtime";
 }
 
@@ -1595,7 +1680,6 @@ export interface ParserAdapterSettingsUpdate {
 export type ChunkingStrategyName =
   | "structure_aware"
   | "recursive_character"
-  | "sentence_window"
   | "hierarchical_parent_child"
   | "markdown_heading"
   | "page_level"
@@ -1664,7 +1748,7 @@ export type ServiceAction = "start" | "stop" | "restart" | "build" | "remove";
 
 export interface ServiceModelCacheData {
   container_path: string;
-  host_path: string;
+  volume_name: string;
   editable: false;
 }
 
@@ -1718,7 +1802,6 @@ export interface ChunkingStrategyStatusData {
   recommended_for: string[];
   selected: boolean;
   uses_child_size: boolean;
-  uses_sentence_window: boolean;
 }
 
 export interface ChunkingSettingsData {
@@ -1726,9 +1809,9 @@ export interface ChunkingSettingsData {
   chunk_size: number;
   overlap: number;
   child_size: number;
-  sentence_window_size: number;
   min_chars: number;
   delimiter: string;
+  context_header_enabled: boolean;
   strategies: ChunkingStrategyStatusData[];
   config_source: "runtime";
 }
@@ -1738,9 +1821,9 @@ export interface ChunkingSettingsUpdate {
   chunk_size: number;
   overlap: number;
   child_size: number;
-  sentence_window_size: number;
   min_chars: number;
   delimiter: string;
+  context_header_enabled: boolean;
 }
 
 // --- 設定: Retrieval アダプター ---
@@ -1829,17 +1912,24 @@ export interface GenerationProfileStatusData {
   recommended_for: string[];
   selected: boolean;
   structured_output: boolean;
+  contract_mode: "groundedness" | "format_validated" | "json_schema" | "custom";
+  repair_enabled: boolean;
 }
 
 export interface GenerationSettingsData {
   profile: GenerationProfileName;
   structured_output: boolean;
   profiles: GenerationProfileStatusData[];
-  config_source: "runtime";
+  config_source: "oracle";
+  revision: number;
+  updated_at: string;
+  active_prompt_version_id: string | null;
+  custom_prompt_configured: boolean;
 }
 
 export interface GenerationSettingsUpdate {
   profile: GenerationProfileName;
+  expected_revision?: number;
 }
 
 // --- 設定: 回答プロンプト版(custom 回答スタイルが使用) ---
@@ -1856,6 +1946,7 @@ export interface PromptVersionData {
 export interface PromptVersionsData {
   active_version_id: string | null;
   versions: PromptVersionData[];
+  settings_revision: number;
 }
 
 export interface PromptVersionCreate {
@@ -1892,7 +1983,7 @@ export interface GuardrailSettingsData {
   grounding_min_ratio: number;
   audit_emphasis: boolean;
   policies: GuardrailPolicyStatusData[];
-  backend: string;
+  backend: GuardrailBackend;
   oci_configured: boolean;
   oci_warning_code: string | null;
   config_source: "runtime";
@@ -1900,7 +1991,10 @@ export interface GuardrailSettingsData {
 
 export interface GuardrailSettingsUpdate {
   policy: GuardrailPolicyName;
+  backend?: GuardrailBackend;
 }
+
+export type GuardrailBackend = "local" | "oci_guardrails";
 
 // --- 設定: Vector Index アダプター ---
 export type VectorIndexProfileName = "balanced" | "accurate" | "fast";
@@ -2300,6 +2394,17 @@ export const api = {
     request<DocumentChunkView[]>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunks`
     ),
+  previewDocumentRecipeChunks: (
+    id: string,
+    recipeId: string,
+    body: DocumentChunkPreviewRequest
+  ) =>
+    request<DocumentChunkPreviewResponse>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/chunk-preview`,
+      jsonBody(body)
+    ),
   exportDocumentRecipeExtraction: (
     id: string,
     recipeId: string,
@@ -2646,11 +2751,15 @@ export const api = {
     if (params.rating) search.set("rating", params.rating);
     if (params.reason) search.set("reason", params.reason);
     if (params.period_days != null) search.set("period_days", String(params.period_days));
+    if (params.q) search.set("q", params.q);
+    if (params.sort_order) search.set("sort_order", params.sort_order);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
     return request<FeedbackDashboard>(`/api/feedback${qs ? `?${qs}` : ""}`);
   },
+  getFeedbackDetail: (id: string) =>
+    request<FeedbackDetail>(`/api/feedback/${encodeURIComponent(id)}`),
 
   // 評価
   runEvaluation: (body: EvaluationRunRequestBody) =>

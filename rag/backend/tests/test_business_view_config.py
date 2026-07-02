@@ -54,8 +54,8 @@ def test_legacy_vector_index_is_read_but_not_applied_or_saved() -> None:
     assert "vector_index_profile" not in dumped_query
 
 
-def test_persona_injects_system_prompt_override() -> None:
-    """persona(system_prompt + 既定言語)は generation 上書きへ注入される。"""
+def test_persona_and_language_remain_separate_generation_layers() -> None:
+    """persona と既定言語は profile を置換せず別 layer として注入される。"""
     settings = get_settings()
     config = BusinessViewConfig(
         system_prompt="あなたは経理規程アシスタントです。",
@@ -66,7 +66,8 @@ def test_persona_injects_system_prompt_override() -> None:
     override = merged.rag_generation_system_prompt_override
     assert override is not None
     assert "経理規程アシスタント" in override
-    assert "日本語" in override
+    assert "日本語" not in override
+    assert merged.rag_generation_default_language == "日本語"
 
 
 def test_dump_parse_roundtrip() -> None:

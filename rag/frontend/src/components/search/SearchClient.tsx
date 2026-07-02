@@ -13,7 +13,10 @@ import { useNavigate } from "react-router-dom";
 
 import { BusinessViewPickerGrid } from "@/components/business-views/BusinessViewPickerGrid";
 import { CitationCard, scoreMaximaForCitations } from "./CitationCard";
-import { FeedbackControls } from "@/components/feedback/FeedbackControls";
+import {
+  buildFeedbackContentSnapshot,
+  FeedbackControls,
+} from "@/components/feedback/FeedbackControls";
 import { PageHeader } from "@/components/PageHeader";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
@@ -126,6 +129,7 @@ const STAGE_LABEL: Record<string, I18nKey> = {
 /** RAG 検索画面。回答を SSE でストリーミング表示する。 */
 export function SearchClient() {
   const [query, setQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [phase, setPhase] = useState<Phase>("idle");
   const [answer, setAnswer] = useState("");
@@ -174,6 +178,7 @@ export function SearchClient() {
       return;
     }
     setScopeError("");
+    setSubmittedQuery(trimmed);
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -288,6 +293,8 @@ export function SearchClient() {
   const noResults = phase === "done" && citations.length === 0;
   const isStreaming = phase === "streaming";
   const citationScoreMaxima = scoreMaximaForCitations(citations);
+  const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
+  const structuredJsonAnswer = meta?.diagnostics?.generation_profile === "structured_json";
 
   return (
     <div>
@@ -568,12 +575,18 @@ export function SearchClient() {
                     />
                   ) : null}
                   <ActiveFilterChips filters={appliedFilters} />
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-                    {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
-                    {isStreaming ? (
-                      <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle" />
-                    ) : null}
-                  </p>
+                  {structuredJsonAnswer ? (
+                    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/20 p-3 font-mono text-sm leading-relaxed text-foreground">
+                      {answer}
+                    </pre>
+                  ) : (
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                      {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
+                      {isStreaming ? (
+                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle" />
+                      ) : null}
+                    </p>
+                  )}
                   {meta && phase === "done" ? (
                     <FeedbackControls
                       traceId={meta.trace_id}
@@ -582,6 +595,7 @@ export function SearchClient() {
                       }
                       targetType="answer"
                       sourceSurface="search"
+                      contentSnapshot={feedbackSnapshot}
                     />
                   ) : null}
                   {meta && phase === "done" ? (
@@ -613,6 +627,7 @@ export function SearchClient() {
                           meta?.diagnostics?.business_view_applied ?? businessViewIds[0] ?? null
                         }
                         sourceSurface="search"
+                        contentSnapshot={feedbackSnapshot}
                         scoreMaxima={citationScoreMaxima}
                       />
                     ))}

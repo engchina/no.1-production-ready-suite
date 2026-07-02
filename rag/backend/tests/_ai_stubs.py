@@ -56,7 +56,9 @@ class DeterministicEnterpriseAi(OciEnterpriseAiClient):
         )
         return extraction.to_document_payload()
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
         if not context.strip():
             return "該当する根拠は見つかりませんでした。条件やキーワードを変えて検索してください。"
         snippet = " ".join(context.split())[:200]

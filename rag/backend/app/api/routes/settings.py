@@ -16,6 +16,7 @@ from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 
 from app.clients.oci_auth import (
     load_oci_config_without_prompt,
@@ -26,7 +27,15 @@ from app.clients.oci_database import AutonomousDatabaseInfo, OciDatabaseClient
 from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oracle import close_oracle_pool, test_oracle_connection
+from app.clients.oracle import (
+    CustomPromptNotConfiguredError,
+    GenerationSettingsRevisionConflictError,
+    OracleClient,
+    StoredGenerationSettings,
+    StoredPromptVersion,
+    close_oracle_pool,
+    test_oracle_connection,
+)
 from app.config import (
     EnterpriseAiConfiguredModel,
     Settings,
@@ -39,7 +48,10 @@ from app.rag.agentic_adapter import (
     agentic_adapter_runtime_settings,
     normalize_agentic_profile,
 )
-from app.rag.chunking_strategy import chunking_runtime_settings, normalize_chunking_strategy
+from app.rag.chunking_strategy import (
+    chunking_runtime_settings,
+    normalize_chunking_strategy,
+)
 from app.rag.evaluation_adapter import (
     evaluation_adapter_runtime_settings,
     normalize_evaluation_suite,
@@ -53,7 +65,10 @@ from app.rag.generation_adapter import (
     generation_adapter_runtime_settings,
     normalize_generation_profile,
 )
-from app.rag.graph_adapter import graph_adapter_runtime_settings, normalize_graph_profile
+from app.rag.graph_adapter import (
+    graph_adapter_runtime_settings,
+    normalize_graph_profile,
+)
 from app.rag.grounding_adapter import (
     grounding_adapter_runtime_settings,
     normalize_post_retrieval_pipeline,
@@ -73,11 +88,9 @@ from app.rag.parser_adapter_scorecard import (
     build_parser_adapter_scorecard,
     build_parser_adapter_source_routes,
 )
-from app.rag.preprocess_strategy import normalize_preprocess_profile, preprocess_runtime_settings
-from app.rag.prompt_versions import (
-    activate_prompt_version,
-    create_prompt_version,
-    list_prompt_versions,
+from app.rag.preprocess_strategy import (
+    normalize_preprocess_profile,
+    preprocess_runtime_settings,
 )
 from app.rag.retrieval_adapter import (
     normalize_retrieval_strategy,
@@ -87,7 +100,11 @@ from app.rag.vector_index_adapter import (
     normalize_vector_index_profile,
     vector_index_adapter_runtime_settings,
 )
-from app.readiness import READINESS_OK, oracle_readiness_check, upload_storage_readiness_checks
+from app.readiness import (
+    READINESS_OK,
+    oracle_readiness_check,
+    upload_storage_readiness_checks,
+)
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import EvaluationThresholds
 from app.schemas.settings import (
@@ -153,6 +170,7 @@ from app.schemas.settings import (
     ParserAdapterSettingsUpdate,
     ParserAdapterSourceRouteData,
     ParserAdapterStatusData,
+    ParserBackendCapabilityData,
     ParserServiceBackendData,
     PreprocessProfileStatusData,
     PreprocessSettingsData,
@@ -571,28 +589,34 @@ async def update_grounding_settings(
 @router.get("/generation", response_model=ApiResponse[GenerationSettingsData])
 async def get_generation_settings() -> ApiResponse[GenerationSettingsData]:
     """Generation アダプター(回答生成プロファイル)の選択と解決内容を返す。"""
-    return ApiResponse(data=_generation_settings_data(get_settings()))
+    stored = await OracleClient().get_generation_settings()
+    return ApiResponse(data=_generation_settings_data(get_settings(), stored))
 
 
 @router.patch("/generation", response_model=ApiResponse[GenerationSettingsData])
 async def update_generation_settings(
     payload: GenerationSettingsUpdate,
 ) -> ApiResponse[GenerationSettingsData]:
-    """回答スタイル設定を backend/.env と現在プロセスへ反映する。"""
-    settings = get_settings()
-    candidate = settings.model_copy(
-        update={"rag_generation_profile": normalize_generation_profile(payload.profile)}
-    )
-    _persist_generation_settings(candidate)
-    settings.rag_generation_profile = candidate.rag_generation_profile
-    return ApiResponse(data=_generation_settings_data(settings))
+    """回答スタイル設定を Oracle GLOBAL 行へ revision 付きで保存する。"""
+    client = OracleClient()
+    try:
+        stored = await client.update_generation_settings(
+            profile=normalize_generation_profile(payload.profile),
+            expected_revision=payload.expected_revision,
+        )
+    except (GenerationSettingsRevisionConflictError, CustomPromptNotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(data=_generation_settings_data(get_settings(), stored))
 
 
-def _prompt_versions_data() -> PromptVersionsData:
-    """prompt 版 store を非機密 API 形へ変換する。"""
-    store = list_prompt_versions()
+def _prompt_versions_data(
+    settings: StoredGenerationSettings,
+    versions: list[StoredPromptVersion],
+) -> PromptVersionsData:
+    """Oracle prompt 版 store を互換 API 形へ変換する。"""
     return PromptVersionsData(
-        active_version_id=store.active_version_id,
+        active_version_id=settings.active_prompt_version_id,
+        settings_revision=settings.revision,
         versions=[
             PromptVersionData(
                 version_id=version.version_id,
@@ -600,10 +624,10 @@ def _prompt_versions_data() -> PromptVersionsData:
                 system_prompt=version.system_prompt,
                 note=version.note,
                 created_at=version.created_at,
-                created_by=version.created_by,
-                active=version.version_id == store.active_version_id,
+                created_by=version.created_by_hash or "",
+                active=version.version_id == settings.active_prompt_version_id,
             )
-            for version in store.versions
+            for version in versions
         ],
     )
 
@@ -611,7 +635,8 @@ def _prompt_versions_data() -> PromptVersionsData:
 @router.get("/prompts", response_model=ApiResponse[PromptVersionsData])
 async def get_prompt_versions() -> ApiResponse[PromptVersionsData]:
     """回答生成 system prompt の版一覧と有効版を返す(custom profile が使用)。"""
-    return ApiResponse(data=_prompt_versions_data())
+    settings, versions = await OracleClient().list_prompt_versions()
+    return ApiResponse(data=_prompt_versions_data(settings, versions))
 
 
 @router.post("/prompts", response_model=ApiResponse[PromptVersionsData])
@@ -619,13 +644,13 @@ async def create_prompt_version_endpoint(
     payload: PromptVersionCreate,
 ) -> ApiResponse[PromptVersionsData]:
     """新しい prompt 版を作成する(activate=true で即時有効化)。"""
-    create_prompt_version(
+    settings, versions = await OracleClient().create_prompt_version(
         name=payload.name,
         system_prompt=payload.system_prompt,
         note=payload.note,
         activate=payload.activate,
     )
-    return ApiResponse(data=_prompt_versions_data())
+    return ApiResponse(data=_prompt_versions_data(settings, versions))
 
 
 @router.post("/prompts/{version_id}/activate", response_model=ApiResponse[PromptVersionsData])
@@ -634,10 +659,10 @@ async def activate_prompt_version_endpoint(
 ) -> ApiResponse[PromptVersionsData]:
     """指定 prompt 版を有効化する(rollback = 旧版を再有効化)。"""
     try:
-        activate_prompt_version(version_id)
+        settings, versions = await OracleClient().activate_prompt_version(version_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="指定の prompt 版が見つかりません。") from exc
-    return ApiResponse(data=_prompt_versions_data())
+    return ApiResponse(data=_prompt_versions_data(settings, versions))
 
 
 def _extraction_fields_data() -> ExtractionFieldsSettingsData:
@@ -646,7 +671,9 @@ def _extraction_fields_data() -> ExtractionFieldsSettingsData:
     return ExtractionFieldsSettingsData(
         fields=[
             FieldDefinitionData(
-                name=field.name, description=field.description, value_type=field.value_type
+                name=field.name,
+                description=field.description,
+                value_type=field.value_type,
             )
             for field in store.fields
         ]
@@ -691,6 +718,15 @@ async def update_guardrail_settings(
     if payload.backend is not None:
         update["rag_guardrail_backend"] = payload.backend
     candidate = settings.model_copy(update=update)
+    readiness_issue = _oci_guardrails_warning_code(candidate)
+    if candidate.rag_guardrail_backend == "oci_guardrails" and readiness_issue:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "OCI Guardrails を選択する前に、compartment と OCI API キー認証を"
+                "システム設定 > OCI 認証で設定してください。"
+            ),
+        )
     _persist_guardrail_settings(candidate)
     settings.rag_guardrail_policy = candidate.rag_guardrail_policy
     settings.rag_guardrail_backend = candidate.rag_guardrail_backend
@@ -1498,7 +1534,6 @@ def _persist_database_settings(settings: Settings) -> None:
 def _huggingface_settings_data(settings: Settings) -> HuggingFaceSettingsData:
     """Settings から HuggingFace 設定の表示用データを作る(token 実値は返さない)。"""
     return HuggingFaceSettingsData(
-        download_dir=settings.huggingface_download_dir,
         endpoint=settings.huggingface_endpoint,
         token_configured=bool(settings.huggingface_token.strip()),
         config_source="runtime",
@@ -1509,9 +1544,8 @@ def _huggingface_settings_candidate(
     base: Settings,
     payload: HuggingFaceSettingsUpdate,
 ) -> Settings:
-    """更新 payload を適用した一時 Settings を作る。download_dir 空は既定を保持する。"""
+    """更新 payload を適用した一時 Settings を作る。"""
     updates = {
-        "huggingface_download_dir": payload.download_dir or base.huggingface_download_dir,
         "huggingface_endpoint": payload.endpoint,
         "huggingface_token": _secret_value(
             current=base.huggingface_token,
@@ -1524,7 +1558,6 @@ def _huggingface_settings_candidate(
 
 def _apply_huggingface_settings(target: Settings, source: Settings) -> None:
     """HuggingFace 関連設定だけ現在プロセスへ反映する。"""
-    target.huggingface_download_dir = source.huggingface_download_dir
     target.huggingface_endpoint = source.huggingface_endpoint
     target.huggingface_token = source.huggingface_token
 
@@ -1534,7 +1567,6 @@ def _persist_huggingface_settings(settings: Settings) -> None:
     _write_env_values(
         BACKEND_ENV_FILE,
         {
-            "HUGGINGFACE_DOWNLOAD_DIR": settings.huggingface_download_dir,
             "HF_TOKEN": settings.huggingface_token,
             "HF_ENDPOINT": settings.huggingface_endpoint,
         },
@@ -1942,13 +1974,13 @@ def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBacke
             # 旧称 enterprise_ai_vlm も選択値として受理(後方互換エイリアス)。
             selected=selected in ("oci_genai_vision", "enterprise_ai_vlm"),
             configured=vlm_configured,
-            warning_code=None if vlm_configured else "enterprise_ai_endpoint_unconfigured",
+            warning_code=(None if vlm_configured else "enterprise_ai_endpoint_unconfigured"),
         ),
         ParserServiceBackendData(
             backend="oci_document_understanding",
             selected=selected == "oci_document_understanding",
             configured=du_configured,
-            warning_code=None if du_configured else "oci_document_understanding_unconfigured",
+            warning_code=(None if du_configured else "oci_document_understanding_unconfigured"),
         ),
     ]
 
@@ -2006,8 +2038,22 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         ),
         source_routes=route_data,
         backend_source_kind_matrix=_parser_adapter_backend_source_matrix(route_data),
+        capabilities=_parser_backend_capabilities_data(),
         config_source="runtime",
     )
+
+
+def _parser_backend_capabilities_data() -> list[ParserBackendCapabilityData]:
+    """capabilities 正本から backend ごとの対応形式宣言を作る(別名は除外)。"""
+    return [
+        ParserBackendCapabilityData(
+            backend=backend,
+            modalities=[m.value for m in supported_modalities(backend)],
+            extensions=sorted(capability.extensions),
+        )
+        for backend, capability in ADAPTER_CAPABILITIES.items()
+        if backend != "enterprise_ai_vlm"
+    ]
 
 
 def _parser_adapter_contract_data(settings: Settings) -> ParserAdapterContractData:
@@ -2369,9 +2415,14 @@ def _persist_vector_index_settings(settings: Settings) -> None:
     )
 
 
-def _generation_settings_data(settings: Settings) -> GenerationSettingsData:
-    """Settings から回答スタイル設定の表示用データを作る。"""
-    runtime = generation_adapter_runtime_settings(settings)
+def _generation_settings_data(
+    settings: Settings,
+    stored: StoredGenerationSettings,
+) -> GenerationSettingsData:
+    """Oracle GLOBAL 行から回答スタイル設定の表示用データを作る。"""
+    runtime = generation_adapter_runtime_settings(
+        settings.model_copy(update={"rag_generation_profile": stored.profile})
+    )
     return GenerationSettingsData(
         profile=runtime.profile,
         structured_output=runtime.structured_output,
@@ -2382,20 +2433,16 @@ def _generation_settings_data(settings: Settings) -> GenerationSettingsData:
                 recommended_for=list(status.recommended_for),
                 selected=status.selected,
                 structured_output=status.structured_output,
+                contract_mode=status.contract_mode,
+                repair_enabled=status.repair_enabled,
             )
             for status in runtime.profiles
         ],
-        config_source="runtime",
-    )
-
-
-def _persist_generation_settings(settings: Settings) -> None:
-    """回答スタイル設定を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {"RAG_GENERATION_PROFILE": settings.rag_generation_profile},
-        section_comment="# Generation アダプター",
-        error_detail="回答スタイル設定を backend/.env へ保存できませんでした。",
+        config_source="oracle",
+        revision=stored.revision,
+        updated_at=stored.updated_at,
+        active_prompt_version_id=stored.active_prompt_version_id,
+        custom_prompt_configured=stored.active_prompt_version_id is not None,
     )
 
 
@@ -2430,19 +2477,26 @@ def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
 
 
 def _oci_guardrails_configured(settings: Settings) -> bool:
-    """OCI Guardrails の compartment が解決できるか(値の有無のみ)。"""
-    return bool(
+    """OCI Guardrails の compartment と API キー認証を静的に確認する。"""
+    compartment_configured = bool(
         str(getattr(settings, "oci_guardrails_compartment_id", "") or "").strip()
         or str(getattr(settings, "oci_compartment_id", "") or "").strip()
     )
+    return compartment_configured and _test_oci_config(settings).status == "success"
 
 
 def _oci_guardrails_warning_code(settings: Settings) -> str | None:
-    """oci_guardrails 選択時に compartment 未設定なら warning code を返す。"""
-    if settings.rag_guardrail_backend == "oci_guardrails" and not _oci_guardrails_configured(
-        settings
-    ):
+    """oci_guardrails 選択時の静的 readiness warning code を返す。"""
+    if settings.rag_guardrail_backend != "oci_guardrails":
+        return None
+    compartment_configured = bool(
+        str(getattr(settings, "oci_guardrails_compartment_id", "") or "").strip()
+        or str(getattr(settings, "oci_compartment_id", "") or "").strip()
+    )
+    if not compartment_configured:
         return "oci_guardrails_compartment_missing"
+    if _test_oci_config(settings).status != "success":
+        return "oci_guardrails_credentials_invalid"
     return None
 
 
@@ -2588,9 +2642,9 @@ def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
         chunk_size=runtime.chunk_size,
         overlap=runtime.overlap,
         child_size=runtime.child_size,
-        sentence_window_size=runtime.sentence_window_size,
         min_chars=runtime.min_chars,
         delimiter=runtime.delimiter,
+        context_header_enabled=settings.rag_chunk_context_header_enabled,
         strategies=[
             ChunkingStrategyStatusData(
                 name=status.name,
@@ -2598,7 +2652,6 @@ def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
                 recommended_for=list(status.recommended_for),
                 selected=status.selected,
                 uses_child_size=status.uses_child_size,
-                uses_sentence_window=status.uses_sentence_window,
             )
             for status in runtime.strategies
         ],
@@ -2617,9 +2670,9 @@ def _chunking_settings_candidate(
             "rag_chunk_size": payload.chunk_size,
             "rag_chunk_overlap": payload.overlap,
             "rag_chunk_child_size": payload.child_size,
-            "rag_chunk_sentence_window_size": payload.sentence_window_size,
             "rag_chunk_min_chars": payload.min_chars,
             "rag_chunk_delimiter": payload.delimiter,
+            "rag_chunk_context_header_enabled": payload.context_header_enabled,
         }
     )
 
@@ -2630,9 +2683,9 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
     target.rag_chunk_size = source.rag_chunk_size
     target.rag_chunk_overlap = source.rag_chunk_overlap
     target.rag_chunk_child_size = source.rag_chunk_child_size
-    target.rag_chunk_sentence_window_size = source.rag_chunk_sentence_window_size
     target.rag_chunk_min_chars = source.rag_chunk_min_chars
     target.rag_chunk_delimiter = source.rag_chunk_delimiter
+    target.rag_chunk_context_header_enabled = source.rag_chunk_context_header_enabled
 
 
 def _persist_chunking_settings(settings: Settings) -> None:
@@ -2644,9 +2697,11 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNK_SIZE": str(settings.rag_chunk_size),
             "RAG_CHUNK_OVERLAP": str(settings.rag_chunk_overlap),
             "RAG_CHUNK_CHILD_SIZE": str(settings.rag_chunk_child_size),
-            "RAG_CHUNK_SENTENCE_WINDOW_SIZE": str(settings.rag_chunk_sentence_window_size),
             "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
             "RAG_CHUNK_DELIMITER": settings.rag_chunk_delimiter,
+            "RAG_CHUNK_CONTEXT_HEADER_ENABLED": _format_env_bool(
+                settings.rag_chunk_context_header_enabled
+            ),
         },
         section_comment="# Chunking アダプター",
         error_detail="文書分割設定を backend/.env へ保存できませんでした。",
@@ -2982,7 +3037,7 @@ def _test_oci_config(settings: Settings) -> OciConfigTestResult:
         config_file_mode=_mode_string(config_path),
         key_file_mode=_mode_string(key_path),
         message=message,
-        error_type="OciPrivateKeyPassPhraseRequiredError" if pass_phrase_required else None,
+        error_type=("OciPrivateKeyPassPhraseRequiredError" if pass_phrase_required else None),
     )
 
 
@@ -3198,7 +3253,9 @@ def _model_settings_data(payload: ModelSettingsPayload, settings: Settings) -> M
     )
 
 
-def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettingsPayload:
+def _public_model_settings_payload(
+    payload: ModelSettingsPayload,
+) -> ModelSettingsPayload:
     """secret を除いたモデル設定 payload を返す。"""
     enterprise_ai = payload.enterprise_ai.model_copy(
         update={

@@ -298,6 +298,29 @@ class StoredBusinessView:
     archived_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class StoredGenerationSettings:
+    """Oracle を正本とする deploy-wide 回答生成設定。"""
+
+    profile: str
+    active_prompt_version_id: str | None
+    revision: int
+    updated_at: datetime
+    updated_by_hash: str | None = None
+
+
+@dataclass(frozen=True)
+class StoredPromptVersion:
+    """Oracle に保存する回答生成 system prompt の版。"""
+
+    version_id: str
+    name: str
+    system_prompt: str
+    note: str
+    created_at: datetime
+    created_by_hash: str | None = None
+
+
 @dataclass
 class StoredConversation:
     """チャット会話(conversation)行。業務ビュー配下に置く。"""
@@ -386,6 +409,18 @@ class OracleWalletPasswordRequiredError(RuntimeError):
 
 class OracleConnectionTimeoutError(TimeoutError):
     """Oracle 接続テストが所定時間内に終わらないときのユーザー向けエラー。"""
+
+    safe_for_user = True
+
+
+class GenerationSettingsRevisionConflictError(RuntimeError):
+    """回答生成設定が別 worker / 利用者により先に更新された。"""
+
+    safe_for_user = True
+
+
+class CustomPromptNotConfiguredError(RuntimeError):
+    """custom profile に必要な active Prompt が未設定。"""
 
     safe_for_user = True
 
@@ -2107,6 +2142,324 @@ class OracleClient:
         """業務ビューをアーカイブする。参照 KB・文書は変更しない。"""
         return await self._archive_business_view_with_oracle(business_view_id)
 
+    # --- 回答生成設定 / Prompt 版 -----------------------------------------
+
+    async def get_generation_settings(self) -> StoredGenerationSettings:
+        """Oracle GLOBAL 行を毎回読み、未作成なら deploy 既定で初期化する。"""
+
+        return await self._run_transaction(
+            lambda connection: _ensure_generation_settings_row(
+                connection,
+                default_profile=self._settings.rag_generation_profile,
+            )
+        )
+
+    async def update_generation_settings(
+        self,
+        *,
+        profile: str,
+        expected_revision: int | None = None,
+    ) -> StoredGenerationSettings:
+        """GLOBAL 行を悲観 lock し、revision を検査して更新する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> StoredGenerationSettings:
+            current = _lock_generation_settings_row(
+                connection,
+                default_profile=self._settings.rag_generation_profile,
+            )
+            _assert_generation_revision(current, expected_revision)
+            if profile == "custom" and current.active_prompt_version_id is None:
+                raise CustomPromptNotConfiguredError(
+                    "カスタム回答スタイルを使う前に Prompt 版を作成して有効化してください。"
+                )
+            updated_at = datetime.now(UTC)
+            _execute(
+                connection,
+                """
+                UPDATE rag_generation_settings
+                SET generation_profile = :generation_profile,
+                    revision = revision + 1,
+                    updated_at = :updated_at,
+                    updated_by_hash = :updated_by_hash
+                WHERE settings_key = 'GLOBAL'
+                """,
+                {
+                    "generation_profile": profile,
+                    "updated_at": updated_at,
+                    "updated_by_hash": current_audit_request_context().user_id_hash,
+                },
+            )
+            return replace(
+                current,
+                profile=profile,
+                revision=current.revision + 1,
+                updated_at=updated_at,
+                updated_by_hash=current_audit_request_context().user_id_hash,
+            )
+
+        return await self._run_transaction(operation)
+
+    async def list_prompt_versions(
+        self,
+    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+        """有効 pointer と Prompt 版を同じ transaction snapshot で返す。"""
+
+        def operation(
+            connection: OracleConnectionProtocol,
+        ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+            settings = _ensure_generation_settings_row(
+                connection,
+                default_profile=self._settings.rag_generation_profile,
+            )
+            return settings, _select_prompt_versions(connection)
+
+        return await self._run_transaction(operation)
+
+    async def create_prompt_version(
+        self,
+        *,
+        name: str,
+        system_prompt: str,
+        note: str = "",
+        activate: bool = True,
+    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+        """Prompt 版の作成・任意 activation・上限整理を原子的に行う。"""
+
+        def operation(
+            connection: OracleConnectionProtocol,
+        ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+            current = _lock_generation_settings_row(
+                connection,
+                default_profile=self._settings.rag_generation_profile,
+            )
+            version_id = uuid4().hex
+            now = datetime.now(UTC)
+            user_hash = current_audit_request_context().user_id_hash
+            _execute(
+                connection,
+                """
+                INSERT INTO rag_prompt_versions (
+                    version_id, name, system_prompt, note, created_at, created_by_hash
+                ) VALUES (
+                    :version_id, :name, :system_prompt, :note, :created_at, :created_by_hash
+                )
+                """,
+                {
+                    "version_id": version_id,
+                    "name": name,
+                    "system_prompt": system_prompt,
+                    "note": note,
+                    "created_at": now,
+                    "created_by_hash": user_hash,
+                },
+            )
+            active_version_id = current.active_prompt_version_id
+            if activate:
+                active_version_id = version_id
+            _execute(
+                connection,
+                """
+                UPDATE rag_generation_settings
+                SET active_prompt_version_id = :active_prompt_version_id,
+                    revision = revision + 1,
+                    updated_at = :updated_at,
+                    updated_by_hash = :updated_by_hash
+                WHERE settings_key = 'GLOBAL'
+                """,
+                {
+                    "active_prompt_version_id": active_version_id,
+                    "updated_at": now,
+                    "updated_by_hash": user_hash,
+                },
+            )
+            updated = replace(
+                current,
+                active_prompt_version_id=active_version_id,
+                revision=current.revision + 1,
+                updated_at=now,
+                updated_by_hash=user_hash,
+            )
+            _delete_stale_prompt_versions(
+                connection,
+                active_prompt_version_id=active_version_id,
+            )
+            return updated, _select_prompt_versions(connection)
+
+        return await self._run_transaction(operation)
+
+    async def activate_prompt_version(
+        self,
+        version_id: str,
+    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+        """既存 Prompt 版を lock 下で有効化する。"""
+
+        def operation(
+            connection: OracleConnectionProtocol,
+        ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+            current = _lock_generation_settings_row(
+                connection,
+                default_profile=self._settings.rag_generation_profile,
+            )
+            if _select_prompt_version(connection, version_id) is None:
+                raise KeyError(f"version_id={version_id} は存在しません。")
+            now = datetime.now(UTC)
+            user_hash = current_audit_request_context().user_id_hash
+            _execute(
+                connection,
+                """
+                UPDATE rag_generation_settings
+                SET active_prompt_version_id = :active_prompt_version_id,
+                    revision = revision + 1,
+                    updated_at = :updated_at,
+                    updated_by_hash = :updated_by_hash
+                WHERE settings_key = 'GLOBAL'
+                """,
+                {
+                    "active_prompt_version_id": version_id,
+                    "updated_at": now,
+                    "updated_by_hash": user_hash,
+                },
+            )
+            updated = replace(
+                current,
+                active_prompt_version_id=version_id,
+                revision=current.revision + 1,
+                updated_at=now,
+                updated_by_hash=user_hash,
+            )
+            return updated, _select_prompt_versions(connection)
+
+        return await self._run_transaction(operation)
+
+    async def get_active_prompt_version(self) -> StoredPromptVersion | None:
+        """現在有効な custom Prompt を Oracle から取得する。"""
+
+        def operation(connection: OracleConnectionProtocol) -> StoredPromptVersion | None:
+            settings = _ensure_generation_settings_row(
+                connection,
+                default_profile=self._settings.rag_generation_profile,
+            )
+            if settings.active_prompt_version_id is None:
+                return None
+            return _select_prompt_version(connection, settings.active_prompt_version_id)
+
+        return await self._run_transaction(operation)
+
+    async def get_generation_runtime_config(
+        self,
+    ) -> tuple[StoredGenerationSettings, StoredPromptVersion | None]:
+        """GLOBAL 設定と active Prompt を同じ transaction snapshot で返す。"""
+
+        def operation(
+            connection: OracleConnectionProtocol,
+        ) -> tuple[StoredGenerationSettings, StoredPromptVersion | None]:
+            settings = _ensure_generation_settings_row(
+                connection,
+                default_profile=self._settings.rag_generation_profile,
+            )
+            active = (
+                _select_prompt_version(connection, settings.active_prompt_version_id)
+                if settings.active_prompt_version_id is not None
+                else None
+            )
+            return settings, active
+
+        return await self._run_transaction(operation)
+
+    async def import_legacy_generation_settings(
+        self,
+        *,
+        profile: str,
+        versions: Sequence[Mapping[str, object]],
+        active_version_id: str | None,
+    ) -> dict[str, object]:
+        """旧 .env / JSON を idempotent に Oracle へ取り込む。"""
+
+        def operation(connection: OracleConnectionProtocol) -> dict[str, object]:
+            before = _fetch_one(
+                connection,
+                """
+                SELECT generation_profile, active_prompt_version_id, revision,
+                       updated_at, updated_by_hash
+                FROM rag_generation_settings
+                WHERE settings_key = 'GLOBAL'
+                FOR UPDATE
+                """,
+                {},
+            )
+            rows = [
+                _legacy_prompt_version_binds(version)
+                for version in versions
+                if str(version.get("version_id") or "").strip()
+                and str(version.get("name") or "").strip()
+                and str(version.get("system_prompt") or "").strip()
+            ]
+            imported_ids = {str(row["version_id"]) for row in rows}
+            if rows:
+                _executemany(
+                    connection,
+                    """
+                    MERGE INTO rag_prompt_versions target
+                    USING (
+                        SELECT :version_id AS version_id,
+                               :name AS name,
+                               :system_prompt AS system_prompt,
+                               :note AS note,
+                               :created_at AS created_at,
+                               :created_by_hash AS created_by_hash
+                        FROM dual
+                    ) source
+                    ON (target.version_id = source.version_id)
+                    WHEN NOT MATCHED THEN INSERT (
+                        version_id, name, system_prompt, note, created_at, created_by_hash
+                    ) VALUES (
+                        source.version_id, source.name, source.system_prompt, source.note,
+                        source.created_at, source.created_by_hash
+                    )
+                    """,
+                    rows,
+                )
+            imported_active = active_version_id if active_version_id in imported_ids else None
+            now = datetime.now(UTC)
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_generation_settings target
+                USING (SELECT 'GLOBAL' AS settings_key FROM dual) source
+                ON (target.settings_key = source.settings_key)
+                WHEN NOT MATCHED THEN INSERT (
+                    settings_key, generation_profile, active_prompt_version_id,
+                    revision, updated_at, updated_by_hash
+                ) VALUES (
+                    'GLOBAL', :generation_profile, :active_prompt_version_id,
+                    1, :updated_at, :updated_by_hash
+                )
+                """,
+                {
+                    "generation_profile": profile,
+                    "active_prompt_version_id": imported_active,
+                    "updated_at": now,
+                    "updated_by_hash": current_audit_request_context().user_id_hash,
+                },
+            )
+            current = _lock_generation_settings_row(
+                connection,
+                default_profile=profile,
+            )
+            _delete_stale_prompt_versions(
+                connection,
+                active_prompt_version_id=current.active_prompt_version_id,
+            )
+            return {
+                "settings_created": before is None,
+                "profile": current.profile,
+                "active_prompt_version_id": current.active_prompt_version_id,
+                "prompt_version_count": len(_select_prompt_versions(connection)),
+                "legacy_prompt_count": len(rows),
+            }
+
+        return await self._run_transaction(operation)
+
     # --- チャット会話 / メッセージ -----------------------------------------
 
     async def create_conversation(
@@ -2453,6 +2806,83 @@ class OracleClient:
             _with_conversation_access_bind(binds),
         )
         return [_stored_message_from_row(row) for row in rows]
+
+    async def list_conversations_for_guardrail_migration(
+        self, *, limit: int, offset: int
+    ) -> list[StoredConversation]:
+        """運用 CLI 用に全 tenant の会話をページングする(API からは使用しない)。"""
+        rows = await self._fetch_all(
+            """
+            SELECT conversation_id, business_view_id, tenant_id_hash, user_id_hash,
+                   title, status, message_count, created_at, updated_at
+            FROM rag_conversations
+            ORDER BY created_at ASC, conversation_id ASC
+            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            """,
+            {"offset": offset, "limit": limit},
+        )
+        return [_stored_conversation_from_row(row) for row in rows]
+
+    async def list_messages_for_guardrail_migration(
+        self, conversation_id: str
+    ) -> list[StoredMessage]:
+        """運用 CLI 用に 1 会話の全メッセージを返す(API からは使用しない)。"""
+        rows = await self._fetch_all(
+            """
+            SELECT message_id, conversation_id, reply_to_message_id, tenant_id_hash,
+                   user_id_hash, role, model, content, citations_json,
+                   guardrail_warnings, trace_id, status, elapsed_ms, created_at
+            FROM rag_messages
+            WHERE conversation_id = :conversation_id
+            ORDER BY created_at ASC, message_id ASC
+            """,
+            {"conversation_id": conversation_id},
+        )
+        return [_stored_message_from_row(row) for row in rows]
+
+    async def get_business_view_config_for_guardrail_migration(
+        self, business_view_id: str
+    ) -> BusinessViewConfig | None:
+        """運用 CLI 用に tenant scope を越えて業務ビュー設定だけを読む。"""
+        row = await self._fetch_one(
+            """
+            SELECT view_config
+            FROM rag_business_views
+            WHERE business_view_id = :business_view_id
+            """,
+            {"business_view_id": business_view_id},
+        )
+        return None if row is None else parse_business_view_config(_json_loads(row["view_config"]))
+
+    async def update_message_for_guardrail_migration(
+        self,
+        *,
+        message_id: str,
+        content: str,
+        status: str,
+        guardrail_warnings: list[str],
+    ) -> None:
+        """運用 CLI 用に sanitized 値だけを上書きする。原文を別領域へ退避しない。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                UPDATE rag_messages
+                SET content = :content,
+                    status = :status,
+                    guardrail_warnings = :guardrail_warnings
+                WHERE message_id = :message_id
+                """,
+                {
+                    "message_id": message_id,
+                    "content": content,
+                    "status": status,
+                    "guardrail_warnings": _json_dumps(guardrail_warnings),
+                },
+            )
+
+        await self._run_transaction(operation)
 
     async def create_ingestion_job(self, job: IngestionJob) -> IngestionJob:
         """取込 job を永続化する。"""
@@ -3019,12 +3449,18 @@ class OracleClient:
             )
         )
 
-    async def save_feedback(self, feedback: Mapping[str, object]) -> str:
-        """回答/引用 feedback を低機密 metadata だけで Oracle へ追記する。"""
+    async def save_feedback(
+        self,
+        feedback: Mapping[str, object],
+        *,
+        details: Mapping[str, object] | None = None,
+    ) -> str:
+        """feedback metadata と任意の調査用本文を同一 transaction で追記する。"""
         feedback_id = _audit_str(feedback, "feedback_id", uuid4().hex)
         binds = _citation_feedback_binds(feedback, feedback_id=feedback_id)
-        await self._run_transaction(
-            lambda connection: _execute(
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
                 connection,
                 """
                 INSERT INTO rag_citation_feedback (
@@ -3059,7 +3495,40 @@ class OracleClient:
                 """,
                 binds,
             )
-        )
+            if details is not None:
+                _execute(
+                    connection,
+                    """
+                    INSERT INTO rag_feedback_details (
+                        feedback_id,
+                        tenant_id_hash,
+                        message_id,
+                        content_source,
+                        question_text,
+                        answer_text,
+                        comment_text,
+                        citations_json,
+                        search_text
+                    ) VALUES (
+                        :feedback_id,
+                        :tenant_id_hash,
+                        :message_id,
+                        :content_source,
+                        :question_text,
+                        :answer_text,
+                        :comment_text,
+                        :citations_json,
+                        :search_text
+                    )
+                    """,
+                    _feedback_detail_binds(
+                        details,
+                        feedback_id=feedback_id,
+                        tenant_id_hash=_optional_str(binds.get("tenant_id_hash")),
+                    ),
+                )
+
+        await self._run_transaction(operation)
         return feedback_id
 
     async def save_citation_feedback(self, feedback: Mapping[str, object]) -> str:
@@ -3080,18 +3549,9 @@ class OracleClient:
         rows = await self._fetch_all(
             _render_sql(
                 """
-            SELECT * FROM (
+            WITH ranked_feedback AS (
                 SELECT
-                    f.feedback_id,
-                    f.trace_id,
-                    f.business_view_id,
-                    f.target_type,
-                    f.source_surface,
-                    f.document_id,
-                    f.chunk_id,
-                    f.rating,
-                    f.reason,
-                    f.created_at,
+                    f.*,
                     ROW_NUMBER() OVER (
                         PARTITION BY f.target_type, NVL(f.document_id, '-'), NVL(f.chunk_id, '-')
                         ORDER BY f.created_at DESC, f.feedback_id DESC
@@ -3101,16 +3561,95 @@ class OracleClient:
                   AND f.user_id_hash = :user_id_hash
                   AND {tenant_sql}
             )
-            WHERE feedback_rank = 1
-            ORDER BY target_type, document_id, chunk_id
+            SELECT
+                f.feedback_id,
+                f.trace_id,
+                f.business_view_id,
+                f.target_type,
+                f.source_surface,
+                f.document_id,
+                f.chunk_id,
+                fd.message_id,
+                f.rating,
+                f.reason,
+                fd.comment_text AS "comment",
+                f.created_at
+            FROM ranked_feedback f
+            LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
+            WHERE f.feedback_rank = 1
+            ORDER BY f.target_type, f.document_id, f.chunk_id
             """,
                 tenant_sql=_oracle_tenant_predicate(alias="f"),
             ),
             _with_tenant_bind({"trace_id": trace_id, "user_id_hash": context.user_id_hash}),
         )
-        return [
-            {key: value for key, value in row.items() if key != "feedback_rank"} for row in rows
-        ]
+        for row in rows:
+            row.pop("feedback_rank", None)
+        return rows
+
+    async def get_feedback_message_context(
+        self,
+        message_id: str,
+        trace_id: str,
+    ) -> dict[str, object] | None:
+        """現在ユーザーの assistant message から質問・回答・根拠を取得する。"""
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT
+                    assistant.message_id,
+                    user_message.content AS question_text,
+                    assistant.content AS answer_text,
+                    assistant.citations_json
+                FROM rag_messages assistant
+                JOIN rag_conversations c
+                  ON c.conversation_id = assistant.conversation_id
+                LEFT JOIN rag_messages user_message
+                  ON user_message.message_id = assistant.reply_to_message_id
+                 AND user_message.role = 'USER'
+                WHERE assistant.message_id = :message_id
+                  AND assistant.trace_id = :trace_id
+                  AND assistant.role = 'ASSISTANT'
+                  AND {access_sql}
+                """,
+                access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
+            ),
+            _with_conversation_access_bind({"message_id": message_id, "trace_id": trace_id}),
+        )
+        if row is None:
+            return None
+        return {
+            "message_id": row.get("message_id"),
+            "question_text": row.get("question_text"),
+            "answer_text": row.get("answer_text"),
+            "citations": _json_object_list(row.get("citations_json")),
+            "content_source": "chat_message",
+        }
+
+    async def feedback_trace_exists(self, trace_id: str) -> bool:
+        """検索 snapshot を現在の tenant/user に属する trace へだけ紐付ける。"""
+        context = current_audit_request_context()
+        user_sql = ""
+        binds: dict[str, object] = {"trace_id": trace_id}
+        if context.user_id_hash is not None:
+            user_sql = "AND a.user_id_hash = :feedback_user_id_hash"
+            binds["feedback_user_id_hash"] = context.user_id_hash
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT 1 AS found
+                FROM rag_search_audit a
+                WHERE a.trace_id = :trace_id
+                  AND {tenant_sql}
+                  {user_sql}
+                FETCH NEXT 1 ROWS ONLY
+                """,
+                tenant_sql=_oracle_tenant_predicate(alias="a"),
+                user_sql=user_sql,
+            ),
+            _with_tenant_bind(binds),
+        )
+        return row is not None
 
     async def list_feedback_dashboard_rows(
         self,
@@ -3120,9 +3659,16 @@ class OracleClient:
         rating: str | None,
         reason: str | None,
         period_days: int | None,
+        search_query: str | None,
+        sort_order: str,
         limit: int,
         offset: int,
-    ) -> tuple[list[dict[str, object]], int, list[dict[str, object]]]:
+    ) -> tuple[
+        list[dict[str, object]],
+        int,
+        list[dict[str, object]],
+        list[dict[str, object]],
+    ]:
         """有効な最新 feedback の明細、総数、集計 group を返す。"""
         where_sql, binds = _feedback_dashboard_filters(
             business_view_id=business_view_id,
@@ -3130,8 +3676,23 @@ class OracleClient:
             rating=rating,
             reason=reason,
             period_days=period_days,
+            search_query=search_query,
+        )
+        previous_where_sql, previous_binds = _feedback_dashboard_filters(
+            business_view_id=business_view_id,
+            target_type=target_type,
+            rating=rating,
+            reason=reason,
+            period_days=period_days,
+            search_query=search_query,
+            previous_period=True,
         )
         cte = _feedback_latest_cte()
+        order_sql = (
+            "f.created_at ASC, f.feedback_id ASC"
+            if sort_order == "oldest"
+            else "f.created_at DESC, f.feedback_id DESC"
+        )
         rows = await self._fetch_all(
             f"""
             {cte},
@@ -3162,17 +3723,27 @@ class OracleClient:
                 f.rating,
                 f.reason,
                 f.created_at,
-                m.message_id,
+                COALESCE(fd.message_id, m.message_id) AS message_id,
                 m.model,
                 c.conversation_id,
-                c.title AS conversation_title
+                c.title AS conversation_title,
+                DBMS_LOB.SUBSTR(fd.question_text, 240, 1) AS question_preview,
+                DBMS_LOB.SUBSTR(fd.comment_text, 160, 1) AS comment_preview,
+                CASE WHEN fd.comment_text IS NULL THEN 0 ELSE 1 END AS has_comment
             FROM latest_feedback f
+            LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
             LEFT JOIN rag_business_views bv
               ON bv.business_view_id = f.business_view_id
              AND NVL(bv.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
             LEFT JOIN assistant_messages m
-              ON m.trace_id = f.trace_id
-             AND m.message_rank = 1
+              ON (
+                    (fd.message_id IS NOT NULL AND m.message_id = fd.message_id)
+                    OR (
+                        fd.message_id IS NULL
+                        AND m.trace_id = f.trace_id
+                        AND m.message_rank = 1
+                    )
+                 )
              AND NVL(m.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
             LEFT JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
@@ -3181,7 +3752,7 @@ class OracleClient:
               ON d.document_id = f.document_id
              AND NVL(d.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
             WHERE {where_sql}
-            ORDER BY f.created_at DESC, f.feedback_id DESC
+            ORDER BY {order_sql}
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
             """,
             _with_tenant_bind({**binds, "offset": offset, "limit": limit}),
@@ -3191,6 +3762,7 @@ class OracleClient:
             {cte}
             SELECT COUNT(*) AS total
             FROM latest_feedback f
+            LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
             WHERE {where_sql}
             """,
             _with_tenant_bind(binds),
@@ -3200,12 +3772,133 @@ class OracleClient:
             {cte}
             SELECT f.target_type, f.rating, f.reason, COUNT(*) AS item_count
             FROM latest_feedback f
+            LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
             WHERE {where_sql}
             GROUP BY f.target_type, f.rating, f.reason
             """,
             _with_tenant_bind(binds),
         )
-        return rows, _int_value((count_row or {}).get("total")), groups
+        previous_groups: list[dict[str, object]] = []
+        if period_days is not None:
+            previous_groups = await self._fetch_all(
+                f"""
+                {cte}
+                SELECT f.target_type, f.rating, f.reason, COUNT(*) AS item_count
+                FROM latest_feedback f
+                LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
+                WHERE {previous_where_sql}
+                GROUP BY f.target_type, f.rating, f.reason
+                """,
+                _with_tenant_bind(previous_binds),
+            )
+        return rows, _int_value((count_row or {}).get("total")), groups, previous_groups
+
+    async def get_feedback_detail(self, feedback_id: str) -> dict[str, object] | None:
+        """管理者 drawer 用に feedback 全文と trace 診断を返す。"""
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                WITH assistant_messages AS (
+                    SELECT
+                        m.*,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY m.trace_id
+                            ORDER BY m.created_at DESC, m.message_id DESC
+                        ) AS message_rank
+                    FROM rag_messages m
+                    WHERE m.role = 'ASSISTANT'
+                ),
+                latest_audit AS (
+                    SELECT * FROM (
+                        SELECT
+                            a.*,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY a.trace_id
+                                ORDER BY a.created_at DESC, a.audit_id DESC
+                            ) AS audit_rank
+                        FROM rag_search_audit a
+                        WHERE {audit_tenant_sql}
+                    )
+                    WHERE audit_rank = 1
+                )
+                SELECT
+                    f.feedback_id,
+                    f.trace_id,
+                    f.business_view_id,
+                    bv.name AS business_view_name,
+                    f.target_type,
+                    f.source_surface,
+                    f.document_id,
+                    f.chunk_id,
+                    d.file_name,
+                    f.rating,
+                    f.reason,
+                    f.created_at,
+                    COALESCE(fd.message_id, m.message_id) AS message_id,
+                    m.model,
+                    c.conversation_id,
+                    c.title AS conversation_title,
+                    fd.content_source,
+                    fd.question_text AS question,
+                    fd.answer_text AS answer,
+                    fd.comment_text AS "comment",
+                    fd.citations_json,
+                    DBMS_LOB.SUBSTR(fd.question_text, 240, 1) AS question_preview,
+                    DBMS_LOB.SUBSTR(fd.comment_text, 160, 1) AS comment_preview,
+                    CASE WHEN fd.comment_text IS NULL THEN 0 ELSE 1 END AS has_comment,
+                    a.outcome,
+                    a.search_mode,
+                    COALESCE(a.elapsed_ms, m.elapsed_ms) AS elapsed_ms,
+                    a.retrieved_count,
+                    a.reranked_count,
+                    a.citation_count,
+                    a.guardrail_codes,
+                    a.config_fingerprint
+                FROM rag_citation_feedback f
+                LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
+                LEFT JOIN rag_business_views bv
+                  ON bv.business_view_id = f.business_view_id
+                 AND NVL(bv.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+                LEFT JOIN assistant_messages m
+                  ON (
+                        (fd.message_id IS NOT NULL AND m.message_id = fd.message_id)
+                        OR (
+                            fd.message_id IS NULL
+                            AND m.trace_id = f.trace_id
+                            AND m.message_rank = 1
+                        )
+                     )
+                 AND NVL(m.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+                LEFT JOIN rag_conversations c
+                  ON c.conversation_id = m.conversation_id
+                 AND NVL(c.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+                LEFT JOIN rag_documents d
+                  ON d.document_id = f.document_id
+                 AND NVL(d.tenant_id_hash, '__GLOBAL__') = NVL(f.tenant_id_hash, '__GLOBAL__')
+                LEFT JOIN latest_audit a ON a.trace_id = f.trace_id
+                WHERE f.feedback_id = :feedback_id
+                  AND {feedback_tenant_sql}
+                """,
+                audit_tenant_sql=_oracle_tenant_predicate(alias="a"),
+                feedback_tenant_sql=_oracle_tenant_predicate(alias="f"),
+            ),
+            _with_tenant_bind({"feedback_id": feedback_id}),
+        )
+        if row is None:
+            return None
+        result = dict(row)
+        result["citations"] = _json_object_list(result.pop("citations_json", None))
+        result["execution"] = {
+            "outcome": result.pop("outcome", None),
+            "search_mode": result.pop("search_mode", None),
+            "elapsed_ms": result.pop("elapsed_ms", None),
+            "retrieved_count": result.pop("retrieved_count", None),
+            "reranked_count": result.pop("reranked_count", None),
+            "citation_count": result.pop("citation_count", None),
+            "guardrail_codes": _json_string_list(result.pop("guardrail_codes", None)),
+            "config_fingerprint": result.pop("config_fingerprint", None),
+        }
+        return result
 
     async def save_evaluation_artifact(self, artifact: Mapping[str, object]) -> str:
         """nightly / staging 評価 artifact を query 原文なしで Oracle へ保存する。"""
@@ -3450,6 +4143,7 @@ class OracleClient:
                 c.chunk_text,
                 c.metadata_json,
                 c.chunk_index,
+                c.chunk_set_id,
                 cs.recipe_id,
                 r.slot_no AS recipe_slot_no,
                 d.file_name,
@@ -3503,6 +4197,7 @@ class OracleClient:
                     c.chunk_text,
                     c.metadata_json,
                     c.chunk_index,
+                    c.chunk_set_id,
                     cs.recipe_id,
                     r.slot_no AS recipe_slot_no,
                     d.file_name,
@@ -3513,7 +4208,7 @@ class OracleClient:
                 LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
                 LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
                 WHERE {where_sql}
-                  AND CONTAINS(c.chunk_text, :query, 1) > 0
+                  AND CONTAINS(c.search_text, :query, 1) > 0
                 ORDER BY
                     SCORE(1) DESC,
                     c.document_id ASC,
@@ -3558,6 +4253,7 @@ class OracleClient:
                     c.chunk_text,
                     c.metadata_json,
                     c.chunk_index,
+                    c.chunk_set_id,
                     cs.recipe_id,
                     r.slot_no AS recipe_slot_no,
                     d.file_name,
@@ -3679,7 +4375,7 @@ class OracleClient:
             anchor_index = _chunk_index_from_retrieved(anchor)
             if anchor_index is None:
                 continue
-            where_sql, binds = _oracle_retrieval_where({"document_id": anchor.document_id})
+            where_sql, binds = _context_anchor_retrieval_where(anchor)
             binds.update(
                 {
                     "anchor_index": anchor_index,
@@ -3697,6 +4393,7 @@ class OracleClient:
                     c.chunk_text,
                     c.metadata_json,
                     c.chunk_index,
+                    c.chunk_set_id,
                     d.file_name,
                     d.category_name,
                     0 AS score
@@ -3741,7 +4438,7 @@ class OracleClient:
             anchor_index = _chunk_index_from_retrieved(anchor)
             if group_id is None or anchor_index is None:
                 continue
-            where_sql, binds = _oracle_retrieval_where({"document_id": anchor.document_id})
+            where_sql, binds = _context_anchor_retrieval_where(anchor)
             binds.update(
                 {
                     "chunk_group_id": group_id,
@@ -3761,6 +4458,7 @@ class OracleClient:
                         c.chunk_text,
                         c.metadata_json,
                         c.chunk_index,
+                        c.chunk_set_id,
                         d.file_name,
                         d.category_name,
                         0 AS score
@@ -3806,7 +4504,7 @@ class OracleClient:
         candidate_limit = max(max_chunks_per_anchor * 8, max_chunks_per_anchor)
         for anchor in anchors:
             anchor_index = _chunk_index_from_retrieved(anchor) or 0
-            where_sql, binds = _oracle_retrieval_where({"document_id": anchor.document_id})
+            where_sql, binds = _context_anchor_retrieval_where(anchor)
             dependency_match_sql, dependency_binds = _context_dependency_match_sql(anchor)
             binds.update(
                 {
@@ -3827,6 +4525,7 @@ class OracleClient:
                         c.chunk_text,
                         c.metadata_json,
                         c.chunk_index,
+                        c.chunk_set_id,
                         d.file_name,
                         d.category_name,
                         0 AS score
@@ -6082,6 +6781,14 @@ class OracleClient:
                 "chunk_id": chunk_id_for(chunk),
                 "chunk_set_id": chunk_set_id,
                 "embedding": _to_vector_bind(embedding),
+                "search_text": _chunk_search_text(chunk),
+                "metadata_json": _json_dumps(
+                    {
+                        **chunk.metadata,
+                        "chunk_id": chunk_id_for(chunk),
+                        "chunk_index": chunk.index,
+                    }
+                ),
             }
             for chunk, embedding in zip(chunks, embeddings, strict=True)
         ]
@@ -6092,7 +6799,9 @@ class OracleClient:
                     connection,
                     """
                     UPDATE rag_chunks
-                    SET embedding = :embedding
+                    SET embedding = :embedding,
+                        search_text = :search_text,
+                        metadata_json = :metadata_json
                     WHERE chunk_id = :chunk_id
                       AND chunk_set_id = :chunk_set_id
                     """,
@@ -6886,6 +7595,7 @@ class OracleClient:
                 "tenant_id_hash": document.tenant_id_hash,
                 "chunk_index": chunk.index,
                 "chunk_text": chunk.text,
+                "search_text": _chunk_search_text(chunk),
                 "metadata_json": _json_dumps(
                     {
                         "document_id": document_id,
@@ -6953,6 +7663,7 @@ class OracleClient:
                         tenant_id_hash,
                         chunk_index,
                         chunk_text,
+                        search_text,
                         metadata_json,
                         embedding
                     ) VALUES (
@@ -6961,6 +7672,7 @@ class OracleClient:
                         :tenant_id_hash,
                         :chunk_index,
                         :chunk_text,
+                        :search_text,
                         :metadata_json,
                         :embedding
                     )
@@ -7040,6 +7752,7 @@ class OracleClient:
                         tenant_id_hash,
                         chunk_index,
                         chunk_text,
+                        search_text,
                         metadata_json,
                         embedding,
                         chunk_set_id
@@ -7049,6 +7762,7 @@ class OracleClient:
                         :tenant_id_hash,
                         :chunk_index,
                         :chunk_text,
+                        :search_text,
                         :metadata_json,
                         :embedding,
                         :chunk_set_id
@@ -7452,6 +8166,200 @@ def _execute(
         cursor.close()
 
 
+def _ensure_generation_settings_row(
+    connection: OracleConnectionProtocol,
+    *,
+    default_profile: str,
+) -> StoredGenerationSettings:
+    """GLOBAL 行を一度だけ作成し、現在値を返す。"""
+
+    now = datetime.now(UTC)
+    _execute(
+        connection,
+        """
+        MERGE INTO rag_generation_settings target
+        USING (SELECT 'GLOBAL' AS settings_key FROM dual) source
+        ON (target.settings_key = source.settings_key)
+        WHEN NOT MATCHED THEN INSERT (
+            settings_key,
+            generation_profile,
+            active_prompt_version_id,
+            revision,
+            updated_at,
+            updated_by_hash
+        ) VALUES (
+            'GLOBAL',
+            :generation_profile,
+            NULL,
+            1,
+            :updated_at,
+            :updated_by_hash
+        )
+        """,
+        {
+            "generation_profile": default_profile,
+            "updated_at": now,
+            "updated_by_hash": current_audit_request_context().user_id_hash,
+        },
+    )
+    row = _fetch_one(
+        connection,
+        """
+        SELECT generation_profile,
+               active_prompt_version_id,
+               revision,
+               updated_at,
+               updated_by_hash
+        FROM rag_generation_settings
+        WHERE settings_key = 'GLOBAL'
+        """,
+        {},
+    )
+    if row is None:  # pragma: no cover - MERGE/SELECT の DB invariant
+        raise RuntimeError("Oracle 回答生成設定 GLOBAL 行を初期化できませんでした。")
+    return _stored_generation_settings_from_row(row)
+
+
+def _lock_generation_settings_row(
+    connection: OracleConnectionProtocol,
+    *,
+    default_profile: str,
+) -> StoredGenerationSettings:
+    """GLOBAL 行を作成後 SELECT FOR UPDATE で lock する。"""
+
+    _ensure_generation_settings_row(connection, default_profile=default_profile)
+    row = _fetch_one(
+        connection,
+        """
+        SELECT generation_profile,
+               active_prompt_version_id,
+               revision,
+               updated_at,
+               updated_by_hash
+        FROM rag_generation_settings
+        WHERE settings_key = 'GLOBAL'
+        FOR UPDATE
+        """,
+        {},
+    )
+    if row is None:  # pragma: no cover - GLOBAL 行は直前に作成済み
+        raise RuntimeError("Oracle 回答生成設定 GLOBAL 行を lock できませんでした。")
+    return _stored_generation_settings_from_row(row)
+
+
+def _assert_generation_revision(
+    current: StoredGenerationSettings,
+    expected_revision: int | None,
+) -> None:
+    if expected_revision is not None and expected_revision != current.revision:
+        raise GenerationSettingsRevisionConflictError(
+            "回答スタイル設定は別の操作で更新されています。再読み込みしてから保存してください。"
+        )
+
+
+def _select_prompt_versions(
+    connection: OracleConnectionProtocol,
+) -> list[StoredPromptVersion]:
+    rows = _fetch_all(
+        connection,
+        """
+        SELECT version_id, name, system_prompt, note, created_at, created_by_hash
+        FROM rag_prompt_versions
+        ORDER BY created_at DESC, version_id DESC
+        """,
+        {},
+    )
+    return [_stored_prompt_version_from_row(row) for row in rows]
+
+
+def _select_prompt_version(
+    connection: OracleConnectionProtocol,
+    version_id: str,
+) -> StoredPromptVersion | None:
+    row = _fetch_one(
+        connection,
+        """
+        SELECT version_id, name, system_prompt, note, created_at, created_by_hash
+        FROM rag_prompt_versions
+        WHERE version_id = :version_id
+        """,
+        {"version_id": version_id},
+    )
+    return _stored_prompt_version_from_row(row) if row is not None else None
+
+
+def _delete_stale_prompt_versions(
+    connection: OracleConnectionProtocol,
+    *,
+    active_prompt_version_id: str | None,
+) -> None:
+    """全体 100 版を超えた分だけ、最古の非 active 版から削除する。"""
+
+    row = _fetch_one(
+        connection,
+        "SELECT COUNT(*) AS count_value FROM rag_prompt_versions",
+        {},
+    )
+    excess = max(0, _row_count_value(row) - 100)
+    if excess == 0:
+        return
+    _execute(
+        connection,
+        """
+        DELETE FROM rag_prompt_versions
+        WHERE version_id IN (
+            SELECT version_id
+            FROM rag_prompt_versions
+            WHERE (:active_prompt_version_id IS NULL
+                   OR version_id <> :active_prompt_version_id)
+            ORDER BY created_at ASC, version_id ASC
+            FETCH FIRST :delete_limit ROWS ONLY
+        )
+        """,
+        {
+            "active_prompt_version_id": active_prompt_version_id,
+            "delete_limit": excess,
+        },
+    )
+
+
+def _stored_generation_settings_from_row(
+    row: Mapping[str, object],
+) -> StoredGenerationSettings:
+    return StoredGenerationSettings(
+        profile=str(row.get("generation_profile") or "grounded_concise"),
+        active_prompt_version_id=_optional_str(row.get("active_prompt_version_id")),
+        revision=max(1, _int_value(row.get("revision"))),
+        updated_at=_datetime_value(row.get("updated_at")),
+        updated_by_hash=_optional_str(row.get("updated_by_hash")),
+    )
+
+
+def _stored_prompt_version_from_row(row: Mapping[str, object]) -> StoredPromptVersion:
+    return StoredPromptVersion(
+        version_id=str(row.get("version_id") or ""),
+        name=str(row.get("name") or ""),
+        system_prompt=_text_value(row.get("system_prompt")),
+        note=_text_value(row.get("note")),
+        created_at=_datetime_value(row.get("created_at")),
+        created_by_hash=_optional_str(row.get("created_by_hash")),
+    )
+
+
+def _legacy_prompt_version_binds(version: Mapping[str, object]) -> dict[str, object]:
+    created_by = str(version.get("created_by") or "").strip()
+    return {
+        "version_id": str(version.get("version_id") or "").strip(),
+        "name": str(version.get("name") or "").strip(),
+        "system_prompt": str(version.get("system_prompt") or "").strip(),
+        "note": str(version.get("note") or "").strip(),
+        "created_at": _datetime_value(version.get("created_at")),
+        "created_by_hash": (
+            hashlib.sha256(created_by.encode("utf-8")).hexdigest() if created_by else None
+        ),
+    }
+
+
 def _executemany(
     connection: OracleConnectionProtocol,
     statement: str,
@@ -7766,6 +8674,33 @@ def _citation_feedback_binds(
     }
 
 
+def _feedback_detail_binds(
+    details: Mapping[str, object],
+    *,
+    feedback_id: str,
+    tenant_id_hash: str | None,
+) -> dict[str, object]:
+    """調査用の本文を audit metadata とは別 table へ保存する。"""
+    question = _audit_optional_str(details, "question_text")
+    answer = _audit_optional_str(details, "answer_text")
+    comment = _audit_optional_str(details, "comment_text")
+    search_text = "\n".join(value for value in (question, answer, comment) if value) or None
+    citations = details.get("citations", [])
+    if not isinstance(citations, Sequence) or isinstance(citations, str | bytes | bytearray):
+        citations = []
+    return {
+        "feedback_id": feedback_id,
+        "tenant_id_hash": tenant_id_hash,
+        "message_id": _audit_optional_str(details, "message_id"),
+        "content_source": _audit_str(details, "content_source", "search_snapshot"),
+        "question_text": question,
+        "answer_text": answer,
+        "comment_text": comment,
+        "citations_json": _json_dumps(citations),
+        "search_text": search_text,
+    }
+
+
 def _feedback_latest_cte() -> str:
     """追記履歴から利用者・対象ごとの最新票だけを選ぶ CTE。"""
     return _render_sql(
@@ -7804,6 +8739,8 @@ def _feedback_dashboard_filters(
     rating: str | None,
     reason: str | None,
     period_days: int | None,
+    search_query: str | None,
+    previous_period: bool = False,
 ) -> tuple[str, dict[str, object]]:
     """列名を固定した feedback 一覧 filter を組み立てる。"""
     clauses = ["1 = 1"]
@@ -7818,8 +8755,24 @@ def _feedback_dashboard_filters(
             clauses.append(f"f.{column} = :{column}")
             binds[column] = value
     if period_days is not None:
-        clauses.append("f.created_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:period_days, 'DAY')")
+        if previous_period:
+            clauses.extend(
+                [
+                    "f.created_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:previous_period_days, 'DAY')",
+                    "f.created_at < SYSTIMESTAMP - NUMTODSINTERVAL(:period_days, 'DAY')",
+                ]
+            )
+            binds["previous_period_days"] = period_days * 2
+        else:
+            clauses.append("f.created_at >= SYSTIMESTAMP - NUMTODSINTERVAL(:period_days, 'DAY')")
         binds["period_days"] = period_days
+    if search_query:
+        text_query = _oracle_text_query(search_query)
+        if text_query is None:
+            clauses.append("1 = 0")
+        else:
+            clauses.append("CONTAINS(fd.search_text, :feedback_query, 1) > 0")
+            binds["feedback_query"] = text_query
     return " AND ".join(clauses), binds
 
 
@@ -8851,6 +9804,40 @@ def _oracle_retrieval_where(filters: dict[str, str]) -> tuple[str, dict[str, obj
     return " AND ".join(clauses), binds
 
 
+def _context_anchor_retrieval_where(
+    anchor: RetrievedChunk,
+) -> tuple[str, dict[str, object]]:
+    """context 補完を anchor と同じ recipe lineage に限定する。"""
+    chunk_set_id = _metadata_str(anchor.metadata.get("chunk_set_id"))
+    filters = {"document_id": anchor.document_id}
+    if chunk_set_id is not None:
+        filters["chunk_set_id"] = chunk_set_id
+        return _oracle_retrieval_where(filters)
+
+    where_sql, binds = _oracle_retrieval_where(filters)
+    recipe_id = _metadata_str(anchor.metadata.get("recipe_id"))
+    if recipe_id is not None:
+        binds["anchor_recipe_id"] = recipe_id
+        return (
+            f"{where_sql} AND EXISTS ("
+            "SELECT 1 FROM rag_chunk_sets anchor_cs "
+            "WHERE anchor_cs.chunk_set_id = c.chunk_set_id "
+            "AND anchor_cs.recipe_id = :anchor_recipe_id "
+            "AND anchor_cs.is_active = 1 AND anchor_cs.status = 'INDEXED'"
+            ")",
+            binds,
+        )
+
+    # recipe 導入前の未タグ文書だけを許可し、複数 active recipe の横断混入を防ぐ。
+    return (
+        f"{where_sql} AND c.chunk_set_id IS NULL AND NOT EXISTS ("
+        "SELECT 1 FROM rag_document_recipes anchor_legacy_r "
+        "WHERE anchor_legacy_r.document_id = c.document_id"
+        ")",
+        binds,
+    )
+
+
 def _parse_filter_datetime(value: str, *, end_of_day: bool) -> datetime:
     """検証済みの ISO 8601 日付/日時を tz-aware datetime へ変換する。
 
@@ -9472,8 +10459,11 @@ def _document_recipe_row(row: Mapping[str, object]) -> dict[str, object]:
 def _retrieved_chunk_from_row(row: Mapping[str, object]) -> RetrievedChunk:
     metadata = _metadata_from_json(row.get("metadata_json"))
     metadata.setdefault("document_id", str(row["document_id"]))
+    chunk_set_id = _optional_str(row.get("chunk_set_id"))
     recipe_id = _optional_str(row.get("recipe_id"))
     recipe_slot_no = _optional_int(row.get("recipe_slot_no"))
+    if chunk_set_id is not None:
+        metadata["chunk_set_id"] = chunk_set_id
     if recipe_id is not None:
         metadata["recipe_id"] = recipe_id
     if recipe_slot_no is not None:
@@ -9537,6 +10527,12 @@ def _agent_memory_chunk_from_row(
         file_name="agent-memory",
         metadata=metadata,
     )
+
+
+def _chunk_search_text(chunk: Chunk) -> str:
+    """Oracle Text には文脈ヘッダを含め、表示本文は chunk.text のまま保つ。"""
+    header = str(chunk.metadata.get("context_header") or "").strip()
+    return f"{header}\n{chunk.text}" if header else chunk.text
 
 
 def _document_chunk_view_from_row(row: Mapping[str, object]) -> DocumentChunkView:
@@ -9851,6 +10847,18 @@ def _optional_str(value: object) -> str | None:
     return str(value)
 
 
+def _text_value(value: object) -> str:
+    """str / bytes / python-oracledb LOB を本文文字列へ変換する。"""
+
+    if value is None:
+        return ""
+    read = getattr(value, "read", None)
+    resolved = read() if callable(read) else value
+    if isinstance(resolved, bytes):
+        return resolved.decode("utf-8")
+    return str(resolved)
+
+
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
@@ -10157,6 +11165,60 @@ def _pem_file_is_encrypted(path: Path) -> bool:
         return False
     text = head.decode("utf-8", errors="ignore").upper()
     return "BEGIN ENCRYPTED PRIVATE KEY" in text or "PROC-TYPE: 4,ENCRYPTED" in text
+
+
+def oracle_prompt_version_schema_sql(
+    table_name: str = "rag_prompt_versions",
+) -> str:
+    """回答生成 custom system prompt の版管理 table DDL。"""
+
+    return f"""
+CREATE TABLE {table_name} (
+    version_id       VARCHAR2(64) PRIMARY KEY,
+    name             VARCHAR2(120) NOT NULL,
+    system_prompt    CLOB NOT NULL,
+    note             VARCHAR2(2000),
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    created_by_hash  CHAR(64)
+);
+
+CREATE INDEX {table_name}_created_idx
+    ON {table_name} (created_at DESC, version_id DESC);
+""".strip()
+
+
+def oracle_generation_settings_schema_sql(
+    table_name: str = "rag_generation_settings",
+    prompt_table: str = "rag_prompt_versions",
+) -> str:
+    """deploy-wide 回答生成設定の単例 table DDL。"""
+
+    return f"""
+CREATE TABLE {table_name} (
+    settings_key              VARCHAR2(32) PRIMARY KEY,
+    generation_profile        VARCHAR2(64) NOT NULL,
+    active_prompt_version_id  VARCHAR2(64),
+    revision                  NUMBER(19) DEFAULT 1 NOT NULL,
+    updated_at                TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    updated_by_hash           CHAR(64),
+    CONSTRAINT {table_name}_singleton_ck CHECK (settings_key = 'GLOBAL'),
+    CONSTRAINT {table_name}_profile_ck CHECK (
+        generation_profile IN (
+            'grounded_concise',
+            'detailed_cited',
+            'strict_extractive',
+            'structured_json',
+            'bilingual_ja_en',
+            'inline_cited',
+            'custom'
+        )
+    ),
+    CONSTRAINT {table_name}_revision_ck CHECK (revision >= 1),
+    CONSTRAINT {table_name}_active_prompt_fk
+        FOREIGN KEY (active_prompt_version_id)
+        REFERENCES {prompt_table} (version_id)
+);
+""".strip()
 
 
 def oracle_knowledge_base_schema_sql(
@@ -10486,6 +11548,7 @@ CREATE TABLE {table_name} (
     tenant_id_hash  CHAR(64),
     chunk_index     NUMBER NOT NULL,
     chunk_text      CLOB NOT NULL,
+    search_text     CLOB NOT NULL,
     metadata_json   JSON,
     embedding       VECTOR(1536, FLOAT32),
     chunk_set_id    VARCHAR2(64),
@@ -10504,7 +11567,7 @@ CREATE VECTOR INDEX {table_name}_embedding_hnsw_idx
     );
 
 CREATE INDEX {table_name}_text_idx
-    ON {table_name} (chunk_text)
+    ON {table_name} (search_text)
     INDEXTYPE IS CTXSYS.CONTEXT
     {oracle_text_index_parameters_sql()};
 
@@ -11093,6 +12156,44 @@ CREATE INDEX rag_feedback_business_created_idx
 
 CREATE INDEX rag_feedback_user_trace_idx
     ON {table_name} (tenant_id_hash, user_id_hash, trace_id, created_at DESC);
+""".strip()
+
+
+def oracle_feedback_details_schema_sql(
+    table_name: str = "rag_feedback_details",
+    feedback_table: str = "rag_citation_feedback",
+) -> str:
+    """管理者調査用の feedback 本文・根拠 snapshot table DDL を返す。"""
+    return f"""
+CREATE TABLE {table_name} (
+    feedback_id       VARCHAR2(64) PRIMARY KEY,
+    tenant_id_hash    CHAR(64),
+    message_id        VARCHAR2(64),
+    content_source    VARCHAR2(32) NOT NULL,
+    question_text     CLOB,
+    answer_text       CLOB,
+    comment_text      VARCHAR2(1000 CHAR),
+    citations_json    JSON,
+    search_text       CLOB,
+    created_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_feedback_fk
+        FOREIGN KEY (feedback_id)
+        REFERENCES {feedback_table} (feedback_id)
+        ON DELETE CASCADE,
+    CONSTRAINT {table_name}_source_ck
+        CHECK (content_source IN ('chat_message', 'search_snapshot'))
+);
+
+CREATE INDEX {table_name}_tenant_created_idx
+    ON {table_name} (tenant_id_hash, created_at DESC);
+
+CREATE INDEX {table_name}_message_idx
+    ON {table_name} (message_id);
+
+CREATE INDEX {table_name}_text_idx
+    ON {table_name} (search_text)
+    INDEXTYPE IS CTXSYS.CONTEXT
+    {oracle_text_index_parameters_sql()};
 """.strip()
 
 

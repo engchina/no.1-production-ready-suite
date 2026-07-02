@@ -4,7 +4,11 @@ import { Link } from "react-router-dom";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
-import type { FeedbackSourceSurface, RetrievedChunk } from "@/lib/api";
+import type {
+  FeedbackContentSnapshot,
+  FeedbackSourceSurface,
+  RetrievedChunk,
+} from "@/lib/api";
 import { useDocument, useDocumentRecipes } from "@/lib/queries";
 import {
   bboxCoordinateModeFromMetadata,
@@ -31,6 +35,8 @@ export function CitationCard({
   traceId,
   businessViewId,
   sourceSurface = "search",
+  messageId = null,
+  contentSnapshot = null,
   scoreMaxima,
 }: {
   chunk: RetrievedChunk;
@@ -38,6 +44,8 @@ export function CitationCard({
   traceId?: string | null;
   businessViewId?: string | null;
   sourceSurface?: FeedbackSourceSurface;
+  messageId?: string | null;
+  contentSnapshot?: FeedbackContentSnapshot | null;
   scoreMaxima?: CitationScoreMaxima;
 }) {
   const maxima = scoreMaxima ?? { score: chunk.score, rerankScore: chunk.rerank_score ?? 0 };
@@ -150,6 +158,8 @@ export function CitationCard({
             sourceSurface={sourceSurface}
             documentId={chunk.document_id}
             chunkId={chunk.chunk_id}
+            messageId={messageId}
+            contentSnapshot={contentSnapshot}
             compact
           />
         ) : null}

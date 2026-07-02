@@ -47,7 +47,6 @@ def test_all_strategies_stamp_chunk_strategy_metadata() -> None:
             chunk_size=60,
             overlap=10,
             child_size=30,
-            sentence_window_size=2,
         )
         assert chunks, strategy
         assert all(chunk.metadata["chunk_strategy"] == strategy for chunk in chunks), strategy
@@ -63,25 +62,17 @@ def test_unknown_strategy_falls_back_to_structure_aware() -> None:
     assert all(chunk.metadata["chunk_strategy"] == "structure_aware" for chunk in chunks)
 
 
-def test_sentence_window_records_window_size() -> None:
-    """sentence_window は窓幅 metadata を付け、文単位の小 chunk を作る。"""
+def test_legacy_sentence_window_aliases_to_recursive_character() -> None:
+    """撤去済み sentence_window は recursive_character として処理する(既存設定互換)。"""
     extraction = _sample_extraction()
     chunks = chunk_extraction_with_strategy(
         extraction,
         strategy="sentence_window",
         chunk_size=400,
         overlap=0,
-        sentence_window_size=1,
     )
-    assert all(chunk.metadata.get("sentence_window_size") == 1 for chunk in chunks)
-    # 文単位なので structure_aware より chunk 数が多い。
-    structure = chunk_extraction_with_strategy(
-        extraction,
-        strategy="structure_aware",
-        chunk_size=400,
-        overlap=0,
-    )
-    assert len(chunks) > len(structure)
+    assert chunks
+    assert all(chunk.metadata["chunk_strategy"] == "recursive_character" for chunk in chunks)
 
 
 def test_hierarchical_parent_child_links_children_to_parent() -> None:
@@ -115,6 +106,32 @@ def test_page_level_groups_by_page() -> None:
     assert pages == {(1, 1), (2, 2)}
 
 
+def test_page_level_applies_overlap_only_inside_page() -> None:
+    """ページ内の再分割には overlap を使い、次ページへは持ち越さない。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(kind="text", text="1111。2222。3333。", page_number=1),
+            DocumentElement(kind="text", text="次ページです。", page_number=2),
+        ]
+    )
+
+    chunks = chunk_extraction_with_strategy(
+        extraction,
+        strategy="page_level",
+        chunk_size=10,
+        overlap=2,
+    )
+
+    page_one = [chunk for chunk in chunks if chunk.metadata.get("page_start") == 1]
+    assert len(page_one) >= 2
+    assert all(
+        current.text.startswith(previous.text[-2:].strip())
+        for previous, current in zip(page_one, page_one[1:], strict=False)
+    )
+    page_two = next(chunk for chunk in chunks if chunk.metadata.get("page_start") == 2)
+    assert not page_two.text.startswith(page_one[-1].text[-2:].strip())
+
+
 def test_page_level_falls_back_without_pages() -> None:
     """ページ情報がない文書では章節単位へ fallback する。"""
     extraction = StructuredExtraction(
@@ -140,24 +157,124 @@ def test_markdown_heading_keeps_one_chunk_per_section() -> None:
     assert len(chunks) == 2
 
 
+def test_markdown_heading_applies_overlap_only_inside_section() -> None:
+    """見出し内の再分割には overlap を使い、次の見出しへは持ち越さない。"""
+    extraction = StructuredExtraction(raw_text="# 第一章\n1111。2222。3333。\n# 第二章\n次章です。")
+
+    chunks = chunk_extraction_with_strategy(
+        extraction,
+        strategy="markdown_heading",
+        chunk_size=10,
+        overlap=2,
+    )
+
+    first_section = [chunk for chunk in chunks if chunk.metadata.get("section_title") == "第一章"]
+    assert len(first_section) >= 2
+    assert all(
+        current.text.startswith(previous.text[-2:].strip())
+        for previous, current in zip(first_section, first_section[1:], strict=False)
+    )
+    second_section = next(
+        chunk for chunk in chunks if chunk.metadata.get("section_title") == "第二章"
+    )
+    assert not second_section.text.startswith(first_section[-1].text[-2:].strip())
+
+
+def test_structure_overlap_stays_inside_element_group_and_skips_table_boundary() -> None:
+    """element group 内だけを重ね、次章や table chunk へ overlap を持ち越さない。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="text",
+                text="AAAA。BBBB。CCCC。",
+                section_path=["第一章"],
+            ),
+            DocumentElement(
+                kind="text",
+                text="DDDD。EEEE。FFFF。",
+                section_path=["第二章"],
+            ),
+            DocumentElement(
+                kind="table",
+                text="|列|値|\n|---|---|\n|A|111111|\n|B|222222|\n|C|333333|",
+                section_path=["第二章"],
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction_with_strategy(
+        extraction,
+        strategy="structure_aware",
+        chunk_size=10,
+        overlap=2,
+    )
+
+    first = [chunk for chunk in chunks if chunk.metadata.get("section_path") == "第一章"]
+    second = [
+        chunk
+        for chunk in chunks
+        if chunk.metadata.get("section_path") == "第二章"
+        and chunk.metadata.get("content_kind") == "text"
+    ]
+    tables = [chunk for chunk in chunks if chunk.metadata.get("content_kind") == "table"]
+    assert len(first) >= 2
+    assert first[1].text.startswith(first[0].text[-2:].strip())
+    assert not second[0].text.startswith(first[-1].text[-2:].strip())
+    assert len(tables) >= 2
+    assert not tables[1].text.startswith(tables[0].text[-2:].strip())
+
+
+def test_hierarchical_overlap_stays_inside_parent_group() -> None:
+    """子 chunk の overlap は同じ parent に限定し、次 parent へ持ち越さない。"""
+    extraction = StructuredExtraction(
+        elements=[
+            DocumentElement(
+                kind="text",
+                text="AAAA。BBBB。CCCC。",
+                section_path=["第一章"],
+            ),
+            DocumentElement(
+                kind="text",
+                text="DDDD。EEEE。FFFF。",
+                section_path=["第二章"],
+            ),
+        ]
+    )
+
+    chunks = chunk_extraction_with_strategy(
+        extraction,
+        strategy="hierarchical_parent_child",
+        chunk_size=200,
+        overlap=2,
+        child_size=10,
+    )
+    by_parent: dict[str, list[core_chunking.Chunk]] = {}
+    for chunk in chunks:
+        by_parent.setdefault(str(chunk.metadata["parent_chunk_id"]), []).append(chunk)
+
+    parents = list(by_parent.values())
+    assert len(parents) == 2
+    assert all(len(parent) >= 2 for parent in parents)
+    assert parents[0][1].text.startswith(parents[0][0].text[-2:].strip())
+    assert not parents[1][0].text.startswith(parents[0][-1].text[-2:].strip())
+
+
 def test_min_chars_absorbs_small_chunks() -> None:
     """min_chars 未満の微小 chunk は同一 group 内の隣接 chunk へ吸収する。"""
     extraction = _sample_extraction()
     without_absorb = chunk_extraction_with_strategy(
         extraction,
-        strategy="sentence_window",
-        chunk_size=400,
+        strategy="recursive_character",
+        chunk_size=20,
         overlap=0,
-        sentence_window_size=1,
         min_chars=0,
     )
     with_absorb = chunk_extraction_with_strategy(
         extraction,
-        strategy="sentence_window",
-        chunk_size=400,
+        strategy="recursive_character",
+        chunk_size=20,
         overlap=0,
-        sentence_window_size=1,
-        min_chars=200,
+        min_chars=15,
     )
     assert len(with_absorb) < len(without_absorb)
     assert all(chunk.metadata["text_chars"] == len(chunk.text) for chunk in with_absorb)
@@ -205,7 +322,6 @@ def test_resolve_chunking_params_reads_settings() -> None:
         rag_chunk_size=1000,
         rag_chunk_overlap=80,
         rag_chunk_child_size=250,
-        rag_chunk_sentence_window_size=2,
         rag_chunk_min_chars=30,
         rag_chunk_delimiter="---",
     )
@@ -214,7 +330,6 @@ def test_resolve_chunking_params_reads_settings() -> None:
     assert params.chunk_size == 1000
     assert params.overlap == 80
     assert params.child_size == 250
-    assert params.sentence_window_size == 2
     assert params.min_chars == 30
     assert params.delimiter == "---"
 
@@ -231,3 +346,5 @@ def test_chunking_runtime_settings_orders_and_marks_selected() -> None:
 def test_normalize_chunking_strategy_defaults_to_structure_aware() -> None:
     assert normalize_chunking_strategy("nope") == "structure_aware"
     assert normalize_chunking_strategy("page_level") == "page_level"
+    # 撤去済み戦略は後継へ読み替える。
+    assert normalize_chunking_strategy("sentence_window") == "recursive_character"

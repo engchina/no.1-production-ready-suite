@@ -22,7 +22,18 @@ const documentDetail = {
   indexed_at: "2026-06-15T00:05:00Z",
   knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
   object_storage_path: "indexed/doc-1.pdf",
-  extraction: {},
+  extraction: {
+    raw_text: "経費申請の規程",
+    elements: [
+      {
+        kind: "text",
+        text: "経費申請の規程",
+        order: 0,
+        element_id: "e0",
+        metadata: {},
+      },
+    ],
+  },
   error_message: null,
 };
 
@@ -45,8 +56,8 @@ function config(): DocumentProcessingConfig {
     chunk_size: 800,
     chunk_overlap: null,
     chunk_child_size: null,
-    chunk_sentence_window_size: null,
     chunk_min_chars: null,
+    chunk_context_header_enabled: null,
     graph_profile: null,
     field_extraction_enabled: null,
     asset_summary_enabled: null,
@@ -89,28 +100,36 @@ function recipeSteps(status: string): DocumentRecipeStep[] {
 
 async function mockWorkspace(
   page: Page,
-  options: { documentStatus?: string; putFails?: boolean } = {}
+  options: {
+    documentStatus?: string;
+    putFails?: boolean;
+    previewFails?: boolean;
+    recipeCount?: number;
+  } = {}
 ) {
   const status = options.documentStatus ?? "INDEXED";
   let processing = config();
   let saved: DocumentProcessingConfig | null = null;
   let ingestionPosts = 0;
-  const recipeResponse = () => {
+  let previewPosts = 0;
+  let previewPayload: unknown = null;
+  const recipeResponse = (slotNo = 1) => {
     const effective = { ...effectiveBase };
     for (const [key, value] of Object.entries(processing)) {
       if (value !== null) Object.assign(effective, { [key]: value });
     }
     return {
-      recipe_id: "recipe-1",
+      recipe_id: `recipe-${slotNo}`,
       document_id: "doc-1",
-      slot_no: 1 as const,
+      slot_no: slotNo,
       status,
       failed_phase: null,
       processing_config: processing,
       effective_processing_config: effective,
       preprocess_artifact: null,
-      active_extraction_recipe_id: status === "INDEXED" ? "er-recipe-1-r1" : null,
-      active_chunk_set_id: status === "INDEXED" ? "chunk-set-recipe-1" : null,
+      active_extraction_recipe_id:
+        status === "INDEXED" || status === "REVIEW" ? `er-recipe-${slotNo}-r1` : null,
+      active_chunk_set_id: status === "INDEXED" ? `chunk-set-recipe-${slotNo}` : null,
       chunk_count: status === "INDEXED" ? 2 : 0,
       vector_count: status === "INDEXED" ? 2 : 0,
       config_revision: 1,
@@ -139,7 +158,13 @@ async function mockWorkspace(
   );
   await page.route("**/api/documents/doc-1/recipes", (route) => {
     if (route.request().method() === "GET") {
-      return route.fulfill({ json: ok([recipeResponse()]) });
+      return route.fulfill({
+        json: ok(
+          Array.from({ length: options.recipeCount ?? 1 }, (_, index) =>
+            recipeResponse(index + 1)
+          )
+        ),
+      });
     }
     return route.fulfill({ status: 404, json: { data: null, error_messages: [], warning_messages: [] } });
   });
@@ -167,6 +192,50 @@ async function mockWorkspace(
   await page.route("**/api/documents/doc-1/recipes/recipe-1/chunks", (route) =>
     route.fulfill({ json: ok([]) })
   );
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/chunk-preview", (route) => {
+    previewPosts += 1;
+    previewPayload = route.request().postDataJSON();
+    if (options.previewFails) {
+      return route.fulfill({
+        status: 503,
+        json: {
+          data: null,
+          error_messages: ["分割サービスに接続できませんでした。"],
+          warning_messages: [],
+        },
+      });
+    }
+    return route.fulfill({
+      json: ok({
+        chunks: [
+          {
+            document_id: "doc-1",
+            chunk_id: "preview:recipe-1:0",
+            chunk_index: 0,
+            text: "経費申請は部門長の承認後、経理部が確認します。",
+            page_start: 1,
+            page_end: 1,
+            bbox: null,
+            section_path: "第1章 > 経費申請",
+            content_kind: "text",
+            chunk_group_id: null,
+            source_parser: "docling",
+            element_ids: ["e0"],
+            metadata: { context_header: "policy.pdf > 第1章 > 経費申請" },
+          },
+        ],
+        stats: {
+          chunk_count: 1,
+          min_chars: 24,
+          average_chars: 24,
+          max_chars: 24,
+          overflow_count: 0,
+          embedding_overflow_count: 0,
+        },
+        warnings: [],
+      }),
+    });
+  });
   await page.route("**/api/documents/doc-1/recipes/recipe-1/extraction-export**", (route) =>
     route.fulfill({
       json: ok({
@@ -175,7 +244,7 @@ async function mockWorkspace(
         format: "markdown",
         content_type: "text/markdown",
         content: "",
-        payload: {},
+        payload: documentDetail.extraction,
         chunks: [],
         parser_backend: "docling",
         parser_profile: "docling",
@@ -211,6 +280,8 @@ async function mockWorkspace(
   return {
     saved: () => saved,
     ingestionPosts: () => ingestionPosts,
+    previewPosts: () => previewPosts,
+    previewPayload: () => previewPayload,
   };
 }
 
@@ -243,6 +314,40 @@ test("文書処理設定を保存し、手動再処理を案内する", async ({
   await expect(page.getByText(/この文書の処理設定を保存しました/)).toBeVisible();
   expect(state.saved()).toMatchObject({ parser_adapter_backend: "mineru", chunk_size: 800 });
   expect(state.ingestionPosts()).toBe(0);
+  await expectNoPageOverflow(page);
+});
+
+test("レシピ比較で空の引用を理由付きの状態として表示する", async ({ page }) => {
+  await mockWorkspace(page, { recipeCount: 2 });
+  const searchRequests: Array<Record<string, unknown>> = [];
+  await page.route("**/api/search", (route) => {
+    searchRequests.push(route.request().postDataJSON() as Record<string, unknown>);
+    return route.fulfill({
+      json: ok({
+        answer: "取得候補の関連度が十分でないため、回答に使える根拠がありませんでした。",
+        citations: [],
+        trace_id: "trace-no-results",
+        guardrail_warnings: ["回答に使える根拠がありませんでした。"],
+        elapsed_ms: 12,
+        diagnostics: {},
+      }),
+    });
+  });
+  await page.goto("/documents/doc-1");
+
+  await page.getByRole("button", { name: "検索結果を横並びで比較" }).click();
+  await page.getByLabel("比較用の検索クエリ").fill("承認条件を教えて");
+  await page.getByRole("button", { name: "比較", exact: true }).click();
+
+  await expect(page.getByText("一致する根拠が見つかりませんでした。")).toHaveCount(2);
+  await expect(
+    page.getByText("取得候補の関連度が十分でないため、回答に使える根拠がありませんでした。")
+  ).toHaveCount(2);
+  expect(
+    searchRequests
+      .map((request) => (request.filters as Record<string, string>).chunk_set_id)
+      .sort()
+  ).toEqual(["chunk-set-recipe-1", "chunk-set-recipe-2"]);
   await expectNoPageOverflow(page);
 });
 
@@ -382,5 +487,115 @@ test("処理途中の文書は設定を編集できない", async ({ page }) => 
   await expect(
     panel.getByRole("group", { name: "文書解析" }).getByText("上書き")
   ).toBeDisabled();
+  await expectNoPageOverflow(page);
+});
+
+test("確認待ちレシピの分割を一時設定でプレビューする", async ({ page }) => {
+  const state = await mockWorkspace(page, { documentStatus: "REVIEW" });
+  await page.goto("/documents/doc-1");
+
+  await page.getByRole("tab", { name: "Chunk" }).click();
+  const preview = page.getByRole("region", { name: "分割プレビュー" });
+  await expect(preview).toContainText(
+    "保存済みの抽出結果を一時設定で分割します。レシピ設定や工程状態は変更しません。"
+  );
+  await expect(page.getByText("chunk はまだ作成されていません。")).toBeVisible();
+  await preview.getByRole("combobox", { name: "分割方式" }).click();
+  await page.getByRole("option", { name: "構造認識" }).click();
+  await preview.getByLabel("chunk サイズ(文字)", { exact: true }).fill("640");
+  await preview.getByRole("button", { name: "プレビュー実行" }).click();
+
+  await expect(preview).toContainText("件数");
+  await expect(preview).toContainText("24 文字");
+  await expect(page.getByText("経費申請は部門長の承認後、経理部が確認します。"))
+    .toBeVisible();
+  expect(state.previewPosts()).toBe(1);
+  expect(state.previewPayload()).toMatchObject({
+    chunk_size: 640,
+    chunk_context_header_enabled: true,
+  });
+  await expectNoPageOverflow(page);
+});
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
+  { name: "mobile", width: 375, height: 812, collapseSidebar: true },
+]) {
+  test(`分割プレビューの意味境界方式は推奨値を適用する (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapseSidebar) {
+      await page.addInitScript(() => {
+        window.localStorage.setItem(
+          "production-ready-rag.ui",
+          JSON.stringify({ state: { sidebarCollapsed: true }, version: 0 })
+        );
+      });
+    }
+    const state = await mockWorkspace(page, { documentStatus: "REVIEW" });
+    await page.goto("/documents/doc-1");
+    await page.getByRole("tab", { name: "Chunk" }).click();
+
+    const preview = page.getByRole("region", { name: "分割プレビュー" });
+    const strategy = preview.getByRole("combobox", { name: "分割方式" });
+    await strategy.click();
+    await page.getByRole("option", { name: "見出し単位" }).click();
+
+    let details = preview.locator("details").filter({
+      hasText: "長大な単位の再分割(詳細設定)",
+    });
+    await expect(details).not.toHaveAttribute("open", "");
+    await details.getByText("長大な単位の再分割(詳細設定)").click();
+    await expect(details.getByLabel("見出し内の再分割上限(文字)")).toHaveValue("32000");
+    await expect(details.getByLabel("再分割時の重複文字数")).toHaveValue("0");
+
+    await strategy.click();
+    await page.getByRole("option", { name: "ページ単位" }).click();
+    details = preview.locator("details").filter({
+      hasText: "長大な単位の再分割(詳細設定)",
+    });
+    await expect(details).not.toHaveAttribute("open", "");
+    await details.getByText("長大な単位の再分割(詳細設定)").click();
+    await expect(details.getByLabel("ページ内の再分割上限(文字)")).toHaveValue("32000");
+    await expect(details.getByLabel("再分割時の重複文字数")).toHaveValue("0");
+
+    await preview.getByRole("button", { name: "プレビュー実行" }).click();
+    expect(state.previewPayload()).toMatchObject({
+      chunking_strategy: "page_level",
+      chunk_size: 32_000,
+      chunk_overlap: 0,
+    });
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("分割プレビュー失敗を画面内に表示する", async ({ page }) => {
+  await mockWorkspace(page, { documentStatus: "REVIEW", previewFails: true });
+  await page.goto("/documents/doc-1");
+
+  await page.getByRole("tab", { name: "Chunk" }).click();
+  const preview = page.getByRole("region", { name: "分割プレビュー" });
+  await preview.getByRole("button", { name: "プレビュー実行" }).click();
+
+  await expect(preview).toContainText("分割サービスに接続できませんでした。");
+  await expectNoPageOverflow(page);
+});
+
+test("未保存の抽出修正がある間は分割プレビューを無効にする", async ({ page }) => {
+  const state = await mockWorkspace(page, { documentStatus: "REVIEW" });
+  await page.goto("/documents/doc-1");
+
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await page.getByRole("button", { name: "構造化要素を修正" }).click();
+  await page.locator('textarea[id^="review-edit-"]').first().fill("修正中の経費申請規程");
+  await page.getByRole("tab", { name: "Chunk" }).click();
+
+  const preview = page.getByRole("region", { name: "分割プレビュー" });
+  await expect(preview).toContainText(
+    "未保存の抽出修正があります。修正を保存してからプレビューしてください。"
+  );
+  await expect(preview.getByRole("button", { name: "プレビュー実行" })).toBeDisabled();
+  expect(state.previewPosts()).toBe(0);
   await expectNoPageOverflow(page);
 });

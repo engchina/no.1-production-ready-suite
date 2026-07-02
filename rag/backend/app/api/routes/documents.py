@@ -28,9 +28,11 @@ from fastapi import (
 )
 
 from app.clients.object_storage import ObjectStorageClient
+from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, OracleClient
 from app.config import CHUNKING_STRATEGIES_WITH_MIN_CHARS, Settings, get_settings
 from app.db_degradation import load_or_degrade
+from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.extraction_field_adapter import load_field_schema
 from app.rag.ingestion import (
     IngestionCancelledError,
@@ -60,6 +62,9 @@ from app.schemas.document import (
     BatchUploadResult,
     ChunkSetExperimentRequest,
     DocumentApproveRequest,
+    DocumentChunkPreviewRequest,
+    DocumentChunkPreviewResponse,
+    DocumentChunkPreviewStats,
     DocumentChunkSet,
     DocumentChunkSetLayerStatuses,
     DocumentChunkView,
@@ -136,8 +141,8 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
         "chunk_size",
         "chunk_overlap",
         "chunk_child_size",
-        "chunk_sentence_window_size",
         "chunk_min_chars",
+        "chunk_context_header_enabled",
     ),
     "graph_profile": ("graph_profile",),
     "field_extraction_enabled": ("field_extraction_enabled",),
@@ -889,6 +894,163 @@ async def list_document_recipe_chunks(
     )
 
 
+@router.post(
+    "/{document_id}/recipes/{recipe_id}/chunk-preview",
+    response_model=ApiResponse[DocumentChunkPreviewResponse],
+)
+async def preview_document_recipe_chunks(
+    http_request: Request,
+    document_id: str,
+    recipe_id: str,
+    request: DocumentChunkPreviewRequest | None = None,
+) -> ApiResponse[DocumentChunkPreviewResponse]:
+    """保存済み抽出を一時設定で分割し、DB・job・工程状態を変更せず返す。"""
+    enforce_rate_limit("ingest", http_request)
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if detail is None or row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    status = FileStatus(str(row.get("status")))
+    if status not in {FileStatus.REVIEW, FileStatus.CHUNKED}:
+        raise HTTPException(
+            status_code=409,
+            detail="確認待ちまたは分割確認待ちのレシピのみプレビューできます。",
+        )
+    extraction_recipe_id = row.get("active_extraction_recipe_id")
+    artifact = (
+        await oracle.get_document_extraction_artifact(
+            document_id=document_id,
+            extraction_recipe_id=str(extraction_recipe_id),
+        )
+        if extraction_recipe_id
+        else None
+    )
+    if artifact is None or not artifact.get("extraction_json"):
+        raise HTTPException(status_code=409, detail="再利用できる抽出結果がありません。")
+
+    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+    settings, _ = _merge_document_processing_config(config)
+    candidate = _candidate_chunking_settings(
+        settings,
+        (request or DocumentChunkPreviewRequest()).settings_overrides(),
+    )
+    extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
+    try:
+        chunks = chunk_extraction_with_strategy(
+            extraction,
+            strategy=candidate.rag_chunking_strategy,
+            chunk_size=candidate.rag_chunk_size,
+            overlap=candidate.rag_chunk_overlap,
+            child_size=candidate.rag_chunk_child_size,
+            min_chars=candidate.rag_chunk_min_chars,
+            delimiter=candidate.rag_chunk_delimiter,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    views: list[DocumentChunkView] = []
+    search_lengths: list[int] = []
+    for chunk in chunks:
+        metadata = dict(chunk.metadata)
+        section_path = str(metadata.get("section_path") or "").strip()
+        header = " > ".join(part for part in (detail.file_name.strip(), section_path) if part)
+        if candidate.rag_chunk_context_header_enabled and header:
+            metadata["context_header"] = header
+        else:
+            metadata.pop("context_header", None)
+        search_lengths.append(
+            len(f"{header}\n{chunk.text}")
+            if candidate.rag_chunk_context_header_enabled and header
+            else len(chunk.text)
+        )
+        views.append(_preview_chunk_view(document_id, recipe_id, chunk, metadata))
+
+    lengths = [len(chunk.text) for chunk in chunks]
+    overflow_count = sum(
+        1
+        for chunk in chunks
+        if chunk.metadata.get("chunk_size_compliance") in {"overflow", "overflow_justified"}
+    )
+    embedding_overflow_count = sum(
+        1 for length in search_lengths if length > EMBEDDING_INPUT_MAX_CHARS
+    )
+    warnings: list[str] = []
+    if overflow_count:
+        warnings.append(f"設定サイズを超える chunk が {overflow_count} 件あります。")
+    if embedding_overflow_count:
+        warnings.append(
+            f"embedding 入力上限を超える chunk が {embedding_overflow_count} 件あります。"
+        )
+    return ApiResponse(
+        data=DocumentChunkPreviewResponse(
+            chunks=views,
+            stats=DocumentChunkPreviewStats(
+                chunk_count=len(chunks),
+                min_chars=min(lengths, default=0),
+                average_chars=(round(sum(lengths) / len(lengths), 1) if lengths else 0),
+                max_chars=max(lengths, default=0),
+                overflow_count=overflow_count,
+                embedding_overflow_count=embedding_overflow_count,
+            ),
+            warnings=warnings,
+        )
+    )
+
+
+def _preview_chunk_view(
+    document_id: str,
+    recipe_id: str,
+    chunk: Chunk,
+    metadata: dict[str, str | int | float | bool | None],
+) -> DocumentChunkView:
+    """永続化前の Chunk を既存 UI view へ写す。"""
+
+    def optional_int(value: object) -> int | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float, str)):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
+
+    bbox: list[float] | None = None
+    raw_bbox = metadata.get("bbox")
+    try:
+        parsed_bbox = json.loads(raw_bbox) if isinstance(raw_bbox, str) else raw_bbox
+        if isinstance(parsed_bbox, list) and len(parsed_bbox) == 4:
+            bbox = [float(value) for value in parsed_bbox]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        bbox = None
+    element_ids = [
+        value.strip()
+        for value in str(metadata.get("element_ids") or "").split(",")
+        if value.strip()
+    ]
+    page_start = optional_int(metadata.get("page_start")) or optional_int(
+        metadata.get("page_number")
+    )
+    return DocumentChunkView(
+        document_id=document_id,
+        chunk_id=f"preview:{recipe_id}:{chunk.index}",
+        chunk_index=chunk.index,
+        text=chunk.text,
+        page_start=page_start,
+        page_end=optional_int(metadata.get("page_end")) or page_start,
+        bbox=bbox,
+        section_path=str(metadata["section_path"]) if metadata.get("section_path") else None,
+        content_kind=str(metadata["content_kind"]) if metadata.get("content_kind") else None,
+        chunk_group_id=(
+            str(metadata["chunk_group_id"]) if metadata.get("chunk_group_id") else None
+        ),
+        source_parser=(str(metadata["source_parser"]) if metadata.get("source_parser") else None),
+        element_ids=element_ids,
+        metadata=metadata,
+    )
+
+
 @router.get("/{document_id}/recipes/{recipe_id}/content")
 async def document_recipe_content(
     document_id: str,
@@ -1094,13 +1256,13 @@ async def list_document_chunk_sets(document_id: str) -> ApiResponse[list[Documen
     return ApiResponse(data=chunk_sets)
 
 
-def _candidate_experiment_settings(base: Settings, request: ChunkSetExperimentRequest) -> Settings:
+def _candidate_chunking_settings(base: Settings, overrides: Mapping[str, object]) -> Settings:
     """global 設定に chunking 上書きを重ねた候補レシピ設定を返す(cross-field 検証込み)。
 
     model_copy は Settings の model_validator を再実行しないため、chunking の相互制約だけ
     ここで明示検証する(不正なら 422)。parser/前処理は変えない=既存抽出を再利用できる。
     """
-    candidate = base.model_copy(update=request.settings_overrides())
+    candidate = base.model_copy(update=dict(overrides))
     if candidate.rag_chunk_overlap >= candidate.rag_chunk_size:
         raise HTTPException(
             status_code=422, detail="overlap は chunk_size より小さくしてください。"
@@ -1155,7 +1317,7 @@ async def create_chunk_set_experiment(
     if serving_chunk_set_id is None:
         raise HTTPException(status_code=409, detail="配信中の chunk_set がありません。")
     base_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
-    candidate_settings = _candidate_experiment_settings(base_settings, request)
+    candidate_settings = _candidate_chunking_settings(base_settings, request.settings_overrides())
     candidate_config = processing_config.model_copy(
         update={field: value for field, value in request.model_dump().items() if value is not None}
     )
@@ -1746,12 +1908,21 @@ def _merge_document_processing_config(
     base = global_settings or get_settings()
     adapter = KnowledgeBaseAdapterConfig(ingestion=config)
     effective_settings = resolve_effective_settings(base, adapter, scope="ingestion")
+    if config.chunk_context_header_enabled is not None:
+        effective_settings = effective_settings.model_copy(
+            update={"rag_chunk_context_header_enabled": config.chunk_context_header_enabled}
+        )
     # 外部 parser 選択時に自動注入される feature flag も含め、実際の Settings を
     # スナップショットへ投影する。これにより runtime と drift 判定が同じ値を見る。
     effective = resolve_effective_adapter_config(
         effective_settings, KnowledgeBaseAdapterConfig()
     ).ingestion
-    return effective_settings, DocumentProcessingConfig.model_validate(effective.model_dump())
+    return effective_settings, DocumentProcessingConfig.model_validate(
+        {
+            **effective.model_dump(),
+            "chunk_context_header_enabled": (effective_settings.rag_chunk_context_header_enabled),
+        }
+    )
 
 
 def _processing_recipe_snapshot(

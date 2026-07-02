@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from rag_pipeline_core.chunking import CHUNK_OVERLAP_MAX_CHARS, CHUNK_SIZE_MAX_CHARS
 
 from app import config as config_module
 from app.config import (
@@ -20,8 +21,7 @@ def test_chunking_strategy_defaults_to_structure_aware() -> None:
     settings = Settings()
     assert settings.rag_chunking_strategy == "structure_aware"
     assert settings.rag_chunk_child_size == 320
-    assert settings.rag_chunk_sentence_window_size == 3
-    assert settings.rag_chunk_min_chars == 0
+    assert settings.rag_chunk_min_chars == 120
     assert settings.rag_chunk_delimiter == "\\n\\n"
 
 
@@ -392,6 +392,20 @@ def test_chunk_overlap_must_be_smaller_than_chunk_size() -> None:
         Settings(rag_chunk_size=400, rag_chunk_overlap=400)
 
 
+def test_chunking_accepts_product_maximums_and_rejects_larger_values() -> None:
+    settings = Settings(
+        rag_chunk_size=CHUNK_SIZE_MAX_CHARS,
+        rag_chunk_overlap=CHUNK_OVERLAP_MAX_CHARS,
+    )
+    assert settings.rag_chunk_size == 32_000
+    assert settings.rag_chunk_overlap == 8_000
+
+    with pytest.raises(ValidationError):
+        Settings(rag_chunk_size=CHUNK_SIZE_MAX_CHARS + 1)
+    with pytest.raises(ValidationError):
+        Settings(rag_chunk_overlap=CHUNK_OVERLAP_MAX_CHARS + 1)
+
+
 def test_upload_storage_backend_is_local_or_oci() -> None:
     """アップロード原本の保存先は local / oci のみ許可する。"""
     assert Settings().upload_storage_backend == "local"
@@ -500,6 +514,8 @@ def test_genai_cache_defaults_and_bounds() -> None:
         Settings(rag_embedding_cache_max_entries=-1)
     with pytest.raises(ValidationError):
         Settings(rag_embedding_batch_size=0)
+    with pytest.raises(ValidationError):
+        Settings(rag_embedding_batch_size=97)
     with pytest.raises(ValidationError):
         Settings(rag_rerank_cache_max_entries=-1)
 

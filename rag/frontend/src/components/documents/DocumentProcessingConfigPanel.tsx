@@ -20,7 +20,13 @@ import {
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
+  findParserCapability,
+  formatSupportedFormats,
+  parserSupportsDocument,
+} from "@/lib/parser-capabilities";
+import {
   useExtractionFieldsSettings,
+  useParserAdapterSettings,
   useUpdateDocumentIngestionConfig,
   useUpdateDocumentRecipe,
 } from "@/lib/queries";
@@ -64,7 +70,6 @@ const PARSER_OPTIONS: SelectFieldOption<ParserAdapterBackend>[] = PARSER_VALUES.
 const CHUNKING_VALUES = [
   "structure_aware",
   "recursive_character",
-  "sentence_window",
   "hierarchical_parent_child",
   "markdown_heading",
   "page_level",
@@ -84,6 +89,7 @@ const EDITED_FIELDS: Array<keyof DocumentProcessingConfig> = [
   "preprocess_profile",
   "parser_adapter_backend",
   "chunking_strategy",
+  "chunk_context_header_enabled",
   "graph_profile",
   "field_extraction_enabled",
   "asset_summary_enabled",
@@ -108,8 +114,8 @@ function emptyConfig(): DocumentProcessingConfig {
     chunk_size: null,
     chunk_overlap: null,
     chunk_child_size: null,
-    chunk_sentence_window_size: null,
     chunk_min_chars: null,
+    chunk_context_header_enabled: null,
     graph_profile: null,
     field_extraction_enabled: null,
     asset_summary_enabled: null,
@@ -200,6 +206,7 @@ export function DocumentProcessingConfigPanel({
   error,
   onRetry,
   disabled,
+  sourceModality = null,
 }: {
   documentId: string;
   recipeId?: string;
@@ -208,6 +215,7 @@ export function DocumentProcessingConfigPanel({
   error: unknown;
   onRetry: () => void;
   disabled: boolean;
+  sourceModality?: string | null;
 }) {
   const saveLegacy = useUpdateDocumentIngestionConfig();
   const saveRecipe = useUpdateDocumentRecipe();
@@ -234,6 +242,33 @@ export function DocumentProcessingConfigPanel({
   const fieldSchemaQuery = useExtractionFieldsSettings(expanded && fieldExtractionEffective);
   const fieldSchemaEmpty =
     fieldExtractionEffective && fieldSchemaQuery.data?.fields.length === 0;
+
+  // 対応形式の宣言(capabilities 正本)は編集展開時のみ取得する。
+  const adapterSettingsQuery = useParserAdapterSettings(expanded);
+  const capabilities = adapterSettingsQuery.data?.capabilities;
+  const effectiveParserBackend =
+    form.parser_adapter_backend ?? configs?.effective.parser_adapter_backend ?? null;
+  const effectivePreprocessProfile =
+    form.preprocess_profile ?? configs?.effective.preprocess_profile ?? null;
+  const parserFormats = formatSupportedFormats(
+    findParserCapability(capabilities, effectiveParserBackend)
+  );
+  const parserSupported = parserSupportsDocument({
+    capabilities,
+    backend: effectiveParserBackend,
+    modality: sourceModality,
+    preprocessProfile: effectivePreprocessProfile,
+  });
+  const parserHint = parserFormats
+    ? t("documents.processingConfig.parserFormats", { formats: parserFormats })
+    : null;
+  const parserWarning =
+    parserSupported === false && sourceModality
+      ? t("documents.processingConfig.parserUnsupported", {
+          modality: t(`sourceProfile.modality.${sourceModality}` as I18nKey),
+          formats: parserFormats,
+        })
+      : null;
 
   const update = (patch: Partial<DocumentProcessingConfig>) =>
     setForm((current) => ({ ...current, ...patch }));
@@ -327,7 +362,10 @@ export function DocumentProcessingConfigPanel({
                 <p className="text-xs text-muted">{t("documents.processingConfig.editHint")}</p>
                 <span className="rounded-md bg-muted/10 px-2 py-1 text-xs font-medium text-muted">
                   {overrideCount > 0
-                    ? t("knowledgeBases.adapter.overrideCount", { count: overrideCount, total: 10 })
+                    ? t("knowledgeBases.adapter.overrideCount", {
+                        count: overrideCount,
+                        total: EDITED_FIELDS.length,
+                      })
                     : t("knowledgeBases.adapter.overrideNone")}
                 </span>
               </div>
@@ -356,6 +394,8 @@ export function DocumentProcessingConfigPanel({
                   defaultValue="docling"
                   disabled={disabled}
                   onChange={(value) => update({ parser_adapter_backend: value })}
+                  hint={parserHint}
+                  warning={parserWarning}
                 />
                 <SelectRow
                   id={`document-chunking-${documentId}`}
@@ -366,6 +406,14 @@ export function DocumentProcessingConfigPanel({
                   defaultValue="structure_aware"
                   disabled={disabled}
                   onChange={(value) => update({ chunking_strategy: value })}
+                />
+                <BooleanRow
+                  id={`document-context-header-${documentId}`}
+                  label={t("documents.processingConfig.contextHeader")}
+                  value={form.chunk_context_header_enabled}
+                  effectiveValue={configs.effective.chunk_context_header_enabled}
+                  disabled={disabled}
+                  onChange={(value) => update({ chunk_context_header_enabled: value })}
                 />
                 <SelectRow
                   id={`document-graph-${documentId}`}
@@ -480,6 +528,8 @@ function SelectRow<T extends string>({
   defaultValue,
   disabled,
   onChange,
+  hint = null,
+  warning = null,
 }: {
   id: string;
   label: string;
@@ -489,6 +539,8 @@ function SelectRow<T extends string>({
   defaultValue: T;
   disabled: boolean;
   onChange: (value: T | null) => void;
+  hint?: string | null;
+  warning?: string | null;
 }) {
   const overriding = value !== null;
   const lastOverride = useRef<T>(value ?? effectiveValue ?? defaultValue);
@@ -529,6 +581,8 @@ function SelectRow<T extends string>({
           })}
         </p>
       )}
+      {hint ? <p className="text-xs text-muted">{hint}</p> : null}
+      {warning ? <FormStatus tone="warning" className="text-xs" message={warning} /> : null}
     </div>
   );
 }

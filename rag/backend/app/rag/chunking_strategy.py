@@ -18,7 +18,6 @@ DEFAULT_CHUNKING_STRATEGY: ChunkingStrategyName = "structure_aware"
 CHUNKING_STRATEGY_ORDER: tuple[ChunkingStrategyName, ...] = (
     "structure_aware",
     "recursive_character",
-    "sentence_window",
     "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
@@ -35,7 +34,6 @@ class ChunkingStrategySpec:
     origin: str
     recommended_for: tuple[str, ...]
     uses_child_size: bool = False
-    uses_sentence_window: bool = False
 
 
 CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
@@ -48,12 +46,6 @@ CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
         name="recursive_character",
         origin="langchain_recursive_character",
         recommended_for=("text", "markdown"),
-    ),
-    "sentence_window": ChunkingStrategySpec(
-        name="sentence_window",
-        origin="llamaindex_sentence_window",
-        recommended_for=("faq", "qa"),
-        uses_sentence_window=True,
     ),
     "hierarchical_parent_child": ChunkingStrategySpec(
         name="hierarchical_parent_child",
@@ -92,7 +84,6 @@ class ChunkingStrategyParams:
     chunk_size: int
     overlap: int
     child_size: int
-    sentence_window_size: int
     min_chars: int
     delimiter: str
 
@@ -106,7 +97,6 @@ class ChunkingStrategyStatus:
     recommended_for: tuple[str, ...]
     selected: bool
     uses_child_size: bool
-    uses_sentence_window: bool
 
 
 @dataclass(frozen=True)
@@ -117,15 +107,21 @@ class ChunkingRuntimeSettings:
     chunk_size: int
     overlap: int
     child_size: int
-    sentence_window_size: int
     min_chars: int
     delimiter: str
     strategies: tuple[ChunkingStrategyStatus, ...]
 
 
+# 撤去済み戦略の既存設定は後継戦略へ読み替える
+_LEGACY_STRATEGY_ALIASES: dict[str, ChunkingStrategyName] = {
+    "sentence_window": "recursive_character",
+}
+
+
 def normalize_chunking_strategy(value: object) -> ChunkingStrategyName:
-    """未知の戦略名は既定 structure_aware へ寄せる。"""
+    """未知の戦略名は既定 structure_aware へ寄せる。撤去済み戦略は後継へ読み替える。"""
     normalized = str(value).casefold()
+    normalized = _LEGACY_STRATEGY_ALIASES.get(normalized, normalized)
     if normalized in CHUNKING_STRATEGIES:
         return normalized  # type: ignore[return-value]
     return DEFAULT_CHUNKING_STRATEGY
@@ -140,8 +136,7 @@ def resolve_chunking_params(settings: Settings) -> ChunkingStrategyParams:
         chunk_size=int(getattr(settings, "rag_chunk_size", 800)),
         overlap=int(getattr(settings, "rag_chunk_overlap", 120)),
         child_size=int(getattr(settings, "rag_chunk_child_size", 320)),
-        sentence_window_size=int(getattr(settings, "rag_chunk_sentence_window_size", 3)),
-        min_chars=int(getattr(settings, "rag_chunk_min_chars", 0)),
+        min_chars=int(getattr(settings, "rag_chunk_min_chars", 120)),
         delimiter=str(getattr(settings, "rag_chunk_delimiter", "\\n\\n")).strip(),
     )
 
@@ -156,7 +151,6 @@ def chunking_runtime_settings(settings: Settings) -> ChunkingRuntimeSettings:
             recommended_for=spec.recommended_for,
             selected=spec.name == params.strategy,
             uses_child_size=spec.uses_child_size,
-            uses_sentence_window=spec.uses_sentence_window,
         )
         for spec in (CHUNKING_STRATEGY_SPECS[name] for name in CHUNKING_STRATEGY_ORDER)
     )
@@ -165,7 +159,6 @@ def chunking_runtime_settings(settings: Settings) -> ChunkingRuntimeSettings:
         chunk_size=params.chunk_size,
         overlap=params.overlap,
         child_size=params.child_size,
-        sentence_window_size=params.sentence_window_size,
         min_chars=params.min_chars,
         delimiter=params.delimiter,
         strategies=statuses,

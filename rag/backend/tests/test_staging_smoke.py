@@ -329,6 +329,16 @@ class FakeOracleClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
+    async def get_generation_runtime_config(self) -> tuple[SimpleNamespace, None]:
+        return (
+            SimpleNamespace(
+                profile="grounded_concise",
+                active_prompt_version_id=None,
+                revision=1,
+            ),
+            None,
+        )
+
     async def create_document(self, **kwargs: Any) -> SimpleNamespace:
         assert kwargs["file_name"].startswith("staging-smoke-")
         assert kwargs["content_sha256"]

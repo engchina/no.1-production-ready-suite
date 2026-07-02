@@ -17,7 +17,7 @@ from app.services.catalog import (
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
-    service_model_cache_host_path,
+    service_model_cache_volume_name,
 )
 from app.services.control import (
     ControlResult,
@@ -115,30 +115,26 @@ def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
     assert with_cache == root_cache | appuser_cache
 
 
-def test_service_model_cache_host_path_is_download_dir_per_service() -> None:
-    settings = get_settings()
-    settings = settings.model_copy(update={"huggingface_download_dir": "/u01/models/huggingface/"})
+def test_service_model_cache_volume_name_is_stable_per_service() -> None:
     glm = get_catalog_entry("parser-glm-ocr")
     assert glm is not None
-    # 末尾スラッシュは正規化し、<download_dir>/<service_id> を返す。
-    assert service_model_cache_host_path(settings, glm) == "/u01/models/huggingface/parser-glm-ocr"
+    assert service_model_cache_volume_name(glm) == "parser-glm-ocr-model-cache"
     # model_cache_path 未設定(モデル DL なし)のサービスは None。
     chunking = get_catalog_entry("pipeline-chunking")
     assert chunking is not None
-    assert service_model_cache_host_path(settings, chunking) is None
+    assert service_model_cache_volume_name(chunking) is None
 
 
 def test_compose_env_injects_huggingface_settings() -> None:
     settings = get_settings()
     settings = settings.model_copy(
         update={
-            "huggingface_download_dir": "/u01/models/huggingface",
             "huggingface_token": "hf_secret",
             "huggingface_endpoint": "https://hf-mirror.com",
         }
     )
     env = _compose_env(settings)
-    assert env["HF_DOWNLOAD_DIR"] == "/u01/models/huggingface"
+    assert "HF_DOWNLOAD_DIR" not in env
     assert env["HF_TOKEN"] == "hf_secret"
     assert env["HF_ENDPOINT"] == "https://hf-mirror.com"
     # os.environ を継承していること(PATH などが残る)。
@@ -192,7 +188,6 @@ def test_compose_passes_oci_enterprise_ai_env_to_vision_parser() -> None:
 def test_list_services_exposes_model_cache_mount(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
-    monkeypatch.setattr(settings, "huggingface_download_dir", "/u01/models/huggingface")
 
     async def fake_probe(_settings: Any) -> dict[str, str]:
         return {entry.service_id: "stopped" for entry in SERVICE_CATALOG}
@@ -202,12 +197,64 @@ def test_list_services_exposes_model_cache_mount(monkeypatch: MonkeyPatch) -> No
     glm = next(s for s in data["services"] if s["service_id"] == "parser-glm-ocr")
     assert glm["model_cache"] == {
         "container_path": "/root/.cache",
-        "host_path": "/u01/models/huggingface/parser-glm-ocr",
+        "volume_name": "parser-glm-ocr-model-cache",
         "editable": False,
     }
     # モデル DL なしのサービスは model_cache=None。
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
     assert chunking["model_cache"] is None
+
+
+def test_list_services_hides_model_cache_mount_in_production(monkeypatch: MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "production")
+    data = client.get("/api/services/catalog").json()["data"]
+    glm = next(s for s in data["services"] if s["service_id"] == "parser-glm-ocr")
+    assert glm["model_cache"] is None
+
+
+def test_dev_compose_uses_portable_named_model_cache_volumes() -> None:
+    compose = Path(__file__).resolve().parents[2] / "docker-compose.dev.yml"
+    text = compose.read_text(encoding="utf-8")
+    cache_entries = [entry for entry in SERVICE_CATALOG if entry.model_cache_path]
+
+    assert len(cache_entries) == 7
+    for entry in cache_entries:
+        volume_name = service_model_cache_volume_name(entry)
+        assert volume_name is not None
+        assert f"- {volume_name}:{entry.model_cache_path}" in text
+        assert f"\n  {volume_name}:" in text
+
+    assert "HF_DOWNLOAD_DIR" not in text
+    assert "/u01/models" not in text
+
+
+def test_model_parser_images_prepare_cache_without_root_escalation() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    appuser_services = ("docling", "marker", "mineru", "asr")
+    root_services = ("unlimited_ocr", "dots_ocr", "glm_ocr")
+
+    for service in appuser_services:
+        text = (repo_root / "services" / "parsers" / service / "Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        assert "mkdir -p /tmp/uv-cache /home/appuser/.cache" in text
+        assert "setpriv" not in text
+        user_lines = [line for line in text.splitlines() if line.startswith("USER ")]
+        assert user_lines[-1] == "USER appuser"
+
+    for service in root_services:
+        text = (repo_root / "services" / "parsers" / service / "Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        assert "mkdir -p /root/.cache" in text
+
+    mineru_dir = repo_root / "services" / "parsers" / "mineru"
+    mineru_dockerfile = (mineru_dir / "Dockerfile").read_text(encoding="utf-8")
+    mineru_project = (mineru_dir / "pyproject.toml").read_text(encoding="utf-8")
+    assert "services/parsers/mineru/uv.lock" in mineru_dockerfile
+    assert "uv sync --locked" in mineru_dockerfile
+    assert '"pdftext==0.6.3"' in mineru_project
 
 
 def test_compose_uses_shared_oci_config_volume() -> None:

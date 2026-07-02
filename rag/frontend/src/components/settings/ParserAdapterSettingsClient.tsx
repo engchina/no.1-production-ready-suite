@@ -37,6 +37,11 @@ import {
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
+  findParserCapability,
+  formatSupportedExtensions,
+  formatSupportedFormats,
+} from "@/lib/parser-capabilities";
+import {
   useParserAdapterContract,
   useParserAdapterSettings,
   useServiceStatusQueries,
@@ -310,6 +315,9 @@ function OverviewCard({
                   const runtime = serviceId ? runtimeByServiceId.get(serviceId) : null;
                   const runtimeStatus = runtime?.status ?? null;
                   const runtimeProfile = runtime?.profile ?? serviceProfileForBackend(backend);
+                  const capability = findParserCapability(settings.capabilities, backend);
+                  const supportedFormats = formatSupportedFormats(capability);
+                  const supportedExtensions = formatSupportedExtensions(capability);
                   return (
                     <button
                       key={backend}
@@ -332,6 +340,16 @@ function OverviewCard({
                       <span className="mt-1 block text-xs leading-relaxed text-muted">
                         {t(backendDescriptionKey(backend))}
                       </span>
+                      {supportedFormats ? (
+                        <span className="mt-1 block text-xs text-muted">
+                          {t("settings.parserAdapters.capabilities")}: {supportedFormats}
+                        </span>
+                      ) : null}
+                      {supportedExtensions ? (
+                        <span className="mt-0.5 block break-words text-[11px] leading-4 text-muted">
+                          {supportedExtensions}
+                        </span>
+                      ) : null}
                       <span className="mt-2 flex flex-wrap items-center gap-1.5">
                         {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
                         {service && !service.configured ? (

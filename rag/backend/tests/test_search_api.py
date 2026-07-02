@@ -13,7 +13,7 @@ from app.config import get_settings
 from app.main import app
 from app.rag.audit import record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
-from app.rag.pipeline import SearchTokenDelta
+from app.rag.generation_contract import GenerationContractError
 from app.schemas.search import (
     SearchRequest,
     SearchResponse,
@@ -23,6 +23,14 @@ from app.schemas.search import (
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _stub_generation_settings(monkeypatch: MonkeyPatch) -> None:
+    async def identity(settings, *, client=None):  # type: ignore[no-untyped-def]
+        return settings
+
+    monkeypatch.setattr(search_route, "resolve_oracle_generation_settings", identity)
 
 
 def test_search_api_returns_504_when_pipeline_times_out(
@@ -69,10 +77,49 @@ def test_stream_search_api_emits_error_event_when_pipeline_times_out(
     assert search_route.SEARCH_TIMEOUT_MESSAGE in response.text
 
 
-def test_stream_search_api_uses_realtime_deltas_without_duplicate_answer(
+def test_search_api_returns_502_when_generation_contract_fails(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """Enterprise AI token stream を使う場合、最終 answer を二重 delta 化しない。"""
+    class FailingPipeline:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
+            raise GenerationContractError(["unknown_citation"], attempt_count=2)
+
+    monkeypatch.setattr(search_route, "RagPipeline", FailingPipeline)
+
+    response = client.post("/api/search", json={"query": "承認条件"})
+
+    assert response.status_code == 502
+    assert "回答形式の検証に失敗" in response.json()["error_messages"][0]
+
+
+def test_stream_generation_contract_failure_emits_only_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    class FailingPipeline:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def run(self, *_args: object, **_kwargs: object) -> SearchResponse:
+            raise GenerationContractError(["unknown_citation"], attempt_count=2)
+
+    monkeypatch.setattr(search_route, "RagPipeline", FailingPipeline)
+
+    response = client.post("/api/search/stream", json={"query": "承認条件"})
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "unknown_citation" in response.text
+    assert "event: delta" not in response.text
+    assert "event: citations" not in response.text
+
+
+def test_stream_search_api_buffers_answer_even_when_realtime_flag_is_enabled(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """互換 flag が有効でも検査前 token callback を backend から渡さない。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_stream_realtime_enabled", True)
     monkeypatch.setattr(search_route, "RagPipeline", RealtimeStreamingPipeline)
@@ -81,10 +128,8 @@ def test_stream_search_api_uses_realtime_deltas_without_duplicate_answer(
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert response.text.count("event: delta") == 2
-    assert '{"text": "承認条件は "}' in response.text
-    assert '{"text": "120000 円です。"}' in response.text
-    assert '{"text": "承認条件は 120000 円です。"}' not in response.text
+    assert response.text.count("event: delta") == 1
+    assert '{"text": "承認条件は 120000 円です。"}' in response.text
     assert "event: metadata" in response.text
     assert '"keyword_terms": ["承認条件"]' in response.text
     assert '"retrieval_breakdown":' in response.text
@@ -107,10 +152,10 @@ def test_search_response_dedupes_guardrail_warnings() -> None:
     assert response.guardrail_warnings == ["A をマスクしました。", "B 検出。"]
 
 
-def test_stream_search_api_replaces_answer_when_guardrail_masks_realtime_stream(
+def test_stream_search_api_never_emits_precheck_answer_bytes(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """realtime stream 後にガードレールが本文をマスクした場合、replace event で再送する。"""
+    """互換 flag が有効でも生回答を送らず、最終マスク済み回答だけを delta 化する。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_stream_realtime_enabled", True)
     monkeypatch.setattr(search_route, "RagPipeline", RealtimeMaskingPipeline)
@@ -118,11 +163,10 @@ def test_stream_search_api_replaces_answer_when_guardrail_masks_realtime_stream(
     response = client.post("/api/search/stream", json={"query": "口座番号"})
 
     assert response.status_code == 200
-    # 生トークンは delta で配信済み、マスク済み本文は replace で再送される。
-    assert "event: replace" in response.text
+    assert "1234567" not in response.text
+    assert "event: replace" not in response.text
     assert '{"text": "口座番号は [機微情報] です。"}' in response.text
-    # 最終 answer を delta として二重配信しない。
-    assert response.text.count("event: delta") == 2
+    assert response.text.count("event: delta") == 1
 
 
 def test_search_api_hashes_tenant_and_user_headers_into_audit(
@@ -321,7 +365,7 @@ class SlowPipeline:
 
 
 class RealtimeStreamingPipeline:
-    """token_callback へ回答 delta を先に流すテスト用 pipeline。"""
+    """route が token_callback を渡さないことを確認するテスト用 pipeline。"""
 
     def __init__(self, *, settings: object | None = None, **_kwargs: object) -> None:
         self._settings = settings
@@ -335,9 +379,7 @@ class RealtimeStreamingPipeline:
     ) -> SearchResponse:
         _ = progress_callback
         assert trace_id
-        assert token_callback is not None
-        await token_callback(SearchTokenDelta(trace_id=trace_id, text="承認条件は "))
-        await token_callback(SearchTokenDelta(trace_id=trace_id, text="120000 円です。"))
+        assert token_callback is None
         return SearchResponse(
             answer="承認条件は 120000 円です。",
             citations=[],
@@ -378,7 +420,7 @@ class RealtimeStreamingPipeline:
 
 
 class RealtimeMaskingPipeline:
-    """生トークンを stream した後にガードレールが本文をマスクするテスト用 pipeline。"""
+    """検査前本文と最終マスク本文を区別するテスト用 pipeline。"""
 
     def __init__(self, *, settings: object | None = None, **_kwargs: object) -> None:
         self._settings = settings
@@ -392,9 +434,7 @@ class RealtimeMaskingPipeline:
     ) -> SearchResponse:
         _ = progress_callback
         assert trace_id
-        assert token_callback is not None
-        await token_callback(SearchTokenDelta(trace_id=trace_id, text="口座番号は "))
-        await token_callback(SearchTokenDelta(trace_id=trace_id, text="1234567 です。"))
+        assert token_callback is None
         return SearchResponse(
             answer="口座番号は [機微情報] です。",
             citations=[],

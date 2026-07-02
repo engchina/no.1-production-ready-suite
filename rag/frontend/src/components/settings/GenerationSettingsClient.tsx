@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { CheckCircle2, RotateCcw, Save, Sparkles } from "lucide-react";
+import { RotateCcw, Save, Sparkles } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
+import { Banner } from "@/components/ui/banner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormStatus } from "@/components/ui/form-status";
@@ -90,7 +91,7 @@ export function GenerationSettingsClient() {
   function submit() {
     if (!profile) return;
     save.mutate(
-      { profile },
+      { profile, expected_revision: settings.revision },
       {
         onSuccess: (data) => {
           setProfile(data.profile);
@@ -120,42 +121,63 @@ export function GenerationSettingsClient() {
             <div className="text-sm font-medium text-foreground">
               {t("settings.generation.profile")}
             </div>
-            <div
-              role="radiogroup"
-              aria-label={t("settings.generation.profile")}
-              className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3"
-            >
+            {!settings.custom_prompt_configured ? (
+              <Banner severity="info" title={t("settings.generation.custom.unavailableTitle")}>
+                <span>{t("settings.generation.custom.unavailableDescription")} </span>
+                <Link className="font-medium text-primary underline" to={APP_ROUTES.settingsPrompts}>
+                  {t("settings.generation.custom.manageLink")}
+                </Link>
+              </Banner>
+            ) : null}
+            <fieldset className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+              <legend className="sr-only">{t("settings.generation.profile")}</legend>
               {profiles.map((item) => {
                 const selected = profile === item.name;
+                const disabled = save.isPending || (
+                  item.name === "custom" && !settings.custom_prompt_configured
+                );
                 return (
-                  <button
+                  <label
                     key={item.name}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    disabled={save.isPending}
-                    onClick={() => selectProfile(item.name)}
+                    htmlFor={`generation-profile-${item.name}`}
                     className={cn(
-                      "min-h-[100px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                      "min-h-[118px] rounded-md border px-3 py-2 text-left transition-colors focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
+                      disabled && "cursor-not-allowed opacity-50",
                       selected
                         ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-card text-foreground hover:bg-background"
+                        : "border-border bg-card text-foreground hover:bg-background",
+                      !disabled && "cursor-pointer"
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
                       <span className="text-sm font-semibold">{profileLabel(item.name)}</span>
-                      {selected ? (
-                        <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
-                      ) : null}
+                      <input
+                        id={`generation-profile-${item.name}`}
+                        className="h-4 w-4 shrink-0 accent-primary"
+                        type="radio"
+                        name="generation-profile"
+                        value={item.name}
+                        checked={selected}
+                        disabled={disabled}
+                        onChange={() => selectProfile(item.name)}
+                      />
                     </span>
                     <span className="mt-1 block text-xs leading-relaxed text-muted">
                       {profileDescription(item.name)}
                     </span>
+                    <span className="mt-2 block text-[11px] font-medium text-muted">
+                      {t("settings.generation.validationMethod")}: {contractLabel(item.contract_mode)}
+                    </span>
+                    {item.repair_enabled ? (
+                      <span className="mt-1 block text-[11px] text-info">
+                        {t("settings.generation.repairEnabled")}
+                      </span>
+                    ) : null}
                     <ProfileChips profile={item} />
-                  </button>
+                  </label>
                 );
               })}
-            </div>
+            </fieldset>
             {profile === "custom" ? (
               <Link
                 to={APP_ROUTES.settingsPrompts}
@@ -175,7 +197,7 @@ export function GenerationSettingsClient() {
             />
             <RuntimeFact
               label={t("settings.generation.source")}
-              value={t("settings.common.currentConfig")}
+              value={t("settings.generation.source.oracle")}
             />
           </dl>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
@@ -184,12 +206,22 @@ export function GenerationSettingsClient() {
                 <FormStatus tone="warning" message={t("settings.generation.actions.unsaved")} />
               ) : null}
               {successMessage ? <FormStatus tone="success" message={successMessage} /> : null}
-              {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
+              {save.isError ? (
+                <FormStatus
+                  tone="danger"
+                  message={
+                    save.error instanceof ApiError && save.error.status === 409
+                      ? t("settings.generation.actions.conflict")
+                      : saveError
+                  }
+                />
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                variant="secondary"
+                variant="ghost"
+                size="lg"
                 onClick={resetForm}
                 disabled={!dirty || save.isPending}
                 aria-label={t("settings.generation.actions.reset")}
@@ -202,6 +234,7 @@ export function GenerationSettingsClient() {
                 loading={save.isPending}
                 disabled={!dirty}
                 onClick={submit}
+                size="lg"
                 aria-label={t("settings.generation.actions.save")}
               >
                 <Save size={15} aria-hidden />
@@ -225,7 +258,7 @@ function ProfileChips({ profile }: { profile: GenerationProfileStatusData }) {
           key={item}
           className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
         >
-          {item}
+          {recommendedForLabel(item)}
         </span>
       ))}
       {profile.structured_output ? (
@@ -263,4 +296,12 @@ function profileLabel(name: GenerationProfileName) {
 
 function profileDescription(name: GenerationProfileName) {
   return t(`settings.generation.profile.${name}.description` as I18nKey) ?? "";
+}
+
+function contractLabel(mode: GenerationProfileStatusData["contract_mode"]) {
+  return t(`settings.generation.contract.${mode}` as I18nKey) ?? mode;
+}
+
+function recommendedForLabel(value: string) {
+  return t(`settings.generation.recommended.${value}` as I18nKey) ?? value;
 }

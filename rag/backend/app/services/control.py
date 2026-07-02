@@ -28,7 +28,6 @@ from app.config import (
 from app.services.catalog import (
     ServiceCatalogEntry,
     is_dev_mode,
-    service_model_cache_host_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,8 +141,8 @@ def _compose_logs_args(
 def _compose_env(settings: Settings) -> dict[str, str]:
     """compose subprocess へ渡す環境変数。
 
-    HuggingFace 設定を docker-compose の ``${HF_DOWNLOAD_DIR}`` / ``${HF_TOKEN}`` /
-    ``${HF_ENDPOINT}`` substitution へ供給する(dev の host マウント基点と DL 認証/ミラー)。
+    HuggingFace 設定を docker-compose の ``${HF_TOKEN}`` / ``${HF_ENDPOINT}``
+    substitution へ供給する(DL 認証/ミラー)。
 
     OCI parser マイクロサービス(parser-oci-genai-vision 等)はモデル設定 JSON を読まず env
     からのみ OCI 設定を読むため、backend が解決済みの実効値(model-settings.json 由来を含む)を
@@ -152,7 +151,6 @@ def _compose_env(settings: Settings) -> dict[str, str]:
     ``os.environ`` を継承しつつ上書きする。
     """
     env = dict(os.environ)
-    env["HF_DOWNLOAD_DIR"] = settings.huggingface_download_dir
     env["HF_TOKEN"] = settings.huggingface_token
     env["HF_ENDPOINT"] = settings.huggingface_endpoint
     # OCI parser コンテナの env へ橋渡しする実効 OCI Enterprise AI 設定。未設定は空文字のまま渡し、
@@ -166,22 +164,6 @@ def _compose_env(settings: Settings) -> dict[str, str]:
     env["OCI_ENTERPRISE_AI_LLM_PATH"] = settings.oci_enterprise_ai_llm_path
     env["OCI_ENTERPRISE_AI_VLM_INPUT_MODE"] = str(settings.oci_enterprise_ai_vlm_input_mode)
     return env
-
-
-def _ensure_model_cache_dir(settings: Settings, entry: ServiceCatalogEntry) -> None:
-    """start 前に host のモデルキャッシュ用サブディレクトリを用意する。
-
-    bind マウント先が存在しないと docker が root 所有で作成し、コンテナ内 appuser が
-    書き込めず DL が失敗する。backend(host プロセス)側で先に作っておく。
-    """
-    host_path = service_model_cache_host_path(settings, entry)
-    if host_path is None:
-        return
-    try:
-        Path(host_path).mkdir(parents=True, exist_ok=True)
-    except OSError:
-        # 作成失敗は致命ではない(compose 側で再試行/エラーになる)。warning に留める。
-        logger.warning("model_cache_dir_create_failed", extra={"path": host_path})
 
 
 def _compose_profile_args(entry: ServiceCatalogEntry) -> list[str]:
@@ -241,8 +223,6 @@ class DockerComposeDriver:
             if action == "build"
             else settings.rag_service_control_timeout_seconds
         )
-        if action in ("start", "restart"):
-            _ensure_model_cache_dir(settings, entry)
         logger.info(
             "service_control_exec",
             extra={"service_id": entry.service_id, "action": action, "argv": args},

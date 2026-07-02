@@ -391,7 +391,8 @@ def _context_role(chunk: RetrievedChunk) -> ContextRole:
     if retrieval_mode in {"agent_memory", "memory", "history"}:
         return "history"
     if retrieval_mode in {"graph_global", "graph_local", "structure"}:
-        return "structure"
+        score = chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+        return "evidence" if score >= 0.75 else "structure"
     if _metadata_bool(chunk.metadata.get("support_only")):
         return "support"
     score = chunk.rerank_score if chunk.rerank_score is not None else chunk.score
