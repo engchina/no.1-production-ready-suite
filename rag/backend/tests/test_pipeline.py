@@ -13,6 +13,8 @@ from app.clients.oracle import OracleClient
 from app.config import Settings
 from app.rag.pipeline import (
     GAP_STOP_ANSWER,
+    LOW_EVIDENCE_ANSWER,
+    LOW_EVIDENCE_WARNING,
     NO_RESULTS_ANSWER,
     NO_RESULTS_WARNING,
     RagPipeline,
@@ -22,6 +24,7 @@ from app.rag.pipeline import (
     _build_context,
     _business_context_scope_pinned,
     _crag_confidence,
+    _crag_grade,
     _dedupe_ranked_chunks,
     _relaxed_corrective_request,
 )
@@ -3220,3 +3223,163 @@ def test_crag_confidence_clamped_to_unit_range() -> None:
         ),
     ]
     assert _crag_confidence(chunks) == 1.0
+
+
+def test_crag_grade_thresholds() -> None:
+    assert _crag_grade(0.7, 0.35, 0.7) == "high"
+    assert _crag_grade(0.5, 0.35, 0.7) == "mid"
+    assert _crag_grade(0.34, 0.35, 0.7) == "low"
+
+
+class SequencedRerankGenAiClient(OciGenAiClient):
+    """rerank スコアを呼び出し順に返す GenAI client(CRAG grade 制御用)。"""
+
+    def __init__(self, scores: list[float]) -> None:
+        super().__init__()
+        self.scores = list(scores)
+        self.rerank_calls = 0
+
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        input_type: str = "SEARCH_DOCUMENT",
+    ) -> list[list[float]]:
+        return [[1.0] + [0.0] * 1535 for _ in texts]
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        score = self.scores[min(self.rerank_calls, len(self.scores) - 1)]
+        self.rerank_calls += 1
+        return [(0, score)]
+
+
+class RewritePlanningLlm(OciEnterpriseAiClient):
+    """CRAG のクエリ精緻化(plan_query)呼び出しを数えるテスト用 LLM。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.plan_calls = 0
+        self.prompt = ""
+
+    async def plan_query(self, query: str, *, mode: str, max_subqueries: int = 3) -> list[str]:
+        self.plan_calls += 1
+        return ["精緻化した検索クエリ"]
+
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+        self.prompt = prompt
+        return "回答本文。"
+
+
+def _crag_pipeline(
+    scores: list[float], **settings_overrides: Any
+) -> tuple[RagPipeline, SequencedRerankGenAiClient, RewritePlanningLlm]:
+    genai = SequencedRerankGenAiClient(scores)
+    llm = RewritePlanningLlm()
+    settings_values: dict[str, Any] = {
+        "rag_query_expansion_enabled": False,
+        "rag_context_window_chars": 2000,
+        "rag_retrieval_corrective_enabled": True,
+        "rag_grounding_crag_confidence_threshold": 0.35,
+        "rag_crag_high_confidence_threshold": 0.7,
+        "rag_crag_max_hops": 1,
+        **settings_overrides,
+    }
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=StubOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(**settings_values),
+    )
+    return pipeline, genai, llm
+
+
+async def test_crag_high_grade_generates_without_refinement() -> None:
+    """高 grade(>= high 閾値)は精緻化再検索せずそのまま生成する。"""
+    pipeline, genai, llm = _crag_pipeline([0.9])
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 0
+    assert genai.rerank_calls == 1
+    assert response.diagnostics.crag_evidence_grade == "high"
+    assert response.diagnostics.crag_hops == 0
+    assert response.diagnostics.corrective_retried is False
+    assert response.answer == "回答本文。"
+
+
+async def test_crag_mid_grade_refines_and_adopts_improvement() -> None:
+    """中間帯は query 精緻化 + 再検索し、信頼度が改善したら採用する。"""
+    pipeline, genai, llm = _crag_pipeline([0.5, 0.75])
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 1
+    assert response.diagnostics.crag_hops == 1
+    assert response.diagnostics.corrective_retried is True
+    assert response.diagnostics.crag_confidence_score == 0.75
+    assert response.diagnostics.crag_evidence_grade == "high"
+    assert response.answer == "回答本文。"
+
+
+async def test_crag_mid_grade_stops_when_no_improvement() -> None:
+    """改善しない精緻化は hop 上限前でも打ち切り、元の候補を維持する。"""
+    pipeline, _genai, llm = _crag_pipeline([0.5, 0.4], rag_crag_max_hops=3)
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 1
+    assert response.diagnostics.crag_hops == 1
+    assert response.diagnostics.crag_confidence_score == 0.5
+    assert response.diagnostics.crag_evidence_grade == "mid"
+    assert response.answer == "回答本文。"
+
+
+async def test_crag_low_grade_abstains_when_opt_in() -> None:
+    """再検索後も低 grade なら棄権(opt-in)して決定論の保留応答を返す。"""
+    pipeline, _genai, llm = _crag_pipeline([0.2, 0.25], rag_crag_low_evidence_abstain_enabled=True)
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 1
+    assert response.answer == LOW_EVIDENCE_ANSWER
+    assert response.citations == []
+    assert LOW_EVIDENCE_WARNING in response.guardrail_warnings
+    assert response.diagnostics.crag_evidence_grade == "low"
+    assert response.diagnostics.fallback_reason == "crag_low_evidence_abstain"
+    # 生成 LLM は呼ばれない(棄権は決定論応答)。
+    assert llm.prompt == ""
+
+
+async def test_crag_low_grade_generates_when_abstain_disabled() -> None:
+    """棄権 opt-in が無効なら低 grade でも best-effort で生成する(従来互換)。"""
+    pipeline, _genai, _llm = _crag_pipeline([0.2, 0.25])
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert response.answer == "回答本文。"
+    assert response.diagnostics.crag_evidence_grade == "low"
+
+
+async def test_crag_zero_hops_keeps_grade_without_retry() -> None:
+    """max_hops=0 は精緻化再検索なしで grade 判定だけを行う。
+
+    (rerank 自体は既存の根拠0件時 corrective 再検索で追加実行されうる。)
+    """
+    pipeline, _genai, llm = _crag_pipeline([0.5], rag_crag_max_hops=0)
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 0
+    assert response.diagnostics.crag_hops == 0
+    assert response.diagnostics.crag_evidence_grade == "mid"
+
+
+async def test_crag_disabled_by_zero_low_threshold() -> None:
+    """低閾値 0.0 は CRAG 全体を無効化する(互換)。"""
+    pipeline, _genai, llm = _crag_pipeline([0.2], rag_grounding_crag_confidence_threshold=0.0)
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 0
+    assert response.diagnostics.crag_evidence_grade == "off"
+    assert response.answer == "回答本文。"

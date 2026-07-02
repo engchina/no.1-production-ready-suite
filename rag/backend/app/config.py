@@ -649,9 +649,33 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         description=(
-            "CRAG: grounding preset が corrective(verified_context/full_governed)のとき、rerank の"
-            "最高スコアがこの閾値未満なら query を書き換えて 1 回だけ corrective 再検索する。"
-            "閾値 0.0 は実質無効(corrective 経路でも再検索しない)。"
+            "CRAG evidence grade の低閾値。rerank 最高スコアがこの値未満なら低 grade"
+            "(棄権 opt-in の対象)。閾値 0.0 は CRAG 全体を実質無効にする(互換)。"
+        ),
+    )
+    rag_crag_high_confidence_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "CRAG evidence grade の高閾値。rerank 最高スコアがこの値以上なら精緻化再検索を"
+            "行わずそのまま生成する。低閾値との間は中間帯(精緻化 + 再検索)。"
+        ),
+    )
+    rag_crag_max_hops: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        description=(
+            "CRAG 中間帯・低帯でのクエリ精緻化 + 再検索の hop 上限。1 は従来の 1 回リトライ相当。"
+            "0 は再検索なし(grade 判定と棄権のみ)。"
+        ),
+    )
+    rag_crag_low_evidence_abstain_enabled: bool = Field(
+        default=False,
+        description=(
+            "CRAG 低 grade(再検索後も低閾値未満)のとき回答を棄権する(opt-in)。"
+            "無効時は従来どおり best-effort で生成する。"
         ),
     )
     rag_context_compression_max_sentences: int = Field(

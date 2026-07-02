@@ -252,6 +252,9 @@ class SearchDiagnostics(BaseModel):
     corrective_retried: bool = False
     crag_confidence_score: float | None = None
     crag_fallback_triggered: bool = False
+    # CRAG evidence grade: off(無効)/ high / mid / low。hops は精緻化再検索の実行回数。
+    crag_hops: int = 0
+    crag_evidence_grade: str = "off"
     hyde_generated: bool = False
     business_context: dict[str, object] = Field(default_factory=dict)
     retrieval_plan: dict[str, object] = Field(default_factory=dict)

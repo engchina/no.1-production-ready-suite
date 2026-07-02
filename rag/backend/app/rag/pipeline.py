@@ -71,6 +71,11 @@ GAP_STOP_ANSWER = (
     "確定していないため、根拠検索を実行しませんでした。スコープを指定して再検索してください。"
 )
 GAP_STOP_WARNING = "業務スコープが未確定のため検索を停止しました(gap-stop)。"
+LOW_EVIDENCE_ANSWER = (
+    "取得できた根拠の信頼度が基準を満たさないため、回答を保留しました。"
+    "検索対象のナレッジベースや質問の言い回しを見直してから再度お試しください。"
+)
+LOW_EVIDENCE_WARNING = "根拠の信頼度が閾値未満のため回答を保留しました(CRAG 棄権)。"
 WHITESPACE_RE = re.compile(r"\s+")
 CONTEXT_SEGMENT_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
 QUERY_FEATURE_RE = re.compile(r"[a-z0-9_]{2,}|[ぁ-んァ-ン一-龯々ー]{2,}", re.IGNORECASE)
@@ -255,6 +260,8 @@ class RagPipeline:
         corrective_retried = False
         crag_confidence_score: float | None = None
         crag_fallback_triggered = False
+        crag_hops = 0
+        crag_evidence_grade = "off"
         hyde_generated = False
         query_expansion_source = "off"
         agentic_subquery_count = 0
@@ -293,6 +300,8 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                crag_hops=crag_hops,
+                crag_evidence_grade=crag_evidence_grade,
                 hyde_generated=hyde_generated,
                 route_reason=resolved_strategy.route_reason,
                 keyword_terms=keyword_terms,
@@ -469,6 +478,8 @@ class RagPipeline:
                     corrective_retried=corrective_retried,
                     crag_confidence_score=crag_confidence_score,
                     crag_fallback_triggered=crag_fallback_triggered,
+                    crag_hops=crag_hops,
+                    crag_evidence_grade=crag_evidence_grade,
                     hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
@@ -507,47 +518,122 @@ class RagPipeline:
                     diagnostics=diagnostics,
                 )
 
-            # CRAG: grounding preset が corrective(verified_context/full_governed)で、rerank の
-            # 最高スコアが閾値未満なら query を書き換えて 1 回だけ corrective 再検索する。
+            # CRAG evidence grade 3分岐(docs/reference-rag-projects.md §2.1):
+            #   高(>= high 閾値)→ そのまま生成 / 中間・低 → query 精緻化 + 再検索を hop 上限まで
+            #   / 再検索後も低(< low 閾値)→ 棄権(opt-in)。低閾値 0.0 は CRAG 全体を無効(互換)。
+            # 発火は grounding corrective preset(verified_context/full_governed)または
+            # 検索方法の補正再検索トグル。
             crag_confidence_score = _crag_confidence(ranked)
-            crag_threshold = float(
+            crag_low_threshold = float(
                 getattr(self._settings, "rag_grounding_crag_confidence_threshold", 0.0)
             )
-            if (
-                grounding_params.corrective_enabled
-                and not corrective_retried
-                and crag_threshold > 0.0
-                and crag_confidence_score < crag_threshold
-            ):
-                corrective_retried = True
-                crag_fallback_triggered = True
+            crag_high_threshold = max(
+                crag_low_threshold,
+                float(getattr(self._settings, "rag_crag_high_confidence_threshold", 0.7)),
+            )
+            crag_enabled = (
+                grounding_params.corrective_enabled or retrieval_params.corrective_retrieval
+            ) and crag_low_threshold > 0.0
+            if crag_enabled:
+                crag_evidence_grade = _crag_grade(
+                    crag_confidence_score, crag_low_threshold, crag_high_threshold
+                )
+                crag_max_hops = int(getattr(self._settings, "rag_crag_max_hops", 1))
                 error_stage = "crag_corrective"
-                rewritten = await self._llm.plan_query(
-                    query_guardrail.sanitized_text,
-                    mode="query_rewrite",
-                    max_subqueries=agentic_params.max_subqueries,
-                )
-                crag_variants = (
-                    _dedupe_strings([*rewritten, *query_variants]) if rewritten else query_variants
-                )
-                crag_vectors = await self._genai.embed(crag_variants, input_type="SEARCH_QUERY")
-                crag_result = await self._retrieve_with_strategy(
-                    query_variants=crag_variants,
-                    vectors=crag_vectors,
-                    request=effective_request,
-                    resolved_strategy=resolved_strategy,
-                )
-                crag_ranked = await self._rerank(
-                    query_guardrail.sanitized_text,
-                    crag_result.chunks,
-                    request.rerank_top_n,
-                )
-                crag_new_confidence = _crag_confidence(crag_ranked)
-                if crag_ranked and crag_new_confidence > crag_confidence_score:
+                while crag_hops < crag_max_hops and crag_confidence_score < crag_high_threshold:
+                    crag_hops += 1
+                    corrective_retried = True
+                    crag_fallback_triggered = True
+                    rewritten = await self._llm.plan_query(
+                        query_guardrail.sanitized_text,
+                        mode="query_rewrite",
+                        max_subqueries=agentic_params.max_subqueries,
+                    )
+                    crag_variants = (
+                        _dedupe_strings([*rewritten, *query_variants])
+                        if rewritten
+                        else query_variants
+                    )
+                    crag_vectors = await self._genai.embed(crag_variants, input_type="SEARCH_QUERY")
+                    crag_result = await self._retrieve_with_strategy(
+                        query_variants=crag_variants,
+                        vectors=crag_vectors,
+                        request=effective_request,
+                        resolved_strategy=resolved_strategy,
+                    )
+                    crag_ranked = await self._rerank(
+                        query_guardrail.sanitized_text,
+                        crag_result.chunks,
+                        request.rerank_top_n,
+                    )
+                    crag_new_confidence = _crag_confidence(crag_ranked)
+                    if not crag_ranked or crag_new_confidence <= crag_confidence_score:
+                        # 改善しない精緻化は打ち切る(hop を重ねても無駄)。
+                        break
                     # 書き換え後の方が信頼度が高ければ採用する。
                     ranked = crag_ranked
                     retrieved = crag_result.chunks
                     crag_confidence_score = crag_new_confidence
+                    query_variants = crag_variants
+                crag_evidence_grade = _crag_grade(
+                    crag_confidence_score, crag_low_threshold, crag_high_threshold
+                )
+                if crag_evidence_grade == "low" and bool(
+                    getattr(self._settings, "rag_crag_low_evidence_abstain_enabled", False)
+                ):
+                    # 低 grade 棄権(opt-in): 決定論の保留応答を返す(生成しない)。
+                    elapsed = elapsed_ms(started_at)
+                    diagnostics = build_search_diagnostics(
+                        effective_request,
+                        settings=self._settings,
+                        retrieval_strategy=runtime_retrieval_strategy,
+                        retrieval_strategy_adapter=retrieval_params.strategy,
+                        retrieval_toggles=_retrieval_toggles(retrieval_params),
+                        query_expansion_source=query_expansion_source,
+                        post_retrieval_pipeline=grounding_params.pipeline,
+                        generation_profile=self._settings.rag_generation_profile,
+                        guardrail_policy=self._settings.rag_guardrail_policy,
+                        vector_index_profile=self._settings.rag_vector_index_profile,
+                        graph_profile=graph_profile,
+                        agentic_profile=agentic_params.profile,
+                        agentic_subquery_count=agentic_subquery_count,
+                        agentic_hops=agentic_hops,
+                        corrective_retried=corrective_retried,
+                        crag_confidence_score=crag_confidence_score,
+                        crag_fallback_triggered=crag_fallback_triggered,
+                        crag_hops=crag_hops,
+                        crag_evidence_grade=crag_evidence_grade,
+                        hyde_generated=hyde_generated,
+                        route_reason=resolved_strategy.route_reason,
+                        keyword_terms=keyword_terms,
+                        fallback_reason="crag_low_evidence_abstain",
+                        business_context=business_context.diagnostics(),
+                        retrieved_count=len(retrieved),
+                        query_variant_count=query_variant_count,
+                    )
+                    record_rag_request(
+                        resolved_strategy.mode.value, "no_results", elapsed / 1000, 0
+                    )
+                    record_rag_search_audit(
+                        trace_id=trace_id,
+                        outcome="no_results",
+                        mode=resolved_strategy.mode,
+                        sanitized_query=query_guardrail.sanitized_text,
+                        filters=request.filters,
+                        findings=query_guardrail.findings,
+                        retrieved_count=len(retrieved),
+                        citations=[],
+                        elapsed_ms=elapsed,
+                        diagnostics=diagnostics,
+                    )
+                    return SearchResponse(
+                        answer=LOW_EVIDENCE_ANSWER,
+                        citations=[],
+                        trace_id=trace_id,
+                        guardrail_warnings=[*query_guardrail.warnings, LOW_EVIDENCE_WARNING],
+                        elapsed_ms=elapsed,
+                        diagnostics=diagnostics,
+                    )
 
             if retrieval_params.business_fit_weighting:
                 error_stage = "business_fit_weighting"
@@ -786,6 +872,8 @@ class RagPipeline:
                     corrective_retried=corrective_retried,
                     crag_confidence_score=crag_confidence_score,
                     crag_fallback_triggered=crag_fallback_triggered,
+                    crag_hops=crag_hops,
+                    crag_evidence_grade=crag_evidence_grade,
                     hyde_generated=hyde_generated,
                     memory_plan_id=retrieval_plan.plan_id,
                     graph_hit_count=runtime_graph_hit_count,
@@ -876,6 +964,8 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                crag_hops=crag_hops,
+                crag_evidence_grade=crag_evidence_grade,
                 hyde_generated=hyde_generated,
                 memory_plan_id=retrieval_plan.plan_id,
                 graph_hit_count=runtime_graph_hit_count,
@@ -1025,6 +1115,8 @@ class RagPipeline:
                 corrective_retried=corrective_retried,
                 crag_confidence_score=crag_confidence_score,
                 crag_fallback_triggered=crag_fallback_triggered,
+                crag_hops=crag_hops,
+                crag_evidence_grade=crag_evidence_grade,
                 hyde_generated=hyde_generated,
                 memory_plan_id=(retrieval_plan.plan_id if retrieval_plan is not None else None),
                 graph_hit_count=runtime_graph_hit_count,
@@ -1998,6 +2090,15 @@ def _business_context_scope_pinned(business_context: BusinessContextPack) -> boo
             business_context.version_filter_present,
         )
     )
+
+
+def _crag_grade(confidence: float, low_threshold: float, high_threshold: float) -> str:
+    """CRAG evidence grade: high(そのまま生成)/ mid(精緻化)/ low(棄権 opt-in)。"""
+    if confidence >= high_threshold:
+        return "high"
+    if confidence < low_threshold:
+        return "low"
+    return "mid"
 
 
 def _crag_confidence(ranked: list[RetrievedChunk]) -> float:
