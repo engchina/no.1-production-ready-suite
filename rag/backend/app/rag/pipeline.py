@@ -40,7 +40,10 @@ from app.rag.observability import (
     record_rag_stage,
     record_trace_span,
 )
-from app.rag.query_transform import expand_retrieval_queries
+from app.rag.query_transform import (
+    expand_retrieval_queries,
+    expand_retrieval_queries_with_llm,
+)
 from app.rag.request_context import current_audit_request_context
 from app.rag.retrieval_adapter import RetrievalAdapterParams, resolve_retrieval_adapter
 from app.rag.retrieval_strategy import (
@@ -253,6 +256,7 @@ class RagPipeline:
         crag_confidence_score: float | None = None
         crag_fallback_triggered = False
         hyde_generated = False
+        query_expansion_source = "off"
         agentic_subquery_count = 0
         agentic_hops = 0
         graph_profile = resolve_graph_adapter(self._settings).profile
@@ -277,6 +281,7 @@ class RagPipeline:
                 retrieval_strategy=runtime_retrieval_strategy,
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 retrieval_toggles=_retrieval_toggles(retrieval_params),
+                query_expansion_source=query_expansion_source,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -317,11 +322,24 @@ class RagPipeline:
                 diagnostics=diagnostics,
             )
         try:
-            query_variants = expand_retrieval_queries(
-                query_guardrail.sanitized_text,
-                enabled=retrieval_params.query_expansion,
-                max_variants=self._settings.rag_query_expansion_max_variants,
-            )
+            query_variants: list[str] = []
+            if retrieval_params.query_expansion and self._settings.rag_query_expansion_llm_enabled:
+                # opt-in の LLM マルチクエリ拡張。失敗・空応答は決定論展開へ縮退する。
+                query_variants = await expand_retrieval_queries_with_llm(
+                    query_guardrail.sanitized_text,
+                    llm=self._llm,
+                    max_variants=self._settings.rag_query_expansion_max_variants,
+                )
+                if query_variants:
+                    query_expansion_source = "llm"
+            if not query_variants:
+                query_variants = expand_retrieval_queries(
+                    query_guardrail.sanitized_text,
+                    enabled=retrieval_params.query_expansion,
+                    max_variants=self._settings.rag_query_expansion_max_variants,
+                )
+                if retrieval_params.query_expansion and len(query_variants) > 1:
+                    query_expansion_source = "deterministic"
             if not query_variants:
                 query_variants = [query_guardrail.sanitized_text]
             if agentic_params.enabled:
@@ -439,6 +457,7 @@ class RagPipeline:
                     retrieval_candidates=retrieval_candidates,
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     retrieval_toggles=_retrieval_toggles(retrieval_params),
+                    query_expansion_source=query_expansion_source,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
                     guardrail_policy=self._settings.rag_guardrail_policy,
@@ -755,6 +774,7 @@ class RagPipeline:
                     retrieval_candidates=retrieval_candidates,
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     retrieval_toggles=_retrieval_toggles(retrieval_params),
+                    query_expansion_source=query_expansion_source,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
                     guardrail_policy=self._settings.rag_guardrail_policy,
@@ -844,6 +864,7 @@ class RagPipeline:
                 retrieval_candidates=retrieval_candidates,
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 retrieval_toggles=_retrieval_toggles(retrieval_params),
+                query_expansion_source=query_expansion_source,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -992,6 +1013,7 @@ class RagPipeline:
                 retrieval_candidates=retrieval_candidates,
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 retrieval_toggles=_retrieval_toggles(retrieval_params),
+                query_expansion_source=query_expansion_source,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,

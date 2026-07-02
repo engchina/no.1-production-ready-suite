@@ -81,15 +81,9 @@ class OciEnterpriseAiConfig:
             oci_enterprise_ai_vlm_path=_get("OCI_ENTERPRISE_AI_VLM_PATH", "/responses"),
             oci_enterprise_ai_llm_response_path=_get("OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH"),
             oci_enterprise_ai_vlm_response_path=_get("OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH"),
-            oci_enterprise_ai_llm_payload_template=_get(
-                "OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE"
-            ),
-            oci_enterprise_ai_vlm_payload_template=_get(
-                "OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE"
-            ),
-            oci_enterprise_ai_vlm_input_mode=_get(
-                "OCI_ENTERPRISE_AI_VLM_INPUT_MODE", "files_api"
-            ),
+            oci_enterprise_ai_llm_payload_template=_get("OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE"),
+            oci_enterprise_ai_vlm_payload_template=_get("OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE"),
+            oci_enterprise_ai_vlm_input_mode=_get("OCI_ENTERPRISE_AI_VLM_INPUT_MODE", "files_api"),
             oci_enterprise_ai_timeout_seconds=_float(
                 _get("OCI_ENTERPRISE_AI_TIMEOUT_SECONDS"), 600.0
             ),
@@ -101,6 +95,8 @@ class OciEnterpriseAiConfig:
                 _get("OCI_ENTERPRISE_AI_VLM_MAX_OUTPUT_TOKENS"), 65536
             ),
         )
+
+
 DEFAULT_MIME_TYPE = "application/octet-stream"
 JSON_HEADERS = {"accept": "application/json", "content-type": "application/json"}
 IMAGE_MIME_TYPES = frozenset({"image/gif", "image/jpeg", "image/jpg", "image/png", "image/webp"})
@@ -165,6 +161,13 @@ _QUERY_DECOMPOSE_PROMPT = (
     "次の質問に答えるために検索すべき独立した sub-question を作成してください。"
     '出力は JSON 文字列配列のみ(例: ["sub-question 1", "sub-question 2"])とし、'
     "説明文は付けないでください。元質問が単純なら 1 要素でも構いません。"
+)
+_QUERY_EXPANSION_PROMPT = (
+    "あなたは検索クエリ拡張アシスタントです。"
+    "次の質問と同じ意図を保ったまま、社内文書検索の再現率を上げる言い換え・同義語・"
+    "関連語のクエリ変種を日本語中心に複数作成してください。"
+    '出力は JSON 文字列配列のみ(例: ["言い換え 1", "言い換え 2"])とし、'
+    "説明文は付けないでください。"
 )
 # HyDE: 仮説的な回答文書を 1 つ生成し、その埋め込みで検索する(query-document 意味ギャップを橋渡し)。
 _QUERY_HYDE_PROMPT = (
@@ -411,6 +414,23 @@ class OciEnterpriseAiClient:
         limit = 1 if mode in single_modes else max(1, max_subqueries)
         return _parse_planned_queries(raw, limit=limit)
 
+    async def expand_search_query(
+        self,
+        query: str,
+        *,
+        max_variants: int = 3,
+    ) -> list[str]:
+        """検索再現率を上げるクエリ変種(言い換え/同義語)を LLM で生成する。
+
+        JSON 文字列配列で受領し、解析失敗・空時は空 list を返す(呼び出し側が
+        決定論の同義語拡張へ縮退する。plan_query と同じ縮退契約)。
+        """
+        try:
+            raw = await self.generate(query, "", system_prompt=_QUERY_EXPANSION_PROMPT)
+        except Exception:
+            return []
+        return _parse_planned_queries(raw, limit=max(1, max_variants))
+
     async def generate_from_image(
         self,
         image_bytes: bytes,
@@ -423,9 +443,8 @@ class OciEnterpriseAiClient:
         # 設定画面の接続確認や asset 要約は小さな画像を直接渡す軽量 probe。
         # Files API 設定時でも画像は NL2SQL direct client と同じ inline data URL を使い、
         # file_id 入力非対応の provider/gateway で不要な 500 を避ける。
-        if (
-            _normalized_mime_type(mime_type) not in IMAGE_MIME_TYPES
-            and _should_upload_vlm_input(self._config, mime_type=mime_type)
+        if _normalized_mime_type(mime_type) not in IMAGE_MIME_TYPES and _should_upload_vlm_input(
+            self._config, mime_type=mime_type
         ):
             uploaded_file_id = await self._upload_vlm_input_file(image_bytes, mime_type=mime_type)
         try:
@@ -527,9 +546,7 @@ class OciEnterpriseAiClient:
                     response_path=self._config.oci_enterprise_ai_vlm_response_path,
                 )
             except httpx.HTTPStatusError as exc:
-                _raise_for_unsupported_file_input(
-                    exc, model_id=self._config.vision_model_id
-                )
+                _raise_for_unsupported_file_input(exc, model_id=self._config.vision_model_id)
                 raise
             return extraction.to_document_payload()
         finally:

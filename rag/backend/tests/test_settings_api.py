@@ -701,6 +701,7 @@ def _patch_retrieval_toggle_fields(monkeypatch: MonkeyPatch, settings: object) -
     """PATCH が現在プロセスへ反映するトグル群をテスト間で汚さないよう退避する。"""
     for field in (
         "rag_query_expansion_enabled",
+        "rag_query_expansion_llm_enabled",
         "rag_retrieval_gap_stop_enabled",
         "rag_retrieval_corrective_enabled",
         "rag_retrieval_business_fit_weighting_enabled",
@@ -826,6 +827,27 @@ def test_update_retrieval_settings_normalizes_legacy_env_on_toggle_save(
     assert "RAG_RETRIEVAL_GAP_STOP_ENABLED=true" in env_text
     assert "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED=true" in env_text
     assert "RAG_QUERY_EXPANSION_ENABLED=false" in env_text
+
+
+def test_update_retrieval_settings_persists_llm_expansion_opt_in(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """LLM マルチクエリ拡張は opt-in(既定 OFF)で .env へ永続化される。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_retrieval_strategy", "hybrid_rrf")
+    _patch_retrieval_toggle_fields(monkeypatch, settings)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.get("/api/settings/retrieval")
+    assert resp.json()["data"]["query_expansion_llm"] is False
+
+    resp = client.patch("/api/settings/retrieval", json={"query_expansion_llm": True})
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["query_expansion_llm"] is True
+    assert settings.rag_query_expansion_llm_enabled is True
+    assert "RAG_QUERY_EXPANSION_LLM_ENABLED=true" in env_file.read_text(encoding="utf-8")
 
 
 def test_update_retrieval_settings_rejects_unknown_strategy() -> None:

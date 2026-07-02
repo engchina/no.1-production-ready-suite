@@ -740,6 +740,7 @@ class RetrievalSettingsData(BaseModel):
     mode: WiredRetrievalMode
     legacy_strategy: RetrievalStrategyName | None = None
     query_expansion: bool
+    query_expansion_llm: bool = False
     gap_stop: bool
     corrective_retrieval: bool
     business_fit_weighting: bool
@@ -757,6 +758,7 @@ class RetrievalSettingsUpdate(BaseModel):
 
     mode: WiredRetrievalMode | None = None
     query_expansion: bool | None = None
+    query_expansion_llm: bool | None = None
     gap_stop: bool | None = None
     corrective_retrieval: bool | None = None
     business_fit_weighting: bool | None = None
@@ -770,6 +772,7 @@ class RetrievalSettingsUpdate(BaseModel):
             for value in (
                 self.mode,
                 self.query_expansion,
+                self.query_expansion_llm,
                 self.gap_stop,
                 self.corrective_retrieval,
                 self.business_fit_weighting,

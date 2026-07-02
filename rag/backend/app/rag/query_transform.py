@@ -1,14 +1,78 @@
-"""RAG retrieval 用の軽量 query expansion。
+"""RAG retrieval 用の query expansion。
 
-LLM を呼ばずに deterministic な同義語展開だけを行い、元の user query は
-rerank / generation 用に保持する。query 本文は audit / trace へ出さない。
+既定は LLM を呼ばない deterministic な同義語展開。opt-in
+(``rag_query_expansion_llm_enabled``)で OCI Enterprise AI によるマルチクエリ生成を使い、
+失敗・空応答時は決定論展開へ縮退する。元の user query は rerank / generation 用に保持する。
+query 本文は audit / trace へ出さない。
 """
 
 from __future__ import annotations
 
+import logging
 import re
+from typing import Protocol
+
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+logger = logging.getLogger(__name__)
 
 WHITESPACE_RE = re.compile(r"\s+")
+
+MAX_LLM_VARIANTS = 8
+MAX_VARIANT_CHARS = 500
+
+
+class _QueryExpander(Protocol):
+    """LLM マルチクエリ拡張を提供する client(OciEnterpriseAiClient)。"""
+
+    async def expand_search_query(self, query: str, *, max_variants: int = 3) -> list[str]: ...
+
+
+class ExpandedQueryVariants(BaseModel):
+    """LLM マルチクエリ拡張の出力スキーマ(LLM 出力はスキーマ検証してから使う)。"""
+
+    variants: list[str] = Field(default_factory=list, max_length=MAX_LLM_VARIANTS)
+
+    @field_validator("variants")
+    @classmethod
+    def clean_variants(cls, values: list[str]) -> list[str]:
+        """空白正規化・空要素除去・長さ上限・重複除去を強制する。"""
+        cleaned: list[str] = []
+        for value in values:
+            normalized = _normalize_query(value)[:MAX_VARIANT_CHARS]
+            if normalized:
+                cleaned.append(normalized)
+        return _dedupe(cleaned)
+
+
+async def expand_retrieval_queries_with_llm(
+    query: str,
+    *,
+    llm: _QueryExpander,
+    max_variants: int = 3,
+) -> list[str]:
+    """OCI Enterprise AI でクエリ変種を生成し、元 query を先頭に融合して返す。
+
+    LLM 失敗・不正応答・変種なしのときは空 list を返し、呼び出し側が決定論の
+    同義語展開へ縮退する。
+    """
+    normalized = _normalize_query(query)
+    if not normalized or max_variants <= 1:
+        return []
+    try:
+        raw_variants = await llm.expand_search_query(normalized, max_variants=max_variants)
+        validated = ExpandedQueryVariants(variants=list(raw_variants))
+    except ValidationError:
+        logger.warning("LLM クエリ拡張の応答がスキーマ検証に失敗したため決定論展開へ縮退します。")
+        return []
+    except Exception:  # noqa: BLE001 - LLM 経路の失敗は決定論展開へ縮退する
+        logger.warning("LLM クエリ拡張に失敗したため決定論展開へ縮退します。", exc_info=True)
+        return []
+    variants = _dedupe([normalized, *validated.variants])[:max_variants]
+    if len(variants) <= 1:
+        return []
+    return variants
+
 
 SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
     ("請求書", "インボイス", "invoice", "bill"),

@@ -2502,6 +2502,7 @@ def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
         mode=runtime.mode,
         legacy_strategy=runtime.legacy_strategy,
         query_expansion=runtime.query_expansion,
+        query_expansion_llm=settings.rag_query_expansion_llm_enabled,
         gap_stop=runtime.gap_stop,
         corrective_retrieval=runtime.corrective_retrieval,
         business_fit_weighting=runtime.business_fit_weighting,
@@ -2548,6 +2549,8 @@ def _retrieval_settings_updates(
         updates["rag_retrieval_strategy"] = payload.mode
     if payload.query_expansion is not None:
         updates["rag_query_expansion_enabled"] = payload.query_expansion
+    if payload.query_expansion_llm is not None:
+        updates["rag_query_expansion_llm_enabled"] = payload.query_expansion_llm
     if payload.gap_stop is not None:
         updates["rag_retrieval_gap_stop_enabled"] = payload.gap_stop
     if payload.corrective_retrieval is not None:
@@ -2561,6 +2564,7 @@ def _apply_retrieval_settings(target: Settings, source: Settings) -> None:
     """保存済み検索方法設定を現在プロセスへ反映する。"""
     target.rag_retrieval_strategy = source.rag_retrieval_strategy
     target.rag_query_expansion_enabled = source.rag_query_expansion_enabled
+    target.rag_query_expansion_llm_enabled = source.rag_query_expansion_llm_enabled
     target.rag_retrieval_gap_stop_enabled = source.rag_retrieval_gap_stop_enabled
     target.rag_retrieval_corrective_enabled = source.rag_retrieval_corrective_enabled
     target.rag_retrieval_business_fit_weighting_enabled = (
@@ -2575,6 +2579,9 @@ def _persist_retrieval_settings(settings: Settings) -> None:
         {
             "RAG_RETRIEVAL_STRATEGY": settings.rag_retrieval_strategy,
             "RAG_QUERY_EXPANSION_ENABLED": _format_env_bool(settings.rag_query_expansion_enabled),
+            "RAG_QUERY_EXPANSION_LLM_ENABLED": _format_env_bool(
+                settings.rag_query_expansion_llm_enabled
+            ),
             "RAG_RETRIEVAL_GAP_STOP_ENABLED": _format_env_bool(
                 settings.rag_retrieval_gap_stop_enabled
             ),

@@ -230,6 +230,8 @@ class SearchDiagnostics(BaseModel):
     # 検索方法の有効トグル(query_expansion / gap_stop / corrective_retrieval /
     # business_fit_weighting)。settings トグル OR legacy 強制トグルの合成結果。
     retrieval_toggles: dict[str, bool] = Field(default_factory=dict)
+    # クエリ拡張の実行元: llm(OCI Enterprise AI)/ deterministic(同義語)/ off。
+    query_expansion_source: str = "off"
     post_retrieval_pipeline: str = "custom"
     generation_profile: str = "grounded_concise"
     guardrail_policy: str = "standard"

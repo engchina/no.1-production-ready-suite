@@ -677,6 +677,13 @@ class Settings(BaseSettings):
         default=True,
         description="retrieval 前に deterministic な業務同義語 query expansion を行う。",
     )
+    rag_query_expansion_llm_enabled: bool = Field(
+        default=False,
+        description=(
+            "query expansion に OCI Enterprise AI のマルチクエリ生成を使う(opt-in)。"
+            "検索ごとに LLM 呼び出しが 1 回増える。失敗時は決定論の同義語展開へ縮退する。"
+        ),
+    )
     rag_query_expansion_max_variants: int = Field(
         default=3,
         ge=1,

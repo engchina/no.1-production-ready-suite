@@ -1250,6 +1250,85 @@ async def test_pipeline_can_disable_query_expansion() -> None:
     assert genai.embedded_texts == ["invoice storage"]
     assert oracle.queries == ["invoice storage"]
     assert response.diagnostics.query_variant_count == 1
+    assert response.diagnostics.query_expansion_source == "off"
+
+
+async def test_pipeline_llm_query_expansion_injects_variants() -> None:
+    """opt-in の LLM 拡張は変種を retrieval へ注入し、生成 prompt は元 query を維持する。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = ExpandingLlm(["請求書 保管 ルール", "インボイス 保存 規程"])
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=True,
+            rag_query_expansion_llm_enabled=True,
+            rag_query_expansion_max_variants=3,
+            rag_rrf_k=60,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5, rerank_top_n=2))
+
+    assert llm.expansion_calls == 1
+    assert genai.embedded_texts == [
+        "invoice storage",
+        "請求書 保管 ルール",
+        "インボイス 保存 規程",
+    ]
+    assert response.diagnostics.query_expansion_source == "llm"
+    assert response.diagnostics.query_variant_count == 3
+    # 生成 prompt は元 query を維持する(拡張は retrieval のみ)。
+    assert llm.prompt == "invoice storage"
+
+
+async def test_pipeline_llm_query_expansion_failure_falls_back_to_deterministic() -> None:
+    """LLM 拡張失敗時は決定論の同義語展開へ縮退する。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = ExpandingLlm(error=RuntimeError("expansion down"))
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=True,
+            rag_query_expansion_llm_enabled=True,
+            rag_query_expansion_max_variants=3,
+            rag_rrf_k=60,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5, rerank_top_n=2))
+
+    assert llm.expansion_calls == 1
+    # 決定論展開(同義語)へ縮退して 3 variants を維持する。
+    assert len(genai.embedded_texts) == 3
+    assert response.diagnostics.query_expansion_source == "deterministic"
+
+
+async def test_pipeline_llm_query_expansion_off_does_not_call_llm() -> None:
+    """既定 OFF では LLM 拡張を呼ばない(決定論展開のみ)。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = ExpandingLlm(["呼ばれないはず"])
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=True,
+            rag_query_expansion_max_variants=3,
+            rag_rrf_k=60,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5, rerank_top_n=2))
+
+    assert llm.expansion_calls == 0
+    assert response.diagnostics.query_expansion_source == "deterministic"
 
 
 async def test_pipeline_injects_agentic_planned_subqueries_into_retrieval() -> None:
@@ -2893,6 +2972,22 @@ class CapturingPromptLlm(OciEnterpriseAiClient):
         self.prompt = prompt
         self.context = context
         return "請求書原本は Object Storage に保管します。"
+
+
+class ExpandingLlm(CapturingPromptLlm):
+    """LLM マルチクエリ拡張の応答を返す LLM(決定論スタブ)。"""
+
+    def __init__(self, variants: list[str] | None = None, error: Exception | None = None) -> None:
+        super().__init__()
+        self.variants = variants or []
+        self.error = error
+        self.expansion_calls = 0
+
+    async def expand_search_query(self, query: str, *, max_variants: int = 3) -> list[str]:
+        self.expansion_calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.variants
 
 
 async def test_pipeline_lean_grounding_pipeline_skips_neighbor_expansion(
