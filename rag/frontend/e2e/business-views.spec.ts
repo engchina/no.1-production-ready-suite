@@ -45,6 +45,7 @@ for (const viewport of [
     const settings = page.locator("fieldset").filter({ hasText: "検索・回答設定" });
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
       "検索方法",
+      "検索オプション",
       "根拠確認",
       "回答スタイル",
       "回答プロンプト",
@@ -52,7 +53,8 @@ for (const viewport of [
       "品質評価",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(5);
+    // 継承 chip: セレクト5行 + 検索オプションの三値トグル5行。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(10);
     await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(5);
     await expect(page.getByLabel("回答の役割・口調")).toBeVisible();
     await expectNoPageOverflow(page);

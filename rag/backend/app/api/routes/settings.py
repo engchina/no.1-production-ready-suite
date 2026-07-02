@@ -9,13 +9,14 @@ import re
 import shutil
 import stat
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
 from app.clients.oci_auth import (
     load_oci_config_without_prompt,
@@ -39,7 +40,10 @@ from app.rag.agentic_adapter import (
     agentic_adapter_runtime_settings,
     normalize_agentic_profile,
 )
-from app.rag.chunking_strategy import chunking_runtime_settings, normalize_chunking_strategy
+from app.rag.chunking_strategy import (
+    chunking_runtime_settings,
+    normalize_chunking_strategy,
+)
 from app.rag.evaluation_adapter import (
     evaluation_adapter_runtime_settings,
     normalize_evaluation_suite,
@@ -53,7 +57,10 @@ from app.rag.generation_adapter import (
     generation_adapter_runtime_settings,
     normalize_generation_profile,
 )
-from app.rag.graph_adapter import graph_adapter_runtime_settings, normalize_graph_profile
+from app.rag.graph_adapter import (
+    graph_adapter_runtime_settings,
+    normalize_graph_profile,
+)
 from app.rag.grounding_adapter import (
     grounding_adapter_runtime_settings,
     normalize_post_retrieval_pipeline,
@@ -73,21 +80,28 @@ from app.rag.parser_adapter_scorecard import (
     build_parser_adapter_scorecard,
     build_parser_adapter_source_routes,
 )
-from app.rag.preprocess_strategy import normalize_preprocess_profile, preprocess_runtime_settings
+from app.rag.preprocess_strategy import (
+    normalize_preprocess_profile,
+    preprocess_runtime_settings,
+)
 from app.rag.prompt_versions import (
     activate_prompt_version,
     create_prompt_version,
     list_prompt_versions,
 )
 from app.rag.retrieval_adapter import (
-    normalize_retrieval_strategy,
+    RetrievalStrategyStatus,
     retrieval_adapter_runtime_settings,
 )
 from app.rag.vector_index_adapter import (
     normalize_vector_index_profile,
     vector_index_adapter_runtime_settings,
 )
-from app.readiness import READINESS_OK, oracle_readiness_check, upload_storage_readiness_checks
+from app.readiness import (
+    READINESS_OK,
+    oracle_readiness_check,
+    upload_storage_readiness_checks,
+)
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import EvaluationThresholds
 from app.schemas.settings import (
@@ -538,13 +552,15 @@ async def get_retrieval_settings() -> ApiResponse[RetrievalSettingsData]:
 async def update_retrieval_settings(
     payload: RetrievalSettingsUpdate,
 ) -> ApiResponse[RetrievalSettingsData]:
-    """検索方法設定を backend/.env と現在プロセスへ反映する。"""
+    """検索方法設定を backend/.env と現在プロセスへ反映する。
+
+    保存は常に新形式(検索モード + トグル)。.env に残る legacy 複合値は、
+    この保存を通るときモード + トグルへ正規化される。
+    """
     settings = get_settings()
-    candidate = settings.model_copy(
-        update={"rag_retrieval_strategy": normalize_retrieval_strategy(payload.strategy)}
-    )
+    candidate = settings.model_copy(update=_retrieval_settings_updates(settings, payload))
     _persist_retrieval_settings(candidate)
-    settings.rag_retrieval_strategy = candidate.rag_retrieval_strategy
+    _apply_retrieval_settings(settings, candidate)
     return ApiResponse(data=_retrieval_settings_data(settings))
 
 
@@ -558,13 +574,22 @@ async def get_grounding_settings() -> ApiResponse[GroundingSettingsData]:
 async def update_grounding_settings(
     payload: GroundingSettingsUpdate,
 ) -> ApiResponse[GroundingSettingsData]:
-    """根拠確認設定を backend/.env と現在プロセスへ反映する。"""
+    """根拠確認設定(処理方式 + CRAG 閾値)を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
-    candidate = settings.model_copy(
-        update={"rag_post_retrieval_pipeline": normalize_post_retrieval_pipeline(payload.pipeline)}
-    )
+    updates: dict[str, object] = {}
+    if payload.pipeline is not None:
+        updates["rag_post_retrieval_pipeline"] = normalize_post_retrieval_pipeline(payload.pipeline)
+    if payload.crag_low_confidence_threshold is not None:
+        updates["rag_grounding_crag_confidence_threshold"] = payload.crag_low_confidence_threshold
+    if payload.crag_high_confidence_threshold is not None:
+        updates["rag_crag_high_confidence_threshold"] = payload.crag_high_confidence_threshold
+    if payload.crag_max_hops is not None:
+        updates["rag_crag_max_hops"] = payload.crag_max_hops
+    if payload.crag_low_evidence_abstain is not None:
+        updates["rag_crag_low_evidence_abstain_enabled"] = payload.crag_low_evidence_abstain
+    candidate = settings.model_copy(update=updates)
     _persist_grounding_settings(candidate)
-    settings.rag_post_retrieval_pipeline = candidate.rag_post_retrieval_pipeline
+    _apply_grounding_settings(settings, candidate)
     return ApiResponse(data=_grounding_settings_data(settings))
 
 
@@ -646,7 +671,9 @@ def _extraction_fields_data() -> ExtractionFieldsSettingsData:
     return ExtractionFieldsSettingsData(
         fields=[
             FieldDefinitionData(
-                name=field.name, description=field.description, value_type=field.value_type
+                name=field.name,
+                description=field.description,
+                value_type=field.value_type,
             )
             for field in store.fields
         ]
@@ -1942,13 +1969,13 @@ def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBacke
             # 旧称 enterprise_ai_vlm も選択値として受理(後方互換エイリアス)。
             selected=selected in ("oci_genai_vision", "enterprise_ai_vlm"),
             configured=vlm_configured,
-            warning_code=None if vlm_configured else "enterprise_ai_endpoint_unconfigured",
+            warning_code=(None if vlm_configured else "enterprise_ai_endpoint_unconfigured"),
         ),
         ParserServiceBackendData(
             backend="oci_document_understanding",
             selected=selected == "oci_document_understanding",
             configured=du_configured,
-            warning_code=None if du_configured else "oci_document_understanding_unconfigured",
+            warning_code=(None if du_configured else "oci_document_understanding_unconfigured"),
         ),
     ]
 
@@ -2459,36 +2486,106 @@ def _persist_guardrail_settings(settings: Settings) -> None:
     )
 
 
+def _retrieval_status_data(
+    statuses: Iterable[RetrievalStrategyStatus],
+) -> list[RetrievalStrategyStatusData]:
+    return [
+        RetrievalStrategyStatusData(
+            name=status.name,
+            origin=status.origin,
+            recommended_for=list(status.recommended_for),
+            selected=status.selected,
+            gap_stop=status.gap_stop,
+            corrective_retrieval=status.corrective_retrieval,
+            business_fit_weighting=status.business_fit_weighting,
+        )
+        for status in statuses
+    ]
+
+
 def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
     """Settings から検索方法設定の表示用データを作る。"""
     runtime = retrieval_adapter_runtime_settings(settings)
     return RetrievalSettingsData(
-        strategy=runtime.strategy,
+        mode=runtime.mode,
+        legacy_strategy=runtime.legacy_strategy,
         query_expansion=runtime.query_expansion,
+        query_expansion_llm=settings.rag_query_expansion_llm_enabled,
         gap_stop=runtime.gap_stop,
         corrective_retrieval=runtime.corrective_retrieval,
         business_fit_weighting=runtime.business_fit_weighting,
-        strategies=[
-            RetrievalStrategyStatusData(
-                name=status.name,
-                origin=status.origin,
-                recommended_for=list(status.recommended_for),
-                selected=status.selected,
-                gap_stop=status.gap_stop,
-                corrective_retrieval=status.corrective_retrieval,
-                business_fit_weighting=status.business_fit_weighting,
-            )
-            for status in runtime.strategies
-        ],
+        modes=_retrieval_status_data(runtime.modes),
         config_source="runtime",
     )
 
 
+def _retrieval_settings_updates(
+    settings: Settings, payload: RetrievalSettingsUpdate
+) -> dict[str, object]:
+    """更新 payload(新形式)から Settings 更新 dict を作る。
+
+    .env に legacy 複合値が残っている場合も、この保存を通るとモードへ正規化される
+    (legacy の強制トグルは明示 ON へ引き継ぎ、現在の有効トグルは
+    _persist_retrieval_settings が書き出す)。
+    """
+    updates: dict[str, object] = {}
+    current = decompose_retrieval_strategy(settings.rag_retrieval_strategy)
+    updates["rag_retrieval_strategy"] = current.mode
+    if current.forced_query_expansion:
+        updates["rag_query_expansion_enabled"] = True
+    if current.forced_gap_stop:
+        updates["rag_retrieval_gap_stop_enabled"] = True
+    if current.forced_corrective_retrieval:
+        updates["rag_retrieval_corrective_enabled"] = True
+    if current.forced_business_fit_weighting:
+        updates["rag_retrieval_business_fit_weighting_enabled"] = True
+    if payload.mode is not None:
+        updates["rag_retrieval_strategy"] = payload.mode
+    if payload.query_expansion is not None:
+        updates["rag_query_expansion_enabled"] = payload.query_expansion
+    if payload.query_expansion_llm is not None:
+        updates["rag_query_expansion_llm_enabled"] = payload.query_expansion_llm
+    if payload.gap_stop is not None:
+        updates["rag_retrieval_gap_stop_enabled"] = payload.gap_stop
+    if payload.corrective_retrieval is not None:
+        updates["rag_retrieval_corrective_enabled"] = payload.corrective_retrieval
+    if payload.business_fit_weighting is not None:
+        updates["rag_retrieval_business_fit_weighting_enabled"] = payload.business_fit_weighting
+    return updates
+
+
+def _apply_retrieval_settings(target: Settings, source: Settings) -> None:
+    """保存済み検索方法設定を現在プロセスへ反映する。"""
+    target.rag_retrieval_strategy = source.rag_retrieval_strategy
+    target.rag_query_expansion_enabled = source.rag_query_expansion_enabled
+    target.rag_query_expansion_llm_enabled = source.rag_query_expansion_llm_enabled
+    target.rag_retrieval_gap_stop_enabled = source.rag_retrieval_gap_stop_enabled
+    target.rag_retrieval_corrective_enabled = source.rag_retrieval_corrective_enabled
+    target.rag_retrieval_business_fit_weighting_enabled = (
+        source.rag_retrieval_business_fit_weighting_enabled
+    )
+
+
 def _persist_retrieval_settings(settings: Settings) -> None:
-    """検索方法設定を backend/.env へ永続化する。"""
+    """検索方法設定(モード + トグル)を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
-        {"RAG_RETRIEVAL_STRATEGY": settings.rag_retrieval_strategy},
+        {
+            "RAG_RETRIEVAL_STRATEGY": settings.rag_retrieval_strategy,
+            "RAG_QUERY_EXPANSION_ENABLED": _format_env_bool(settings.rag_query_expansion_enabled),
+            "RAG_QUERY_EXPANSION_LLM_ENABLED": _format_env_bool(
+                settings.rag_query_expansion_llm_enabled
+            ),
+            "RAG_RETRIEVAL_GAP_STOP_ENABLED": _format_env_bool(
+                settings.rag_retrieval_gap_stop_enabled
+            ),
+            "RAG_RETRIEVAL_CORRECTIVE_ENABLED": _format_env_bool(
+                settings.rag_retrieval_corrective_enabled
+            ),
+            "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED": _format_env_bool(
+                settings.rag_retrieval_business_fit_weighting_enabled
+            ),
+        },
         section_comment="# Retrieval アダプター",
         error_detail="検索方法設定を backend/.env へ保存できませんでした。",
     )
@@ -2503,6 +2600,10 @@ def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
         diversity_enabled=runtime.diversity_enabled,
         expansion_mode=runtime.expansion_mode,
         compression_enabled=runtime.compression_enabled,
+        crag_low_confidence_threshold=settings.rag_grounding_crag_confidence_threshold,
+        crag_high_confidence_threshold=settings.rag_crag_high_confidence_threshold,
+        crag_max_hops=settings.rag_crag_max_hops,
+        crag_low_evidence_abstain=settings.rag_crag_low_evidence_abstain_enabled,
         pipelines=[
             GroundingPipelineStatusData(
                 name=status.name,
@@ -2521,11 +2622,30 @@ def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
     )
 
 
+def _apply_grounding_settings(target: Settings, source: Settings) -> None:
+    """保存済み根拠確認設定を現在プロセスへ反映する。"""
+    target.rag_post_retrieval_pipeline = source.rag_post_retrieval_pipeline
+    target.rag_grounding_crag_confidence_threshold = source.rag_grounding_crag_confidence_threshold
+    target.rag_crag_high_confidence_threshold = source.rag_crag_high_confidence_threshold
+    target.rag_crag_max_hops = source.rag_crag_max_hops
+    target.rag_crag_low_evidence_abstain_enabled = source.rag_crag_low_evidence_abstain_enabled
+
+
 def _persist_grounding_settings(settings: Settings) -> None:
-    """根拠確認設定を backend/.env へ永続化する。"""
+    """根拠確認設定(処理方式 + CRAG 閾値)を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
-        {"RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline},
+        {
+            "RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline,
+            "RAG_GROUNDING_CRAG_CONFIDENCE_THRESHOLD": str(
+                settings.rag_grounding_crag_confidence_threshold
+            ),
+            "RAG_CRAG_HIGH_CONFIDENCE_THRESHOLD": str(settings.rag_crag_high_confidence_threshold),
+            "RAG_CRAG_MAX_HOPS": str(settings.rag_crag_max_hops),
+            "RAG_CRAG_LOW_EVIDENCE_ABSTAIN_ENABLED": _format_env_bool(
+                settings.rag_crag_low_evidence_abstain_enabled
+            ),
+        },
         section_comment="# Grounding アダプター",
         error_detail="根拠確認設定を backend/.env へ保存できませんでした。",
     )
@@ -2982,7 +3102,7 @@ def _test_oci_config(settings: Settings) -> OciConfigTestResult:
         config_file_mode=_mode_string(config_path),
         key_file_mode=_mode_string(key_path),
         message=message,
-        error_type="OciPrivateKeyPassPhraseRequiredError" if pass_phrase_required else None,
+        error_type=("OciPrivateKeyPassPhraseRequiredError" if pass_phrase_required else None),
     )
 
 
@@ -3198,7 +3318,9 @@ def _model_settings_data(payload: ModelSettingsPayload, settings: Settings) -> M
     )
 
 
-def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettingsPayload:
+def _public_model_settings_payload(
+    payload: ModelSettingsPayload,
+) -> ModelSettingsPayload:
     """secret を除いたモデル設定 payload を返す。"""
     enterprise_ai = payload.enterprise_ai.model_copy(
         update={

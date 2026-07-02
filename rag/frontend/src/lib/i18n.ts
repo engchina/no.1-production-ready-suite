@@ -553,11 +553,15 @@ export const ja = {
   "settings.services.empty": "表示できるサービスがありません。",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
-    "業務ビューの検索で使う検索方法を選択します。",
+    "業務ビューの検索で使う検索モードとオプションを選択します。",
   "settings.retrieval.overview.title": "検索方法",
   "settings.retrieval.overview.description":
-    "意味/全文/グラフ/構造化検索と業務適合・補正検索を OCI / Oracle スタックへ再マップし、手動選択できます。ここで選ぶのはグローバル既定で、公開済みの業務ビューが上書きします。",
+    "検索モード(意味/全文/融合/グラフ)と、任意のモードに合成できる検索オプション(クエリ拡張・gap-stop・業務適合加重・補正再検索)を選択します。ここで選ぶのはグローバル既定で、公開済みの業務ビューが上書きします。",
   "settings.retrieval.strategy": "検索方法",
+  "settings.retrieval.mode": "検索モード",
+  "settings.retrieval.toggles": "検索オプション",
+  "settings.retrieval.toggles.description":
+    "選択した検索モードに合成できるオプションです。組み合わせは自由です。",
   "settings.retrieval.selected": "選択中",
   "settings.retrieval.recommendedFor": "推奨用途",
   "settings.retrieval.source": "設定元",
@@ -567,6 +571,19 @@ export const ja = {
   "settings.retrieval.corrective": "補正検索",
   "settings.retrieval.businessFit": "業務適合加重",
   "settings.retrieval.none": "なし",
+  "settings.retrieval.toggle.queryExpansion.description":
+    "業務同義語でクエリを広げ、多クエリを RRF 融合して再現率を上げます。",
+  "settings.retrieval.toggle.queryExpansionLlm": "LLM マルチクエリ生成",
+  "settings.retrieval.toggle.queryExpansionLlm.description":
+    "OCI Enterprise AI で言い換えクエリを生成します。検索ごとに LLM 呼び出しが 1 回増えます(失敗時は同義語拡張へ縮退)。",
+  "settings.retrieval.toggle.gapStop.description":
+    "業務スコープ(テナント / ACL / ナレッジベースなど)が未確定のとき検索を停止します。",
+  "settings.retrieval.toggle.businessFit.description":
+    "版状態・ACL などの業務適合で並べ替えスコアを加重します。",
+  "settings.retrieval.toggle.corrective.description":
+    "根拠が不足するとき、クエリ精緻化と条件緩和で再検索します(CRAG)。",
+  "settings.retrieval.legacyNotice":
+    "旧形式の設定から読み替えて表示しています。保存すると新形式(モード + オプション)へ移行します。",
   "settings.retrieval.useCase.general": "一般",
   "settings.retrieval.useCase.faq": "FAQ",
   "settings.retrieval.useCase.policy": "規程",
@@ -578,11 +595,12 @@ export const ja = {
   "settings.retrieval.useCase.cross_document": "文書横断",
   "settings.retrieval.useCase.compliance": "コンプライアンス",
   "settings.retrieval.useCase.enterprise": "全社",
+  "settings.retrieval.useCase.manual": "マニュアル",
+  "settings.retrieval.useCase.long_document": "長文文書",
   "settings.retrieval.useCase.recall_critical": "再現率重視",
   "settings.retrieval.useCase.ambiguous": "曖昧",
   "settings.retrieval.strategy.hybrid_rrf": "ハイブリッド(RRF)",
-  "settings.retrieval.strategy.hybrid_rrf.description":
-    "意味+全文の融合 + クエリ拡張 + RRF(既定)",
+  "settings.retrieval.strategy.hybrid_rrf.description": "意味+全文を RRF で融合(既定)",
   "settings.retrieval.strategy.vector": "ベクトル",
   "settings.retrieval.strategy.vector.description": "意味検索のみ。表現ゆれに強い",
   "settings.retrieval.strategy.keyword": "キーワード",
@@ -590,6 +608,9 @@ export const ja = {
   "settings.retrieval.strategy.graph_augmented": "グラフ拡張",
   "settings.retrieval.strategy.graph_augmented.description":
     "関係性・横断要約(GraphRAG-lite、未有効時は hybrid へ)",
+  "settings.retrieval.strategy.reasoning_tree_search": "ツリー検索",
+  "settings.retrieval.strategy.reasoning_tree_search.description":
+    "LLM が目次(章節要約)から関連 section を選択。長文の規程・マニュアル向け(要ナビゲーション要約、未構築時は hybrid へ)",
   "settings.retrieval.strategy.business_context_strict": "業務厳格",
   "settings.retrieval.strategy.business_context_strict.description":
     "業務適合加重 + gap-stop(スコープ未確定なら検索停止)",
@@ -643,6 +664,23 @@ export const ja = {
   "settings.grounding.actions.saved": "根拠確認設定を保存しました。",
   "settings.grounding.actions.reset": "変更を破棄",
   "settings.grounding.actions.unsaved": "未保存の変更があります。",
+  "settings.grounding.crag.title": "補正検索(CRAG)のしきい値",
+  "settings.grounding.crag.description":
+    "検索方法の補正検索、または補正付き処理方式が有効なときの evidence grade 判定を調整します。",
+  "settings.grounding.crag.lowThreshold": "低しきい値",
+  "settings.grounding.crag.lowThreshold.helper":
+    "この値未満は低 grade(棄権の対象)。0 で補正検索全体を無効化します。",
+  "settings.grounding.crag.highThreshold": "高しきい値",
+  "settings.grounding.crag.highThreshold.helper":
+    "この値以上は再検索せずそのまま回答します。低しきい値以上にしてください。",
+  "settings.grounding.crag.maxHops": "再検索の上限回数",
+  "settings.grounding.crag.maxHops.helper":
+    "中間帯でのクエリ精緻化 + 再検索の回数(0-3)。0 は判定のみ。",
+  "settings.grounding.crag.abstain": "低 grade で回答を保留する",
+  "settings.grounding.crag.abstain.helper":
+    "再検索後も低しきい値未満のとき、回答せず保留メッセージを返します(既定 OFF)。",
+  "settings.grounding.crag.invalid":
+    "しきい値は 0〜1(高しきい値は低しきい値以上)、再検索回数は 0〜3 で入力してください。",
   "settings.grounding.loadError": "根拠確認設定を取得できませんでした。",
   "settings.grounding.saveError": "根拠確認設定を保存できませんでした。",
   "settings.generation.subtitle":

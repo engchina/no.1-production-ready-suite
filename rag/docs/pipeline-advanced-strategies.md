@@ -45,10 +45,15 @@ cosine 類似度ではなく **LLM が章節 tree を navigation** して関連 
 
 ### 段階
 1. (済)戦略登録 + hybrid 縮退。
-2. `app/rag/reasoning_tree.py`: 既存 navigation tree から検索時 navigation(injectable LLM、決定論
-   部分を unit test)。`_retrieve_with_strategy` に経路追加。
-3. `SearchDiagnostics.tree_search_path` + 設定 + 専用テスト(LLM stub)。
-4. 実 Oracle/OCI 結合検証(staging)。
+2. (済)`app/rag/reasoning_tree.py`: navigation 要約チャンク(content_kind=section_summary)を
+   候補に LLM が section を選択(`select_relevant_sections`)、配下 chunk を section_path フィルタで
+   検索。`_retrieve_with_strategy` に経路追加(PageIndex-lite。DDL なし・要約未構築/LLM 失敗時は
+   hybrid へ縮退し fallback_reason を診断へ)。
+3. (済)`SearchDiagnostics.tree_search_path`(候補/選択の踏破記録)+
+   `RAG_REASONING_TREE_MAX_SECTIONS`(1-8, 既定3)+ 専用テスト(LLM stub)。検索モードとして
+   設定 UI / 業務ビュー上書きへ露出。
+4. 実 Oracle/OCI 結合検証(staging)。深い tree の多段 navigation(node 単位 yes/no)は
+   必要になったら拡張。
 
 ---
 

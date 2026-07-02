@@ -680,6 +680,12 @@ export interface KnowledgeBaseIngestionConfig {
 /** 検索・回答設定。Business View の query 設定として使う。 */
 export interface KnowledgeBaseQueryConfig {
   retrieval_strategy: RetrievalStrategyName | null;
+  /** 検索方法の合成トグル(null はグローバル継承)。 */
+  retrieval_query_expansion: boolean | null;
+  retrieval_query_expansion_llm: boolean | null;
+  retrieval_gap_stop: boolean | null;
+  retrieval_corrective: boolean | null;
+  retrieval_business_fit_weighting: boolean | null;
   post_retrieval_pipeline: PostRetrievalPipelineName | null;
   generation_profile: GenerationProfileName | null;
   guardrail_policy: GuardrailPolicyName | null;
@@ -1744,11 +1750,17 @@ export interface ChunkingSettingsUpdate {
 }
 
 // --- 設定: Retrieval アダプター ---
-export type RetrievalStrategyName =
+/** 検索モード(新形式・排他選択)。 */
+export type RetrievalModeName =
   | "hybrid_rrf"
   | "vector"
   | "keyword"
   | "graph_augmented"
+  | "reasoning_tree_search";
+
+/** legacy 複合値込みの読み取り互換型。保存は RetrievalModeName のみ。 */
+export type RetrievalStrategyName =
+  | RetrievalModeName
   | "business_context_strict"
   | "corrective_multi_query";
 
@@ -1763,17 +1775,25 @@ export interface RetrievalStrategyStatusData {
 }
 
 export interface RetrievalSettingsData {
-  strategy: RetrievalStrategyName;
+  mode: RetrievalModeName;
+  legacy_strategy: RetrievalStrategyName | null;
   query_expansion: boolean;
+  query_expansion_llm: boolean;
   gap_stop: boolean;
   corrective_retrieval: boolean;
   business_fit_weighting: boolean;
-  strategies: RetrievalStrategyStatusData[];
+  modes: RetrievalStrategyStatusData[];
   config_source: "runtime";
 }
 
+/** 部分更新。null/undefined のフィールドは変更しない。 */
 export interface RetrievalSettingsUpdate {
-  strategy: RetrievalStrategyName;
+  mode?: RetrievalModeName;
+  query_expansion?: boolean;
+  query_expansion_llm?: boolean;
+  gap_stop?: boolean;
+  corrective_retrieval?: boolean;
+  business_fit_weighting?: boolean;
 }
 
 // --- 設定: Grounding アダプター ---
@@ -1805,12 +1825,22 @@ export interface GroundingSettingsData {
   diversity_enabled: boolean;
   expansion_mode: GroundingExpansionMode;
   compression_enabled: boolean;
+  /** CRAG(補正検索)の evidence grade 判定パラメータ。 */
+  crag_low_confidence_threshold: number;
+  crag_high_confidence_threshold: number;
+  crag_max_hops: number;
+  crag_low_evidence_abstain: boolean;
   pipelines: GroundingPipelineStatusData[];
   config_source: "runtime";
 }
 
+/** 部分更新。undefined のフィールドは変更しない。 */
 export interface GroundingSettingsUpdate {
-  pipeline: PostRetrievalPipelineName;
+  pipeline?: PostRetrievalPipelineName;
+  crag_low_confidence_threshold?: number;
+  crag_high_confidence_threshold?: number;
+  crag_max_hops?: number;
+  crag_low_evidence_abstain?: boolean;
 }
 
 // --- 設定: Generation アダプター ---

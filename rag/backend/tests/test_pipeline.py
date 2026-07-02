@@ -13,6 +13,8 @@ from app.clients.oracle import OracleClient
 from app.config import Settings
 from app.rag.pipeline import (
     GAP_STOP_ANSWER,
+    LOW_EVIDENCE_ANSWER,
+    LOW_EVIDENCE_WARNING,
     NO_RESULTS_ANSWER,
     NO_RESULTS_WARNING,
     RagPipeline,
@@ -22,6 +24,7 @@ from app.rag.pipeline import (
     _build_context,
     _business_context_scope_pinned,
     _crag_confidence,
+    _crag_grade,
     _dedupe_ranked_chunks,
     _relaxed_corrective_request,
 )
@@ -1250,6 +1253,85 @@ async def test_pipeline_can_disable_query_expansion() -> None:
     assert genai.embedded_texts == ["invoice storage"]
     assert oracle.queries == ["invoice storage"]
     assert response.diagnostics.query_variant_count == 1
+    assert response.diagnostics.query_expansion_source == "off"
+
+
+async def test_pipeline_llm_query_expansion_injects_variants() -> None:
+    """opt-in の LLM 拡張は変種を retrieval へ注入し、生成 prompt は元 query を維持する。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = ExpandingLlm(["請求書 保管 ルール", "インボイス 保存 規程"])
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=True,
+            rag_query_expansion_llm_enabled=True,
+            rag_query_expansion_max_variants=3,
+            rag_rrf_k=60,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5, rerank_top_n=2))
+
+    assert llm.expansion_calls == 1
+    assert genai.embedded_texts == [
+        "invoice storage",
+        "請求書 保管 ルール",
+        "インボイス 保存 規程",
+    ]
+    assert response.diagnostics.query_expansion_source == "llm"
+    assert response.diagnostics.query_variant_count == 3
+    # 生成 prompt は元 query を維持する(拡張は retrieval のみ)。
+    assert llm.prompt == "invoice storage"
+
+
+async def test_pipeline_llm_query_expansion_failure_falls_back_to_deterministic() -> None:
+    """LLM 拡張失敗時は決定論の同義語展開へ縮退する。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = ExpandingLlm(error=RuntimeError("expansion down"))
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=True,
+            rag_query_expansion_llm_enabled=True,
+            rag_query_expansion_max_variants=3,
+            rag_rrf_k=60,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5, rerank_top_n=2))
+
+    assert llm.expansion_calls == 1
+    # 決定論展開(同義語)へ縮退して 3 variants を維持する。
+    assert len(genai.embedded_texts) == 3
+    assert response.diagnostics.query_expansion_source == "deterministic"
+
+
+async def test_pipeline_llm_query_expansion_off_does_not_call_llm() -> None:
+    """既定 OFF では LLM 拡張を呼ばない(決定論展開のみ)。"""
+    genai = CapturingExpansionGenAiClient()
+    oracle = QueryVariantOracleClient()
+    llm = ExpandingLlm(["呼ばれないはず"])
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_query_expansion_enabled=True,
+            rag_query_expansion_max_variants=3,
+            rag_rrf_k=60,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="invoice storage", top_k=5, rerank_top_n=2))
+
+    assert llm.expansion_calls == 0
+    assert response.diagnostics.query_expansion_source == "deterministic"
 
 
 async def test_pipeline_injects_agentic_planned_subqueries_into_retrieval() -> None:
@@ -2895,6 +2977,22 @@ class CapturingPromptLlm(OciEnterpriseAiClient):
         return "請求書原本は Object Storage に保管します。"
 
 
+class ExpandingLlm(CapturingPromptLlm):
+    """LLM マルチクエリ拡張の応答を返す LLM(決定論スタブ)。"""
+
+    def __init__(self, variants: list[str] | None = None, error: Exception | None = None) -> None:
+        super().__init__()
+        self.variants = variants or []
+        self.error = error
+        self.expansion_calls = 0
+
+    async def expand_search_query(self, query: str, *, max_variants: int = 3) -> list[str]:
+        self.expansion_calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.variants
+
+
 async def test_pipeline_lean_grounding_pipeline_skips_neighbor_expansion(
     caplog: LogCaptureFixture,
 ) -> None:
@@ -2938,7 +3036,10 @@ async def test_pipeline_gap_stop_returns_without_retrieval() -> None:
     assert response.answer == GAP_STOP_ANSWER
     assert response.citations == []
     assert response.diagnostics.gap_stopped is True
-    assert response.diagnostics.retrieval_strategy_adapter == "business_context_strict"
+    # legacy 複合値は診断でも分解後のモード + 有効トグルで報告する。
+    assert response.diagnostics.retrieval_strategy_adapter == "hybrid_rrf"
+    assert response.diagnostics.retrieval_toggles["gap_stop"] is True
+    assert response.diagnostics.retrieval_toggles["business_fit_weighting"] is True
     assert llm.context == ""
 
 
@@ -3122,3 +3223,303 @@ def test_crag_confidence_clamped_to_unit_range() -> None:
         ),
     ]
     assert _crag_confidence(chunks) == 1.0
+
+
+def test_crag_grade_thresholds() -> None:
+    assert _crag_grade(0.7, 0.35, 0.7) == "high"
+    assert _crag_grade(0.5, 0.35, 0.7) == "mid"
+    assert _crag_grade(0.34, 0.35, 0.7) == "low"
+
+
+class SequencedRerankGenAiClient(OciGenAiClient):
+    """rerank スコアを呼び出し順に返す GenAI client(CRAG grade 制御用)。"""
+
+    def __init__(self, scores: list[float]) -> None:
+        super().__init__()
+        self.scores = list(scores)
+        self.rerank_calls = 0
+
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        input_type: str = "SEARCH_DOCUMENT",
+    ) -> list[list[float]]:
+        return [[1.0] + [0.0] * 1535 for _ in texts]
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        score = self.scores[min(self.rerank_calls, len(self.scores) - 1)]
+        self.rerank_calls += 1
+        return [(0, score)]
+
+
+class RewritePlanningLlm(OciEnterpriseAiClient):
+    """CRAG のクエリ精緻化(plan_query)呼び出しを数えるテスト用 LLM。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.plan_calls = 0
+        self.prompt = ""
+
+    async def plan_query(self, query: str, *, mode: str, max_subqueries: int = 3) -> list[str]:
+        self.plan_calls += 1
+        return ["精緻化した検索クエリ"]
+
+    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+        self.prompt = prompt
+        return "回答本文。"
+
+
+def _crag_pipeline(
+    scores: list[float], **settings_overrides: Any
+) -> tuple[RagPipeline, SequencedRerankGenAiClient, RewritePlanningLlm]:
+    genai = SequencedRerankGenAiClient(scores)
+    llm = RewritePlanningLlm()
+    settings_values: dict[str, Any] = {
+        "rag_query_expansion_enabled": False,
+        "rag_context_window_chars": 2000,
+        "rag_retrieval_corrective_enabled": True,
+        "rag_grounding_crag_confidence_threshold": 0.35,
+        "rag_crag_high_confidence_threshold": 0.7,
+        "rag_crag_max_hops": 1,
+        **settings_overrides,
+    }
+    pipeline = RagPipeline(
+        genai=genai,
+        oracle=StubOracleClient(),
+        llm=llm,
+        settings=Settings.model_construct(**settings_values),
+    )
+    return pipeline, genai, llm
+
+
+async def test_crag_high_grade_generates_without_refinement() -> None:
+    """高 grade(>= high 閾値)は精緻化再検索せずそのまま生成する。"""
+    pipeline, genai, llm = _crag_pipeline([0.9])
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 0
+    assert genai.rerank_calls == 1
+    assert response.diagnostics.crag_evidence_grade == "high"
+    assert response.diagnostics.crag_hops == 0
+    assert response.diagnostics.corrective_retried is False
+    assert response.answer == "回答本文。"
+
+
+async def test_crag_mid_grade_refines_and_adopts_improvement() -> None:
+    """中間帯は query 精緻化 + 再検索し、信頼度が改善したら採用する。"""
+    pipeline, genai, llm = _crag_pipeline([0.5, 0.75])
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 1
+    assert response.diagnostics.crag_hops == 1
+    assert response.diagnostics.corrective_retried is True
+    assert response.diagnostics.crag_confidence_score == 0.75
+    assert response.diagnostics.crag_evidence_grade == "high"
+    assert response.answer == "回答本文。"
+
+
+async def test_crag_mid_grade_stops_when_no_improvement() -> None:
+    """改善しない精緻化は hop 上限前でも打ち切り、元の候補を維持する。"""
+    pipeline, _genai, llm = _crag_pipeline([0.5, 0.4], rag_crag_max_hops=3)
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 1
+    assert response.diagnostics.crag_hops == 1
+    assert response.diagnostics.crag_confidence_score == 0.5
+    assert response.diagnostics.crag_evidence_grade == "mid"
+    assert response.answer == "回答本文。"
+
+
+async def test_crag_low_grade_abstains_when_opt_in() -> None:
+    """再検索後も低 grade なら棄権(opt-in)して決定論の保留応答を返す。"""
+    pipeline, _genai, llm = _crag_pipeline([0.2, 0.25], rag_crag_low_evidence_abstain_enabled=True)
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 1
+    assert response.answer == LOW_EVIDENCE_ANSWER
+    assert response.citations == []
+    assert LOW_EVIDENCE_WARNING in response.guardrail_warnings
+    assert response.diagnostics.crag_evidence_grade == "low"
+    assert response.diagnostics.fallback_reason == "crag_low_evidence_abstain"
+    # 生成 LLM は呼ばれない(棄権は決定論応答)。
+    assert llm.prompt == ""
+
+
+async def test_crag_low_grade_generates_when_abstain_disabled() -> None:
+    """棄権 opt-in が無効なら低 grade でも best-effort で生成する(従来互換)。"""
+    pipeline, _genai, _llm = _crag_pipeline([0.2, 0.25])
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert response.answer == "回答本文。"
+    assert response.diagnostics.crag_evidence_grade == "low"
+
+
+async def test_crag_zero_hops_keeps_grade_without_retry() -> None:
+    """max_hops=0 は精緻化再検索なしで grade 判定だけを行う。
+
+    (rerank 自体は既存の根拠0件時 corrective 再検索で追加実行されうる。)
+    """
+    pipeline, _genai, llm = _crag_pipeline([0.5], rag_crag_max_hops=0)
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 0
+    assert response.diagnostics.crag_hops == 0
+    assert response.diagnostics.crag_evidence_grade == "mid"
+
+
+async def test_crag_disabled_by_zero_low_threshold() -> None:
+    """低閾値 0.0 は CRAG 全体を無効化する(互換)。"""
+    pipeline, _genai, llm = _crag_pipeline([0.2], rag_grounding_crag_confidence_threshold=0.0)
+
+    response = await pipeline.run(SearchRequest(query="承認条件"))
+
+    assert llm.plan_calls == 0
+    assert response.diagnostics.crag_evidence_grade == "off"
+    assert response.answer == "回答本文。"
+
+
+class TreeSearchOracleClient(OracleClient):
+    """navigation 要約と section 配下 chunk を返すツリー検索用 Oracle stub。"""
+
+    def __init__(self, *, with_summaries: bool = True) -> None:
+        super().__init__()
+        self.with_summaries = with_summaries
+        self.filters_seen: list[dict[str, str]] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        filters = dict(filters or {})
+        self.filters_seen.append(filters)
+        if filters.get("content_kind") == "section_summary":
+            if not self.with_summaries:
+                return []
+            return [
+                RetrievedChunk(
+                    document_id="doc-1",
+                    chunk_id="doc-1:nav-1",
+                    text="経費精算: 承認フローと上限金額。",
+                    score=0.7,
+                    file_name="manual.pdf",
+                    metadata={"section_path": "第1章 > 経費", "content_kind": "section_summary"},
+                ),
+                RetrievedChunk(
+                    document_id="doc-1",
+                    chunk_id="doc-1:nav-2",
+                    text="旅費規程: 出張旅費の精算基準。",
+                    score=0.6,
+                    file_name="manual.pdf",
+                    metadata={"section_path": "第2章 > 旅費", "content_kind": "section_summary"},
+                ),
+            ][:top_k]
+        if filters.get("section_path") == "第2章 > 旅費":
+            return [
+                RetrievedChunk(
+                    document_id="doc-1",
+                    chunk_id="doc-1:20",
+                    text="出張旅費は実費精算とし、上限は 50000 円。",
+                    score=0.9,
+                    file_name="manual.pdf",
+                    metadata={"section_path": "第2章 > 旅費", "chunk_index": 20},
+                )
+            ][:top_k]
+        # baseline hybrid(縮退経路)。
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="一般規程の chunk。",
+                score=0.5,
+                file_name="manual.pdf",
+                metadata={"chunk_index": 0},
+            )
+        ][:top_k]
+
+
+class SectionSelectingLlm(CapturingPromptLlm):
+    """ツリー検索の section 選択応答を固定するテスト用 LLM。"""
+
+    def __init__(self, numbers: list[int]) -> None:
+        super().__init__()
+        self.numbers = numbers
+        self.select_calls = 0
+        self.sections_seen: list[str] = []
+
+    async def select_relevant_sections(
+        self, query: str, sections: list[str], *, max_sections: int = 3
+    ) -> list[int]:
+        self.select_calls += 1
+        self.sections_seen = list(sections)
+        return self.numbers
+
+
+def _tree_pipeline(
+    *, numbers: list[int], with_summaries: bool = True
+) -> tuple[RagPipeline, TreeSearchOracleClient, SectionSelectingLlm]:
+    oracle = TreeSearchOracleClient(with_summaries=with_summaries)
+    llm = SectionSelectingLlm(numbers)
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_retrieval_strategy="reasoning_tree_search",
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+            rag_reasoning_tree_max_sections=3,
+        ),
+    )
+    return pipeline, oracle, llm
+
+
+async def test_tree_search_selects_sections_and_retrieves_their_chunks() -> None:
+    """ツリー検索は LLM が選んだ section の配下 chunk を検索し、踏破記録を診断へ残す。"""
+    pipeline, oracle, llm = _tree_pipeline(numbers=[2])
+
+    response = await pipeline.run(SearchRequest(query="出張旅費の上限"))
+
+    assert llm.select_calls == 1
+    assert any("第2章 > 旅費" in line for line in llm.sections_seen)
+    assert [c.chunk_id for c in response.citations] == ["doc-1:20"]
+    assert response.diagnostics.retrieval_strategy_adapter == "reasoning_tree_search"
+    assert response.diagnostics.fallback_reason is None
+    path = response.diagnostics.tree_search_path
+    assert [step["decision"] for step in path] == ["candidate", "selected"]
+    assert path[1]["section_path"] == "第2章 > 旅費"
+    # section 検索は section_path フィルタで実行される。
+    assert any(f.get("section_path") == "第2章 > 旅費" for f in oracle.filters_seen)
+
+
+async def test_tree_search_falls_back_when_no_navigation_summaries() -> None:
+    """navigation 要約が未構築なら hybrid baseline へ縮退し、縮退理由を診断へ残す。"""
+    pipeline, _oracle, llm = _tree_pipeline(numbers=[1], with_summaries=False)
+
+    response = await pipeline.run(SearchRequest(query="出張旅費の上限"))
+
+    assert llm.select_calls == 0
+    assert [c.chunk_id for c in response.citations] == ["doc-1:0"]
+    assert response.diagnostics.fallback_reason == "tree_search_no_navigation_summaries"
+    assert response.diagnostics.tree_search_path == []
+
+
+async def test_tree_search_falls_back_when_no_section_selected() -> None:
+    """LLM が section を選ばなければ hybrid baseline へ縮退する。"""
+    pipeline, _oracle, llm = _tree_pipeline(numbers=[])
+
+    response = await pipeline.run(SearchRequest(query="出張旅費の上限"))
+
+    assert llm.select_calls == 1
+    assert [c.chunk_id for c in response.citations] == ["doc-1:0"]
+    assert response.diagnostics.fallback_reason == "tree_search_no_section_selected"

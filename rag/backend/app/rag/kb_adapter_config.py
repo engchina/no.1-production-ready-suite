@@ -78,6 +78,11 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
 }
 _QUERY_FIELD_MAP: dict[str, str] = {
     "retrieval_strategy": "rag_retrieval_strategy",
+    "retrieval_query_expansion": "rag_query_expansion_enabled",
+    "retrieval_query_expansion_llm": "rag_query_expansion_llm_enabled",
+    "retrieval_gap_stop": "rag_retrieval_gap_stop_enabled",
+    "retrieval_corrective": "rag_retrieval_corrective_enabled",
+    "retrieval_business_fit_weighting": "rag_retrieval_business_fit_weighting_enabled",
     "post_retrieval_pipeline": "rag_post_retrieval_pipeline",
     "generation_profile": "rag_generation_profile",
     "guardrail_policy": "rag_guardrail_policy",
@@ -141,7 +146,17 @@ class KnowledgeBaseQueryConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # legacy 複合値(business_context_strict 等)込みで受理し、runtime 解決時に
+    # rag_pipeline_core.decompose_retrieval_strategy がモード + トグルへ読み替える。
+    # 型を narrow すると parse 失敗で config 全体が空へ縮退する事故になるため、
+    # legacy 込み Literal を維持する。
     retrieval_strategy: RetrievalStrategy | None = None
+    # 検索方法の合成トグル(None はグローバル継承)。
+    retrieval_query_expansion: bool | None = None
+    retrieval_query_expansion_llm: bool | None = None
+    retrieval_gap_stop: bool | None = None
+    retrieval_corrective: bool | None = None
+    retrieval_business_fit_weighting: bool | None = None
     post_retrieval_pipeline: PostRetrievalPipeline | None = None
     generation_profile: GenerationProfile | None = None
     guardrail_policy: GuardrailPolicyName | None = None
@@ -205,7 +220,9 @@ def _ensure_external_parser_backend_enabled(overrides: dict[str, object]) -> Non
     overrides.setdefault(flag_field, True)
 
 
-def parse_adapter_config(raw: Mapping[str, object] | None) -> KnowledgeBaseAdapterConfig:
+def parse_adapter_config(
+    raw: Mapping[str, object] | None,
+) -> KnowledgeBaseAdapterConfig:
     """``retrieval_config`` JSON から KB 構築設定を寛容に復元する。
 
     旧来の free-form ``retrieval_config`` や未知キーは ``extra=ignore`` で捨て、

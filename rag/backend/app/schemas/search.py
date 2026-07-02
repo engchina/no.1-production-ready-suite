@@ -227,6 +227,13 @@ class SearchDiagnostics(BaseModel):
     mode: str = ""
     retrieval_strategy: str = "hybrid"
     retrieval_strategy_adapter: str = "hybrid_rrf"
+    # 検索方法の有効トグル(query_expansion / gap_stop / corrective_retrieval /
+    # business_fit_weighting)。settings トグル OR legacy 強制トグルの合成結果。
+    retrieval_toggles: dict[str, bool] = Field(default_factory=dict)
+    # クエリ拡張の実行元: llm(OCI Enterprise AI)/ deterministic(同義語)/ off。
+    query_expansion_source: str = "off"
+    # ツリー検索の踏破記録(候補 section と selected/candidate 判定)。監査用・非機密。
+    tree_search_path: list[dict[str, object]] = Field(default_factory=list)
     post_retrieval_pipeline: str = "custom"
     generation_profile: str = "grounded_concise"
     guardrail_policy: str = "standard"
@@ -247,6 +254,9 @@ class SearchDiagnostics(BaseModel):
     corrective_retried: bool = False
     crag_confidence_score: float | None = None
     crag_fallback_triggered: bool = False
+    # CRAG evidence grade: off(無効)/ high / mid / low。hops は精緻化再検索の実行回数。
+    crag_hops: int = 0
+    crag_evidence_grade: str = "off"
     hyde_generated: bool = False
     business_context: dict[str, object] = Field(default_factory=dict)
     retrieval_plan: dict[str, object] = Field(default_factory=dict)
@@ -394,7 +404,10 @@ def _validate_filter_range_consistency(filters: dict[str, str]) -> None:
     high = filters.get("page_number_max")
     if low and high and int(low) > int(high):
         raise ValueError("page_number_min は page_number_max 以下にしてください。")
-    for from_key, to_key in (("uploaded_from", "uploaded_to"), ("indexed_from", "indexed_to")):
+    for from_key, to_key in (
+        ("uploaded_from", "uploaded_to"),
+        ("indexed_from", "indexed_to"),
+    ):
         start = filters.get(from_key)
         end = filters.get(to_key)
         if start and end and _filter_date_sort_key(start) > _filter_date_sort_key(end):

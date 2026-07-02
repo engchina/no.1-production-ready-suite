@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   ApiError,
   type GroundingPipelineStatusData,
@@ -27,19 +28,57 @@ const PIPELINE_ORDER: PostRetrievalPipelineName[] = [
   "full_governed",
 ];
 
-/** 根拠確認の現在設定を管理する設定画面。 */
+/** 画面ローカルの編集フォーム状態(処理方式 + CRAG 補正パラメータ)。 */
+interface GroundingForm {
+  pipeline: PostRetrievalPipelineName;
+  crag_low_confidence_threshold: number;
+  crag_high_confidence_threshold: number;
+  crag_max_hops: number;
+  crag_low_evidence_abstain: boolean;
+}
+
+function formFromSettings(settings: GroundingSettingsData): GroundingForm {
+  return {
+    pipeline: settings.pipeline,
+    crag_low_confidence_threshold: settings.crag_low_confidence_threshold,
+    crag_high_confidence_threshold: settings.crag_high_confidence_threshold,
+    crag_max_hops: settings.crag_max_hops,
+    crag_low_evidence_abstain: settings.crag_low_evidence_abstain,
+  };
+}
+
+function isDirty(form: GroundingForm, settings: GroundingSettingsData): boolean {
+  const base = formFromSettings(settings);
+  return (Object.keys(base) as (keyof GroundingForm)[]).some((key) => form[key] !== base[key]);
+}
+
+function isValid(form: GroundingForm): boolean {
+  return (
+    Number.isFinite(form.crag_low_confidence_threshold) &&
+    form.crag_low_confidence_threshold >= 0 &&
+    form.crag_low_confidence_threshold <= 1 &&
+    Number.isFinite(form.crag_high_confidence_threshold) &&
+    form.crag_high_confidence_threshold >= form.crag_low_confidence_threshold &&
+    form.crag_high_confidence_threshold <= 1 &&
+    Number.isInteger(form.crag_max_hops) &&
+    form.crag_max_hops >= 0 &&
+    form.crag_max_hops <= 3
+  );
+}
+
+/** 根拠確認(処理方式 + CRAG 補正)の設定画面。 */
 export function GroundingSettingsClient() {
   const query = useGroundingSettings();
   const save = useUpdateGroundingSettings();
-  const [pipeline, setPipeline] = useState<PostRetrievalPipelineName | null>(null);
+  const [form, setForm] = useState<GroundingForm | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     // 初期化時のみ server 値で同期する。dirty な未保存選択は背景 refetch で上書きしない。
-    if (query.data && pipeline === null) {
-      setPipeline(query.data.pipeline);
+    if (query.data && form === null) {
+      setForm(formFromSettings(query.data));
     }
-  }, [query.data, pipeline]);
+  }, [query.data, form]);
 
   if (query.isPending) {
     return (
@@ -63,32 +102,33 @@ export function GroundingSettingsClient() {
   }
 
   const settings = query.data;
-  if (!settings || !pipeline) return null;
+  if (!settings || !form) return null;
 
-  const dirty = pipeline !== settings.pipeline;
+  const dirty = isDirty(form, settings);
+  const valid = isValid(form);
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.grounding.saveError");
   const pipelines = orderedPipelines(settings.pipelines);
 
-  function selectPipeline(next: PostRetrievalPipelineName) {
+  function updateForm(patch: Partial<GroundingForm>) {
     save.reset();
     setSuccessMessage(null);
-    setPipeline(next);
+    setForm((current) => (current ? { ...current, ...patch } : current));
   }
 
   function resetForm() {
     save.reset();
     setSuccessMessage(null);
-    setPipeline(settings.pipeline);
+    if (settings) setForm(formFromSettings(settings));
   }
 
   function submit() {
-    if (!pipeline) return;
+    if (!form || !isValid(form)) return;
     save.mutate(
-      { pipeline },
+      { ...form },
       {
         onSuccess: (data) => {
-          setPipeline(data.pipeline);
+          setForm(formFromSettings(data));
           setSuccessMessage(t("settings.grounding.actions.saved"));
         },
         onError: () => setSuccessMessage(null),
@@ -121,7 +161,7 @@ export function GroundingSettingsClient() {
               className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3"
             >
               {pipelines.map((item) => {
-                const selected = pipeline === item.name;
+                const selected = form.pipeline === item.name;
                 return (
                   <button
                     key={item.name}
@@ -129,7 +169,7 @@ export function GroundingSettingsClient() {
                     role="radio"
                     aria-checked={selected}
                     disabled={save.isPending}
-                    onClick={() => selectPipeline(item.name)}
+                    onClick={() => updateForm({ pipeline: item.name })}
                     className={cn(
                       "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                       selected
@@ -152,17 +192,66 @@ export function GroundingSettingsClient() {
               })}
             </div>
           </div>
-          <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <RuntimeFact label={t("settings.grounding.pipeline")} value={pipelineLabel(pipeline)} />
-            <RuntimeFact
-              label={t("settings.grounding.expansion")}
-              value={expansionLabel(settings.expansion_mode)}
-            />
-            <RuntimeFact
-              label={t("settings.grounding.source")}
-              value={t("settings.common.currentConfig")}
-            />
-          </dl>
+          <div className="space-y-2">
+            <div>
+              <div className="text-sm font-medium text-foreground">
+                {t("settings.grounding.crag.title")}
+              </div>
+              <p className="text-xs text-muted">{t("settings.grounding.crag.description")}</p>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <NumberField
+                label={t("settings.grounding.crag.lowThreshold")}
+                helper={t("settings.grounding.crag.lowThreshold.helper")}
+                value={form.crag_low_confidence_threshold}
+                min={0}
+                max={1}
+                step={0.05}
+                disabled={save.isPending}
+                onChange={(value) => updateForm({ crag_low_confidence_threshold: value })}
+              />
+              <NumberField
+                label={t("settings.grounding.crag.highThreshold")}
+                helper={t("settings.grounding.crag.highThreshold.helper")}
+                value={form.crag_high_confidence_threshold}
+                min={0}
+                max={1}
+                step={0.05}
+                disabled={save.isPending}
+                onChange={(value) => updateForm({ crag_high_confidence_threshold: value })}
+              />
+              <NumberField
+                label={t("settings.grounding.crag.maxHops")}
+                helper={t("settings.grounding.crag.maxHops.helper")}
+                value={form.crag_max_hops}
+                min={0}
+                max={3}
+                step={1}
+                disabled={save.isPending}
+                onChange={(value) => updateForm({ crag_max_hops: value })}
+              />
+            </div>
+            <div className="flex items-start justify-between gap-4 rounded-md border border-border px-3 py-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-foreground">
+                  {t("settings.grounding.crag.abstain")}
+                </div>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted">
+                  {t("settings.grounding.crag.abstain.helper")}
+                </p>
+              </div>
+              <Switch
+                checked={form.crag_low_evidence_abstain}
+                disabled={save.isPending}
+                aria-label={t("settings.grounding.crag.abstain")}
+                onCheckedChange={(checked) => updateForm({ crag_low_evidence_abstain: checked })}
+                className="mt-0.5 shrink-0"
+              />
+            </div>
+            {!valid ? (
+              <FormStatus tone="danger" message={t("settings.grounding.crag.invalid")} />
+            ) : null}
+          </div>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">
               {dirty ? (
@@ -185,7 +274,7 @@ export function GroundingSettingsClient() {
               <Button
                 type="button"
                 loading={save.isPending}
-                disabled={!dirty}
+                disabled={!dirty || !valid}
                 onClick={submit}
                 aria-label={t("settings.grounding.actions.save")}
               >
@@ -229,12 +318,42 @@ function StageChips({ pipeline }: { pipeline: GroundingPipelineStatusData }) {
   );
 }
 
-function RuntimeFact({ label, value }: { label: string; value: string }) {
+function NumberField({
+  label,
+  helper,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  helper: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
-    </div>
+    <label className="block space-y-1">
+      <span className="text-sm font-medium text-foreground">{label}</span>
+      <input
+        type="number"
+        inputMode="decimal"
+        value={Number.isFinite(value) ? value : ""}
+        min={min}
+        max={max}
+        step={step}
+        aria-label={label}
+        disabled={disabled}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+      />
+      <span className="block text-xs text-muted">{helper}</span>
+    </label>
   );
 }
 
@@ -254,8 +373,4 @@ function pipelineLabel(name: PostRetrievalPipelineName) {
 
 function pipelineDescription(name: PostRetrievalPipelineName) {
   return t(`settings.grounding.pipeline.${name}.description` as I18nKey);
-}
-
-function expansionLabel(mode: GroundingSettingsData["expansion_mode"]) {
-  return t(`settings.grounding.expansionMode.${mode}` as I18nKey);
 }

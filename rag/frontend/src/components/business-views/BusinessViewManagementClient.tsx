@@ -26,6 +26,7 @@ import {
   type GuardrailPolicyName,
   type KnowledgeBaseQueryConfig,
   type PostRetrievalPipelineName,
+  type RetrievalModeName,
   type RetrievalStrategyName,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -46,20 +47,45 @@ const NAME_ERROR_ID = "business-view-name-error";
 const NAME_HELPER_ID = "business-view-name-helper";
 const SCOPE_ERROR_ID = "business-view-scope-error";
 
-const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalStrategyName>[] = [
+const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalModeName>[] = [
   { value: "hybrid_rrf", label: t("settings.retrieval.strategy.hybrid_rrf") },
   { value: "vector", label: t("settings.retrieval.strategy.vector") },
   { value: "keyword", label: t("settings.retrieval.strategy.keyword") },
   { value: "graph_augmented", label: t("settings.retrieval.strategy.graph_augmented") },
   {
-    value: "business_context_strict",
-    label: t("settings.retrieval.strategy.business_context_strict"),
-  },
-  {
-    value: "corrective_multi_query",
-    label: t("settings.retrieval.strategy.corrective_multi_query"),
+    value: "reasoning_tree_search",
+    label: t("settings.retrieval.strategy.reasoning_tree_search"),
   },
 ];
+
+// legacy 複合戦略 -> 検索モード + 明示トグルの読み替え(backend の decompose と同義)。
+// 編集フォームへ読み込む時点で正規化するため、保存は常に新形式になる。
+const LEGACY_RETRIEVAL_MAP: Partial<
+  Record<
+    RetrievalStrategyName,
+    { mode: RetrievalModeName; toggles: Partial<KnowledgeBaseQueryConfig> }
+  >
+> = {
+  business_context_strict: {
+    mode: "hybrid_rrf",
+    toggles: { retrieval_gap_stop: true, retrieval_business_fit_weighting: true },
+  },
+  corrective_multi_query: {
+    mode: "hybrid_rrf",
+    toggles: { retrieval_query_expansion: true, retrieval_corrective: true },
+  },
+};
+
+function normalizeBusinessViewConfig(config: BusinessViewConfig): BusinessViewConfig {
+  // 旧保存 JSON に無いトグルは null(継承)で補完してから legacy を読み替える。
+  const query = { ...emptyQueryConfig(), ...config.query };
+  const legacy = query.retrieval_strategy ? LEGACY_RETRIEVAL_MAP[query.retrieval_strategy] : undefined;
+  if (!legacy) return { ...config, query };
+  return {
+    ...config,
+    query: { ...query, retrieval_strategy: legacy.mode, ...legacy.toggles },
+  };
+}
 const GROUNDING_OPTIONS: SelectFieldOption<PostRetrievalPipelineName>[] = [
   { value: "custom", label: t("settings.grounding.pipeline.custom") },
   { value: "lean", label: t("settings.grounding.pipeline.lean") },
@@ -91,6 +117,11 @@ const EVALUATION_OPTIONS: SelectFieldOption<EvaluationSuiteName>[] = [
 function emptyQueryConfig(): KnowledgeBaseQueryConfig {
   return {
     retrieval_strategy: null,
+    retrieval_query_expansion: null,
+    retrieval_query_expansion_llm: null,
+    retrieval_gap_stop: null,
+    retrieval_corrective: null,
+    retrieval_business_fit_weighting: null,
     post_retrieval_pipeline: null,
     generation_profile: null,
     guardrail_policy: null,
@@ -316,7 +347,9 @@ function BusinessViewForm({
   const update = useUpdateBusinessView();
   const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
-  const [config, setConfig] = useState<BusinessViewConfig>(initial?.config ?? emptyConfig());
+  const [config, setConfig] = useState<BusinessViewConfig>(
+    initial?.config ? normalizeBusinessViewConfig(initial.config) : emptyConfig()
+  );
   const [touched, setTouched] = useState(false);
   const isDefault = initial?.name === DEFAULT_BUSINESS_VIEW_NAME;
 
@@ -457,12 +490,49 @@ function BusinessViewForm({
               <QuerySelectRow
                 id="business-view-retrieval"
                 label={t("businessViews.field.retrieval")}
-                value={config.query.retrieval_strategy}
+                value={config.query.retrieval_strategy as RetrievalModeName | null}
                 options={RETRIEVAL_OPTIONS}
                 defaultOnOverride="vector"
                 disabled={pending}
                 onChange={(value) => updateQuery({ retrieval_strategy: value })}
               />
+              <div className="grid gap-3 rounded-lg border border-border bg-background p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+                <h3 className="text-sm font-medium text-foreground">
+                  {t("settings.retrieval.toggles")}
+                </h3>
+                <div className="min-w-0 space-y-2">
+                  <QueryToggleRow
+                    label={t("settings.retrieval.queryExpansion")}
+                    value={config.query.retrieval_query_expansion}
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ retrieval_query_expansion: value })}
+                  />
+                  <QueryToggleRow
+                    label={t("settings.retrieval.toggle.queryExpansionLlm")}
+                    value={config.query.retrieval_query_expansion_llm}
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ retrieval_query_expansion_llm: value })}
+                  />
+                  <QueryToggleRow
+                    label={t("settings.retrieval.gapStop")}
+                    value={config.query.retrieval_gap_stop}
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ retrieval_gap_stop: value })}
+                  />
+                  <QueryToggleRow
+                    label={t("settings.retrieval.businessFit")}
+                    value={config.query.retrieval_business_fit_weighting}
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ retrieval_business_fit_weighting: value })}
+                  />
+                  <QueryToggleRow
+                    label={t("settings.retrieval.corrective")}
+                    value={config.query.retrieval_corrective}
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ retrieval_corrective: value })}
+                  />
+                </div>
+              </div>
               <QuerySelectRow
                 id="business-view-grounding"
                 label={t("businessViews.field.grounding")}
@@ -644,6 +714,36 @@ function QuerySelectRow<T extends string>({
             className="[&>label]:sr-only"
           />
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** 検索オプションの三値行(グローバル継承 / ON / OFF)。null は継承。 */
+function QueryToggleRow({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: boolean | null;
+  disabled: boolean;
+  onChange: (value: boolean | null) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <span className="text-sm text-foreground">{label}</span>
+      <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
+        <ToggleChip selected={value === null} disabled={disabled} onClick={() => onChange(null)}>
+          {t("businessViews.inherit")}
+        </ToggleChip>
+        <ToggleChip selected={value === true} disabled={disabled} onClick={() => onChange(true)}>
+          ON
+        </ToggleChip>
+        <ToggleChip selected={value === false} disabled={disabled} onClick={() => onChange(false)}>
+          OFF
+        </ToggleChip>
       </div>
     </div>
   );
