@@ -1304,12 +1304,25 @@ class RagPipeline:
             )
 
         graph_query = query_variants[0] if query_variants else request.query
+        graph_strategy = resolved_strategy.strategy
         graph_hits, graph_fallback_reason = await self._graph_search(
-            strategy=resolved_strategy.strategy,
+            strategy=graph_strategy,
             query=graph_query,
             top_k=request.top_k,
             filters=request.filters,
         )
+        graph_degrade_reason: str | None = None
+        if not graph_hits and graph_strategy == SearchStrategy.GRAPH_GLOBAL:
+            # community summary は profile=full でしか構築されない。entities 構築でも
+            # graph を活かせるよう、global 空振り時は entity graph(local)へ縮退する。
+            graph_strategy = SearchStrategy.GRAPH_LOCAL
+            graph_hits, graph_fallback_reason = await self._graph_search(
+                strategy=graph_strategy,
+                query=graph_query,
+                top_k=request.top_k,
+                filters=request.filters,
+            )
+            graph_degrade_reason = "graph_global_degraded_to_local"
         if graph_hits:
             agent_memory_hits = await self._retrieve_agent_memory(
                 query_variants=query_variants,
@@ -1318,9 +1331,10 @@ class RagPipeline:
             )
             return RetrievalExecutionResult(
                 chunks=[*graph_hits, *agent_memory_hits],
-                strategy=resolved_strategy.strategy,
+                strategy=graph_strategy,
                 graph_hit_count=len(graph_hits),
                 agent_memory_hit_count=len(agent_memory_hits),
+                fallback_reason=graph_degrade_reason,
             )
 
         chunks = await self._retrieve_with_query_variants(

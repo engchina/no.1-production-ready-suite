@@ -431,7 +431,30 @@ export interface ExtractionAsset {
   page_number?: number | null;
   bbox?: number[] | null;
   alt_text?: string | null;
+  /** 図表 VLM 要約(有効時のみ)。 */
+  summary?: string | null;
   metadata?: Record<string, string | number | boolean | null>;
+}
+
+/** 章節 navigation tree のノード(ナビゲーション要約 有効時は summary 付き)。 */
+export interface DocumentNavigationNode {
+  section_id: string;
+  title: string;
+  section_path: string[];
+  depth: number;
+  parent_section_id: string | null;
+  page_start: number | null;
+  page_end: number | null;
+  summary: string | null;
+}
+
+/** schema 駆動で抽出した項目(メタデータ/項目抽出 有効時のみ)。 */
+export interface ExtractionField {
+  name: string;
+  value: string;
+  value_type: string;
+  confidence: number | null;
+  page_number: number | null;
 }
 
 export interface StructuredExtraction {
@@ -530,6 +553,8 @@ export interface DocumentChunkSet {
   vector_count: number;
   /** 配信中(serving)か。文書につき 1 つだけ true。candidate(実験)は false。 */
   is_serving: boolean;
+  /** chunk_set の作成日時。診断行の「chunk_set 作成」表示に使う。 */
+  created_at: string | null;
   /** 親抽出(extraction)の ID。parser×preprocess ごとに分かれる 2 階層の上位キー。 */
   extraction_id: string | null;
   /** 親抽出の parser backend(2 階層表示のラベル)。 */
@@ -1853,6 +1878,11 @@ export interface GuardrailPolicyStatusData {
   audit_emphasis: boolean;
 }
 
+/** メタデータ/項目抽出のスキーマ定義(検索・回答設定)。 */
+export interface ExtractionFieldsSettingsData {
+  fields: Array<{ name: string; description: string; value_type: string }>;
+}
+
 export interface GuardrailSettingsData {
   policy: GuardrailPolicyName;
   block_prompt_injection: boolean;
@@ -2769,6 +2799,8 @@ export const api = {
     ),
 
   // 設定: Guardrail アダプター
+  getExtractionFieldsSettings: () =>
+    request<ExtractionFieldsSettingsData>("/api/settings/extraction-fields"),
   getGuardrailSettings: () => request<GuardrailSettingsData>("/api/settings/guardrail"),
   updateGuardrailSettings: (body: GuardrailSettingsUpdate) =>
     request<GuardrailSettingsData>("/api/settings/guardrail", {

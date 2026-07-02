@@ -64,6 +64,7 @@ import {
   type GenerationSettingsUpdate,
   type PromptVersionsData,
   type PromptVersionCreate,
+  type ExtractionFieldsSettingsData,
   type GuardrailSettingsData,
   type GuardrailSettingsUpdate,
   type VectorIndexSettingsData,
@@ -147,6 +148,7 @@ export const queryKeys = {
   generationSettings: ["settings", "generation"] as const,
   promptVersions: ["settings", "prompts"] as const,
   guardrailSettings: ["settings", "guardrail"] as const,
+  extractionFieldsSettings: ["settings", "extraction-fields"] as const,
   vectorIndexSettings: ["settings", "vector-index"] as const,
   evaluationSettings: ["settings", "evaluation-suite"] as const,
   graphSettings: ["settings", "graph"] as const,
@@ -1458,6 +1460,16 @@ export function useActivatePromptVersion() {
   return useMutation({
     mutationFn: (versionId: string) => api.activatePromptVersion(versionId),
     onSuccess: (data) => invalidatePromptDependents(qc, data),
+  });
+}
+
+/** メタデータ/項目抽出のスキーマ定義。項目抽出トグルの警告表示などに使う。 */
+export function useExtractionFieldsSettings(enabled = true) {
+  return useQuery<ExtractionFieldsSettingsData>({
+    queryKey: queryKeys.extractionFieldsSettings,
+    queryFn: api.getExtractionFieldsSettings,
+    enabled,
+    retry: false,
   });
 }
 

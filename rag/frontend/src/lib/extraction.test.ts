@@ -112,6 +112,61 @@ describe("parseStructuredExtraction", () => {
     const parsed = parseStructuredExtraction({ raw_text: "本文" });
     expect(parsed.sourceDerivation).toBeNull();
   });
+
+  it("navigation / fields / asset summary を安全に読み取る", () => {
+    const parsed = parseStructuredExtraction({
+      raw_text: "本文",
+      navigation: [
+        {
+          section_id: "sec-1",
+          title: "第1章",
+          section_path: ["第1章"],
+          depth: 0,
+          page_start: 1,
+          summary: "章の要約",
+        },
+        { section_id: "", title: "壊れた node" },
+        "garbage",
+      ],
+      fields: [
+        { name: "請求書番号", value: "INV-1", value_type: "string", confidence: 0.9 },
+        { name: "空値", value: "  " },
+      ],
+      assets: [
+        { asset_id: "a1", kind: "figure", summary: "図の説明", page_number: 2 },
+        { asset_id: "a2", kind: "figure" },
+      ],
+    });
+
+    expect(parsed.navigation).toEqual([
+      {
+        section_id: "sec-1",
+        title: "第1章",
+        section_path: ["第1章"],
+        depth: 0,
+        parent_section_id: null,
+        page_start: 1,
+        page_end: null,
+        summary: "章の要約",
+      },
+    ]);
+    expect(parsed.fields).toEqual([
+      {
+        name: "請求書番号",
+        value: "INV-1",
+        value_type: "string",
+        confidence: 0.9,
+        page_number: null,
+      },
+    ]);
+    expect(parsed.assets.map((asset) => asset.summary)).toEqual(["図の説明", null]);
+  });
+
+  it("navigation / fields が無ければ空配列を返す", () => {
+    const parsed = parseStructuredExtraction({ raw_text: "本文" });
+    expect(parsed.navigation).toEqual([]);
+    expect(parsed.fields).toEqual([]);
+  });
 });
 
 describe("summarizeDocumentElements", () => {

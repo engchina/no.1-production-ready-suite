@@ -464,6 +464,10 @@ function contentKindLabel(kind: string): string {
       return t("search.filters.contentKind.slide");
     case "sheet":
       return t("search.filters.contentKind.sheet");
+    case "field":
+      return t("search.filters.contentKind.field");
+    case "section_summary":
+      return t("search.filters.contentKind.section_summary");
     default:
       return kind;
   }

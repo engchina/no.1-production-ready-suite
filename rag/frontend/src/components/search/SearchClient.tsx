@@ -63,6 +63,8 @@ const CONTENT_KIND_OPTIONS = [
   "email",
   "slide",
   "sheet",
+  "field",
+  "section_summary",
 ] as const;
 type ContentKindFilter = (typeof CONTENT_KIND_OPTIONS)[number];
 const TOP_K_OPTIONS = ["5", "10", "20", "50"] as const;
@@ -87,6 +89,8 @@ const CONTENT_KIND_LABEL: Record<ContentKindFilter, Parameters<typeof t>[0]> = {
   email: "search.filters.contentKind.email",
   slide: "search.filters.contentKind.slide",
   sheet: "search.filters.contentKind.sheet",
+  field: "search.filters.contentKind.field",
+  section_summary: "search.filters.contentKind.section_summary",
 };
 const CONTENT_KIND_SELECT_OPTIONS = CONTENT_KIND_OPTIONS.map((option) => ({
   value: option,

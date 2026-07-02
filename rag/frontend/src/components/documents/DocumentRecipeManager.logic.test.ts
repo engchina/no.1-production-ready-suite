@@ -5,9 +5,14 @@ import {
   canDeleteRecipe,
   recipeConfigLocked,
   recipeIsActive,
+  recipeLayerStatuses,
   resolveSelectedRecipe,
 } from "./DocumentRecipeManager.logic";
-import type { DocumentProcessingConfig, DocumentRecipeView } from "@/lib/api";
+import type {
+  DocumentChunkSet,
+  DocumentProcessingConfig,
+  DocumentRecipeView,
+} from "@/lib/api";
 
 const emptyConfig: DocumentProcessingConfig = {
   preprocess_profile: null,
@@ -101,5 +106,63 @@ describe("DocumentRecipeManager logic", () => {
     expect(recipeConfigLocked(recipe("error", 1, "SUCCEEDED", "ERROR"))).toBe(false);
     expect(recipeConfigLocked(recipe("review", 1, "SUCCEEDED", "REVIEW"))).toBe(true);
     expect(recipeConfigLocked(recipe("running", 1, "RUNNING", "INGESTING"))).toBe(true);
+  });
+});
+
+function chunkSet(
+  chunkSetId: string,
+  layers: Partial<DocumentChunkSet["layer_statuses"]>
+): DocumentChunkSet {
+  const notRequested = { layer_id: null, requested: false, status: "not_requested", reason: null };
+  return {
+    chunk_set_id: chunkSetId,
+    extraction_recipe_id: null,
+    extraction_status: "materialized",
+    extraction_reason: null,
+    status: "INDEXED",
+    chunk_count: 1,
+    vector_count: 1,
+    is_serving: true,
+    created_at: null,
+    extraction_id: null,
+    parser: null,
+    preprocess: null,
+    knowledge_base_ids: [],
+    serving_knowledge_base_ids: [],
+    layer_statuses: {
+      metadata: notRequested,
+      graph: notRequested,
+      navigation: notRequested,
+      ...layers,
+    },
+  } as DocumentChunkSet;
+}
+
+describe("recipeLayerStatuses", () => {
+  it("active chunk_set の要求済み layer だけを表示順で返す", () => {
+    const target = recipe("recipe-1", 1);
+    target.active_chunk_set_id = "cs-1";
+    const sets = [
+      chunkSet("cs-other", {
+        graph: { layer_id: "gl-x", requested: true, status: "materialized", reason: null },
+      }),
+      chunkSet("cs-1", {
+        graph: { layer_id: "gl-1", requested: true, status: "planned_only", reason: "未実体化" },
+        navigation: { layer_id: "nv-1", requested: true, status: "materialized", reason: null },
+      }),
+    ];
+    expect(recipeLayerStatuses(target, sets)).toEqual([
+      { layer: "graph", status: "planned_only", reason: "未実体化" },
+      { layer: "navigation", status: "materialized", reason: null },
+    ]);
+  });
+
+  it("active chunk_set 不在・未取得・全 not_requested では空を返す", () => {
+    const noActive = recipe("recipe-1", 1);
+    expect(recipeLayerStatuses(noActive, [chunkSet("cs-1", {})])).toEqual([]);
+    const withActive = recipe("recipe-2", 2);
+    withActive.active_chunk_set_id = "cs-1";
+    expect(recipeLayerStatuses(withActive, undefined)).toEqual([]);
+    expect(recipeLayerStatuses(withActive, [chunkSet("cs-1", {})])).toEqual([]);
   });
 });

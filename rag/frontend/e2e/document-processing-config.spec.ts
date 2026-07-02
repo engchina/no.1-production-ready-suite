@@ -261,6 +261,116 @@ test("保存失敗時は編集値を保持する", async ({ page }) => {
   await expect(panel.getByRole("combobox", { name: "文書解析" })).toContainText("MinerU");
 });
 
+test("派生レイヤー状態チップ・項目定義未設定の警告・抽出セクションを表示する", async ({ page }) => {
+  await mockWorkspace(page);
+  // 後着 route が優先される。派生 layer 状態と抽出 payload を上書きする。
+  await page.route("**/api/documents/doc-1/chunk-sets", (route) =>
+    route.fulfill({
+      json: ok([
+        {
+          chunk_set_id: "chunk-set-recipe-1",
+          extraction_recipe_id: "er-recipe-1-r1",
+          extraction_status: "materialized",
+          extraction_reason: null,
+          status: "INDEXED",
+          chunk_count: 2,
+          vector_count: 2,
+          is_serving: true,
+          created_at: "2026-06-15T00:00:10Z",
+          extraction_id: "ex-1",
+          parser: "docling",
+          preprocess: "office_to_pdf",
+          knowledge_base_ids: ["kb-1"],
+          serving_knowledge_base_ids: ["kb-1"],
+          layer_statuses: {
+            metadata: { layer_id: null, requested: false, status: "not_requested", reason: null },
+            graph: {
+              layer_id: "gl-1",
+              requested: true,
+              status: "planned_only",
+              reason: "関係情報は構築計画に含まれていますが、まだ実体化していません。",
+            },
+            navigation: {
+              layer_id: "nv-1",
+              requested: true,
+              status: "materialized",
+              reason: "ナビゲーションは 2 件の章節として実体化済みです。",
+            },
+          },
+        },
+      ]),
+    })
+  );
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/extraction-export**", (route) =>
+    route.fulfill({
+      json: ok({
+        document_id: "doc-1",
+        file_name: "policy.pdf",
+        format: "json",
+        content_type: "application/json",
+        content: "",
+        payload: {
+          raw_text: "経費申請の規程",
+          elements: [{ kind: "text", text: "経費申請の規程", order: 0, element_id: "e0" }],
+          navigation: [
+            { section_id: "sec-1", title: "第1章 総則", depth: 0, page_start: 1, summary: "章の要約テキスト" },
+            { section_id: "sec-2", title: "1.1 目的", depth: 1, parent_section_id: "sec-1" },
+          ],
+          fields: [
+            { name: "請求書番号", value: "INV-1", value_type: "string", confidence: 0.9 },
+          ],
+          assets: [
+            { asset_id: "fig-1", kind: "figure", alt_text: "承認フロー図", summary: "承認の流れを示す図", page_number: 2 },
+          ],
+        },
+        chunks: [],
+        parser_backend: "docling",
+        parser_profile: "docling",
+        page_count: 1,
+        element_count: 1,
+        table_count: 0,
+        asset_count: 1,
+      }),
+    })
+  );
+  await page.route("**/api/settings/extraction-fields", (route) =>
+    route.fulfill({ json: ok({ fields: [] }) })
+  );
+
+  await page.goto("/documents/doc-1");
+
+  // レシピヘッダに派生 layer 状態チップ(not_requested は出さない)。
+  const layerChips = page.getByTestId("recipe-layer-statuses");
+  await expect(layerChips.getByTestId("recipe-layer-graph")).toContainText("計画のみ");
+  await expect(layerChips.getByTestId("recipe-layer-navigation")).toContainText("構築済み");
+  await expect(layerChips.getByTestId("recipe-layer-metadata")).toHaveCount(0);
+
+  // 構造化要素タブに章節ナビ・図表要約・抽出項目の折りたたみセクション。
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+  const navigationSection = page.getByTestId("extraction-navigation");
+  await navigationSection.getByText("章節ナビゲーション").click();
+  await expect(navigationSection).toContainText("第1章 総則");
+  await expect(navigationSection).toContainText("章の要約テキスト");
+  const assetSection = page.getByTestId("extraction-asset-summaries");
+  await assetSection.getByText("図表の要約").click();
+  await expect(assetSection).toContainText("承認の流れを示す図");
+  const fieldsSection = page.getByTestId("extraction-fields");
+  await fieldsSection.getByText("抽出項目").click();
+  await expect(fieldsSection).toContainText("請求書番号");
+  await expect(fieldsSection).toContainText("INV-1");
+
+  // 項目抽出を上書きで有効にすると、スキーマ未設定の警告を出す。
+  const panel = page.getByRole("region", { name: "処理レシピ" });
+  await panel.getByRole("button", { name: "処理設定を編集" }).click();
+  const fieldGroup = panel
+    .getByText("メタデータ/項目抽出", { exact: true })
+    .locator("../..");
+  await fieldGroup.getByText("上書き", { exact: true }).click();
+  await fieldGroup.getByText("有効", { exact: true }).click();
+  await expect(panel).toContainText("抽出する項目定義が未設定のため、項目抽出は実行されません");
+  await expectNoPageOverflow(page);
+});
+
 test("処理途中の文書は設定を編集できない", async ({ page }) => {
   await mockWorkspace(page, { documentStatus: "REVIEW" });
   await page.goto("/documents/doc-1");
