@@ -595,36 +595,33 @@ _RECIPE_PHASES = (
     IngestionJobPhase.INDEX,
 )
 
+_PHASE_TO_RUNNING_STATUS = {
+    IngestionJobPhase.PREPROCESS: FileStatus.PREPROCESSING,
+    IngestionJobPhase.EXTRACT: FileStatus.INGESTING,
+    IngestionJobPhase.CHUNK: FileStatus.CHUNKING,
+    IngestionJobPhase.INDEX: FileStatus.INDEXING,
+}
+_RUNNING_STATUS_TO_PHASE = {status: phase for phase, status in _PHASE_TO_RUNNING_STATUS.items()}
 
-def _inferred_recipe_step_status(
-    recipe_status: FileStatus,
-    phase: IngestionJobPhase,
-    failed_phase: IngestionJobPhase | None,
-) -> DocumentRecipeStepStatus:
-    if recipe_status == FileStatus.ERROR and failed_phase == phase:
-        return DocumentRecipeStepStatus.FAILED
-    running = {
-        FileStatus.PREPROCESSING: IngestionJobPhase.PREPROCESS,
-        FileStatus.INGESTING: IngestionJobPhase.EXTRACT,
-        FileStatus.CHUNKING: IngestionJobPhase.CHUNK,
-        FileStatus.INDEXING: IngestionJobPhase.INDEX,
-    }
-    if running.get(recipe_status) == phase:
-        return DocumentRecipeStepStatus.RUNNING
-    completed: dict[FileStatus, int] = {
-        FileStatus.PREPROCESSED: 1,
-        FileStatus.REVIEW: 2,
-        FileStatus.CHUNKED: 3,
-        FileStatus.INDEXED: 4,
-    }
-    index = _RECIPE_PHASES.index(phase) + 1
-    if index <= completed.get(recipe_status, 0):
-        if recipe_status == FileStatus.REVIEW and phase == IngestionJobPhase.EXTRACT:
-            return DocumentRecipeStepStatus.NEEDS_REVIEW
-        if recipe_status == FileStatus.CHUNKED and phase == IngestionJobPhase.CHUNK:
-            return DocumentRecipeStepStatus.NEEDS_REVIEW
-        return DocumentRecipeStepStatus.SUCCEEDED
-    return DocumentRecipeStepStatus.PENDING
+_STEP_PENDING = DocumentRecipeStepStatus.PENDING
+_STEP_RUNNING = DocumentRecipeStepStatus.RUNNING
+_STEP_SUCCEEDED = DocumentRecipeStepStatus.SUCCEEDED
+_STEP_NEEDS_REVIEW = DocumentRecipeStepStatus.NEEDS_REVIEW
+
+# レシピ行 status を単一状態源として 4 工程の表示状態を導出する行列。
+# 1 本のジョブが複数工程を通し実行するため、ジョブ行の phase/status からは
+# 「いまどの工程か」を判定できない(pipeline が工程ごとにレシピ status を更新する)。
+_RECIPE_STEP_MATRIX: dict[FileStatus, tuple[DocumentRecipeStepStatus, ...]] = {
+    FileStatus.UPLOADED: (_STEP_PENDING, _STEP_PENDING, _STEP_PENDING, _STEP_PENDING),
+    FileStatus.PREPROCESSING: (_STEP_RUNNING, _STEP_PENDING, _STEP_PENDING, _STEP_PENDING),
+    FileStatus.PREPROCESSED: (_STEP_SUCCEEDED, _STEP_PENDING, _STEP_PENDING, _STEP_PENDING),
+    FileStatus.INGESTING: (_STEP_SUCCEEDED, _STEP_RUNNING, _STEP_PENDING, _STEP_PENDING),
+    FileStatus.REVIEW: (_STEP_SUCCEEDED, _STEP_NEEDS_REVIEW, _STEP_PENDING, _STEP_PENDING),
+    FileStatus.CHUNKING: (_STEP_SUCCEEDED, _STEP_SUCCEEDED, _STEP_RUNNING, _STEP_PENDING),
+    FileStatus.CHUNKED: (_STEP_SUCCEEDED, _STEP_SUCCEEDED, _STEP_NEEDS_REVIEW, _STEP_PENDING),
+    FileStatus.INDEXING: (_STEP_SUCCEEDED, _STEP_SUCCEEDED, _STEP_SUCCEEDED, _STEP_RUNNING),
+    FileStatus.INDEXED: (_STEP_SUCCEEDED, _STEP_SUCCEEDED, _STEP_SUCCEEDED, _STEP_SUCCEEDED),
+}
 
 
 def _recipe_steps(row: Mapping[str, object], jobs: list[IngestionJob]) -> list[DocumentRecipeStep]:
@@ -634,27 +631,47 @@ def _recipe_steps(row: Mapping[str, object], jobs: list[IngestionJob]) -> list[D
     latest_by_phase: dict[IngestionJobPhase, IngestionJob] = {}
     for job in jobs:
         latest_by_phase.setdefault(job.phase, job)
+    latest_failed = next((job for job in jobs if job.status == IngestionJobStatus.FAILED), None)
+    if recipe_status == FileStatus.ERROR:
+        failed = failed_phase or (
+            latest_failed.phase if latest_failed is not None else IngestionJobPhase.PREPROCESS
+        )
+        failed_index = _RECIPE_PHASES.index(failed)
+        statuses = tuple(
+            (
+                _STEP_SUCCEEDED
+                if i < failed_index
+                else DocumentRecipeStepStatus.FAILED if i == failed_index else _STEP_PENDING
+            )
+            for i in range(len(_RECIPE_PHASES))
+        )
+    else:
+        statuses = _RECIPE_STEP_MATRIX.get(recipe_status, (_STEP_PENDING,) * len(_RECIPE_PHASES))
+    newest = jobs[0] if jobs else None
     result: list[DocumentRecipeStep] = []
-    for phase in _RECIPE_PHASES:
+    for phase, status in zip(_RECIPE_PHASES, statuses, strict=True):
         latest_job = latest_by_phase.get(phase)
-        if latest_job is None:
-            status = _inferred_recipe_step_status(recipe_status, phase, failed_phase)
-        else:
-            status = {
-                IngestionJobStatus.QUEUED: DocumentRecipeStepStatus.QUEUED,
-                IngestionJobStatus.RUNNING: DocumentRecipeStepStatus.RUNNING,
-                IngestionJobStatus.SUCCEEDED: DocumentRecipeStepStatus.SUCCEEDED,
-                IngestionJobStatus.FAILED: DocumentRecipeStepStatus.FAILED,
-                IngestionJobStatus.CANCELLED: DocumentRecipeStepStatus.CANCELLED,
-                IngestionJobStatus.SKIPPED: DocumentRecipeStepStatus.PENDING,
-            }[latest_job.status]
+        if (
+            newest is not None
+            and newest.status == IngestionJobStatus.QUEUED
+            and newest.phase == phase
+        ):
+            # enqueue→claim 間はレシピ status がまだ前値のため、最新ジョブでだけ補正する。
+            status = DocumentRecipeStepStatus.QUEUED
+        error_message: str | None = None
+        if status == DocumentRecipeStepStatus.FAILED:
+            # 通しジョブの失敗では失敗工程にジョブ行が無いことがあるため、
+            # 最新 FAILED ジョブのメッセージへフォールバックする。
+            error_message = (latest_job.error_message if latest_job is not None else None) or (
+                latest_failed.error_message if latest_failed is not None else None
+            )
         result.append(
             DocumentRecipeStep(
                 phase=phase,
                 status=status,
                 started_at=latest_job.started_at if latest_job is not None else None,
                 finished_at=latest_job.finished_at if latest_job is not None else None,
-                error_message=latest_job.error_message if latest_job is not None else None,
+                error_message=error_message,
             )
         )
     return result
@@ -1389,12 +1406,7 @@ async def _materialize_experiment_candidate(
     if job.recipe_id is not None:
         await oracle.update_document_recipe_status(
             recipe_id=job.recipe_id,
-            status={
-                IngestionJobPhase.PREPROCESS: FileStatus.PREPROCESSING,
-                IngestionJobPhase.EXTRACT: FileStatus.INGESTING,
-                IngestionJobPhase.CHUNK: FileStatus.CHUNKING,
-                IngestionJobPhase.INDEX: FileStatus.INDEXING,
-            }[job.phase],
+            status=_PHASE_TO_RUNNING_STATUS[job.phase],
         )
     pipeline = IngestionPipeline(
         oracle=oracle,
@@ -4289,15 +4301,9 @@ async def _run_ingestion_job(
     if job is None:
         return
     if job.recipe_id is not None:
-        phase_status = {
-            IngestionJobPhase.PREPROCESS: FileStatus.PREPROCESSING,
-            IngestionJobPhase.EXTRACT: FileStatus.INGESTING,
-            IngestionJobPhase.CHUNK: FileStatus.CHUNKING,
-            IngestionJobPhase.INDEX: FileStatus.INDEXING,
-        }[job.phase]
         await oracle.update_document_recipe_status(
             recipe_id=job.recipe_id,
-            status=phase_status,
+            status=_PHASE_TO_RUNNING_STATUS[job.phase],
         )
 
     async def is_cancelled() -> bool:
@@ -4457,13 +4463,29 @@ async def _mark_recipe_job_failed(
     job: IngestionJob,
     error_message: str,
 ) -> None:
-    """レシピ失敗だけを記録する。既存 active chunk_set は変更しない。"""
+    """レシピ失敗だけを記録する。既存 active chunk_set は変更しない。
+
+    1 本のジョブが複数工程を通し実行するため、失敗工程は job.phase ではなく
+    レシピ行の現在 status(pipeline が工程ごとに更新)から導出する。
+    ジョブ開始工程より前へは戻さず、ゲート停止など非実行 status は job.phase に従う。
+    """
     if job.recipe_id is None:
         return
+    failed_phase = job.phase
+    try:
+        row = await oracle.get_document_recipe(job.document_id, job.recipe_id)
+    except Exception:
+        row = None
+    if row is not None and row.get("status"):
+        current_phase = _RUNNING_STATUS_TO_PHASE.get(FileStatus(str(row["status"])))
+        if current_phase is not None and _RECIPE_PHASES.index(current_phase) > _RECIPE_PHASES.index(
+            failed_phase
+        ):
+            failed_phase = current_phase
     await oracle.update_document_recipe_status(
         recipe_id=job.recipe_id,
         status=FileStatus.ERROR,
-        failed_phase=job.phase,
+        failed_phase=failed_phase,
         error_message=error_message[:2000],
     )
 

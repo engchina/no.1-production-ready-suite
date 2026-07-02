@@ -588,7 +588,10 @@ function stepTone(step: DocumentRecipeStep | undefined) {
 }
 
 function completedStepCount(recipe: DocumentRecipeView) {
-  return recipe.steps.filter((step) => step.status === "SUCCEEDED").length;
+  // NEEDS_REVIEW は「工程完了・承認待ち」なので完了数に含める。
+  return recipe.steps.filter(
+    (step) => step.status === "SUCCEEDED" || step.status === "NEEDS_REVIEW"
+  ).length;
 }
 
 function recipeName(recipe: DocumentRecipeView) {
