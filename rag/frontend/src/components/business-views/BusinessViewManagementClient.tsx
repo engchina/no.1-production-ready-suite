@@ -52,6 +52,10 @@ const RETRIEVAL_OPTIONS: SelectFieldOption<RetrievalModeName>[] = [
   { value: "vector", label: t("settings.retrieval.strategy.vector") },
   { value: "keyword", label: t("settings.retrieval.strategy.keyword") },
   { value: "graph_augmented", label: t("settings.retrieval.strategy.graph_augmented") },
+  {
+    value: "reasoning_tree_search",
+    label: t("settings.retrieval.strategy.reasoning_tree_search"),
+  },
 ];
 
 // legacy 複合戦略 -> 検索モード + 明示トグルの読み替え(backend の decompose と同義)。

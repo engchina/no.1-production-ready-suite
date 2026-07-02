@@ -3383,3 +3383,143 @@ async def test_crag_disabled_by_zero_low_threshold() -> None:
     assert llm.plan_calls == 0
     assert response.diagnostics.crag_evidence_grade == "off"
     assert response.answer == "回答本文。"
+
+
+class TreeSearchOracleClient(OracleClient):
+    """navigation 要約と section 配下 chunk を返すツリー検索用 Oracle stub。"""
+
+    def __init__(self, *, with_summaries: bool = True) -> None:
+        super().__init__()
+        self.with_summaries = with_summaries
+        self.filters_seen: list[dict[str, str]] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        filters = dict(filters or {})
+        self.filters_seen.append(filters)
+        if filters.get("content_kind") == "section_summary":
+            if not self.with_summaries:
+                return []
+            return [
+                RetrievedChunk(
+                    document_id="doc-1",
+                    chunk_id="doc-1:nav-1",
+                    text="経費精算: 承認フローと上限金額。",
+                    score=0.7,
+                    file_name="manual.pdf",
+                    metadata={"section_path": "第1章 > 経費", "content_kind": "section_summary"},
+                ),
+                RetrievedChunk(
+                    document_id="doc-1",
+                    chunk_id="doc-1:nav-2",
+                    text="旅費規程: 出張旅費の精算基準。",
+                    score=0.6,
+                    file_name="manual.pdf",
+                    metadata={"section_path": "第2章 > 旅費", "content_kind": "section_summary"},
+                ),
+            ][:top_k]
+        if filters.get("section_path") == "第2章 > 旅費":
+            return [
+                RetrievedChunk(
+                    document_id="doc-1",
+                    chunk_id="doc-1:20",
+                    text="出張旅費は実費精算とし、上限は 50000 円。",
+                    score=0.9,
+                    file_name="manual.pdf",
+                    metadata={"section_path": "第2章 > 旅費", "chunk_index": 20},
+                )
+            ][:top_k]
+        # baseline hybrid(縮退経路)。
+        return [
+            RetrievedChunk(
+                document_id="doc-1",
+                chunk_id="doc-1:0",
+                text="一般規程の chunk。",
+                score=0.5,
+                file_name="manual.pdf",
+                metadata={"chunk_index": 0},
+            )
+        ][:top_k]
+
+
+class SectionSelectingLlm(CapturingPromptLlm):
+    """ツリー検索の section 選択応答を固定するテスト用 LLM。"""
+
+    def __init__(self, numbers: list[int]) -> None:
+        super().__init__()
+        self.numbers = numbers
+        self.select_calls = 0
+        self.sections_seen: list[str] = []
+
+    async def select_relevant_sections(
+        self, query: str, sections: list[str], *, max_sections: int = 3
+    ) -> list[int]:
+        self.select_calls += 1
+        self.sections_seen = list(sections)
+        return self.numbers
+
+
+def _tree_pipeline(
+    *, numbers: list[int], with_summaries: bool = True
+) -> tuple[RagPipeline, TreeSearchOracleClient, SectionSelectingLlm]:
+    oracle = TreeSearchOracleClient(with_summaries=with_summaries)
+    llm = SectionSelectingLlm(numbers)
+    pipeline = RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=oracle,
+        llm=llm,
+        settings=Settings.model_construct(
+            rag_retrieval_strategy="reasoning_tree_search",
+            rag_query_expansion_enabled=False,
+            rag_context_window_chars=2000,
+            rag_reasoning_tree_max_sections=3,
+        ),
+    )
+    return pipeline, oracle, llm
+
+
+async def test_tree_search_selects_sections_and_retrieves_their_chunks() -> None:
+    """ツリー検索は LLM が選んだ section の配下 chunk を検索し、踏破記録を診断へ残す。"""
+    pipeline, oracle, llm = _tree_pipeline(numbers=[2])
+
+    response = await pipeline.run(SearchRequest(query="出張旅費の上限"))
+
+    assert llm.select_calls == 1
+    assert any("第2章 > 旅費" in line for line in llm.sections_seen)
+    assert [c.chunk_id for c in response.citations] == ["doc-1:20"]
+    assert response.diagnostics.retrieval_strategy_adapter == "reasoning_tree_search"
+    assert response.diagnostics.fallback_reason is None
+    path = response.diagnostics.tree_search_path
+    assert [step["decision"] for step in path] == ["candidate", "selected"]
+    assert path[1]["section_path"] == "第2章 > 旅費"
+    # section 検索は section_path フィルタで実行される。
+    assert any(f.get("section_path") == "第2章 > 旅費" for f in oracle.filters_seen)
+
+
+async def test_tree_search_falls_back_when_no_navigation_summaries() -> None:
+    """navigation 要約が未構築なら hybrid baseline へ縮退し、縮退理由を診断へ残す。"""
+    pipeline, _oracle, llm = _tree_pipeline(numbers=[1], with_summaries=False)
+
+    response = await pipeline.run(SearchRequest(query="出張旅費の上限"))
+
+    assert llm.select_calls == 0
+    assert [c.chunk_id for c in response.citations] == ["doc-1:0"]
+    assert response.diagnostics.fallback_reason == "tree_search_no_navigation_summaries"
+    assert response.diagnostics.tree_search_path == []
+
+
+async def test_tree_search_falls_back_when_no_section_selected() -> None:
+    """LLM が section を選ばなければ hybrid baseline へ縮退する。"""
+    pipeline, _oracle, llm = _tree_pipeline(numbers=[])
+
+    response = await pipeline.run(SearchRequest(query="出張旅費の上限"))
+
+    assert llm.select_calls == 1
+    assert [c.chunk_id for c in response.citations] == ["doc-1:0"]
+    assert response.diagnostics.fallback_reason == "tree_search_no_section_selected"

@@ -695,6 +695,7 @@ WiredRetrievalMode = Literal[
     "vector",
     "keyword",
     "graph_augmented",
+    "reasoning_tree_search",
 ]
 assert set(get_args(WiredRetrievalMode)) == set(
     WIRED_RETRIEVAL_MODES

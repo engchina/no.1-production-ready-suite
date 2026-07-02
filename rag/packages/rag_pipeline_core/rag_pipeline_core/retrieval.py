@@ -30,6 +30,7 @@ RETRIEVAL_MODES: tuple[str, ...] = (
     "vector",
     "keyword",
     "graph_augmented",
+    "reasoning_tree_search",
 )
 
 # legacy 複合戦略 -> 分解先の強制トグル(モードは hybrid_rrf 固定)。
@@ -93,13 +94,14 @@ RETRIEVAL_SPECS: dict[str, RetrievalSpec] = {
         query_expansion=True,
         corrective_retrieval=True,
     ),
-    # --- 段階導入(現状は hybrid へ安全縮退。実行配線は docs/pipeline-advanced-strategies.md)---
+    # PageIndex-lite: LLM が navigation 要約(content_kind=section_summary)から関連 section を
+    # 選び、その配下 chunk を検索する。要約未構築・LLM 失敗時は hybrid へ縮退する。
     "reasoning_tree_search": RetrievalSpec(
         "reasoning_tree_search",
-        "pageindex_pending",
+        "pageindex_lite",
         ("manual", "compliance", "long_document"),
-        pending_execution=True,
     ),
+    # --- 段階導入(現状は hybrid へ安全縮退。実行配線は docs/pipeline-advanced-strategies.md)---
     "colpali_visual_retrieval": RetrievalSpec(
         "colpali_visual_retrieval",
         "colpali_pending_gpu",

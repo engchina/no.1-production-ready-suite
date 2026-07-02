@@ -232,6 +232,8 @@ class SearchDiagnostics(BaseModel):
     retrieval_toggles: dict[str, bool] = Field(default_factory=dict)
     # クエリ拡張の実行元: llm(OCI Enterprise AI)/ deterministic(同義語)/ off。
     query_expansion_source: str = "off"
+    # ツリー検索の踏破記録(候補 section と selected/candidate 判定)。監査用・非機密。
+    tree_search_path: list[dict[str, object]] = Field(default_factory=list)
     post_retrieval_pipeline: str = "custom"
     generation_profile: str = "grounded_concise"
     guardrail_policy: str = "standard"

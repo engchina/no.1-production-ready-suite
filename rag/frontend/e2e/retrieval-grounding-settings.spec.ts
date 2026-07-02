@@ -38,6 +38,7 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /ベクトル/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /キーワード/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /グラフ拡張/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /ツリー検索/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /業務厳格/ })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /補正マルチクエリ/ })).toHaveCount(0);
     // 合成トグル群。
@@ -235,6 +236,7 @@ function retrievalEnvelope(
     { name: "vector", recommended_for: ["semantic"] },
     { name: "keyword", recommended_for: ["named_entity"] },
     { name: "graph_augmented", recommended_for: ["relationship"] },
+    { name: "reasoning_tree_search", recommended_for: ["manual"] },
   ];
   const statuses = modeSpecs.map((spec) => ({
     ...spec,

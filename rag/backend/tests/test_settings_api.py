@@ -725,7 +725,13 @@ def test_retrieval_settings_reports_legacy_strategy_as_mode_and_toggles(
     assert body["gap_stop"] is True
     assert body["business_fit_weighting"] is True
     mode_names = [item["name"] for item in body["modes"]]
-    assert mode_names == ["hybrid_rrf", "vector", "keyword", "graph_augmented"]
+    assert mode_names == [
+        "hybrid_rrf",
+        "vector",
+        "keyword",
+        "graph_augmented",
+        "reasoning_tree_search",
+    ]
     # 併存フィールド(strategy / strategies)は廃止済み。
     assert "strategy" not in body
     assert "strategies" not in body

@@ -20,7 +20,13 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useRetrievalSettings, useUpdateRetrievalSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
-const MODE_ORDER: RetrievalModeName[] = ["hybrid_rrf", "vector", "keyword", "graph_augmented"];
+const MODE_ORDER: RetrievalModeName[] = [
+  "hybrid_rrf",
+  "vector",
+  "keyword",
+  "graph_augmented",
+  "reasoning_tree_search",
+];
 
 /** 画面ローカルの編集フォーム状態(検索モード + 合成トグル)。 */
 interface RetrievalForm {

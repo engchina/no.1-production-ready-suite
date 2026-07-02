@@ -64,12 +64,13 @@ CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "markdown_heading",
     "page_level",
 }
-# 検索モード(排他選択)。設定 API の保存はこの4値のみ。
+# 検索モード(排他選択)。設定 API の保存はこの5値のみ。
 RetrievalMode = Literal[
     "hybrid_rrf",
     "vector",
     "keyword",
     "graph_augmented",
+    "reasoning_tree_search",
 ]
 # 読み取り互換の全戦略。legacy 複合値(business_context_strict / corrective_multi_query)は
 # 既存 .env / Business View JSON の validation を落とさないため残し、解決時に
@@ -821,6 +822,15 @@ class Settings(BaseSettings):
     rag_retrieval_corrective_enabled: bool = Field(
         default=False,
         description="根拠不足時に条件緩和 + 再検索する補正検索(CRAG)。",
+    )
+    rag_reasoning_tree_max_sections: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        description=(
+            "ツリー検索(reasoning_tree_search)で LLM が選ぶ section 数の上限。"
+            "選んだ section ごとに section_path フィルタ付き検索を 1 回行う。"
+        ),
     )
     rag_serving_mode: ServingMode = Field(
         default="fused",

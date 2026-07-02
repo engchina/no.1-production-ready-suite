@@ -1751,7 +1751,12 @@ export interface ChunkingSettingsUpdate {
 
 // --- 設定: Retrieval アダプター ---
 /** 検索モード(新形式・排他選択)。 */
-export type RetrievalModeName = "hybrid_rrf" | "vector" | "keyword" | "graph_augmented";
+export type RetrievalModeName =
+  | "hybrid_rrf"
+  | "vector"
+  | "keyword"
+  | "graph_augmented"
+  | "reasoning_tree_search";
 
 /** legacy 複合値込みの読み取り互換型。保存は RetrievalModeName のみ。 */
 export type RetrievalStrategyName =

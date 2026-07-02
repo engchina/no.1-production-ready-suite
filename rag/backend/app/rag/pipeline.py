@@ -6,7 +6,7 @@ import json
 import math
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
@@ -44,6 +44,12 @@ from app.rag.query_transform import (
     expand_retrieval_queries,
     expand_retrieval_queries_with_llm,
 )
+from app.rag.reasoning_tree import (
+    SECTION_SUMMARY_CONTENT_KIND,
+    build_section_candidates,
+    candidate_lines,
+    selected_section_paths,
+)
 from app.rag.request_context import current_audit_request_context
 from app.rag.retrieval_adapter import RetrievalAdapterParams, resolve_retrieval_adapter
 from app.rag.retrieval_strategy import (
@@ -71,6 +77,8 @@ GAP_STOP_ANSWER = (
     "確定していないため、根拠検索を実行しませんでした。スコープを指定して再検索してください。"
 )
 GAP_STOP_WARNING = "業務スコープが未確定のため検索を停止しました(gap-stop)。"
+# ツリー検索で LLM へ提示する navigation 要約の取得件数上限。
+MAX_TREE_SUMMARY_TOP_K = 24
 LOW_EVIDENCE_ANSWER = (
     "取得できた根拠の信頼度が基準を満たさないため、回答を保留しました。"
     "検索対象のナレッジベースや質問の言い回しを見直してから再度お試しください。"
@@ -92,6 +100,8 @@ class RetrievalExecutionResult:
     graph_hit_count: int = 0
     agent_memory_hit_count: int = 0
     fallback_reason: str | None = None
+    # ツリー検索の踏破記録(選択 section 列)。tree 経路以外は空。
+    tree_search_path: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -264,6 +274,7 @@ class RagPipeline:
         crag_evidence_grade = "off"
         hyde_generated = False
         query_expansion_source = "off"
+        tree_search_path: list[dict[str, object]] = []
         agentic_subquery_count = 0
         agentic_hops = 0
         graph_profile = resolve_graph_adapter(self._settings).profile
@@ -289,6 +300,7 @@ class RagPipeline:
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 retrieval_toggles=_retrieval_toggles(retrieval_params),
                 query_expansion_source=query_expansion_source,
+                tree_search_path=tree_search_path,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -403,6 +415,7 @@ class RagPipeline:
                     vectors=vectors,
                     request=effective_request,
                     resolved_strategy=resolved_strategy,
+                    tree_search=retrieval_params.strategy == "reasoning_tree_search",
                 ),
                 attributes={
                     "mode": resolved_strategy.mode.value,
@@ -427,6 +440,7 @@ class RagPipeline:
             runtime_retrieval_strategy = retrieval_result.strategy.value
             runtime_fallback_reason = retrieval_result.fallback_reason
             runtime_graph_hit_count = retrieval_result.graph_hit_count
+            tree_search_path = retrieval_result.tree_search_path
             agent_memory_retrieved_count = retrieval_result.agent_memory_hit_count
             error_stage = "rerank"
             ranked = await _observe_stage(
@@ -467,6 +481,7 @@ class RagPipeline:
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     retrieval_toggles=_retrieval_toggles(retrieval_params),
                     query_expansion_source=query_expansion_source,
+                    tree_search_path=tree_search_path,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
                     guardrail_policy=self._settings.rag_guardrail_policy,
@@ -590,6 +605,7 @@ class RagPipeline:
                         retrieval_strategy_adapter=retrieval_params.strategy,
                         retrieval_toggles=_retrieval_toggles(retrieval_params),
                         query_expansion_source=query_expansion_source,
+                        tree_search_path=tree_search_path,
                         post_retrieval_pipeline=grounding_params.pipeline,
                         generation_profile=self._settings.rag_generation_profile,
                         guardrail_policy=self._settings.rag_guardrail_policy,
@@ -861,6 +877,7 @@ class RagPipeline:
                     retrieval_strategy_adapter=retrieval_params.strategy,
                     retrieval_toggles=_retrieval_toggles(retrieval_params),
                     query_expansion_source=query_expansion_source,
+                    tree_search_path=tree_search_path,
                     post_retrieval_pipeline=grounding_params.pipeline,
                     generation_profile=self._settings.rag_generation_profile,
                     guardrail_policy=self._settings.rag_guardrail_policy,
@@ -953,6 +970,7 @@ class RagPipeline:
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 retrieval_toggles=_retrieval_toggles(retrieval_params),
                 query_expansion_source=query_expansion_source,
+                tree_search_path=tree_search_path,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -1104,6 +1122,7 @@ class RagPipeline:
                 retrieval_strategy_adapter=retrieval_params.strategy,
                 retrieval_toggles=_retrieval_toggles(retrieval_params),
                 query_expansion_source=query_expansion_source,
+                tree_search_path=tree_search_path,
                 post_retrieval_pipeline=grounding_params.pipeline,
                 generation_profile=self._settings.rag_generation_profile,
                 guardrail_policy=self._settings.rag_guardrail_policy,
@@ -1405,12 +1424,36 @@ class RagPipeline:
         vectors: list[list[float]],
         request: SearchRequest,
         resolved_strategy: ResolvedRetrievalStrategy,
+        tree_search: bool = False,
     ) -> RetrievalExecutionResult:
-        """resolved strategy に応じて GraphRAG-lite または baseline retrieval を実行する。"""
+        """resolved strategy に応じて tree / GraphRAG-lite / baseline retrieval を実行する。"""
         if resolved_strategy.strategy not in (
             SearchStrategy.GRAPH_LOCAL,
             SearchStrategy.GRAPH_GLOBAL,
         ):
+            tree_fallback_reason: str | None = None
+            if tree_search:
+                tree_chunks, tree_path, tree_fallback_reason = (
+                    await self._retrieve_with_reasoning_tree(
+                        query_variants=query_variants,
+                        vectors=vectors,
+                        request=request,
+                    )
+                )
+                if tree_chunks:
+                    agent_memory_hits = await self._retrieve_agent_memory(
+                        query_variants=query_variants,
+                        vectors=vectors,
+                        request=request,
+                    )
+                    return RetrievalExecutionResult(
+                        chunks=[*tree_chunks, *agent_memory_hits],
+                        strategy=resolved_strategy.strategy,
+                        graph_hit_count=resolved_strategy.graph_hit_count,
+                        agent_memory_hit_count=len(agent_memory_hits),
+                        fallback_reason=resolved_strategy.fallback_reason,
+                        tree_search_path=tree_path,
+                    )
             chunks = await self._retrieve_with_query_variants(
                 query_variants=query_variants,
                 vectors=vectors,
@@ -1427,7 +1470,7 @@ class RagPipeline:
                 strategy=resolved_strategy.strategy,
                 graph_hit_count=resolved_strategy.graph_hit_count,
                 agent_memory_hit_count=len(agent_memory_hits),
-                fallback_reason=resolved_strategy.fallback_reason,
+                fallback_reason=resolved_strategy.fallback_reason or tree_fallback_reason,
             )
 
         graph_query = query_variants[0] if query_variants else request.query
@@ -1529,6 +1572,77 @@ class RagPipeline:
             return await self._oracle.graph_local_search(query, top_k, filters), None
         except Exception:
             return [], "graph_query_error"
+
+    async def _retrieve_with_reasoning_tree(
+        self,
+        *,
+        query_variants: list[str],
+        vectors: list[list[float]],
+        request: SearchRequest,
+    ) -> tuple[list[RetrievedChunk], list[dict[str, object]], str | None]:
+        """ツリー検索(PageIndex-lite): navigation 要約から LLM が section を選び配下を検索する。
+
+        戻り値は (chunks, 踏破記録, 縮退理由)。navigation 要約未構築・LLM 失敗・選択なしの
+        ときは空 chunks + 縮退理由を返し、呼び出し側が hybrid baseline へ縮退する。
+        """
+        query = query_variants[0] if query_variants else request.query
+        vector = vectors[0] if vectors else []
+        if not vector:
+            return [], [], "tree_search_no_query_vector"
+        summary_hits = await self._oracle.hybrid_search(
+            query=query,
+            embedding=vector,
+            top_k=MAX_TREE_SUMMARY_TOP_K,
+            mode=SearchMode.HYBRID,
+            filters={**request.filters, "content_kind": SECTION_SUMMARY_CONTENT_KIND},
+        )
+        candidates = build_section_candidates(summary_hits)
+        if not candidates:
+            return [], [], "tree_search_no_navigation_summaries"
+        max_sections = int(getattr(self._settings, "rag_reasoning_tree_max_sections", 3))
+        try:
+            selected_numbers = await self._llm.select_relevant_sections(
+                query,
+                candidate_lines(candidates),
+                max_sections=max_sections,
+            )
+        except Exception:  # noqa: BLE001 - LLM 失敗は hybrid へ縮退する
+            return [], [], "tree_search_llm_failed"
+        paths = selected_section_paths(candidates, selected_numbers, max_sections=max_sections)
+        if not paths:
+            return [], [], "tree_search_no_section_selected"
+        section_filters = {key: value for key, value in request.filters.items()}
+        section_hits = await asyncio.gather(
+            *[
+                self._oracle.hybrid_search(
+                    query=query,
+                    embedding=vector,
+                    top_k=request.top_k,
+                    mode=SearchMode.HYBRID,
+                    filters={**section_filters, "section_path": path},
+                )
+                for path in paths
+            ]
+        )
+        chunks: list[RetrievedChunk] = []
+        seen_chunk_ids: set[str] = set()
+        for hits in section_hits:
+            for chunk in hits:
+                if chunk.chunk_id in seen_chunk_ids:
+                    continue
+                seen_chunk_ids.add(chunk.chunk_id)
+                chunks.append(chunk)
+        tree_path: list[dict[str, object]] = [
+            {
+                "section_path": candidate.section_path,
+                "title": candidate.title,
+                "decision": "selected" if candidate.section_path in paths else "candidate",
+            }
+            for candidate in candidates
+        ]
+        if not chunks:
+            return [], tree_path, "tree_search_sections_empty"
+        return chunks, tree_path, None
 
     async def _retrieve_with_query_variants(
         self,

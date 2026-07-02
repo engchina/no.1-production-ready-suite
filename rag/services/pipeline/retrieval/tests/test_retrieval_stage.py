@@ -57,8 +57,10 @@ def test_unknown_strategy_falls_back() -> None:
 
 
 def test_pending_strategies_resolve_without_bias_for_hybrid_degrade() -> None:
-    # reasoning_tree_search / colpali_visual_retrieval は段階導入中。strategy_bias/mode_override を
-    # 持たないため実行は hybrid へ安全縮退する(戦略名は選択値として保持)。
+    # colpali_visual_retrieval は段階導入中。strategy_bias/mode_override を持たないため
+    # 実行は hybrid へ安全縮退する(戦略名は選択値として保持)。
+    # reasoning_tree_search は配線済みモード(実行は backend の tree 経路。core の静的解決は
+    # bias/override なしで同形)。
     for name in ("reasoning_tree_search", "colpali_visual_retrieval"):
         body = _run(name)
         assert body["strategy"] == name

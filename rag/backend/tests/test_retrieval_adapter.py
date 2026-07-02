@@ -107,7 +107,11 @@ def test_decompose_retrieval_strategy_table() -> None:
     corrective = decompose_retrieval_strategy("corrective_multi_query")
     assert corrective.mode == "hybrid_rrf"
     assert corrective.forced_query_expansion and corrective.forced_corrective_retrieval
-    for value in ("reasoning_tree_search", "colpali_visual_retrieval", "nope"):
+    # reasoning_tree_search は配線済みモードとして素通しする。
+    tree = decompose_retrieval_strategy("reasoning_tree_search")
+    assert tree.mode == "reasoning_tree_search"
+    assert tree.legacy_strategy is None
+    for value in ("colpali_visual_retrieval", "nope"):
         pending = decompose_retrieval_strategy(value)
         assert pending.mode == "hybrid_rrf"
         assert pending.legacy_strategy is None

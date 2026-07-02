@@ -595,6 +595,8 @@ export const ja = {
   "settings.retrieval.useCase.cross_document": "文書横断",
   "settings.retrieval.useCase.compliance": "コンプライアンス",
   "settings.retrieval.useCase.enterprise": "全社",
+  "settings.retrieval.useCase.manual": "マニュアル",
+  "settings.retrieval.useCase.long_document": "長文文書",
   "settings.retrieval.useCase.recall_critical": "再現率重視",
   "settings.retrieval.useCase.ambiguous": "曖昧",
   "settings.retrieval.strategy.hybrid_rrf": "ハイブリッド(RRF)",
@@ -606,6 +608,9 @@ export const ja = {
   "settings.retrieval.strategy.graph_augmented": "グラフ拡張",
   "settings.retrieval.strategy.graph_augmented.description":
     "関係性・横断要約(GraphRAG-lite、未有効時は hybrid へ)",
+  "settings.retrieval.strategy.reasoning_tree_search": "ツリー検索",
+  "settings.retrieval.strategy.reasoning_tree_search.description":
+    "LLM が目次(章節要約)から関連 section を選択。長文の規程・マニュアル向け(要ナビゲーション要約、未構築時は hybrid へ)",
   "settings.retrieval.strategy.business_context_strict": "業務厳格",
   "settings.retrieval.strategy.business_context_strict.description":
     "業務適合加重 + gap-stop(スコープ未確定なら検索停止)",
