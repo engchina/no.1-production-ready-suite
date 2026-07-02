@@ -23,7 +23,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760, collapseSidebar: false },
   { name: "mobile", width: 375, height: 812, collapseSidebar: true },
 ]) {
-  test(`検索方法設定は検索方法を表示する (${viewport.name})`, async ({ page }) => {
+  test(`検索方法設定は検索モードとオプションを表示する (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     if (viewport.collapseSidebar) {
       await collapseSidebar(page);
@@ -33,9 +33,19 @@ for (const viewport of [
     await page.goto("/settings/retrieval");
 
     await expect(page.getByRole("heading", { name: "検索方法" })).toBeVisible();
+    // 検索モードは 4 択。legacy 複合方法はカードとして出さない。
     await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /業務厳格/ })).toBeVisible();
-    await expect(page.getByRole("radio", { name: /補正マルチクエリ/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /ベクトル/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /キーワード/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /グラフ拡張/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /業務厳格/ })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: /補正マルチクエリ/ })).toHaveCount(0);
+    // 合成トグル群。
+    await expect(page.getByRole("switch", { name: "クエリ拡張" })).toBeVisible();
+    await expect(page.getByRole("switch", { name: "LLM マルチクエリ生成" })).toBeVisible();
+    await expect(page.getByRole("switch", { name: "gap-stop" })).toBeVisible();
+    await expect(page.getByRole("switch", { name: "業務適合加重" })).toBeVisible();
+    await expect(page.getByRole("switch", { name: "補正検索" })).toBeVisible();
     // 推奨用途チップは英語生トークンではなく日本語 i18n ラベルで表示する。
     await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toContainText("一般");
     await expect(page.getByRole("link", { name: "検索方法" })).toHaveAttribute(
@@ -66,13 +76,15 @@ for (const viewport of [
   });
 }
 
-test("検索方法設定は検索方法を保存できる", async ({ page }) => {
+test("検索方法設定はモードとトグルを保存できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let savedPayload: unknown = null;
   await page.route("**/api/settings/retrieval", async (route) => {
     if (route.request().method() === "PATCH") {
       savedPayload = route.request().postDataJSON();
-      await route.fulfill({ json: retrievalEnvelope("business_context_strict") });
+      await route.fulfill({
+        json: retrievalEnvelope("keyword", { corrective_retrieval: true }),
+      });
       return;
     }
     await route.fulfill({ json: retrievalEnvelope("hybrid_rrf") });
@@ -80,33 +92,57 @@ test("検索方法設定は検索方法を保存できる", async ({ page }) => 
 
   await page.goto("/settings/retrieval");
 
-  const strict = page.getByRole("radio", { name: /業務厳格/ });
-  await strict.click();
-  await expect(strict).toHaveAttribute("aria-checked", "true");
+  const keyword = page.getByRole("radio", { name: /キーワード/ });
+  await keyword.click();
+  await expect(keyword).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("switch", { name: "補正検索" }).click();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("検索方法を保存しました。")).toBeVisible();
-  expect(savedPayload).toEqual({ strategy: "business_context_strict" });
+  expect(savedPayload).toEqual({
+    mode: "keyword",
+    query_expansion: true,
+    query_expansion_llm: false,
+    gap_stop: false,
+    corrective_retrieval: true,
+    business_fit_weighting: false,
+  });
   await expectNoHorizontalOverflow(page);
 });
 
-test("検索方法設定の現在の設定行は未保存時も保存値を保つ", async ({ page }) => {
+test("LLM マルチクエリ生成はクエリ拡張 OFF で無効化される", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await mockRetrieval(page); // GET は hybrid_rrf を返す
+  await mockRetrieval(page);
 
   await page.goto("/settings/retrieval");
 
-  // 「設定元: 現在の設定」行(dl)は保存済みスナップショット。
-  const facts = page.locator("dl").filter({ hasText: "設定元" });
-  await expect(facts).toContainText("ハイブリッド(RRF)");
+  const llmSwitch = page.getByRole("switch", { name: "LLM マルチクエリ生成" });
+  await expect(llmSwitch).toBeEnabled();
+  await page.getByRole("switch", { name: "クエリ拡張" }).click();
+  await expect(llmSwitch).toBeDisabled();
+});
 
-  // 未保存で別戦略を選んでも現在の設定行は保存値のまま(プレビュー値を混ぜない)。
-  await page.getByRole("radio", { name: /業務厳格/ }).click();
-  await expect(page.getByText("未保存の変更があります。")).toBeVisible();
-  await expect(facts).toContainText("ハイブリッド(RRF)");
-  await expect(facts).not.toContainText("業務厳格");
+test("legacy 設定は読み替え notice とトグル ON で表示する", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 760 });
+  await page.route("**/api/settings/retrieval", async (route) => {
+    await route.fulfill({
+      json: retrievalEnvelope("hybrid_rrf", {
+        legacy_strategy: "business_context_strict",
+        gap_stop: true,
+        business_fit_weighting: true,
+      }),
+    });
+  });
+
+  await page.goto("/settings/retrieval");
+
+  await expect(page.getByText(/旧形式の設定から読み替えて表示しています/)).toBeVisible();
+  await expect(page.getByRole("switch", { name: "gap-stop" })).toBeChecked();
+  await expect(page.getByRole("switch", { name: "業務適合加重" })).toBeChecked();
+  // legacy 読み替え中は同値でも保存できる(保存で新形式へ移行)。
+  await expect(page.getByRole("button", { name: "保存" })).toBeEnabled();
 });
 
 test("根拠確認設定は処理方式を保存できる", async ({ page }) => {
@@ -157,24 +193,45 @@ async function collapseSidebar(page: Page) {
   });
 }
 
-function retrievalEnvelope(strategy: string) {
-  const specs = [
-    { name: "hybrid_rrf", recommended_for: ["general"], gap_stop: false, corrective_retrieval: false, business_fit_weighting: false },
-    { name: "vector", recommended_for: ["semantic"], gap_stop: false, corrective_retrieval: false, business_fit_weighting: false },
-    { name: "keyword", recommended_for: ["named_entity"], gap_stop: false, corrective_retrieval: false, business_fit_weighting: false },
-    { name: "graph_augmented", recommended_for: ["relationship"], gap_stop: false, corrective_retrieval: false, business_fit_weighting: false },
-    { name: "business_context_strict", recommended_for: ["compliance"], gap_stop: true, corrective_retrieval: false, business_fit_weighting: true },
-    { name: "corrective_multi_query", recommended_for: ["recall_critical"], gap_stop: false, corrective_retrieval: true, business_fit_weighting: false },
+function retrievalEnvelope(
+  mode: string,
+  overrides: Partial<{
+    legacy_strategy: string | null;
+    query_expansion: boolean;
+    query_expansion_llm: boolean;
+    gap_stop: boolean;
+    corrective_retrieval: boolean;
+    business_fit_weighting: boolean;
+  }> = {}
+) {
+  const modeSpecs = [
+    { name: "hybrid_rrf", recommended_for: ["general"] },
+    { name: "vector", recommended_for: ["semantic"] },
+    { name: "keyword", recommended_for: ["named_entity"] },
+    { name: "graph_augmented", recommended_for: ["relationship"] },
   ];
+  const statuses = modeSpecs.map((spec) => ({
+    ...spec,
+    origin: "x",
+    selected: spec.name === mode,
+    gap_stop: false,
+    corrective_retrieval: false,
+    business_fit_weighting: false,
+  }));
   return {
     data: {
-      strategy,
+      strategy: mode,
+      mode,
+      legacy_strategy: null,
       query_expansion: true,
-      gap_stop: strategy === "business_context_strict",
-      corrective_retrieval: strategy === "corrective_multi_query",
-      business_fit_weighting: strategy === "business_context_strict",
-      strategies: specs.map((spec) => ({ ...spec, origin: "x", selected: spec.name === strategy })),
+      query_expansion_llm: false,
+      gap_stop: false,
+      corrective_retrieval: false,
+      business_fit_weighting: false,
+      strategies: statuses,
+      modes: statuses,
       config_source: "runtime",
+      ...overrides,
     },
     error_messages: [],
     warning_messages: [],

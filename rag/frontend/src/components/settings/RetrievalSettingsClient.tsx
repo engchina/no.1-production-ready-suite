@@ -8,8 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   ApiError,
+  type RetrievalModeName,
+  type RetrievalSettingsData,
   type RetrievalStrategyName,
   type RetrievalStrategyStatusData,
 } from "@/lib/api";
@@ -17,25 +20,46 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useRetrievalSettings, useUpdateRetrievalSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
-const STRATEGY_ORDER: RetrievalStrategyName[] = [
-  "hybrid_rrf",
-  "vector",
-  "keyword",
-  "graph_augmented",
-  "business_context_strict",
-  "corrective_multi_query",
-];
+const MODE_ORDER: RetrievalModeName[] = ["hybrid_rrf", "vector", "keyword", "graph_augmented"];
 
-/** 検索方法の現在設定を管理する設定画面。 */
+/** 画面ローカルの編集フォーム状態(検索モード + 合成トグル)。 */
+interface RetrievalForm {
+  mode: RetrievalModeName;
+  query_expansion: boolean;
+  query_expansion_llm: boolean;
+  gap_stop: boolean;
+  corrective_retrieval: boolean;
+  business_fit_weighting: boolean;
+}
+
+function formFromSettings(settings: RetrievalSettingsData): RetrievalForm {
+  return {
+    mode: settings.mode,
+    query_expansion: settings.query_expansion,
+    query_expansion_llm: settings.query_expansion_llm,
+    gap_stop: settings.gap_stop,
+    corrective_retrieval: settings.corrective_retrieval,
+    business_fit_weighting: settings.business_fit_weighting,
+  };
+}
+
+function isDirty(form: RetrievalForm, settings: RetrievalSettingsData): boolean {
+  // legacy 読み替え中は保存で新形式へ移行するため、同値でも保存可能にする。
+  if (settings.legacy_strategy) return true;
+  const base = formFromSettings(settings);
+  return (Object.keys(base) as (keyof RetrievalForm)[]).some((key) => form[key] !== base[key]);
+}
+
+/** 検索方法(検索モード + 検索オプション)の設定画面。 */
 export function RetrievalSettingsClient() {
   const query = useRetrievalSettings();
   const save = useUpdateRetrievalSettings();
-  const [strategy, setStrategy] = useState<RetrievalStrategyName | null>(null);
+  const [form, setForm] = useState<RetrievalForm | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (query.data && !save.isPending) {
-      setStrategy(query.data.strategy);
+      setForm(formFromSettings(query.data));
     }
   }, [query.data, save.isPending]);
 
@@ -61,32 +85,32 @@ export function RetrievalSettingsClient() {
   }
 
   const settings = query.data;
-  if (!settings || !strategy) return null;
+  if (!settings || !form) return null;
 
-  const dirty = strategy !== settings.strategy;
+  const dirty = isDirty(form, settings);
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.retrieval.saveError");
-  const strategies = orderedStrategies(settings.strategies);
+  const modes = orderedModes(settings.modes);
 
-  function selectStrategy(next: RetrievalStrategyName) {
+  function updateForm(patch: Partial<RetrievalForm>) {
     save.reset();
     setSuccessMessage(null);
-    setStrategy(next);
+    setForm((current) => (current ? { ...current, ...patch } : current));
   }
 
   function resetForm() {
     save.reset();
     setSuccessMessage(null);
-    setStrategy(settings.strategy);
+    if (settings) setForm(formFromSettings(settings));
   }
 
   function submit() {
-    if (!strategy) return;
+    if (!form) return;
     save.mutate(
-      { strategy },
+      { ...form },
       {
         onSuccess: (data) => {
-          setStrategy(data.strategy);
+          setForm(formFromSettings(data));
           setSuccessMessage(t("settings.retrieval.actions.saved"));
         },
         onError: () => setSuccessMessage(null),
@@ -109,17 +133,20 @@ export function RetrievalSettingsClient() {
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
+          {settings.legacy_strategy ? (
+            <FormStatus tone="info" message={t("settings.retrieval.legacyNotice")} />
+          ) : null}
           <div className="space-y-2">
             <div className="text-sm font-medium text-foreground">
-              {t("settings.retrieval.strategy")}
+              {t("settings.retrieval.mode")}
             </div>
             <div
               role="radiogroup"
-              aria-label={t("settings.retrieval.strategy")}
-              className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3"
+              aria-label={t("settings.retrieval.mode")}
+              className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4"
             >
-              {strategies.map((item) => {
-                const selected = strategy === item.name;
+              {modes.map((item) => {
+                const selected = form.mode === item.name;
                 return (
                   <button
                     key={item.name}
@@ -127,9 +154,9 @@ export function RetrievalSettingsClient() {
                     role="radio"
                     aria-checked={selected}
                     disabled={save.isPending}
-                    onClick={() => selectStrategy(item.name)}
+                    onClick={() => updateForm({ mode: item.name as RetrievalModeName })}
                     className={cn(
-                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                      "min-h-[96px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                       selected
                         ? "border-primary bg-primary/10 text-foreground"
                         : "border-border bg-card text-foreground hover:bg-background"
@@ -144,26 +171,73 @@ export function RetrievalSettingsClient() {
                     <span className="mt-1 block text-xs leading-relaxed text-muted">
                       {strategyDescription(item.name)}
                     </span>
-                    <TechniqueChips strategy={item} />
+                    <span className="mt-2 flex flex-wrap gap-1">
+                      {item.recommended_for.slice(0, 2).map((token) => (
+                        <span
+                          key={token}
+                          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
+                        >
+                          {purposeLabel(token)}
+                        </span>
+                      ))}
+                    </span>
                   </button>
                 );
               })}
             </div>
           </div>
-          <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <RuntimeFact
-              label={t("settings.retrieval.strategy")}
-              value={strategyLabel(settings.strategy)}
-            />
-            <RuntimeFact
-              label={t("settings.retrieval.queryExpansion")}
-              value={settings.query_expansion ? "ON" : "OFF"}
-            />
-            <RuntimeFact
-              label={t("settings.retrieval.source")}
-              value={t("settings.common.currentConfig")}
-            />
-          </dl>
+          <div className="space-y-2">
+            <div>
+              <div className="text-sm font-medium text-foreground">
+                {t("settings.retrieval.toggles")}
+              </div>
+              <p className="text-xs text-muted">{t("settings.retrieval.toggles.description")}</p>
+            </div>
+            <div className="divide-y divide-border rounded-md border border-border">
+              <ToggleRow
+                label={t("settings.retrieval.queryExpansion")}
+                description={t("settings.retrieval.toggle.queryExpansion.description")}
+                checked={form.query_expansion}
+                disabled={save.isPending}
+                onChange={(checked) =>
+                  updateForm(
+                    checked
+                      ? { query_expansion: true }
+                      : { query_expansion: false, query_expansion_llm: false }
+                  )
+                }
+              />
+              <ToggleRow
+                nested
+                label={t("settings.retrieval.toggle.queryExpansionLlm")}
+                description={t("settings.retrieval.toggle.queryExpansionLlm.description")}
+                checked={form.query_expansion_llm}
+                disabled={save.isPending || !form.query_expansion}
+                onChange={(checked) => updateForm({ query_expansion_llm: checked })}
+              />
+              <ToggleRow
+                label={t("settings.retrieval.gapStop")}
+                description={t("settings.retrieval.toggle.gapStop.description")}
+                checked={form.gap_stop}
+                disabled={save.isPending}
+                onChange={(checked) => updateForm({ gap_stop: checked })}
+              />
+              <ToggleRow
+                label={t("settings.retrieval.businessFit")}
+                description={t("settings.retrieval.toggle.businessFit.description")}
+                checked={form.business_fit_weighting}
+                disabled={save.isPending}
+                onChange={(checked) => updateForm({ business_fit_weighting: checked })}
+              />
+              <ToggleRow
+                label={t("settings.retrieval.corrective")}
+                description={t("settings.retrieval.toggle.corrective.description")}
+                checked={form.corrective_retrieval}
+                disabled={save.isPending}
+                onChange={(checked) => updateForm({ corrective_retrieval: checked })}
+              />
+            </div>
+          </div>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">
               {dirty ? (
@@ -203,50 +277,50 @@ export function RetrievalSettingsClient() {
   );
 }
 
-function TechniqueChips({ strategy }: { strategy: RetrievalStrategyStatusData }) {
-  const techniques: string[] = [];
-  if (strategy.gap_stop) techniques.push(t("settings.retrieval.gapStop"));
-  if (strategy.corrective_retrieval) techniques.push(t("settings.retrieval.corrective"));
-  if (strategy.business_fit_weighting) techniques.push(t("settings.retrieval.businessFit"));
+function ToggleRow({
+  label,
+  description,
+  checked,
+  disabled,
+  onChange,
+  nested = false,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+  nested?: boolean;
+}) {
   return (
-    <span className="mt-2 flex flex-wrap gap-1">
-      {strategy.recommended_for.slice(0, 2).map((item) => (
-        <span
-          key={item}
-          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
-        >
-          {purposeLabel(item)}
-        </span>
-      ))}
-      {techniques.map((label) => (
-        <span
-          key={label}
-          className="inline-flex min-h-5 items-center rounded bg-info-bg px-1.5 text-[11px] font-medium text-info"
-        >
-          {label}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-function RuntimeFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+    <div
+      className={cn(
+        "flex items-start justify-between gap-4 px-3 py-3",
+        nested && "pl-8",
+        disabled && "opacity-60"
+      )}
+    >
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-foreground">{label}</div>
+        <p className="mt-0.5 text-xs leading-relaxed text-muted">{description}</p>
+      </div>
+      <Switch
+        checked={checked}
+        disabled={disabled}
+        aria-label={label}
+        onCheckedChange={onChange}
+        className="mt-0.5 shrink-0"
+      />
     </div>
   );
 }
 
-function orderedStrategies(
-  strategies: RetrievalStrategyStatusData[]
-): RetrievalStrategyStatusData[] {
-  const byName = new Map(strategies.map((item) => [item.name, item]));
-  const ordered = STRATEGY_ORDER.map((name) => byName.get(name)).filter(
+function orderedModes(modes: RetrievalStrategyStatusData[]): RetrievalStrategyStatusData[] {
+  const byName = new Map(modes.map((item) => [item.name, item]));
+  const ordered = MODE_ORDER.map((name) => byName.get(name)).filter(
     (item): item is RetrievalStrategyStatusData => Boolean(item)
   );
-  return ordered.length ? ordered : strategies;
+  return ordered.length ? ordered : modes;
 }
 
 function strategyLabel(name: RetrievalStrategyName) {

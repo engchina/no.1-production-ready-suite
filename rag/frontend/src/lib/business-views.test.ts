@@ -57,6 +57,10 @@ describe("api 業務ビュー(Business View)", () => {
         knowledge_base_ids: ["kb-1", "kb-2"],
         query: {
           retrieval_strategy: null,
+          retrieval_query_expansion: null,
+          retrieval_gap_stop: null,
+          retrieval_corrective: null,
+          retrieval_business_fit_weighting: null,
           post_retrieval_pipeline: null,
           generation_profile: "detailed_cited",
           guardrail_policy: null,

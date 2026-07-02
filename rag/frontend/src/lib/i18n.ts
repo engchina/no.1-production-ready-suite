@@ -553,11 +553,15 @@ export const ja = {
   "settings.services.empty": "表示できるサービスがありません。",
   "settings.services.loadError": "サービス一覧を取得できませんでした。",
   "settings.retrieval.subtitle":
-    "業務ビューの検索で使う検索方法を選択します。",
+    "業務ビューの検索で使う検索モードとオプションを選択します。",
   "settings.retrieval.overview.title": "検索方法",
   "settings.retrieval.overview.description":
-    "意味/全文/グラフ/構造化検索と業務適合・補正検索を OCI / Oracle スタックへ再マップし、手動選択できます。ここで選ぶのはグローバル既定で、公開済みの業務ビューが上書きします。",
+    "検索モード(意味/全文/融合/グラフ)と、任意のモードに合成できる検索オプション(クエリ拡張・gap-stop・業務適合加重・補正再検索)を選択します。ここで選ぶのはグローバル既定で、公開済みの業務ビューが上書きします。",
   "settings.retrieval.strategy": "検索方法",
+  "settings.retrieval.mode": "検索モード",
+  "settings.retrieval.toggles": "検索オプション",
+  "settings.retrieval.toggles.description":
+    "選択した検索モードに合成できるオプションです。組み合わせは自由です。",
   "settings.retrieval.selected": "選択中",
   "settings.retrieval.recommendedFor": "推奨用途",
   "settings.retrieval.source": "設定元",
@@ -567,6 +571,19 @@ export const ja = {
   "settings.retrieval.corrective": "補正検索",
   "settings.retrieval.businessFit": "業務適合加重",
   "settings.retrieval.none": "なし",
+  "settings.retrieval.toggle.queryExpansion.description":
+    "業務同義語でクエリを広げ、多クエリを RRF 融合して再現率を上げます。",
+  "settings.retrieval.toggle.queryExpansionLlm": "LLM マルチクエリ生成",
+  "settings.retrieval.toggle.queryExpansionLlm.description":
+    "OCI Enterprise AI で言い換えクエリを生成します。検索ごとに LLM 呼び出しが 1 回増えます(失敗時は同義語拡張へ縮退)。",
+  "settings.retrieval.toggle.gapStop.description":
+    "業務スコープ(テナント / ACL / ナレッジベースなど)が未確定のとき検索を停止します。",
+  "settings.retrieval.toggle.businessFit.description":
+    "版状態・ACL などの業務適合で並べ替えスコアを加重します。",
+  "settings.retrieval.toggle.corrective.description":
+    "根拠が不足するとき、クエリ精緻化と条件緩和で再検索します(CRAG)。",
+  "settings.retrieval.legacyNotice":
+    "旧形式の設定から読み替えて表示しています。保存すると新形式(モード + オプション)へ移行します。",
   "settings.retrieval.useCase.general": "一般",
   "settings.retrieval.useCase.faq": "FAQ",
   "settings.retrieval.useCase.policy": "規程",
@@ -581,8 +598,7 @@ export const ja = {
   "settings.retrieval.useCase.recall_critical": "再現率重視",
   "settings.retrieval.useCase.ambiguous": "曖昧",
   "settings.retrieval.strategy.hybrid_rrf": "ハイブリッド(RRF)",
-  "settings.retrieval.strategy.hybrid_rrf.description":
-    "意味+全文の融合 + クエリ拡張 + RRF(既定)",
+  "settings.retrieval.strategy.hybrid_rrf.description": "意味+全文を RRF で融合(既定)",
   "settings.retrieval.strategy.vector": "ベクトル",
   "settings.retrieval.strategy.vector.description": "意味検索のみ。表現ゆれに強い",
   "settings.retrieval.strategy.keyword": "キーワード",
