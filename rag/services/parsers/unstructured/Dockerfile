@@ -11,7 +11,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
 # unstructured[all-docs] は libGL / poppler / tesseract 等の OS 依存を要する
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libgl1 libglib2.0-0 poppler-utils tesseract-ocr \
+        libgl1 libglib2.0-0 poppler-utils tesseract-ocr tesseract-ocr-jpn \
     && rm -rf /var/lib/apt/lists/*
 
 COPY packages/rag_parser_core /build/packages/rag_parser_core

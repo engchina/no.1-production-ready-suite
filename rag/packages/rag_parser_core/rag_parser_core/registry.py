@@ -1556,6 +1556,7 @@ def _run_dots_ocr(path: Path) -> object:
 def _run_dots_ocr_parser(path: Path) -> str:
     """Dots.OCR 公式 parser を実行し、生成 markdown を返す。"""
     runtime = os.environ.get("DOTS_OCR_RUNTIME", "vllm").strip().lower() or "vllm"
+    parser: Any
     if runtime in {"vllm", "official_vllm"}:
         parser = _load_dots_ocr_vllm_parser()
     elif runtime in {"hf", "hf_explicit_cuda"}:
@@ -1759,7 +1760,7 @@ def _ensure_flash_attn_importable_for_dots(attention_impl: str) -> None:
 
     fake_flash_attn = types.ModuleType("flash_attn")
     fake_flash_attn.__spec__ = importlib.machinery.ModuleSpec("flash_attn", loader=None)
-    fake_flash_attn.__version__ = "0.0.0"
+    fake_flash_attn.__dict__["__version__"] = "0.0.0"
 
     def _flash_attn_varlen_func(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError(
@@ -1767,7 +1768,7 @@ def _ensure_flash_attn_importable_for_dots(attention_impl: str) -> None:
             "DOTS_OCR_ATTENTION_IMPLEMENTATION=sdpa or install flash_attn"
         )
 
-    fake_flash_attn.flash_attn_varlen_func = _flash_attn_varlen_func
+    fake_flash_attn.__dict__["flash_attn_varlen_func"] = _flash_attn_varlen_func
     sys.modules["flash_attn"] = fake_flash_attn
 
 
@@ -1966,7 +1967,7 @@ def _run_glm_ocr_transformers(path: Path) -> object:
         os.environ.get("GLM_OCR_MODEL_ID", "zai-org/GLM-OCR").strip()
         or "zai-org/GLM-OCR"
     )
-    processor, model = _load_glm_ocr_pipeline(model_id)
+    processor, model = cast(tuple[Any, Any], _load_glm_ocr_pipeline(model_id))
     image_module = importlib.import_module("PIL.Image")
     prompt = os.environ.get(
         "GLM_OCR_PROMPT",
@@ -2779,7 +2780,8 @@ def _unstructured_partition_kwargs(
     if _unstructured_supports_page_breaks(normalized_content_type, extension):
         kwargs["include_page_breaks"] = True
     if _unstructured_supports_table_inference(normalized_content_type, extension):
-        kwargs["strategy"] = "auto"
+        kwargs["strategy"] = "hi_res"
+        kwargs["languages"] = ["jpn", "eng"]
         kwargs["infer_table_structure"] = True
     return kwargs
 
