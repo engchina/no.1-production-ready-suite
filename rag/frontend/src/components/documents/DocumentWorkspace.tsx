@@ -3,6 +3,7 @@
 import {
   Braces,
   Check,
+  ChevronDown,
   Clock3,
   Download,
   FileSearch,
@@ -27,10 +28,14 @@ import { DocumentRecipeManager } from "./DocumentRecipeManager";
 import { DocumentExtraction, DocumentRawText } from "./DocumentExtraction";
 import { ExtractedText, IndexBadge, InfoChip } from "./extraction-bits";
 import {
+  type ChunkPreviewForm,
   type IngestionParserDisplay,
   type IngestionProgressSummary,
   type ProgressUnit,
+  chunkPreviewForm,
+  chunkPreviewValidationError,
   ingestConflictBannerIsStale,
+  isIndexedTransition,
   phaseForDocumentStatus,
   phaseLabelKey,
   phaseRetryLabelKey,
@@ -39,7 +44,8 @@ import {
   resolveDocumentActionPlan,
   resolveIngestionParserDisplay,
   resolveIngestionProgressSummary,
-  resolveLatestJobsByPhase,
+  resolvePhaseRows,
+  resolveStatusMessageSlot,
   shouldShowProcessingWatchBanner,
 } from "./DocumentWorkspace.logic";
 import {
@@ -55,13 +61,19 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormStatus } from "@/components/ui/form-status";
 import { EmptyState, ErrorState } from "@/components/StateViews";
+import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   api,
   ApiError,
   type DocumentElement,
+  type ChunkingStrategyName,
+  type DocumentChunkPreviewResponse,
   type DocumentChunkView,
   type DocumentExtractionExportFormat,
+  type DocumentRecipeStep,
+  type DocumentRecipeStepStatus,
   type DocumentReviewEditsRequest,
   type ExtractionTable,
   type ExtractionTableCell,
@@ -71,6 +83,15 @@ import {
   type KnowledgeBaseRef,
   type SourceProfile,
 } from "@/lib/api";
+import {
+  CHUNK_OVERLAP_MAX_CHARS,
+  CHUNK_SIZE_MAX_CHARS,
+  CHUNK_SIZE_MIN_CHARS,
+  chunkSizeLabelKey,
+  chunkingStrategyPreset,
+  isSemanticBoundaryStrategy,
+  overlapLabelKey,
+} from "@/lib/chunking";
 import { parseStructuredExtraction, type SourceDerivationView } from "@/lib/extraction";
 import {
   documentWorkspaceShouldRefresh,
@@ -87,6 +108,7 @@ import {
   useEnqueueDocumentRecipeJob,
   useIngestionJob,
   useModelSettings,
+  usePreviewDocumentRecipeChunks,
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
   useSaveDocumentRecipeReviewEdits,
@@ -122,6 +144,13 @@ import {
 import { cn } from "@/lib/utils";
 
 const DOCUMENT_WORKSPACE_REFETCH_INTERVAL_MS = 4000;
+
+/** 承認待ちゲート案内(状態メッセージ単一スロット)の文言キー。 */
+const GATE_MESSAGE_KEYS = {
+  PREPROCESSED: "flow.preprocessed.description",
+  REVIEW: "flow.review.description",
+  CHUNKED: "flow.chunked.description",
+} as const;
 
 function emptyReviewEdits(): DocumentReviewEditsRequest {
   return { element_edits: [], table_cell_edits: [] };
@@ -200,6 +229,19 @@ type UrlFallbackFocus = {
   pageSize: BboxPageSize | null;
 };
 
+const CHUNK_PREVIEW_STRATEGIES: SelectFieldOption<ChunkingStrategyName>[] = [
+  "structure_aware",
+  "recursive_character",
+  "hierarchical_parent_child",
+  "markdown_heading",
+  "page_level",
+  "fixed_size",
+  "fixed_delimiter",
+].map((value) => ({
+  value: value as ChunkingStrategyName,
+  label: t(`settings.chunking.strategy.${value}` as I18nKey),
+}));
+
 /** 文書プレビュー作業領域：原本プレビュー｜本文・構造化要素＋取込アクション。 */
 export function DocumentWorkspace({
   documentId,
@@ -236,6 +278,15 @@ export function DocumentWorkspace({
     setSelectedElementId(null);
   };
   const chunksQuery = useDocumentRecipeChunks(documentId, selectedRecipeId);
+  const chunkPreview = usePreviewDocumentRecipeChunks();
+  const [chunkPreviewSettings, setChunkPreviewSettings] = useState<ChunkPreviewForm>(() =>
+    chunkPreviewForm(selectedRecipe)
+  );
+  const resetChunkPreview = chunkPreview.reset;
+  useEffect(() => {
+    setChunkPreviewSettings(chunkPreviewForm(selectedRecipe));
+    resetChunkPreview();
+  }, [resetChunkPreview, selectedRecipe, selectedRecipeId]);
   const chunkSetsQuery = useDocumentChunkSets(documentId);
   const documentJobsQuery = useDocumentIngestionJobs(documentId);
   const segmentsQuery = useDocumentIngestionSegments(documentId);
@@ -442,6 +493,10 @@ export function DocumentWorkspace({
       query.data?.error_message,
     ]
   );
+  // 失敗工程のタイトル用 phase(failedStep は同じ入力から導出されるため対応が取れる)。
+  const failedPhase = documentFailure.failedStep
+    ? failedDocumentJob?.phase ?? latestDocumentJob?.phase ?? null
+    : null;
   const ingestionErrorDisplays = useMemo(
     () =>
       resolveIngestionErrorDisplayPlan({
@@ -466,6 +521,16 @@ export function DocumentWorkspace({
   // 取込・診断の折りたたみ。通常は閉じておき、取込中/失敗/エラー/セグメント失敗時のみ自動展開する。
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const diagnosticsAutoOpenedRef = useRef(false);
+  // 索引完了は常設バナーではなく遷移時 toast で 1 回だけ通知する(messaging-spec §3.4)。
+  const prevRecipeStatusRef = useRef<{ recipeId: string | null; status: string } | null>(null);
+  useEffect(() => {
+    const prev = prevRecipeStatusRef.current;
+    const next = { recipeId: selectedRecipeId, status };
+    prevRecipeStatusRef.current = next;
+    if (isIndexedTransition(prev, next)) {
+      toast.success(t("flow.indexed"));
+    }
+  }, [selectedRecipeId, status]);
   const diagnosticsHasActivity =
     status === "INGESTING" ||
     status === "ERROR" ||
@@ -536,9 +601,13 @@ export function DocumentWorkspace({
       resetEnqueueIngestion();
     }
   }, [enqueueIngestion.error, activeSubmittedJob, resetEnqueueIngestion]);
+  const displayedChunks = useMemo(
+    () => chunkPreview.data?.chunks ?? chunksQuery.data ?? [],
+    [chunkPreview.data?.chunks, chunksQuery.data]
+  );
   const selectedChunk = useMemo(
-    () => chunksQuery.data?.find((chunk) => chunk.chunk_id === selectedChunkId) ?? null,
-    [chunksQuery.data, selectedChunkId]
+    () => displayedChunks.find((chunk) => chunk.chunk_id === selectedChunkId) ?? null,
+    [displayedChunks, selectedChunkId]
   );
   const selectedElement = useMemo(
     () =>
@@ -642,13 +711,11 @@ export function DocumentWorkspace({
     urlFallbackFocus,
   ]);
   function selectElement(elementId: string) {
-    const linkedChunk = chunksQuery.data?.find((chunk) => chunk.element_ids.includes(elementId));
+    const linkedChunk = displayedChunks.find((chunk) => chunk.element_ids.includes(elementId));
     setUrlFallbackFocus(null);
     setSelectedElementId(elementId);
     setSelectedTableCellKey(null);
-    if (chunksQuery.data) {
-      setSelectedChunkId(linkedChunk?.chunk_id ?? null);
-    }
+    setSelectedChunkId(linkedChunk?.chunk_id ?? null);
     setPreviewFocusSource("element");
   }
 
@@ -656,14 +723,12 @@ export function DocumentWorkspace({
     const key = tableCellKey(table.table_id, cell);
     const linkedElementId = table.element_id ?? null;
     const linkedChunk = linkedElementId
-      ? chunksQuery.data?.find((chunk) => chunk.element_ids.includes(linkedElementId))
-      : chunksQuery.data?.find((chunk) => chunk.content_kind === "table");
+      ? displayedChunks.find((chunk) => chunk.element_ids.includes(linkedElementId))
+      : displayedChunks.find((chunk) => chunk.content_kind === "table");
     setSelectedTableCellKey(key);
     setUrlFallbackFocus(null);
     setSelectedElementId(linkedElementId);
-    if (chunksQuery.data) {
-      setSelectedChunkId(linkedChunk?.chunk_id ?? selectedChunkId ?? null);
-    }
+    setSelectedChunkId(linkedChunk?.chunk_id ?? selectedChunkId ?? null);
     setPreviewFocusSource("table_cell");
   }
 
@@ -715,7 +780,7 @@ export function DocumentWorkspace({
   }, [activeSubmittedJob, status]);
 
   useEffect(() => {
-    const chunks = chunksQuery.data ?? [];
+    const chunks = displayedChunks;
     if (
       !chunks.length &&
       !requestedChunkId &&
@@ -839,7 +904,7 @@ export function DocumentWorkspace({
     setSelectedElementId(firstChunk.element_ids[0] ?? null);
     setSelectedTableCellKey(null);
   }, [
-    chunksQuery.data,
+    displayedChunks,
     parsedExtraction.elements,
     parsedExtraction.tables,
     requestedCellCol,
@@ -932,6 +997,16 @@ export function DocumentWorkspace({
     phaseForDocumentStatus(status) ??
     latestDocumentJob?.phase ??
     "PREPROCESS";
+  const statusMessageSlot = resolveStatusMessageSlot({
+    errored: documentFailure.errored,
+    processingVisible: shouldShowProcessingWatchBanner({
+      watchProcessing,
+      documentStatus: status,
+      latestJobStatus: latestDocumentJob?.status,
+    }),
+    documentStatus: status,
+    preparedArtifactMissing,
+  });
   const submittedIngestionJob = queuedJob.data ?? enqueueIngestion.data;
   const showSubmittedIngestionStatus =
     !documentFailure.errored &&
@@ -988,13 +1063,32 @@ export function DocumentWorkspace({
           error={recipesQuery.error}
           onRetry={() => void recipesQuery.refetch()}
           chunkSets={chunkSetsQuery.data}
+          sourceModality={sourceProfile?.modality ?? null}
         />
-        {shouldShowProcessingWatchBanner({
-          watchProcessing,
-          documentStatus: status,
-          latestJobStatus: latestDocumentJob?.status,
-        }) ? (
+        {/* 状態メッセージ単一スロット(messaging-spec §9): 失敗原因 > 実行中 > ゲート案内 を 1 本だけ表示する。 */}
+        {statusMessageSlot?.kind === "failure" ? (
+          <Banner
+            severity="danger"
+            title={
+              failedPhase
+                ? t("flow.error.atStep", { step: t(phaseLabelKey(failedPhase)) })
+                : undefined
+            }
+          >
+            {documentFailure.primaryMessage ?? t("flow.error.fallback")}
+          </Banner>
+        ) : statusMessageSlot?.kind === "processing" ? (
           <Banner severity="info">{t(phaseRunningMessageKey(currentProcessingPhase))}</Banner>
+        ) : statusMessageSlot?.kind === "gate" ? (
+          statusMessageSlot.artifactMissing ? (
+            <Banner severity="danger">
+              {preparedArtifact?.converted
+                ? t("flow.preprocessed.persistFailed")
+                : t("flow.preprocessed.preparedMissing")}
+            </Banner>
+          ) : (
+            <Banner severity="info">{t(GATE_MESSAGE_KEYS[statusMessageSlot.status])}</Banner>
+          )
         ) : null}
 
         <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
@@ -1120,9 +1214,9 @@ export function DocumentWorkspace({
                 onSelect={() => setInspectorTab("chunks")}
               >
                 {t("flow.chunks.title")}
-                {chunksQuery.data?.length ? (
+                {displayedChunks.length ? (
                   <span className="tnum ml-1.5 opacity-70">
-                    {formatNumber(chunksQuery.data.length)}
+                    {formatNumber(displayedChunks.length)}
                   </span>
                 ) : null}
               </InspectorTab>
@@ -1274,20 +1368,50 @@ export function DocumentWorkspace({
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
-                <DocumentChunksPanel
-                  chunks={chunksQuery.data ?? []}
-                  loading={chunksQuery.isPending}
-                  error={chunksQuery.isError}
-                  selectedChunkId={selectedChunkId}
-                  focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
-                  onSelect={(chunk) => {
-                    setUrlFallbackFocus(null);
-                    setSelectedChunkId(chunk.chunk_id);
-                    setSelectedElementId(chunk.element_ids[0] ?? null);
-                    setSelectedTableCellKey(null);
-                    setPreviewFocusSource("chunk");
-                  }}
-                />
+                <div className="space-y-3">
+                  {selectedRecipeId && (status === "REVIEW" || status === "CHUNKED") ? (
+                    <ChunkPreviewControls
+                      form={chunkPreviewSettings}
+                      onChange={(update) =>
+                        setChunkPreviewSettings((current) => ({ ...current, ...update }))
+                      }
+                      onRun={() =>
+                        chunkPreview.mutate(
+                          {
+                            id: documentId,
+                            recipeId: selectedRecipeId,
+                            payload: chunkPreviewSettings,
+                          },
+                          {
+                            onSuccess: () => {
+                              setSelectedChunkId(null);
+                              setSelectedElementId(null);
+                              setSelectedTableCellKey(null);
+                            },
+                          }
+                        )
+                      }
+                      pending={chunkPreview.isPending}
+                      disabled={hasReviewEdits}
+                      error={chunkPreview.error}
+                      result={chunkPreview.data ?? null}
+                    />
+                  ) : null}
+                  <DocumentChunksPanel
+                    chunks={displayedChunks}
+                    loading={chunkPreview.isPending || (!chunkPreview.data && chunksQuery.isPending)}
+                    error={!chunkPreview.data && chunksQuery.isError}
+                    selectedChunkId={selectedChunkId}
+                    focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
+                    onSelect={(chunk) => {
+                      setUrlFallbackFocus(null);
+                      setSelectedChunkId(chunk.chunk_id);
+                      setSelectedElementId(chunk.element_ids[0] ?? null);
+                      setSelectedTableCellKey(null);
+                      setPreviewFocusSource("chunk");
+                    }}
+                  />
+                </div>
               </div>
             ) : null}
 
@@ -1333,6 +1457,7 @@ export function DocumentWorkspace({
               />
             ) : null}
             <IngestionJobsPanel
+              steps={selectedRecipe?.steps ?? []}
               jobs={recipeJobs}
               segments={recipeSegments}
               loading={documentJobsQuery.isPending}
@@ -1398,29 +1523,6 @@ export function DocumentWorkspace({
             />
           </div>
         </details>
-
-        {status === "INDEXED" ? (
-          <Banner severity="success">{t("flow.indexed")}</Banner>
-        ) : null}
-
-
-        {status === "PREPROCESSED" ? (
-          preparedArtifactMissing ? (
-            <Banner severity="danger">
-              {preparedArtifact?.converted
-                ? t("flow.preprocessed.persistFailed")
-                : t("flow.preprocessed.preparedMissing")}
-            </Banner>
-          ) : (
-            <Banner severity="info">{t("flow.preprocessed.description")}</Banner>
-          )
-        ) : null}
-        {status === "REVIEW" ? (
-          <Banner severity="info">{t("flow.review.description")}</Banner>
-        ) : null}
-        {status === "CHUNKED" ? (
-          <Banner severity="info">{t("flow.chunked.description")}</Banner>
-        ) : null}
 
         {approveDocument.isError ? (
           <Banner severity={approveNeedsReingest ? "warning" : "danger"}>
@@ -1586,6 +1688,7 @@ export function DocumentWorkspace({
 }
 
 function IngestionJobsPanel({
+  steps,
   jobs,
   segments,
   loading,
@@ -1600,6 +1703,8 @@ function IngestionJobsPanel({
   vectorCount,
   embeddingLabel,
 }: {
+  /** 選択中レシピの工程状態(単一状態源)。工程の実行有無はこちらを正とする。 */
+  steps: DocumentRecipeStep[];
   jobs: IngestionJob[];
   segments: IngestionSegment[];
   loading: boolean;
@@ -1626,7 +1731,7 @@ function IngestionJobsPanel({
   }
   if (!jobs.length) return null;
 
-  const rows = resolveLatestJobsByPhase(jobs);
+  const rows = resolvePhaseRows(steps, jobs);
   return (
     <section className="rounded-md border border-border bg-background p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1639,10 +1744,11 @@ function IngestionJobsPanel({
         </span>
       </div>
       <ol className="mt-3 space-y-2" aria-label={t("flow.jobs.title")}>
-        {rows.map(({ phase, job }) => (
+        {rows.map(({ phase, step, job }) => (
           <PhaseJobRow
             key={phase}
             phase={phase}
+            step={step}
             job={job}
             segments={segments}
             nowMs={nowMs}
@@ -1664,6 +1770,7 @@ function IngestionJobsPanel({
 /** 工程1件分の実行状況行。未実行工程はミュート表示のみ。 */
 function PhaseJobRow({
   phase,
+  step,
   job,
   segments,
   nowMs,
@@ -1677,6 +1784,7 @@ function PhaseJobRow({
   embeddingLabel,
 }: {
   phase: IngestionJobPhase;
+  step: DocumentRecipeStep | null;
   job: IngestionJob | null;
   segments: IngestionSegment[];
   nowMs: number;
@@ -1692,20 +1800,51 @@ function PhaseJobRow({
   const engineLabel = ingestionParser?.backend
     ? [parserBackendLabel(ingestionParser.backend), parserVersion].filter(Boolean).join(" ")
     : null;
-  if (!job) {
+  // 工程状態は steps(レシピ status 由来の単一状態源)を正とする(§9 P1)。ジョブの phase は
+  // 起点工程のみで、通しジョブ内で実行済みの工程はジョブ行を持たず、逆に設定変更で無効化
+  // された古いジョブ行が残ることもあるため、ジョブの有無/状態から工程状態を導出しない。
+  if (!job || step?.status === "PENDING") {
+    if (!step || step.status === "PENDING") {
+      // PENDING で古いジョブ行が残っていても表示しない(前 revision の成果で現状態と矛盾する)。
+      return (
+        <li className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border bg-card/40 px-3 py-2 text-xs text-muted">
+          <span className="font-medium text-foreground/70">{t(jobPhaseKey(phase))}</span>
+          <span>{t("flow.jobs.notStarted")}</span>
+        </li>
+      );
+    }
+    const stepErrorMessage =
+      step.status === "FAILED"
+        ? (() => {
+            const normalized = normalizeIngestionErrorMessage(step.error_message);
+            return normalized && normalized !== suppressMessage ? normalized : null;
+          })()
+        : null;
     return (
-      <li className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border bg-card/40 px-3 py-2 text-xs text-muted">
-        <span className="font-medium text-foreground/70">{t(jobPhaseKey(phase))}</span>
-        <span>{t("flow.jobs.notStarted")}</span>
+      <li className="rounded-md border border-border bg-card/40 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold text-foreground">{t(jobPhaseKey(phase))}</span>
+          <span className={recipeStepStatusClass(step.status)}>
+            {t(recipeStepStatusKey(step.status))}
+          </span>
+          <span className="text-xs text-muted">{t("flow.jobs.inlineExecution")}</span>
+        </div>
+        {stepErrorMessage ? (
+          <div className="mt-2 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
+            <p className="font-medium text-danger">{t("flow.jobs.errorReason")}</p>
+            <p className="mt-1 break-words text-danger/90">{stepErrorMessage}</p>
+          </div>
+        ) : null}
       </li>
     );
   }
   const active = ingestionJobIsActive(job.status);
-  const normalizedError = normalizeIngestionErrorMessage(job.error_message);
+  const failed = step ? step.status === "FAILED" : job.status === "FAILED";
+  const normalizedError = normalizeIngestionErrorMessage(
+    job.error_message ?? step?.error_message ?? null
+  );
   const errorMessageText =
-    job.status === "FAILED" && normalizedError && normalizedError !== suppressMessage
-      ? normalizedError
-      : null;
+    failed && normalizedError && normalizedError !== suppressMessage ? normalizedError : null;
   const progressSummary =
     active && (phase === "PREPROCESS" || phase === "EXTRACT")
       ? resolveIngestionProgressSummary(segments)
@@ -1715,7 +1854,9 @@ function PhaseJobRow({
     <li className="rounded-md border border-border bg-card/40 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-foreground">{t(jobPhaseKey(phase))}</span>
-        <span className={jobStatusClass(job.status)}>{t(jobStatusKey(job.status))}</span>
+        <span className={step ? recipeStepStatusClass(step.status) : jobStatusClass(job.status)}>
+          {t(step ? recipeStepStatusKey(step.status) : jobStatusKey(job.status))}
+        </span>
         {preprocessConverted != null ? (
           <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
             {preprocessConverted ? t("provenance.converted") : t("provenance.passthrough")}
@@ -2096,6 +2237,41 @@ function jobStatusKey(status: IngestionJob["status"]): I18nKey {
   }
 }
 
+/** レシピ工程状態のラベル。PENDING は呼び出し側で「未実行」行にするため対象外。 */
+function recipeStepStatusKey(status: DocumentRecipeStepStatus): I18nKey {
+  switch (status) {
+    case "NEEDS_REVIEW":
+      return "documents.recipes.status.review";
+    case "RUNNING":
+      return "upload.job.status.RUNNING";
+    case "SUCCEEDED":
+      return "upload.job.status.SUCCEEDED";
+    case "FAILED":
+      return "upload.job.status.FAILED";
+    case "CANCELLED":
+      return "upload.job.status.CANCELLED";
+    default:
+      return "upload.job.status.QUEUED";
+  }
+}
+
+function recipeStepStatusClass(status: DocumentRecipeStepStatus): string {
+  const base = "rounded-full px-2 py-0.5 text-xs font-medium";
+  switch (status) {
+    case "QUEUED":
+    case "RUNNING":
+      return `${base} bg-info-bg text-info`;
+    case "SUCCEEDED":
+      return `${base} bg-success-bg text-success`;
+    case "FAILED":
+      return `${base} bg-danger-bg text-danger`;
+    case "NEEDS_REVIEW":
+      return `${base} bg-warning-bg text-warning`;
+    default:
+      return `${base} bg-background text-muted`;
+  }
+}
+
 function jobPhaseKey(phase: IngestionJob["phase"]): I18nKey {
   if (phase === "INDEX") return "flow.jobs.phase.index";
   if (phase === "CHUNK") return "flow.jobs.phase.chunk";
@@ -2173,6 +2349,275 @@ function InspectorTab({
     >
       {children}
     </button>
+  );
+}
+
+function ChunkPreviewControls({
+  form,
+  onChange,
+  onRun,
+  pending,
+  disabled,
+  error,
+  result,
+}: {
+  form: ChunkPreviewForm;
+  onChange: (update: Partial<ChunkPreviewForm>) => void;
+  onRun: () => void;
+  pending: boolean;
+  disabled: boolean;
+  error: unknown;
+  result: DocumentChunkPreviewResponse | null;
+}) {
+  const validationError = chunkPreviewValidationError(form);
+  const fixedDelimiter = form.chunking_strategy === "fixed_delimiter";
+  const fixedSize = form.chunking_strategy === "fixed_size";
+  const semanticBoundary = isSemanticBoundaryStrategy(form.chunking_strategy);
+  const chunkSizeField = (
+    <PreviewNumberField
+      label={t(chunkSizeLabelKey(form.chunking_strategy))}
+      value={form.chunk_size}
+      min={CHUNK_SIZE_MIN_CHARS}
+      max={CHUNK_SIZE_MAX_CHARS}
+      disabled={pending}
+      onChange={(value) => onChange({ chunk_size: value })}
+    />
+  );
+  const overlapField = (
+    <PreviewNumberField
+      label={t(overlapLabelKey(form.chunking_strategy))}
+      value={form.chunk_overlap}
+      min={0}
+      max={CHUNK_OVERLAP_MAX_CHARS}
+      disabled={pending}
+      onChange={(value) => onChange({ chunk_overlap: value })}
+    />
+  );
+  const minCharsField = !fixedSize ? (
+    <PreviewNumberField
+      label={t("settings.chunking.params.minChars")}
+      value={form.chunk_min_chars}
+      min={0}
+      max={2000}
+      disabled={pending}
+      onChange={(value) => onChange({ chunk_min_chars: value })}
+    />
+  ) : null;
+  return (
+    <section
+      aria-label={t("flow.chunkPreview.title")}
+      className="space-y-3 rounded-md border border-border bg-card p-3"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <FileSearch size={15} className="text-primary" aria-hidden />
+            {t("flow.chunkPreview.title")}
+          </h4>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            {t("flow.chunkPreview.description")}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          loading={pending}
+          disabled={disabled || Boolean(validationError)}
+          onClick={onRun}
+        >
+          <FileSearch size={14} aria-hidden />
+          {t(result ? "flow.chunkPreview.rerun" : "flow.chunkPreview.run")}
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <SelectField
+          id="chunk-preview-strategy"
+          label={t("flow.chunkPreview.strategy")}
+          value={form.chunking_strategy}
+          options={CHUNK_PREVIEW_STRATEGIES}
+          onValueChange={(value) => {
+            const preset = chunkingStrategyPreset(value);
+            onChange({
+              chunking_strategy: value,
+              chunk_size: preset.chunkSize,
+              chunk_overlap: preset.overlap,
+            });
+          }}
+          buttonClassName="min-h-11"
+        />
+        <div className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
+          <span className="text-sm font-medium text-foreground">
+            {t("flow.chunkPreview.contextHeader")}
+          </span>
+          <Switch
+            checked={form.chunk_context_header_enabled}
+            disabled={pending}
+            aria-label={t("flow.chunkPreview.contextHeader")}
+            onCheckedChange={(checked) =>
+              onChange({ chunk_context_header_enabled: checked })
+            }
+          />
+        </div>
+        {fixedDelimiter ? (
+          <label className="space-y-1.5 sm:col-span-2">
+            <span className="block text-sm font-medium text-foreground">
+              {t("settings.chunking.params.delimiter")}
+            </span>
+            <input
+              type="text"
+              value={form.chunk_delimiter}
+              maxLength={256}
+              disabled={pending}
+              onChange={(event) => onChange({ chunk_delimiter: event.target.value })}
+              className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+            />
+          </label>
+        ) : (
+          <>
+            {semanticBoundary ? (
+              <details
+                key={form.chunking_strategy}
+                className="group rounded-md border border-border bg-background p-3 sm:col-span-2"
+              >
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                  <span>{t("settings.chunking.params.semanticDetails")}</span>
+                  <ChevronDown
+                    size={16}
+                    className="shrink-0 text-muted transition-transform group-open:rotate-180"
+                    aria-hidden
+                  />
+                </summary>
+                <p className="mb-3 text-xs leading-relaxed text-muted">
+                  {t(
+                    form.chunking_strategy === "markdown_heading"
+                      ? "settings.chunking.params.headingDescription"
+                      : "settings.chunking.params.pageDescription"
+                  )}
+                </p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {chunkSizeField}
+                  {overlapField}
+                  {minCharsField}
+                </div>
+              </details>
+            ) : (
+              <>
+                {chunkSizeField}
+                {overlapField}
+              </>
+            )}
+            {form.chunking_strategy === "hierarchical_parent_child" ? (
+              <PreviewNumberField
+                label={t("settings.chunking.params.childSize")}
+                value={form.chunk_child_size}
+                min={80}
+                max={4000}
+                disabled={pending}
+                onChange={(value) => onChange({ chunk_child_size: value })}
+              />
+            ) : null}
+            {!semanticBoundary ? minCharsField : null}
+          </>
+        )}
+      </div>
+
+      {disabled ? (
+        <FormStatus tone="warning" message={t("flow.chunkPreview.unsavedEdits")} />
+      ) : validationError ? (
+        <FormStatus tone="danger" message={validationError} />
+      ) : error ? (
+        <FormStatus
+          tone="danger"
+          message={errorMessage(error, t("flow.chunkPreview.error"))}
+        />
+      ) : null}
+
+      {result ? (
+        <>
+          <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <PreviewStat
+              label={t("flow.chunkPreview.stats.count")}
+              value={result.stats.chunk_count}
+              chars={false}
+            />
+            <PreviewStat label={t("flow.chunkPreview.stats.min")} value={result.stats.min_chars} />
+            <PreviewStat
+              label={t("flow.chunkPreview.stats.average")}
+              value={result.stats.average_chars}
+            />
+            <PreviewStat label={t("flow.chunkPreview.stats.max")} value={result.stats.max_chars} />
+            <PreviewStat
+              label={t("flow.chunkPreview.stats.overflow")}
+              value={result.stats.overflow_count}
+              chars={false}
+            />
+            <PreviewStat
+              label={t("flow.chunkPreview.stats.embeddingOverflow")}
+              value={result.stats.embedding_overflow_count}
+              chars={false}
+            />
+          </dl>
+          {result.warnings.length ? (
+            <FormStatus tone="warning" message={result.warnings.join(" ")} />
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function PreviewNumberField({
+  label,
+  value,
+  min,
+  max,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="space-y-1.5">
+      <span className="block text-sm font-medium text-foreground">{label}</span>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={Number.isFinite(value) ? value : ""}
+        min={min}
+        max={max}
+        disabled={disabled}
+        onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
+        className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+      />
+    </label>
+  );
+}
+
+function PreviewStat({
+  label,
+  value,
+  chars = true,
+}: {
+  label: string;
+  value: number;
+  chars?: boolean;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background p-2">
+      <dt className="text-[11px] text-muted">{label}</dt>
+      <dd className="tnum mt-0.5 text-sm font-semibold text-foreground">
+        {chars
+          ? t("flow.chunkPreview.stats.chars", { count: formatNumber(value) })
+          : formatNumber(value)}
+      </dd>
+    </div>
   );
 }
 

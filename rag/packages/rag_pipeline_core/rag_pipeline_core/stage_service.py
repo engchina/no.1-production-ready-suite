@@ -274,7 +274,6 @@ def create_chunking_app(
             chunk_size=request.chunk_size,
             overlap=request.overlap,
             child_size=request.child_size,
-            sentence_window_size=request.sentence_window_size,
             min_chars=request.min_chars,
             delimiter=request.delimiter,
         )

@@ -20,6 +20,7 @@ import {
   type DatabaseSettingsUpdate,
   type HuggingFaceSettingsUpdate,
   type DocumentApproveRequest,
+  type DocumentChunkPreviewRequest,
   type DocumentReviewEditsRequest,
   type DocumentDetail,
   type DocumentSummary,
@@ -133,6 +134,7 @@ export const queryKeys = {
   conversation: (id: string) => ["conversations", id] as const,
   currentFeedback: (traceId: string) => ["feedback", "current", traceId] as const,
   feedback: (params: FeedbackListParams) => ["feedback", params] as const,
+  feedbackDetail: (id: string) => ["feedback", "detail", id] as const,
   compareModels: ["chat", "models"] as const,
   modelSettings: ["settings", "model"] as const,
   databaseSettings: ["settings", "database"] as const,
@@ -522,6 +524,20 @@ export function useDocumentRecipeChunks(id: string | null, recipeId: string | nu
     queryFn: () => api.listDocumentRecipeChunks(id as string, recipeId as string),
     enabled: id != null && recipeId != null,
     retry: false,
+  });
+}
+
+export function usePreviewDocumentRecipeChunks() {
+  return useMutation({
+    mutationFn: ({
+      id,
+      recipeId,
+      payload,
+    }: {
+      id: string;
+      recipeId: string;
+      payload: DocumentChunkPreviewRequest;
+    }) => api.previewDocumentRecipeChunks(id, recipeId, payload),
   });
 }
 
@@ -937,6 +953,15 @@ export function useFeedbackDashboard(params: FeedbackListParams) {
   });
 }
 
+/** 管理者向けフィードバック本文・実行情報を、drawer を開いた時だけ取得する。 */
+export function useFeedbackDetail(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.feedbackDetail(id ?? ""),
+    queryFn: () => api.getFeedbackDetail(id as string),
+    enabled: id != null,
+  });
+}
+
 /** チャット会話名更新。 */
 export function useUpdateConversation() {
   const qc = useQueryClient();
@@ -1212,15 +1237,13 @@ export function useHuggingFaceSettings() {
   });
 }
 
-/** HuggingFace 設定のランタイム保存(マウント先 host_path が変わるためサービス一覧も無効化)。 */
+/** HuggingFace token / mirror endpoint のランタイム保存。 */
 export function useUpdateHuggingFaceSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: HuggingFaceSettingsUpdate) => api.updateHuggingFaceSettings(payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.huggingfaceSettings });
-      qc.invalidateQueries({ queryKey: queryKeys.services });
-      qc.invalidateQueries({ queryKey: queryKeys.serviceCatalog });
     },
   });
 }
@@ -1295,10 +1318,11 @@ export function useUploadStorageSettings() {
 }
 
 /** 任意 parser adapter の runtime readiness。 */
-export function useParserAdapterSettings() {
+export function useParserAdapterSettings(enabled = true) {
   return useQuery<ParserAdapterSettingsData>({
     queryKey: queryKeys.parserAdapterSettings,
     queryFn: api.getParserAdapterSettings,
+    enabled,
     retry: false,
   });
 }

@@ -61,6 +61,20 @@ for (const viewport of [
   });
 }
 
+test("業務ビューの回答スタイルは逐句引用とカスタムを選べる", async ({ page }) => {
+  await mockBusinessViews(page, []);
+  await page.goto("/business-views");
+  const generationSetting = page
+    .getByRole("heading", { name: "回答スタイル", level: 3 })
+    .locator("..");
+  await generationSetting.getByRole("button", { name: "業務ビューで上書き" }).click();
+  const select = page.locator("#business-view-generation");
+  await expect(select).toBeVisible();
+  await select.click();
+  await expect(page.getByRole("option", { name: "逐句出典付与" })).toBeVisible();
+  await expect(page.getByRole("option", { name: "カスタム" })).toBeVisible();
+});
+
 test("業務ビューを作成すると参照 KB と方針を含めて POST する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   let createBody: Record<string, unknown> | null = null;
@@ -195,6 +209,37 @@ test("RAG 検索は複数業務ビューを選ぶと business_view_ids を送る
 
   await expect.poll(() => searchPayload?.business_view_ids).toEqual(["bv-1", "bv-2"]);
   await expect.poll(() => searchPayload?.knowledge_base_ids).toBeUndefined();
+});
+
+test("構造化 JSON 回答は等幅コード領域に表示する", async ({ page }) => {
+  await mockBusinessViews(page, [
+    {
+      id: "bv-1",
+      name: "連携ビュー",
+      description: null,
+      status: "ACTIVE",
+      knowledge_base_count: 1,
+      created_at: "2026-06-19T00:00:00Z",
+      updated_at: "2026-06-19T00:00:00Z",
+      archived_at: null,
+    },
+  ]);
+  await page.route("**/api/search/stream", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: searchStreamBody("structured_json", '{"answer":"確認しました"}'),
+    });
+  });
+  await page.goto("/search");
+  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
+  await page.getByRole("option", { name: /連携ビュー/ }).click();
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("確認");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+
+  const jsonAnswer = page.locator("pre").filter({ hasText: '"answer":"確認しました"' });
+  await expect(jsonAnswer).toBeVisible();
+  await expect(jsonAnswer).toHaveClass(/font-mono/);
 });
 
 for (const viewport of [
@@ -451,15 +496,21 @@ async function mockDefaultBusinessView(
   });
 }
 
-function searchStreamBody(): string {
+function searchStreamBody(
+  generationProfile = "grounded_concise",
+  answer = "上限額を確認しました。"
+): string {
   return [
     `event: metadata\ndata: ${JSON.stringify({
       trace_id: "trace-bv",
       elapsed_ms: 10,
       guardrail_warnings: [],
-      diagnostics: { business_view_applied: "bv-1" },
+      diagnostics: {
+        business_view_applied: "bv-1",
+        generation_profile: generationProfile,
+      },
     })}\n\n`,
-    `event: delta\ndata: ${JSON.stringify({ text: "上限額を確認しました。" })}\n\n`,
+    `event: delta\ndata: ${JSON.stringify({ text: answer })}\n\n`,
     `event: citations\ndata: ${JSON.stringify([])}\n\n`,
     `event: done\ndata: ${JSON.stringify({ trace_id: "trace-bv" })}\n\n`,
   ].join("");

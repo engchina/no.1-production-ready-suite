@@ -1,10 +1,76 @@
 import type {
+  DocumentChunkPreviewRequest,
+  DocumentRecipeView,
   FileStatus,
   IngestionJobPhase,
   IngestionJobStatus,
   IngestionSegment,
 } from "@/lib/api";
-import type { I18nKey } from "@/lib/i18n";
+import {
+  CHUNK_OVERLAP_MAX_CHARS,
+  CHUNK_SIZE_MAX_CHARS,
+  CHUNK_SIZE_MIN_CHARS,
+  chunkSizeLabelKey,
+  overlapLabelKey,
+} from "@/lib/chunking";
+import { t, type I18nKey } from "@/lib/i18n";
+
+export type ChunkPreviewForm = Required<DocumentChunkPreviewRequest>;
+
+export function chunkPreviewForm(recipe: DocumentRecipeView | null): ChunkPreviewForm {
+  const config = recipe?.effective_processing_config;
+  return {
+    chunking_strategy: config?.chunking_strategy ?? "structure_aware",
+    chunk_size: config?.chunk_size ?? 800,
+    chunk_overlap: config?.chunk_overlap ?? 120,
+    chunk_child_size: config?.chunk_child_size ?? 320,
+    chunk_min_chars: config?.chunk_min_chars ?? 120,
+    chunk_delimiter: "\\n\\n",
+    chunk_context_header_enabled: config?.chunk_context_header_enabled ?? true,
+  };
+}
+
+export function chunkPreviewValidationError(form: ChunkPreviewForm): string | null {
+  if (form.chunking_strategy === "fixed_delimiter") {
+    return form.chunk_delimiter.trim() ? null : t("settings.chunking.params.delimiter");
+  }
+  if (
+    !Number.isFinite(form.chunk_size) ||
+    form.chunk_size < CHUNK_SIZE_MIN_CHARS ||
+    form.chunk_size > CHUNK_SIZE_MAX_CHARS
+  ) {
+    return t(chunkSizeLabelKey(form.chunking_strategy));
+  }
+  if (
+    !Number.isFinite(form.chunk_overlap) ||
+    form.chunk_overlap < 0 ||
+    form.chunk_overlap > CHUNK_OVERLAP_MAX_CHARS
+  ) {
+    return t(overlapLabelKey(form.chunking_strategy));
+  }
+  if (form.chunk_overlap >= form.chunk_size) {
+    return `${t(overlapLabelKey(form.chunking_strategy))} < ${t(
+      chunkSizeLabelKey(form.chunking_strategy)
+    )}`;
+  }
+  if (
+    form.chunking_strategy === "hierarchical_parent_child" &&
+    form.chunk_child_size >= form.chunk_size
+  ) {
+    return `${t("settings.chunking.params.childSize")} < ${t(
+      "settings.chunking.params.chunkSize"
+    )}`;
+  }
+  if (
+    !["fixed_size", "fixed_delimiter"].includes(form.chunking_strategy) &&
+    form.chunk_min_chars >= form.chunk_size
+  ) {
+    return `${t("settings.chunking.params.minChars")} < ${t(
+      "settings.chunking.params.chunkSize"
+    )}`;
+  }
+  return null;
+}
 
 export type DocumentPrimaryAction =
   | { kind: "enqueue"; phase: "PREPROCESS" }
@@ -195,14 +261,21 @@ export const INGESTION_PHASE_ORDER: readonly IngestionJobPhase[] = [
 ];
 
 /**
- * 工程順(ファイル準備→抽出→Chunk 作成→Embedding/索引)に、各工程の最新ジョブを解決する。
- * jobs は既存 API と同じく新しい順で渡す前提(各工程の先頭一致 = 最新)。未実行工程は null。
+ * 工程順(ファイル準備→抽出→Chunk 作成→Embedding/索引)に、工程状態と最新ジョブを解決する。
+ * 状態は steps(レシピ status 由来の単一状態源)を正とする。ジョブの phase は「起点工程」で
+ * しかなく、1 本のジョブが後続工程を通し実行するため、job の有無から工程の実行有無は判定
+ * できない(messaging-spec §9 P1)。jobs は新しい順で渡す前提(各工程の先頭一致 = 最新)。
  */
-export function resolveLatestJobsByPhase<T extends { phase: IngestionJobPhase }>(
+export function resolvePhaseRows<
+  S extends { phase: IngestionJobPhase },
+  T extends { phase: IngestionJobPhase },
+>(
+  steps: S[],
   jobs: T[]
-): Array<{ phase: IngestionJobPhase; job: T | null }> {
+): Array<{ phase: IngestionJobPhase; step: S | null; job: T | null }> {
   return INGESTION_PHASE_ORDER.map((phase) => ({
     phase,
+    step: steps.find((step) => step.phase === phase) ?? null,
     job: jobs.find((job) => job.phase === phase) ?? null,
   }));
 }
@@ -330,6 +403,53 @@ export function ingestConflictBannerIsStale({
   hasActiveJob: boolean;
 }): boolean {
   return errorStatus === 409 && !hasActiveJob;
+}
+
+/** 状態メッセージ単一スロット(messaging-spec §9)の表示内容。優先順: 失敗原因 > 実行中 > 承認待ちゲート案内。 */
+export type StatusMessageSlot =
+  | { kind: "failure" }
+  | { kind: "processing" }
+  | { kind: "gate"; status: "PREPROCESSED" | "REVIEW" | "CHUNKED"; artifactMissing: boolean }
+  | null;
+
+export function resolveStatusMessageSlot({
+  errored,
+  processingVisible,
+  documentStatus,
+  preparedArtifactMissing,
+}: {
+  errored: boolean;
+  processingVisible: boolean;
+  documentStatus: string;
+  preparedArtifactMissing: boolean;
+}): StatusMessageSlot {
+  if (errored) return { kind: "failure" };
+  if (processingVisible) return { kind: "processing" };
+  if (
+    documentStatus === "PREPROCESSED" ||
+    documentStatus === "REVIEW" ||
+    documentStatus === "CHUNKED"
+  ) {
+    return {
+      kind: "gate",
+      status: documentStatus,
+      artifactMissing: documentStatus === "PREPROCESSED" && preparedArtifactMissing,
+    };
+  }
+  return null;
+}
+
+/** 索引完了 toast は「同一レシピで INDEXING → INDEXED へ遷移した」時だけ 1 回出す(messaging-spec §3.4)。 */
+export function isIndexedTransition(
+  prev: { recipeId: string | null; status: string } | null,
+  next: { recipeId: string | null; status: string }
+): boolean {
+  return (
+    prev != null &&
+    prev.recipeId === next.recipeId &&
+    prev.status === "INDEXING" &&
+    next.status === "INDEXED"
+  );
 }
 
 export function shouldShowProcessingWatchBanner({

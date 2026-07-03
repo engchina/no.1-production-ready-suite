@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
     UV_CACHE_DIR=/tmp/uv-cache \
-    # 焼き込み/host マウントのキャッシュ先を appuser 配下に固定する(dev の bind 先と一致)。
+    # 焼き込み/named volume のキャッシュ先を appuser 配下に固定する。
     HF_HOME=/home/appuser/.cache/huggingface
 
 RUN apt-get update \
@@ -24,15 +24,15 @@ COPY services/parsers/asr/pyproject.toml ./
 # GPU 依存(faster-whisper / CTranslate2)を含むため重い。CUDA host の build 環境で実行する。
 RUN uv sync --no-install-project --python python3.12 \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /tmp/uv-cache \
-    && chown -R appuser:appuser /tmp/uv-cache /build
+    && mkdir -p /tmp/uv-cache /home/appuser/.cache \
+    && chown -R appuser:appuser /tmp/uv-cache /home/appuser/.cache /build
 
 COPY --chown=appuser:appuser services/parsers/asr/app ./app
 
 EXPOSE 8000
 USER appuser
 # モデルをビルド時に焼き込む(prod・配布向け)。dev は `--build-arg BAKE_MODELS=0` で省き
-# host マウントのキャッシュを使う。別サイズは `--build-arg ASR_MODEL_SIZE=...`、
+# named volume のキャッシュを使う。別サイズは `--build-arg ASR_MODEL_SIZE=...`、
 # ミラーは HF_ENDPOINT build-arg、token は runtime env のみ(image 履歴へ残さない)。
 ARG ASR_MODEL_SIZE=large-v3
 ENV ASR_MODEL_SIZE=${ASR_MODEL_SIZE}

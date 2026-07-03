@@ -15,13 +15,14 @@ RUN python3 -m pip install --no-cache-dir --force-reinstall --no-deps \
     "https://huggingface.co/baidu/Unlimited-OCR/resolve/main/wheel/sglang-0.0.0.dev11416+g92e8bb79e-py3-none-any.whl" \
     && python3 -m pip install --no-cache-dir \
     "kernels==0.11.7" \
-    "pymupdf==1.27.2.2"
+    "pymupdf==1.27.2.2" \
+    && mkdir -p /root/.cache
 
 COPY packages/rag_parser_core /opt/rag_parser_core
 RUN pip install --no-cache-dir "/opt/rag_parser_core[service]"
 
 # モデルをビルド時に取得してイメージへ焼き込む(prod・配布向け。実行時 DL を排除)。
-# dev は `--build-arg BAKE_MODELS=0` で省き host マウントのキャッシュを使う。
+# dev は `--build-arg BAKE_MODELS=0` で省き named volume のキャッシュを使う。
 # 別モデルは `--build-arg UNLIMITED_OCR_MODEL_ID=...`、ミラーは HF_ENDPOINT build-arg、token は runtime env のみ(image 履歴へ残さない)。
 ARG UNLIMITED_OCR_MODEL_ID=baidu/Unlimited-OCR
 ENV UNLIMITED_OCR_MODEL_ID=${UNLIMITED_OCR_MODEL_ID}

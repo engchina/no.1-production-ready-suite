@@ -3,10 +3,11 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.config import GenerationProfile
 from app.schemas.common import JsonValue
 
 # PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle 26ai の JSON_VALUE 数値述語・
@@ -110,6 +111,10 @@ class SearchRequest(BaseModel):
             "検索対象にする業務ビュー(Business View)ID。複数指定時は参照 KB 群を union し、"
             "query 設定・persona は先頭の業務ビューを代表として適用する。"
         ),
+    )
+    generation_profile: GenerationProfile | None = Field(
+        default=None,
+        description="API 呼び出し単位の回答スタイル上書き。業務ビューと GLOBAL より優先する。",
     )
 
     @field_validator("business_view_id")
@@ -236,7 +241,17 @@ class SearchDiagnostics(BaseModel):
     tree_search_path: list[dict[str, object]] = Field(default_factory=list)
     post_retrieval_pipeline: str = "custom"
     generation_profile: str = "grounded_concise"
+    generation_config_source: Literal["request", "business_view", "global"] = "global"
+    generation_contract_mode: Literal[
+        "groundedness", "format_validated", "json_schema", "custom"
+    ] = "groundedness"
+    generation_attempt_count: int = 0
+    generation_repair_count: int = 0
+    generation_validation_codes: list[str] = Field(default_factory=list)
+    custom_prompt_version_id: str | None = None
     guardrail_policy: str = "standard"
+    guardrail_backend: str = "local"
+    guardrail_degraded: bool = False
     vector_index_profile: str = "balanced"
     graph_profile: str = "off"
     serving_mode: str = "single"

@@ -168,9 +168,14 @@ export function UploadWorkspace() {
 }
 
 function UploadIngestionJobNotice({ job }: { job: IngestionJob | null | undefined }) {
-  if (!job) return null;
+  // 実行中/完了は直下の DocumentWorkspace の状態表示と重複するため出さない(messaging-spec §9 P1)。
+  // skip_reason 等ここにしか出ない情報を持つ SKIPPED / FAILED のみ提示する。
+  if (!job || (job.status !== "SKIPPED" && job.status !== "FAILED")) return null;
   return (
-    <Banner severity={uploadJobNoticeSeverity(job.status)} title={t("upload.jobs.title")}>
+    <Banner
+      severity={job.status === "FAILED" ? "danger" : "warning"}
+      title={t("upload.jobs.title")}
+    >
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <IngestionJobBadge job={job} />
         {job.skip_reason ? (
@@ -179,19 +184,6 @@ function UploadIngestionJobNotice({ job }: { job: IngestionJob | null | undefine
       </div>
     </Banner>
   );
-}
-
-function uploadJobNoticeSeverity(status: IngestionJob["status"]) {
-  switch (status) {
-    case "SUCCEEDED":
-      return "success";
-    case "FAILED":
-      return "danger";
-    case "SKIPPED":
-      return "warning";
-    default:
-      return "info";
-  }
 }
 
 function uploadSkipReasonLabel(reason: string): string {

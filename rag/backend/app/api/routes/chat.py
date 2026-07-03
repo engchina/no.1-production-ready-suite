@@ -29,8 +29,10 @@ from app.config import (
     get_settings,
 )
 from app.db_degradation import load_or_degrade
+from app.rag.generation_contract import GenerationContractError
+from app.rag.guardrails import GuardrailPolicy
 from app.rag.observability import new_trace_id
-from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress, SearchTokenDelta
+from app.rag.pipeline import ChatTurn, RagPipeline, SearchStageProgress
 from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.chat import (
     ChatMessage,
@@ -52,12 +54,19 @@ CHAT_DISABLED_MESSAGE = "チャット機能は現在無効です。"
 CONVERSATION_NOT_FOUND_MESSAGE = "会話が見つかりません。"
 BUSINESS_VIEW_NOT_FOUND_MESSAGE = "業務ビューが見つかりません。"
 HISTORY_PROMPT_LIMIT = 40
+BLOCKED_MESSAGE_PLACEHOLDER = "安全ポリシーにより内容を保存しませんでした。"
 
 
 def _require_chat_enabled(settings: Settings) -> None:
     """チャット無効時は 404 にする(運用キルスイッチ)。"""
     if not settings.rag_chat_enabled:
         raise HTTPException(status_code=404, detail=CHAT_DISABLED_MESSAGE)
+
+
+def _business_view_is_archived(view: object) -> bool:
+    """テスト fake を含む業務ビューの status を寛容に判定する。"""
+    status = getattr(view, "status", None)
+    return getattr(status, "value", status) == "ARCHIVED"
 
 
 def _to_conversation_summary(conversation: StoredConversation) -> ConversationSummary:
@@ -157,6 +166,11 @@ async def create_conversation(
     view = await oracle.get_business_view(request.business_view_id)
     if view is None:
         raise HTTPException(status_code=404, detail=BUSINESS_VIEW_NOT_FOUND_MESSAGE)
+    if _business_view_is_archived(view):
+        raise HTTPException(
+            status_code=409,
+            detail="アーカイブ済みの業務ビューでは会話を作成できません。",
+        )
     conversation = await oracle.create_conversation(
         business_view_id=request.business_view_id, title=request.title
     )
@@ -226,6 +240,14 @@ async def stream_message(
         raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
     if conversation.status != "ACTIVE":
         raise HTTPException(status_code=409, detail="アーカイブ済みの会話には送信できません。")
+    view = await oracle.get_business_view(conversation.business_view_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail=BUSINESS_VIEW_NOT_FOUND_MESSAGE)
+    if _business_view_is_archived(view):
+        raise HTTPException(
+            status_code=409,
+            detail="アーカイブ済みの業務ビューではチャットできません。",
+        )
     return StreamingResponse(
         _stream_chat_events(conversation_id, conversation.business_view_id, request, settings),
         media_type="text/event-stream",
@@ -257,20 +279,41 @@ def _resolve_compare_models(
     return selected[: settings.rag_chat_max_compare_models]
 
 
-def _build_history(messages: list[StoredMessage]) -> list[ChatTurn]:
-    """既存メッセージから生成用の会話履歴(USER と各ターン先頭の ASSISTANT)を組み立てる。"""
+async def _build_safe_history(
+    messages: list[StoredMessage], guardrails: GuardrailPolicy
+) -> list[ChatTurn]:
+    """ブロック済みターンを除外し、旧メッセージも再検査して生成履歴を作る。"""
     turns: list[ChatTurn] = []
     seen_replies: set[str] = set()
-    for message in messages:
+    allowed_user_ids: set[str] = set()
+    blocked_user_ids: set[str] = set()
+    for message in messages[-HISTORY_PROMPT_LIMIT * 3 :]:
         if message.role == "USER":
-            turns.append(ChatTurn(role="USER", content=message.content))
+            if message.status != "COMPLETE":
+                blocked_user_ids.add(message.id)
+                continue
+            result = await asyncio.to_thread(guardrails.validate_query, message.content)
+            if not result.allowed:
+                blocked_user_ids.add(message.id)
+                continue
+            allowed_user_ids.add(message.id)
+            turns.append(ChatTurn(role="USER", content=result.sanitized_text))
         elif message.role == "ASSISTANT":
+            if message.status != "COMPLETE":
+                continue
+            if message.reply_to_message_id in blocked_user_ids:
+                continue
+            if message.reply_to_message_id and message.reply_to_message_id not in allowed_user_ids:
+                continue
             # 同一ユーザーターンに複数モデルの回答がある場合は先頭だけを履歴に使う。
             key = message.reply_to_message_id or message.id
             if key in seen_replies:
                 continue
+            result = await asyncio.to_thread(guardrails.validate_answer, message.content)
+            if not result.allowed:
+                continue
             seen_replies.add(key)
-            turns.append(ChatTurn(role="ASSISTANT", content=message.content))
+            turns.append(ChatTurn(role="ASSISTANT", content=result.sanitized_text))
     return turns[-HISTORY_PROMPT_LIMIT:]
 
 
@@ -282,21 +325,6 @@ async def _stream_chat_events(
 ) -> AsyncIterator[str]:
     """USER 永続化 → 各モデルへ fan-out 生成 → ASSISTANT 永続化 を SSE で流す。"""
     oracle = OracleClient()
-    # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
-    prior_messages = await oracle.list_messages(conversation_id)
-    history = _build_history(prior_messages)
-    now = datetime.now(UTC)
-    user_message = await oracle.append_message(
-        StoredMessage(
-            id=uuid4().hex,
-            conversation_id=conversation_id,
-            role="USER",
-            content=request.content,
-            status="COMPLETE",
-            created_at=now,
-        )
-    )
-
     base_request = SearchRequest(
         query=request.content,
         mode=request.mode,
@@ -306,12 +334,31 @@ async def _stream_chat_events(
     effective_request, effective_settings, _applied_kb, _applied_view = (
         await _resolve_query_context(base_request, settings)
     )
+    guardrails = GuardrailPolicy(effective_settings)
+    query_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
+    # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
+    prior_messages = await oracle.list_messages(conversation_id)
+    history = await _build_safe_history(prior_messages, guardrails)
+    now = datetime.now(UTC)
+    user_message = await oracle.append_message(
+        StoredMessage(
+            id=uuid4().hex,
+            conversation_id=conversation_id,
+            role="USER",
+            content=(
+                query_guardrail.sanitized_text
+                if query_guardrail.allowed
+                else BLOCKED_MESSAGE_PLACEHOLDER
+            ),
+            guardrail_warnings=query_guardrail.warnings,
+            status="COMPLETE" if query_guardrail.allowed else "ERROR",
+            created_at=now,
+        )
+    )
+
     columns = _resolve_compare_models(request, effective_settings)
     timeout = effective_settings.rag_search_timeout_seconds
-    realtime = effective_settings.rag_stream_realtime_enabled
-
     queue: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
-    realtime_sent: dict[str, bool] = {column["model_id"]: False for column in columns}
 
     async def run_model(column: dict[str, str]) -> None:
         model_id = column["model_id"]
@@ -331,22 +378,16 @@ async def _stream_chat_events(
                 )
             )
 
-        async def emit_delta(delta: SearchTokenDelta) -> None:
-            if not delta.text:
-                return
-            realtime_sent[model_id] = True
-            await queue.put(("delta", {"model_id": model_id, "text": delta.text}))
-
         try:
             llm = OciEnterpriseAiClient(settings=effective_settings, model_id=model_id or None)
-            pipeline = RagPipeline(settings=effective_settings, llm=llm)
+            pipeline = RagPipeline(settings=effective_settings, llm=llm, guardrails=guardrails)
             result = await asyncio.wait_for(
                 pipeline.run(
                     effective_request,
                     trace_id=trace_id,
                     progress_callback=emit_progress,
-                    token_callback=emit_delta if realtime else None,
                     history=history,
+                    query_guardrail_result=query_guardrail,
                 ),
                 timeout=timeout,
             )
@@ -374,7 +415,6 @@ async def _stream_chat_events(
                         "message_id": assistant.id,
                         "trace_id": result.trace_id,
                         "answer": result.answer,
-                        "stream_already_sent": realtime_sent[model_id],
                         "guardrail_warnings": result.guardrail_warnings,
                         "elapsed_ms": result.elapsed_ms,
                         "citations": [
@@ -385,11 +425,12 @@ async def _stream_chat_events(
             )
         except Exception as exc:
             # SSE では例外を error event へ落とし、ストリームを正常終了させる。
-            message = (
-                "回答生成がタイムアウトしました。"
-                if isinstance(exc, TimeoutError)
-                else STREAM_ERROR_MESSAGE
-            )
+            if isinstance(exc, TimeoutError):
+                message = "回答生成がタイムアウトしました。"
+            elif isinstance(exc, GenerationContractError):
+                message = str(exc)
+            else:
+                message = STREAM_ERROR_MESSAGE
             with suppress(Exception):
                 await oracle.append_message(
                     StoredMessage(
@@ -446,9 +487,8 @@ async def _stream_chat_events(
                         "guardrail_warnings": payload["guardrail_warnings"],
                     },
                 )
-                if not payload["stream_already_sent"]:
-                    for chunk in _answer_chunks(str(payload["answer"])):
-                        yield _sse_event("delta", {"model_id": model_id, "text": chunk})
+                for chunk in _answer_chunks(str(payload["answer"])):
+                    yield _sse_event("delta", {"model_id": model_id, "text": chunk})
                 yield _sse_event(
                     "citations", {"model_id": model_id, "citations": payload["citations"]}
                 )

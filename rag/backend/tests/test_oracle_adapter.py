@@ -15,6 +15,7 @@ import pytest
 import app.clients.oracle as oracle_module
 from app.clients.oracle import (
     DocumentDeleteBlockedByRunningIngestionError,
+    GenerationSettingsRevisionConflictError,
     OracleClient,
     OracleWalletPasswordRequiredError,
     _datetime_value,
@@ -23,12 +24,15 @@ from app.clients.oracle import (
     oracle_audit_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
+    oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
+    oracle_generation_settings_schema_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
+    oracle_prompt_version_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_text_terms,
     oracle_vector_schema_sql,
@@ -89,6 +93,160 @@ def test_datetime_value_attaches_utc_to_naive_database_values() -> None:
 
     assert value.tzinfo is UTC
     assert value.isoformat() == "2026-06-23T00:34:00+00:00"
+
+
+@pytest.mark.anyio
+async def test_independent_oracle_clients_read_same_generation_settings() -> None:
+    """process-local cache を介さず、2 client が同じ GLOBAL 行を読む。"""
+    now = datetime.now(UTC)
+    row = {
+        "generation_profile": "detailed_cited",
+        "active_prompt_version_id": "prompt-1",
+        "revision": 8,
+        "updated_at": now,
+        "updated_by_hash": None,
+    }
+    pool = FakeOraclePool(execute_results=[[row], [row]])
+    settings = Settings.model_construct(rag_generation_profile="grounded_concise")
+
+    first = await OracleClient(
+        settings=settings,
+        pool=pool,
+        db_call_runner=_run_inline,
+    ).get_generation_settings()
+    second = await OracleClient(
+        settings=settings,
+        pool=pool,
+        db_call_runner=_run_inline,
+    ).get_generation_settings()
+
+    assert first == second
+    assert first.profile == "detailed_cited"
+    assert first.revision == 8
+    merge_count = sum(
+        "MERGE INTO rag_generation_settings" in call.statement for call in pool.connection.calls
+    )
+    assert merge_count == 2
+
+
+@pytest.mark.anyio
+async def test_generation_settings_update_locks_and_increments_revision() -> None:
+    now = datetime.now(UTC)
+    current: dict[str, object] = {
+        "generation_profile": "grounded_concise",
+        "active_prompt_version_id": None,
+        "revision": 3,
+        "updated_at": now,
+        "updated_by_hash": None,
+    }
+    pool = FakeOraclePool(execute_results=[[current], [current]])
+    client = OracleClient(
+        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
+        pool=pool,
+        db_call_runner=_run_inline,
+    )
+
+    updated = await client.update_generation_settings(
+        profile="detailed_cited",
+        expected_revision=3,
+    )
+
+    assert updated.profile == "detailed_cited"
+    assert updated.revision == 4
+    assert pool.connection.commits == 1
+    assert any("FOR UPDATE" in call.statement for call in pool.connection.calls)
+    update = next(
+        call for call in pool.connection.calls if "UPDATE rag_generation_settings" in call.statement
+    )
+    assert update.parameters["generation_profile"] == "detailed_cited"
+
+
+@pytest.mark.anyio
+async def test_generation_settings_revision_conflict_rolls_back() -> None:
+    now = datetime.now(UTC)
+    current: dict[str, object] = {
+        "generation_profile": "grounded_concise",
+        "active_prompt_version_id": None,
+        "revision": 5,
+        "updated_at": now,
+        "updated_by_hash": None,
+    }
+    pool = FakeOraclePool(execute_results=[[current], [current]])
+    client = OracleClient(
+        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
+        pool=pool,
+        db_call_runner=_run_inline,
+    )
+
+    with pytest.raises(GenerationSettingsRevisionConflictError):
+        await client.update_generation_settings(
+            profile="detailed_cited",
+            expected_revision=4,
+        )
+
+    assert pool.connection.rollbacks == 1
+    assert not any(
+        "UPDATE rag_generation_settings" in call.statement for call in pool.connection.calls
+    )
+
+
+@pytest.mark.anyio
+async def test_prompt_creation_activation_and_cleanup_share_one_transaction() -> None:
+    now = datetime.now(UTC)
+    current = {
+        "generation_profile": "grounded_concise",
+        "active_prompt_version_id": "active-old",
+        "revision": 9,
+        "updated_at": now,
+        "updated_by_hash": None,
+    }
+    prompt_row = {
+        "version_id": "active-old",
+        "name": "旧版",
+        "system_prompt": "旧 prompt",
+        "note": "",
+        "created_at": now,
+        "created_by_hash": None,
+    }
+    pool = FakeOraclePool(
+        execute_results=[
+            [current],
+            [current],
+            [{"count_value": 101}],
+            [prompt_row],
+        ]
+    )
+    client = OracleClient(
+        settings=Settings.model_construct(rag_generation_profile="grounded_concise"),
+        pool=pool,
+        db_call_runner=_run_inline,
+    )
+
+    settings, _versions = await client.create_prompt_version(
+        name="新版",
+        system_prompt="新 prompt",
+        activate=True,
+    )
+
+    assert settings.revision == 10
+    assert settings.active_prompt_version_id != "active-old"
+    assert pool.connection.commits == 1
+    statements = [call.statement for call in pool.connection.calls]
+    assert any("SELECT generation_profile" in sql and "FOR UPDATE" in sql for sql in statements)
+    assert any("INSERT INTO rag_prompt_versions" in sql for sql in statements)
+    assert any("DELETE FROM rag_prompt_versions" in sql for sql in statements)
+
+
+def test_generation_schema_has_singleton_revision_and_active_pointer() -> None:
+    prompt_sql = oracle_prompt_version_schema_sql()
+    settings_sql = oracle_generation_settings_schema_sql()
+
+    assert "CREATE TABLE rag_prompt_versions" in prompt_sql
+    assert "system_prompt    CLOB NOT NULL" in prompt_sql
+    assert "CREATE TABLE rag_generation_settings" in settings_sql
+    assert "CHECK (settings_key = 'GLOBAL')" in settings_sql
+    assert "active_prompt_version_id" in settings_sql
+    assert "revision >= 1" in settings_sql
 
 
 @pytest.mark.anyio
@@ -1217,6 +1375,9 @@ async def test_oci_vector_search_uses_ai_vector_search_sql() -> None:
                     "chunk_id": "doc-1:0",
                     "chunk_text": "社内規程 クラウド利用料",
                     "metadata_json": '{"chunk_index":0}',
+                    "chunk_set_id": "set-a",
+                    "recipe_id": "recipe-a",
+                    "recipe_slot_no": 1,
                     "file_name": "policy.txt",
                     "category_name": "社内規程",
                     "score": 0.91,
@@ -1235,6 +1396,8 @@ async def test_oci_vector_search_uses_ai_vector_search_sql() -> None:
     assert len(hits) == 1
     assert hits[0].metadata["document_id"] == "doc-1"
     assert hits[0].metadata["chunk_id"] == "doc-1:0"
+    assert hits[0].metadata["chunk_set_id"] == "set-a"
+    assert hits[0].metadata["recipe_id"] == "recipe-a"
     assert hits[0].metadata["retrieval_mode"] == "vector"
     assert hits[0].metadata["vector_rank"] == 1
     assert hits[0].metadata["vector_score"] == 0.91
@@ -1618,7 +1781,11 @@ async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> N
                 text="社内規程",
                 start_offset=0,
                 end_offset=3,
-                metadata={"section_path": "経費申請 > 承認", "content_kind": "text"},
+                metadata={
+                    "section_path": "経費申請 > 承認",
+                    "content_kind": "text",
+                    "context_header": "社内規程.pdf > 経費申請 > 承認",
+                },
             )
         ],
         [[1.0, 0.0, 0.0]],
@@ -1635,6 +1802,8 @@ async def test_oci_save_chunks_replaces_existing_chunks_and_binds_vectors() -> N
     assert pool.connection.many_calls
     inserted = pool.connection.many_calls[0].rows[0]
     assert inserted["chunk_id"] == "doc-1:0"
+    assert inserted["chunk_text"] == "社内規程"
+    assert inserted["search_text"] == "社内規程.pdf > 経費申請 > 承認\n社内規程"
     assert inserted["embedding"] == array("f", [1.0, 0.0, 0.0])
     metadata = json.loads(str(inserted["metadata_json"]))
     assert metadata["document_id"] == "doc-1"
@@ -2006,7 +2175,7 @@ async def test_oci_context_neighbors_uses_chunk_index_window_sql() -> None:
         text="中心: 承認条件。",
         score=0.91,
         file_name="policy.txt",
-        metadata={"chunk_index": 2},
+        metadata={"chunk_index": 2, "chunk_set_id": "set-a", "recipe_id": "recipe-a"},
     )
 
     neighbors = await client.context_neighbors([anchor], window=1)
@@ -2022,6 +2191,7 @@ async def test_oci_context_neighbors_uses_chunk_index_window_sql() -> None:
     assert "d.status = 'INDEXED'" in call.statement
     assert "d.document_id = :filter_document_id" in call.statement
     assert call.parameters["filter_document_id"] == "doc-1"
+    assert call.parameters["filter_chunk_set_id"] == "set-a"
     assert call.parameters["anchor_index"] == 2
     assert call.parameters["start_index"] == 1
     assert call.parameters["end_index"] == 3
@@ -2063,7 +2233,12 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
         text="表行: 承認条件 / 120000 円以上。",
         score=0.91,
         file_name="policy.txt",
-        metadata={"chunk_index": 2, "chunk_group_id": "grp-table"},
+        metadata={
+            "chunk_index": 2,
+            "chunk_group_id": "grp-table",
+            "chunk_set_id": "set-a",
+            "recipe_id": "recipe-a",
+        },
     )
 
     siblings = await client.context_group_siblings([anchor], max_chunks_per_group=2)
@@ -2081,6 +2256,7 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     assert "d.status = 'INDEXED'" in call.statement
     assert "d.document_id = :filter_document_id" in call.statement
     assert call.parameters["filter_document_id"] == "doc-1"
+    assert call.parameters["filter_chunk_set_id"] == "set-a"
     assert call.parameters["chunk_group_id"] == "grp-table"
     assert call.parameters["anchor_index"] == 2
     assert call.parameters["anchor_chunk_id"] == "doc-1:2"
@@ -2121,7 +2297,11 @@ async def test_oci_context_dependency_chunks_uses_dependency_metadata_sql() -> N
         text="図: 承認フロー。",
         score=0.91,
         file_name="approval.pdf",
-        metadata={"chunk_index": 2, "element_ids": "fig-1"},
+        metadata={
+            "chunk_index": 2,
+            "element_ids": "fig-1",
+            "recipe_id": "recipe-a",
+        },
     )
 
     chunks = await client.context_dependency_chunks([anchor], max_chunks_per_anchor=2)
@@ -2137,6 +2317,8 @@ async def test_oci_context_dependency_chunks_uses_dependency_metadata_sql() -> N
     assert "LIKE :dependency_token_0 ESCAPE '\\'" in call.statement
     assert "ROWNUM <= :candidate_limit" in call.statement
     assert call.parameters["filter_document_id"] == "doc-1"
+    assert call.parameters["anchor_recipe_id"] == "recipe-a"
+    assert "anchor_cs.recipe_id = :anchor_recipe_id" in call.statement
     assert call.parameters["anchor_index"] == 2
     assert call.parameters["anchor_chunk_id"] == "doc-1:2"
     assert call.parameters["candidate_limit"] == 16
@@ -2164,6 +2346,8 @@ async def test_oci_context_dependency_chunks_falls_back_without_anchor_lineage()
     assert "JSON_EXISTS(c.metadata_json, '$.parent_element_ids')" in call.statement
     assert "JSON_EXISTS(c.metadata_json, '$.dependency_edges')" in call.statement
     assert "dependency_token_0" not in call.parameters
+    assert "c.chunk_set_id IS NULL" in call.statement
+    assert "anchor_legacy_r.document_id = c.document_id" in call.statement
 
 
 async def test_oci_update_error_status_preserves_chunks_and_extraction() -> None:
@@ -2362,7 +2546,7 @@ async def test_oci_keyword_search_normalizes_natural_language_query() -> None:
     assert "{規程}" in text_query
     assert "{フロー}" in text_query
     assert " ACCUM " in text_query
-    assert "CONTAINS(c.chunk_text, :query, 1) > 0" in call.statement
+    assert "CONTAINS(c.search_text, :query, 1) > 0" in call.statement
 
 
 async def test_oci_keyword_search_escapes_oracle_text_special_syntax() -> None:
@@ -2591,6 +2775,7 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     ddl = oracle_vector_schema_sql()
 
     assert "tenant_id_hash  CHAR(64)" in ddl
+    assert "search_text     CLOB NOT NULL" in ddl
     assert "embedding       VECTOR(1536, FLOAT32)," in ddl
     assert "embedding       VECTOR(1536, FLOAT32) NOT NULL" not in ddl
     assert "CREATE VECTOR INDEX rag_chunks_embedding_hnsw_idx" in ddl
@@ -2612,6 +2797,7 @@ def test_oracle_vector_schema_includes_tenant_filter_columns() -> None:
     assert "rag_chunks_tenant_document_idx" in ddl
     assert "ON rag_chunks (tenant_id_hash, document_id, chunk_index)" in ddl
     assert "INDEXTYPE IS CTXSYS.CONTEXT" in ddl
+    assert "ON rag_chunks (search_text)" in ddl
 
 
 def test_oracle_search_audit_schema_redacts_query_body() -> None:
@@ -2766,6 +2952,7 @@ def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> N
     """GraphRAG-lite / feedback / eval artifact は Oracle table と JSON で表現する。"""
     graph_ddl = oracle_knowledge_graph_schema_sql()
     feedback_ddl = oracle_feedback_schema_sql()
+    feedback_details_ddl = oracle_feedback_details_schema_sql()
     artifact_ddl = oracle_evaluation_artifact_schema_sql()
 
     assert "CREATE TABLE rag_graph_entities" in graph_ddl
@@ -2784,6 +2971,12 @@ def test_oracle_graph_feedback_and_eval_artifact_schema_use_oracle_tables() -> N
     assert "comment_hash      CHAR(64)" in feedback_ddl
     assert "comment_text" not in feedback_ddl.lower()
     assert "comment_body" not in feedback_ddl.lower()
+    assert "CREATE TABLE rag_feedback_details" in feedback_details_ddl
+    assert "question_text     CLOB" in feedback_details_ddl
+    assert "answer_text       CLOB" in feedback_details_ddl
+    assert "comment_text      VARCHAR2(1000 CHAR)" in feedback_details_ddl
+    assert "INDEXTYPE IS CTXSYS.CONTEXT" in feedback_details_ddl
+    assert "SYNC (ON COMMIT)" in feedback_details_ddl
     assert "CREATE TABLE rag_evaluation_runs" in artifact_ddl
     assert "request_json      JSON NOT NULL" in artifact_ddl
     assert "result_json       JSON NOT NULL" in artifact_ddl
@@ -2809,6 +3002,7 @@ async def test_feedback_write_and_current_read_use_append_only_latest_vote() -> 
                     "chunk_id": None,
                     "rating": "not_helpful",
                     "reason": "incorrect",
+                    "comment": "古い回答です。",
                     "created_at": created_at,
                     "feedback_rank": 1,
                 }
@@ -2847,25 +3041,93 @@ async def test_feedback_write_and_current_read_use_append_only_latest_vote() -> 
     assert insert.parameters["user_id_hash"] == "b" * 64
     assert "ROW_NUMBER() OVER" in select.statement
     assert "f.user_id_hash = :user_id_hash" in select.statement
+    assert 'fd.comment_text AS "comment"' in select.statement
     assert current[0]["feedback_id"] == "feedback-2"
+    assert current[0]["comment"] == "古い回答です。"
     assert "feedback_rank" not in current[0]
 
 
 @pytest.mark.anyio
-async def test_feedback_dashboard_filters_tenant_and_aggregates_latest_votes() -> None:
-    """一覧・件数・集計は同じ latest CTE と tenant/filter を使う。"""
-    pool = FakeOraclePool(execute_results=[[], [{"total": 2}], []])
+async def test_feedback_detail_uses_oracle_safe_comment_alias() -> None:
+    """詳細取得でも予約語 COMMENT を引用し、API キーは comment のまま返す。"""
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "feedback_id": "feedback-1",
+                    "comment": "古い回答です。",
+                    "citations_json": "[]",
+                    "guardrail_codes": "[]",
+                }
+            ]
+        ]
+    )
+    client = OracleClient(
+        settings=Settings.model_construct(), pool=pool, db_call_runner=_run_inline
+    )
+
+    detail = await client.get_feedback_detail("feedback-1")
+
+    assert 'fd.comment_text AS "comment"' in pool.connection.calls[0].statement
+    assert detail is not None
+    assert detail["comment"] == "古い回答です。"
+
+
+@pytest.mark.anyio
+async def test_feedback_details_are_committed_with_the_vote() -> None:
+    """本文 snapshot は feedback event と同一 transaction で保存する。"""
+    pool = FakeOraclePool()
     client = OracleClient(
         settings=Settings.model_construct(), pool=pool, db_call_runner=_run_inline
     )
     token = set_audit_request_context(AuditRequestContext(tenant_id_hash="a" * 64))
     try:
-        rows, total, groups = await client.list_feedback_dashboard_rows(
+        await client.save_feedback(
+            {
+                "feedback_id": "feedback-1",
+                "trace_id": "trace-1",
+                "business_view_id": "bv-1",
+                "target_type": "answer",
+                "source_surface": "search",
+                "rating": "not_helpful",
+                "reason": "incorrect",
+            },
+            details={
+                "content_source": "search_snapshot",
+                "question_text": "質問",
+                "answer_text": "回答",
+                "comment_text": "古い回答です。",
+                "citations": [],
+            },
+        )
+    finally:
+        reset_audit_request_context(token)
+
+    assert len(pool.connection.calls) == 2
+    assert "INSERT INTO rag_citation_feedback" in pool.connection.calls[0].statement
+    assert "INSERT INTO rag_feedback_details" in pool.connection.calls[1].statement
+    assert pool.connection.calls[1].parameters["search_text"] == "質問\n回答\n古い回答です。"
+    assert pool.connection.commits == 1
+    assert pool.connection.rollbacks == 0
+
+
+@pytest.mark.anyio
+async def test_feedback_dashboard_filters_tenant_and_aggregates_latest_votes() -> None:
+    """一覧・件数・集計は同じ latest CTE と tenant/filter を使う。"""
+    pool = FakeOraclePool(execute_results=[[], [{"total": 2}], [], []])
+    client = OracleClient(
+        settings=Settings.model_construct(), pool=pool, db_call_runner=_run_inline
+    )
+    token = set_audit_request_context(AuditRequestContext(tenant_id_hash="a" * 64))
+    try:
+        rows, total, groups, previous_groups = await client.list_feedback_dashboard_rows(
             business_view_id="bv-1",
             target_type="citation",
             rating="not_helpful",
             reason="not_relevant",
             period_days=30,
+            search_query="規程",
+            sort_order="newest",
             limit=20,
             offset=0,
         )
@@ -2875,13 +3137,15 @@ async def test_feedback_dashboard_filters_tenant_and_aggregates_latest_votes() -
     assert rows == []
     assert total == 2
     assert groups == []
-    assert len(pool.connection.calls) == 3
+    assert previous_groups == []
+    assert len(pool.connection.calls) == 4
     for call in pool.connection.calls:
         assert "latest_feedback" in call.statement
         assert "f.tenant_id_hash = :tenant_id_hash" in call.statement
         assert call.parameters["tenant_id_hash"] == "a" * 64
         assert call.parameters["business_view_id"] == "bv-1"
         assert call.parameters["period_days"] == 30
+        assert call.parameters["feedback_query"] == "{規程}"
 
 
 async def test_vector_search_rejects_wrong_embedding_dimension() -> None:

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  chunkPreviewForm,
+  chunkPreviewValidationError,
   ingestConflictBannerIsStale,
+  isIndexedTransition,
   phaseLabelKey,
   phaseRetryLabelKey,
   phaseRunningMessageKey,
@@ -9,7 +12,8 @@ import {
   resolveDocumentActionPlan,
   resolveIngestionParserDisplay,
   resolveIngestionProgressSummary,
-  resolveLatestJobsByPhase,
+  resolvePhaseRows,
+  resolveStatusMessageSlot,
   shouldShowProcessingWatchBanner,
 } from "./DocumentWorkspace.logic";
 import {
@@ -18,6 +22,60 @@ import {
 } from "./ingestion-error-display";
 import { t } from "@/lib/i18n";
 import type { FileStatus, IngestionJobPhase } from "@/lib/api";
+
+describe("分割プレビュー設定", () => {
+  it("レシピ未指定時は現行の既定値を使う", () => {
+    expect(chunkPreviewForm(null)).toEqual({
+      chunking_strategy: "structure_aware",
+      chunk_size: 800,
+      chunk_overlap: 120,
+      chunk_child_size: 320,
+      chunk_min_chars: 120,
+      chunk_delimiter: "\\n\\n",
+      chunk_context_header_enabled: true,
+    });
+  });
+
+  it("overlap・子 chunk・最小文字数・分割符の不正値を実行前に止める", () => {
+    const base = chunkPreviewForm(null);
+    expect(chunkPreviewValidationError({ ...base, chunk_overlap: 800 })).toContain("overlap");
+    expect(
+      chunkPreviewValidationError({
+        ...base,
+        chunking_strategy: "hierarchical_parent_child",
+        chunk_child_size: 800,
+      })
+    ).toContain("子 chunk");
+    expect(chunkPreviewValidationError({ ...base, chunk_min_chars: 800 })).toContain(
+      "最小 chunk"
+    );
+    expect(
+      chunkPreviewValidationError({
+        ...base,
+        chunking_strategy: "fixed_delimiter",
+        chunk_delimiter: " ",
+      })
+    ).toBe("固定分割符文字列");
+    expect(chunkPreviewValidationError(base)).toBeNull();
+  });
+
+  it("chunk size と overlap の製品上限を検証する", () => {
+    const base = chunkPreviewForm(null);
+    expect(
+      chunkPreviewValidationError({
+        ...base,
+        chunk_size: 32_000,
+        chunk_overlap: 8_000,
+      })
+    ).toBeNull();
+    expect(chunkPreviewValidationError({ ...base, chunk_size: 32_001 })).toContain(
+      "chunk サイズ"
+    );
+    expect(chunkPreviewValidationError({ ...base, chunk_overlap: 8_001 })).toContain(
+      "overlap"
+    );
+  });
+});
 
 describe("文書処理の表示名", () => {
   it.each<[FileStatus, string]>([
@@ -206,7 +264,7 @@ describe("resolveDocumentActionPlan", () => {
   });
 });
 
-describe("resolveLatestJobsByPhase", () => {
+describe("resolvePhaseRows", () => {
   it("工程順に各工程の最新(先頭一致)ジョブを返す", () => {
     const jobs = [
       { id: "j4", phase: "INDEX" as IngestionJobPhase },
@@ -215,7 +273,7 @@ describe("resolveLatestJobsByPhase", () => {
       { id: "j2a", phase: "EXTRACT" as IngestionJobPhase },
       { id: "j1", phase: "PREPROCESS" as IngestionJobPhase },
     ];
-    const rows = resolveLatestJobsByPhase(jobs);
+    const rows = resolvePhaseRows([], jobs);
     expect(rows.map((row) => row.phase)).toEqual([
       "PREPROCESS",
       "EXTRACT",
@@ -225,12 +283,24 @@ describe("resolveLatestJobsByPhase", () => {
     expect(rows.map((row) => row.job?.id ?? null)).toEqual(["j1", "j2b", "j3", "j4"]);
   });
 
-  it("未実行工程は job=null の行になる", () => {
-    const rows = resolveLatestJobsByPhase([
+  it("通しジョブで実行済みの工程は step 状態を保持する(job=null でも未実行にしない)", () => {
+    // PREPROCESS 起点の通しジョブ 1 本で 4 工程完了 → steps は全 SUCCEEDED、
+    // EXTRACT/CHUNK/INDEX にはジョブ行が無い。
+    const steps = (["PREPROCESS", "EXTRACT", "CHUNK", "INDEX"] as IngestionJobPhase[]).map(
+      (phase) => ({ phase, status: "SUCCEEDED" })
+    );
+    const rows = resolvePhaseRows(steps, [
       { id: "j1", phase: "PREPROCESS" as IngestionJobPhase },
     ]);
     expect(rows[0].job?.id).toBe("j1");
     expect(rows.slice(1).every((row) => row.job === null)).toBe(true);
+    expect(rows.every((row) => row.step?.status === "SUCCEEDED")).toBe(true);
+  });
+
+  it("工程状態が無い工程は step=null の行になる", () => {
+    const rows = resolvePhaseRows([{ phase: "PREPROCESS" as IngestionJobPhase }], []);
+    expect(rows[0].step).not.toBeNull();
+    expect(rows.slice(1).every((row) => row.step === null && row.job === null)).toBe(true);
   });
 });
 
@@ -485,5 +555,92 @@ describe("ingestConflictBannerIsStale", () => {
   it("409 以外のエラーは消さない", () => {
     expect(ingestConflictBannerIsStale({ errorStatus: 500, hasActiveJob: false })).toBe(false);
     expect(ingestConflictBannerIsStale({ errorStatus: null, hasActiveJob: false })).toBe(false);
+  });
+});
+
+describe("resolveStatusMessageSlot(状態メッセージ単一スロット)", () => {
+  const base = {
+    errored: false,
+    processingVisible: false,
+    documentStatus: "INDEXED",
+    preparedArtifactMissing: false,
+  };
+
+  it("失敗原因が実行中・ゲート案内より優先される", () => {
+    expect(
+      resolveStatusMessageSlot({
+        ...base,
+        errored: true,
+        processingVisible: true,
+        documentStatus: "REVIEW",
+      })
+    ).toEqual({ kind: "failure" });
+  });
+
+  it("実行中はゲート案内より優先される", () => {
+    expect(
+      resolveStatusMessageSlot({ ...base, processingVisible: true, documentStatus: "REVIEW" })
+    ).toEqual({ kind: "processing" });
+  });
+
+  it.each(["PREPROCESSED", "REVIEW", "CHUNKED"] as const)(
+    "%s は承認待ちゲート案内を出す",
+    (status) => {
+      expect(resolveStatusMessageSlot({ ...base, documentStatus: status })).toEqual({
+        kind: "gate",
+        status,
+        artifactMissing: false,
+      });
+    }
+  );
+
+  it("PREPROCESSED で処理後ファイル欠落なら artifactMissing を立てる", () => {
+    expect(
+      resolveStatusMessageSlot({
+        ...base,
+        documentStatus: "PREPROCESSED",
+        preparedArtifactMissing: true,
+      })
+    ).toEqual({ kind: "gate", status: "PREPROCESSED", artifactMissing: true });
+  });
+
+  it("INDEXED では常設メッセージを出さない(StatusBadge に委ねる)", () => {
+    expect(resolveStatusMessageSlot(base)).toBeNull();
+    expect(
+      resolveStatusMessageSlot({ ...base, documentStatus: "PREPROCESSED", preparedArtifactMissing: true, errored: false, processingVisible: false })
+    ).not.toBeNull();
+  });
+});
+
+describe("isIndexedTransition(索引完了 toast)", () => {
+  it("同一レシピの INDEXING → INDEXED でのみ true", () => {
+    expect(
+      isIndexedTransition(
+        { recipeId: "r1", status: "INDEXING" },
+        { recipeId: "r1", status: "INDEXED" }
+      )
+    ).toBe(true);
+  });
+
+  it("初回マウント(prev なし)では発火しない", () => {
+    expect(isIndexedTransition(null, { recipeId: "r1", status: "INDEXED" })).toBe(false);
+  });
+
+  it("レシピ切替による INDEXED 表示では発火しない", () => {
+    expect(
+      isIndexedTransition(
+        { recipeId: "r1", status: "INDEXING" },
+        { recipeId: "r2", status: "INDEXED" }
+      )
+    ).toBe(false);
+  });
+
+  it("INDEXING 以外からの遷移では発火しない", () => {
+    expect(
+      isIndexedTransition(
+        { recipeId: "r1", status: "REVIEW" },
+        { recipeId: "r1", status: "INDEXED" }
+      )
+    ).toBe(false);
   });
 });

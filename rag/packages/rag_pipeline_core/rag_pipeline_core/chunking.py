@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 
-SENTENCE_BOUNDARY = re.compile(r"(?<=[。！？!?])\s*")
+# 終端句読点 + 後続の閉じ記号列(」』)】等)の直後を文境界とする。
+# 閉じ記号を次文の先頭へ送らないため、lookbehind ではなく境界そのものを match する。
+SENTENCE_BOUNDARY = re.compile(r"[。！？!?][」』）】\)\"']*\s*")
 MARKDOWN_HEADING = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+)$")
 NUMBERED_HEADING = re.compile(
     r"^(?P<prefix>(?:\d+(?:\.\d+)*|第[一二三四五六七八九十百千\d]+[章節部]|"
@@ -106,6 +108,11 @@ BBOX_COORDINATE_MODE_KEYS = (
 )
 BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
 
+# 設定/API が受け付ける製品上の文字数範囲。低レベル関数は小さい値を使う単体テストも許容する。
+CHUNK_SIZE_MIN_CHARS = 200
+CHUNK_SIZE_MAX_CHARS = 32_000
+CHUNK_OVERLAP_MAX_CHARS = 8_000
+
 
 def chunk_text(text: str, chunk_size: int = 800, overlap: int = 120) -> list[Chunk]:
     """テキストを重複付きで分割する。
@@ -147,10 +154,7 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 120) -> list[Chu
             )
         )
 
-    if overlap == 0 or len(chunks) <= 1:
-        final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
-    else:
-        final_chunks = [_with_chunk_metadata(chunk) for chunk in _apply_overlap(chunks, overlap)]
+    final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
     return _with_chunk_size_compliance_metadata(
         final_chunks,
         chunk_size=chunk_size,
@@ -221,7 +225,6 @@ def chunk_extraction(
 CHUNKING_STRATEGIES: tuple[str, ...] = (
     "structure_aware",
     "recursive_character",
-    "sentence_window",
     "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
@@ -230,6 +233,11 @@ CHUNKING_STRATEGIES: tuple[str, ...] = (
 )
 _DEFAULT_CHUNKING_STRATEGY = "structure_aware"
 _DEFAULT_FIXED_DELIMITER = "\\n\\n"
+# 撤去済み戦略の既存設定を後継戦略へ読み替える(sentence_window は小 chunk 化のみで
+# recursive_character + 検索時 neighbor expansion で代替)
+_LEGACY_CHUNKING_STRATEGY_ALIASES: dict[str, str] = {
+    "sentence_window": "recursive_character",
+}
 
 
 def chunk_extraction_with_strategy(
@@ -239,7 +247,6 @@ def chunk_extraction_with_strategy(
     chunk_size: int = 800,
     overlap: int = 120,
     child_size: int = 320,
-    sentence_window_size: int = 3,
     min_chars: int = 0,
     delimiter: str = _DEFAULT_FIXED_DELIMITER,
 ) -> list[Chunk]:
@@ -249,20 +256,14 @@ def chunk_extraction_with_strategy(
     本プロジェクトの `StructuredExtraction` に再マップし、chunks 段階で手動選択できるようにする。
     未知 / 既定の戦略は structure_aware へ安全に fallback する。
     """
+    aliased_strategy = _LEGACY_CHUNKING_STRATEGY_ALIASES.get(strategy, strategy)
     normalized_strategy = (
-        strategy if strategy in CHUNKING_STRATEGIES else _DEFAULT_CHUNKING_STRATEGY
+        aliased_strategy if aliased_strategy in CHUNKING_STRATEGIES else _DEFAULT_CHUNKING_STRATEGY
     )
     if normalized_strategy != "fixed_delimiter":
         _validate_chunk_settings(chunk_size, overlap)
     if normalized_strategy == "recursive_character":
         chunks = _chunk_recursive_character(extraction, chunk_size=chunk_size, overlap=overlap)
-    elif normalized_strategy == "sentence_window":
-        chunks = _chunk_sentence_window(
-            extraction,
-            chunk_size=chunk_size,
-            overlap=overlap,
-            window=max(1, sentence_window_size),
-        )
     elif normalized_strategy == "hierarchical_parent_child":
         chunks = _chunk_hierarchical_parent_child(
             extraction,
@@ -438,69 +439,6 @@ def _chunk_markdown_heading(
                 metadata=metadata,
                 start_index=len(chunks),
             )
-        chunks.extend(
-            _with_chunk_group_metadata(
-                segment_chunks,
-                group_kind="section",
-                group_text=normalized,
-            )
-        )
-    final_chunks = [_with_chunk_metadata(chunk) for chunk in chunks]
-    return _with_chunk_size_compliance_metadata(
-        final_chunks,
-        chunk_size=chunk_size,
-        overlap=overlap,
-    )
-
-
-def _chunk_sentence_window(
-    extraction: StructuredExtraction,
-    *,
-    chunk_size: int,
-    overlap: int,
-    window: int,
-) -> list[Chunk]:
-    """LlamaIndex SentenceWindow 風に章節内で固定文数ごとの小 chunk を作る。"""
-    source = extraction.raw_text.replace("\r\n", "\n").replace("\r", "\n")
-    if not source.strip():
-        return []
-    chunks: list[Chunk] = []
-    for segment in _section_segments(source):
-        normalized = re.sub(r"\s+", " ", segment.text).strip()
-        if not normalized:
-            continue
-        metadata = _segment_metadata(segment)
-        metadata["sentence_window_size"] = window
-        sentences = _split_sentences(normalized)
-        segment_chunks: list[Chunk] = []
-        cursor = segment.start_offset
-        for start in range(0, len(sentences), window):
-            text = " ".join(sentences[start : start + window]).strip()
-            if not text:
-                continue
-            if len(text) <= chunk_size:
-                segment_chunks.append(
-                    Chunk(
-                        text=text,
-                        index=len(chunks) + len(segment_chunks),
-                        start_offset=cursor,
-                        end_offset=cursor + len(text),
-                        metadata=dict(metadata),
-                    )
-                )
-                cursor += len(text) + 1
-                continue
-            for part in _split_long_sentence(text, chunk_size, overlap):
-                segment_chunks.append(
-                    Chunk(
-                        text=part,
-                        index=len(chunks) + len(segment_chunks),
-                        start_offset=cursor,
-                        end_offset=cursor + len(part),
-                        metadata=dict(metadata),
-                    )
-                )
-                cursor += max(1, len(part) - overlap)
         chunks.extend(
             _with_chunk_group_metadata(
                 segment_chunks,
@@ -765,7 +703,7 @@ def _chunk_normalized_text(
                     metadata=dict(metadata),
                 )
             )
-        for part in _split_long_sentence(sentence, chunk_size, overlap):
+        for part in _split_long_sentence(sentence, chunk_size, 0):
             chunks.append(
                 Chunk(
                     text=part,
@@ -775,7 +713,7 @@ def _chunk_normalized_text(
                     metadata=dict(metadata),
                 )
             )
-            cursor += max(1, len(part) - overlap)
+            cursor += len(part)
         buffer = ""
 
     if buffer:
@@ -789,7 +727,7 @@ def _chunk_normalized_text(
             )
         )
 
-    return chunks
+    return _apply_overlap(chunks, overlap) if overlap and len(chunks) > 1 else chunks
 
 
 def _element_spans(elements: list[DocumentElement]) -> list[_ElementSpan]:
@@ -1119,13 +1057,14 @@ def _chunk_span_group(
             group_text=text,
         )
     if metadata["content_kind"] == "list":
+        list_chunks = _chunks_from_parts(
+            _split_lines_by_size(text, chunk_size),
+            start_index=start_index,
+            start_offset=start_offset,
+            metadata=metadata,
+        )
         return _with_chunk_group_metadata(
-            _chunks_from_parts(
-                _split_lines_by_size(text, chunk_size),
-                start_index=start_index,
-                start_offset=start_offset,
-                metadata=metadata,
-            ),
+            _apply_overlap(list_chunks, overlap) if overlap else list_chunks,
             group_kind="element_group",
             group_text=text,
         )
@@ -1919,8 +1858,13 @@ def _span_dependency_edges(group: list[_ElementSpan]) -> list[dict[str, str]]:
 
 
 def _split_sentences(text: str) -> list[str]:
-    """句点・疑問符・感嘆符を優先して文に分ける。"""
-    parts = [part.strip() for part in SENTENCE_BOUNDARY.split(text)]
+    """句点・疑問符・感嘆符(+閉じ括弧・閉じ引用)を優先して文に分ける。"""
+    parts: list[str] = []
+    cursor = 0
+    for match in SENTENCE_BOUNDARY.finditer(text):
+        parts.append(text[cursor : match.end()].strip())
+        cursor = match.end()
+    parts.append(text[cursor:].strip())
     return [part for part in parts if part]
 
 

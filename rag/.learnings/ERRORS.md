@@ -1,3 +1,323 @@
+## [ERR-20260703-007] service_testclient_httpx_deadlock
+
+**Logged**: 2026-07-03T05:23:00+09:00
+**Priority**: low
+**Status**: pending
+**Area**: service tests
+
+### Summary
+chunking service の FastAPI `TestClient` が backend venv の deprecated httpx 組合せで request 中に停止した。
+
+### Error
+```text
+StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.
+test_health_ok が response を返さず timeout した。
+```
+
+### Context
+- test collection と service app import は成功する。
+- 共有 stage request / app factory の parity テストは backend suite で通過した。
+
+### Suggested Fix
+service 専用 test environment の FastAPI/Starlette/httpx test transport を互換版へ揃える。
+
+### Metadata
+- Reproducible: yes
+- Related Files: services/pipeline/chunking/pyproject.toml, services/pipeline/chunking/tests/test_chunking_stage.py
+
+---
+
+## [ERR-20260703-A17] oracle_target_mismatch
+
+**Logged**: 2026-07-03T07:21:48+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+ローカルコンテナ向け migration を計画したが、backend は共有 OCI ADB を参照していた。
+
+### Error
+```text
+ORA-01017: invalid credential or not authorized; logon denied
+```
+
+### Context
+- ローカル `oracle-database` へ schema migration artifact を適用しようとした。
+- backend の実 DSN は Wallet alias `aiomladb0121_high` で、ローカル Free DB ではなかった。
+- 認証で停止したため、ローカルコンテナへの DDL は実行されていない。
+
+### Suggested Fix
+DB 変更前に backend の実 DSN と計画上の対象を照合し、共有 DB なら明示承認を得る。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/.env, backend/app/config.py
+
+### Resolution
+- **Resolved**: 2026-07-03T07:21:48+09:00
+- **Notes**: 接続先不一致を確認し、共有 ADB への書き込みは実行せず明示承認待ちにした。
+
+---
+
+## [ERR-20260703-008] uv_cache_read_only_in_sandbox
+
+**Logged**: 2026-07-03T06:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+通常 sandbox では uv の既定キャッシュ `/root/.cache/uv` が読み取り専用で、検証コマンドが開始できなかった。
+
+### Error
+```text
+Could not acquire lock: Could not create temporary file: Read-only file system at /root/.cache/uv
+```
+
+### Context
+- backend の ruff と Python 構文検証を `uv run` で開始した。
+- repository 自体ではなく uv の一時 lock 作成だけが失敗した。
+
+### Suggested Fix
+sandbox 内の uv 実行では `UV_CACHE_DIR=/tmp/uv-cache` を指定する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pyproject.toml
+
+### Resolution
+- **Resolved**: 2026-07-03T06:00:00+09:00
+- **Notes**: 以降の検証コマンドで writable な `/tmp/uv-cache` を使用する。
+
+---
+
+## [ERR-20260703-009] unit_tests_probed_real_oracle
+
+**Logged**: 2026-07-03T06:05:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+通常の unit test 実行でも `backend/.env` の Oracle DSN を読み、session fixture が実 DB 接続と schema 確認を開始したため長時間停止した。
+
+### Error
+```text
+pytest collected tests, then waited in the session-level real Oracle availability/schema fixture
+```
+
+### Context
+- `tests/test_grounding_adapter.py` 単体でも `_oracle_db_session` が autouse で実行される。
+- 今回の CI 相当検証は決定論 unit test だけで、実 Oracle は不要だった。
+
+### Suggested Fix
+unit test 実行時は `ORACLE_DSN=` を明示し、実 DB 検証は専用 staging run に分離する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/conftest.py, backend/tests/_oracle_test_db.py
+
+### Resolution
+- **Resolved**: 2026-07-03T06:05:00+09:00
+- **Notes**: 以降の unit test コマンドで `ORACLE_DSN=` を指定する。
+
+---
+
+## [ERR-20260703-010] full_backend_suite_waited_on_external_path
+
+**Logged**: 2026-07-03T07:08:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Oracle DSN を無効化した全量 pytest でも、外部サービス待機を含む既存テスト経路で進捗が止まった。
+
+### Error
+```text
+pytest reached about 17% and then produced no progress for over one minute
+```
+
+### Context
+- grounding の対象テストは個別実行ですべて完了している。
+- 全量実行は複数の未コミット機能変更を含む worktree で、早期失敗も既に発生していた。
+
+### Suggested Fix
+CI unit suite から実サービス待機テストを marker で分離し、各外部 client に短い決定論 timeout を設定する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests, backend/app/clients
+
+### Resolution
+- **Resolved**: 2026-07-03T07:08:00+09:00
+- **Notes**: 全量 run を中止し、grounding 関連 suite と静的検査を個別完走させた。
+
+---
+
+## [ERR-20260703-008] uv_cache_read_only
+
+**Logged**: 2026-07-03T12:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+managed sandbox では既定の `/root/.cache/uv` が read-only のため uv コマンドが開始前に失敗した。
+
+### Error
+```text
+error: Could not acquire lock
+Caused by: Could not create temporary file
+Caused by: Read-only file system at /root/.cache/uv
+```
+
+### Context
+- 回答生成設定変更後の対象 Ruff check を `uv run ruff check ...` で実行した。
+- workspace と `/tmp` は書き込み可能だが、root cache は書き込み不可だった。
+
+### Suggested Fix
+managed sandbox 内の uv コマンドでは `UV_CACHE_DIR=/tmp/uv-cache` を指定する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pyproject.toml
+
+### Resolution
+- **Resolved**: 2026-07-03T12:00:00+09:00
+- **Notes**: 以後の uv コマンドは `/tmp/uv-cache` を使用する。
+
+---
+
+## [ERR-20260703-009] search_stream_patch_context_drift
+
+**Logged**: 2026-07-03T12:30:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Ruff 整形後の検索 SSE import/context と一致しない複数 hunk patch が原子的に失敗した。
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected lines
+```
+
+### Context
+- raw-token callback を route 層から除去する差分を再適用しようとした。
+- 現行ファイルを確認すると同変更は既に反映済みだった。
+
+### Suggested Fix
+自動整形や並行変更後は対象範囲を再読込し、未反映の hunk だけを小さく適用する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/api/routes/search.py
+
+### Resolution
+- **Resolved**: 2026-07-03T12:30:00+09:00
+- **Notes**: 現行コードで callback 不使用を確認し、重複 patch を中止した。
+
+---
+
+## [ERR-20260703-010] oracle_generation_test_sqlcall_field
+
+**Logged**: 2026-07-03T12:45:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+追加した Oracle generation test が fake SQL call の既存フィールド名を誤認した。
+
+### Error
+```text
+AttributeError: 'SqlCall' object has no attribute 'binds'
+```
+
+### Context
+- `SqlCall` の bind 値は `parameters` に保存される既存 test helper だった。
+
+### Suggested Fix
+既存 fake/helper の dataclass 定義を確認してから assertion を追加する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_oracle_adapter.py
+
+### Resolution
+- **Resolved**: 2026-07-03T12:45:00+09:00
+- **Notes**: assertion を `update.parameters` へ修正した。
+
+---
+
+## [ERR-20260703-011] generation_radio_pointer_interception
+
+**Logged**: 2026-07-03T13:00:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+回答スタイルの visually-hidden native radio が label 内の文字に覆われ、Playwright の check が pointer interception で timeout した。
+
+### Error
+```text
+locator.check: span from label subtree intercepts pointer events
+```
+
+### Context
+- semantic role と方向キー操作は成立したが、input 本体へのポインター操作が不安定だった。
+- desktop/mobile の保存・custom・revision 競合用例で再現した。
+
+### Suggested Fix
+カード label は維持しつつ native radio 本体をタイトル領域に表示し、input 自身を直接操作可能にする。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/components/settings/GenerationSettingsClient.tsx, frontend/e2e/generation-guardrail-settings.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-03T13:00:00+09:00
+- **Notes**: radio を可視化し、assertion を native checked state に変更した。
+
+---
+
+## [ERR-20260703-006] document_recipe_combobox_polling_detach
+
+**Logged**: 2026-07-03T05:10:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend e2e
+
+### Summary
+文書処理設定の既存 E2E で、文書解析 combobox が polling 中に繰り返し再 mount され click が timeout した。
+
+### Error
+```text
+locator.click: element was detached from the DOM, retrying
+Test timeout of 30000ms exceeded.
+```
+
+### Context
+- `保存失敗時は編集値を保持する` の既存シナリオで再現した。
+- 今回追加した意味境界の desktop/mobile 2 シナリオと更新した分割プレビューは通過した。
+
+### Suggested Fix
+処理レシピの query 更新で編集中フォームを再 mount しないよう、選択レシピの安定した identity と編集 state を維持する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/components/documents/DocumentRecipeManager.tsx, frontend/e2e/document-processing-config.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-03T08:45:00+09:00
+- **Notes**: recipe の structural identity が変わらない間は設定 payload を `useMemo` で安定化し、polling 中のフォーム再初期化を止めた。desktop/mobile の回帰テストで確認した。
+
+---
+
 ## [ERR-20260701-010] mypy_unrelated_feedback_route
 
 **Logged**: 2026-07-01T23:12:00+09:00
@@ -23,6 +343,322 @@ feedback route 側で入力を具体型へ検証・narrowing してから `int()
 ### Metadata
 - Reproducible: yes
 - Related Files: backend/app/api/routes/feedback.py
+
+---
+
+## [ERR-20260703-004] apply_patch_multi_hunk_context_drift
+
+**Logged**: 2026-07-03T04:31:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+共有 chunking 修正の複数 hunk patch が、変更中の作業ツリーとの context 不一致で適用されなかった。
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected lines
+```
+
+### Context
+- 未コミット変更を含む `packages/rag_pipeline_core/rag_pipeline_core/chunking.py` に複数箇所を一括 patch しようとした。
+- `apply_patch` は原子的に失敗し、対象ファイルは変更されなかった。
+
+### Suggested Fix
+対象関数の現行内容を再読込し、独立した小さい hunk に分けて適用する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/rag_pipeline_core/rag_pipeline_core/chunking.py
+
+### Resolution
+- **Resolved**: 2026-07-03T04:31:00+09:00
+- **Notes**: 現行 context を再取得し、小さい patch へ分割した。
+
+---
+
+## [ERR-20260703-005] low_level_min_chars_default_regression
+
+**Logged**: 2026-07-03T05:03:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: chunking
+
+### Summary
+製品設定の `min_chars=120` を低レベル分割関数の既定値にも適用し、小さい chunk size の二次分割を再結合してしまった。
+
+### Error
+```text
+page/heading の境界内分割が 1 chunk に再結合され、parent-child の child_size 上限も超過した。
+```
+
+### Context
+- 製品の実行既定値と、任意サイズを扱う低レベル関数の既定値を同一視した。
+- backend の関連テストで page/heading/parent-child の 3 退化を検出した。
+
+### Suggested Fix
+製品入口は `min_chars=120` を維持し、低レベル `chunk_extraction_with_strategy()` は明示指定がない限り再結合しない `0` を維持する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/rag_pipeline_core/rag_pipeline_core/chunking.py
+
+### Resolution
+- **Resolved**: 2026-07-03T05:03:00+09:00
+- **Notes**: 低レベル関数だけ `min_chars=0` に戻し、製品設定と pipeline request は 120 を維持した。
+
+---
+
+## [ERR-20260703-001] uv_cache_read_only
+
+**Logged**: 2026-07-03T00:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Managed sandbox の既定 uv cache が read-only で、ruff/mypy が起動前に失敗した。
+
+### Error
+```text
+Could not acquire lock: Read-only file system at /root/.cache/uv
+```
+
+### Context
+- `uv run ruff check ...` と `uv run mypy ...` の同時実行。
+- コード検査前の cache lock 作成で失敗した。
+
+### Suggested Fix
+`env UV_CACHE_DIR=/tmp/uv-cache uv run ...` で検証する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pyproject.toml
+- See Also: ERR-20260618-001
+
+### Resolution
+- **Resolved**: 2026-07-03T00:00:00+09:00
+- **Notes**: writable な `/tmp/uv-cache` を指定して再実行した。
+
+---
+
+## [ERR-20260702-010] duplicate_backend_path_in_workdir
+
+**Logged**: 2026-07-02T22:31:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+backend を作業ディレクトリにした状態で `backend/` を重ね、存在しないパスを読もうとした。
+
+### Error
+```text
+sed: can't read backend/app/schemas/document.py: No such file or directory
+```
+
+### Context
+- `workdir` は既に `/u01/workspace/no.1-production-ready-rag/backend` だった。
+
+### Suggested Fix
+コマンドのパスは常に指定した `workdir` からの相対として確認する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/schemas/document.py
+
+### Resolution
+- **Resolved**: 2026-07-02T22:31:00+09:00
+- **Notes**: `app/schemas/document.py` として再実行した。
+
+---
+
+## [ERR-20260702-009] full_pytest_wip_contract_drift
+
+**Logged**: 2026-07-02T22:30:00+09:00
+**Priority**: medium
+**Status**: pending
+**Area**: backend tests
+
+### Summary
+chunking 対象テストは通過したが full pytest は既存 WIP の契約差分で48件失敗した。
+
+### Error
+```text
+48 failed: PREPROCESS 起点への移行、neighbor_window=1、preprocess service 既定、
+Oracle chunk-set/extraction 状態などの旧期待値が現行実装と不一致
+```
+
+### Context
+- 今回の対象テスト（chunking/settings/ingestion/variant/Oracle schema/preview）は通過。
+- 代表例は `/ingest` が PREPROCESS job を返す一方、旧テストが EXTRACT/INDEXED を1回で期待するもの。
+- grounding/pipeline の旧テストは neighbor expansion 無効を期待するが、現行既定は1。
+
+### Suggested Fix
+既存 WIP の工程移行を別タスクで完了し、legacy API の自動進行契約と全体テストの期待値を同時に更新する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_rag_flow.py, backend/tests/test_two_phase_review.py, backend/tests/test_pipeline.py
+
+---
+
+## [ERR-20260702-008] chunk_preview_e2e_copy_mismatch
+
+**Logged**: 2026-07-02T22:22:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+分割プレビュー E2E が、実装済み i18n 文言ではなく計画書の表現を期待して失敗した。
+
+### Error
+```text
+Expected: この設定はプレビュー専用で保存されません
+Received: 保存済みの抽出結果を一時設定で分割します。レシピ設定や工程状態は変更しません。
+```
+
+### Context
+- desktop / 375px のレビュー画面検証で同じ文言差分が発生した。
+
+### Suggested Fix
+UI の正本である i18n キーの実文言を確認してから E2E assertion を記述する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/lib/i18n.ts, frontend/e2e/document-processing-config.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-02T22:22:00+09:00
+- **Notes**: 現行 i18n 文言を期待値に使用した。
+
+---
+
+## [ERR-20260702-007] chunking_target_test_filename
+
+**Logged**: 2026-07-02T12:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend tests
+
+### Summary
+対象 pytest の指定に存在しない `tests/test_config_defaults.py` を含めた。
+
+### Error
+```text
+ERROR: file or directory not found: tests/test_config_defaults.py
+```
+
+### Context
+- chunking 変更の対象テストをまとめて実行する際、実在する設定テスト名を確認せず指定した。
+
+### Suggested Fix
+実行前に `rg --files tests` で対象ファイルを確認する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_config.py
+
+### Resolution
+- **Resolved**: 2026-07-02T12:00:00+09:00
+- **Notes**: 実在する `tests/test_config.py` へ置き換えた。
+
+---
+
+## [ERR-20260702-004] apply_patch_large_context_mismatch
+
+**Logged**: 2026-07-02T21:57:02+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+複数の離れた SQL 変更をまとめた apply_patch が、作業中差分との文脈不一致で失敗した。
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected lines in backend/app/clients/oracle.py
+```
+
+### Context
+- Oracle chunk insert、keyword query、schema DDL を一括パッチしようとした。
+- 大きな未コミット WIP により対象周辺の整形が基準文脈と一致しなかった。
+
+### Suggested Fix
+対象箇所を再読込し、関数単位の小さな patch に分割する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/clients/oracle.py
+
+### Resolution
+- **Resolved**: 2026-07-02T21:57:02+09:00
+- **Notes**: 変更を insert/query/update/DDL 単位へ分割した。
+
+---
+
+## [ERR-20260702-005] oracle_schema_search_text_bootstrap_order
+
+**Logged**: 2026-07-02T22:00:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend tests
+
+### Summary
+既存 Oracle schema に対する full DDL の新 index 作成が、列追加 migration より先に実行された。
+
+### Error
+```text
+ORA-00904: "SEARCH_TEXT": invalid identifier
+```
+
+### Context
+- test fixture は full schema DDL を先に冪等適用し、その後 migration を適用する。
+- 既存 `rag_chunks` には `search_text` がなく、新しい Text index DDL が先に失敗した。
+
+### Suggested Fix
+既存列を migration で補う index の ORA-00904 は full DDL 段階で許容し、migration 後に作成する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/_oracle_test_db.py, backend/app/rag/oracle_schema.py
+
+### Resolution
+- **Resolved**: 2026-07-02T22:00:00+09:00
+- **Notes**: fixture の既存 schema 互換条件へ SEARCH_TEXT index を追加した。
+
+---
+
+## [ERR-20260702-006] uv_cache_read_only_in_sandbox
+
+**Logged**: 2026-07-02T22:02:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend tooling
+
+### Summary
+workspace sandbox 内の uv 実行が `/root/.cache/uv` の一時 lock を作れず失敗した。
+
+### Error
+```text
+Could not acquire lock: Read-only file system at /root/.cache/uv
+```
+
+### Context
+- 変更対象ファイルへ `uv run ruff check` を実行した。
+
+### Suggested Fix
+承認済みの限定 prefix で同じ lint command を sandbox 外実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/pyproject.toml
+
+### Resolution
+- **Resolved**: 2026-07-02T22:02:00+09:00
+- **Notes**: `uv run ruff check` のみ権限昇格して再実行した。
 
 ---
 
@@ -2568,5 +3204,321 @@ ORA-06512: at line 46
 ### Resolution
 - **Resolved**: 2026-07-02T07:20:00+09:00
 - **Notes**: 対象2列をdata dictionaryから列挙し、NOT NULLの列だけALTERするよう修正した。
+
+---
+
+## [ERR-20260703-006] feedback_test_patch_context_drift
+
+**Logged**: 2026-07-03T05:01:04+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+feedback API testへの複数hunk patchが、想定したtuple周辺のcontext不一致で適用されなかった。
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected lines
+```
+
+### Context
+- `backend/tests/test_feedback_api.py` の複数箇所を一括更新しようとした。
+- patchは原子的に失敗し、対象ファイルは変更されなかった。
+
+### Suggested Fix
+現行ファイルを再読込し、関数単位の小さいpatchへ分割する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/tests/test_feedback_api.py
+- See Also: ERR-20260703-004
+
+### Resolution
+- **Resolved**: 2026-07-03T05:01:04+09:00
+- **Notes**: 関数単位の小さいpatchへ切り替えた。
+
+---
+
+## [ERR-20260703-007] feedback_playwright_webserver_sandbox
+
+**Logged**: 2026-07-03T05:16:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+Playwright の Vite webServer が filesystem/network sandbox 内で起動できず、用例実行前に終了した。
+
+### Error
+```text
+Error: Process from config.webServer was not able to start. Exit code: 1
+```
+
+### Context
+- `npm run test:e2e -- e2e/feedback.spec.ts` を通常 sandbox で実行した。
+- 実行環境が network namespace を分離しており、localhost listener の起動が失敗した。
+
+### Suggested Fix
+Playwright の browser/webServer 実行だけを承認済みの sandbox 外コマンドで再実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/playwright.config.ts, frontend/e2e/feedback.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-03T05:16:00+09:00
+- **Notes**: 同じ対象テストを sandbox 外で再実行する方針へ切り替えた。
+
+---
+## [ERR012] chat history unit test inherited remote stage defaults
+
+**Date**: 2026-07-03
+**Context**: Running `test_build_history_takes_first_assistant_per_turn` in isolation.
+**Symptom**: The unit test exceeded 60 seconds before entering the local history assertions.
+**Cause**: A fresh `Settings(rag_guardrail_backend="local")` still defaults `rag_guardrail_service_enabled=True`, so guardrail policy resolution attempted the unreachable pipeline service with a 120-second timeout.
+**Fix**: Set `rag_guardrail_service_enabled=False` in local-only guardrail test fixtures.
+**Prevention**: Unit tests that instantiate fresh `Settings` for in-process stage logic must explicitly disable the corresponding remote stage flag.
+## [ERR013] duplicated backend path in final quality command
+
+**Date**: 2026-07-03
+**Context**: Final backend quality checks while the command working directory was already `backend/`.
+**Symptom**: `rg backend/pyproject.toml` failed with “No such file or directory” and short-circuited the remaining checks.
+**Cause**: The command repeated the working-directory prefix.
+**Fix**: Use `pyproject.toml` relative to the declared backend working directory, then rerun all checks.
+**Prevention**: Resolve command paths relative to `workdir` before composing chained quality commands.
+
+---
+
+## [ERR-20260703-NPM] dependency_audit_sandbox_network_block
+
+**Logged**: 2026-07-03T08:34:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+ローカルの `npm audit` と `pip-audit` が sandbox 内の DNS 制限で registry に接続できず、sandbox 外実行も依存メタデータ送信リスクとして拒否された。
+
+### Error
+```text
+getaddrinfo EAI_AGAIN registry.npmjs.org
+NameResolutionError: pypi.org
+CreateProcess rejected: dependency metadata may be disclosed to an untrusted destination
+```
+
+### Context
+- GitHub CI と同じ `npm audit --audit-level=moderate` と `pip-audit` をローカルで実行した。
+- sandbox 外への再実行承認も要求したが、ポリシー審査で拒否された。
+
+### Suggested Fix
+ローカルで迂回せず、PR の GitHub Actions Frontend job で dependency audit を確認する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: .github/workflows/ci.yml, frontend/package-lock.json, backend/uv.lock
+
+### Resolution
+- **Resolved**: 2026-07-03T08:34:00+09:00
+- **Notes**: GitHub CI を正本の audit 結果として監視する方針に切り替えた。
+
+---
+
+## [ERR-20260703-SEC] gitleaks_directory_scan_included_ignored_files
+
+**Logged**: 2026-07-03T08:35:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+PR 差分の事前確認に directory scan を使ったため、コミット対象外の ignored `.env` と未変更ファイルを検出した。
+
+### Error
+```text
+leaks found: 2
+```
+
+### Context
+- `gitleaks dir .` は Git の追跡・差分状態に関係なく作業ディレクトリを走査する。
+- 検出値は表示せず、ファイル名とルール ID だけで対象外と確認した。
+
+### Suggested Fix
+PR 用の事前検査はコミット後に `gitleaks git --log-opts=origin/main..HEAD` で差分履歴へ限定する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: .gitleaks.toml, .gitignore
+
+### Resolution
+- **Resolved**: 2026-07-03T08:35:00+09:00
+- **Notes**: ignored ファイルを変更せず、コミット後の差分履歴 scan に切り替えた。
+
+---
+
+## [ERR-20260703-THR] asyncio_to_thread_stalls_in_managed_sandbox
+
+**Logged**: 2026-07-03T08:42:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+managed sandbox 内では `asyncio.to_thread()` の最小再現が完了せず、Backend テストがチャット履歴検査で停止した。
+
+### Error
+```text
+timeout 5s python3 -c 'import asyncio; print(asyncio.run(asyncio.to_thread(lambda: 1)))'
+exit code 124
+```
+
+### Context
+- Oracle DSN と guardrail remote service を無効化しても同じテスト位置で停止した。
+- 同じ対象テストは sandbox 外で直ちに 20 件すべて成功した。
+
+### Suggested Fix
+thread executor を使うテストは実 DB 接続を明示的に無効化し、承認済みの通常プロセスで実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: backend/app/api/routes/chat.py, backend/tests/test_chat_api.py
+
+### Resolution
+- **Resolved**: 2026-07-03T08:42:00+09:00
+- **Notes**: `ORACLE_DSN=` を指定した sandbox 外の pytest へ切り替えた。
+
+---
+
+## [ERR-20260703-STEP] ingestion_step_e2e_fixture_drift
+
+**Logged**: 2026-07-03T08:45:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+工程表示を recipe `steps` 正本へ移した後も、Playwright fixture が job status と矛盾する文書状態と旧件数を期待していた。
+
+### Error
+```text
+Expected 未実行: 3, received: 2
+Expected 失敗, but fixture steps reported RUNNING
+```
+
+### Context
+- 通しジョブではファイル準備が完了済みなので未実行は後続 2 工程だけになる。
+- 失敗 job の fixture は recipe status/steps も `ERROR` / `FAILED` に揃える必要がある。
+
+### Suggested Fix
+E2E fixture は job phase から工程状態を再導出せず、API 契約どおり recipe `steps` と整合させる。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/e2e/document-workspace-file-processing.spec.ts
+
+### Resolution
+- **Resolved**: 2026-07-03T08:45:00+09:00
+- **Notes**: 期待件数と失敗 fixture を `steps` 正本へ合わせ、原因本文は上部メッセージへ 1 本化した。
+
+---
+
+## [ERR-20260703-ORCH] parallel_exec_javascript_quote_error
+
+**Logged**: 2026-07-03T08:53:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+並行検証を起動する JavaScript の `prefix_rule` に引用符漏れがあり、tool 実行前に構文エラーになった。
+
+### Error
+```text
+SyntaxError: Unexpected identifier 'env'
+SyntaxError: Invalid or unexpected token
+```
+
+### Context
+- 4 本の Backend 検証を `Promise.all` で起動する記述内の typo。
+- CI 修正後の Frontend 並行検証でも object literal の typo が再発した。
+- コマンドは 1 本も開始されず、リポジトリ状態への影響はなかった。
+
+### Suggested Fix
+複合 tool call の object literal と文字列配列を送信前に見直す。
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+- Recurrence-Count: 2
+- Last-Seen: 2026-07-03
+
+### Resolution
+- **Resolved**: 2026-07-03T08:53:00+09:00
+- **Notes**: 並行記述をやめ、E2E・build・lint を個別に起動した。
+
+---
+
+## [ERR-20260703-RACE] eslint_playwright_test_results_race
+
+**Logged**: 2026-07-03T08:55:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+ESLint と Playwright を並行実行し、Playwright が `test-results` を入れ替える瞬間に ESLint の directory walk が失敗した。
+
+### Error
+```text
+ENOENT: no such file or directory, scandir 'frontend/test-results'
+```
+
+### Context
+- lint と E2E は同じ frontend tree を同時に走査・更新していた。
+- E2E 完了後の単独 lint では再現しない。
+
+### Suggested Fix
+Playwright と repository-wide ESLint は並行実行せず、E2E 完了後に lint を実行する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/eslint.config.mjs, frontend/playwright.config.ts
+
+### Resolution
+- **Resolved**: 2026-07-03T08:55:00+09:00
+- **Notes**: E2E 完了後に lint を単独で再実行した。
+
+---
+
+## [ERR-20260703-CI] shared_ui_local_commit_masked_scroll_regression
+
+**Logged**: 2026-07-03T09:10:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: frontend tests
+
+### Summary
+ローカル sibling の shared UI は未 push commit で scroll chaining 修正済みだったが、CI は platform `origin/main` の旧 token を使うため回帰テストが失敗した。
+
+### Error
+```text
+Expected overscrollBehaviorY: auto
+Received: contain
+```
+
+### Context
+- RAG 側の回帰テストは `bounded-scroll-area` が親ページへの wheel chaining を許可することを検証する。
+- ローカル platform は origin/main より 1 commit 先で、CI checkout との差が事前検証を覆い隠した。
+
+### Suggested Fix
+CI が取得する sibling ref とローカル sibling の commit 差を確認し、アプリ側が未公開 sibling commit に依存しないようにする。
+
+### Metadata
+- Reproducible: yes
+- Related Files: frontend/src/globals.css, frontend/e2e/knowledge-bases.spec.ts, .github/workflows/ci.yml
+
+### Resolution
+- **Resolved**: 2026-07-03T09:10:00+09:00
+- **Notes**: RAG の globals.css で `overscroll-behavior-y: auto` を明示し、現行 shared UI 配布版の `contain` を上書きした。
 
 ---

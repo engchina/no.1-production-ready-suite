@@ -278,6 +278,12 @@ def test_generation_adapter_override_beats_service(monkeypatch: MonkeyPatch) -> 
         rag_generation_system_prompt_override="persona override",
     )
     params = resolve_generation_adapter(settings)
-    # persona override は service 解決より優先。
-    assert params.system_prompt == "persona override"
+    # persona は安全 prefix を置換せず、service の profile 指示より前に合成する。
+    assert params.system_prompt is not None
+    assert params.system_prompt.index("必須の根拠・安全制約") < params.system_prompt.index(
+        "persona override"
+    )
+    assert params.system_prompt.index("persona override") < params.system_prompt.index(
+        "service prompt"
+    )
     assert params.profile == "inline_cited"

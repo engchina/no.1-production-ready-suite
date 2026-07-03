@@ -88,14 +88,33 @@ def _reset() -> None:
 
 def _install(monkeypatch: MonkeyPatch, views: dict[str, BusinessViewConfig]) -> None:
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
-    monkeypatch.setattr(search_route, "OracleClient", lambda: FakeViewOracle(views))
+    monkeypatch.setattr(
+        search_route,
+        "resolve_oracle_generation_settings",
+        _keep_global_generation_settings,
+    )
+    monkeypatch.setattr(
+        search_route,
+        "OracleClient",
+        lambda *_args, **_kwargs: FakeViewOracle(views),
+    )
+
+
+async def _keep_global_generation_settings(
+    settings: Settings,
+    **_kwargs: object,
+) -> Settings:
+    return settings
 
 
 def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyPatch) -> None:
     """参照 KB 群が検索対象へ展開され、query 設定が pipeline と diagnostics に効く。"""
     config = BusinessViewConfig(
         knowledge_base_ids=["kb-1", "kb-2"],
-        query=KnowledgeBaseQueryConfig(generation_profile="detailed_cited"),
+        query=KnowledgeBaseQueryConfig(
+            generation_profile="detailed_cited",
+            post_retrieval_pipeline="verified_context",
+        ),
     )
     _install(monkeypatch, {"bv-1": config})
 
@@ -107,6 +126,8 @@ def test_business_view_expands_kbs_and_applies_query_config(monkeypatch: MonkeyP
     assert response.status_code == 200
     diagnostics = response.json()["data"]["diagnostics"]
     assert diagnostics["generation_profile"] == "detailed_cited"
+    assert RecordingPipeline.captured_settings is not None
+    assert RecordingPipeline.captured_settings.rag_post_retrieval_pipeline == "verified_context"
     assert diagnostics["business_view_applied"] == "bv-1"
     # 参照 KB が検索対象へ展開されている。
     assert RecordingPipeline.captured_request is not None
@@ -142,6 +163,30 @@ def test_multiple_business_views_expand_union_and_use_first_config(
     assert RecordingPipeline.captured_request.filters["knowledge_base_id"] == "kb-1,kb-2,kb-3"
 
 
+def test_request_generation_profile_takes_precedence_over_business_view(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    config = BusinessViewConfig(
+        knowledge_base_ids=["kb-1"],
+        query=KnowledgeBaseQueryConfig(generation_profile="detailed_cited"),
+    )
+    _install(monkeypatch, {"bv-1": config})
+
+    response = client.post(
+        "/api/search",
+        json={
+            "query": "上限額",
+            "business_view_id": "bv-1",
+            "generation_profile": "strict_extractive",
+        },
+    )
+
+    assert response.status_code == 200
+    diagnostics = response.json()["data"]["diagnostics"]
+    assert diagnostics["generation_profile"] == "strict_extractive"
+    assert diagnostics["generation_config_source"] == "request"
+
+
 def test_business_view_persona_overrides_system_prompt(monkeypatch: MonkeyPatch) -> None:
     """persona は generation system prompt 上書きとして pipeline settings へ渡る。"""
     config = BusinessViewConfig(
@@ -160,6 +205,26 @@ def test_business_view_persona_overrides_system_prompt(monkeypatch: MonkeyPatch)
     assert settings is not None
     assert settings.rag_generation_system_prompt_override is not None
     assert "経理規程アシスタント" in settings.rag_generation_system_prompt_override
+
+
+def test_business_view_guardrail_policy_reaches_pipeline_settings(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """業務ビューの regulated 設定が実 pipeline 構築に使う Settings へ届く。"""
+    config = BusinessViewConfig(
+        knowledge_base_ids=["kb-1"],
+        query=KnowledgeBaseQueryConfig(guardrail_policy="regulated"),
+    )
+    _install(monkeypatch, {"bv-1": config})
+
+    response = client.post(
+        "/api/search",
+        json={"query": "上限額", "business_view_id": "bv-1"},
+    )
+
+    assert response.status_code == 200
+    assert RecordingPipeline.captured_settings is not None
+    assert RecordingPipeline.captured_settings.rag_guardrail_policy == "regulated"
 
 
 def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> None:
@@ -181,8 +246,8 @@ def test_request_kb_ids_take_precedence_over_view(monkeypatch: MonkeyPatch) -> N
     assert RecordingPipeline.captured_request.knowledge_base_ids == ["kb-9"]
 
 
-def test_missing_business_view_falls_back_to_global(monkeypatch: MonkeyPatch) -> None:
-    """存在しない業務ビュー ID はグローバル既定へ安全縮退する。"""
+def test_missing_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
+    """明示した業務ビューが無い場合は別 scope へ縮退せず 404 にする。"""
     _install(monkeypatch, {})
 
     response = client.post(
@@ -190,10 +255,39 @@ def test_missing_business_view_falls_back_to_global(monkeypatch: MonkeyPatch) ->
         json={"query": "上限額", "business_view_id": "missing"},
     )
 
-    assert response.status_code == 200
-    diagnostics = response.json()["data"]["diagnostics"]
-    assert diagnostics["business_view_applied"] is None
-    assert diagnostics["generation_profile"] == "grounded_concise"
+    assert response.status_code == 404
+    assert response.json()["error_messages"] == ["指定した業務ビューが見つかりません: missing"]
+
+
+def test_archived_business_view_is_rejected(monkeypatch: MonkeyPatch) -> None:
+    class ArchivedOracle(FakeViewOracle):
+        async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
+            detail = await super().get_business_view(business_view_id)
+            return (
+                detail.model_copy(update={"status": BusinessViewStatus.ARCHIVED})
+                if detail
+                else None
+            )
+
+    monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
+    monkeypatch.setattr(
+        search_route,
+        "resolve_oracle_generation_settings",
+        _keep_global_generation_settings,
+    )
+    monkeypatch.setattr(
+        search_route,
+        "OracleClient",
+        lambda *_args, **_kwargs: ArchivedOracle({"bv-1": BusinessViewConfig()}),
+    )
+
+    response = client.post(
+        "/api/search",
+        json={"query": "上限額", "business_view_id": "bv-1"},
+    )
+
+    assert response.status_code == 409
+    assert "アーカイブ済み" in response.json()["error_messages"][0]
 
 
 def test_business_view_serving_mode_flows_to_settings_and_diagnostics(
@@ -258,17 +352,28 @@ class FakeViewAndKbOracle:
 def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) -> None:
     """Business View は単一 KB に解決しても KB legacy query を下層に重ねない。"""
     kb_config = KnowledgeBaseAdapterConfig.model_validate(
-        {"query": {"vector_index_profile": "accurate"}}
+        {"query": {"vector_index_profile": "accurate", "post_retrieval_pipeline": "lean"}}
     )
     view_config = BusinessViewConfig(
         knowledge_base_ids=["kb-1"],
-        query=KnowledgeBaseQueryConfig(generation_profile="detailed_cited"),
+        query=KnowledgeBaseQueryConfig(
+            generation_profile="detailed_cited",
+            post_retrieval_pipeline="compact",
+        ),
     )
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(
         search_route,
+        "resolve_oracle_generation_settings",
+        _keep_global_generation_settings,
+    )
+    monkeypatch.setattr(
+        search_route,
         "OracleClient",
-        lambda: FakeViewAndKbOracle({"bv-1": view_config}, {"kb-1": kb_config}),
+        lambda *_args, **_kwargs: FakeViewAndKbOracle(
+            {"bv-1": view_config},
+            {"kb-1": kb_config},
+        ),
     )
 
     response = client.post(
@@ -281,6 +386,7 @@ def test_business_view_ignores_single_kb_legacy_query(monkeypatch: MonkeyPatch) 
     assert settings is not None
     # Business View が設定した generation は Business View 値が効く。
     assert settings.rag_generation_profile == "detailed_cited"
+    assert settings.rag_post_retrieval_pipeline == "compact"
     # Business View が触れていない vector_index は KB legacy 値ではなく global 既定。
     assert settings.rag_vector_index_profile == "balanced"
     diagnostics = response.json()["data"]["diagnostics"]

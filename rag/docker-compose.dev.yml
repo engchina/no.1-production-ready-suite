@@ -10,10 +10,9 @@
 # --profile gpu が併用される。oci parser は profiles:["oci"]。
 # 推論サーバー(SGLang/vLLM)は各 parser イメージへ内包するため、別建ての sidecar ポート公開は不要。
 #
-# モデルは dev では **イメージへ焼き込まず**(BAKE_MODELS=0)、host の
-# ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/<service_id> を各コンテナの ~/.cache へ
-# bind マウントして共有・永続化する(初回 DL は HuggingFace 設定の token/ミラーで実施)。
-# host サブディレクトリは backend のサービス制御が start 前に mkdir する。
+# モデルは dev では **イメージへ焼き込まず**(BAKE_MODELS=0)、parser ごとの Docker
+# named volume を ~/.cache へ mount して永続化する。host の絶対パス・UID に依存しない。
+# 初回 DL は HuggingFace 設定の token/ミラーを使い、通常の down/restart では保持される。
 x-dev-no-bake: &dev-no-bake
   args:
     BAKE_MODELS: "0"
@@ -52,14 +51,14 @@ services:
   parser-docling:
     build: *dev-no-bake
     volumes:
-      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-docling:/home/appuser/.cache
+      - parser-docling-model-cache:/home/appuser/.cache
     ports:
       - "127.0.0.1:18020:8000"
 
   parser-marker:
     build: *dev-no-bake
     volumes:
-      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-marker:/home/appuser/.cache
+      - parser-marker-model-cache:/home/appuser/.cache
     ports:
       - "127.0.0.1:18021:8000"
 
@@ -71,35 +70,35 @@ services:
   parser-unlimited-ocr:
     build: *dev-no-bake
     volumes:
-      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-unlimited-ocr:/root/.cache
+      - parser-unlimited-ocr-model-cache:/root/.cache
     ports:
       - "127.0.0.1:18029:8000"
 
   parser-mineru:
     build: *dev-no-bake
     volumes:
-      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-mineru:/home/appuser/.cache
+      - parser-mineru-model-cache:/home/appuser/.cache
     ports:
       - "127.0.0.1:18023:8000"
 
   parser-dots-ocr:
     build: *dev-no-bake
     volumes:
-      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-dots-ocr:/root/.cache
+      - parser-dots-ocr-model-cache:/root/.cache
     ports:
       - "127.0.0.1:18024:8000"
 
   parser-glm-ocr:
     build: *dev-no-bake
     volumes:
-      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-glm-ocr:/root/.cache
+      - parser-glm-ocr-model-cache:/root/.cache
     ports:
       - "127.0.0.1:18025:8000"
 
   parser-asr:
     build: *dev-no-bake
     volumes:
-      - ${HF_DOWNLOAD_DIR:-/u01/models/huggingface}/parser-asr:/home/appuser/.cache
+      - parser-asr-model-cache:/home/appuser/.cache
     ports:
       - "127.0.0.1:18026:8000"
 
@@ -148,3 +147,12 @@ services:
   pipeline-retrieval:
     ports:
       - "127.0.0.1:18038:8000"
+
+volumes:
+  parser-docling-model-cache:
+  parser-marker-model-cache:
+  parser-unlimited-ocr-model-cache:
+  parser-mineru-model-cache:
+  parser-dots-ocr-model-cache:
+  parser-glm-ocr-model-cache:
+  parser-asr-model-cache:

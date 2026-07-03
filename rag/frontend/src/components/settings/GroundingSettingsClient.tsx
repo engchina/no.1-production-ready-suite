@@ -298,22 +298,25 @@ function StageChips({ pipeline }: { pipeline: GroundingPipelineStatusData }) {
   if (pipeline.expansion_mode !== "none") stages.push(t("settings.grounding.expansion"));
   if (pipeline.compression) stages.push(t("settings.grounding.compression"));
   if (pipeline.corrective) stages.push(t("settings.grounding.corrective"));
+  const useCases = pipeline.recommended_for.slice(0, 2).map(groundingUseCaseLabel);
   return (
     <span className="mt-2 flex flex-wrap gap-1">
-      {stages.length ? (
-        stages.map((label) => (
-          <span
-            key={label}
-            className="inline-flex min-h-5 items-center rounded bg-success-bg px-1.5 text-[11px] font-medium text-success"
-          >
-            {label}
-          </span>
-        ))
-      ) : (
-        <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
-          {pipeline.recommended_for[0] ?? t("settings.grounding.none")}
+      {(useCases.length ? useCases : [t("settings.grounding.useCase.unknown")]).map((label) => (
+        <span
+          key={`use-case-${label}`}
+          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
+        >
+          {label}
         </span>
-      )}
+      ))}
+      {stages.map((label) => (
+        <span
+          key={label}
+          className="inline-flex min-h-5 items-center rounded bg-success-bg px-1.5 text-[11px] font-medium text-success"
+        >
+          {label}
+        </span>
+      ))}
     </span>
   );
 }
@@ -373,4 +376,11 @@ function pipelineLabel(name: PostRetrievalPipelineName) {
 
 function pipelineDescription(name: PostRetrievalPipelineName) {
   return t(`settings.grounding.pipeline.${name}.description` as I18nKey);
+}
+/** API の推奨用途 token を日本語へ変換し、未知値を画面へ露出しない。 */
+export function groundingUseCaseLabel(token: string) {
+  return (
+    t(`settings.grounding.useCase.${token}` as I18nKey) ||
+    t("settings.grounding.useCase.unknown")
+  );
 }

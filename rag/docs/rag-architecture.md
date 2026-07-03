@@ -115,7 +115,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - `/api/search` と `/api/search/stream` は `RAG_SEARCH_TIMEOUT_SECONDS` で pipeline 実行時間を制限する。通常検索は timeout 時に 504 を返す。SSE は stream 開始後に timeout した場合、HTTP status は維持して `error` event を返し、どちらも `rag_search_audit.error_stage=timeout` を残す。
    - embedding / retrieval / rerank / generation は `rag_search_stage_duration_seconds` で stage 別 latency を記録する。
    - レスポンスには `trace_id`、`citations`、`guardrail_warnings`、`diagnostics`、`elapsed_ms` を含める。
-   - `POST /api/search/stream` は SSE で `stage`、`metadata`、`delta`、`citations`、`done` を返す。`stage` event は `embedding`、`retrieval`、`rerank`、`generation` などの `started` / `success` / `error` と低機密 attributes を表し、最終 `metadata.diagnostics.stream_stage_timings` には stage 別の ms timing を含める。`RAG_STREAM_REALTIME_ENABLED=true` では Enterprise AI の token streaming から generation 中に `delta` を即時送信し、最終 response では同じ回答を二重に `delta` 化しない。既存の `metadata`、`delta`、`citations`、`done` event contract は維持する。
+   - `POST /api/search/stream` は SSE で `stage`、`metadata`、`delta`、`citations`、`done` を返す。`stage` event は `embedding`、`retrieval`、`rerank`、`generation` などの `started` / `success` / `error` と低機密 attributes を表し、最終 `metadata.diagnostics.stream_stage_timings` には stage 別の ms timing を含める。回答 token は完全生成、PII マスク、groundedness、回答検査の後にだけ `delta` 分割する。`RAG_STREAM_REALTIME_ENABLED` は廃止予定の互換設定で、検査前出力を有効化しない。
 
 ## ダッシュボード集計
 

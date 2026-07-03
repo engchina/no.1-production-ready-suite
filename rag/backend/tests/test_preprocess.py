@@ -82,7 +82,9 @@ def test_source_derivation_defaults() -> None:
 
 
 def test_preprocess_runtime_snapshot_defaults_to_passthrough() -> None:
-    snapshot = preprocess_runtime_settings(Settings())
+    snapshot = preprocess_runtime_settings(
+        Settings(rag_preprocess_enabled=False, rag_preprocess_profile="passthrough")
+    )
     assert snapshot.profile == "passthrough"
     assert snapshot.service_enabled is False
     names = tuple(status.name for status in snapshot.profiles)

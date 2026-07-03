@@ -1,5 +1,8 @@
 """ツリー検索(reasoning_tree_search)の決定論部分と LLM 応答解析のテスト。"""
 
+from collections.abc import Mapping
+from typing import Any
+
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.rag.reasoning_tree import (
     MAX_SECTION_CANDIDATES,
@@ -66,7 +69,16 @@ class _SectionSelectLlm(OciEnterpriseAiClient):
         self.raw = raw or "[]"
         self.error = error
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str | None = None,
+        response_schema: Mapping[str, Any] | None = None,
+        response_schema_name: str = "structured_answer",
+    ) -> str:
+        del prompt, context, system_prompt, response_schema, response_schema_name
         if self.error is not None:
             raise self.error
         return self.raw

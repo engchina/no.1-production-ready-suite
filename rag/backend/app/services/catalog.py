@@ -55,8 +55,8 @@ class ServiceCatalogEntry:
       (``rag_pipeline_core``)で動作し、サービス化は将来対応(操作系を出さず /health も叩かない)。
     - ``model_cache_path``: モデル DL を行うサービスのコンテナ内キャッシュ親(``~/.cache``)。
       HF・docling・mineru など tool 別キャッシュをまとめて含めるため ``huggingface`` ではなく
-      ``.cache`` 親を指す。dev では host の ``<huggingface_download_dir>/<service_id>`` を
-      ここへ bind マウントする。None のサービスはモデル DL なし(マウント対象外)。
+      ``.cache`` 親を指す。dev では parser ごとの Docker named volume をここへ mount する。
+      None のサービスはモデル DL なし(マウント対象外)。
     """
 
     service_id: str
@@ -386,15 +386,8 @@ def service_health_url(settings: Settings, entry: ServiceCatalogEntry) -> str:
     return resolve_service_base_url(settings, entry.url_field)
 
 
-def service_model_cache_host_path(settings: Settings, entry: ServiceCatalogEntry) -> str | None:
-    """モデル DL を行うサービスの host マウント先 ``<download_dir>/<service_id>`` を返す。
-
-    ``model_cache_path`` 未設定(モデル DL なし)のサービスは None。download_dir 末尾の
-    スラッシュは正規化する。
-    """
+def service_model_cache_volume_name(entry: ServiceCatalogEntry) -> str | None:
+    """モデル DL を行うサービスの Compose named volume 論理名を返す。"""
     if entry.model_cache_path is None:
         return None
-    base = settings.huggingface_download_dir.strip().rstrip("/")
-    if not base:
-        return None
-    return f"{base}/{entry.service_id}"
+    return f"{entry.service_id}-model-cache"

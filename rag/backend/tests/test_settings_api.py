@@ -3,16 +3,23 @@
 import json
 import stat
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from zipfile import ZipFile
 
+import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import settings as settings_routes
-from app.clients.oracle import OracleConnectionTimeoutError, OracleWalletPasswordRequiredError
+from app.clients.oracle import (
+    GenerationSettingsRevisionConflictError,
+    OracleConnectionTimeoutError,
+    OracleWalletPasswordRequiredError,
+    StoredGenerationSettings,
+)
 from app.config import Settings, get_settings, load_persisted_model_settings
 from app.main import app
 from app.rag import parser_adapter_readiness
@@ -114,6 +121,14 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert "audio" in matrix["backend_source_kinds"]["local"]
     assert matrix["missing_source_kinds"] == []
     assert "raw_text" not in str(matrix)
+    capability_by_backend = {item["backend"]: item for item in body["capabilities"]}
+    assert capability_by_backend["marker"]["modalities"] == ["pdf", "image"]
+    assert ".pdf" in capability_by_backend["marker"]["extensions"]
+    assert capability_by_backend["oci_document_understanding"]["modalities"] == [
+        "pdf",
+        "image",
+    ]
+    assert "enterprise_ai_vlm" not in capability_by_backend  # 別名は公開しない
 
 
 def test_parser_adapter_settings_reports_service_backends(
@@ -504,31 +519,30 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
 ) -> None:
     """Chunking 設定 API は選択戦略・パラメータ・戦略一覧を返す。"""
     settings = get_settings()
-    monkeypatch.setattr(settings, "rag_chunking_strategy", "sentence_window")
+    monkeypatch.setattr(settings, "rag_chunking_strategy", "page_level")
     monkeypatch.setattr(settings, "rag_chunk_size", 900)
     monkeypatch.setattr(settings, "rag_chunk_overlap", 150)
     monkeypatch.setattr(settings, "rag_chunk_child_size", 280)
-    monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 4)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 50)
     monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n---\\n")
+    monkeypatch.setattr(settings, "rag_chunk_context_header_enabled", False)
 
     resp = client.get("/api/settings/chunking")
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["strategy"] == "sentence_window"
+    assert body["strategy"] == "page_level"
     assert body["chunk_size"] == 900
     assert body["overlap"] == 150
     assert body["child_size"] == 280
-    assert body["sentence_window_size"] == 4
     assert body["min_chars"] == 50
     assert body["delimiter"] == "\\n---\\n"
+    assert body["context_header_enabled"] is False
     assert body["config_source"] == "runtime"
     names = [item["name"] for item in body["strategies"]]
     assert names == [
         "structure_aware",
         "recursive_character",
-        "sentence_window",
         "hierarchical_parent_child",
         "markdown_heading",
         "page_level",
@@ -536,7 +550,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
         "fixed_delimiter",
     ]
     selected = [item["name"] for item in body["strategies"] if item["selected"]]
-    assert selected == ["sentence_window"]
+    assert selected == ["page_level"]
 
 
 def test_update_chunking_settings_persists_env_and_mutates_runtime(
@@ -549,9 +563,9 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     monkeypatch.setattr(settings, "rag_chunk_size", 800)
     monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
     monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
-    monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 3)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
     monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
+    monkeypatch.setattr(settings, "rag_chunk_context_header_enabled", True)
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     resp = client.patch(
@@ -561,9 +575,9 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
             "chunk_size": 1000,
             "overlap": 100,
             "child_size": 300,
-            "sentence_window_size": 5,
             "min_chars": 40,
             "delimiter": "---",
+            "context_header_enabled": False,
         },
     )
 
@@ -576,12 +590,14 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     assert settings.rag_chunk_child_size == 300
     assert settings.rag_chunk_min_chars == 40
     assert settings.rag_chunk_delimiter == "---"
+    assert settings.rag_chunk_context_header_enabled is False
     persisted = env_file.read_text(encoding="utf-8")
     assert "RAG_CHUNKING_STRATEGY=hierarchical_parent_child" in persisted
     assert "RAG_CHUNK_SIZE=1000" in persisted
     assert "RAG_CHUNK_CHILD_SIZE=300" in persisted
     assert "RAG_CHUNK_MIN_CHARS=40" in persisted
     assert "RAG_CHUNK_DELIMITER=---" in persisted
+    assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED=false" in persisted
 
 
 def test_update_chunking_settings_rejects_unknown_strategy() -> None:
@@ -592,7 +608,6 @@ def test_update_chunking_settings_rejects_unknown_strategy() -> None:
             "chunk_size": 800,
             "overlap": 120,
             "child_size": 320,
-            "sentence_window_size": 3,
             "min_chars": 0,
         },
     )
@@ -608,12 +623,68 @@ def test_update_chunking_settings_rejects_overlap_not_smaller_than_size() -> Non
             "chunk_size": 400,
             "overlap": 400,
             "child_size": 320,
-            "sentence_window_size": 3,
             "min_chars": 0,
         },
     )
 
     assert resp.status_code == 422
+
+
+def test_update_chunking_settings_accepts_new_maximums(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    for field in (
+        "rag_chunking_strategy",
+        "rag_chunk_size",
+        "rag_chunk_overlap",
+        "rag_chunk_child_size",
+        "rag_chunk_min_chars",
+        "rag_chunk_delimiter",
+        "rag_chunk_context_header_enabled",
+    ):
+        monkeypatch.setattr(settings, field, getattr(settings, field))
+    _settings_env_file(monkeypatch, tmp_path)
+
+    resp = client.patch(
+        "/api/settings/chunking",
+        json={
+            "strategy": "page_level",
+            "chunk_size": 32_000,
+            "overlap": 8_000,
+            "child_size": 320,
+            "min_chars": 120,
+            "delimiter": "\\n\\n",
+            "context_header_enabled": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert settings.rag_chunk_size == 32_000
+    assert settings.rag_chunk_overlap == 8_000
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("chunk_size", 32_001), ("overlap", 8_001)],
+)
+def test_update_chunking_settings_rejects_values_above_new_maximums(
+    field: str,
+    value: int,
+) -> None:
+    payload = {
+        "strategy": "structure_aware",
+        "chunk_size": 32_000,
+        "overlap": 120,
+        "child_size": 320,
+        "min_chars": 120,
+        "delimiter": "\\n\\n",
+        "context_header_enabled": True,
+    }
+    payload[field] = value
+
+    assert client.patch("/api/settings/chunking", json=payload).status_code == 422
 
 
 def test_update_chunking_settings_ignores_non_applicable_bounds_for_fixed_size(
@@ -626,7 +697,6 @@ def test_update_chunking_settings_ignores_non_applicable_bounds_for_fixed_size(
     monkeypatch.setattr(settings, "rag_chunk_size", 800)
     monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
     monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
-    monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 3)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
     monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
     _settings_env_file(monkeypatch, tmp_path)
@@ -638,7 +708,6 @@ def test_update_chunking_settings_ignores_non_applicable_bounds_for_fixed_size(
             "chunk_size": 400,
             "overlap": 120,
             "child_size": 400,
-            "sentence_window_size": 3,
             "min_chars": 400,
             "delimiter": "\\n\\n",
         },
@@ -656,7 +725,6 @@ def test_update_chunking_settings_rejects_child_size_for_parent_child() -> None:
             "chunk_size": 400,
             "overlap": 120,
             "child_size": 400,
-            "sentence_window_size": 3,
             "min_chars": 0,
             "delimiter": "\\n\\n",
         },
@@ -674,7 +742,6 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
     monkeypatch.setattr(settings, "rag_chunk_size", 800)
     monkeypatch.setattr(settings, "rag_chunk_overlap", 120)
     monkeypatch.setattr(settings, "rag_chunk_child_size", 320)
-    monkeypatch.setattr(settings, "rag_chunk_sentence_window_size", 3)
     monkeypatch.setattr(settings, "rag_chunk_min_chars", 0)
     monkeypatch.setattr(settings, "rag_chunk_delimiter", "\\n\\n")
     env_file = _settings_env_file(monkeypatch, tmp_path)
@@ -686,7 +753,6 @@ def test_update_chunking_settings_allows_fixed_delimiter_without_chunk_bounds(
             "chunk_size": 400,
             "overlap": 400,
             "child_size": 400,
-            "sentence_window_size": 3,
             "min_chars": 400,
             "delimiter": "---",
         },
@@ -966,8 +1032,18 @@ def test_update_grounding_settings_rejects_empty_payload() -> None:
 
 
 def test_generation_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "rag_generation_profile", "structured_json")
+    stored = StoredGenerationSettings(
+        profile="structured_json",
+        active_prompt_version_id="prompt-1",
+        revision=7,
+        updated_at=datetime.now(UTC),
+    )
+
+    class FakeOracleClient:
+        async def get_generation_settings(self) -> StoredGenerationSettings:
+            return stored
+
+    monkeypatch.setattr(settings_routes, "OracleClient", FakeOracleClient)
 
     resp = client.get("/api/settings/generation")
 
@@ -975,31 +1051,77 @@ def test_generation_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -
     body = resp.json()["data"]
     assert body["profile"] == "structured_json"
     assert body["structured_output"] is True
+    assert body["config_source"] == "oracle"
+    assert body["revision"] == 7
+    assert body["custom_prompt_configured"] is True
     names = [item["name"] for item in body["profiles"]]
     assert names[0] == "grounded_concise"
     selected = [item["name"] for item in body["profiles"] if item["selected"]]
     assert selected == ["structured_json"]
 
 
-def test_update_generation_settings_persists_env_and_mutates_runtime(
+def test_update_generation_settings_uses_oracle_revision_without_mutating_runtime(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_generation_profile", "grounded_concise")
     env_file = _settings_env_file(monkeypatch, tmp_path)
+    calls: list[tuple[str, int | None]] = []
 
-    resp = client.patch("/api/settings/generation", json={"profile": "detailed_cited"})
+    class FakeOracleClient:
+        async def update_generation_settings(
+            self,
+            *,
+            profile: str,
+            expected_revision: int | None = None,
+        ) -> StoredGenerationSettings:
+            calls.append((profile, expected_revision))
+            return StoredGenerationSettings(
+                profile=profile,
+                active_prompt_version_id=None,
+                revision=4,
+                updated_at=datetime.now(UTC),
+            )
+
+    monkeypatch.setattr(settings_routes, "OracleClient", FakeOracleClient)
+
+    resp = client.patch(
+        "/api/settings/generation",
+        json={"profile": "detailed_cited", "expected_revision": 3},
+    )
 
     assert resp.status_code == 200
     assert resp.json()["data"]["profile"] == "detailed_cited"
-    assert settings.rag_generation_profile == "detailed_cited"
-    assert "RAG_GENERATION_PROFILE=detailed_cited" in env_file.read_text(encoding="utf-8")
+    assert resp.json()["data"]["revision"] == 4
+    assert calls == [("detailed_cited", 3)]
+    assert settings.rag_generation_profile == "grounded_concise"
+    assert not env_file.exists()
 
 
 def test_update_generation_settings_rejects_unknown_profile() -> None:
     resp = client.patch("/api/settings/generation", json={"profile": "chain_of_thought"})
     assert resp.status_code == 422
+
+
+def test_update_generation_settings_returns_409_on_revision_conflict(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    class FakeOracleClient:
+        async def update_generation_settings(self, **_kwargs: object) -> StoredGenerationSettings:
+            raise GenerationSettingsRevisionConflictError(
+                "回答スタイル設定は別の操作で更新されています。"
+            )
+
+    monkeypatch.setattr(settings_routes, "OracleClient", FakeOracleClient)
+
+    resp = client.patch(
+        "/api/settings/generation",
+        json={"profile": "detailed_cited", "expected_revision": 1},
+    )
+
+    assert resp.status_code == 409
+    assert "別の操作" in resp.json()["error_messages"][0]
 
 
 def test_guardrail_settings_reports_runtime_policy(monkeypatch: MonkeyPatch) -> None:
@@ -1024,15 +1146,38 @@ def test_update_guardrail_settings_persists_env_and_mutates_runtime(
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_guardrail_policy", "standard")
+    monkeypatch.setattr(settings, "rag_guardrail_backend", "local")
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
-    resp = client.patch("/api/settings/guardrail", json={"policy": "regulated"})
+    resp = client.patch(
+        "/api/settings/guardrail",
+        json={"policy": "regulated", "backend": "local"},
+    )
 
     assert resp.status_code == 200
     assert resp.json()["data"]["policy"] == "regulated"
     assert resp.json()["data"]["audit_emphasis"] is True
     assert settings.rag_guardrail_policy == "regulated"
     assert "RAG_GUARDRAIL_POLICY=regulated" in env_file.read_text(encoding="utf-8")
+    assert "RAG_GUARDRAIL_BACKEND=local" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_guardrail_settings_rejects_unready_oci_backend(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_guardrail_backend", "local")
+    monkeypatch.setattr(settings, "oci_guardrails_compartment_id", "")
+    monkeypatch.setattr(settings, "oci_compartment_id", "")
+
+    response = client.patch(
+        "/api/settings/guardrail",
+        json={"policy": "standard", "backend": "oci_guardrails"},
+    )
+
+    assert response.status_code == 422
+    assert "OCI 認証" in response.json()["error_messages"][0]
+    assert settings.rag_guardrail_backend == "local"
 
 
 def test_update_guardrail_settings_rejects_unknown_policy() -> None:
@@ -1040,7 +1185,9 @@ def test_update_guardrail_settings_rejects_unknown_policy() -> None:
     assert resp.status_code == 422
 
 
-def test_vector_index_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
+def test_vector_index_settings_reports_runtime_profile(
+    monkeypatch: MonkeyPatch,
+) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_vector_index_profile", "accurate")
     monkeypatch.setattr(settings, "oracle_vector_target_accuracy", 95)
@@ -1058,7 +1205,9 @@ def test_vector_index_settings_reports_runtime_profile(monkeypatch: MonkeyPatch)
     assert selected == ["accurate"]
 
 
-def test_vector_index_balanced_reports_existing_accuracy(monkeypatch: MonkeyPatch) -> None:
+def test_vector_index_balanced_reports_existing_accuracy(
+    monkeypatch: MonkeyPatch,
+) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_vector_index_profile", "balanced")
     monkeypatch.setattr(settings, "oracle_vector_target_accuracy", 92)
@@ -1109,7 +1258,9 @@ def test_evaluation_settings_reports_runtime_suite(monkeypatch: MonkeyPatch) -> 
     assert selected == ["balanced"]
 
 
-def test_evaluation_settings_request_only_has_no_thresholds(monkeypatch: MonkeyPatch) -> None:
+def test_evaluation_settings_request_only_has_no_thresholds(
+    monkeypatch: MonkeyPatch,
+) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_evaluation_suite", "request_only")
 
@@ -1232,7 +1383,14 @@ def test_agentic_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> N
     assert body["multi_hop"] is False
     assert body["max_subqueries"] == 4
     names = [item["name"] for item in body["profiles"]]
-    assert names == ["off", "smart_routing", "query_rewrite", "hyde", "decompose", "multi_hop"]
+    assert names == [
+        "off",
+        "smart_routing",
+        "query_rewrite",
+        "hyde",
+        "decompose",
+        "multi_hop",
+    ]
     selected = [item["name"] for item in body["profiles"] if item["selected"]]
     assert selected == ["decompose"]
     by_name = {item["name"]: item for item in body["profiles"]}
@@ -1423,7 +1581,9 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert "sk-update-secret" not in resp.text
 
 
-def test_load_persisted_model_settings_applies_saved_model_catalog(tmp_path: Path) -> None:
+def test_load_persisted_model_settings_applies_saved_model_catalog(
+    tmp_path: Path,
+) -> None:
     settings_file = tmp_path / "model-settings.json"
     settings_file.write_text(
         json.dumps(
@@ -1503,7 +1663,9 @@ def test_update_model_settings_does_not_mutate_runtime_when_persist_fails(
     assert settings.oci_enterprise_ai_api_key == "sk-old-secret"
 
 
-def test_check_model_settings_does_not_mutate_runtime_settings(monkeypatch: MonkeyPatch) -> None:
+def test_check_model_settings_does_not_mutate_runtime_settings(
+    monkeypatch: MonkeyPatch,
+) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "")
 
@@ -1808,7 +1970,9 @@ def test_model_settings_rejects_non_1536_embedding_dim() -> None:
     assert body["error_messages"]
 
 
-def test_read_oci_config_uses_requested_profile_from_backend_path(tmp_path: Path) -> None:
+def test_read_oci_config_uses_requested_profile_from_backend_path(
+    tmp_path: Path,
+) -> None:
     config_file = tmp_path / "config"
     config_file.write_text(
         "\n".join(
@@ -2368,7 +2532,10 @@ def test_read_object_storage_namespace_refuses_encrypted_private_key_without_pro
     def fake_import_module(name: str) -> object:
         if name == "oci.config":
             return SimpleNamespace(
-                from_file=lambda path, profile: {"key_file": str(key_file), "region": "ap-tokyo-1"}
+                from_file=lambda path, profile: {
+                    "key_file": str(key_file),
+                    "region": "ap-tokyo-1",
+                }
             )
         if name == "oci.object_storage":
             return SimpleNamespace(ObjectStorageClient=FakeObjectStorageClient)
@@ -2954,7 +3121,9 @@ def _patch_adb_client(
     monkeypatch.setattr(settings_routes, "OciDatabaseClient", _factory)
 
 
-def test_get_adb_info_returns_not_configured_without_ocid(monkeypatch: MonkeyPatch) -> None:
+def test_get_adb_info_returns_not_configured_without_ocid(
+    monkeypatch: MonkeyPatch,
+) -> None:
     monkeypatch.setattr(get_settings(), "oracle_adb_ocid", "")
 
     resp = client.get("/api/settings/database/adb")
@@ -2993,7 +3162,10 @@ def test_update_adb_settings_persists_ocid_and_region(
 
     resp = client.post(
         "/api/settings/database/adb/settings",
-        json={"adb_ocid": "ocid1.autonomousdatabase.oc1..saved", "region": "ap-tokyo-1"},
+        json={
+            "adb_ocid": "ocid1.autonomousdatabase.oc1..saved",
+            "region": "ap-tokyo-1",
+        },
     )
 
     assert resp.status_code == 200
@@ -3063,7 +3235,9 @@ def test_stop_adb_reports_already_stopped(monkeypatch: MonkeyPatch) -> None:
     assert not any(call.startswith("stop:") for call in calls)
 
 
-def test_start_adb_without_ocid_returns_not_configured(monkeypatch: MonkeyPatch) -> None:
+def test_start_adb_without_ocid_returns_not_configured(
+    monkeypatch: MonkeyPatch,
+) -> None:
     monkeypatch.setattr(get_settings(), "oracle_adb_ocid", "")
 
     resp = client.post("/api/settings/database/adb/start")
@@ -3326,13 +3500,12 @@ def _payload() -> dict[str, Any]:
 
 def test_get_huggingface_settings_masks_token(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
-    monkeypatch.setattr(settings, "huggingface_download_dir", "/u01/models/huggingface")
     monkeypatch.setattr(settings, "huggingface_endpoint", "https://hf-mirror.com")
     monkeypatch.setattr(settings, "huggingface_token", "hf_secret")
 
     body = client.get("/api/settings/huggingface").json()["data"]
 
-    assert body["download_dir"] == "/u01/models/huggingface"
+    assert "download_dir" not in body
     assert body["endpoint"] == "https://hf-mirror.com"
     assert body["token_configured"] is True
     # token 実値はレスポンスに含めない。
@@ -3351,7 +3524,6 @@ def test_update_huggingface_settings_persists_env_and_mutates_runtime(
     resp = client.patch(
         "/api/settings/huggingface",
         json={
-            "download_dir": "/u01/models/huggingface",
             "endpoint": "https://hf-mirror.com",
             "token": "hf_new",
         },
@@ -3359,12 +3531,11 @@ def test_update_huggingface_settings_persists_env_and_mutates_runtime(
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["download_dir"] == "/u01/models/huggingface"
     assert body["endpoint"] == "https://hf-mirror.com"
     assert body["token_configured"] is True
     assert settings.huggingface_token == "hf_new"
     env_text = env_file.read_text(encoding="utf-8")
-    assert "HUGGINGFACE_DOWNLOAD_DIR=/u01/models/huggingface" in env_text
+    assert "HUGGINGFACE_DOWNLOAD_DIR" not in env_text
     assert "HF_TOKEN=hf_new" in env_text
     assert "HF_ENDPOINT=https://hf-mirror.com" in env_text
 
@@ -3380,24 +3551,27 @@ def test_update_huggingface_settings_keeps_token_when_blank(
     # token 未指定なら既存値を保持し、clear_token で削除する。
     resp = client.patch(
         "/api/settings/huggingface",
-        json={"download_dir": "/u01/models/huggingface", "endpoint": ""},
+        json={"endpoint": ""},
     )
     assert resp.status_code == 200
     assert settings.huggingface_token == "hf_existing"
 
     resp = client.patch(
         "/api/settings/huggingface",
-        json={"download_dir": "/u01/models/huggingface", "endpoint": "", "clear_token": True},
+        json={
+            "endpoint": "",
+            "clear_token": True,
+        },
     )
     assert resp.status_code == 200
     assert settings.huggingface_token == ""
     assert resp.json()["data"]["token_configured"] is False
 
 
-def test_update_huggingface_settings_rejects_relative_dir() -> None:
+def test_update_huggingface_settings_rejects_removed_download_dir() -> None:
     resp = client.patch(
         "/api/settings/huggingface",
-        json={"download_dir": "models/huggingface", "endpoint": ""},
+        json={"download_dir": "/u01/models/huggingface", "endpoint": ""},
     )
     assert resp.status_code == 422
 

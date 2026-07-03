@@ -39,7 +39,12 @@ def test_parser_registry_partitions_text_html_email_sources() -> None:
             "application/x-ndjson",
             "text",
         ),
-        ("page.html", b"<html><body><h1>Title</h1><p>Body</p></body></html>", "text/html", "html"),
+        (
+            "page.html",
+            b"<html><body><h1>Title</h1><p>Body</p></body></html>",
+            "text/html",
+            "html",
+        ),
         (
             "mail.eml",
             b"Subject: Hello\nFrom: a@example.com\nTo: b@example.com\n\nBody",
@@ -285,7 +290,10 @@ def test_parser_registry_preserves_markdown_table_caption_and_escaped_pipe() -> 
     )
     assert chunk.metadata["table_caption"] == "表1: 製品別説明"
     assert chunk.metadata["table_column_count"] == 2
-    assert json.loads(str(chunk.metadata["table_row_tree_column_keys"])) == ["項目", "説明"]
+    assert json.loads(str(chunk.metadata["table_row_tree_column_keys"])) == [
+        "項目",
+        "説明",
+    ]
 
 
 def test_parser_registry_infers_cross_page_markdown_table_lineage() -> None:
@@ -435,7 +443,11 @@ def test_parser_registry_preserves_html_table_cells_in_reading_order() -> None:
     result = parse_with_registry(data, source_profile=profile, content_type="text/html")
 
     assert result.extraction is not None
-    assert [element.kind for element in result.extraction.elements] == ["title", "table", "text"]
+    assert [element.kind for element in result.extraction.elements] == [
+        "title",
+        "table",
+        "text",
+    ]
     table_element = result.extraction.elements[1]
     assert table_element.content_kind == "table"
     assert table_element.section_path == ["料金"]
@@ -450,7 +462,12 @@ def test_parser_registry_preserves_html_table_cells_in_reading_order() -> None:
         (1, 0, "交通費"),
         (1, 1, "1200"),
     ]
-    assert [cell.metadata["cell_ref"] for cell in table.cells] == ["A1", "B1", "A2", "B2"]
+    assert [cell.metadata["cell_ref"] for cell in table.cells] == [
+        "A1",
+        "B1",
+        "A2",
+        "B2",
+    ]
 
 
 def test_parser_registry_preserves_html_table_caption_lineage() -> None:
@@ -1223,7 +1240,9 @@ def test_parser_registry_uses_explicit_marker_adapter(
     def create_model_dict() -> dict[str, object]:
         return {"model": "fake"}
 
-    def text_from_rendered(rendered: object) -> tuple[str, dict[str, object], dict[str, object]]:
+    def text_from_rendered(
+        rendered: object,
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         _ = rendered
         return "# Marker Fallback\n本文", {}, {}
 
@@ -1325,7 +1344,8 @@ def test_parser_registry_explicit_unstructured_routes_email(
     monkeypatch.setitem(sys.modules, "unstructured.partition", partition_package)
     monkeypatch.setitem(sys.modules, "unstructured.partition.auto", partition_module)
     monkeypatch.setattr(
-        "rag_parser_core.registry._module_available", lambda name: name == "unstructured"
+        "rag_parser_core.registry._module_available",
+        lambda name: name == "unstructured",
     )
     data = b"Subject: Hello\nFrom: a@example.com\nTo: b@example.com\n\nBody"
     profile = build_source_profile(
@@ -1431,7 +1451,9 @@ def test_image_adapter_without_bbox_gets_full_frame_source_asset(
     def create_model_dict() -> dict[str, object]:
         return {"model": "fake"}
 
-    def text_from_rendered(rendered: object) -> tuple[str, dict[str, object], dict[str, object]]:
+    def text_from_rendered(
+        rendered: object,
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         _ = rendered
         return "TOTAL 1000 JPY", {}, {}
 
@@ -1628,7 +1650,11 @@ def test_docling_adapter_remaps_structured_text_and_tables(
 
     assert result.parser_backend == "docling"
     assert result.extraction is not None
-    assert [element.kind for element in result.extraction.elements] == ["title", "text", "table"]
+    assert [element.kind for element in result.extraction.elements] == [
+        "title",
+        "text",
+        "table",
+    ]
     title_element = result.extraction.elements[0]
     text_element = result.extraction.elements[1]
     assert title_element.element_id == "title-1"
@@ -2034,7 +2060,9 @@ def test_parser_registry_uses_marker_adapter_without_llm(
     def create_model_dict() -> dict[str, object]:
         return {"model": "fake"}
 
-    def text_from_rendered(rendered: object) -> tuple[str, dict[str, object], dict[str, object]]:
+    def text_from_rendered(
+        rendered: object,
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         _ = rendered
         return "# Marker\n本文", {}, {}
 
@@ -2130,7 +2158,10 @@ def test_marker_adapter_remaps_chunks_without_llm(
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["llm_enabled"] is False
     assert result.extraction.parser_artifacts["adapter_export"] == "structured_elements"
-    assert [element.content_kind for element in result.extraction.elements] == ["text", "code"]
+    assert [element.content_kind for element in result.extraction.elements] == [
+        "text",
+        "code",
+    ]
     assert "select 1" in result.extraction.elements[1].text
 
 
@@ -2902,7 +2933,12 @@ def test_parser_registry_prefers_adapter_table_rows_over_caption_text(
         (1, 0, "交通費"),
         (1, 1, "1000円"),
     ]
-    assert [cell.metadata["cell_ref"] for cell in table.cells] == ["A1", "B1", "A2", "B2"]
+    assert [cell.metadata["cell_ref"] for cell in table.cells] == [
+        "A1",
+        "B1",
+        "A2",
+        "B2",
+    ]
     table_chunk = chunk_extraction(result.extraction, chunk_size=80, overlap=0)[0]
     assert "交通費" in table_chunk.text
     assert table_chunk.metadata["table_id"] == "table-rows-1"
@@ -2924,7 +2960,12 @@ def test_parser_registry_preserves_adapter_structured_table_cells(
         category = "Table"
         text = "明細表"
         cells = [
-            {"row": 0, "col": 0, "text": "項目", "bbox": {"x": 0, "y": 0, "w": 20, "h": 10}},
+            {
+                "row": 0,
+                "col": 0,
+                "text": "項目",
+                "bbox": {"x": 0, "y": 0, "w": 20, "h": 10},
+            },
             {
                 "row": 0,
                 "col": 1,
@@ -3009,7 +3050,12 @@ def test_parser_registry_preserves_adapter_structured_table_cells(
     assert "formula_cell_ref" not in third.metadata
     assert (fourth.row, fourth.col, fourth.text) == (1, 1, "1000円")
     assert fourth.metadata["cell_id"] == "cell-b2"
-    assert [cell.metadata["cell_ref"] for cell in table.cells] == ["A1", "B1", "A2", "B2"]
+    assert [cell.metadata["cell_ref"] for cell in table.cells] == [
+        "A1",
+        "B1",
+        "A2",
+        "B2",
+    ]
     assert fourth.metadata["cell_ref"] == "B2"
     assert fourth.metadata["formula_cell_ref"] == "B2"
     assert fourth.metadata["formula"] == "SUM(B1:B1)"
@@ -3399,3 +3445,142 @@ def _zip_bytes(files: dict[str, str]) -> bytes:
         for name, body in files.items():
             archive.writestr(name, body)
     return output.getvalue()
+
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@pytest.mark.parametrize(
+    ("backend", "file_name", "content_type", "expected"),
+    [
+        # marker: PDF・画像のみ(.bmp 拡張子は宣言外だが image/ MIME で通る)
+        ("marker", "doc.pdf", "application/pdf", True),
+        ("marker", "scan.png", "image/png", True),
+        ("marker", "memo.md", "text/markdown", False),
+        ("marker", "sheet.xlsx", _XLSX_MIME, False),
+        # docling: PDF・画像・テキスト・HTML・Office
+        ("docling", "doc.pdf", "application/pdf", True),
+        ("docling", "memo.md", "text/markdown", True),
+        ("docling", "page.html", "text/html", True),
+        ("docling", "sheet.xlsx", _XLSX_MIME, True),
+        # unstructured: 汎用(メール含む)
+        ("unstructured", "mail.eml", "message/rfc822", True),
+        ("unstructured", "doc.pdf", "application/pdf", True),
+        # mineru: PDF・画像・Office(HTML 不可)
+        ("mineru", "sheet.xlsx", _XLSX_MIME, True),
+        ("mineru", "page.html", "text/html", False),
+        # 画像専用 OCR
+        ("dots_ocr", "scan.png", "image/png", True),
+        ("dots_ocr", "doc.pdf", "application/pdf", False),
+        ("glm_ocr", "doc.pdf", "application/pdf", False),
+        ("unlimited_ocr", "doc.pdf", "application/pdf", True),
+        # OCI service backend: PDF・画像
+        ("oci_genai_vision", "doc.pdf", "application/pdf", True),
+        ("oci_genai_vision", "memo.md", "text/markdown", False),
+        ("oci_document_understanding", "scan.png", "image/png", True),
+        ("oci_document_understanding", "mail.eml", "message/rfc822", False),
+        # 音声は全 backend 非対応
+        ("unstructured", "meeting.m4a", "audio/mp4", False),
+        ("docling", "meeting.m4a", "audio/mp4", False),
+        # 未宣言 backend は非対応
+        ("no_such_backend", "doc.pdf", "application/pdf", False),
+    ],
+)
+def test_adapter_capabilities_matrix(
+    backend: str, file_name: str, content_type: str, expected: bool
+) -> None:
+    """capabilities.py の宣言 matrix が従来 if-chain と同じ判定を返す。"""
+    from rag_parser_core.capabilities import adapter_supports_source
+
+    profile = build_source_profile(
+        original_file_name=file_name,
+        sanitized_file_name=file_name,
+        content_type=content_type,
+        file_size_bytes=16,
+        content_sha256="c" * 64,
+        data=b"payload-16-bytes",
+    )
+
+    assert (
+        adapter_supports_source(backend, source_profile=profile, content_type=content_type)
+        is expected
+    )
+
+
+def test_adapter_capabilities_unknown_modality_only_unstructured() -> None:
+    """UNKNOWN modality は unstructured だけが受ける(従来挙動)。"""
+    from rag_parser_core.capabilities import adapter_supports_source
+
+    assert adapter_supports_source("unstructured", source_profile=None, content_type="")
+    assert not adapter_supports_source("docling", source_profile=None, content_type="")
+
+
+def test_supported_modalities_for_display() -> None:
+    """表示用一覧は定義順で UNKNOWN/AUDIO を含まない。"""
+    from rag_parser_core.capabilities import supported_modalities
+
+    assert [m.value for m in supported_modalities("marker")] == ["pdf", "image"]
+    assert [m.value for m in supported_modalities("unstructured")] == [
+        "pdf",
+        "image",
+        "text",
+        "html",
+        "email",
+        "office",
+    ]
+    assert supported_modalities("no_such_backend") == ()
+
+
+def test_parser_registry_classifies_broken_pdf_as_invalid_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PdfiumError 系の失敗は adapter_failed でなく adapter_invalid_input に分類する。"""
+    marker_module = ModuleType("marker")
+    marker_module.__dict__["__version__"] = "4.5.6"
+    converters_module = ModuleType("marker.converters")
+    pdf_module = ModuleType("marker.converters.pdf")
+    models_module = ModuleType("marker.models")
+    output_module = ModuleType("marker.output")
+
+    class PdfiumError(RuntimeError):
+        pass
+
+    class FakePdfConverter:
+        def __init__(self, *, artifact_dict: dict[str, object]) -> None:
+            _ = artifact_dict
+
+        def __call__(self, path: str) -> object:
+            raise PdfiumError("Failed to load document (PDFium: Data format error).")
+
+    pdf_module.__dict__["PdfConverter"] = FakePdfConverter
+    models_module.__dict__["create_model_dict"] = lambda: {"model": "fake"}
+    output_module.__dict__["text_from_rendered"] = lambda rendered: ("", {}, {})
+    monkeypatch.setitem(sys.modules, "marker", marker_module)
+    monkeypatch.setitem(sys.modules, "marker.converters", converters_module)
+    monkeypatch.setitem(sys.modules, "marker.converters.pdf", pdf_module)
+    monkeypatch.setitem(sys.modules, "marker.models", models_module)
+    monkeypatch.setitem(sys.modules, "marker.output", output_module)
+    monkeypatch.setattr("rag_parser_core.registry._module_available", lambda name: name == "marker")
+
+    data = b"broken-not-a-real-pdf"
+    profile = build_source_profile(
+        original_file_name="broken.pdf",
+        sanitized_file_name="broken.pdf",
+        content_type="application/pdf",
+        file_size_bytes=len(data),
+        content_sha256="b" * 64,
+        data=data,
+    )
+
+    result = parse_with_registry(
+        data,
+        source_profile=profile,
+        content_type=profile.content_type,
+        adapter_backend="marker",
+        marker_enabled=True,
+    )
+
+    assert result.extraction is None
+    assert result.fallback_used is True
+    assert "marker_adapter_invalid_input" in result.warnings
+    assert "marker_adapter_failed" not in result.warnings

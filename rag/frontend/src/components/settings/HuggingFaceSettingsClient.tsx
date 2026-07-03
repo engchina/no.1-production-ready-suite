@@ -1,21 +1,17 @@
 "use client";
 
 import {
-  Check,
-  Clipboard,
   Eye,
   EyeOff,
   HardDriveDownload,
   Save,
   ShieldCheck,
-  SlidersHorizontal,
 } from "lucide-react";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useState } from "react";
 
 import { ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -33,36 +29,30 @@ import { useHuggingFaceSettings, useUpdateHuggingFaceSettings } from "@/lib/quer
 import { cn } from "@/lib/utils";
 
 interface HuggingFaceForm {
-  downloadDir: string;
   endpoint: string;
   token: string;
   clearToken: boolean;
 }
 
 const EMPTY_FORM: HuggingFaceForm = {
-  downloadDir: "",
   endpoint: "",
   token: "",
   clearToken: false,
 };
 
-/** HuggingFace モデルダウンロード(DL ディレクトリ / token / ミラー)の runtime 設定フォーム。 */
+/** HuggingFace モデルダウンロード(token / ミラー)の runtime 設定フォーム。 */
 export function HuggingFaceSettingsClient() {
   const query = useHuggingFaceSettings();
   const save = useUpdateHuggingFaceSettings();
 
   const [form, setForm] = useState<HuggingFaceForm>(EMPTY_FORM);
-  const [downloadDirError, setDownloadDirError] = useState<string | undefined>();
   const [tokenVisible, setTokenVisible] = useState(false);
   const [saved, setSaved] = useState(false);
   const [optimistic, setOptimistic] = useState<HuggingFaceSettingsData | null>(null);
 
-  const downloadDirRef = useRef<HTMLInputElement>(null);
-
   useEffect(() => {
     if (query.data) {
       setForm(formFromSettings(query.data));
-      setDownloadDirError(undefined);
       setSaved(false);
       setOptimistic(null);
     }
@@ -70,17 +60,10 @@ export function HuggingFaceSettingsClient() {
 
   function updateForm(update: Partial<HuggingFaceForm>) {
     setForm((current) => ({ ...current, ...update }));
-    if ("downloadDir" in update) setDownloadDirError(undefined);
     setSaved(false);
   }
 
   function submit() {
-    const trimmed = form.downloadDir.trim();
-    if (trimmed && !trimmed.startsWith("/")) {
-      setDownloadDirError(t("settings.huggingface.validation.absolutePath"));
-      downloadDirRef.current?.focus();
-      return;
-    }
     save.mutate(payloadFromForm(form), {
       onSuccess: (data) => {
         setForm(formFromSettings(data));
@@ -139,21 +122,6 @@ export function HuggingFaceSettingsClient() {
             </CardHeader>
 
             <CardContent className="space-y-5 p-6">
-              <TextField
-                id="hf-download-dir"
-                label={t("settings.huggingface.field.downloadDir")}
-                value={form.downloadDir}
-                inputRef={downloadDirRef}
-                onChange={(value) => updateForm({ downloadDir: value })}
-                placeholder={t("settings.huggingface.placeholder.downloadDir")}
-                helper={t("settings.huggingface.helper.downloadDir")}
-                error={downloadDirError}
-              />
-
-              <DownloadDirSetup
-                dir={form.downloadDir.trim() || t("settings.huggingface.placeholder.downloadDir")}
-              />
-
               <TextField
                 id="hf-endpoint"
                 label={t("settings.huggingface.field.endpoint")}
@@ -218,70 +186,6 @@ export function HuggingFaceSettingsClient() {
   );
 }
 
-/** DL ディレクトリの事前作成コマンドを、入力中のパスから組み立ててコピーさせる。 */
-function DownloadDirSetup({ dir }: { dir: string }) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const command = `mkdir -p ${dir} && chmod 777 ${dir}`;
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* clipboard 不可環境では手動選択にフォールバック */
-    }
-  }
-
-  return (
-    <div className="rounded-md border border-border bg-background">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls="hf-download-dir-setup"
-        onPointerDown={(event) => {
-          event.preventDefault();
-          setOpen((value) => !value);
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          setOpen((value) => !value);
-        }}
-        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        <SlidersHorizontal size={14} className="text-primary" aria-hidden />
-        {t("settings.services.commands.title")}
-      </button>
-      {open ? (
-        <div id="hf-download-dir-setup" className="space-y-2 border-t border-border p-3">
-          <p className="text-xs leading-relaxed text-muted">
-            {t("settings.huggingface.helper.downloadDirSetup")}
-          </p>
-          <div className="flex items-stretch gap-2">
-            <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-border bg-card px-3 py-2 font-mono text-xs text-foreground">
-              {command}
-            </code>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="shrink-0 whitespace-nowrap"
-              onClick={() => void copy()}
-            >
-              {copied ? <Check size={14} aria-hidden /> : <Clipboard size={14} aria-hidden />}
-              {copied
-                ? t("settings.preview.copy.copied")
-                : t("settings.huggingface.actions.copyCommand")}
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function StatusPanel({ settings }: { settings: HuggingFaceSettingsData }) {
   return (
     <Card>
@@ -338,8 +242,6 @@ function TextField({
   onChange,
   placeholder,
   helper,
-  error,
-  inputRef,
 }: {
   id: string;
   label: string;
@@ -347,12 +249,8 @@ function TextField({
   onChange: (value: string) => void;
   placeholder: string;
   helper?: string;
-  error?: string;
-  inputRef?: RefObject<HTMLInputElement | null>;
 }) {
-  const errorId = `${id}-error`;
   const hintId = `${id}-hint`;
-  const describedBy = [helper ? hintId : "", error ? errorId : ""].filter(Boolean).join(" ");
 
   return (
     <div className="space-y-1.5">
@@ -360,25 +258,19 @@ function TextField({
         {label}
       </label>
       <input
-        ref={inputRef}
         id={id}
         type="text"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={describedBy || undefined}
-        className={cn(
-          "h-11 w-full rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-          error ? "border-danger" : "border-border"
-        )}
+        aria-describedby={helper ? hintId : undefined}
+        className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
       />
       {helper ? (
         <p id={hintId} className="text-xs leading-relaxed text-muted">
           {helper}
         </p>
       ) : null}
-      <FieldError id={errorId} message={error} />
     </div>
   );
 }
@@ -476,7 +368,6 @@ function SecretClearCheckbox({
 
 function formFromSettings(settings: HuggingFaceSettingsData): HuggingFaceForm {
   return {
-    downloadDir: settings.download_dir,
     endpoint: settings.endpoint,
     token: "",
     clearToken: false,
@@ -485,7 +376,6 @@ function formFromSettings(settings: HuggingFaceSettingsData): HuggingFaceForm {
 
 function payloadFromForm(form: HuggingFaceForm): HuggingFaceSettingsUpdate {
   const payload: HuggingFaceSettingsUpdate = {
-    download_dir: form.downloadDir,
     endpoint: form.endpoint,
   };
   if (form.clearToken) payload.clear_token = true;
@@ -502,7 +392,6 @@ function buildEnvFile(form: HuggingFaceForm, settings: HuggingFaceSettingsData):
         ? t("settings.preview.secret.saved")
         : "";
   const entries: [string, string][] = [
-    ["HUGGINGFACE_DOWNLOAD_DIR", form.downloadDir],
     ["HF_TOKEN", token],
     ["HF_ENDPOINT", form.endpoint],
   ];

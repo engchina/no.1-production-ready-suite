@@ -10,8 +10,7 @@
 * query 上書き(Retrieval / Grounding / Generation / Guardrail / Evaluation)は
   KB の :class:`KnowledgeBaseQueryConfig` を再利用する。複数 KB の query 設定は競合するため、
   検索時はこの**業務ビュー 1 枚から**解決する。KB 個別の query legacy 値は使わない。
-* persona は Generation の system prompt を runtime 上書きする
-  (:attr:`Settings.rag_generation_system_prompt_override`)。
+* persona / 既定言語は Generation profile を置換せず、公共制約と形式制約の間へ合成する。
 * 取込系(Preprocess / Parser / Chunking / Vector Index build)は KB の物理索引方法なので
   業務ビューでは触らない。
 * 永続化は ``rag_business_views.view_config`` JSON カラムに一括格納する(DDL 最小)。
@@ -64,14 +63,8 @@ class BusinessViewConfig(BaseModel):
         return _unique_clean_ids(self.knowledge_base_ids)
 
     def resolved_system_prompt(self) -> str | None:
-        """persona(system_prompt + 既定言語ディレクティブ)を 1 本の prompt へ束ねる。"""
+        """前後空白を除いた persona を返す。言語は別 layer として扱う。"""
         prompt = (self.system_prompt or "").strip()
-        language = (self.default_language or "").strip()
-        if not prompt and not language:
-            return None
-        if language:
-            directive = f"回答は原則 {language} で行ってください。"
-            prompt = f"{prompt}\n{directive}".strip() if prompt else directive
         return prompt or None
 
 
@@ -128,6 +121,9 @@ def resolve_business_view_settings(
     persona = config.resolved_system_prompt()
     if persona is not None:
         updates["rag_generation_system_prompt_override"] = persona
+    language = (config.default_language or "").strip()
+    if language:
+        updates["rag_generation_default_language"] = language
     if merged.rag_serving_mode != "fused":
         updates["rag_serving_mode"] = "fused"
     if updates:

@@ -23,13 +23,16 @@ from app.clients.oracle import (
     oracle_document_recipe_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
+    oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
+    oracle_generation_settings_schema_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_ingestion_segment_schema_sql,
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
     oracle_message_schema_sql,
+    oracle_prompt_version_schema_sql,
     oracle_search_audit_schema_sql,
     oracle_text_index_parameters_sql,
     oracle_text_preferences_sql,
@@ -38,7 +41,7 @@ from app.clients.oracle import (
 
 SCHEMA_NAME = "production-ready-rag-oracle-26ai"
 SCHEMA_VERSION = "1"
-MIGRATION_ARTIFACT_VERSION = "20260701_002"
+MIGRATION_ARTIFACT_VERSION = "20260703_002"
 VECTOR_CONTRACT = "VECTOR(1536, FLOAT32)"
 VECTOR_INDEX_CONTRACT = {
     "type": "HNSW",
@@ -113,6 +116,16 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             sql=oracle_business_view_schema_sql(),
         ),
         OracleSchemaSection(
+            name="prompt_versions",
+            table_name="rag_prompt_versions",
+            sql=oracle_prompt_version_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="generation_settings",
+            table_name="rag_generation_settings",
+            sql=oracle_generation_settings_schema_sql(),
+        ),
+        OracleSchemaSection(
             name="conversations",
             table_name="rag_conversations",
             sql=oracle_conversation_schema_sql(),
@@ -171,6 +184,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="citation_feedback",
             table_name="rag_citation_feedback",
             sql=oracle_feedback_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="feedback_details",
+            table_name="rag_feedback_details",
+            sql=oracle_feedback_details_schema_sql(),
         ),
         OracleSchemaSection(
             name="evaluation_artifacts",
@@ -333,6 +351,21 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260701_002_conversation_titles",
             table_name="rag_conversations",
             sql=_conversation_titles_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260702_001_chunk_search_text",
+            table_name="rag_chunks",
+            sql=_chunk_search_text_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260703_001_generation_settings",
+            table_name="rag_generation_settings",
+            sql=_generation_settings_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260703_002_feedback_details",
+            table_name="rag_feedback_details",
+            sql=_feedback_details_migration_sql(),
         ),
     ]
 
@@ -1491,6 +1524,136 @@ END;
 """.strip()
 
 
+def _generation_settings_migration_sql() -> str:
+    """回答生成 GLOBAL 設定と Prompt 版 table を追加する。"""
+
+    return """
+DECLARE
+    v_table_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_PROMPT_VERSIONS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_prompt_versions ('
+            || 'version_id VARCHAR2(64) PRIMARY KEY,'
+            || 'name VARCHAR2(120) NOT NULL,'
+            || 'system_prompt CLOB NOT NULL,'
+            || 'note VARCHAR2(2000),'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'created_by_hash CHAR(64)'
+            || ')';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_PROMPT_VERSIONS_CREATED_IDX';
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_prompt_versions_created_idx '
+            || 'ON rag_prompt_versions (created_at DESC, version_id DESC)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_GENERATION_SETTINGS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_generation_settings ('
+            || 'settings_key VARCHAR2(32) PRIMARY KEY,'
+            || 'generation_profile VARCHAR2(64) NOT NULL,'
+            || 'active_prompt_version_id VARCHAR2(64),'
+            || 'revision NUMBER(19) DEFAULT 1 NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'updated_by_hash CHAR(64),'
+            || 'CONSTRAINT rag_generation_settings_singleton_ck '
+            || 'CHECK (settings_key = ''GLOBAL''),'
+            || 'CONSTRAINT rag_generation_settings_profile_ck CHECK ('
+            || 'generation_profile IN ('
+            || '''grounded_concise'',''detailed_cited'',''strict_extractive'','
+            || '''structured_json'',''bilingual_ja_en'',''inline_cited'',''custom'')),'
+            || 'CONSTRAINT rag_generation_settings_revision_ck CHECK (revision >= 1),'
+            || 'CONSTRAINT rag_generation_settings_active_prompt_fk '
+            || 'FOREIGN KEY (active_prompt_version_id) '
+            || 'REFERENCES rag_prompt_versions (version_id)'
+            || ')';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _feedback_details_migration_sql() -> str:
+    """feedback の調査用本文・根拠 snapshot table を追加する。"""
+    parameters = oracle_text_index_parameters_sql().replace("'", "''")
+    return f"""
+{oracle_text_preferences_sql()}
+
+DECLARE
+    v_table_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_FEEDBACK_DETAILS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_feedback_details ('
+            || 'feedback_id VARCHAR2(64) PRIMARY KEY,'
+            || 'tenant_id_hash CHAR(64),'
+            || 'message_id VARCHAR2(64),'
+            || 'content_source VARCHAR2(32) NOT NULL,'
+            || 'question_text CLOB,'
+            || 'answer_text CLOB,'
+            || 'comment_text VARCHAR2(1000 CHAR),'
+            || 'citations_json JSON,'
+            || 'search_text CLOB,'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_feedback_details_feedback_fk FOREIGN KEY (feedback_id) '
+            || 'REFERENCES rag_citation_feedback (feedback_id) ON DELETE CASCADE,'
+            || 'CONSTRAINT rag_feedback_details_source_ck CHECK '
+            || '(content_source IN (''chat_message'', ''search_snapshot''))'
+            || ')';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_FEEDBACK_DETAILS_TENANT_CREATED_IDX';
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_feedback_details_tenant_created_idx '
+            || 'ON rag_feedback_details (tenant_id_hash, created_at DESC)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_FEEDBACK_DETAILS_MESSAGE_IDX';
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_feedback_details_message_idx '
+            || 'ON rag_feedback_details (message_id)';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_FEEDBACK_DETAILS_TEXT_IDX';
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_feedback_details_text_idx '
+            || 'ON rag_feedback_details (search_text) '
+            || 'INDEXTYPE IS CTXSYS.CONTEXT '
+            || '{parameters}';
+    END IF;
+END;
+/
+""".strip()
+
+
 def _business_views_migration_sql() -> str:
     """rag_business_views(業務ビュー)table を追加する。"""
     return """
@@ -2038,6 +2201,74 @@ BEGIN
             EXECUTE IMMEDIATE
                 'CREATE INDEX rag_chunks_text_idx '
                 || 'ON rag_chunks (chunk_text) '
+                || 'INDEXTYPE IS CTXSYS.CONTEXT '
+                || '{parameters}';
+        END IF;
+    END IF;
+END;
+/
+""".strip()
+
+
+def _chunk_search_text_migration_sql() -> str:
+    """表示本文を維持したまま Contextual header を Oracle Text へ索引する。"""
+    parameters = oracle_text_index_parameters_sql().replace("'", "''")
+    return f"""
+{oracle_text_preferences_sql()}
+
+DECLARE
+    v_table_count NUMBER;
+    v_col_count NUMBER;
+    v_nullable VARCHAR2(1);
+    v_index_count NUMBER;
+    v_target_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_CHUNKS';
+
+    IF v_table_count > 0 THEN
+        SELECT COUNT(*) INTO v_col_count
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_CHUNKS'
+          AND column_name = 'SEARCH_TEXT';
+
+        IF v_col_count = 0 THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_chunks ADD (search_text CLOB)';
+        END IF;
+
+        EXECUTE IMMEDIATE
+            'UPDATE rag_chunks SET search_text = chunk_text WHERE search_text IS NULL';
+
+        SELECT nullable INTO v_nullable
+        FROM user_tab_columns
+        WHERE table_name = 'RAG_CHUNKS'
+          AND column_name = 'SEARCH_TEXT';
+
+        IF v_nullable = 'Y' THEN
+            EXECUTE IMMEDIATE 'ALTER TABLE rag_chunks MODIFY (search_text NOT NULL)';
+        END IF;
+
+        SELECT COUNT(*) INTO v_index_count
+        FROM user_indexes
+        WHERE index_name = 'RAG_CHUNKS_TEXT_IDX';
+
+        IF v_index_count > 0 THEN
+            SELECT COUNT(*) INTO v_target_count
+            FROM user_ind_columns
+            WHERE index_name = 'RAG_CHUNKS_TEXT_IDX'
+              AND column_name = 'SEARCH_TEXT';
+
+            IF v_target_count = 0 THEN
+                EXECUTE IMMEDIATE 'DROP INDEX rag_chunks_text_idx';
+                v_index_count := 0;
+            END IF;
+        END IF;
+
+        IF v_index_count = 0 THEN
+            EXECUTE IMMEDIATE
+                'CREATE INDEX rag_chunks_text_idx '
+                || 'ON rag_chunks (search_text) '
                 || 'INDEXTYPE IS CTXSYS.CONTEXT '
                 || '{parameters}';
         END IF;

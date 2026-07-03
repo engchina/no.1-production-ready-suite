@@ -825,7 +825,7 @@ function serviceLabel(service: ServiceCatalogItemData): string {
   return t(service.label_key as I18nKey);
 }
 
-/** モデルキャッシュの host マウント先(読み取り専用)を表示する行。 */
+/** モデルキャッシュの Docker volume とコンテナ内パスを表示する行。 */
 function ServiceModelCacheRow({ cache }: { cache: ServiceModelCacheData }) {
   return (
     <p
@@ -834,7 +834,7 @@ function ServiceModelCacheRow({ cache }: { cache: ServiceModelCacheData }) {
     >
       <HardDriveDownload size={13} aria-hidden />
       <span className="text-muted">{t("settings.services.modelCache.label")}:</span>
-      <span className="font-mono break-all text-foreground">{cache.host_path}</span>
+      <span className="font-mono break-all text-foreground">{cache.volume_name}</span>
       <span aria-hidden>→</span>
       <span className="font-mono break-all text-foreground">{cache.container_path}</span>
       <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">

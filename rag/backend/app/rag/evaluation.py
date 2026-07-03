@@ -15,6 +15,7 @@ from app.rag.file_processing_evaluation import (
     citation_traceability_coverage,
     element_lineage_coverage,
 )
+from app.rag.generation_config import resolve_oracle_generation_settings
 from app.rag.guardrails import evaluate_groundedness
 from app.rag.ingestion_quality import summarize_ingestion_quality
 from app.rag.observability import (
@@ -110,6 +111,8 @@ class EvaluationRunner:
     ) -> EvaluationMetrics:
         """評価ケースを実行し、集計指標を返す。"""
         effective_settings = _settings_with_rag_overrides(self._settings, rag_overrides)
+        if self._pipeline is None:
+            effective_settings = await resolve_oracle_generation_settings(effective_settings)
         pipeline = self._pipeline or RagPipeline(settings=effective_settings)
         if not cases:
             aggregate_values = {

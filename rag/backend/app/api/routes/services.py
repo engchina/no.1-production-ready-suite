@@ -27,7 +27,7 @@ from app.services.catalog import (
     get_catalog_entry,
     is_dev_mode,
     service_health_url,
-    service_model_cache_host_path,
+    service_model_cache_volume_name,
 )
 from app.services.control import (
     ServiceAction,
@@ -50,11 +50,14 @@ def _control_enabled(settings: Settings) -> bool:
 
 
 def _model_cache(settings: Settings, entry: ServiceCatalogEntry) -> ServiceModelCacheData | None:
-    """モデル DL を行うサービスのマウント情報(読み取り専用)を作る。"""
-    host_path = service_model_cache_host_path(settings, entry)
-    if entry.model_cache_path is None or host_path is None:
+    """dev のモデルキャッシュ named volume 情報(読み取り専用)を作る。"""
+    volume_name = service_model_cache_volume_name(entry)
+    if not is_dev_mode(settings) or entry.model_cache_path is None or volume_name is None:
         return None
-    return ServiceModelCacheData(container_path=entry.model_cache_path, host_path=host_path)
+    return ServiceModelCacheData(
+        container_path=entry.model_cache_path,
+        volume_name=volume_name,
+    )
 
 
 def _catalog_item(settings: Settings, entry: ServiceCatalogEntry) -> ServiceCatalogItemData:

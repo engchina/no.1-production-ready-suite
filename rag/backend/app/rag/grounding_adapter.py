@@ -1,10 +1,9 @@
 """Grounding アダプター(検索後処理の手動選択プリセット)。
 
 preset→検索後処理段フラグの静的解決は共有パッケージ ``rag_pipeline_core.grounding`` を単一ソース
-として使い、backend と grounding マイクロサービスが同一結果を返す。`rag_grounding_service_enabled`
-が真のとき preset 解決を pipeline-grounding サービスへ委譲する。無効時は in-process(同一
-ロジック)、remote 未到達時も in-process へ縮退する。応答済み remote の HTTP error / 不正応答は
-処理停止する。`custom` は backend の legacy `rag_context_*`
+として使い、backend と grounding マイクロサービスが同一結果を返す。backend の検索経路は
+静的 preset を常に in-process で解決し、同期 HTTP の待ち時間と追加障害点を持たない。
+`custom` は backend の legacy `rag_context_*`
 設定をそのまま使う(後方互換)。CRAG 的 corrective(confidence-based)は
 verified_context/full_governed で surface する。
 """
@@ -112,7 +111,7 @@ def resolve_grounding_adapter(settings: Settings) -> GroundingAdapterParams:
             neighbor_expansion_enabled=_settings_neighbor_enabled(settings),
             compression_enabled=bool(getattr(settings, "rag_context_compression_enabled", False)),
         )
-    resolved = _resolve_static(settings, pipeline)
+    resolved = resolve_grounding(pipeline)
     return GroundingAdapterParams(
         pipeline=pipeline,
         dependency_promotion_enabled=resolved.dependency_promotion,
@@ -122,28 +121,6 @@ def resolve_grounding_adapter(settings: Settings) -> GroundingAdapterParams:
         compression_enabled=resolved.compression,
         corrective_enabled=resolved.corrective,
     )
-
-
-def _resolve_static(settings: Settings, pipeline: str):  # type: ignore[no-untyped-def]
-    """preset の静的解決を service opt-in + disabled 時 in-process で行う。"""
-    from rag_pipeline_core.grounding import GroundingResolved
-    from rag_pipeline_core.stage import GroundingStageRequest
-
-    from app.clients.pipeline_stage import PipelineStageClient
-
-    client = PipelineStageClient(settings)
-    if client.is_enabled("grounding"):
-        response = client.run_grounding(GroundingStageRequest(pipeline=pipeline))
-        if response is not None:
-            return GroundingResolved(
-                pipeline=response.pipeline,
-                dependency_promotion=response.dependency_promotion,
-                diversity=response.diversity,
-                expansion_mode=response.expansion_mode,  # type: ignore[arg-type]
-                compression=response.compression,
-                corrective=response.corrective,
-            )
-    return resolve_grounding(pipeline)
 
 
 def _display_expansion_mode(params: GroundingAdapterParams) -> ExpansionMode:

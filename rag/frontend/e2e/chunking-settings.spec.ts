@@ -41,15 +41,19 @@ for (const viewport of [
     await expect(
       page.getByText("backend 内処理または pipeline-chunking へ渡す方式")
     ).toBeVisible();
+    await expect(page.getByText("ここで選ぶ 7 個は分割方式です。", { exact: false })).toBeVisible();
     await expect(page.getByRole("radio", { name: /構造認識/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /親子階層/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /ページ単位/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /固定分割符/ })).toBeVisible();
     // 各方式カードに概念図(装飾 SVG)が 1 つずつ描画される。
-    await expect(page.locator('svg[viewBox="0 0 48 36"]')).toHaveCount(8);
+    await expect(page.locator('svg[viewBox="0 0 48 36"]')).toHaveCount(7);
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
     await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveValue("800");
     await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");
+    await expect(
+      page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" })
+    ).toBeChecked();
 
     await expectStrategyParams(page, /構造認識/, [
       "chunk サイズ(文字)",
@@ -61,29 +65,27 @@ for (const viewport of [
       "overlap(文字)",
       "最小 chunk 文字数",
     ]);
-    await expectStrategyParams(page, /文ウィンドウ/, [
-      "文ウィンドウ数",
-      "chunk サイズ(文字)",
-      "overlap(文字)",
-      "最小 chunk 文字数",
-    ]);
     await expectStrategyParams(page, /親子階層/, [
       "chunk サイズ(文字)",
       "overlap(文字)",
       "子 chunk サイズ(文字)",
       "最小 chunk 文字数",
     ]);
-    await expectStrategyParams(page, /見出し単位/, [
-      "chunk サイズ(文字)",
-      "overlap(文字)",
-      "最小 chunk 文字数",
-    ]);
-    await expectStrategyParams(page, /ページ単位/, [
-      "chunk サイズ(文字)",
-      "overlap(文字)",
-      "最小 chunk 文字数",
-    ]);
+    await expectSemanticStrategyParams(
+      page,
+      /見出し単位/,
+      "見出し内の再分割上限(文字)"
+    );
+    await expectSemanticStrategyParams(
+      page,
+      /ページ単位/,
+      "ページ内の再分割上限(文字)"
+    );
     await expectStrategyParams(page, /^固定長 /, ["chunk サイズ(文字)", "overlap(文字)"]);
+
+    await page.getByRole("radio", { name: /構造認識/ }).click();
+    await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveValue("800");
+    await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");
 
     await page.getByRole("radio", { name: /固定分割符/ }).click();
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
@@ -91,7 +93,6 @@ for (const viewport of [
     await expect(page.getByLabel("chunk サイズ(文字)", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel("overlap(文字)")).toHaveCount(0);
     await expect(page.getByLabel("子 chunk サイズ(文字)")).toHaveCount(0);
-    await expect(page.getByLabel("文ウィンドウ数")).toHaveCount(0);
     await expect(page.getByLabel("最小 chunk 文字数")).toHaveCount(0);
 
     const navLink = page.getByRole("link", { name: "文書分割" });
@@ -132,9 +133,9 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
           chunk_size: 1000,
           overlap: 120,
           child_size: 300,
-          sentence_window_size: 3,
           min_chars: 40,
           delimiter: "\\n\\n",
+          context_header_enabled: false,
         }),
       });
       return;
@@ -154,6 +155,7 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
   await minChars.fill("40");
   const chunkSize = page.getByLabel("chunk サイズ(文字)", { exact: true });
   await chunkSize.fill("1000");
+  await page.getByRole("switch", { name: "文脈ヘッダを検索対象へ追加" }).click();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
@@ -164,9 +166,9 @@ test("文書分割設定は方式とパラメータを保存できる", async ({
     chunk_size: 1000,
     overlap: 120,
     child_size: 300,
-    sentence_window_size: 3,
     min_chars: 40,
     delimiter: "\\n\\n",
+    context_header_enabled: false,
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -199,9 +201,9 @@ test("文書分割設定は固定分割符を保存できる", async ({ page }) 
     chunk_size: 800,
     overlap: 120,
     child_size: 320,
-    sentence_window_size: 3,
-    min_chars: 0,
+    min_chars: 120,
     delimiter: "---SECTION---",
+    context_header_enabled: true,
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -211,9 +213,9 @@ type ChunkingOverrides = {
   chunk_size?: number;
   overlap?: number;
   child_size?: number;
-  sentence_window_size?: number;
   min_chars?: number;
   delimiter?: string;
+  context_header_enabled?: boolean;
 };
 
 function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
@@ -221,7 +223,6 @@ function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
   const specs: { name: string; origin: string; recommended_for: string[] }[] = [
     { name: "structure_aware", origin: "ragflow_docling_marker", recommended_for: ["pdf", "office"] },
     { name: "recursive_character", origin: "langchain_recursive_character", recommended_for: ["text"] },
-    { name: "sentence_window", origin: "llamaindex_sentence_window", recommended_for: ["faq"] },
     {
       name: "hierarchical_parent_child",
       origin: "llamaindex_auto_merging",
@@ -238,14 +239,13 @@ function chunkingEnvelope(overrides: ChunkingOverrides = {}) {
       chunk_size: overrides.chunk_size ?? 800,
       overlap: overrides.overlap ?? 120,
       child_size: overrides.child_size ?? 320,
-      sentence_window_size: overrides.sentence_window_size ?? 3,
-      min_chars: overrides.min_chars ?? 0,
+      min_chars: overrides.min_chars ?? 120,
       delimiter: overrides.delimiter ?? "\\n\\n",
+      context_header_enabled: overrides.context_header_enabled ?? true,
       strategies: specs.map((spec) => ({
         ...spec,
         selected: spec.name === strategy,
         uses_child_size: spec.name === "hierarchical_parent_child",
-        uses_sentence_window: spec.name === "sentence_window",
       })),
       config_source: "runtime",
     },
@@ -265,15 +265,35 @@ async function expectStrategyParams(page: Page, radioName: RegExp, visibleLabels
     "chunk サイズ(文字)",
     "overlap(文字)",
     "子 chunk サイズ(文字)",
-    "文ウィンドウ数",
     "最小 chunk 文字数",
     "固定分割符文字列",
+    "見出し内の再分割上限(文字)",
+    "ページ内の再分割上限(文字)",
+    "再分割時の重複文字数",
   ];
   await page.getByRole("radio", { name: radioName }).click();
   for (const label of allLabels) {
     const locator = page.getByLabel(label, { exact: true });
     await expect(locator).toHaveCount(visibleLabels.includes(label) ? 1 : 0);
   }
+}
+
+async function expectSemanticStrategyParams(
+  page: Page,
+  radioName: RegExp,
+  splitLimitLabel: string
+) {
+  await page.getByRole("radio", { name: radioName }).click();
+  await expect(page.getByText("32,000文字超のみ再分割 / 重複なし")).toBeVisible();
+
+  const details = page.locator("details").filter({
+    hasText: "長大な単位の再分割(詳細設定)",
+  });
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.getByText("長大な単位の再分割(詳細設定)").click();
+  await expect(details.getByLabel(splitLimitLabel, { exact: true })).toHaveValue("32000");
+  await expect(details.getByLabel("再分割時の重複文字数")).toHaveValue("0");
+  await expect(details.getByLabel("最小 chunk 文字数")).toHaveValue("120");
 }
 
 async function expectNoHorizontalOverflow(page: Page) {

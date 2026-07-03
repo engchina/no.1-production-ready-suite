@@ -68,7 +68,10 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "根拠確認" })).toBeVisible();
     await expect(page.getByRole("radio", { name: /カスタム/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /カスタム/ })).toContainText("高度な設定");
+    await expect(page.getByRole("radio", { name: /リーン/ })).toContainText("低遅延");
     await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toContainText("補正(CRAG)");
+    await expect(page.getByRole("radio", { name: /リーン/ })).not.toContainText("low_latency");
     await expect(page.getByRole("link", { name: "根拠確認" })).toHaveAttribute(
       "aria-current",
       "page"
@@ -266,12 +269,12 @@ function retrievalEnvelope(
 
 function groundingEnvelope(pipeline: string) {
   const specs = [
-    { name: "custom", dependency_promotion: false, diversity: false, expansion_mode: "none", compression: false, corrective: false },
-    { name: "lean", dependency_promotion: false, diversity: false, expansion_mode: "none", compression: false, corrective: false },
-    { name: "verified_context", dependency_promotion: false, diversity: true, expansion_mode: "none", compression: false, corrective: true },
-    { name: "context_enrich", dependency_promotion: true, diversity: true, expansion_mode: "adaptive", compression: false, corrective: false },
-    { name: "compact", dependency_promotion: false, diversity: true, expansion_mode: "none", compression: true, corrective: false },
-    { name: "full_governed", dependency_promotion: true, diversity: true, expansion_mode: "adaptive", compression: true, corrective: true },
+    { name: "custom", recommended_for: ["advanced", "manual"], dependency_promotion: false, diversity: false, expansion_mode: "none", compression: false, corrective: false },
+    { name: "lean", recommended_for: ["low_latency", "simple"], dependency_promotion: false, diversity: false, expansion_mode: "none", compression: false, corrective: false },
+    { name: "verified_context", recommended_for: ["general", "balanced"], dependency_promotion: false, diversity: true, expansion_mode: "none", compression: false, corrective: true },
+    { name: "context_enrich", recommended_for: ["multi_page", "dependency"], dependency_promotion: true, diversity: true, expansion_mode: "adaptive", compression: false, corrective: false },
+    { name: "compact", recommended_for: ["token_budget", "long_context"], dependency_promotion: false, diversity: true, expansion_mode: "none", compression: true, corrective: false },
+    { name: "full_governed", recommended_for: ["compliance", "max_quality"], dependency_promotion: true, diversity: true, expansion_mode: "adaptive", compression: true, corrective: true },
   ];
   const selected = specs.find((spec) => spec.name === pipeline) ?? specs[0];
   return {
@@ -288,7 +291,6 @@ function groundingEnvelope(pipeline: string) {
       pipelines: specs.map((spec) => ({
         ...spec,
         origin: "x",
-        recommended_for: ["general"],
         selected: spec.name === pipeline,
       })),
       config_source: "runtime",

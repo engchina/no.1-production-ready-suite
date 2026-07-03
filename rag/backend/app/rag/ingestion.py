@@ -14,6 +14,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from pydantic import ValidationError
+from rag_parser_core.capabilities import adapter_supports_source
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
 from rag_parser_core.result import (
     EXTERNAL_ADAPTER_PACKAGES,
@@ -35,7 +36,11 @@ from app.clients.oci_enterprise_ai import (
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oci_speech import OciSpeechClient
 from app.clients.oracle import OracleClient
-from app.clients.parser_service import ParserServiceClient, ParserServiceUnavailableError
+from app.clients.parser_service import (
+    ParserServiceClient,
+    ParserServiceUnavailableError,
+    supported_formats_label,
+)
 from app.clients.pipeline_stage import PipelineStageClient
 from app.clients.preprocess_service import PreprocessServiceClient
 from app.config import Settings, get_settings
@@ -249,6 +254,16 @@ class IngestionPipeline:
         # (in-process 解析は実行しない)。診断側は設定値 local をそのまま baseline として扱う。
         if backend in {"local", "local_partition"}:
             backend = "unstructured"
+        # pre-flight: 宣言 matrix で非対応形式なら microservice/OCI を呼ぶ前に停止する
+        # (preprocess 変換後の content_type で判定するため、office_to_pdf 済み等は通る)。
+        if not adapter_supports_source(
+            backend, source_profile=source_profile, content_type=content_type
+        ):
+            raise ParserServiceUnavailableError(
+                backend,
+                "adapter_source_unsupported",
+                warning_code=f"{backend}_adapter_source_unsupported",
+            )
         if backend in SERVICE_ADAPTER_BACKENDS:
             return ParserRegistryResult(
                 extraction=None,
@@ -557,6 +572,9 @@ class IngestionPipeline:
                 record_outcome=record_outcome,
                 manage_document_state=manage_document_state,
                 cancel_checker=cancel_checker,
+                document_title=(
+                    source_profile.original_file_name if source_profile is not None else ""
+                ),
             )
         except IngestionCancelledError as exc:
             await self._mark_segments_cancelled(checkpoint_segments)
@@ -743,6 +761,7 @@ class IngestionPipeline:
                 record_outcome=record_outcome,
                 manage_document_state=self._recipe_id is None,
                 cancel_checker=cancel_checker,
+                document_title=detail.file_name,
             )
         except IngestionCancelledError as exc:
             record_ingestion("cancelled", 0)
@@ -808,6 +827,11 @@ class IngestionPipeline:
                 quality_report=quality_report,
                 parser_profile=quality_report.parser_profile,
                 cancel_checker=cancel_checker,
+            )
+            chunks = _chunks_with_context_headers(
+                chunks,
+                detail.file_name,
+                enabled=self._settings.rag_chunk_context_header_enabled,
             )
             await _raise_if_cancelled(cancel_checker)
             await _observe_ingestion_stage(
@@ -913,6 +937,11 @@ class IngestionPipeline:
             chunks = [_chunk_view_to_chunk(view) for view in chunk_views]
             if not chunks:
                 raise IngestionUserError("索引対象のチャンクが見つかりません。")
+            chunks = _chunks_with_context_headers(
+                chunks,
+                detail.file_name,
+                enabled=self._settings.rag_chunk_context_header_enabled,
+            )
             return await self._run_embedding_index_phase(
                 trace_id=trace_id,
                 document_id=document_id,
@@ -984,7 +1013,6 @@ class IngestionPipeline:
                 chunk_size=chunking_params.chunk_size,
                 overlap=chunking_params.overlap,
                 child_size=chunking_params.child_size,
-                sentence_window_size=chunking_params.sentence_window_size,
                 min_chars=chunking_params.min_chars,
                 delimiter=chunking_params.delimiter,
             )
@@ -997,7 +1025,6 @@ class IngestionPipeline:
                 chunk_size=chunking_params.chunk_size,
                 overlap=chunking_params.overlap,
                 child_size=chunking_params.child_size,
-                sentence_window_size=chunking_params.sentence_window_size,
                 min_chars=chunking_params.min_chars,
                 delimiter=chunking_params.delimiter,
             )
@@ -1012,7 +1039,6 @@ class IngestionPipeline:
                 "chunk_size": chunking_params.chunk_size,
                 "chunk_overlap": chunking_params.overlap,
                 "chunk_child_size": chunking_params.child_size,
-                "chunk_sentence_window_size": chunking_params.sentence_window_size,
                 "chunk_min_chars": chunking_params.min_chars,
                 "input_chars": len(text),
                 "parser_profile": parser_profile,
@@ -1044,6 +1070,7 @@ class IngestionPipeline:
         record_outcome: bool = True,
         manage_document_state: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+        document_title: str = "",
     ) -> DocumentDetail:
         """抽出結果から chunk→embed→index を実行し INDEXED まで進める後段。
 
@@ -1061,6 +1088,11 @@ class IngestionPipeline:
             parser_profile=parser_profile,
             cancel_checker=cancel_checker,
         )
+        chunks = _chunks_with_context_headers(
+            chunks,
+            document_title,
+            enabled=self._settings.rag_chunk_context_header_enabled,
+        )
         return await self._run_embedding_index_phase(
             trace_id=trace_id,
             document_id=document_id,
@@ -1076,6 +1108,16 @@ class IngestionPipeline:
             cancel_checker=cancel_checker,
             reuse_saved_chunks=False,
         )
+
+    def _chunk_embedding_inputs(self, chunks: list[Chunk]) -> list[str]:
+        """embedding へ渡す入力テキストを作る(Contextual chunk header の決定論版)。
+
+        有効時は「文書名 > section_path」を各 chunk の先頭へ前置して検索文脈を持たせる。
+        保存される chunk 本文・引用表示は変えず、chunk metadata の context_header を使う。
+        """
+        if not self._settings.rag_chunk_context_header_enabled:
+            return [chunk.text for chunk in chunks]
+        return [_embedding_input_with_context_header(chunk) for chunk in chunks]
 
     async def _run_embedding_index_phase(
         self,
@@ -1096,13 +1138,15 @@ class IngestionPipeline:
     ) -> DocumentDetail:
         """chunk を embedding し、Oracle index として検索可能にする。"""
         await _raise_if_cancelled(cancel_checker)
+        embed_inputs = self._chunk_embedding_inputs(chunks)
         vectors = await _observe_ingestion_stage(
             trace_id,
             "embedding",
-            self._genai.embed([chunk.text for chunk in chunks]),
+            self._genai.embed(embed_inputs),
             attributes={
                 "model": self._settings.oci_genai_embedding_model,
                 "input_count": len(chunks),
+                "context_header_enabled": self._settings.rag_chunk_context_header_enabled,
             },
             result_attributes=lambda result: {"vector_count": len(result)},
         )
@@ -1400,7 +1444,10 @@ class IngestionPipeline:
             return [
                 (
                     segment.model_copy(
-                        update={"status": "QUEUED", "error_code": "retry_failed_segment"}
+                        update={
+                            "status": "QUEUED",
+                            "error_code": "retry_failed_segment",
+                        }
                     )
                     if segment.segment_id in failed_ids
                     else segment
@@ -1665,7 +1712,10 @@ class IngestionPipeline:
         except Exception as exc:
             logger.info(
                 "segment_extraction_artifact_cache_skipped",
-                extra={"segment_id": segment.segment_id, "error_type": type(exc).__name__},
+                extra={
+                    "segment_id": segment.segment_id,
+                    "error_type": type(exc).__name__,
+                },
             )
             return None
 
@@ -1782,7 +1832,10 @@ class IngestionPipeline:
             await self._mark_segment_succeeded(latest, artifact_path=checkpoint_artifact_path)
             updated_segments.append(
                 latest.model_copy(
-                    update={"status": "SUCCEEDED", "artifact_path": checkpoint_artifact_path}
+                    update={
+                        "status": "SUCCEEDED",
+                        "artifact_path": checkpoint_artifact_path,
+                    }
                 )
             )
         return updated_segments
@@ -2214,7 +2267,9 @@ def _coerce_extraction_payload(value: object) -> Mapping[str, object] | None:
     return None
 
 
-def _validate_structured_extraction_payload(payload: Mapping[str, object]) -> StructuredExtraction:
+def _validate_structured_extraction_payload(
+    payload: Mapping[str, object],
+) -> StructuredExtraction:
     """抽出 payload を検証し、ValidationError を利用者向けに変換する。"""
     try:
         return StructuredExtraction.model_validate(payload)
@@ -2293,10 +2348,20 @@ def _selected_parser_failure_message(
             f"再実行してください。{warning_suffix}"
         )
     if warning and warning.endswith("_adapter_source_unsupported"):
+        formats = supported_formats_label(selected_backend)
+        formats_suffix = f"（対応形式: {formats}）" if formats else ""
         return (
-            f"選択した文書解析エンジン（{label}）はこのファイル形式を処理できません。"
+            f"選択した文書解析エンジン（{label}）はこのファイル形式を処理できません"
+            f"{formats_suffix}。"
             "別の解析エンジンには切り替えずに取込を停止しました。対応形式に変換するか、"
             f"設定を変更してから再実行してください。{warning_suffix}"
+        )
+    if warning and warning.endswith("_adapter_invalid_input"):
+        return (
+            f"選択した文書解析エンジン（{label}）でファイルを読み取れませんでした。"
+            "ファイルが破損しているか、この形式として読み取れません。"
+            "元ファイルが正しく開けるか確認し、開ける場合は別の解析エンジンを試すか、"
+            f"ファイルを再作成・再変換してから再アップロードしてください。{warning_suffix}"
         )
     if warning and (
         warning.endswith("_adapter_service_unconfigured")
@@ -2568,6 +2633,45 @@ def _chunk_view_to_chunk(view: DocumentChunkView) -> Chunk:
     )
 
 
+def _chunks_with_context_headers(
+    chunks: list[Chunk],
+    document_title: str,
+    *,
+    enabled: bool,
+) -> list[Chunk]:
+    """表示本文を変えず、索引用の決定論ヘッダだけ metadata へ付ける。"""
+    contextualized: list[Chunk] = []
+    for chunk in chunks:
+        metadata = dict(chunk.metadata)
+        section_path = str(metadata.get("section_path") or "").strip()
+        header = " > ".join(part for part in (document_title.strip(), section_path) if part)
+        if enabled and header:
+            metadata["context_header"] = header
+        else:
+            metadata.pop("context_header", None)
+        contextualized.append(
+            Chunk(
+                text=chunk.text,
+                index=chunk.index,
+                start_offset=chunk.start_offset,
+                end_offset=chunk.end_offset,
+                metadata=metadata,
+            )
+        )
+    return contextualized
+
+
+def _embedding_input_with_context_header(chunk: Chunk, document_title: str = "") -> str:
+    """chunk の embedding 入力へ「文書名 > section_path」の文脈ヘッダを前置する。"""
+    header = str(chunk.metadata.get("context_header") or "").strip()
+    if not header:
+        section_path = str(chunk.metadata.get("section_path") or "").strip()
+        header = " > ".join(part for part in (document_title.strip(), section_path) if part)
+    if not header:
+        return chunk.text
+    return f"{header}\n{chunk.text}"
+
+
 def _stored_chunk_int(value: object, *, default: int) -> int:
     """保存済み chunk metadata の整数値を安全に読む。"""
     if isinstance(value, bool) or value is None:
@@ -2618,7 +2722,7 @@ def _source_derivation_from_preprocess_artifact(
         converter_version=artifact.converter_version or "v1",
         source_content_type=artifact.source_content_type,
         source_sha256=artifact.source_sha256,
-        derived_object_path=artifact.object_storage_path if artifact.converted else None,
+        derived_object_path=(artifact.object_storage_path if artifact.converted else None),
         derived_content_type=artifact.content_type,
         derived_sha256=artifact.sha256,
         page_map={str(key): int(value) for key, value in artifact.page_map.items()},
@@ -3067,7 +3171,11 @@ def _merge_segment_extractions(
 
     ordered_segment_extractions = sorted(
         segment_extractions,
-        key=lambda item: (item.segment.page_start, item.segment.page_end, item.segment.index),
+        key=lambda item: (
+            item.segment.page_start,
+            item.segment.page_end,
+            item.segment.index,
+        ),
     )
 
     for segment_extraction in ordered_segment_extractions:
@@ -3287,7 +3395,7 @@ def _merge_extraction_pages(pages: Sequence[ExtractionPage]) -> list[ExtractionP
                 "label": existing.label or page.label,
                 "width": existing.width or page.width,
                 "height": existing.height or page.height,
-                "rotation": existing.rotation if existing.rotation is not None else page.rotation,
+                "rotation": (existing.rotation if existing.rotation is not None else page.rotation),
                 "element_ids": _dedupe_text([*existing.element_ids, *page.element_ids]),
                 "metadata": {**page.metadata, **existing.metadata},
             }
@@ -3496,7 +3604,9 @@ def _graph_index_result_attributes(graph_index: GraphIndex) -> Mapping[str, obje
     }
 
 
-def _extraction_structure_attributes(extraction: StructuredExtraction) -> Mapping[str, object]:
+def _extraction_structure_attributes(
+    extraction: StructuredExtraction,
+) -> Mapping[str, object]:
     """構造化抽出から非機密な件数だけを trace attribute にする。"""
     quality = extraction.quality_report or build_ingestion_quality_report(extraction)
     return {
@@ -3514,7 +3624,9 @@ def _extraction_structure_attributes(extraction: StructuredExtraction) -> Mappin
     }
 
 
-def _raw_extraction_structure_attributes(extracted: Mapping[str, object]) -> Mapping[str, object]:
+def _raw_extraction_structure_attributes(
+    extracted: Mapping[str, object],
+) -> Mapping[str, object]:
     """VLM 生 payload から本文を見ずに構造件数だけを読む。"""
     elements = _raw_mapping_items(extracted.get("elements"))
     pages_payload = _raw_mapping_items(extracted.get("pages"))

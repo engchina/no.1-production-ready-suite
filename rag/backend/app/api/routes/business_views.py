@@ -64,13 +64,15 @@ async def create_business_view(
     request: BusinessViewCreateRequest,
 ) -> ApiResponse[BusinessViewDetail]:
     """業務ビューを作成する。"""
-    created = await OracleClient().create_business_view(
+    oracle = OracleClient()
+    await _validate_custom_prompt(request.config, oracle)
+    created = await oracle.create_business_view(
         name=request.name,
         description=request.description,
         config=request.config,
     )
     # 参照 KB 名を解決した詳細を返す。
-    detail = await OracleClient().get_business_view(created.id)
+    detail = await oracle.get_business_view(created.id)
     return ApiResponse(data=detail or created)
 
 
@@ -92,8 +94,11 @@ async def update_business_view(
 ) -> ApiResponse[BusinessViewDetail]:
     """業務ビューを更新する。"""
     update_fields = set(request.model_fields_set)
+    oracle = OracleClient()
+    if request.config is not None:
+        await _validate_custom_prompt(request.config, oracle)
     try:
-        await OracleClient().update_business_view(
+        await oracle.update_business_view(
             business_view_id,
             name=request.name,
             description=request.description,
@@ -104,10 +109,24 @@ async def update_business_view(
         raise HTTPException(status_code=404, detail="業務ビューが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    detail = await OracleClient().get_business_view(business_view_id)
+    detail = await oracle.get_business_view(business_view_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="業務ビューが見つかりません。")
     return ApiResponse(data=detail)
+
+
+async def _validate_custom_prompt(config: object, oracle: OracleClient) -> None:
+    """custom を保存する時点で Oracle active Prompt を必須化する。"""
+
+    query = getattr(config, "query", None)
+    if getattr(query, "generation_profile", None) != "custom":
+        return
+    settings, active_prompt = await oracle.get_generation_runtime_config()
+    if settings.active_prompt_version_id is None or active_prompt is None:
+        raise HTTPException(
+            status_code=409,
+            detail="カスタム回答スタイルを使う前に Prompt 版を作成して有効化してください。",
+        )
 
 
 @router.post("/{business_view_id}/archive", response_model=ApiResponse[BusinessViewDetail])

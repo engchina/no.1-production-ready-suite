@@ -16,6 +16,7 @@ import logging
 from collections.abc import Mapping
 
 import httpx
+from rag_parser_core.capabilities import supported_modalities
 from rag_parser_core.result import ParseResponse, ParserRegistryResult
 
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
@@ -52,6 +53,23 @@ _SERVICE_LABELS: dict[str, str] = {
     "oci_genai_vision": "OCI Generative AI Vision",
     "oci_document_understanding": "OCI Document Understanding",
 }
+
+_MODALITY_LABELS: dict[str, str] = {
+    "pdf": "PDF",
+    "image": "画像",
+    "text": "テキスト",
+    "html": "HTML",
+    "email": "メール",
+    "office": "Office",
+}
+
+
+def supported_formats_label(backend: str) -> str:
+    """backend の対応形式を「PDF・画像」形式の日本語ラベルにする(未宣言は空文字)。"""
+    modalities = supported_modalities(backend)
+    return "・".join(
+        _MODALITY_LABELS.get(modality.value, modality.value) for modality in modalities
+    )
 
 
 class ParserServiceUnavailableError(RuntimeError):
@@ -127,7 +145,7 @@ class ParserServiceClient:
             return _fallback(backend, f"{backend}_adapter_service_unconfigured")
         files = {
             "file": (
-                source_profile.sanitized_file_name if source_profile is not None else "upload",
+                (source_profile.sanitized_file_name if source_profile is not None else "upload"),
                 source_bytes,
                 content_type or "application/octet-stream",
             )
@@ -220,7 +238,11 @@ class ParserServiceClient:
         except ValueError as exc:
             logger.warning(
                 "parser service returned invalid payload",
-                extra={"parser_backend": backend, "service_url": url, "error": str(exc)},
+                extra={
+                    "parser_backend": backend,
+                    "service_url": url,
+                    "error": str(exc),
+                },
             )
             if fail_fast:
                 raise ParserServiceUnavailableError(
@@ -260,7 +282,11 @@ class ParserServiceClient:
         if url is None:
             return _fallback(backend, f"{backend}_adapter_service_unconfigured")
         files = {"file": ("upload", source_bytes, content_type or "application/octet-stream")}
-        data = {"content_type": content_type, "document_id": document_id, "prompt": prompt}
+        data = {
+            "content_type": content_type,
+            "document_id": document_id,
+            "prompt": prompt,
+        }
         try:
             payload = self._post_parse_json(backend, url, files=files, data=data)
         except httpx.HTTPStatusError as exc:
@@ -313,7 +339,11 @@ class ParserServiceClient:
         except ValueError as exc:
             logger.warning(
                 "parser service returned invalid payload",
-                extra={"parser_backend": backend, "service_url": url, "error": str(exc)},
+                extra={
+                    "parser_backend": backend,
+                    "service_url": url,
+                    "error": str(exc),
+                },
             )
             return _fallback(backend, f"{backend}_adapter_service_invalid_response")
 
@@ -369,6 +399,8 @@ def _parser_result_failure_reason(result: ParserRegistryResult) -> str:
         return "invalid_response"
     if any(warning.endswith("_adapter_service_unreachable") for warning in warnings):
         return "unreachable"
+    if any(warning.endswith("_adapter_invalid_input") for warning in warnings):
+        return "adapter_invalid_input"
     if any(warning.endswith("_adapter_failed") for warning in warnings):
         return "adapter_failed"
     if result.unsupported_reason:
@@ -403,9 +435,20 @@ def _service_unavailable_message(
             f"{warning_suffix}"
         )
     if reason == "adapter_source_unsupported":
+        formats = supported_formats_label(backend)
+        formats_suffix = f"（対応形式: {formats}）" if formats else ""
         return (
-            f"選択した文書解析サービス（{label}）はこのファイル形式を処理できません。"
+            f"選択した文書解析サービス（{label}）はこのファイル形式を処理できません"
+            f"{formats_suffix}。"
             "別の解析エンジンを選ぶか、対応形式に変換してから再実行してください。"
+            f"{warning_suffix}"
+        )
+    if reason == "adapter_invalid_input":
+        return (
+            f"選択した文書解析サービス（{label}）でファイルを読み取れませんでした。"
+            "ファイルが破損しているか、この形式として読み取れません。"
+            "元ファイルが正しく開けるか確認し、開ける場合は別の解析エンジンを試すか、"
+            "ファイルを再作成・再変換してから再アップロードしてください。"
             f"{warning_suffix}"
         )
     if reason == "adapter_feature_flag_disabled":

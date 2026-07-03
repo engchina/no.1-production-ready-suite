@@ -1,11 +1,19 @@
-"""prompt version store(PoweRAG 由来の prompt 版管理)の単体テスト。"""
+"""旧 Prompt file の rollback 互換と Oracle Prompt API の単体テスト。"""
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from app.api.routes import settings as settings_route
+from app.clients.oracle import (
+    CustomPromptNotConfiguredError,
+    StoredGenerationSettings,
+    StoredPromptVersion,
+)
 from app.config import Settings
 from app.main import app
 from app.rag import prompt_versions
@@ -17,10 +25,77 @@ client = AsgiTestClient(app)
 
 @pytest.fixture(autouse=True)
 def _isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """版管理ファイルをテストごとの一時ファイルへ隔離する。"""
+    """旧 file と Oracle API fake をテストごとに隔離する。"""
     monkeypatch.setenv(
         prompt_versions.PROMPT_VERSIONS_FILE_ENV, str(tmp_path / "prompt-versions.json")
     )
+    FakePromptOracle.reset()
+    monkeypatch.setattr(settings_route, "OracleClient", FakePromptOracle)
+
+
+class FakePromptOracle:
+    """Prompt route が使う Oracle transaction 境界の最小 fake。"""
+
+    settings: StoredGenerationSettings
+    versions: list[StoredPromptVersion]
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        pass
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.settings = StoredGenerationSettings(
+            profile="grounded_concise",
+            active_prompt_version_id=None,
+            revision=1,
+            updated_at=datetime(2026, 7, 3, tzinfo=UTC),
+        )
+        cls.versions = []
+
+    async def list_prompt_versions(
+        self,
+    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+        return self.settings, list(self.versions)
+
+    async def create_prompt_version(
+        self,
+        *,
+        name: str,
+        system_prompt: str,
+        note: str = "",
+        activate: bool = True,
+    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+        version = StoredPromptVersion(
+            version_id=f"prompt-{len(self.versions) + 1}",
+            name=name,
+            system_prompt=system_prompt,
+            note=note,
+            created_at=datetime.now(UTC),
+        )
+        self.versions.insert(0, version)
+        self.__class__.settings = replace(
+            self.settings,
+            active_prompt_version_id=(
+                version.version_id if activate else self.settings.active_prompt_version_id
+            ),
+            revision=self.settings.revision + 1,
+            updated_at=version.created_at,
+        )
+        return self.settings, list(self.versions)
+
+    async def activate_prompt_version(
+        self, version_id: str
+    ) -> tuple[StoredGenerationSettings, list[StoredPromptVersion]]:
+        if all(version.version_id != version_id for version in self.versions):
+            raise KeyError(version_id)
+        now = datetime.now(UTC)
+        self.__class__.settings = replace(
+            self.settings,
+            active_prompt_version_id=version_id,
+            revision=self.settings.revision + 1,
+            updated_at=now,
+        )
+        return self.settings, list(self.versions)
 
 
 def test_create_first_version_is_auto_activated() -> None:
@@ -79,17 +154,27 @@ def test_no_active_when_store_empty() -> None:
 
 
 def test_custom_generation_profile_resolves_active_prompt() -> None:
-    prompt_versions.create_prompt_version(name="v1", system_prompt="カスタム指示です。")
-    params = resolve_generation_adapter(Settings.model_construct(rag_generation_profile="custom"))
+    params = resolve_generation_adapter(
+        Settings(
+            rag_generation_profile="custom",
+            rag_generation_custom_prompt="カスタム指示です。",
+            rag_generation_custom_prompt_version_id="prompt-v1",
+            rag_generation_service_enabled=False,
+        )
+    )
     assert params.profile == "custom"
-    assert params.system_prompt == "カスタム指示です。"
+    assert "必須の根拠・安全制約" in (params.system_prompt or "")
+    assert "カスタム指示です。" in (params.system_prompt or "")
 
 
-def test_custom_profile_falls_back_to_default_prompt_when_no_active_version() -> None:
-    # 有効版が無ければ system_prompt は None(client 既定 prompt を使う)。
-    params = resolve_generation_adapter(Settings.model_construct(rag_generation_profile="custom"))
-    assert params.profile == "custom"
-    assert params.system_prompt is None
+def test_custom_profile_rejects_when_no_active_version() -> None:
+    with pytest.raises(CustomPromptNotConfiguredError):
+        resolve_generation_adapter(
+            Settings(
+                rag_generation_profile="custom",
+                rag_generation_service_enabled=False,
+            )
+        )
 
 
 def test_prompts_api_create_list_and_rollback() -> None:

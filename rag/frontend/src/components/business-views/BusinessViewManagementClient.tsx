@@ -100,6 +100,8 @@ const GENERATION_OPTIONS: SelectFieldOption<GenerationProfileName>[] = [
   { value: "strict_extractive", label: t("settings.generation.profile.strict_extractive") },
   { value: "structured_json", label: t("settings.generation.profile.structured_json") },
   { value: "bilingual_ja_en", label: t("settings.generation.profile.bilingual_ja_en") },
+  { value: "inline_cited", label: t("settings.generation.profile.inline_cited") },
+  { value: "custom", label: t("settings.generation.profile.custom") },
 ];
 const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
   { value: "standard", label: t("settings.guardrail.policy.standard") },

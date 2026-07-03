@@ -107,7 +107,8 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert metrics.mrr == 1.0
     assert metrics.answer_keyword_hit_rate == 1.0
     assert metrics.groundedness_pass_rate == 1.0
-    assert metrics.faithfulness == 1.0
+    # 数字 1 件の一致だけで 1.0 に短絡せず、全回答 feature に対する比率を使う。
+    assert metrics.faithfulness == 0.5
     assert metrics.context_precision == 1.0
     assert metrics.context_recall == 1.0
     assert metrics.response_relevancy >= 0.8
@@ -133,10 +134,10 @@ async def test_evaluation_runner_computes_metrics() -> None:
     assert result.reciprocal_rank == 1.0
     assert result.answer_keyword_hit is True
     assert result.groundedness_passed is True
-    assert result.groundedness_score == 1.0
+    assert result.groundedness_score == 0.5
     assert result.grounding_overlap_count >= 1
     assert result.grounding_answer_feature_count >= 1
-    assert result.faithfulness == 1.0
+    assert result.faithfulness == 0.5
     assert result.context_precision == 1.0
     assert result.context_recall == 1.0
     assert result.response_relevancy >= 0.8
@@ -420,7 +421,7 @@ async def test_evaluation_runner_marks_threshold_gate_passed() -> None:
             mrr=1.0,
             answer_keyword_hit_rate=1.0,
             groundedness_pass_rate=1.0,
-            faithfulness=1.0,
+            faithfulness=0.5,
             context_precision=1.0,
             context_recall=1.0,
             noise_sensitivity=1.0,
@@ -798,7 +799,14 @@ async def test_evaluation_compare_applies_experiment_rag_overrides(
                 ),
             )
 
+    async def keep_test_settings(settings: Settings) -> Settings:
+        return settings
+
     monkeypatch.setattr("app.rag.evaluation.RagPipeline", CapturingRagPipeline)
+    monkeypatch.setattr(
+        "app.rag.evaluation.resolve_oracle_generation_settings",
+        keep_test_settings,
+    )
     runner = EvaluationRunner(
         quality_source=EmptyQualitySource(),
         settings=Settings.model_construct(
@@ -1192,15 +1200,16 @@ def test_evaluation_api_runs_against_local_pipeline() -> None:
     assert data["precision_at_k"] == 1.0
     assert data["recall_at_k"] == 1.0
     assert data["answer_keyword_hit_rate"] == 1.0
-    assert data["groundedness_pass_rate"] == 1.0
+    # 非空の固定回答に根拠が無い case は low-groundedness として扱う。
+    assert data["groundedness_pass_rate"] == 0.0
     assert data["passed"] is True
     assert data["threshold_failures"] == []
-    assert data["failure_reason_counts"] == {}
+    assert data["failure_reason_counts"] == {"low_groundedness": 1}
     assert data["case_results"][0]["case_id"] == "empty-store"
     assert data["case_results"][0]["retrieved_document_ids"] == []
     assert data["case_results"][0]["answer_keyword_hit"] is True
-    assert data["case_results"][0]["groundedness_passed"] is True
-    assert data["case_results"][0]["failure_reasons"] == []
+    assert data["case_results"][0]["groundedness_passed"] is False
+    assert data["case_results"][0]["failure_reasons"] == ["low_groundedness"]
 
 
 def _minimal_eval_metrics() -> EvaluationMetrics:

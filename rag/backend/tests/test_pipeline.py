@@ -17,6 +17,7 @@ from app.rag.pipeline import (
     LOW_EVIDENCE_WARNING,
     NO_RESULTS_ANSWER,
     NO_RESULTS_WARNING,
+    UNVERIFIED_RESULTS_WARNING,
     RagPipeline,
     SearchStageProgress,
     SearchTokenDelta,
@@ -26,6 +27,7 @@ from app.rag.pipeline import (
     _crag_confidence,
     _crag_grade,
     _dedupe_ranked_chunks,
+    _extract_relevant_excerpt,
     _relaxed_corrective_request,
 )
 from app.rag.request_context import (
@@ -142,6 +144,25 @@ async def test_pipeline_propagates_low_groundedness_warning_to_response_and_audi
     assert audit_event["outcome"] == "success"
     assert audit_event["guardrail_codes"] == ["low_groundedness"]
     assert audit_event["citation_count"] == 1
+
+
+async def test_pipeline_uses_effective_regulated_policy_for_execution() -> None:
+    """Business View 相当の effective Settings が診断だけでなく実 Guardrail を駆動する。"""
+    settings = Settings(
+        rag_guardrail_policy="regulated",
+        rag_guardrail_backend="local",
+    )
+    response = await RagPipeline(
+        genai=StubGenAiClient(),
+        oracle=StubOracleClient(),
+        llm=UngroundedLlm(),
+        settings=settings,
+    ).run(SearchRequest(query="承認条件"))
+
+    assert "明日の天気" not in response.answer
+    assert response.diagnostics.guardrail_policy == "regulated"
+    assert response.diagnostics.guardrail_backend == "local"
+    assert response.guardrail_warnings
 
 
 async def test_pipeline_masks_sensitive_identifiers_in_answer_and_audit(
@@ -1452,8 +1473,8 @@ async def test_pipeline_reports_stage_progress_and_diagnostic_timings() -> None:
     assert "INV-SECRET" not in str([event.attributes for event in observed])
 
 
-async def test_pipeline_streams_generation_deltas_when_enabled() -> None:
-    """stream flag と token callback がある場合は Enterprise AI stream を使う。"""
+async def test_pipeline_buffers_generation_before_publishing_deltas() -> None:
+    """互換 stream flag が有効でも検証前の raw token は callback へ公開しない。"""
     observed: list[SearchTokenDelta] = []
 
     async def capture_token(delta: SearchTokenDelta) -> None:
@@ -1463,7 +1484,10 @@ async def test_pipeline_streams_generation_deltas_when_enabled() -> None:
         genai=StubGenAiClient(),
         oracle=StubOracleClient(),
         llm=StreamingLlm(),
-        settings=Settings.model_construct(rag_stream_realtime_enabled=True),
+        settings=Settings.model_construct(
+            rag_stream_realtime_enabled=True,
+            rag_generation_service_enabled=False,
+        ),
     )
 
     response = await pipeline.run(
@@ -1473,8 +1497,7 @@ async def test_pipeline_streams_generation_deltas_when_enabled() -> None:
     )
 
     assert response.answer == "承認条件は 120000 円です。"
-    assert [delta.text for delta in observed] == ["承認条件は ", "120000 円です。"]
-    assert {delta.trace_id for delta in observed} == {"trace-stream"}
+    assert observed == []
     assert response.diagnostics.stream_stage_timings["generation"] >= 0.0
 
 
@@ -1575,7 +1598,9 @@ class ExplodingLlm(OciEnterpriseAiClient):
         super().__init__()
         self.called = False
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
         self.called = True
         raise AssertionError("no-results では LLM を呼び出さない")
 
@@ -1738,7 +1763,9 @@ class FailingRerankGenAiClient(OciGenAiClient):
 class SensitiveAnswerLlm(OciEnterpriseAiClient):
     """機微情報を含む回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
         return "振込先の口座番号は 1234567 です。クラウド利用料です。"
 
 
@@ -2903,29 +2930,34 @@ class RejectedCandidateOracleClient(OracleClient):
 class UngroundedLlm(OciEnterpriseAiClient):
     """citation と無関係な回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
         return "明日の天気は晴れです。"
 
 
 class GroundedLlm(OciEnterpriseAiClient):
     """citation に基づく回答を返すテスト用 LLM。"""
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
         return "承認条件は 120000 円です。"
 
 
 class StreamingLlm(OciEnterpriseAiClient):
-    """Enterprise AI streaming 回答を返すテスト用 LLM。"""
+    """raw stream を使わず buffer 生成することを確認する LLM。"""
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
-        raise AssertionError("stream 有効時は generate_stream を使う")
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
+        return "承認条件は 120000 円です。"
 
-    async def generate_stream(
+    async def generate_stream(  # type: ignore[override]
         self, prompt: str, context: str, *, system_prompt: str | None = None
     ) -> AsyncIterator[str]:
-        _ = prompt, context
-        for chunk in ("承認条件は ", "120000 円です。"):
-            yield chunk
+        raise AssertionError("公開前検証を迂回する generate_stream は使わない")
+        yield ""  # pragma: no cover
 
 
 class CapturingLlm(OciEnterpriseAiClient):
@@ -2935,7 +2967,9 @@ class CapturingLlm(OciEnterpriseAiClient):
         super().__init__()
         self.context = ""
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
         self.context = context
         return "承認条件は 120000 円です。"
 
@@ -2958,7 +2992,9 @@ class PlanningLlm(OciEnterpriseAiClient):
         self.plan_calls.append((query, mode, max_subqueries))
         return list(self._planned)
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
         _ = prompt, context
         return "請求書原本は Object Storage に保管します。"
 
@@ -2971,7 +3007,9 @@ class CapturingPromptLlm(OciEnterpriseAiClient):
         self.prompt = ""
         self.context = ""
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(  # type: ignore[override]
+        self, prompt: str, context: str, *, system_prompt: str | None = None
+    ) -> str:
         self.prompt = prompt
         self.context = context
         return "請求書原本は Object Storage に保管します。"
@@ -3123,7 +3161,7 @@ class SystemPromptCapturingLlm(OciEnterpriseAiClient):
         super().__init__()
         self.system_prompt: str | None = "__unset__"
 
-    async def generate(
+    async def generate(  # type: ignore[override]
         self,
         prompt: str,
         context: str,
@@ -3131,6 +3169,8 @@ class SystemPromptCapturingLlm(OciEnterpriseAiClient):
         system_prompt: str | None = None,
     ) -> str:
         self.system_prompt = system_prompt
+        if system_prompt and "抽出" in system_prompt:
+            return "中心: 承認条件。"
         return "承認条件は 120000 円です。"
 
 
@@ -3143,6 +3183,7 @@ async def test_pipeline_threads_generation_profile_system_prompt() -> None:
         llm=llm,
         settings=Settings.model_construct(
             rag_generation_profile="strict_extractive",
+            rag_generation_service_enabled=False,
             rag_context_window_chars=2000,
             rag_query_expansion_enabled=False,
         ),
@@ -3156,8 +3197,8 @@ async def test_pipeline_threads_generation_profile_system_prompt() -> None:
     assert "抽出" in llm.system_prompt
 
 
-async def test_pipeline_default_generation_profile_uses_client_default_prompt() -> None:
-    """既定 grounded_concise は system_prompt を渡さず client 既定を使う。"""
+async def test_pipeline_default_generation_profile_passes_explicit_safe_prompt() -> None:
+    """既定 grounded_concise も公共制約と簡潔指示を明示する。"""
     llm = SystemPromptCapturingLlm()
     pipeline = RagPipeline(
         genai=StubGenAiClient(),
@@ -3166,14 +3207,15 @@ async def test_pipeline_default_generation_profile_uses_client_default_prompt() 
         settings=Settings.model_construct(
             rag_context_window_chars=2000,
             rag_query_expansion_enabled=False,
+            rag_generation_service_enabled=False,
         ),
     )
 
     response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
 
     assert response.diagnostics.generation_profile == "grounded_concise"
-    # 既定 path は generate(query, context) を呼ぶため system_prompt は未指定(None)。
-    assert llm.system_prompt is None
+    assert llm.system_prompt is not None
+    assert "必須の根拠・安全制約" in llm.system_prompt
 
 
 def test_crag_confidence_prefers_rerank_score() -> None:
@@ -3225,6 +3267,460 @@ def test_crag_confidence_clamped_to_unit_range() -> None:
     assert _crag_confidence(chunks) == 1.0
 
 
+class LowScoreGenAiClient(StubGenAiClient):
+    """全候補を support 扱いにする rerank score を返す。"""
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        del query
+        return [(index, 0.5) for index, _ in enumerate(documents[:top_n])]
+
+
+class OrderedTwoResultGenAiClient(StubGenAiClient):
+    """先頭 support-only、後続 evidence の順を維持する。"""
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        del query, documents
+        return [(0, 0.99), (1, 0.98)][:top_n]
+
+
+class SupportOnlyOracleClient(OracleClient):
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-support",
+                chunk_id="doc-support:0",
+                text="承認条件の参考情報です。",
+                score=0.9,
+                file_name="support.txt",
+                metadata={"support_only": True, "chunk_index": 0},
+            )
+        ][:top_k]
+
+
+class RejectedOnlyOracleClient(SupportOnlyOracleClient):
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        chunks = await super().hybrid_search(query, embedding, top_k, mode, filters)
+        return [
+            chunk.model_copy(
+                update={
+                    "metadata": {
+                        **chunk.metadata,
+                        "support_only": False,
+                        "source_acl_denied": True,
+                    }
+                }
+            )
+            for chunk in chunks
+        ]
+
+
+class WindowGateOracleClient(OracleClient):
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del query, embedding, mode, filters
+        return [
+            RetrievedChunk(
+                document_id="doc-support",
+                chunk_id="doc-support:0",
+                text="先頭に置かれる補助情報です。",
+                score=0.9,
+                file_name="support.txt",
+                metadata={"support_only": True, "chunk_index": 0},
+            ),
+            RetrievedChunk(
+                document_id="doc-evidence",
+                chunk_id="doc-evidence:0",
+                text="承認条件は 120000 円です。",
+                score=0.9,
+                file_name="policy.txt",
+                metadata={"chunk_index": 0},
+            ),
+        ][:top_k]
+
+
+class QueryAwareRetryOracleClient(OracleClient):
+    def __init__(self, *, initial_empty: bool = False) -> None:
+        super().__init__()
+        self.initial_empty = initial_empty
+        self.queries: list[str] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        del embedding, mode, filters
+        self.queries.append(query)
+        if "書き換え" in query or "分解" in query:
+            return [
+                RetrievedChunk(
+                    document_id="doc-evidence",
+                    chunk_id="doc-evidence:0",
+                    text="承認条件は 120000 円です。",
+                    score=0.95,
+                    file_name="policy.txt",
+                    metadata={"chunk_index": 0},
+                )
+            ][:top_k]
+        if self.initial_empty:
+            return []
+        return await SupportOnlyOracleClient().hybrid_search(query, [], top_k)
+
+
+class TopKCorrectiveOracleClient(SupportOnlyOracleClient):
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        if top_k > 1:
+            return [
+                RetrievedChunk(
+                    document_id="doc-corrected",
+                    chunk_id="doc-corrected:0",
+                    text="承認条件は 120000 円です。",
+                    score=0.95,
+                    file_name="corrected.txt",
+                    metadata={"chunk_index": 0},
+                )
+            ]
+        return await super().hybrid_search(query, embedding, top_k, mode, filters)
+
+
+class ModePlanningLlm(OciEnterpriseAiClient):
+    def __init__(self, *, generate_allowed: bool = True) -> None:
+        super().__init__()
+        self.generate_allowed = generate_allowed
+        self.generated = False
+        self.plan_modes: list[str] = []
+
+    async def plan_query(
+        self,
+        query: str,
+        *,
+        mode: str,
+        max_subqueries: int = 3,
+    ) -> list[str]:
+        del query, max_subqueries
+        self.plan_modes.append(mode)
+        if mode == "query_rewrite":
+            return ["承認条件 書き換え"]
+        if mode == "decompose":
+            return ["承認条件 分解"]
+        return []
+
+    async def generate(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str | None = None,
+        response_schema: Mapping[str, Any] | None = None,
+        response_schema_name: str = "response",
+    ) -> str:
+        del prompt, context, system_prompt, response_schema, response_schema_name
+        if not self.generate_allowed:
+            raise AssertionError("evidence 0 では生成しない")
+        self.generated = True
+        return "承認条件は 120000 円です。"
+
+
+class RecordingGroundingPipeline(RagPipeline):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.grounding_calls: list[str] = []
+
+    async def _promote_dependency_linked_context(
+        self,
+        anchors: list[RetrievedChunk],
+        candidates: list[RetrievedChunk],
+    ) -> tuple[list[RetrievedChunk], int]:
+        del candidates
+        self.grounding_calls.append("dependency")
+        return anchors, 0
+
+    async def _diversify_context_anchors(
+        self,
+        chunks: list[RetrievedChunk],
+        diversity_lambda: float | None = None,
+    ) -> tuple[list[RetrievedChunk], int]:
+        del diversity_lambda
+        self.grounding_calls.append("diversity")
+        return chunks, 0
+
+    async def _expand_context_adaptively(
+        self,
+        chunks: list[RetrievedChunk],
+        query: str,
+    ) -> tuple[list[RetrievedChunk], int]:
+        del query
+        self.grounding_calls.append("adaptive")
+        return chunks, 0
+
+    async def _compress_context_chunks(
+        self,
+        chunks: list[RetrievedChunk],
+        query: str,
+    ) -> tuple[list[RetrievedChunk], int, int]:
+        del query
+        self.grounding_calls.append("compression")
+        return chunks, 0, 0
+
+
+def _grounding_test_settings(**updates: object) -> Settings:
+    values: dict[str, object] = {
+        "rag_query_expansion_enabled": False,
+        "rag_context_window_chars": 2000,
+        "rag_context_neighbor_window": 0,
+        "rag_generation_service_enabled": False,
+        "rag_graph_service_enabled": False,
+        "rag_guardrail_service_enabled": False,
+        "rag_grounding_service_enabled": False,
+        "rag_retrieval_service_enabled": False,
+        "rag_agentic_service_enabled": False,
+    }
+    values.update(updates)
+    return Settings.model_construct(**cast(Any, values))
+
+
+@pytest.mark.parametrize(
+    ("pipeline_name", "expected_calls"),
+    [
+        ("custom", []),
+        ("lean", []),
+        ("verified_context", ["diversity"]),
+        ("context_enrich", ["dependency", "diversity", "adaptive"]),
+        ("compact", ["diversity", "compression"]),
+        (
+            "full_governed",
+            ["dependency", "diversity", "adaptive", "compression"],
+        ),
+    ],
+)
+async def test_each_grounding_preset_executes_its_stages(
+    pipeline_name: str,
+    expected_calls: list[str],
+) -> None:
+    pipeline = RecordingGroundingPipeline(
+        genai=StubGenAiClient(),
+        oracle=NeighborOracleClient(),
+        llm=GroundedLlm(),
+        settings=_grounding_test_settings(rag_post_retrieval_pipeline=pipeline_name),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert pipeline.grounding_calls == expected_calls
+    assert response.diagnostics.post_retrieval_pipeline == pipeline_name
+    assert response.diagnostics.evidence_count == 1
+
+
+async def test_pipeline_uses_verified_low_score_context_in_standard_profile() -> None:
+    pipeline = RagPipeline(
+        genai=LowScoreGenAiClient(),
+        oracle=SupportOnlyOracleClient(),
+        llm=GroundedLlm(),
+        settings=_grounding_test_settings(rag_post_retrieval_pipeline="lean"),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.answer == "承認条件は 120000 円です。"
+    assert [citation.chunk_id for citation in response.citations] == ["doc-support:0"]
+    assert response.diagnostics.evidence_count == 0
+    assert response.diagnostics.support_count == 1
+
+
+async def test_pipeline_never_generates_when_all_candidates_are_rejected() -> None:
+    llm = ExplodingLlm()
+    pipeline = RagPipeline(
+        genai=LowScoreGenAiClient(),
+        oracle=RejectedOnlyOracleClient(),
+        llm=llm,
+        settings=_grounding_test_settings(rag_post_retrieval_pipeline="lean"),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.answer == NO_RESULTS_ANSWER
+    assert response.citations == []
+    assert response.diagnostics.evidence_count == 0
+    assert response.guardrail_warnings == [NO_RESULTS_WARNING, UNVERIFIED_RESULTS_WARNING]
+    assert llm.called is False
+
+
+@pytest.mark.parametrize(
+    "strict_settings",
+    [
+        {"rag_generation_profile": "strict_extractive"},
+        {"rag_guardrail_policy": "regulated"},
+    ],
+)
+async def test_pipeline_never_generates_low_score_context_in_strict_modes(
+    strict_settings: dict[str, object],
+) -> None:
+    llm = ExplodingLlm()
+    pipeline = RagPipeline(
+        genai=LowScoreGenAiClient(),
+        oracle=SupportOnlyOracleClient(),
+        llm=llm,
+        settings=_grounding_test_settings(
+            rag_post_retrieval_pipeline="lean",
+            **strict_settings,
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.citations == []
+    assert response.diagnostics.evidence_count == 0
+    assert llm.called is False
+
+
+async def test_pipeline_checks_evidence_again_after_context_window_build() -> None:
+    llm = ExplodingLlm()
+    pipeline = RagPipeline(
+        genai=OrderedTwoResultGenAiClient(),
+        oracle=WindowGateOracleClient(),
+        llm=llm,
+        settings=_grounding_test_settings(
+            rag_post_retrieval_pipeline="lean",
+            rag_context_window_chars=70,
+            rag_generation_profile="strict_extractive",
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=2, rerank_top_n=2))
+
+    assert response.answer == "提供された根拠には該当する情報がありません。"
+    assert response.diagnostics.retrieved_context_pack["evidence_count"] == 1
+    assert response.diagnostics.context_builder["evidence_count"] == 0
+    assert llm.called is False
+
+
+@pytest.mark.parametrize("initial_empty", [False, True])
+async def test_crag_retries_support_only_and_empty_results_once(initial_empty: bool) -> None:
+    oracle = QueryAwareRetryOracleClient(initial_empty=initial_empty)
+    llm = ModePlanningLlm()
+    pipeline = RecordingGroundingPipeline(
+        genai=StubGenAiClient(),
+        oracle=oracle,
+        llm=llm,
+        settings=_grounding_test_settings(rag_post_retrieval_pipeline="verified_context"),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.citations[0].chunk_id == "doc-evidence:0"
+    assert response.diagnostics.corrective_retried is True
+    assert response.diagnostics.crag_fallback_triggered is True
+    assert llm.plan_modes == ["query_rewrite"]
+    assert pipeline.grounding_calls.count("diversity") == 2
+
+
+async def test_failed_crag_retry_still_refuses_generation() -> None:
+    llm = ModePlanningLlm(generate_allowed=False)
+    pipeline = RagPipeline(
+        genai=LowScoreGenAiClient(),
+        oracle=QueryAwareRetryOracleClient(),
+        llm=llm,
+        settings=_grounding_test_settings(
+            rag_post_retrieval_pipeline="verified_context",
+            rag_generation_profile="strict_extractive",
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.answer == "提供された根拠には該当する情報がありません。"
+    assert response.citations == []
+    assert llm.generated is False
+    assert llm.plan_modes == ["query_rewrite"]
+
+
+async def test_corrective_retrieval_reuses_full_post_processing() -> None:
+    pipeline = RecordingGroundingPipeline(
+        genai=StubGenAiClient(),
+        oracle=TopKCorrectiveOracleClient(),
+        llm=GroundedLlm(),
+        settings=_grounding_test_settings(
+            rag_retrieval_strategy="corrective_multi_query",
+            rag_post_retrieval_pipeline="compact",
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.citations[0].chunk_id == "doc-corrected:0"
+    assert response.diagnostics.corrective_retried is True
+    assert pipeline.grounding_calls.count("compression") == 2
+
+
+async def test_agentic_multi_hop_reuses_full_post_processing() -> None:
+    llm = ModePlanningLlm()
+    pipeline = RecordingGroundingPipeline(
+        genai=StubGenAiClient(),
+        oracle=QueryAwareRetryOracleClient(),
+        llm=llm,
+        settings=_grounding_test_settings(
+            rag_agentic_profile="multi_hop",
+            rag_post_retrieval_pipeline="compact",
+        ),
+    )
+
+    response = await pipeline.run(SearchRequest(query="承認条件", top_k=1, rerank_top_n=1))
+
+    assert response.citations[0].chunk_id == "doc-evidence:0"
+    assert response.diagnostics.corrective_retried is True
+    assert "decompose" in llm.plan_modes
+    assert pipeline.grounding_calls.count("compression") == 2
+
+
+def test_compression_selects_best_segments_before_restoring_source_order() -> None:
+    excerpt = _extract_relevant_excerpt(
+        "needle。無関係な長い説明です。needle strong。",
+        query_features={"needle", "strong"},
+        max_sentences=1,
+        max_chars=30,
+    )
+    ordered = _extract_relevant_excerpt(
+        "needle first。無関係です。needle strong second。",
+        query_features={"needle", "strong", "first", "second"},
+        max_sentences=2,
+        max_chars=45,
+    )
+
+    assert excerpt == "needle strong。"
+    assert ordered.index("first") < ordered.index("second")
+
+
 def test_crag_grade_thresholds() -> None:
     assert _crag_grade(0.7, 0.35, 0.7) == "high"
     assert _crag_grade(0.5, 0.35, 0.7) == "mid"
@@ -3265,7 +3761,16 @@ class RewritePlanningLlm(OciEnterpriseAiClient):
         self.plan_calls += 1
         return ["精緻化した検索クエリ"]
 
-    async def generate(self, prompt: str, context: str, *, system_prompt: str | None = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        context: str,
+        *,
+        system_prompt: str | None = None,
+        response_schema: Mapping[str, Any] | None = None,
+        response_schema_name: str = "structured_answer",
+    ) -> str:
+        del context, system_prompt, response_schema, response_schema_name
         self.prompt = prompt
         return "回答本文。"
 

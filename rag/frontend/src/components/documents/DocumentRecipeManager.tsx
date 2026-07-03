@@ -16,9 +16,10 @@ import {
   Settings2,
   Trash2,
 } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 
 import { DocumentProcessingConfigPanel } from "./DocumentProcessingConfigPanel";
+import { EmptyState } from "@/components/StateViews";
 import {
   canAddRecipe,
   canDeleteRecipe,
@@ -44,7 +45,7 @@ import {
   type DocumentRecipeStep,
   type DocumentRecipeView,
   type IngestionJobPhase,
-  type RetrievedChunk,
+  type SearchResponse,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -90,6 +91,7 @@ export function DocumentRecipeManager({
   error,
   onRetry,
   chunkSets,
+  sourceModality = null,
 }: {
   documentId: string;
   recipes: DocumentRecipeView[];
@@ -99,6 +101,7 @@ export function DocumentRecipeManager({
   error: unknown;
   onRetry: () => void;
   chunkSets?: DocumentChunkSet[];
+  sourceModality?: string | null;
 }) {
   const selected = resolveSelectedRecipe(recipes, selectedRecipeId);
   const createRecipe = useCreateDocumentRecipe();
@@ -108,6 +111,10 @@ export function DocumentRecipeManager({
   const confirm = useConfirm();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [addMode, setAddMode] = useState<AddMode>("clone");
+  const configData = useMemo(
+    () => (selected ? recipeConfigData(selected) : null),
+    [selected]
+  );
 
   const openAddDialog = () => {
     setAddMode("clone");
@@ -196,7 +203,6 @@ export function DocumentRecipeManager({
     return <FormStatus tone="info" message={t("documents.recipes.empty")} />;
   }
 
-  const configData = recipeConfigData(selected);
   const processPending = enqueue.isPending || approve.isPending;
   const processError = enqueue.error ?? approve.error;
 
@@ -298,13 +304,11 @@ export function DocumentRecipeManager({
 
         <RecipeSteps recipe={selected} />
 
+        {/* 失敗の原因本文は上部の状態メッセージスロット(DocumentWorkspace)が正本(messaging-spec §9 P2)。
+            ここは「検索は旧出力で継続中」という状況提示のみ残す。 */}
         {selected.status === "ERROR" && selected.searchable ? (
           <Banner severity="warning" className="mt-3">
             {t("documents.recipes.staleError")}
-          </Banner>
-        ) : selected.error_message ? (
-          <Banner severity="danger" className="mt-3">
-            {selected.error_message}
           </Banner>
         ) : null}
         {processError ? (
@@ -323,6 +327,7 @@ export function DocumentRecipeManager({
             error={null}
             onRetry={onRetry}
             disabled={recipeConfigLocked(selected)}
+            sourceModality={sourceModality}
           />
         </div>
         <RecipeComparison documentId={documentId} recipes={recipes} />
@@ -640,8 +645,8 @@ function RecipeComparison({
   const [rightId, setRightId] = useState(searchable[1]?.recipe_id ?? "");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{
-    left: RetrievedChunk[];
-    right: RetrievedChunk[];
+    left: SearchResponse;
+    right: SearchResponse;
   } | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -672,7 +677,7 @@ function RecipeComparison({
           filters: { document_id: documentId, chunk_set_id: right.active_chunk_set_id },
         }),
       ]);
-      setResults({ left: leftResult.citations, right: rightResult.citations });
+      setResults({ left: leftResult, right: rightResult });
     } catch (reason) {
       setError(
         reason instanceof ApiError ? reason.message : t("documents.experiment.compare.error")
@@ -742,11 +747,11 @@ function RecipeComparison({
             <div className="grid gap-4 lg:grid-cols-2">
               <ComparisonColumn
                 title={left ? recipeName(left) : ""}
-                chunks={results.left}
+                result={results.left}
               />
               <ComparisonColumn
                 title={right ? recipeName(right) : ""}
-                chunks={results.right}
+                result={results.right}
               />
             </div>
           ) : null}
@@ -756,21 +761,31 @@ function RecipeComparison({
   );
 }
 
-function ComparisonColumn({ title, chunks }: { title: string; chunks: RetrievedChunk[] }) {
+function ComparisonColumn({ title, result }: { title: string; result: SearchResponse }) {
+  const chunks = result.citations;
   const maxima = scoreMaximaForCitations(chunks);
   return (
     <section className="min-w-0">
       <h4 className="mb-2 text-sm font-semibold text-foreground">{title}</h4>
-      <ol className="space-y-2">
-        {chunks.map((chunk, index) => (
-          <CitationCard
-            key={`${chunk.chunk_id}-${index}`}
-            chunk={chunk}
-            index={index}
-            scoreMaxima={maxima}
+      {chunks.length ? (
+        <ol className="space-y-2">
+          {chunks.map((chunk, index) => (
+            <CitationCard
+              key={`${chunk.chunk_id}-${index}`}
+              chunk={chunk}
+              index={index}
+              scoreMaxima={maxima}
+            />
+          ))}
+        </ol>
+      ) : (
+        <div aria-live="polite">
+          <EmptyState
+            title={t("search.noResults")}
+            hint={result.answer || t("search.noResultsHint")}
           />
-        ))}
-      </ol>
+        </div>
+      )}
     </section>
   );
 }

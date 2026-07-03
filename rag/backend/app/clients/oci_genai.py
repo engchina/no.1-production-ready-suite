@@ -26,6 +26,9 @@ EMBEDDING_INPUT_TYPES = frozenset(
 # ponytail: Cohere Embed v4 128k tokens への保守的な文字数ガード。
 # tokenizer は実際に必要になるまで入れない。
 EMBEDDING_INPUT_MAX_CHARS = 100_000
+# OCI Embed 4 は 1 request 内の全入力で 128k token。tokenizer 依存を増やさず保守的に抑える。
+EMBEDDING_REQUEST_MAX_CHARS = 100_000
+EMBEDDING_REQUEST_MAX_INPUTS = 96
 type SdkCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 
 
@@ -141,10 +144,12 @@ class OciGenAiClient:
         input_type: EmbeddingInputType,
     ) -> list[list[float]]:
         """OCI embedding request を設定値で分割し、入力順に結合して返す。"""
-        batch_size = max(1, getattr(self._settings, "rag_embedding_batch_size", 96))
+        batch_size = min(
+            EMBEDDING_REQUEST_MAX_INPUTS,
+            max(1, getattr(self._settings, "rag_embedding_batch_size", 96)),
+        )
         vectors: list[list[float]] = []
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start : start + batch_size]
+        for batch in _embedding_request_batches(texts, max_count=batch_size):
             batch_vectors = await self._embed_with_oci(batch, input_type=input_type)
             _validate_embedding_batch(
                 batch_vectors,
@@ -364,6 +369,25 @@ def _validate_embedding_input_lengths(texts: Sequence[str]) -> None:
                 "embedding input が長すぎます。"
                 f"index={index}, chars={chars}, max_chars={EMBEDDING_INPUT_MAX_CHARS}"
             )
+
+
+def _embedding_request_batches(texts: Sequence[str], *, max_count: int) -> list[list[str]]:
+    """入力順を保ったまま件数と保守的な総文字数の両方で request を分割する。"""
+    batches: list[list[str]] = []
+    batch: list[str] = []
+    batch_chars = 0
+    for text in texts:
+        if batch and (
+            len(batch) >= max_count or batch_chars + len(text) > EMBEDDING_REQUEST_MAX_CHARS
+        ):
+            batches.append(batch)
+            batch = []
+            batch_chars = 0
+        batch.append(text)
+        batch_chars += len(text)
+    if batch:
+        batches.append(batch)
+    return batches
 
 
 def _validate_embedding_batch(

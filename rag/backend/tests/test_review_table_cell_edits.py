@@ -163,7 +163,6 @@ def test_saved_review_text_is_used_by_every_chunk_strategy(strategy: str) -> Non
         chunk_size=200,
         overlap=0,
         child_size=80,
-        sentence_window_size=2,
     )
 
     assert chunks, strategy

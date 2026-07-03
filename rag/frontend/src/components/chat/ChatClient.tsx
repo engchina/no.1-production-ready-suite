@@ -7,6 +7,7 @@ import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { CitationCard, scoreMaximaForCitations } from "@/components/search/CitationCard";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
+import { Banner } from "@/components/ui/banner";
 import { Card, CardContent } from "@/components/ui/card";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { ToggleChip } from "@/components/ui/toggle-chip";
@@ -37,6 +38,7 @@ interface LiveColumn {
   status: "streaming" | "done" | "error";
   traceId: string | null;
   errorMessage: string | null;
+  guardrailWarnings: string[];
 }
 
 interface LiveTurn {
@@ -74,6 +76,7 @@ function AssistantColumn({
   messageId,
   streaming,
   errorMessage,
+  guardrailWarnings,
   showLabel,
   className,
 }: {
@@ -85,6 +88,7 @@ function AssistantColumn({
   messageId: string | null;
   streaming: boolean;
   errorMessage: string | null;
+  guardrailWarnings: string[];
   showLabel: boolean;
   className?: string;
 }) {
@@ -120,12 +124,19 @@ function AssistantColumn({
           ) : null}
         </p>
       )}
+      {guardrailWarnings.length > 0 ? (
+        <Banner severity="warning">
+          <span className="font-medium">{t("chat.guardrail")}: </span>
+          {guardrailWarnings.join(" / ")}
+        </Banner>
+      ) : null}
       {!streaming && !errorMessage ? (
         <FeedbackControls
           traceId={traceId}
           businessViewId={businessViewId}
           targetType="answer"
           sourceSurface="chat"
+          messageId={messageId}
         />
       ) : null}
       {citations.length > 0 ? (
@@ -146,6 +157,7 @@ function AssistantColumn({
                 traceId={traceId}
                 businessViewId={businessViewId}
                 sourceSurface="chat"
+                messageId={messageId}
                 scoreMaxima={scoreMaxima}
               />
             ))}
@@ -173,6 +185,7 @@ function MessageTurn({
     messageId: string | null;
     streaming: boolean;
     errorMessage: string | null;
+    guardrailWarnings: string[];
   }[];
 }) {
   const compare = columns.length > 1;
@@ -183,6 +196,14 @@ function MessageTurn({
           {user.content}
         </div>
       </div>
+      {user.guardrail_warnings.length > 0 ? (
+        <div className="ml-auto max-w-[85%]">
+          <Banner severity="warning">
+            <span className="font-medium">{t("chat.guardrail")}: </span>
+            {user.guardrail_warnings.join(" / ")}
+          </Banner>
+        </div>
+      ) : null}
       <div
         className="grid grid-cols-1 gap-3"
         style={
@@ -202,6 +223,7 @@ function MessageTurn({
             messageId={column.messageId}
             streaming={column.streaming}
             errorMessage={column.errorMessage}
+            guardrailWarnings={column.guardrailWarnings}
             showLabel={compare}
             className={
               compare && columns.length % 2 === 1 && index === columns.length - 1
@@ -418,6 +440,7 @@ export function ChatClient() {
                 status: "streaming",
                 traceId: null,
                 errorMessage: null,
+                guardrailWarnings: [],
               })),
             });
           },
@@ -434,7 +457,11 @@ export function ChatClient() {
               };
             });
           },
-          onMetadata: ({ model_id, trace_id }) => updateColumn(model_id, { traceId: trace_id }),
+          onMetadata: ({ model_id, trace_id, guardrail_warnings }) =>
+            updateColumn(model_id, {
+              traceId: trace_id,
+              guardrailWarnings: guardrail_warnings,
+            }),
           onCitations: (modelId, citations) => updateColumn(modelId, { citations }),
           onModelDone: ({ model_id }) => updateColumn(model_id, { status: "done" }),
           onModelError: ({ model_id, message }) =>
@@ -479,6 +506,7 @@ export function ChatClient() {
         messageId: null,
         streaming: column.status === "streaming",
         errorMessage: column.errorMessage,
+        guardrailWarnings: column.guardrailWarnings,
       }))
     : [];
 
@@ -702,6 +730,7 @@ export function ChatClient() {
                         messageId: reply.message_id,
                         streaming: false,
                         errorMessage: reply.status === "ERROR" ? reply.content : null,
+                        guardrailWarnings: reply.guardrail_warnings,
                       }))}
                     />
                   ))}

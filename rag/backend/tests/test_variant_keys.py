@@ -28,6 +28,14 @@ def test_chunk_set_id_changes_with_chunk_axis() -> None:
     assert compute_chunk_set_id(SRC, base) != compute_chunk_set_id(SRC, other)
 
 
+def test_chunk_set_id_changes_with_context_header_axis() -> None:
+    """索引対象テキストが変わるため context header の有無は別 chunk_set。"""
+    enabled = get_settings().model_copy(update={"rag_chunk_context_header_enabled": True})
+    disabled = enabled.model_copy(update={"rag_chunk_context_header_enabled": False})
+
+    assert compute_chunk_set_id(SRC, enabled) != compute_chunk_set_id(SRC, disabled)
+
+
 def test_extraction_recipe_id_is_deterministic() -> None:
     """同一原本 + 同一設定なら extraction_recipe_id は安定。prefix は er_。"""
     settings = get_settings()

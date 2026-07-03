@@ -40,6 +40,13 @@ from xml.etree import ElementTree
 
 from charset_normalizer import from_bytes
 
+from rag_parser_core.capabilities import (
+    AUDIO_EXTENSIONS as AUDIO_EXTENSIONS,
+)
+from rag_parser_core.capabilities import (
+    adapter_supports_source,
+    is_audio_source,
+)
 from rag_parser_core.extraction import (
     DocumentElement,
     ExtractionAsset,
@@ -70,8 +77,8 @@ from rag_parser_core.source import (
 
 # 共有 contract 型・定数は result.py(軽量)へ移設済み。registry は実装専用とし、backend が
 # registry を読み込まずに型を参照できるようにする。本モジュール固有の定数のみ残す。
+# AUDIO_EXTENSIONS は capabilities.py 正本を re-export(後方互換)。
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
-AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 
 logger = logging.getLogger(__name__)
 
@@ -864,124 +871,10 @@ def _external_adapter_supports_source(
     source_profile: SourceProfile | None,
     content_type: str,
 ) -> bool:
-    modality = (
-        source_profile.modality
-        if source_profile is not None
-        else SourceModality.UNKNOWN
+    # 判定の正本は capabilities.ADAPTER_CAPABILITIES(宣言的 matrix)
+    return adapter_supports_source(
+        backend, source_profile=source_profile, content_type=content_type
     )
-    extension = _source_extension(source_profile)
-    normalized_content_type = _normalized_content_type_for_parser(
-        content_type
-        or (source_profile.content_type if source_profile is not None else "")
-    )
-    if _is_audio_source(source_profile, normalized_content_type):
-        return False
-    if backend == "docling":
-        return (
-            modality
-            in {
-                SourceModality.PDF,
-                SourceModality.IMAGE,
-                SourceModality.TEXT,
-                SourceModality.HTML,
-                SourceModality.OFFICE,
-            }
-            or normalized_content_type
-            in {
-                "application/pdf",
-                "text/html",
-                "application/xhtml+xml",
-                "text/markdown",
-                "text/csv",
-                "application/json",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            }
-            or normalized_content_type.startswith("image/")
-            or extension
-            in {
-                ".pdf",
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".webp",
-                ".bmp",
-                ".md",
-                ".markdown",
-                ".csv",
-                ".html",
-                ".htm",
-                ".xhtml",
-                ".docx",
-                ".pptx",
-                ".xlsx",
-            }
-        )
-    if backend == "marker":
-        return (
-            modality in {SourceModality.PDF, SourceModality.IMAGE}
-            or normalized_content_type == "application/pdf"
-            or normalized_content_type.startswith("image/")
-            or extension in {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
-        )
-    if backend == "unstructured":
-        return modality in {
-            SourceModality.PDF,
-            SourceModality.IMAGE,
-            SourceModality.TEXT,
-            SourceModality.HTML,
-            SourceModality.EMAIL,
-            SourceModality.OFFICE,
-            SourceModality.UNKNOWN,
-        }
-    if backend == "mineru":
-        return (
-            modality
-            in {SourceModality.PDF, SourceModality.IMAGE, SourceModality.OFFICE}
-            or normalized_content_type == "application/pdf"
-            or normalized_content_type.startswith("image/")
-            or normalized_content_type
-            in {
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            }
-            or extension
-            in {
-                ".pdf",
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".webp",
-                ".bmp",
-                ".docx",
-                ".pptx",
-                ".xlsx",
-            }
-        )
-    if backend == "dots_ocr":
-        return (
-            modality == SourceModality.IMAGE
-            or normalized_content_type.startswith("image/")
-            or extension in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-        )
-    if backend == "glm_ocr":
-        # GLM-OCR は vLLM 経路が単一画像、transformers 経路も PIL で PDF 不可。
-        # どちらも PDF を処理できないため、対応は画像のみと正直に申告して PDF は fallback させる。
-        return (
-            modality == SourceModality.IMAGE
-            or normalized_content_type.startswith("image/")
-            or extension in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-        )
-    if backend == "unlimited_ocr":
-        return (
-            modality in {SourceModality.PDF, SourceModality.IMAGE}
-            or normalized_content_type == "application/pdf"
-            or normalized_content_type.startswith("image/")
-            or extension in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-        )
-    return False
 
 
 def _source_extension(source_profile: SourceProfile | None) -> str:
@@ -993,20 +886,7 @@ def _source_extension(source_profile: SourceProfile | None) -> str:
 
 
 def _is_audio_source(source_profile: SourceProfile | None, content_type: str) -> bool:
-    modality = (
-        source_profile.modality
-        if source_profile is not None
-        else SourceModality.UNKNOWN
-    )
-    normalized_content_type = _normalized_content_type_for_parser(
-        content_type
-        or (source_profile.content_type if source_profile is not None else "")
-    )
-    return (
-        modality == SourceModality.AUDIO
-        or normalized_content_type.startswith("audio/")
-        or _source_extension(source_profile) in AUDIO_EXTENSIONS
-    )
+    return is_audio_source(source_profile, content_type)
 
 
 def _source_route_kind(source_profile: SourceProfile | None, content_type: str) -> str:
@@ -1151,7 +1031,8 @@ def _external_adapter_result(
                 source_profile=source_profile,
                 content_type=content_type,
             )
-    except Exception:
+    except Exception as exc:
+        invalid_input = _is_invalid_input_error(exc)
         logger.exception(
             "external parser adapter failed",
             extra={
@@ -1164,10 +1045,53 @@ def _external_adapter_result(
                 "source_modality": (
                     source_profile.modality.value if source_profile else None
                 ),
+                "failure_kind": "invalid_input" if invalid_input else "adapter_error",
             },
         )
+        if invalid_input:
+            return _adapter_fallback_result(backend, f"{backend}_adapter_invalid_input")
         return _adapter_fallback_result(backend, f"{backend}_adapter_failed")
     return _adapter_fallback_result(backend, f"{backend}_adapter_unsupported")
+
+
+# 「入力ファイル自体が不正(破損・偽装拡張子・暗号化)」を示す例外の型名。
+# core は pypdfium2 / PIL 等の adapter 依存を import できない(adapter 未導入環境でも
+# registry は import される)ため、型そのものではなく型名でマッチする。
+_INVALID_INPUT_EXCEPTION_NAMES = frozenset(
+    {
+        "PdfiumError",  # pypdfium2(marker): "Data format error" 等
+        "PDFSyntaxError",  # pdfminer(unstructured)
+        "PSEOF",
+        "PSSyntaxError",
+        "UnidentifiedImageError",  # PIL(画像系 OCR adapter)
+        "BadZipFile",  # docx/pptx/xlsx(unstructured/docling)
+        "FileDataError",  # pymupdf(mineru)
+        "EmptyFileError",
+    }
+)
+_INVALID_INPUT_MESSAGE_MARKERS = (
+    "data format error",
+    "cannot open broken document",
+    "not a pdf",
+    "cannot identify image",
+    "file has not been decrypted",
+    "password",
+)
+
+
+def _is_invalid_input_error(exc: BaseException) -> bool:
+    """例外連鎖を辿り、入力データ不正(破損ファイル等)由来かを判定する。"""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if type(current).__name__ in _INVALID_INPUT_EXCEPTION_NAMES:
+            return True
+        message = str(current).casefold()
+        if any(marker in message for marker in _INVALID_INPUT_MESSAGE_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _external_adapter_package_available(backend: str) -> bool:

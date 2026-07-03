@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     "rag-parser-core[service]",
     "mineru[core]==3.4.0",
+    # MinerU 3.4.0 の重複文字除去は list を前提とし、pdftext 0.7 の PageChars と非互換。
+    "pdftext==0.6.3",
     # RTX 50xx(sm_120) は古い cu124 wheel だと非対応警告が出るため、
     # CUDA 13 系 wheel を解決できるバージョンを下限にする。
     "torch>=2.12.1",

@@ -17,6 +17,7 @@ from app.clients.oci_enterprise_ai import (
 from app.clients.oci_genai import OciGenAiClient
 from app.config import Settings
 from app.rag import ingestion as ingestion_module
+from app.rag.chunking import Chunk
 from app.rag.graph_index import GraphIndex
 from app.rag.ingestion import (
     IngestionCancelledError,
@@ -25,6 +26,7 @@ from app.rag.ingestion import (
 )
 from app.rag.ingestion_quality import build_ingestion_quality_report
 from app.schemas.document import (
+    DocumentChunkView,
     DocumentDetail,
     FileStatus,
     IngestionSegment,
@@ -212,7 +214,12 @@ class CapturingVlm(OciEnterpriseAiClient):
             "confidence": 0.92,
             "warnings": [],
             "elements": [
-                {"kind": "text", "text": "PDF 規程本文です。", "order": 1, "page_number": 1},
+                {
+                    "kind": "text",
+                    "text": "PDF 規程本文です。",
+                    "order": 1,
+                    "page_number": 1,
+                },
                 {
                     "kind": "table",
                     "text": "| 項目 | 値 |\n| 承認 | 部門長 |",
@@ -418,7 +425,12 @@ def _canned_extraction() -> StructuredExtraction:
             "confidence": 0.92,
             "warnings": [],
             "elements": [
-                {"kind": "text", "text": "PDF 規程本文です。", "order": 1, "page_number": 1},
+                {
+                    "kind": "text",
+                    "text": "PDF 規程本文です。",
+                    "order": 1,
+                    "page_number": 1,
+                },
                 {
                     "kind": "table",
                     "text": "| 項目 | 値 |\n| 承認 | 部門長 |",
@@ -1120,3 +1132,246 @@ def test_checkpoint_parser_profile_prefers_external_adapter_lineage() -> None:
         )
         == "unstructured_adapter"
     )
+
+
+def _office_source_profile() -> SourceProfile:
+    """Office(docx)source profile のテスト fixture。"""
+    return SourceProfile(
+        original_file_name="report.docx",
+        sanitized_file_name="report.docx",
+        extension=".docx",
+        content_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        file_size_bytes=10,
+        content_sha256="d" * 64,
+        modality=SourceModality.OFFICE,
+        parser_profile="local_office_structure",
+    )
+
+
+def _preflight_pipeline(backend: str, monkeypatch: pytest.MonkeyPatch) -> IngestionPipeline:
+    """pre-flight テスト用の pipeline。runner 呼び出しは失敗扱いにする。"""
+
+    def _forbidden_runner(*args: object, **kwargs: object) -> ParserRegistryResult:
+        raise AssertionError("pre-flight で停止すべきなので runner は呼ばれない")
+
+    monkeypatch.setattr(
+        "app.clients.parser_service.ParserServiceClient.runner",
+        _forbidden_runner,
+        raising=True,
+    )
+    return IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, FakeOracle()),
+        object_storage=cast(Any, FakeObjectStorage()),
+        document_understanding=cast(Any, object()),
+        speech=cast(Any, object()),
+        settings=Settings(rag_parser_adapter_backend=backend),
+    )
+
+
+def test_partition_source_preflight_blocks_unsupported_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """marker × Office は microservice を呼ぶ前に対応形式入りエラーで停止する。"""
+    from app.clients.parser_service import ParserServiceUnavailableError
+
+    pipeline = _preflight_pipeline("marker", monkeypatch)
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        pipeline._partition_source(
+            parse_bytes=b"docx-bytes",
+            source_profile=_office_source_profile(),
+            content_type=_office_source_profile().content_type,
+        )
+
+    assert exc_info.value.reason == "adapter_source_unsupported"
+    assert exc_info.value.warning_code == "marker_adapter_source_unsupported"
+    assert "対応形式: PDF・画像" in str(exc_info.value)
+
+
+def test_partition_source_preflight_blocks_service_backend_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OCI Document Understanding × Office も HTTP 前に停止する(sentinel を返さない)。"""
+    from app.clients.parser_service import ParserServiceUnavailableError
+
+    pipeline = _preflight_pipeline("oci_document_understanding", monkeypatch)
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        pipeline._partition_source(
+            parse_bytes=b"docx-bytes",
+            source_profile=_office_source_profile(),
+            content_type=_office_source_profile().content_type,
+        )
+
+    assert exc_info.value.reason == "adapter_source_unsupported"
+
+
+def test_partition_source_preflight_passes_converted_pdf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """office_to_pdf 変換後(content_type=application/pdf)は marker でも通過する。"""
+    pipeline = _preflight_pipeline("marker", monkeypatch)
+
+    def _runner(
+        self: object,
+        backend: str,
+        source_bytes: bytes,
+        source_profile: SourceProfile | None,
+        content_type: str,
+        *,
+        fail_fast: bool = False,
+    ) -> ParserRegistryResult:
+        return ParserRegistryResult(
+            extraction=_canned_extraction(),
+            parser_backend=backend,
+            parser_version="marker_test",
+        )
+
+    monkeypatch.setattr(
+        "app.clients.parser_service.ParserServiceClient.runner",
+        _runner,
+        raising=True,
+    )
+
+    result = pipeline._partition_source(
+        parse_bytes=b"%PDF",
+        source_profile=_office_source_profile(),
+        content_type="application/pdf",
+    )
+
+    assert result.parser_backend == "marker"
+    assert result.extraction is not None
+
+
+def test_embedding_input_with_context_header_prepends_title_and_section() -> None:
+    """Contextual chunk header は「文書名 > section_path」を embedding 入力へ前置する。"""
+    chunk = Chunk(
+        text="本文です。",
+        index=0,
+        start_offset=0,
+        end_offset=5,
+        metadata={"section_path": "第1章 > 第2節"},
+    )
+    assert (
+        ingestion_module._embedding_input_with_context_header(chunk, "製品マニュアル.pdf")
+        == "製品マニュアル.pdf > 第1章 > 第2節\n本文です。"
+    )
+
+
+def test_embedding_input_with_context_header_falls_back_to_raw_text() -> None:
+    """文書名も section_path もない chunk はヘッダなしで本文のみを返す。"""
+    chunk = Chunk(text="本文です。", index=0, start_offset=0, end_offset=5, metadata={})
+    assert ingestion_module._embedding_input_with_context_header(chunk, "") == "本文です。"
+
+
+def test_embedding_input_with_context_header_uses_title_only_without_section() -> None:
+    """section_path がない場合は文書名だけをヘッダにする。"""
+    chunk = Chunk(text="本文です。", index=0, start_offset=0, end_offset=5, metadata={})
+    assert (
+        ingestion_module._embedding_input_with_context_header(chunk, "manual.pdf")
+        == "manual.pdf\n本文です。"
+    )
+
+
+def test_chunk_embedding_inputs_skip_context_header_when_disabled() -> None:
+    """無効化時は保存済み metadata にヘッダがあっても本文だけを embedding する。"""
+    pipeline = IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=cast(Any, object()),
+        object_storage=cast(Any, object()),
+        settings=Settings(rag_chunk_context_header_enabled=False),
+    )
+    chunk = Chunk(
+        text="本文です。",
+        index=0,
+        start_offset=0,
+        end_offset=5,
+        metadata={"context_header": "manual.pdf > 第1章"},
+    )
+
+    assert pipeline._chunk_embedding_inputs([chunk]) == ["本文です。"]
+
+
+async def test_index_chunked_rebuilds_context_header_without_document_lookup() -> None:
+    """CHUNKED 再開時も既取得の detail と chunk metadata だけで検索入力を再構築する。"""
+
+    class ResumeOracle(FakeOracle):
+        def __init__(self) -> None:
+            super().__init__()
+            self.updated_chunks: list[Chunk] = []
+            self.recipe_rows["recipe-1"] = {"recipe_id": "recipe-1"}
+
+        async def get_document(self, document_id: str) -> DocumentDetail | None:
+            return DocumentDetail(
+                id=document_id,
+                file_name="製品マニュアル.pdf",
+                status=FileStatus.CHUNKED,
+                uploaded_at=datetime.now(UTC),
+                content_sha256="a" * 64,
+            )
+
+        async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
+            _ = chunk_set_id
+            return [
+                DocumentChunkView(
+                    document_id="doc-1",
+                    chunk_id="chunk-1",
+                    chunk_index=0,
+                    text="本文です。",
+                    section_path="第1章 > 概要",
+                    element_ids=["e1"],
+                    metadata={"section_path": "第1章 > 概要"},
+                )
+            ]
+
+        async def update_chunk_set_embeddings(
+            self,
+            *,
+            chunk_set_id: str,
+            chunks: list[Chunk],
+            embeddings: list[list[float]],
+        ) -> None:
+            _ = chunk_set_id, embeddings
+            self.updated_chunks = chunks
+
+    class CapturingEmbeddingClient(FakeEmbeddingClient):
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+
+        async def embed(
+            self,
+            texts: list[str],
+            *,
+            input_type: str = "SEARCH_DOCUMENT",
+        ) -> list[list[float]]:
+            self.texts = texts
+            return await super().embed(texts, input_type=input_type)
+
+    class ResumePipeline(IngestionPipeline):
+        async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
+            _ = detail
+            return StructuredExtraction(raw_text="本文です。")
+
+    oracle = ResumeOracle()
+    embedding = CapturingEmbeddingClient()
+    pipeline = ResumePipeline(
+        vlm=cast(Any, object()),
+        genai=embedding,
+        oracle=cast(Any, oracle),
+        object_storage=cast(Any, FakeObjectStorage()),
+        settings=Settings(
+            rag_chunk_context_header_enabled=True,
+            rag_graph_profile="off",
+        ),
+        recipe_id="recipe-1",
+        recipe_revision=1,
+    )
+
+    await pipeline.index_chunked("doc-1", chunk_set_id="chunk-set-1", record_outcome=False)
+
+    expected = "製品マニュアル.pdf > 第1章 > 概要"
+    assert embedding.texts == [f"{expected}\n本文です。"]
+    assert oracle.updated_chunks[0].metadata["context_header"] == expected

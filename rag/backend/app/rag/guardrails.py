@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -19,18 +20,26 @@ class _OciGuardrailsLike(Protocol):
     def inspect_text(self, text: str) -> GuardrailInspection | None: ...
 
 
-PROMPT_INJECTION_PATTERNS = [
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in [
-        r"ignore\s+(all\s+)?previous\s+instructions",
-        r"system\s*prompt",
-        r"developer\s*message",
-        r"jailbreak",
-        r"これまでの指示を無視",
-        r"システムプロンプト",
-        r"開発者メッセージ",
-    ]
-]
+PROMPT_INJECTION_TARGET_PATTERN = re.compile(
+    r"(?:system\s+(?:prompt|instructions?)|your\s+prompt|developer\s+message|"
+    r"hidden\s+(?:prompt|instruction)s?|(?:previous|prior)\s+instructions?|"
+    r"safety\s+(?:rules|instructions?)|システム\s*プロンプト|開発者\s*メッセージ|"
+    r"(?:これまで|以前|前)\s*の?\s*指示|(?:内部|安全)\s*(?:指示|ルール)|"
+    r"隠(?:し|された)\s*(?:指示|プロンプト))",
+    re.IGNORECASE,
+)
+PROMPT_INJECTION_ACTION_PATTERN = re.compile(
+    r"(?:ignore|disregard|forget|reveal|show|print|output|disclose|extract|repeat|leak|jailbreak|"
+    r"bypass|override|disable|無視|忘れ|表示|開示|出力|抽出|復唱|暴露|漏ら|"
+    r"回避|解除|無効|上書き|破棄|従わ|脱獄)",
+    re.IGNORECASE,
+)
+PROMPT_DIRECT_DISCLOSURE_PATTERN = re.compile(
+    r"(?:(?:システム\s*プロンプト|開発者\s*メッセージ|内部\s*指示)"
+    r"\s*(?:の\s*内容\s*)?(?:を\s*)?(?:教え|見せ)|"
+    r"(?:tell|give)\s+me\s+(?:your|the)\s+(?:system\s+)?prompt)",
+    re.IGNORECASE,
+)
 GROUNDING_TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
 GROUNDING_STOPWORDS = {
     "検索",
@@ -48,9 +57,9 @@ MIN_GROUNDING_RATIO = 0.12
 SENSITIVE_VALUE_MASK = "[機微情報]"
 SENSITIVE_IDENTIFIER_MESSAGE = "個人番号や口座番号などの機微な識別子をマスクしました。"
 SENSITIVE_LABEL_SEPARATOR = r"\s*(?:[:：#-]|は|が|を|は、)?\s*"
-PERSONAL_NUMBER_VALUE = r"(?:\d[\s-]?){11}\d"
-BANK_ACCOUNT_VALUE = r"(?:\d[\s-]?){6,7}\d"
-PHONE_NUMBER_VALUE = r"0\d{1,4}[\s-]?\d{1,4}[\s-]?\d{3,4}"
+PERSONAL_NUMBER_VALUE = r"(?<!\d)(?:\d[\s-]?){11}\d(?!\d)"
+BANK_ACCOUNT_VALUE = r"(?<!\d)(?:\d[\s-]?){6,7}\d(?!\d)"
+PHONE_NUMBER_VALUE = r"(?<!\d)0\d{1,4}[\s-]?\d{1,4}[\s-]?\d{3,4}(?!\d)"
 SENSITIVE_IDENTIFIER_PATTERNS = [
     re.compile(
         rf"(?P<label>(?:マイナンバー|個人番号){SENSITIVE_LABEL_SEPARATOR})"
@@ -95,6 +104,7 @@ class GuardrailResult:
     allowed: bool
     sanitized_text: str
     findings: list[GuardrailFinding]
+    backend_degraded: bool = False
 
     @property
     def warnings(self) -> list[str]:
@@ -118,7 +128,8 @@ class GuardrailPolicy:
 
     backend が ``oci_guardrails`` のときは、in-process(local)検査に加えて OCI Generative AI
     Guardrails(ApplyGuardrails)で content moderation / PII / prompt injection を検出して
-    増強する。OCI 側が未設定・失敗のときは local の結果へ安全に縮退する。
+    増強する。OCI 側が未設定・失敗のときは regulated を拒否し、他方針は警告付きで
+    local の結果へ縮退する。
     """
 
     def __init__(
@@ -137,7 +148,7 @@ class GuardrailPolicy:
 
     def _local_validate_query(self, query: str) -> GuardrailResult:
         """in-process(local)決定論ガードレール。"""
-        sanitized = re.sub(r"\s+", " ", query).strip()
+        sanitized = _normalize_query_text(query)
         findings: list[GuardrailFinding] = []
         if self._params.mask_sensitive_identifiers:
             sanitized, sensitive_findings = _mask_sensitive_identifiers(sanitized)
@@ -157,23 +168,19 @@ class GuardrailPolicy:
                 ],
             )
 
-        if self._params.block_prompt_injection:
-            for pattern in PROMPT_INJECTION_PATTERNS:
-                if pattern.search(sanitized):
-                    return GuardrailResult(
-                        allowed=False,
-                        sanitized_text=sanitized,
-                        findings=[
-                            *findings,
-                            GuardrailFinding(
-                                code="prompt_injection",
-                                severity="error",
-                                message=(
-                                    "システム指示の抽出や無効化を求める内容は処理できません。"
-                                ),
-                            ),
-                        ],
-                    )
+        if self._params.block_prompt_injection and _looks_like_prompt_injection(sanitized):
+            return GuardrailResult(
+                allowed=False,
+                sanitized_text=sanitized,
+                findings=[
+                    *findings,
+                    GuardrailFinding(
+                        code="prompt_injection",
+                        severity="error",
+                        message="システム指示の抽出や無効化を求める内容は処理できません。",
+                    ),
+                ],
+            )
 
         if _looks_like_sql_mutation(sanitized):
             findings.append(
@@ -241,14 +248,20 @@ class GuardrailPolicy:
         return GuardrailResult(allowed=True, sanitized_text=sanitized, findings=findings)
 
     def _augment_with_oci(self, result: GuardrailResult, *, block_on_flag: bool) -> GuardrailResult:
-        """OCI Guardrails の検出で result を増強する。未設定/失敗時は result をそのまま返す。"""
+        """OCI Guardrails の検出で result を増強し、失敗を policy ごとに処理する。"""
         if self._oci_client is None or not result.sanitized_text.strip():
             return result
-        inspection = self._oci_client.inspect_text(result.sanitized_text)
-        if inspection is None or not inspection.flagged:
+        try:
+            inspection = self._oci_client.inspect_text(result.sanitized_text)
+        except Exception:  # noqa: BLE001 - 外部 SDK の詳細を応答へ出さない
+            return self._oci_failure_result(result)
+        if inspection is None:
+            return self._oci_failure_result(result)
+        if not inspection.flagged:
             return result
         extra: list[GuardrailFinding] = []
         blocked = not result.allowed
+        sanitized = result.sanitized_text
         if inspection.prompt_injection:
             extra.append(
                 GuardrailFinding(
@@ -267,22 +280,45 @@ class GuardrailPolicy:
                 )
             )
             blocked = blocked or block_on_flag
-        if inspection.pii_labels:
-            # PII の値は載せず、検出 label 種別のみを残す(privacy)。
-            labels = ",".join(sorted(set(inspection.pii_labels)))
+        if inspection.pii_spans:
+            sanitized = _mask_spans(sanitized, inspection.pii_spans)
             extra.append(
                 GuardrailFinding(
                     code="oci_pii_detected",
                     severity="warning",
-                    message=f"OCI Guardrails が個人情報の可能性を検出しました({labels})。",
+                    message="OCI Guardrails が個人情報の可能性を検出し、マスクしました。",
                 )
             )
         if not extra:
             return result
         return GuardrailResult(
             allowed=not blocked,
-            sanitized_text=result.sanitized_text,
+            sanitized_text=sanitized,
             findings=[*result.findings, *extra],
+            backend_degraded=result.backend_degraded,
+        )
+
+    def _oci_failure_result(self, result: GuardrailResult) -> GuardrailResult:
+        """OCI 障害を policy ごとの fail-open / fail-closed に変換する。"""
+        regulated = self._params.audit_emphasis
+        finding = GuardrailFinding(
+            code="guardrail_backend_unavailable",
+            severity="error" if regulated else "warning",
+            message=(
+                "安全検査サービスを利用できないため処理を停止しました。"
+                if regulated
+                else "安全検査サービスを利用できないため、ローカル検査のみで処理しました。"
+            ),
+        )
+        return GuardrailResult(
+            allowed=result.allowed and not regulated,
+            sanitized_text=(
+                "安全検査を完了できないため、規制対応ポリシーにより表示できません。"
+                if regulated
+                else result.sanitized_text
+            ),
+            findings=[*result.findings, finding],
+            backend_degraded=True,
         )
 
 
@@ -299,6 +335,50 @@ def _maybe_oci_client(settings: Settings) -> _OciGuardrailsLike | None:
 def _looks_like_sql_mutation(text: str) -> bool:
     """SELECT 以外の SQL 変更文らしさを検出する。"""
     return bool(SQL_MUTATION_INTENT_PATTERN.search(text))
+
+
+def _normalize_for_safety(text: str) -> str:
+    """NFKC・空白・大小文字を正規化し、全角変体による回避を防ぐ。"""
+    normalized = unicodedata.normalize("NFKC", text)
+    return _normalize_query_text(normalized).casefold()
+
+
+def _normalize_query_text(text: str) -> str:
+    """保存・検索用の表示文字は維持し、連続空白だけを正規化する。"""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _looks_like_prompt_injection(text: str) -> bool:
+    """保護対象と危険動作の両方がある明示的な攻撃要求だけを拒否する。"""
+    normalized = _normalize_for_safety(text)
+    return bool(
+        (
+            PROMPT_INJECTION_TARGET_PATTERN.search(normalized)
+            and PROMPT_INJECTION_ACTION_PATTERN.search(normalized)
+        )
+        or PROMPT_DIRECT_DISCLOSURE_PATTERN.search(normalized)
+    )
+
+
+def _mask_spans(text: str, spans: tuple[object, ...]) -> str:
+    """OCI PII の位置情報を後ろから適用し、原値を保持せずマスクする。"""
+    masked = text
+    normalized_spans: list[tuple[int, int]] = []
+    for span in spans:
+        offset = int(getattr(span, "offset", -1))
+        length = int(getattr(span, "length", 0))
+        if offset < 0 or length <= 0 or offset + length > len(text):
+            continue
+        normalized_spans.append((offset, offset + length))
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(set(normalized_spans)):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    for start, end in reversed(merged):
+        masked = f"{masked[:start]}{SENSITIVE_VALUE_MASK}{masked[end:]}"
+    return masked
 
 
 def _mask_sensitive_identifiers(text: str) -> tuple[str, list[GuardrailFinding]]:
@@ -336,7 +416,7 @@ def evaluate_groundedness(
     `min_overlap` / `min_ratio` は Guardrail アダプターの policy が解決する閾値。
     既定は現行定数で、standard policy と一致する。
     """
-    if not answer.strip() or not context.strip():
+    if not answer.strip():
         return GroundednessEvaluation(
             grounded=True,
             score=1.0,
@@ -344,13 +424,21 @@ def evaluate_groundedness(
             answer_feature_count=0,
             high_signal_overlap=False,
         )
+    if not context.strip():
+        return GroundednessEvaluation(
+            grounded=False,
+            score=0.0,
+            overlap_count=0,
+            answer_feature_count=len(_grounding_features(answer)),
+            high_signal_overlap=False,
+        )
 
     answer_features = _grounding_features(answer)
     context_features = _grounding_features(context)
     if not answer_features or not context_features:
         return GroundednessEvaluation(
-            grounded=True,
-            score=1.0,
+            grounded=False,
+            score=0.0,
             overlap_count=0,
             answer_feature_count=len(answer_features),
             high_signal_overlap=False,
@@ -358,21 +446,14 @@ def evaluate_groundedness(
 
     overlap = answer_features & context_features
     high_signal = {feature for feature in answer_features if _is_high_signal_feature(feature)}
-    if high_signal and high_signal & context_features:
-        return GroundednessEvaluation(
-            grounded=True,
-            score=1.0,
-            overlap_count=len(overlap),
-            answer_feature_count=len(answer_features),
-            high_signal_overlap=True,
-        )
     score = round(min(1.0, len(overlap) / len(answer_features)), 4)
+    required_overlap = min(min_overlap, len(answer_features))
     return GroundednessEvaluation(
-        grounded=len(overlap) >= min_overlap or score >= min_ratio,
+        grounded=len(overlap) >= required_overlap and score >= min_ratio,
         score=score,
         overlap_count=len(overlap),
         answer_feature_count=len(answer_features),
-        high_signal_overlap=False,
+        high_signal_overlap=bool(high_signal & context_features),
     )
 
 

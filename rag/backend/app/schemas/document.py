@@ -6,7 +6,14 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
-from app.config import ChunkingStrategy, ParserAdapterBackend, PreprocessProfile
+from app.config import (
+    CHUNK_OVERLAP_MAX_CHARS,
+    CHUNK_SIZE_MAX_CHARS,
+    CHUNK_SIZE_MIN_CHARS,
+    ChunkingStrategy,
+    ParserAdapterBackend,
+    PreprocessProfile,
+)
 from app.rag.kb_adapter_config import KnowledgeBaseIngestionConfig
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
@@ -258,10 +265,13 @@ class ChunkSetExperimentRequest(BaseModel):
     """
 
     chunking_strategy: ChunkingStrategy | None = None
-    chunk_size: int | None = Field(default=None, ge=200, le=4000)
-    chunk_overlap: int | None = Field(default=None, ge=0, le=1000)
+    chunk_size: int | None = Field(
+        default=None,
+        ge=CHUNK_SIZE_MIN_CHARS,
+        le=CHUNK_SIZE_MAX_CHARS,
+    )
+    chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     chunk_child_size: int | None = Field(default=None, ge=80, le=4000)
-    chunk_sentence_window_size: int | None = Field(default=None, ge=1, le=20)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
     chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
 
@@ -270,7 +280,6 @@ class ChunkSetExperimentRequest(BaseModel):
         "chunk_size": "rag_chunk_size",
         "chunk_overlap": "rag_chunk_overlap",
         "chunk_child_size": "rag_chunk_child_size",
-        "chunk_sentence_window_size": "rag_chunk_sentence_window_size",
         "chunk_min_chars": "rag_chunk_min_chars",
         "chunk_delimiter": "rag_chunk_delimiter",
     }
@@ -288,6 +297,58 @@ class ChunkSetExperimentRequest(BaseModel):
             for field, setting in self._FIELD_TO_SETTING.items()
             if getattr(self, field) is not None
         }
+
+
+class DocumentChunkPreviewRequest(BaseModel):
+    """保存しない分割プレビュー用の一時 chunking 上書き。"""
+
+    chunking_strategy: ChunkingStrategy | None = None
+    chunk_size: int | None = Field(
+        default=None,
+        ge=CHUNK_SIZE_MIN_CHARS,
+        le=CHUNK_SIZE_MAX_CHARS,
+    )
+    chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
+    chunk_child_size: int | None = Field(default=None, ge=80, le=4000)
+    chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
+    chunk_delimiter: str | None = Field(default=None, min_length=1, max_length=256)
+    chunk_context_header_enabled: bool | None = None
+
+    _FIELD_TO_SETTING = {
+        "chunking_strategy": "rag_chunking_strategy",
+        "chunk_size": "rag_chunk_size",
+        "chunk_overlap": "rag_chunk_overlap",
+        "chunk_child_size": "rag_chunk_child_size",
+        "chunk_min_chars": "rag_chunk_min_chars",
+        "chunk_delimiter": "rag_chunk_delimiter",
+        "chunk_context_header_enabled": "rag_chunk_context_header_enabled",
+    }
+
+    def settings_overrides(self) -> dict[str, object]:
+        return {
+            setting: getattr(self, field)
+            for field, setting in self._FIELD_TO_SETTING.items()
+            if getattr(self, field) is not None
+        }
+
+
+class DocumentChunkPreviewStats(BaseModel):
+    """分割結果の軽量な文字数統計。"""
+
+    chunk_count: int = Field(ge=0)
+    min_chars: int = Field(ge=0)
+    average_chars: float = Field(ge=0)
+    max_chars: int = Field(ge=0)
+    overflow_count: int = Field(ge=0)
+    embedding_overflow_count: int = Field(ge=0)
+
+
+class DocumentChunkPreviewResponse(BaseModel):
+    """DB を変更しないレシピ別 chunk preview。"""
+
+    chunks: list[DocumentChunkView] = Field(default_factory=list)
+    stats: DocumentChunkPreviewStats
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ParserExtractionExperimentRequest(BaseModel):
@@ -325,6 +386,7 @@ class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
     """文書単位の処理レシピ上書き。None は global 既定を継承する。"""
 
     model_config = ConfigDict(extra="forbid")
+    chunk_context_header_enabled: bool | None = None
 
 
 class DocumentRecipeStepStatus(StrEnum):

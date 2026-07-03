@@ -12,7 +12,10 @@ from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import ParserRegistryResult
 from rag_parser_core.result import ParseResponse
 
-from app.clients.parser_service import ParserServiceClient, ParserServiceUnavailableError
+from app.clients.parser_service import (
+    ParserServiceClient,
+    ParserServiceUnavailableError,
+)
 from app.config import Settings
 from app.schemas.document import SourceModality, SourceProfile
 
@@ -83,7 +86,9 @@ def test_runner_returns_extraction_on_success(monkeypatch: pytest.MonkeyPatch) -
     assert result.extraction.elements[0].text == "本文"
 
 
-def test_runner_falls_back_when_service_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runner_falls_back_when_service_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=request)
 
@@ -290,3 +295,58 @@ def test_runner_falls_back_when_url_unconfigured() -> None:
     assert result.extraction is None
     assert result.fallback_used is True
     assert "docling_adapter_service_unconfigured" in result.warnings
+
+
+def test_runner_fail_fast_classifies_invalid_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """破損ファイル由来の失敗は adapter_failed と区別し、破損向け文言を返す。"""
+    response = ParseResponse(
+        extraction=None,
+        parser_backend="marker",
+        parser_version="service_unavailable",
+        fallback_used=True,
+        warnings=["marker_adapter_invalid_input"],
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response.model_dump(mode="json"))
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(rag_parser_marker_service_url="http://parser-marker:8000")
+    )
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner("marker", b"not-a-pdf", _profile(), "application/pdf", fail_fast=True)
+
+    assert exc_info.value.reason == "adapter_invalid_input"
+    assert exc_info.value.warning_code == "marker_adapter_invalid_input"
+    assert "ファイルが破損しているか" in str(exc_info.value)
+
+
+def test_source_unsupported_message_lists_supported_formats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非対応形式の文言には backend の対応形式一覧を含める。"""
+    response = ParseResponse(
+        extraction=None,
+        parser_backend="marker",
+        parser_version="service_unavailable",
+        fallback_used=True,
+        warnings=["marker_adapter_source_unsupported"],
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response.model_dump(mode="json"))
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(rag_parser_marker_service_url="http://parser-marker:8000")
+    )
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner("marker", b"abc", _profile(), "text/markdown", fail_fast=True)
+
+    assert exc_info.value.reason == "adapter_source_unsupported"
+    assert "対応形式: PDF・画像" in str(exc_info.value)

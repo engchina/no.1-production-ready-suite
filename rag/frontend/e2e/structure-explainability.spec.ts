@@ -273,16 +273,20 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
     /\/documents\/doc-1\?chunk_id=doc-1%3A1&page=2&element_id=tbl-1&cell_ref=B2&formula_cell_ref=B2/
   );
   await citation.getByRole("button", { name: "この引用は役に立った" }).click();
-  await expect.poll(() => feedbackPayload).toEqual({
+  await expect.poll(() => feedbackPayload).toMatchObject({
     trace_id: "trace-1",
     business_view_id: "bv-1",
     target_type: "citation",
     source_surface: "search",
     document_id: "doc-1",
     chunk_id: "doc-1:1",
+    message_id: null,
     rating: "helpful",
     reason: null,
+    comment: null,
   });
+  expect((feedbackPayload?.content_snapshot as { question: string }).question).toBe("料金表を確認");
+  expect((feedbackPayload?.content_snapshot as { answer: string }).answer).toBe("料金表を確認しました。");
   await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
   await previewLink.click();
   await expect(page).toHaveURL(

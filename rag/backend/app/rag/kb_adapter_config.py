@@ -27,6 +27,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import (
+    CHUNK_OVERLAP_MAX_CHARS,
+    CHUNK_SIZE_MAX_CHARS,
+    CHUNK_SIZE_MIN_CHARS,
     ChunkingStrategy,
     GenerationProfile,
     GraphProfile,
@@ -64,7 +67,6 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "chunk_size": "rag_chunk_size",
     "chunk_overlap": "rag_chunk_overlap",
     "chunk_child_size": "rag_chunk_child_size",
-    "chunk_sentence_window_size": "rag_chunk_sentence_window_size",
     "chunk_min_chars": "rag_chunk_min_chars",
     # 取込側の高度軸(現状グローバルのみだった adapter を KB 上書き対象へ拡張)。
     # いずれも取込パイプラインが self._settings から読むため、KB 上書きが取込に効く。
@@ -122,10 +124,13 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     parser_dots_ocr_enabled: bool | None = None
     parser_glm_ocr_enabled: bool | None = None
     chunking_strategy: ChunkingStrategy | None = None
-    chunk_size: int | None = Field(default=None, ge=200, le=4000)
-    chunk_overlap: int | None = Field(default=None, ge=0, le=1000)
+    chunk_size: int | None = Field(
+        default=None,
+        ge=CHUNK_SIZE_MIN_CHARS,
+        le=CHUNK_SIZE_MAX_CHARS,
+    )
+    chunk_overlap: int | None = Field(default=None, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     chunk_child_size: int | None = Field(default=None, ge=80, le=4000)
-    chunk_sentence_window_size: int | None = Field(default=None, ge=1, le=20)
     chunk_min_chars: int | None = Field(default=None, ge=0, le=2000)
     # 取込側の高度軸(KB 上書き対象へ拡張)。None はグローバル継承。
     graph_profile: GraphProfile | None = None

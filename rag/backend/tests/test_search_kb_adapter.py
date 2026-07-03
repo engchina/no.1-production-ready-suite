@@ -77,8 +77,17 @@ def _reset_recording() -> None:
 
 
 def _install(monkeypatch: MonkeyPatch, configs: dict[str, KnowledgeBaseAdapterConfig]) -> None:
+    async def keep_global_settings(settings: Settings, *, client: object | None = None) -> Settings:
+        _ = client
+        return settings
+
     monkeypatch.setattr(search_route, "RagPipeline", RecordingPipeline)
     monkeypatch.setattr(search_route, "OracleClient", lambda: FakeSearchOracle(configs))
+    monkeypatch.setattr(
+        search_route,
+        "resolve_oracle_generation_settings",
+        keep_global_settings,
+    )
 
 
 def test_single_kb_legacy_query_overrides_are_ignored(monkeypatch: MonkeyPatch) -> None:

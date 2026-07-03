@@ -10,6 +10,15 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from rag_pipeline_core.chunking import (
+    CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
+)
+from rag_pipeline_core.chunking import (
+    CHUNK_SIZE_MAX_CHARS as CHUNK_SIZE_MAX_CHARS,
+)
+from rag_pipeline_core.chunking import (
+    CHUNK_SIZE_MIN_CHARS as CHUNK_SIZE_MIN_CHARS,
+)
 
 AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
@@ -49,7 +58,6 @@ PreprocessProfile = Literal[
 ChunkingStrategy = Literal[
     "structure_aware",
     "recursive_character",
-    "sentence_window",
     "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
@@ -59,7 +67,6 @@ ChunkingStrategy = Literal[
 CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "structure_aware",
     "recursive_character",
-    "sentence_window",
     "hierarchical_parent_child",
     "markdown_heading",
     "page_level",
@@ -269,12 +276,7 @@ class Settings(BaseSettings):
         description="UI から保存したモデル設定 JSON。存在する場合は .env より優先する。",
     )
 
-    # --- HuggingFace モデルダウンロード(dev は各 parser へ host マウントする基点)---
-    huggingface_download_dir: str = Field(
-        default="/u01/models/huggingface",
-        description="parser のモデルキャッシュを host マウントする基点。各サービスは "
-        "<dir>/<service_id>/ に mount する。",
-    )
+    # --- HuggingFace モデルダウンロード ---
     # env キーは標準名(HF_TOKEN/HF_ENDPOINT)に合わせ、compose からも同じ値を参照できるようにする。
     huggingface_token: str = Field(default="", validation_alias="HF_TOKEN")
     huggingface_endpoint: str = Field(default="", validation_alias="HF_ENDPOINT")
@@ -508,14 +510,18 @@ class Settings(BaseSettings):
     )
 
     # --- RAG ---
-    rag_chunk_size: int = Field(default=800, ge=200, le=4000)
-    rag_chunk_overlap: int = Field(default=120, ge=0, le=1000)
+    rag_chunk_size: int = Field(
+        default=800,
+        ge=CHUNK_SIZE_MIN_CHARS,
+        le=CHUNK_SIZE_MAX_CHARS,
+    )
+    rag_chunk_overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     rag_chunking_strategy: ChunkingStrategy = Field(
         default="structure_aware",
         description=(
             "chunks 段階の分割戦略(Chunking アダプター)。"
             "structure_aware は element/section/table 認識、recursive_character は固定長、"
-            "sentence_window は文単位、hierarchical_parent_child は親子、"
+            "hierarchical_parent_child は親子、"
             "markdown_heading は章節単位、page_level はページ単位、"
             "fixed_size は章節・文境界を無視した純粋な固定長分割、"
             "fixed_delimiter は指定文字列での固定分割。"
@@ -536,19 +542,20 @@ class Settings(BaseSettings):
             "rag_chunk_size より小さくする。"
         ),
     )
-    rag_chunk_sentence_window_size: int = Field(
-        default=3,
-        ge=1,
-        le=20,
-        description="sentence_window 戦略で 1 chunk にまとめる文の数。",
-    )
     rag_chunk_min_chars: int = Field(
-        default=0,
+        default=120,
         ge=0,
         le=2000,
         description=(
             "この文字数未満の微小 chunk を隣接 chunk へ吸収する下限。0 で無効。"
             "rag_chunk_size より小さくする。"
+        ),
+    )
+    rag_chunk_context_header_enabled: bool = Field(
+        default=True,
+        description=(
+            "embedding 入力の先頭へ「文書名 > section_path」の文脈ヘッダを前置する"
+            "(Anthropic Contextual Retrieval の決定論版)。保存 chunk 本文・引用表示は変えない。"
         ),
     )
     rag_context_window_chars: int = Field(default=12000, ge=1000, le=100000)
@@ -726,9 +733,9 @@ class Settings(BaseSettings):
     rag_embedding_batch_size: int = Field(
         default=96,
         ge=1,
-        le=1024,
+        le=96,
         description=(
-            "OCI Generative AI embedding へ 1 回に送る text 数。"
+            "OCI Generative AI embedding へ 1 回に送る text 数(最大 96)。"
             "大きな文書取込や query expansion で API payload を過大化しない。"
         ),
     )
@@ -855,10 +862,25 @@ class Settings(BaseSettings):
     rag_generation_system_prompt_override: str | None = Field(
         default=None,
         description=(
-            "回答生成 system prompt の上書き。業務ビュー(Business View)の persona を"
-            "クエリ時に注入するための runtime 上書きで env からは設定しない(既定 None=上書きなし)。"
-            "設定時は Generation アダプターの profile prompt より優先する。"
+            "業務ビュー(Business View)の persona。回答スタイルを置換せず、公共の安全制約・"
+            "言語・profile 形式制約と決定論的に合成する runtime 値。"
         ),
+    )
+    rag_generation_default_language: str | None = Field(
+        default=None,
+        description="業務ビューの既定回答言語。bilingual_ja_en の形式制約が優先する。",
+    )
+    rag_generation_custom_prompt: str | None = Field(
+        default=None,
+        description="Oracle active Prompt から解決した custom profile 指示。env へ保存しない。",
+    )
+    rag_generation_custom_prompt_version_id: str | None = Field(
+        default=None,
+        description="Oracle active Prompt の version ID。診断用途のみ。",
+    )
+    rag_generation_config_source: Literal["request", "business_view", "global"] = Field(
+        default="global",
+        description="回答スタイルの最終選択元。",
     )
     rag_guardrail_policy: GuardrailPolicyName = Field(
         default="standard",
@@ -872,8 +894,9 @@ class Settings(BaseSettings):
         description=(
             "Guardrail のバックエンド。local(既定)は in-process 決定論ヒューリスティック"
             "(現行挙動)。oci_guardrails は OCI Generative AI Guardrails(ApplyGuardrails、"
-            "content moderation / PII / prompt injection の検出専用 API)を併用し、未設定/失敗時"
-            "は local へ安全に縮退する。確定スタックは不変(別 LLM provider・外部 DB は不採用)。"
+            "content moderation / PII / prompt injection の検出専用 API)を併用する。障害時は"
+            "regulated が拒否し、その他は warning 付きで local へ縮退する。確定スタックは不変"
+            "(別 LLM provider・外部 DB は不採用)。"
         ),
     )
     oci_guardrails_compartment_id: str = Field(
@@ -889,6 +912,12 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         description="prompt injection の risk score をブロック扱いにする閾値(0.0–1.0)。",
+    )
+    oci_guardrails_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0.0,
+        le=30.0,
+        description="OCI Guardrails 検査の接続・読取 timeout 秒。",
     )
     rag_evaluation_suite: EvaluationSuite = Field(
         default="request_only",
@@ -1212,9 +1241,8 @@ class Settings(BaseSettings):
     rag_grounding_service_enabled: bool = Field(
         default=True,
         description=(
-            "grounding の preset 解決(検索後処理段フラグ)の remote 委譲を許可する。"
-            "サービス未起動・未到達時は backend in-process の同一実装へ縮退する。"
-            "OFF は常に in-process。"
+            "互換用の standalone grounding サービス設定。"
+            "backend の検索経路は preset を常に in-process で解決するため、この値には依存しない。"
             "custom preset は backend の legacy rag_context_* 設定をそのまま使う。"
         ),
     )
@@ -1558,6 +1586,14 @@ class Settings(BaseSettings):
         """廃止済み text_normalize は起動互換のため passthrough(no-op)へ寄せる。"""
         if str(value).strip().casefold() == "text_normalize":
             return "passthrough"
+        return value
+
+    @field_validator("rag_chunking_strategy", mode="before")
+    @classmethod
+    def normalize_legacy_chunking_strategy(cls, value: object) -> object:
+        """撤去済み sentence_window は起動互換のため recursive_character へ寄せる。"""
+        if str(value).strip().casefold() == "sentence_window":
+            return "recursive_character"
         return value
 
     @field_validator("oci_enterprise_ai_vlm_input_mode", mode="before")
