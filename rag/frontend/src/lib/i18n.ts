@@ -2715,6 +2715,7 @@ export const ja = {
   "search.meta.diagnostics": "診断",
   "search.meta.detailMetrics": "詳細メトリクス",
   "search.meta.candidateDetails": "候補詳細",
+  "search.meta.chunkOriginal": "Chunk 原本",
   "search.meta.candidate": "候補",
   "search.meta.source": "取得元",
   "search.meta.vector": "Vector",

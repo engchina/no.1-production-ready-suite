@@ -526,7 +526,11 @@ async def test_pipeline_reports_retrieval_breakdown_and_candidates() -> None:
     assert candidates[0].status == "citation"
     assert candidates[2].status == "dropped"
     assert candidates[2].drop_reason == "rerank_out"
-    assert not hasattr(candidates[0], "text")
+    assert candidates[0].text == "承認条件は 120000 円以上です。"
+    serialized = response.diagnostics.model_dump()
+    assert "text" not in serialized["retrieval_candidates"][0]
+    restored = type(response.diagnostics).model_validate(serialized)
+    assert restored.retrieval_candidates[0].text == ""
 
 
 async def test_pipeline_returns_only_citations_in_generation_context(

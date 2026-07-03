@@ -1036,6 +1036,7 @@ export interface SearchRetrievalBreakdown {
 export interface SearchRetrievalCandidate {
   chunk_id: string;
   document_id: string;
+  text?: string;
   file_name: string | null;
   sources: string[];
   vector_rank: number | null;

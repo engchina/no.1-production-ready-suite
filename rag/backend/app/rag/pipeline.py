@@ -1941,7 +1941,7 @@ def _build_retrieval_diagnostics(
     citations: list[RetrievedChunk],
     evidence_count: int = 0,
 ) -> tuple[SearchRetrievalBreakdown, list[SearchRetrievalCandidate]]:
-    """本文を含めず、検索候補の流れだけを diagnostics 化する。"""
+    """検索候補の流れと SSE 表示用本文を diagnostics 化する。"""
     document_candidates = [chunk for chunk in retrieved if not _is_agent_memory_chunk(chunk)]
     vector_count = _metadata_max_int(document_candidates, "retrieval_vector_count")
     keyword_count = _metadata_max_int(document_candidates, "retrieval_keyword_count")
@@ -2034,6 +2034,7 @@ def _retrieval_candidate(
     return SearchRetrievalCandidate(
         chunk_id=chunk.chunk_id,
         document_id=chunk.document_id,
+        text=chunk.text,
         file_name=chunk.file_name,
         sources=sources,
         vector_rank=_metadata_optional_int(chunk.metadata.get("vector_rank")),

@@ -29,7 +29,7 @@ import {
   resolveSelectedRecipe,
   type RecipeLayerStatusView,
 } from "./DocumentRecipeManager.logic";
-import { CitationCard, scoreMaximaForCitations } from "@/components/search/CitationCard";
+import { CitationCard } from "@/components/search/CitationCard";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -763,7 +763,6 @@ function RecipeComparison({
 
 function ComparisonColumn({ title, result }: { title: string; result: SearchResponse }) {
   const chunks = result.citations;
-  const maxima = scoreMaximaForCitations(chunks);
   return (
     <section className="min-w-0">
       <h4 className="mb-2 text-sm font-semibold text-foreground">{title}</h4>
@@ -774,7 +773,6 @@ function ComparisonColumn({ title, result }: { title: string; result: SearchResp
               key={`${chunk.chunk_id}-${index}`}
               chunk={chunk}
               index={index}
-              scoreMaxima={maxima}
             />
           ))}
         </ol>

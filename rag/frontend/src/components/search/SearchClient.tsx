@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ChevronRight,
   Clock3,
   Plus,
   Search as SearchIcon,
@@ -12,7 +13,8 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { BusinessViewPickerGrid } from "@/components/business-views/BusinessViewPickerGrid";
-import { CitationCard, scoreMaximaForCitations } from "./CitationCard";
+import { ExtractedText } from "@/components/documents/extraction-bits";
+import { CitationCard } from "./CitationCard";
 import {
   buildFeedbackContentSnapshot,
   FeedbackControls,
@@ -292,7 +294,6 @@ export function SearchClient() {
 
   const noResults = phase === "done" && citations.length === 0;
   const isStreaming = phase === "streaming";
-  const citationScoreMaxima = scoreMaximaForCitations(citations);
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
   const structuredJsonAnswer = meta?.diagnostics?.generation_profile === "structured_json";
 
@@ -616,7 +617,7 @@ export function SearchClient() {
                   <h2 className="mb-3 text-sm font-semibold text-foreground">
                     {t("search.citations")}（{citations.length}）
                   </h2>
-                  <ul className="bounded-scroll-area-lg space-y-3 rounded-lg border border-border bg-background p-3">
+                  <ul className="bounded-scroll-area-lg space-y-2 pr-1">
                     {citations.map((chunk, i) => (
                       <CitationCard
                         key={chunk.chunk_id}
@@ -628,7 +629,6 @@ export function SearchClient() {
                         }
                         sourceSurface="search"
                         contentSnapshot={feedbackSnapshot}
-                        scoreMaxima={citationScoreMaxima}
                       />
                     ))}
                   </ul>
@@ -993,8 +993,9 @@ function RetrievalCandidateDetails({
         <div role="table" aria-label={t("search.meta.candidateDetails")} className="space-y-1.5">
           <div
             role="row"
-            className="hidden grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_90px_90px_80px_90px_minmax(0,1fr)] gap-2 px-2 text-[11px] font-medium text-muted md:grid"
+            className="hidden grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] gap-2 px-2 text-[11px] font-medium text-muted md:grid"
           >
+            <span role="columnheader">{t("fileList.col.fileName")}</span>
             <span role="columnheader">{t("search.meta.candidate")}</span>
             <span role="columnheader">{t("search.meta.source")}</span>
             <span role="columnheader">{t("search.meta.vector")}</span>
@@ -1020,36 +1021,72 @@ function CandidateRow({
   candidate: NonNullable<SearchDiagnostics["retrieval_candidates"]>[number];
 }) {
   return (
-    <div
+    <details
       role="row"
-      className="grid gap-2 rounded-md border border-border bg-card p-2 text-xs md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_90px_90px_80px_90px_minmax(0,1fr)]"
+      className="group rounded-md border border-border bg-card text-xs"
     >
-      <span role="cell" className="min-w-0">
-        <span className="block truncate font-medium text-foreground" title={candidate.file_name ?? candidate.document_id}>
-          {candidate.file_name ?? candidate.document_id}
-        </span>
-        <span className="block truncate text-[11px] text-muted" title={candidate.chunk_id}>
-          {candidate.chunk_id}
-        </span>
-      </span>
-      <span role="cell" className="flex flex-wrap gap-1">
-        {candidate.sources.map((source) => (
-          <span key={source} className="rounded-full bg-muted/10 px-2 py-0.5 text-[11px] font-medium text-muted">
-            {sourceLabel(source)}
+      <summary className="grid min-h-11 cursor-pointer list-none gap-2 rounded-md p-2 outline-none transition-colors hover:bg-background focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none md:grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
+        <span
+          role="cell"
+          data-testid="candidate-file-name"
+          className="flex min-w-0 items-center gap-2"
+        >
+          <ChevronRight
+            size={14}
+            className="shrink-0 text-muted transition-transform duration-200 group-open:rotate-90 motion-reduce:transition-none"
+            aria-hidden
+          />
+          <span
+            className="min-w-0 truncate font-medium text-foreground"
+            title={candidate.file_name ?? candidate.document_id}
+          >
+            {candidate.file_name ?? candidate.document_id}
           </span>
-        ))}
-      </span>
-      <span role="cell" className="tnum text-foreground">{formatRankScore(candidate.vector_rank, candidate.vector_score)}</span>
-      <span role="cell" className="tnum text-foreground">{formatRankScore(candidate.keyword_rank, candidate.keyword_score)}</span>
-      <span role="cell" className="tnum text-foreground">{formatScore(candidate.rrf_score)}</span>
-      <span role="cell" className="tnum text-foreground">{formatRankScore(candidate.rerank_rank, candidate.rerank_score)}</span>
-      <span role="cell" className="min-w-0 text-foreground">
-        <span>{candidateStatusLabel(candidate.status)}</span>
-        {candidate.drop_reason ? (
-          <span className="ml-1 text-muted">({dropReasonLabel(candidate.drop_reason)})</span>
-        ) : null}
-      </span>
-    </div>
+        </span>
+        <span
+          role="cell"
+          data-testid="candidate-preview"
+          className="min-w-0 truncate text-[11px] text-muted"
+          title={candidate.text || undefined}
+        >
+          {candidate.text || "—"}
+        </span>
+        <span role="cell" className="flex flex-wrap gap-1">
+          {candidate.sources.map((source) => (
+            <span
+              key={source}
+              className="rounded-full bg-muted/10 px-2 py-0.5 text-[11px] font-medium text-muted"
+            >
+              {sourceLabel(source)}
+            </span>
+          ))}
+        </span>
+        <span role="cell" className="tnum text-foreground">
+          {formatRankScore(candidate.vector_rank, candidate.vector_score)}
+        </span>
+        <span role="cell" className="tnum text-foreground">
+          {formatRankScore(candidate.keyword_rank, candidate.keyword_score)}
+        </span>
+        <span role="cell" className="tnum text-foreground">
+          {formatScore(candidate.rrf_score)}
+        </span>
+        <span role="cell" className="tnum text-foreground">
+          {formatRankScore(candidate.rerank_rank, candidate.rerank_score)}
+        </span>
+        <span role="cell" className="min-w-0 text-foreground">
+          <span>{candidateStatusLabel(candidate.status)}</span>
+          {candidate.drop_reason ? (
+            <span className="ml-1 text-muted">({dropReasonLabel(candidate.drop_reason)})</span>
+          ) : null}
+        </span>
+      </summary>
+      <div data-testid="candidate-original" className="border-t border-border p-3">
+        <p className="mb-2 text-[11px] font-medium text-muted">
+          {t("search.meta.chunkOriginal")}
+        </p>
+        <ExtractedText text={candidate.text ?? ""} />
+      </div>
+    </details>
   );
 }
 

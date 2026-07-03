@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "@/components/PageHeader";
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
-import { CitationCard, scoreMaximaForCitations } from "@/components/search/CitationCard";
+import { CitationCard } from "@/components/search/CitationCard";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
 import { Banner } from "@/components/ui/banner";
@@ -92,7 +92,6 @@ function AssistantColumn({
   showLabel: boolean;
   className?: string;
 }) {
-  const scoreMaxima = useMemo(() => scoreMaximaForCitations(citations), [citations]);
   return (
     <div
       id={messageId ? `message-${messageId}` : undefined}
@@ -158,7 +157,6 @@ function AssistantColumn({
                 businessViewId={businessViewId}
                 sourceSurface="chat"
                 messageId={messageId}
-                scoreMaxima={scoreMaxima}
               />
             ))}
           </ul>

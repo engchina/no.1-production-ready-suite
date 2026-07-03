@@ -26,7 +26,6 @@ import {
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { firstMetadataToken, integerMetadataValue } from "@/lib/table-cell-focus";
-import { cn } from "@/lib/utils";
 
 /** 引用チャンク1件の表示。retrieval 由来の score/metadata を併記。 */
 export function CitationCard({
@@ -37,7 +36,6 @@ export function CitationCard({
   sourceSurface = "search",
   messageId = null,
   contentSnapshot = null,
-  scoreMaxima,
 }: {
   chunk: RetrievedChunk;
   index: number;
@@ -46,9 +44,7 @@ export function CitationCard({
   sourceSurface?: FeedbackSourceSurface;
   messageId?: string | null;
   contentSnapshot?: FeedbackContentSnapshot | null;
-  scoreMaxima?: CitationScoreMaxima;
 }) {
-  const maxima = scoreMaxima ?? { score: chunk.score, rerankScore: chunk.rerank_score ?? 0 };
   const chips = citationMetadataChips(chunk.metadata);
   const retrievalBadges = citationRetrievalBadges(chunk);
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
@@ -78,70 +74,79 @@ export function CitationCard({
     dialogRef.current?.close();
   }
 
+  const hasMetadata = chips.length > 0 || recipeSlot != null || Boolean(chunk.category_name);
+
   return (
-    <li className="rounded-lg border border-border bg-card p-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-            {index + 1}
-          </span>
-          <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-            <FileText size={14} className="shrink-0 text-muted" aria-hidden />
-            <span className="truncate" title={chunk.file_name ?? chunk.document_id}>
-              {chunk.file_name ?? chunk.document_id}
+    <li className="rounded-lg border border-border bg-card p-3">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start">
+        <div data-testid="citation-main" className="min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+              {index + 1}
             </span>
-          </span>
-          {retrievalBadges.length ? (
-            <span className="flex flex-wrap gap-1">
-              {retrievalBadges.map((badge) => (
-                <span
-                  key={badge}
-                  className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted"
-                >
-                  {badge}
+            <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+              <FileText size={14} className="shrink-0 text-muted" aria-hidden />
+              <span className="truncate" title={chunk.file_name ?? chunk.document_id}>
+                {chunk.file_name ?? chunk.document_id}
+              </span>
+            </span>
+            {retrievalBadges.length ? (
+              <span className="flex flex-wrap gap-1">
+                {retrievalBadges.map((badge) => (
+                  <span
+                    key={badge}
+                    className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted"
+                  >
+                    {badge}
+                  </span>
+                ))}
+              </span>
+            ) : null}
+          </div>
+          <p
+            data-testid="citation-text"
+            className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90"
+          >
+            {chunk.text}
+          </p>
+          {hasMetadata ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {chips.length > 0 ? (
+                <dl className="flex flex-wrap gap-1.5">
+                  {chips.map((chip) => (
+                    <MetadataChip key={chip.id} chip={chip} />
+                  ))}
+                </dl>
+              ) : null}
+              {recipeSlot ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+                  <Layers size={11} aria-hidden />
+                  {t("documents.recipes.name", { slot: recipeSlot })}
                 </span>
-              ))}
-            </span>
+              ) : null}
+              {chunk.category_name ? (
+                <span className="inline-flex rounded-full bg-info-bg px-2 py-0.5 text-xs text-info">
+                  {chunk.category_name}
+                </span>
+              ) : null}
+            </div>
           ) : null}
         </div>
-        <CitationScoreMeters chunk={chunk} maxima={maxima} />
+        <CitationScores chunk={chunk} />
       </div>
-      <p className="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
-        {chunk.text}
-      </p>
-      {chips.length > 0 ? (
-        <dl className="mt-3 flex flex-wrap gap-2">
-          {chips.map((chip) => (
-            <MetadataChip key={chip.id} chip={chip} />
-          ))}
-        </dl>
-      ) : null}
-      {recipeSlot ? (
-        <span
-          className="mt-2 mr-2 inline-flex items-center gap-1 rounded-full bg-muted/10 px-2 py-0.5 text-xs text-muted"
-        >
-          <Layers size={11} aria-hidden />
-          {t("documents.recipes.name", { slot: recipeSlot })}
-        </span>
-      ) : null}
-      {chunk.category_name ? (
-        <span className="mt-2 inline-block rounded-full bg-info-bg px-2 py-0.5 text-xs text-info">
-          {chunk.category_name}
-        </span>
-      ) : null}
-      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-2.5 flex flex-col gap-2 border-t border-border pt-2.5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={openPreview}
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:h-9"
           >
             <Eye size={15} aria-hidden />
             {t("search.citation.previewOpen")}
           </button>
           <Link
             to={previewUrl}
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:h-9"
             aria-label={t("search.citation.openPreview", {
               file: previewFileName,
             })}
@@ -223,25 +228,6 @@ export function CitationCard({
   );
 }
 
-export interface CitationScoreMaxima {
-  score: number;
-  rerankScore: number;
-}
-
-/** 引用一覧から retrieval / rerank スコアの最大値を求める(スコアメータの基準)。 */
-export function scoreMaximaForCitations(citations: RetrievedChunk[]): CitationScoreMaxima {
-  return {
-    score: maxScore(citations.map((chunk) => chunk.score)),
-    rerankScore: maxScore(
-      citations.flatMap((chunk) => (chunk.rerank_score == null ? [] : [chunk.rerank_score]))
-    ),
-  };
-}
-
-function maxScore(values: number[]): number {
-  return values.reduce((max, value) => (Number.isFinite(value) && value > max ? value : max), 0);
-}
-
 function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
   const vectorRank = integerMetadataValue(chunk.metadata.vector_rank);
   const keywordRank = integerMetadataValue(chunk.metadata.keyword_rank);
@@ -257,27 +243,17 @@ function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
   return badges;
 }
 
-function CitationScoreMeters({
-  chunk,
-  maxima,
-}: {
-  chunk: RetrievedChunk;
-  maxima: CitationScoreMaxima;
-}) {
+function CitationScores({ chunk }: { chunk: RetrievedChunk }) {
   return (
-    <div className="w-full space-y-1.5 rounded-md bg-background px-2.5 py-2 sm:w-56">
-      <ScoreMeter
-        label={t("search.citation.score.retrieval")}
-        value={chunk.score}
-        max={maxima.score}
-        tone="primary"
-      />
-      <ScoreMeter
-        label={t("search.citation.score.rerank")}
-        value={chunk.rerank_score}
-        max={maxima.rerankScore}
-        tone="success"
-      />
+    <div
+      data-testid="citation-score-panel"
+      className="w-full space-y-2 rounded-md bg-background px-2.5 py-2 sm:w-[176px] sm:shrink-0"
+    >
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="font-medium text-muted">{t("search.citation.score.retrieval")}</span>
+        <span className="tnum shrink-0 text-foreground">{formatScoreValue(chunk.score)}</span>
+      </div>
+      <ScoreMeter label={t("search.citation.score.rerank")} value={chunk.rerank_score} />
     </div>
   );
 }
@@ -285,17 +261,19 @@ function CitationScoreMeters({
 function ScoreMeter({
   label,
   value,
-  max,
-  tone,
 }: {
   label: string;
   value: number | null;
-  max: number;
-  tone: "primary" | "success";
 }) {
+  if (value == null || !Number.isFinite(value)) {
+    return (
+      <p className="text-[11px] font-medium text-muted">
+        {t("search.citation.score.rerankMissing")}
+      </p>
+    );
+  }
   const valueText = formatScoreValue(value);
-  const ariaMax = Number.isFinite(max) && max > 0 ? max : 1;
-  const ariaNow = value == null || !Number.isFinite(value) ? 0 : Math.min(Math.max(value, 0), ariaMax);
+  const ariaNow = Math.min(Math.max(value, 0), 1);
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2 text-[11px]">
@@ -306,33 +284,30 @@ function ScoreMeter({
         role="meter"
         aria-label={t("search.citation.score.meter", { label, value: valueText })}
         aria-valuemin={0}
-        aria-valuemax={ariaMax}
+        aria-valuemax={1}
         aria-valuenow={ariaNow}
         aria-valuetext={valueText}
         className="h-1.5 overflow-hidden rounded-full bg-muted/20"
       >
         <div
-          className={cn(
-            "h-full rounded-full",
-            tone === "primary" ? "bg-primary" : "bg-success"
-          )}
-          style={{ width: `${scoreMeterPercent(value, max)}%` }}
+          data-testid="citation-rerank-fill"
+          className="h-full rounded-full bg-success"
+          style={{ width: `${scoreMeterPercent(value)}%` }}
         />
       </div>
     </div>
   );
 }
 
-function formatScoreValue(value: number | null): string {
-  if (value == null || !Number.isFinite(value)) return t("search.citation.score.rerankMissing");
-  return value.toFixed(3);
+function formatScoreValue(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(3) : "—";
 }
 
-export function scoreMeterPercent(value: number | null, max: number): number {
-  if (value == null || !Number.isFinite(value) || !Number.isFinite(max) || value <= 0 || max <= 0) {
+export function scoreMeterPercent(value: number | null): number {
+  if (value == null || !Number.isFinite(value) || value <= 0) {
     return 0;
   }
-  return Math.min(100, (value / max) * 100);
+  return Math.min(100, value * 100);
 }
 
 export function citationPreviewUrl(chunk: RetrievedChunk): string {
@@ -415,7 +390,7 @@ function firstIntegerMetadata(
 
 function MetadataChip({ chip }: { chip: CitationMetadataChip }) {
   return (
-    <div className="min-w-0 max-w-full rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted sm:max-w-80">
+    <div className="min-w-0 max-w-full rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted sm:max-w-80">
       <dt className="sr-only">{chipLabel(chip)}</dt>
       <dd className="truncate">{chipValue(chip)}</dd>
     </div>
