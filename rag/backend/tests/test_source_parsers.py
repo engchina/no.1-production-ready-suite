@@ -2771,7 +2771,7 @@ def test_unstructured_adapter_uses_page_breaks_for_missing_page_numbers(
 def test_unstructured_adapter_requests_page_breaks_and_table_inference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unstructured adapter は対応版なら page break / table inference を要求する。"""
+    """Unstructured adapter は対応版なら日英 hi_res と表解析を要求する。"""
     unstructured_module = ModuleType("unstructured")
     unstructured_module.__dict__["__version__"] = "7.8.9"
     partition_package = ModuleType("unstructured.partition")
@@ -2815,11 +2815,12 @@ def test_unstructured_adapter_requests_page_breaks_and_table_inference(
     assert seen_kwargs["filename"].endswith(".pdf")
     assert seen_kwargs["content_type"] == "application/pdf"
     assert seen_kwargs["include_page_breaks"] is True
-    assert seen_kwargs["strategy"] == "auto"
+    assert seen_kwargs["strategy"] == "hi_res"
+    assert seen_kwargs["languages"] == ["jpn", "eng"]
     assert seen_kwargs["infer_table_structure"] is True
     assert result.extraction is not None
     assert result.extraction.parser_artifacts["partition_include_page_breaks"] is True
-    assert result.extraction.parser_artifacts["partition_strategy"] == "auto"
+    assert result.extraction.parser_artifacts["partition_strategy"] == "hi_res"
     assert result.extraction.parser_artifacts["partition_infer_table_structure"] is True
 
 
