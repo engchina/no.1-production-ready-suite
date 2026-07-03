@@ -161,4 +161,4 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate compose config
-        run: docker compose config
+        run: docker compose config --quiet

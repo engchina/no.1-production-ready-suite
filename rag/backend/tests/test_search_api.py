@@ -135,7 +135,7 @@ def test_stream_search_api_buffers_answer_even_when_realtime_flag_is_enabled(
     assert '"retrieval_breakdown":' in response.text
     assert '"vector_count": 1' in response.text
     assert '"retrieval_candidates":' in response.text
-    assert "候補本文" not in response.text
+    assert "候補本文" in response.text
     assert "event: citations" in response.text
     assert "event: done" in response.text
 
@@ -403,6 +403,7 @@ class RealtimeStreamingPipeline:
                     SearchRetrievalCandidate(
                         chunk_id="doc-1:0",
                         document_id="doc-1",
+                        text="候補本文",
                         file_name="policy.txt",
                         sources=["vector", "keyword"],
                         vector_rank=1,

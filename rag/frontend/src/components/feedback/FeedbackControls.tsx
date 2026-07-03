@@ -147,7 +147,11 @@ export function FeedbackControls({
             type="button"
             variant={current?.rating === "helpful" ? "secondary" : "ghost"}
             size="sm"
-            className={cn("min-w-8 px-2", current?.rating === "helpful" && "text-success")}
+            className={cn(
+              "min-w-8 px-2",
+              compact && "min-h-[44px] min-w-[44px] sm:min-h-9 sm:min-w-8",
+              current?.rating === "helpful" && "text-success"
+            )}
             aria-label={helpfulLabel}
             aria-pressed={current?.rating === "helpful"}
             title={helpfulLabel}
@@ -161,7 +165,11 @@ export function FeedbackControls({
             type="button"
             variant={current?.rating === "not_helpful" ? "secondary" : "ghost"}
             size="sm"
-            className={cn("min-w-8 px-2", current?.rating === "not_helpful" && "text-danger")}
+            className={cn(
+              "min-w-8 px-2",
+              compact && "min-h-[44px] min-w-[44px] sm:min-h-9 sm:min-w-8",
+              current?.rating === "not_helpful" && "text-danger"
+            )}
             aria-label={notHelpfulLabel}
             aria-pressed={current?.rating === "not_helpful"}
             aria-expanded={showReasons}

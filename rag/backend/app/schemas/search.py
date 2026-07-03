@@ -209,10 +209,11 @@ class SearchRetrievalBreakdown(BaseModel):
 
 
 class SearchRetrievalCandidate(BaseModel):
-    """検索候補の取得元と採用状態。本文は含めない。"""
+    """検索候補の取得元と採用状態。本文は SSE 表示時だけ明示的に返す。"""
 
     chunk_id: str
     document_id: str
+    text: str = Field(default="", exclude=True)
     file_name: str | None = None
     sources: list[str] = Field(default_factory=list)
     vector_rank: int | None = None

@@ -361,13 +361,20 @@ async def _search_events(
     result: SearchResponse,
 ) -> AsyncIterator[str]:
     """検証済み SearchResponse を SSE イベント列へ変換する。"""
+    diagnostics = result.diagnostics.model_dump(mode="json")
+    for payload, candidate in zip(
+        diagnostics["retrieval_candidates"],
+        result.diagnostics.retrieval_candidates,
+        strict=True,
+    ):
+        payload["text"] = candidate.text
     yield _sse_event(
         "metadata",
         {
             "trace_id": result.trace_id,
             "elapsed_ms": result.elapsed_ms,
             "guardrail_warnings": result.guardrail_warnings,
-            "diagnostics": result.diagnostics.model_dump(mode="json"),
+            "diagnostics": diagnostics,
         },
     )
     for chunk in _answer_chunks(result.answer):

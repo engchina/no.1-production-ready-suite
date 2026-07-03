@@ -22,9 +22,9 @@ function searchStreamBody(chunkId: string): string {
   const citation = {
     document_id: "doc-1",
     chunk_id: chunkId,
-    text: "料金表の交通費は 1000 円です。",
-    score: 0.91,
-    rerank_score: 0.96,
+    text: "料金表の交通費は 1000 円です。申請時は領収書を添付し、利用日、経路、目的を記載してください。承認後に精算されます。長い根拠本文でもカード内では三行に収まり、全文はプレビューから確認できます。",
+    score: 0.048,
+    rerank_score: 0.869,
     file_name: "policy.txt",
     category_name: null,
     metadata: {
@@ -97,6 +97,7 @@ function searchStreamBody(chunkId: string): string {
           {
             chunk_id: chunkId,
             document_id: "doc-1",
+            text: "候補 Chunk 原本\n料金表の交通費は 1000 円です。",
             file_name: "policy.txt",
             sources: ["vector", "keyword"],
             vector_rank: 1,
@@ -118,7 +119,7 @@ function searchStreamBody(chunkId: string): string {
   ].join("");
 }
 
-test("引用カードに variant(chunk_set)バッジが出る", async ({ page }) => {
+test("引用カードに variant(chunk_set)バッジが出る", async ({ page }, testInfo) => {
   await mockDatabaseReady(page);
   await page.route("**/api/auth/me", (route) => route.fulfill({ json: auth }));
   await page.route("**/api/business-views**", (route) =>
@@ -211,13 +212,100 @@ test("引用カードに variant(chunk_set)バッジが出る", async ({ page })
   await page.getByText("診断", { exact: true }).click();
   await expect(page.getByText("詳細メトリクス")).toBeVisible();
   await expect(page.getByText("候補詳細")).toBeVisible();
-  await expect(page.getByRole("meter", { name: "取得スコア: 0.910" })).toBeVisible();
-  await expect(page.getByRole("meter", { name: "Rerank スコア: 0.960" })).toBeVisible();
+  const candidateTable = page.getByRole("table", { name: "候補詳細" });
+  const candidateDetails = candidateTable.locator("details").filter({ hasText: "policy.txt" });
+  const candidateSummary = candidateDetails.locator("summary");
+  const candidateFileName = candidateDetails.getByTestId("candidate-file-name");
+  const candidatePreview = candidateDetails.getByTestId("candidate-preview");
+  const candidateOriginal = candidateDetails.getByTestId("candidate-original");
+  const candidateText = candidateOriginal.getByText("候補 Chunk 原本", { exact: false });
+  const fileNameHeader = candidateTable.getByRole("columnheader", { name: "ファイル名" });
+  await expect(candidatePreview).toContainText("候補 Chunk 原本");
+  await expect(candidateFileName).toContainText("policy.txt");
+  await expect(candidateDetails.getByText("doc-1:cs_recipe1:1", { exact: true })).toHaveCount(0);
+  if (testInfo.project.name === "desktop") {
+    await expect(fileNameHeader).toBeVisible();
+    const fileNameBox = await candidateFileName.boundingBox();
+    const previewBox = await candidatePreview.boundingBox();
+    expect(fileNameBox).not.toBeNull();
+    expect(previewBox).not.toBeNull();
+    expect(previewBox!.x).toBeGreaterThan(fileNameBox!.x + fileNameBox!.width);
+  } else {
+    await expect(fileNameHeader).toBeHidden();
+  }
+  await candidateTable.screenshot({
+    path: testInfo.outputPath(`candidate-preview-${testInfo.project.name}.png`),
+  });
+  await expect(candidateDetails).not.toHaveAttribute("open", "");
+  await expect(candidateOriginal).toBeHidden();
+  await candidateSummary.click();
+  await expect(candidateText).toBeVisible();
+  await expectNoPageOverflow(page);
+  await candidateSummary.click();
+  await expect(candidateOriginal).toBeHidden();
+  await candidateSummary.press("Enter");
+  await expect(candidateText).toBeVisible();
+  await candidateSummary.press("Enter");
+  await expect(candidateOriginal).toBeHidden();
+  await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
+  const rerankMeter = page.getByRole("meter", { name: "Rerank スコア: 0.869" });
+  await expect(rerankMeter).toBeVisible();
   await expect(page.getByText("Both")).toBeVisible();
   await expect(page.getByText("Vector #1")).toBeVisible();
   await expect(page.getByText("Keyword #1")).toBeVisible();
   await expect(page.getByText("Rerank #1")).toBeVisible();
   // レシピバッジ(recipe_slot_no)が引用カードに表示される。
   await expect(page.getByText("レシピ1")).toBeVisible();
+
+  const citationText = page.getByTestId("citation-text");
+  const citation = citationText.locator("xpath=ancestor::li[1]");
+  const citationMain = citation.getByTestId("citation-main");
+  const scorePanel = citation.getByTestId("citation-score-panel");
+  const rerankFill = citation.getByTestId("citation-rerank-fill");
+  await expect(citationText).toBeVisible();
+  await expect(scorePanel).toBeVisible();
+  await expect(scorePanel.getByText("0.048", { exact: true })).toBeVisible();
+  await expect
+    .poll(() => citationText.evaluate((element) => getComputedStyle(element).webkitLineClamp))
+    .toBe("3");
+
+  const citationBox = await citation.boundingBox();
+  const citationMainBox = await citationMain.boundingBox();
+  const citationTextBox = await citationText.boundingBox();
+  const scorePanelBox = await scorePanel.boundingBox();
+  const rerankMeterBox = await rerankMeter.boundingBox();
+  const rerankFillBox = await rerankFill.boundingBox();
+  expect(citationBox).not.toBeNull();
+  expect(citationMainBox).not.toBeNull();
+  expect(citationTextBox).not.toBeNull();
+  expect(scorePanelBox).not.toBeNull();
+  expect(rerankMeterBox).not.toBeNull();
+  expect(rerankFillBox).not.toBeNull();
+  expect(rerankFillBox!.width / rerankMeterBox!.width).toBeCloseTo(0.869, 1);
+  if (testInfo.project.name === "mobile") {
+    expect(scorePanelBox!.width).toBeGreaterThan(citationBox!.width - 32);
+    expect(scorePanelBox!.y).toBeGreaterThanOrEqual(citationMainBox!.y + citationMainBox!.height);
+    for (const control of [
+      citation.getByRole("button", { name: "プレビュー" }),
+      citation.getByRole("link", { name: "policy.txt の引用位置を開く" }),
+      citation.getByRole("button", { name: "この引用は役に立った" }),
+      citation.getByRole("button", { name: "この引用は役に立たなかった" }),
+    ]) {
+      const controlBox = await control.boundingBox();
+      expect(controlBox).not.toBeNull();
+      expect(controlBox!.height).toBeGreaterThanOrEqual(44);
+    }
+  } else {
+    expect(scorePanelBox!.width).toBeCloseTo(176, 0);
+    expect(scorePanelBox!.x).toBeGreaterThan(citationMainBox!.x + citationMainBox!.width);
+    expect(citationTextBox!.y).toBeLessThan(scorePanelBox!.y + scorePanelBox!.height);
+  }
   await expectNoPageOverflow(page);
+  await citation.scrollIntoViewIfNeeded();
+  await citation.screenshot({
+    path: testInfo.outputPath(`citation-card-${testInfo.project.name}.png`),
+  });
+  await page.screenshot({
+    path: testInfo.outputPath(`citation-page-${testInfo.project.name}.png`),
+  });
 });

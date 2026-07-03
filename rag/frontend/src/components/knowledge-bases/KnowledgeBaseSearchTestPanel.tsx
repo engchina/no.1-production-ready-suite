@@ -3,7 +3,7 @@
 import { FlaskConical, Search as SearchIcon, Sparkles, X } from "lucide-react";
 import { useRef, useState } from "react";
 
-import { CitationCard, scoreMaximaForCitations } from "@/components/search/CitationCard";
+import { CitationCard } from "@/components/search/CitationCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ToggleChip } from "@/components/ui/toggle-chip";
@@ -96,7 +96,6 @@ export function KnowledgeBaseSearchTestPanel({
   };
 
   const noResults = phase === "done" && citations.length === 0;
-  const scoreMaxima = scoreMaximaForCitations(citations);
   const inputId = `kb-search-test-${knowledgeBaseId}`;
 
   return (
@@ -212,14 +211,13 @@ export function KnowledgeBaseSearchTestPanel({
                     <h3 className="mb-3 text-sm font-semibold text-foreground">
                       {t("search.citations")}（{citations.length}）
                     </h3>
-                    <ul className="bounded-scroll-area-lg space-y-3 rounded-lg border border-border bg-background p-3">
+                    <ul className="bounded-scroll-area-lg space-y-2 pr-1">
                       {citations.map((chunk, i) => (
                         <CitationCard
                           key={chunk.chunk_id}
                           chunk={chunk}
                           index={i}
                           traceId={meta?.trace_id}
-                          scoreMaxima={scoreMaxima}
                         />
                       ))}
                     </ul>

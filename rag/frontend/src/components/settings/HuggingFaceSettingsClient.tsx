@@ -53,7 +53,6 @@ export function HuggingFaceSettingsClient() {
   useEffect(() => {
     if (query.data) {
       setForm(formFromSettings(query.data));
-      setSaved(false);
       setOptimistic(null);
     }
   }, [query.data]);
