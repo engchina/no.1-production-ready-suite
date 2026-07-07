@@ -1,10 +1,9 @@
-"""parser マイクロサービスを呼ぶ HTTP クライアント。
+"""parser マイクロサービスまたは外部解析 API を呼ぶ HTTP クライアント。
 
-backend は外部 adapter(docling/marker/unstructured/unlimited_ocr/mineru/dots_ocr)を同一プロセスで
-import せず、各 parser サービスへ HTTP で委譲する。サービスは `StructuredExtraction` を
-返すため remap 忠実度を維持できる。接続失敗・timeout・retry 後の 5xx 時は通常 warning
-付き fallback(`extraction=None`)を返す。ユーザーが明示選択した backend は fail-fast にし、
-友好的なエラーで取込を止める。
+CPU adapter は各 parser サービスへ HTTP で委譲する。GPU OCR は外部のネイティブ API を
+直接呼び、応答を `StructuredExtraction` へ変換する。接続失敗・timeout・retry 後の 5xx 時は
+通常 warning 付き fallback(`extraction=None`)を返す。ユーザーが明示選択した backend は
+fail-fast にし、友好的なエラーで取込を止める。
 
 `parse_with_registry(..., external_adapter_runner=client.runner)` の形で注入する。
 """
@@ -14,11 +13,18 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from typing import cast
 
 import httpx
 from rag_parser_core.capabilities import supported_modalities
 from rag_parser_core.result import ParseResponse, ParserRegistryResult
 
+from app.clients.external_parser import (
+    ENGINE_SPECS,
+    ExternalParserBackend,
+    ExternalParserCallError,
+    ExternalParserClient,
+)
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
 from app.schemas.document import SourceProfile
@@ -30,10 +36,6 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
     "marker": "rag_parser_marker_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
-    "unlimited_ocr": "rag_parser_unlimited_ocr_service_url",
-    "mineru": "rag_parser_mineru_service_url",
-    "dots_ocr": "rag_parser_dots_ocr_service_url",
-    "glm_ocr": "rag_parser_glm_ocr_service_url",
     "asr": "rag_parser_asr_service_url",
     # OCI クラウド service 系 backend(薄いプロキシ microservice)。
     "oci_genai_vision": "rag_parser_oci_genai_vision_service_url",
@@ -112,6 +114,7 @@ class ParserServiceClient:
         self._settings = settings
         self._timeout = float(settings.rag_parser_service_timeout_seconds)
         self._retry = retry_config_from_settings(settings)
+        self._external = ExternalParserClient(settings)
 
     def service_url(self, backend: str) -> str | None:
         field = _SERVICE_URL_FIELDS.get(backend)
@@ -134,6 +137,29 @@ class ParserServiceClient:
         fail_fast: bool = False,
     ) -> ParserRegistryResult:
         """`ExternalAdapterRunner` 互換: 1 backend を HTTP で実行する。"""
+        if backend in ENGINE_SPECS:
+            external_backend = backend
+            try:
+                return self._external.parse(
+                    external_backend,
+                    source_bytes,
+                    source_profile,
+                    content_type,
+                )
+            except ExternalParserCallError as exc:
+                if fail_fast:
+                    raise ParserServiceUnavailableError(
+                        backend,
+                        exc.reason,
+                        service_url=self._external_connection_url(backend),
+                        status_code=exc.status_code,
+                        attempts=self._retry.attempts,
+                        warning_code=exc.warning_code,
+                    ) from exc
+                return _fallback(
+                    backend,
+                    exc.warning_code or f"{backend}_external_unavailable",
+                )
         url = self.service_url(backend)
         if url is None:
             if fail_fast:
@@ -262,6 +288,12 @@ class ParserServiceClient:
                 warning_code=warning_code,
             )
         return result
+
+    def _external_connection_url(self, backend: str) -> str | None:
+        spec = ENGINE_SPECS.get(cast(ExternalParserBackend, backend))
+        if spec is None:
+            return None
+        return str(getattr(self._settings, spec.endpoint_field, "") or "").strip() or None
 
     def run_service_backend(
         self,
@@ -419,12 +451,53 @@ def _service_unavailable_message(
 ) -> str:
     label = _SERVICE_LABELS.get(backend, backend)
     service_id = f"parser-{backend.replace('_', '-')}"
+    external = backend in ENGINE_SPECS
     retry_suffix = f"{attempts} 回試行しました。" if attempts > 1 else ""
     warning_suffix = f" エラーコード: {warning_code}" if warning_code else ""
+    if reason == "engine_removed":
+        return (
+            f"この文書レシピが参照する解析エンジン（{label}）は削除されました。"
+            "旧結果は保持されていますが、新しい処理は開始できません。"
+            "文書レシピで利用可能な解析エンジンを選び直してください。"
+        )
     if reason == "unconfigured":
         return (
-            f"選択した文書解析サービス（{label}）の接続先 URL が未設定です。"
-            "システム設定で parser サービスの URL を設定してから再実行してください。"
+            f"選択した文書解析エンジン（{label}）の接続先 URL が未設定です。"
+            "「検索・回答設定 › 文書解析」で外部接続を保存してから再実行してください。"
+        )
+    if reason == "model_missing":
+        return (
+            f"選択した文書解析エンジン（{label}）に設定したモデルが見つかりません。"
+            "外部接続のモデル ID を確認し、接続テストを再実行してください。"
+        )
+    if external:
+        suffix = f" 接続先: {service_url}" if service_url else ""
+        if reason == "adapter_invalid_input":
+            return (
+                f"選択した文書解析エンジン（{label}）でファイルを読み取れませんでした。"
+                "原本が正しく開けるか確認し、別の解析エンジンも試してください。"
+            )
+        if reason == "timeout":
+            return (
+                f"選択した文書解析エンジン（{label}）の応答がタイムアウトしました。"
+                f"{retry_suffix}外部エンジンの状態を確認して接続テストを再実行してください。"
+                f"{suffix}"
+            )
+        if reason in {"invalid_response", "adapter_empty_result"}:
+            return (
+                f"選択した文書解析エンジン（{label}）から有効な解析結果を取得できませんでした。"
+                "モデル ID と外部 API の互換性を確認して接続テストを再実行してください。"
+            )
+        if reason == "http_error":
+            status_text = f"HTTP {status_code}" if status_code is not None else "HTTP error"
+            return (
+                f"選択した文書解析エンジン（{label}）が {status_text} を返しました。"
+                f"{retry_suffix}外部エンジンのログと設定を確認してください。{suffix}"
+            )
+        return (
+            f"選択した文書解析エンジン（{label}）に接続できません。"
+            "外部接続の URL と認証情報を確認し、接続テストを再実行してください。"
+            f"{suffix}"
         )
     if reason == "adapter_package_missing":
         return (

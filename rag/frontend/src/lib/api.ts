@@ -135,6 +135,18 @@ export type ParserAdapterBackendName =
   | "mineru"
   | "dots_ocr"
   | "glm_ocr";
+export type ExternalParserBackendName =
+  | "unlimited_ocr"
+  | "mineru"
+  | "dots_ocr"
+  | "glm_ocr";
+export type ExternalParserProtocol = "mineru_file_parse" | "openai_chat_completions";
+export type ExternalParserConnectionStatus =
+  | "available"
+  | "unconfigured"
+  | "unreachable"
+  | "model_missing"
+  | "invalid_response";
 export type ParserAdapterStatus = "active" | "available" | "disabled" | "ignored" | "missing";
 export type ParserAdapterScoreBackend = "local" | ParserAdapterBackendName;
 export type ParserAdapterScoreStatus =
@@ -1660,6 +1672,30 @@ export interface ParserBackendCapabilityData {
   extensions: string[];
 }
 
+export interface ExternalParserConnectionData {
+  backend: ExternalParserBackendName;
+  protocol: ExternalParserProtocol;
+  endpoint: string;
+  model: string | null;
+  api_key_configured: boolean;
+  configured: boolean;
+}
+
+export interface ExternalParserConnectionUpdate {
+  backend: ExternalParserBackendName;
+  endpoint?: string;
+  model?: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+}
+
+export interface ExternalParserConnectionStatusData {
+  backend: ExternalParserBackendName;
+  status: ExternalParserConnectionStatus;
+  version: string | null;
+  warning_code: string | null;
+}
+
 export interface ParserAdapterSettingsData {
   adapter_backend: ParserAdapterBackend;
   effective_order: ParserAdapterBackendName[];
@@ -1669,6 +1705,7 @@ export interface ParserAdapterSettingsData {
   source_routes: ParserAdapterSourceRouteData[];
   backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;
   capabilities: ParserBackendCapabilityData[];
+  connections: ExternalParserConnectionData[];
   config_source: "runtime";
 }
 
@@ -1681,6 +1718,7 @@ export interface ParserAdapterSettingsUpdate {
   mineru_enabled?: boolean;
   dots_ocr_enabled?: boolean;
   glm_ocr_enabled?: boolean;
+  connections?: ExternalParserConnectionUpdate[];
 }
 
 // --- 設定: Chunking アダプター ---
@@ -2860,6 +2898,10 @@ export const api = {
     request<ParserAdapterSettingsData>("/api/settings/parser-adapters"),
   getParserAdapterContract: () =>
     request<ParserAdapterContractData>("/api/settings/parser-adapters/contract"),
+  getExternalParserStatus: (backend: ExternalParserBackendName) =>
+    request<ExternalParserConnectionStatusData>(
+      `/api/settings/parser-adapters/${encodeURIComponent(backend)}/status`
+    ),
   updateParserAdapterSettings: (body: ParserAdapterSettingsUpdate) =>
     request<ParserAdapterSettingsData>("/api/settings/parser-adapters", {
       method: "PATCH",

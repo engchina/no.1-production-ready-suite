@@ -15,6 +15,7 @@ import {
 import { ErrorState } from "@/components/StateViews";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field-error";
 import { FormStatus } from "@/components/ui/form-status";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -25,12 +26,16 @@ import {
 } from "@/components/settings/ServicesManagementClient";
 import {
   ApiError,
+  type ExternalParserBackendName,
+  type ExternalParserConnectionData,
+  type ExternalParserConnectionStatus,
   type ParserAdapterBackend,
   type ParserAdapterBackendName,
   type ParserAdapterContractCaseData,
   type ParserAdapterContractData,
   type ParserAdapterContractStatus,
   type ParserAdapterSettingsData,
+  type ParserAdapterSettingsUpdate,
   type ParserServiceBackendData,
   type ParserServiceBackendName,
   type ServiceProfile,
@@ -44,6 +49,7 @@ import {
 import {
   useParserAdapterContract,
   useParserAdapterSettings,
+  useExternalParserStatus,
   useServiceStatusQueries,
   useUpdateParserAdapterSettings,
 } from "@/lib/queries";
@@ -58,8 +64,26 @@ type ParserAdapterForm = {
   mineru_enabled: boolean;
   dots_ocr_enabled: boolean;
   glm_ocr_enabled: boolean;
+  connections: Record<ExternalParserBackendName, ExternalParserConnectionForm>;
 };
-type ParserAdapterFlagField = Exclude<keyof ParserAdapterForm, "adapter_backend">;
+type ExternalParserConnectionForm = {
+  endpoint: string;
+  model: string;
+  api_key: string;
+  clear_api_key: boolean;
+};
+type ParserAdapterFlagField = Exclude<
+  keyof ParserAdapterForm,
+  "adapter_backend" | "connections"
+>;
+type ConnectionFieldErrors = Record<string, string>;
+
+const EXTERNAL_BACKENDS: ExternalParserBackendName[] = [
+  "unlimited_ocr",
+  "mineru",
+  "dots_ocr",
+  "glm_ocr",
+];
 
 const ADAPTER_FLAG_FIELDS: Record<ParserAdapterBackendName, ParserAdapterFlagField> = {
   docling: "docling_enabled",
@@ -76,17 +100,12 @@ const SERVICE_BACKENDS: ParserServiceBackendName[] = [
   "oci_document_understanding",
 ];
 
-const PARSER_BACKEND_SERVICE_IDS: Record<
-  ParserAdapterBackendName | ParserServiceBackendName,
-  string
+const PARSER_BACKEND_SERVICE_IDS: Partial<
+  Record<ParserAdapterBackendName | ParserServiceBackendName, string>
 > = {
   docling: "parser-docling",
   marker: "parser-marker",
   unstructured: "parser-unstructured",
-  unlimited_ocr: "parser-unlimited-ocr",
-  mineru: "parser-mineru",
-  dots_ocr: "parser-dots-ocr",
-  glm_ocr: "parser-glm-ocr",
   oci_genai_vision: "parser-oci-genai-vision",
   oci_document_understanding: "parser-oci-document-understanding",
 };
@@ -99,12 +118,19 @@ function isServiceBackend(backend: ParserAdapterBackend): backend is ParserServi
   return (SERVICE_BACKENDS as ParserAdapterBackend[]).includes(backend);
 }
 
+function isExternalBackend(
+  backend: ParserAdapterBackend
+): backend is ExternalParserBackendName {
+  return (EXTERNAL_BACKENDS as ParserAdapterBackend[]).includes(backend);
+}
+
 /** Optional parser adapter の runtime 設定と readiness を管理する設定画面。 */
 export function ParserAdapterSettingsClient() {
   const query = useParserAdapterSettings();
   const contractQuery = useParserAdapterContract();
   const save = useUpdateParserAdapterSettings();
   const [form, setForm] = useState<ParserAdapterForm | null>(null);
+  const [connectionErrors, setConnectionErrors] = useState<ConnectionFieldErrors>({});
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -161,13 +187,45 @@ export function ParserAdapterSettingsClient() {
 
   function resetForm() {
     save.reset();
+    setConnectionErrors({});
     setSuccessMessage(null);
     setForm(formFromSettings(settings));
   }
 
+  function updateConnection(
+    backend: ExternalParserBackendName,
+    update: Partial<ExternalParserConnectionForm>
+  ) {
+    save.reset();
+    setSuccessMessage(null);
+    setConnectionErrors((current) => {
+      const next = { ...current };
+      for (const field of Object.keys(update)) delete next[`${backend}.${field}`];
+      return next;
+    });
+    setForm((current) =>
+      current
+        ? {
+            ...current,
+            connections: {
+              ...current.connections,
+              [backend]: { ...current.connections[backend], ...update },
+            },
+          }
+        : current
+    );
+  }
+
   function submit() {
     if (!form) return;
-    save.mutate(form, {
+    const errors = validateConnections(form);
+    setConnectionErrors(errors);
+    const firstError = Object.keys(errors)[0];
+    if (firstError) {
+      requestAnimationFrame(() => focusConnectionError(firstError));
+      return;
+    }
+    save.mutate(parserSettingsUpdate(form), {
       onSuccess: (data) => {
         setForm(formFromSettings(data));
         setSuccessMessage(t("settings.parserAdapters.actions.saved"));
@@ -187,7 +245,9 @@ export function ParserAdapterSettingsClient() {
         saving={save.isPending}
         successMessage={successMessage}
         errorMessage={save.isError ? saveError : null}
+        connectionErrors={connectionErrors}
         onBackendChange={selectBackend}
+        onConnectionChange={updateConnection}
         onReset={resetForm}
         onSubmit={submit}
       />
@@ -216,7 +276,9 @@ function OverviewCard({
   saving,
   successMessage,
   errorMessage,
+  connectionErrors,
   onBackendChange,
+  onConnectionChange,
   onReset,
   onSubmit,
 }: {
@@ -226,7 +288,12 @@ function OverviewCard({
   saving: boolean;
   successMessage: string | null;
   errorMessage: string | null;
+  connectionErrors: ConnectionFieldErrors;
   onBackendChange: (backend: ParserAdapterBackend) => void;
+  onConnectionChange: (
+    backend: ExternalParserBackendName,
+    update: Partial<ExternalParserConnectionForm>
+  ) => void;
   onReset: () => void;
   onSubmit: () => void;
 }) {
@@ -276,6 +343,13 @@ function OverviewCard({
       ),
     [settings.service_backends]
   );
+  const connectionByBackend = useMemo(
+    () =>
+      new Map<ExternalParserBackendName, ExternalParserConnectionData>(
+        (settings.connections ?? []).map((connection) => [connection.backend, connection])
+      ),
+    [settings.connections]
+  );
   return (
     <Card>
       <CardHeader>
@@ -310,6 +384,9 @@ function OverviewCard({
                   const selected = form.adapter_backend === backend;
                   const service = isServiceBackend(backend)
                     ? serviceByName.get(backend)
+                    : undefined;
+                  const externalConnection = isExternalBackend(backend)
+                    ? connectionByBackend.get(backend)
                     : undefined;
                   const serviceId = serviceIdForBackend(backend);
                   const runtime = serviceId ? runtimeByServiceId.get(serviceId) : null;
@@ -358,6 +435,25 @@ function OverviewCard({
                             {t("settings.parserAdapters.serviceBackend.unconfigured")}
                           </span>
                         ) : null}
+                        {externalConnection ? (
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap",
+                              externalConnection.configured
+                                ? "bg-success-bg text-success"
+                                : "bg-warning-bg text-warning"
+                            )}
+                          >
+                            {externalConnection.configured ? (
+                              <CheckCircle2 size={12} aria-hidden />
+                            ) : (
+                              <AlertTriangle size={12} aria-hidden />
+                            )}
+                            {externalConnection.configured
+                              ? t("settings.parserAdapters.connection.configured")
+                              : t("settings.parserAdapters.serviceBackend.unconfigured")}
+                          </span>
+                        ) : null}
                       </span>
                     </button>
                   );
@@ -374,6 +470,29 @@ function OverviewCard({
             {t("settings.parserAdapters.serviceBackend.note")}
           </p>
         </div>
+        <section className="space-y-3 border-t border-border pt-5">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">
+              {t("settings.parserAdapters.connection.title")}
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              {t("settings.parserAdapters.connection.description")}
+            </p>
+          </div>
+          <div className="grid min-w-0 grid-cols-1 gap-3 xl:grid-cols-2">
+            {EXTERNAL_BACKENDS.map((backend) => (
+              <ExternalConnectionCard
+                key={backend}
+                backend={backend}
+                connection={connectionByBackend.get(backend)}
+                value={form.connections[backend]}
+                errors={connectionErrors}
+                saving={saving}
+                onChange={(update) => onConnectionChange(backend, update)}
+              />
+            ))}
+          </div>
+        </section>
         <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <RuntimeFact
             label={t("settings.parserAdapters.backend")}
@@ -399,16 +518,6 @@ function OverviewCard({
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
-              variant="secondary"
-              onClick={onReset}
-              disabled={!dirty || saving}
-              aria-label={t("settings.parserAdapters.actions.reset")}
-            >
-              <RotateCcw size={15} aria-hidden />
-              {t("settings.parserAdapters.actions.reset")}
-            </Button>
-            <Button
-              type="button"
               loading={saving}
               disabled={!dirty}
               onClick={onSubmit}
@@ -419,10 +528,215 @@ function OverviewCard({
                 ? t("settings.parserAdapters.actions.saving")
                 : t("settings.parserAdapters.actions.save")}
             </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onReset}
+              disabled={!dirty || saving}
+              aria-label={t("settings.parserAdapters.actions.reset")}
+            >
+              <RotateCcw size={15} aria-hidden />
+              {t("settings.parserAdapters.actions.reset")}
+            </Button>
           </div>
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function ExternalConnectionCard({
+  backend,
+  connection,
+  value,
+  errors,
+  saving,
+  onChange,
+}: {
+  backend: ExternalParserBackendName;
+  connection: ExternalParserConnectionData | undefined;
+  value: ExternalParserConnectionForm;
+  errors: ConnectionFieldErrors;
+  saving: boolean;
+  onChange: (update: Partial<ExternalParserConnectionForm>) => void;
+}) {
+  const statusQuery = useExternalParserStatus(backend);
+  const modelSupported = backend !== "mineru";
+  const dirty =
+    value.endpoint.trim() !== (connection?.endpoint ?? "") ||
+    (modelSupported && value.model.trim() !== (connection?.model ?? "")) ||
+    Boolean(value.api_key) ||
+    value.clear_api_key;
+  const endpointError = errors[`${backend}.endpoint`];
+  const modelError = errors[`${backend}.model`];
+  const endpointId = `external-parser-${backend}-endpoint`;
+  const modelId = `external-parser-${backend}-model`;
+  const apiKeyId = `external-parser-${backend}-api-key`;
+  const clearApiKeyId = `external-parser-${backend}-clear-api-key`;
+
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-muted/10 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold text-foreground">{backendLabel(backend)}</h4>
+          <p className="mt-0.5 break-all text-xs text-muted">
+            {connectionProtocolLabel(connection?.protocol ?? externalProtocol(backend))}
+          </p>
+        </div>
+        <span
+          className={cn(
+            "inline-flex min-h-6 items-center rounded-md px-2 text-xs font-medium",
+            connection?.configured
+              ? "bg-success-bg text-success"
+              : "bg-warning-bg text-warning"
+          )}
+        >
+          {connection?.configured
+            ? t("settings.parserAdapters.connection.configured")
+            : t("settings.parserAdapters.serviceBackend.unconfigured")}
+        </span>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        <ConnectionTextField
+          id={endpointId}
+          label={t("settings.parserAdapters.connection.endpoint")}
+          type="url"
+          value={value.endpoint}
+          placeholder={externalEndpointPlaceholder(backend)}
+          error={endpointError}
+          disabled={saving}
+          onChange={(endpoint) => onChange({ endpoint })}
+        />
+        <ConnectionTextField
+          id={modelId}
+          label={t("settings.parserAdapters.connection.model")}
+          value={modelSupported ? value.model : t("settings.parserAdapters.connection.nativeModel")}
+          placeholder={modelSupported ? "model-id" : undefined}
+          error={modelError}
+          disabled={saving || !modelSupported}
+          onChange={(model) => onChange({ model })}
+        />
+        <ConnectionTextField
+          id={apiKeyId}
+          label={t("settings.parserAdapters.connection.apiKey")}
+          type="password"
+          value={value.api_key}
+          placeholder={
+            connection?.api_key_configured
+              ? t("settings.parserAdapters.connection.apiKeyRetained")
+              : t("settings.parserAdapters.connection.apiKeyOptional")
+          }
+          disabled={saving || value.clear_api_key}
+          onChange={(api_key) => onChange({ api_key, clear_api_key: false })}
+        />
+        <label
+          htmlFor={clearApiKeyId}
+          className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md text-xs text-foreground"
+        >
+          <input
+            id={clearApiKeyId}
+            type="checkbox"
+            checked={value.clear_api_key}
+            disabled={saving || !connection?.api_key_configured}
+            onChange={(event) =>
+              onChange({ clear_api_key: event.target.checked, api_key: "" })
+            }
+            className="h-4 w-4 rounded border-border accent-primary"
+          />
+          {t("settings.parserAdapters.connection.clearApiKey")}
+        </label>
+      </div>
+
+      <div className="mt-4 space-y-2 border-t border-border pt-3">
+        <Button
+          type="button"
+          variant="secondary"
+          className="min-h-[44px] w-full sm:w-auto"
+          loading={statusQuery.isFetching}
+          disabled={saving || dirty || !connection?.configured}
+          onClick={() => void statusQuery.refetch()}
+        >
+          <Plug size={15} aria-hidden />
+          {statusQuery.isFetching
+            ? t("settings.parserAdapters.connection.testing")
+            : t("settings.parserAdapters.connection.test")}
+        </Button>
+        {dirty ? (
+          <p className="text-xs leading-relaxed text-muted">
+            {t("settings.parserAdapters.connection.saveBeforeTest")}
+          </p>
+        ) : null}
+        {!dirty && statusQuery.data ? (
+          <ConnectionTestStatus status={statusQuery.data.status} />
+        ) : null}
+        {!dirty && statusQuery.isError ? (
+          <FormStatus
+            tone="danger"
+            message={
+              statusQuery.error instanceof ApiError
+                ? statusQuery.error.message
+                : t("settings.parserAdapters.connection.testFailed")
+            }
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ConnectionTextField({
+  id,
+  label,
+  value,
+  type = "text",
+  placeholder,
+  error,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  type?: "text" | "url" | "password";
+  placeholder?: string;
+  error?: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const errorId = `${id}-error`;
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <label htmlFor={id} className="text-xs font-medium text-foreground">
+        {label}
+      </label>
+      <input
+        id={id}
+        type={type}
+        value={value}
+        placeholder={placeholder}
+        disabled={disabled}
+        autoComplete="off"
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+        onChange={(event) => onChange(event.target.value)}
+        className={cn(
+          "min-h-[44px] w-full min-w-0 rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
+          error ? "border-danger" : "border-border"
+        )}
+      />
+      <FieldError id={errorId} message={error} />
+    </div>
+  );
+}
+
+function ConnectionTestStatus({ status }: { status: ExternalParserConnectionStatus }) {
+  const success = status === "available";
+  return (
+    <FormStatus
+      tone={success ? "success" : status === "unconfigured" ? "warning" : "danger"}
+      message={t(`settings.parserAdapters.connection.status.${status}` as I18nKey)}
+    />
   );
 }
 
@@ -845,9 +1159,9 @@ function backendOptionsFromSettings(settings: ParserAdapterSettingsData): Parser
 
 function serviceIdForBackend(backend: ParserAdapterBackend): string | null {
   const normalized = normalizeBackend(backend);
-  if (normalized === "local") return null;
+  if (normalized === "local" || isExternalBackend(normalized)) return null;
   if (isAdapterBackend(normalized) || isServiceBackend(normalized)) {
-    return PARSER_BACKEND_SERVICE_IDS[normalized];
+    return PARSER_BACKEND_SERVICE_IDS[normalized] ?? null;
   }
   return null;
 }
@@ -1067,6 +1381,22 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
     mineru_enabled: enabledByBackend.get("mineru") ?? false,
     dots_ocr_enabled: enabledByBackend.get("dots_ocr") ?? false,
     glm_ocr_enabled: enabledByBackend.get("glm_ocr") ?? false,
+    connections: Object.fromEntries(
+      EXTERNAL_BACKENDS.map((backend) => {
+        const connection = (settings.connections ?? []).find(
+          (candidate) => candidate.backend === backend
+        );
+        return [
+          backend,
+          {
+            endpoint: connection?.endpoint ?? "",
+            model: connection?.model ?? defaultExternalModel(backend),
+            api_key: "",
+            clear_api_key: false,
+          },
+        ];
+      })
+    ) as Record<ExternalParserBackendName, ExternalParserConnectionForm>,
   };
 }
 
@@ -1100,5 +1430,81 @@ function serializeForm(form: ParserAdapterForm) {
     mineru_enabled: form.mineru_enabled,
     dots_ocr_enabled: form.dots_ocr_enabled,
     glm_ocr_enabled: form.glm_ocr_enabled,
+    connections: form.connections,
   });
+}
+
+function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpdate {
+  return {
+    adapter_backend: form.adapter_backend,
+    docling_enabled: form.docling_enabled,
+    marker_enabled: form.marker_enabled,
+    unstructured_enabled: form.unstructured_enabled,
+    unlimited_ocr_enabled: form.unlimited_ocr_enabled,
+    mineru_enabled: form.mineru_enabled,
+    dots_ocr_enabled: form.dots_ocr_enabled,
+    glm_ocr_enabled: form.glm_ocr_enabled,
+    connections: EXTERNAL_BACKENDS.map((backend) => {
+      const connection = form.connections[backend];
+      return {
+        backend,
+        endpoint: connection.endpoint.trim(),
+        ...(backend === "mineru" ? {} : { model: connection.model.trim() }),
+        ...(connection.api_key ? { api_key: connection.api_key } : {}),
+        ...(connection.clear_api_key ? { clear_api_key: true } : {}),
+      };
+    }),
+  };
+}
+
+function validateConnections(form: ParserAdapterForm): ConnectionFieldErrors {
+  const errors: ConnectionFieldErrors = {};
+  for (const backend of EXTERNAL_BACKENDS) {
+    const connection = form.connections[backend];
+    const endpoint = connection.endpoint.trim();
+    if (endpoint) {
+      try {
+        const parsed = new URL(endpoint);
+        if (
+          !["http:", "https:"].includes(parsed.protocol) ||
+          parsed.username ||
+          parsed.password ||
+          parsed.search ||
+          parsed.hash
+        ) {
+          errors[`${backend}.endpoint`] = t("settings.parserAdapters.connection.invalidEndpoint");
+        }
+      } catch {
+        errors[`${backend}.endpoint`] = t("settings.parserAdapters.connection.invalidEndpoint");
+      }
+    }
+    if (endpoint && backend !== "mineru" && !connection.model.trim()) {
+      errors[`${backend}.model`] = t("settings.parserAdapters.connection.modelRequired");
+    }
+  }
+  return errors;
+}
+
+function focusConnectionError(key: string) {
+  const [backend, field] = key.split(".");
+  document.getElementById(`external-parser-${backend}-${field}`)?.focus();
+}
+
+function externalProtocol(backend: ExternalParserBackendName) {
+  return backend === "mineru" ? "mineru_file_parse" : "openai_chat_completions";
+}
+
+function connectionProtocolLabel(protocol: string) {
+  return protocol === "mineru_file_parse" ? "MinerU /file_parse" : "OpenAI /v1/chat/completions";
+}
+
+function externalEndpointPlaceholder(backend: ExternalParserBackendName) {
+  return backend === "mineru" ? "https://parser.example.com" : "https://api.example.com/v1";
+}
+
+function defaultExternalModel(backend: ExternalParserBackendName) {
+  if (backend === "dots_ocr") return "rednote-hilab/dots.mocr";
+  if (backend === "glm_ocr") return "ggml-org/GLM-OCR-GGUF:f16";
+  if (backend === "unlimited_ocr") return "/models/Unlimited-OCR";
+  return "";
 }

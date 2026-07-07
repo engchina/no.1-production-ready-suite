@@ -18,6 +18,7 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({ json: authStatus });
   });
   await mockParserServiceStatuses(page);
+  await mockExternalParserStatuses(page);
 });
 
 for (const viewport of [
@@ -45,12 +46,10 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /Marker.*CPU.*停止/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Unstructured.*CPU.*縮退/ })).toBeVisible();
     await expect(
-      page.getByRole("radio", { name: /Unlimited-OCR.*GPU.*停止/ })
+      page.getByRole("radio", { name: /Unlimited-OCR.*GPU.*設定済み/ })
     ).toBeVisible();
-    await expect(page.getByRole("radio", { name: /MinerU.*GPU.*停止/ })).toBeVisible();
-    await expect(
-      page.getByRole("radio", { name: /Dots\.OCR.*GPU.*停止/ })
-    ).toBeVisible();
+    await expect(page.getByRole("radio", { name: /MinerU.*GPU.*未設定/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Dots\.OCR.*GPU.*未設定/ })).toBeVisible();
     await expect(
       page.getByRole("radio", { name: /OCI Generative AI \(Vision\).*OCI.*稼働中/ })
     ).toBeVisible();
@@ -66,6 +65,10 @@ for (const viewport of [
     expect(engineNames[6]).toContain("GLM-OCR");
     expect(engineNames[7]).toContain("OCI Generative AI (Vision)");
     expect(engineNames[8]).toContain("OCI Document Understanding");
+    await expect(page.getByText("外部 GPU 解析エンジンの接続")).toBeVisible();
+    await expect(page.getByLabel("Endpoint")).toHaveCount(4);
+    await expect(page.getByLabel("Model")).toHaveCount(4);
+    await expect(page.getByLabel("API key", { exact: true })).toHaveCount(4);
     await page.getByText("運用診断", { exact: true }).click();
     await expect(page.getByText("解析方式の稼働状況")).toHaveCount(0);
     await expect(page.getByText("原本種別ごとの実行順")).toHaveCount(0);
@@ -323,6 +326,124 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
     mineru_enabled: true,
     dots_ocr_enabled: false,
     glm_ocr_enabled: false,
+    connections: defaultConnections().map((connection) => ({
+      backend: connection.backend,
+      endpoint: connection.endpoint,
+      ...(connection.backend === "mineru" ? {} : { model: connection.model }),
+    })),
+  });
+  await expectNoHorizontalOverflow(page);
+});
+
+test("外部 GPU 接続は検証・秘密鍵保持・明示削除ができる", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "production-ready-rag.ui",
+      JSON.stringify({ state: { sidebarCollapsed: true }, version: 0 })
+    );
+  });
+  const payloads: Array<Record<string, unknown>> = [];
+  let connections = defaultConnections().map((connection) => ({ ...connection }));
+  await page.route("**/api/settings/parser-adapters", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      payloads.push(payload);
+      const updates = payload.connections as Array<Record<string, unknown>>;
+      connections = connections.map((connection) => {
+        const update = updates.find((item) => item.backend === connection.backend);
+        if (!update) return connection;
+        return {
+          ...connection,
+          endpoint: String(update.endpoint ?? connection.endpoint),
+          model:
+            connection.backend === "mineru"
+              ? null
+              : String(update.model ?? connection.model ?? ""),
+          api_key_configured: update.clear_api_key ? false : connection.api_key_configured,
+          configured: Boolean(update.endpoint),
+        };
+      });
+    }
+    await route.fulfill({
+      json: parserAdapterEnvelope({
+        adapter_backend: "unlimited_ocr",
+        effective_order: ["unlimited_ocr"],
+        config_source: "runtime",
+        connections,
+        adapters: [
+          disabledAdapter("docling"),
+          disabledAdapter("marker"),
+          disabledAdapter("unstructured"),
+          { ...disabledAdapter("unlimited_ocr"), enabled: true, selected: true, status: "active" },
+          disabledAdapter("mineru"),
+          disabledAdapter("dots_ocr"),
+          disabledAdapter("glm_ocr"),
+        ],
+      }),
+    });
+  });
+  let statusChecks = 0;
+  await page.route("**/api/settings/parser-adapters/unlimited_ocr/status", async (route) => {
+    statusChecks += 1;
+    await route.fulfill({
+      json: {
+        data: {
+          backend: "unlimited_ocr",
+          status: statusChecks === 1 ? "available" : "model_missing",
+          version: null,
+          warning_code: statusChecks === 1 ? null : "external_parser_model_missing",
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+
+  await page.goto("/settings/parser-adapters");
+  const endpoint = page.locator("#external-parser-unlimited_ocr-endpoint");
+  const model = page.locator("#external-parser-unlimited_ocr-model");
+  const card = endpoint.locator("xpath=../../..");
+
+  await card.getByRole("button", { name: "接続を確認" }).click();
+  await expect(card.getByText("接続できました。")).toBeVisible();
+
+  await endpoint.fill("ftp://invalid.example.com");
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect(
+    page.getByText(
+      "http または https の Endpoint を入力してください。認証情報、query、fragment は URL に含められません。"
+    )
+  ).toBeVisible();
+  await expect(endpoint).toBeFocused();
+  expect(payloads).toHaveLength(0);
+
+  await endpoint.fill("https://unlimited-new.example.com/v1");
+  await model.fill("served-unlimited");
+  await page.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByText("文書解析設定を保存しました。")).toBeVisible();
+  const firstConnections = payloads[0].connections as Array<Record<string, unknown>>;
+  const firstUnlimited = firstConnections.find((item) => item.backend === "unlimited_ocr");
+  expect(firstUnlimited).toEqual({
+    backend: "unlimited_ocr",
+    endpoint: "https://unlimited-new.example.com/v1",
+    model: "served-unlimited",
+  });
+  await expect(card.getByText("接続できました。")).toHaveCount(0);
+
+  await card.getByRole("button", { name: "接続を確認" }).click();
+  await expect(
+    page.getByText("設定した Model が接続先にありません。Model 名を確認してください。")
+  ).toBeVisible();
+
+  await card.getByLabel("保存済み API key を削除").check();
+  await page.getByRole("button", { name: "保存" }).click();
+  const secondConnections = payloads[1].connections as Array<Record<string, unknown>>;
+  expect(secondConnections.find((item) => item.backend === "unlimited_ocr")).toEqual({
+    backend: "unlimited_ocr",
+    endpoint: "https://unlimited-new.example.com/v1",
+    model: "served-unlimited",
+    clear_api_key: true,
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -376,11 +497,10 @@ async function mockParserAdapters(page: Page) {
             },
             {
               backend: "unlimited_ocr",
-              package_name: "sglang",
-              import_name: "sglang",
-              distribution_name: null,
-              install_package:
-                "parser-unlimited-ocr image (official SGLang wheel + baidu/Unlimited-OCR)",
+              package_name: "external_api",
+              import_name: "external_api",
+              distribution_name: "openai_chat_completions",
+              install_package: "外部 Unlimited-OCR API",
               enabled: false,
               selected: false,
               installed: false,
@@ -390,10 +510,10 @@ async function mockParserAdapters(page: Page) {
             },
             {
               backend: "mineru",
-              package_name: "mineru",
-              import_name: "mineru",
-              distribution_name: null,
-              install_package: "mineru[core]==3.4.0",
+              package_name: "external_api",
+              import_name: "external_api",
+              distribution_name: "mineru_file_parse",
+              install_package: "外部 MinerU API",
               enabled: false,
               selected: false,
               installed: false,
@@ -403,10 +523,10 @@ async function mockParserAdapters(page: Page) {
             },
             {
               backend: "dots_ocr",
-              package_name: "dots_ocr",
-              import_name: "dots_ocr",
-              distribution_name: null,
-              install_package: "git+https://github.com/rednote-hilab/dots.ocr.git",
+              package_name: "external_api",
+              import_name: "external_api",
+              distribution_name: "openai_chat_completions",
+              install_package: "外部 Dots.OCR API",
               enabled: false,
               selected: false,
               installed: false,
@@ -416,10 +536,10 @@ async function mockParserAdapters(page: Page) {
             },
             {
               backend: "glm_ocr",
-              package_name: "transformers",
-              import_name: "transformers",
-              distribution_name: null,
-              install_package: "transformers (zai-org/GLM-OCR via HuggingFace)",
+              package_name: "external_api",
+              import_name: "external_api",
+              distribution_name: "openai_chat_completions",
+              install_package: "外部 GLM-OCR API",
               enabled: false,
               selected: false,
               installed: false,
@@ -438,6 +558,7 @@ function parserAdapterEnvelope(data: object) {
   return {
     data: {
       source_routes: sourceRoutes,
+      connections: defaultConnections(),
       service_backends: [
         {
           backend: "oci_genai_vision",
@@ -534,10 +655,6 @@ async function mockParserServiceStatuses(page: Page) {
     "parser-docling": "running",
     "parser-marker": "stopped",
     "parser-unstructured": "degraded",
-    "parser-unlimited-ocr": "stopped",
-    "parser-mineru": "stopped",
-    "parser-dots-ocr": "stopped",
-    "parser-glm-ocr": "stopped",
     "parser-oci-genai-vision": "running",
     "parser-oci-document-understanding": "unconfigured",
   };
@@ -567,14 +684,66 @@ async function mockParserServiceStatuses(page: Page) {
   });
 }
 
+async function mockExternalParserStatuses(page: Page) {
+  await page.route("**/api/settings/parser-adapters/*/status", async (route) => {
+    const backend = decodeURIComponent(
+      route.request().url().match(/parser-adapters\/([^/]+)\/status/)?.[1] ?? ""
+    );
+    await route.fulfill({
+      json: {
+        data: {
+          backend,
+          status: "available",
+          version: backend === "mineru" ? "3.4.0" : "served-model",
+          warning_code: null,
+        },
+        error_messages: [],
+        warning_messages: [],
+      },
+    });
+  });
+}
+
+function defaultConnections() {
+  return [
+    {
+      backend: "unlimited_ocr",
+      protocol: "openai_chat_completions",
+      endpoint: "https://unlimited.example.com/v1",
+      model: "/models/Unlimited-OCR",
+      api_key_configured: true,
+      configured: true,
+    },
+    {
+      backend: "mineru",
+      protocol: "mineru_file_parse",
+      endpoint: "",
+      model: null,
+      api_key_configured: false,
+      configured: false,
+    },
+    {
+      backend: "dots_ocr",
+      protocol: "openai_chat_completions",
+      endpoint: "",
+      model: "rednote-hilab/dots.mocr",
+      api_key_configured: false,
+      configured: false,
+    },
+    {
+      backend: "glm_ocr",
+      protocol: "openai_chat_completions",
+      endpoint: "",
+      model: "ggml-org/GLM-OCR-GGUF:f16",
+      api_key_configured: false,
+      configured: false,
+    },
+  ] as const;
+}
+
 function serviceProfileForId(serviceId: string) {
   if (serviceId.includes("oci")) return "oci";
-  if (
-    serviceId.includes("mineru") ||
-    serviceId.includes("unlimited-ocr") ||
-    serviceId.includes("dots-ocr") ||
-    serviceId.includes("glm-ocr")
-  ) {
+  if (serviceId.includes("asr")) {
     return "gpu";
   }
   return "cpu";
@@ -592,10 +761,12 @@ function disabledAdapter(
 ) {
   return {
     backend,
-    package_name:
-      backend === "unlimited_ocr" ? "sglang" : backend === "glm_ocr" ? "transformers" : backend,
-    import_name:
-      backend === "unlimited_ocr" ? "sglang" : backend === "glm_ocr" ? "transformers" : backend,
+    package_name: ["unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"].includes(backend)
+      ? "external_api"
+      : backend,
+    import_name: ["unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"].includes(backend)
+      ? "external_api"
+      : backend,
     distribution_name: null,
     install_package:
       backend === "marker"
@@ -603,13 +774,13 @@ function disabledAdapter(
         : backend === "unstructured"
           ? "unstructured[all-docs]==0.18.32"
           : backend === "unlimited_ocr"
-            ? "parser-unlimited-ocr image (official SGLang wheel + baidu/Unlimited-OCR)"
+            ? "外部 Unlimited-OCR API"
             : backend === "mineru"
-              ? "mineru[core]==3.4.0"
+              ? "外部 MinerU API"
               : backend === "dots_ocr"
-                ? "git+https://github.com/rednote-hilab/dots.ocr.git"
+                ? "外部 Dots.OCR API"
                 : backend === "glm_ocr"
-                  ? "transformers (zai-org/GLM-OCR via HuggingFace)"
+                  ? "外部 GLM-OCR API"
                   : "docling==2.103.0",
     enabled: false,
     selected: false,

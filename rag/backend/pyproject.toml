@@ -21,6 +21,7 @@ dependencies = [
     "prometheus-client>=0.24",
     "charset-normalizer>=3.4,<4",
     "pypdf>=6.4,<7",
+    "pymupdf>=1.26,<2",
     "rag-parser-core",
     "rag-pipeline-core",
     "production-ready-backend-core",

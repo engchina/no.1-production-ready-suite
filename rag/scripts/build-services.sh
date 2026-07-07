@@ -6,12 +6,12 @@
 # イメージ名(例 no1-production-ready-rag-parser-docling)を一致させる。
 #
 # 使い方:
-#   scripts/build-services.sh                  # 既定: 全サービスをビルド(CPU + GPU + 前処理)
+#   scripts/build-services.sh                  # 既定: 全サービスをビルド(CPU + ASR + 前処理)
 #   scripts/build-services.sh --cpu            # CPU parser のみ(docling/marker/unstructured)
-#   scripts/build-services.sh --gpu            # GPU parser のみ(unlimited-ocr/mineru/dots-ocr/glm-ocr。GPU は実行時に必要)
+#   scripts/build-services.sh --gpu            # ローカル GPU parser(ASR)のみ
 #   scripts/build-services.sh --preprocess     # 前処理サービスのみ
 #   scripts/build-services.sh --cpu --preprocess  # 選択したグループのみ(組み合わせ可)
-#   scripts/build-services.sh parser-docling   # サービス名を直接指定(GPU 名は自動で --profile gpu)
+#   scripts/build-services.sh parser-docling   # サービス名を直接指定
 #   scripts/build-services.sh --all            # 全サービス(既定と同じ)
 set -euo pipefail
 
@@ -21,7 +21,7 @@ cd "${ROOT_DIR}"
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.dev.yml)
 CPU_PARSERS=(parser-docling parser-marker parser-unstructured)
-GPU_PARSERS=(parser-unlimited-ocr parser-mineru parser-dots-ocr parser-glm-ocr)
+GPU_PARSERS=(parser-asr)
 PREPROCESS=(
   preprocess-office-to-pdf
   preprocess-pdf-to-page-images
@@ -62,7 +62,7 @@ while [ $# -gt 0 ]; do
 done
 
 # サービス名の直接指定が無いときは、選択グループから対象を組み立てる。
-# グループフラグも無ければ既定で全サービス(CPU + GPU + 前処理)をビルドする。
+# グループフラグも無ければ既定で全サービス(CPU + ASR + 前処理)をビルドする。
 if [ "${#targets[@]}" -eq 0 ]; then
   if [ "${any_group}" -eq 0 ]; then
     include_cpu=1
@@ -84,7 +84,7 @@ fi
 profile_args=()
 for t in "${targets[@]}"; do
   case "${t}" in
-    parser-unlimited-ocr|parser-mineru|parser-dots-ocr|parser-glm-ocr) profile_args=(--profile gpu) ;;
+    parser-asr) profile_args=(--profile gpu) ;;
   esac
 done
 

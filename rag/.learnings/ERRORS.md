@@ -1056,6 +1056,8 @@ Process exited with code 124 after 60 seconds
 ### Metadata
 - Reproducible: yes
 - Related Files: backend/tests/test_ingestion_strategy.py
+- Recurrence-Count: 2
+- Last-Seen: 2026-07-07
 
 ---
 
@@ -3765,5 +3767,97 @@ server state hydration では成功表示を消さず、ユーザーが次にフ
 - **Resolved**: 2026-07-03T15:52:00+09:00
 - **Commit/PR**: #53
 - **Notes**: query hydration から成功表示の reset を削除し、CI mode の desktop/mobile 6 件で検証した。
+
+---
+## 2026-07-07 — 大きな複数箇所パッチのコンテキスト不一致
+
+- 外部 parser 登録表のリファクタで、重複行を含む想定コンテキストが実ファイルと一致せず `apply_patch` が失敗した。
+- 対応: 変更を小さなパッチに分割し、直前の実ファイル断片を基準に適用する。
+
+## 2026-07-07 — sandbox 内の uv lock が DNS で失敗
+
+- `UV_CACHE_DIR=/tmp/uv-cache uv lock` は PyPI の名前解決に失敗した。
+- 対応: 同じ限定コマンドをネットワーク許可付きで再実行し、PyMuPDF を lock へ追加した。
+
+## 2026-07-07 — Playwright の部分一致ラベルが checkbox も取得
+
+- `getByLabel("API key")` が入力 4 件だけでなく「保存済み API key を削除」checkbox 4 件にも一致した。
+- 対応: フィールド件数の検証では `{ exact: true }` を指定した。
+
+## 2026-07-07 — root からの uv run が既定 cache へ書けず失敗
+
+- package 単体テストで `UV_CACHE_DIR` を付け忘れ、`/root/.cache/uv` が read-only で失敗した。
+- 対応: リポジトリ内の uv コマンドは常に `UV_CACHE_DIR=/tmp/uv-cache` を明示する。
+- 再発: backend の Ruff でも同じ失敗を確認。以降の検証は writable cache を明示する。
+
+## 2026-07-07 — Black の複数ファイル diff が sandbox の socket 制限で失敗
+
+- `black --diff` を複数ファイルへ実行すると SyncManager の socket 作成が EPERM になった。
+- 対応: 対象を 1 ファイルずつ実行して差分を確認する。
+
+## [ERR-20260707-GDM] git_diff_deleted_node_modules_hang
+
+**Logged**: 2026-07-07T20:12:11+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+削除扱いの `frontend/node_modules` を含む `git diff` が 60 秒以上停止した。
+
+### Error
+```text
+git diff -- frontend/node_modules が出力なしで停止し、手動終了した。
+```
+
+### Context
+- 未コミット差分レビューで追跡済み `frontend/node_modules` の種類を確認しようとした。
+- 複数の独立コマンドを同じ実行へまとめていたため、後続確認も待たされた。
+
+### Suggested Fix
+`git ls-tree` と `stat` を個別に実行し、`node_modules` 自体には `git diff` を使わない。
+
+### Metadata
+- Reproducible: unknown
+- Related Files: frontend/node_modules
+- See Also: ERR-20260703-DIR
+
+### Resolution
+- **Resolved**: 2026-07-07T20:12:11+09:00
+- **Notes**: 停止プロセスを終了し、対象別の読み取り専用コマンドへ切り替えた。
+
+---
+
+## [ERR-20260707-PKGQ] rag_parser_core_quality_baseline
+
+**Logged**: 2026-07-07T22:57:01+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+rag_parser_core 全体の Ruff / mypy は、本変更外の既存違反で完走しなかった。
+
+### Error
+```text
+Ruff: rag_parser_core/oci_enterprise_ai.py:167 E501 (105 > 100)
+mypy: 3 個の既存テストファイルで 23 errors
+```
+
+### Context
+- Picture asset remap 修正後に package 全体を検証した。
+- 変更対象の `registry.py` には Ruff / mypy の新規指摘はなかった。
+- backend 側の Ruff と mypy、および関連する parser テストは成功した。
+
+### Suggested Fix
+既存の package テスト型エラーと E501 を別変更で解消し、package 単体の品質チェックを CI に固定する。
+
+### Metadata
+- Reproducible: yes
+- Related Files: packages/rag_parser_core/rag_parser_core/oci_enterprise_ai.py, packages/rag_parser_core/tests/test_ocr_engine_remap.py, packages/rag_parser_core/tests/test_service_contract.py, packages/rag_parser_core/tests/test_preprocess_contract.py
+
+### Resolution
+- **Resolved**: 2026-07-07T23:04:00+09:00
+- **Notes**: 既存 E501 と 23 件のテスト型エラーを最小修正し、package Ruff / mypy と OCR remap 24 テストを通過した。
 
 ---

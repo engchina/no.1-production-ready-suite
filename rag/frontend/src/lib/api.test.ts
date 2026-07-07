@@ -1322,10 +1322,10 @@ describe("api.services", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
         data: {
-          service_id: "parser-dots-ocr",
+          service_id: "parser-asr",
           category: "parser",
           profile: "gpu",
-          label_key: "settings.services.item.parserDotsOcr",
+          label_key: "settings.services.item.parserAsr",
           execution_policy: "selected_adapter",
           status: "running",
           configured: true,
@@ -1336,11 +1336,35 @@ describe("api.services", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await api.getServiceStatus("parser-dots-ocr");
+    const result = await api.getServiceStatus("parser-asr");
 
     expect(result.status).toBe("running");
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/services/parser-dots-ocr/status",
+      "/api/services/parser-asr/status",
+      expect.anything()
+    );
+  });
+
+  it("getExternalParserStatus は外部解析エンジンの接続状態を取得する", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          backend: "dots_ocr",
+          status: "available",
+          version: "served-dots",
+          warning_code: null,
+        },
+        error_messages: [],
+        warning_messages: [],
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.getExternalParserStatus("dots_ocr");
+
+    expect(result.status).toBe("available");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings/parser-adapters/dots_ocr/status",
       expect.anything()
     );
   });
@@ -1378,18 +1402,18 @@ describe("api.services", () => {
   it("controlService は service_id を URL エンコードして POST する", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
-        data: { service_id: "parser-mineru", action: "start", status: "running" },
+        data: { service_id: "parser-asr", action: "start", status: "running" },
         error_messages: [],
         warning_messages: [],
       })
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await api.controlService("parser-mineru", "start");
+    const result = await api.controlService("parser-asr", "start");
 
     expect(result.status).toBe("running");
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/services/parser-mineru/start",
+      "/api/services/parser-asr/start",
       expect.objectContaining({ method: "POST" })
     );
   });

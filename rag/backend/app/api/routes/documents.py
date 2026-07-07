@@ -54,6 +54,7 @@ from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
+    extraction_recipe_subset,
 )
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
@@ -3369,22 +3370,7 @@ def _document_extraction_recipe_id(detail: DocumentDetail, settings: Settings) -
 
 def _extraction_recipe_subset(settings: Settings) -> dict[str, object]:
     """extraction recipe の人が読める snapshot。正規 ID は variant_keys 側の hash を正とする。"""
-    return {
-        "preprocess_profile": getattr(settings, "rag_preprocess_profile", "passthrough"),
-        "parser_adapter_backend": getattr(settings, "rag_parser_adapter_backend", "local"),
-        "parser_docling_enabled": bool(getattr(settings, "rag_parser_docling_enabled", False)),
-        "parser_marker_enabled": bool(getattr(settings, "rag_parser_marker_enabled", False)),
-        "parser_unstructured_enabled": bool(
-            getattr(settings, "rag_parser_unstructured_enabled", False)
-        ),
-        "parser_unlimited_ocr_enabled": bool(
-            getattr(settings, "rag_parser_unlimited_ocr_enabled", False)
-        ),
-        "parser_mineru_enabled": bool(getattr(settings, "rag_parser_mineru_enabled", False)),
-        "parser_dots_ocr_enabled": bool(getattr(settings, "rag_parser_dots_ocr_enabled", False)),
-        "parser_glm_ocr_enabled": bool(getattr(settings, "rag_parser_glm_ocr_enabled", False)),
-        "parser_asr_enabled": bool(getattr(settings, "rag_parser_asr_enabled", False)),
-    }
+    return extraction_recipe_subset(settings)
 
 
 async def _record_document_extraction_artifact(

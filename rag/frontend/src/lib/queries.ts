@@ -29,6 +29,8 @@ import {
   type DocumentExtractionExportFormat,
   type EvaluationCompareRequestBody,
   type EvaluationRunRequestBody,
+  type ExternalParserBackendName,
+  type ExternalParserConnectionStatusData,
   type FileStatus,
   type FeedbackListParams,
   type FeedbackRequestBody,
@@ -143,6 +145,9 @@ export const queryKeys = {
   uploadStorageSettings: ["settings", "upload-storage"] as const,
   parserAdapterSettings: ["settings", "parser-adapters"] as const,
   parserAdapterContract: ["settings", "parser-adapters", "contract"] as const,
+  externalParserStatuses: ["settings", "parser-adapters", "status"] as const,
+  externalParserStatus: (backend: ExternalParserBackendName) =>
+    ["settings", "parser-adapters", "status", backend] as const,
   preprocessSettings: ["settings", "preprocess"] as const,
   chunkingSettings: ["settings", "chunking"] as const,
   retrievalSettings: ["settings", "retrieval"] as const,
@@ -1337,6 +1342,19 @@ export function useParserAdapterContract() {
   });
 }
 
+/** 保存済みの外部 GPU parser 接続を確認する。 */
+export function useExternalParserStatus(
+  backend: ExternalParserBackendName,
+  enabled = false
+) {
+  return useQuery<ExternalParserConnectionStatusData>({
+    queryKey: queryKeys.externalParserStatus(backend),
+    queryFn: () => api.getExternalParserStatus(backend),
+    enabled,
+    retry: false,
+  });
+}
+
 /** アップロード原本の保存先設定をランタイム保存。 */
 export function useUpdateUploadStorageSettings() {
   const qc = useQueryClient();
@@ -1669,6 +1687,7 @@ export function useUpdateParserAdapterSettings() {
       api.updateParserAdapterSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.parserAdapterSettings, data);
+      void qc.resetQueries({ queryKey: queryKeys.externalParserStatuses });
       qc.invalidateQueries({ queryKey: queryKeys.parserAdapterContract });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },

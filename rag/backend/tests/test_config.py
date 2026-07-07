@@ -197,12 +197,30 @@ def test_http_service_retry_defaults_to_five_attempts_and_is_bounded() -> None:
         Settings(rag_http_service_retry_attempts=11)
 
 
-def test_vllm_sidecar_service_url_defaults() -> None:
-    """外部 parser / sidecar の URL は Settings で管理する。"""
+def test_external_gpu_parser_connection_defaults() -> None:
+    """外部 GPU parser は未接続を既定とし、旧 service URL を読まない。"""
     settings = Settings()
 
-    assert settings.rag_parser_unlimited_ocr_service_url == "http://parser-unlimited-ocr:8000"
-    assert settings.rag_parser_dots_ocr_service_url == "http://parser-dots-ocr:8000"
+    assert settings.rag_parser_unlimited_ocr_api_host == ""
+    assert settings.rag_parser_mineru_api_host == ""
+    assert settings.rag_parser_dots_ocr_api_host == ""
+    assert settings.rag_parser_glm_ocr_api_host == ""
+    assert settings.rag_parser_unlimited_ocr_model == "/models/Unlimited-OCR"
+    assert settings.rag_parser_mineru_language == "japan"
+    assert settings.rag_parser_dots_ocr_model == "rednote-hilab/dots.mocr"
+    assert settings.rag_parser_glm_ocr_model == "ggml-org/GLM-OCR-GGUF:f16"
+
+    assert Settings(rag_parser_mineru_language=" english ").rag_parser_mineru_language == "english"
+    with pytest.raises(ValidationError):
+        Settings(rag_parser_mineru_language="   ")
+
+
+def test_legacy_gpu_service_url_is_not_migrated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RAG_PARSER_MINERU_SERVICE_URL", "http://legacy-mineru:8000/parse")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.rag_parser_mineru_api_host == ""
 
 
 def test_enterprise_ai_timeout_defaults_to_pdf_friendly_value() -> None:

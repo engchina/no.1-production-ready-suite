@@ -24,25 +24,43 @@ import json
 from app.config import Settings
 
 # キー算法の版。算法やフィールド構成を変えるときに上げて、旧キーと衝突させない。
-KEY_VERSION = "v3"
+KEY_VERSION = "v4"
 
 # 1 文書あたりの抽出(preprocess x parser 組合せ)上限。組合せ暴発の安全弁。
 MAX_EXTRACTIONS_PER_DOCUMENT = 8
 
-# parse/抽出結果を決める取込軸。ここが違う場合は保存済み extraction を再利用しない。
-_EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
+# parse/抽出結果を決める共通軸。backend 固有値は選択中のものだけを加える。
+_COMMON_EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
     "rag_preprocess_profile",
     "rag_preprocess_enabled",
     "rag_parser_adapter_backend",
-    "rag_parser_docling_enabled",
-    "rag_parser_marker_enabled",
-    "rag_parser_unstructured_enabled",
-    "rag_parser_unlimited_ocr_enabled",
-    "rag_parser_mineru_enabled",
-    "rag_parser_dots_ocr_enabled",
-    "rag_parser_glm_ocr_enabled",
     "rag_parser_asr_enabled",
 )
+_BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
+    "docling": ("rag_parser_docling_enabled",),
+    "marker": ("rag_parser_marker_enabled",),
+    "unstructured": ("rag_parser_unstructured_enabled",),
+    "unlimited_ocr": (
+        "rag_parser_unlimited_ocr_enabled",
+        "rag_parser_unlimited_ocr_model",
+        "rag_parser_unlimited_ocr_dpi",
+        "rag_parser_unlimited_ocr_pdf_batch_size",
+    ),
+    "mineru": (
+        "rag_parser_mineru_enabled",
+        "rag_parser_mineru_language",
+    ),
+    "dots_ocr": (
+        "rag_parser_dots_ocr_enabled",
+        "rag_parser_dots_ocr_model",
+        "rag_parser_dots_ocr_dpi",
+    ),
+    "glm_ocr": (
+        "rag_parser_glm_ocr_enabled",
+        "rag_parser_glm_ocr_model",
+        "rag_parser_glm_ocr_dpi",
+    ),
+}
 
 # chunk text(と、それに従属する embedding)を決める分割軸。
 # extraction_recipe_id + これらが同じなら chunk 集合は同一とみなして共有する。
@@ -79,6 +97,15 @@ def _fields(settings: Settings, names: tuple[str, ...]) -> dict[str, object]:
     return {name: getattr(settings, name, None) for name in names}
 
 
+def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
+    """ID と同じ非機密 extraction 軸を diagnostics 用に返す。"""
+    backend = str(getattr(settings, "rag_parser_adapter_backend", "")).strip().casefold()
+    return {
+        **_fields(settings, _COMMON_EXTRACTION_RECIPE_FIELDS),
+        **_fields(settings, _BACKEND_EXTRACTION_RECIPE_FIELDS.get(backend, ())),
+    }
+
+
 def compute_extraction_recipe_id(source_sha256: str, settings: Settings) -> str:
     """parse/抽出 recipe の決定論 ID。
 
@@ -88,7 +115,7 @@ def compute_extraction_recipe_id(source_sha256: str, settings: Settings) -> str:
     payload: dict[str, object] = {
         "v": KEY_VERSION,
         "src": source_sha256,
-        **_fields(settings, _EXTRACTION_RECIPE_FIELDS),
+        **extraction_recipe_subset(settings),
     }
     return _digest("er", payload)
 

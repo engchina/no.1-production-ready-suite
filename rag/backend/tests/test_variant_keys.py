@@ -1,5 +1,7 @@
 """variant 層別 keying(variant_keys)の決定論ユニットテスト。"""
 
+import pytest
+
 from app.config import get_settings
 from app.rag.variant_keys import (
     compute_chunk_set_id,
@@ -9,6 +11,7 @@ from app.rag.variant_keys import (
     compute_layer_ids,
     compute_metadata_layer_id,
     compute_nav_layer_id,
+    extraction_recipe_subset,
 )
 
 SRC = "a" * 64
@@ -70,6 +73,90 @@ def test_extraction_recipe_id_changes_with_parser_axis() -> None:
 
     assert compute_extraction_recipe_id(SRC, base) != compute_extraction_recipe_id(SRC, other)
     assert compute_chunk_set_id(SRC, base) != compute_chunk_set_id(SRC, other)
+
+
+@pytest.mark.parametrize(
+    ("backend", "field", "value"),
+    [
+        ("unlimited_ocr", "rag_parser_unlimited_ocr_model", "unlimited-v2"),
+        ("unlimited_ocr", "rag_parser_unlimited_ocr_dpi", 600),
+        ("unlimited_ocr", "rag_parser_unlimited_ocr_pdf_batch_size", 8),
+        ("mineru", "rag_parser_mineru_language", "english"),
+        ("dots_ocr", "rag_parser_dots_ocr_model", "dots-v2"),
+        ("dots_ocr", "rag_parser_dots_ocr_dpi", 400),
+        ("glm_ocr", "rag_parser_glm_ocr_model", "glm-v2"),
+        ("glm_ocr", "rag_parser_glm_ocr_dpi", 500),
+    ],
+)
+def test_extraction_recipe_id_changes_with_output_affecting_parser_setting(
+    backend: str,
+    field: str,
+    value: object,
+) -> None:
+    base = get_settings().model_copy(update={"rag_parser_adapter_backend": backend})
+    changed = base.model_copy(update={field: value})
+    base_id = compute_extraction_recipe_id(SRC, base)
+    changed_id = compute_extraction_recipe_id(SRC, changed)
+
+    assert base_id != changed_id
+    assert compute_document_recipe_extraction_id(
+        base_id, "recipe-1", 1
+    ) != compute_document_recipe_extraction_id(changed_id, "recipe-1", 1)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("rag_parser_unlimited_ocr_model", "unlimited-v2"),
+        ("rag_parser_mineru_language", "english"),
+        ("rag_parser_dots_ocr_dpi", 400),
+        ("rag_parser_glm_ocr_model", "glm-v2"),
+    ],
+)
+def test_extraction_recipe_id_ignores_unselected_parser_setting(
+    field: str,
+    value: object,
+) -> None:
+    base = get_settings().model_copy(update={"rag_parser_adapter_backend": "unstructured"})
+    changed = base.model_copy(update={field: value})
+
+    assert compute_extraction_recipe_id(SRC, base) == compute_extraction_recipe_id(SRC, changed)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("rag_parser_glm_ocr_api_host", "https://new.example.com"),
+        ("rag_parser_glm_ocr_api_key", "new-secret"),
+        ("rag_parser_dots_ocr_pdf_workers", 12),
+    ],
+)
+def test_extraction_recipe_id_ignores_parser_deployment_setting(
+    field: str,
+    value: object,
+) -> None:
+    base = get_settings()
+    changed = base.model_copy(update={field: value})
+
+    assert compute_extraction_recipe_id(SRC, base) == compute_extraction_recipe_id(SRC, changed)
+
+
+def test_extraction_recipe_diagnostics_match_hashed_non_secret_settings() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "rag_parser_adapter_backend": "glm_ocr",
+            "rag_parser_glm_ocr_model": "glm-diagnostic",
+            "rag_parser_glm_ocr_api_key": "never-persist-this",
+        }
+    )
+
+    subset = extraction_recipe_subset(settings)
+
+    assert subset["rag_parser_glm_ocr_model"] == "glm-diagnostic"
+    assert "rag_parser_glm_ocr_api_key" not in subset
+    assert "rag_parser_glm_ocr_api_host" not in subset
+    assert "rag_parser_dots_ocr_pdf_workers" not in subset
+    assert "rag_parser_dots_ocr_model" not in subset
 
 
 def test_extraction_recipe_id_changes_with_preprocess_axis_and_source() -> None:

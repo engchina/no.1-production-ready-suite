@@ -273,6 +273,7 @@ def test_compatibility_matrix_uses_parser_service_runner_for_unlimited_ocr(
         Settings(
             rag_parser_adapter_backend="unlimited_ocr",
             rag_parser_unlimited_ocr_enabled=True,
+            rag_parser_unlimited_ocr_api_host="http://external-unlimited",
         ),
         fixture_root=fixture_root,
         fixture_specs=(
@@ -290,11 +291,11 @@ def test_compatibility_matrix_uses_parser_service_runner_for_unlimited_ocr(
     assert matrix.cases[0].status == "passed"
 
 
-def test_compatibility_matrix_unlimited_ocr_unconfigured_service_falls_back(
+def test_compatibility_matrix_unlimited_ocr_unconfigured_connection_is_missing(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """service 未設定時は GPU OCR を in-process 起動せず service fallback として記録する。"""
+    """外部接続未設定時は GPU OCR を in-process 起動せず missing として記録する。"""
     fixture_root = tmp_path / "fixtures"
     fixture_root.mkdir()
     (fixture_root / "scan.pdf").write_bytes(b"%PDF-1.7 scanned")
@@ -318,7 +319,7 @@ def test_compatibility_matrix_unlimited_ocr_unconfigured_service_falls_back(
         Settings(
             rag_parser_adapter_backend="unlimited_ocr",
             rag_parser_unlimited_ocr_enabled=True,
-            rag_parser_unlimited_ocr_service_url="",
+            rag_parser_unlimited_ocr_api_host="",
         ),
         fixture_root=fixture_root,
         fixture_specs=(
@@ -333,8 +334,8 @@ def test_compatibility_matrix_unlimited_ocr_unconfigured_service_falls_back(
 
     case = matrix.cases[0]
     assert matrix.passed is False
-    assert case.status == "fallback"
-    assert case.warning_codes == ("unlimited_ocr_adapter_service_unconfigured",)
+    assert case.status == "missing"
+    assert case.warning_codes == ("external_parser_unconfigured",)
 
 
 def test_compatibility_matrix_uses_manifest_fixtures_for_real_remap(

@@ -351,7 +351,7 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
     },
     {
       label: t("settings.services.commands.buildGpu.label"),
-      command: `docker compose ${files}--profile gpu build parser-glm-ocr`,
+      command: `docker compose ${files}--profile gpu build parser-asr`,
     },
   ];
   return (

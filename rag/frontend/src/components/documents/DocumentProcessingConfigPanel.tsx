@@ -149,6 +149,12 @@ function optionLabel<T extends string>(
   return value === null ? "—" : (options.find((option) => option.value === value)?.label ?? value);
 }
 
+function parserOptionLabel(value: ParserAdapterBackend | null) {
+  if (value === null) return "—";
+  const option = PARSER_OPTIONS.find((candidate) => candidate.value === value);
+  return option?.label ?? t("documents.processingConfig.parserRemoved", { engine: value });
+}
+
 type Stage = { key: string; label: string; value: string; overridden: boolean };
 
 function stagesFor(
@@ -165,7 +171,7 @@ function stagesFor(
     {
       key: "parser",
       label: t("knowledgeBases.adapter.field.parserBackend"),
-      value: optionLabel(effective.parser_adapter_backend, PARSER_OPTIONS),
+      value: parserOptionLabel(effective.parser_adapter_backend),
       overridden: processing.parser_adapter_backend !== null,
     },
     {
@@ -248,6 +254,10 @@ export function DocumentProcessingConfigPanel({
   const capabilities = adapterSettingsQuery.data?.capabilities;
   const effectiveParserBackend =
     form.parser_adapter_backend ?? configs?.effective.parser_adapter_backend ?? null;
+  const parserRemoved = Boolean(
+    effectiveParserBackend &&
+      !(PARSER_VALUES as readonly string[]).includes(effectiveParserBackend)
+  );
   const effectivePreprocessProfile =
     form.preprocess_profile ?? configs?.effective.preprocess_profile ?? null;
   const parserFormats = formatSupportedFormats(
@@ -372,6 +382,14 @@ export function DocumentProcessingConfigPanel({
 
               {disabled ? (
                 <FormStatus tone="info" message={t("documents.processingConfig.blocked")} />
+              ) : null}
+              {parserRemoved && effectiveParserBackend ? (
+                <FormStatus
+                  tone="danger"
+                  message={t("documents.processingConfig.parserRemovedDetail", {
+                    engine: effectiveParserBackend,
+                  })}
+                />
               ) : null}
 
               <div className="grid gap-3 lg:grid-cols-2">

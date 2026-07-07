@@ -1,20 +1,13 @@
 # parser は独立マイクロサービス化している(services/parsers/<name>)。
 # backend / ingestion-worker は重い parser 依存を持たず、取込時に各 parser サービスへ
 # HTTP 委譲する(未達時は local / Enterprise AI VLM へ安全に fallback)。
-# CPU parser(docling/marker/unstructured)は既定起動、GPU parser(unlimited_ocr/mineru/dots_ocr/glm_ocr)は
-# `--profile gpu` で opt-in する。
-# 注意: 各 GPU parser は GPU を 1 枚ずつ予約する。`--profile gpu` は全 GPU parser を起動するため
-# 複数 GPU ホスト向け。単一 GPU では engine 個別 profile(`--profile mineru` 等)で 1 つだけ起動する。
-# unlimited-ocr / dots-ocr / glm-ocr は推論サーバー(SGLang/vLLM)を同一イメージへ内包する単一サービス。
+# CPU parser(docling/marker/unstructured)は既定起動、ローカル GPU は ASR だけを opt-in する。
+# Unlimited-OCR / MinerU / Dots.OCR / GLM-OCR は外部 API を文書解析設定で指定する。
 
 x-parser-service-urls: &parser-service-urls
   RAG_PARSER_DOCLING_SERVICE_URL: http://parser-docling:8000
   RAG_PARSER_MARKER_SERVICE_URL: http://parser-marker:8000
   RAG_PARSER_UNSTRUCTURED_SERVICE_URL: http://parser-unstructured:8000
-  RAG_PARSER_UNLIMITED_OCR_SERVICE_URL: http://parser-unlimited-ocr:8000
-  RAG_PARSER_MINERU_SERVICE_URL: http://parser-mineru:8000
-  RAG_PARSER_DOTS_OCR_SERVICE_URL: http://parser-dots-ocr:8000
-  RAG_PARSER_GLM_OCR_SERVICE_URL: http://parser-glm-ocr:8000
   # OCI クラウド parser(薄いプロキシ・`--profile oci` で opt-in)。
   RAG_PARSER_OCI_GENAI_VISION_SERVICE_URL: http://parser-oci-genai-vision:8000
   RAG_PARSER_OCI_DOCUMENT_UNDERSTANDING_SERVICE_URL: http://parser-oci-document-understanding:8000
@@ -195,102 +188,7 @@ services:
       dockerfile: services/parsers/unstructured/Dockerfile
     restart: unless-stopped
 
-  # ---- parser マイクロサービス(GPU・`--profile gpu` で opt-in)----
-  parser-unlimited-ocr:
-    profiles: ["gpu", "unlimited-ocr"]
-    build:
-      context: .
-      dockerfile: services/parsers/unlimited_ocr/Dockerfile
-      args: *hf-build-args
-    environment:
-      <<: *hf-env
-      UNLIMITED_OCR_RUNTIME: ${UNLIMITED_OCR_RUNTIME:-sglang}
-      UNLIMITED_OCR_MODEL_ID: ${UNLIMITED_OCR_MODEL_ID:-baidu/Unlimited-OCR}
-      UNLIMITED_OCR_SGLANG_MODEL: ${UNLIMITED_OCR_SGLANG_MODEL:-Unlimited-OCR}
-      UNLIMITED_OCR_SGLANG_ATTENTION_BACKEND: ${UNLIMITED_OCR_SGLANG_ATTENTION_BACKEND:-flashinfer}
-      UNLIMITED_OCR_SGLANG_MEM_FRACTION_STATIC: ${UNLIMITED_OCR_SGLANG_MEM_FRACTION_STATIC:-0.8}
-      UNLIMITED_OCR_SGLANG_TIMEOUT_SECONDS: ${UNLIMITED_OCR_SGLANG_TIMEOUT_SECONDS:-1200}
-      UNLIMITED_OCR_DEVICE: ${UNLIMITED_OCR_DEVICE:-cuda:0}
-      UNLIMITED_OCR_TORCH_DTYPE: ${UNLIMITED_OCR_TORCH_DTYPE:-bfloat16}
-      UNLIMITED_OCR_DPI: ${UNLIMITED_OCR_DPI:-300}
-      UNLIMITED_OCR_PDF_BATCH_SIZE: ${UNLIMITED_OCR_PDF_BATCH_SIZE:-2}
-      UNLIMITED_OCR_PDF_TIMEOUT_SECONDS: ${UNLIMITED_OCR_PDF_TIMEOUT_SECONDS:-1200}
-      HF_HUB_DOWNLOAD_TIMEOUT: ${HF_HUB_DOWNLOAD_TIMEOUT:-120}
-      HF_HUB_ETAG_TIMEOUT: ${HF_HUB_ETAG_TIMEOUT:-30}
-      GUNICORN_TIMEOUT: ${UNLIMITED_OCR_GUNICORN_TIMEOUT:-1260}
-    restart: unless-stopped
-    ipc: host
-    shm_size: "32g"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: ["gpu"]
-
-  parser-mineru:
-    profiles: ["gpu", "mineru"]
-    build:
-      context: .
-      dockerfile: services/parsers/mineru/Dockerfile
-      args: *hf-build-args
-    environment: *hf-env
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: ["gpu"]
-
-  parser-dots-ocr:
-    # Dots.OCR は vLLM(OpenAI 互換)と parser FastAPI を **単一イメージ/単一コンテナ**で
-    # 起動する(従来の parser + vLLM sidecar の 2 サービスを統合)。parser は localhost の
-    # vLLM(イメージ既定の DOTS_OCR_IP/PORT)へ OCR を委譲する。
-    profiles: ["gpu", "dots-ocr"]
-    build:
-      context: .
-      dockerfile: services/parsers/dots_ocr/Dockerfile
-      args: *hf-build-args
-    # vLLM の共有メモリ要件(--shm-size 相当)。
-    ipc: host
-    environment:
-      <<: *hf-env
-      DOTS_OCR_GPU_MEMORY_UTILIZATION: ${DOTS_OCR_GPU_MEMORY_UTILIZATION:-0.9}
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: ["gpu"]
-
-  parser-glm-ocr:
-    # GLM-OCR は vLLM(OpenAI 互換)と parser FastAPI を **単一イメージ/単一コンテナ**で
-    # 起動する(従来の parser + vLLM sidecar の 2 サービスを統合)。GLM_OCR_VLLM_BASE_URL は
-    # イメージ既定の localhost を使う。
-    profiles: ["gpu", "glm-ocr"]
-    build:
-      context: .
-      dockerfile: services/parsers/glm_ocr/Dockerfile
-      args: *hf-build-args
-    # vLLM の共有メモリ要件(--shm-size 相当)。
-    ipc: host
-    environment:
-      <<: *hf-env
-      GLM_OCR_GPU_MEMORY_UTILIZATION: ${GLM_OCR_GPU_MEMORY_UTILIZATION:-0.9}
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: ["gpu"]
-
+  # ---- ローカル GPU parser(ASR のみ・`--profile gpu` で opt-in)----
   parser-asr:
     profiles: ["gpu", "asr"]
     build:

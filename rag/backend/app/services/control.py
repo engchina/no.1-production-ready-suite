@@ -171,15 +171,6 @@ def _compose_profile_args(entry: ServiceCatalogEntry) -> list[str]:
     profiles: list[str] = []
     if entry.profile == "gpu":
         profiles.append("gpu")
-        # OCR 系 GPU は engine 別 profile で個別に enable する(vLLM はイメージ内包)。
-        for prefix, engine_profile in (
-            ("parser-unlimited-ocr", "unlimited-ocr"),
-            ("parser-dots-ocr", "dots-ocr"),
-            ("parser-glm-ocr", "glm-ocr"),
-        ):
-            if entry.service_id.startswith(prefix):
-                profiles.append(engine_profile)
-                break
     return [arg for profile in profiles for arg in ("--profile", profile)]
 
 

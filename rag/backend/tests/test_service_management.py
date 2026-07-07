@@ -54,17 +54,15 @@ def test_catalog_covers_preprocess_and_parser_with_gpu() -> None:
     # preprocess / parser に加え、pipeline ステージのプラグイン(chunking 等)を含む。
     assert {"preprocess", "parser", "chunking"} <= categories
     gpu_ids = {entry.service_id for entry in SERVICE_CATALOG if entry.profile == "gpu"}
-    assert gpu_ids == {
+    assert gpu_ids == {"parser-asr"}
+    # GPU OCR は外部接続へ移行し、ローカル管理対象には残さない。
+    for service_id in (
         "parser-unlimited-ocr",
         "parser-mineru",
         "parser-dots-ocr",
         "parser-glm-ocr",
-        "parser-asr",
-    }
-    # OCR 系 parser は推論サーバー(SGLang/vLLM)をイメージへ内包する単一サービス。
-    assert get_catalog_entry("parser-unlimited-ocr") is not None
-    assert get_catalog_entry("parser-dots-ocr") is not None
-    assert get_catalog_entry("parser-glm-ocr") is not None
+    ):
+        assert get_catalog_entry(service_id) is None
 
 
 def test_catalog_execution_policies_mark_fallback_boundaries() -> None:
@@ -102,23 +100,20 @@ def test_catalog_deployable_marks_future_service_stages() -> None:
 
 
 def test_model_cache_path_set_only_for_model_downloading_parsers() -> None:
-    """モデル DL を行う 7 parser だけ model_cache_path を持ち、root/appuser でパスが分かれる。"""
+    """ローカルでモデル DL を行う parser だけ model_cache_path を持つ。"""
     by_id = {entry.service_id: entry for entry in SERVICE_CATALOG}
-    root_cache = {"parser-unlimited-ocr", "parser-dots-ocr", "parser-glm-ocr"}
-    appuser_cache = {"parser-mineru", "parser-marker", "parser-docling", "parser-asr"}
-    for service_id in root_cache:
-        assert by_id[service_id].model_cache_path == "/root/.cache"
+    appuser_cache = {"parser-marker", "parser-docling", "parser-asr"}
     for service_id in appuser_cache:
         assert by_id[service_id].model_cache_path == "/home/appuser/.cache"
     # それ以外(OCI proxy / pipeline / preprocess / unstructured)はモデル DL なし。
     with_cache = {e.service_id for e in SERVICE_CATALOG if e.model_cache_path is not None}
-    assert with_cache == root_cache | appuser_cache
+    assert with_cache == appuser_cache
 
 
 def test_service_model_cache_volume_name_is_stable_per_service() -> None:
-    glm = get_catalog_entry("parser-glm-ocr")
-    assert glm is not None
-    assert service_model_cache_volume_name(glm) == "parser-glm-ocr-model-cache"
+    asr = get_catalog_entry("parser-asr")
+    assert asr is not None
+    assert service_model_cache_volume_name(asr) == "parser-asr-model-cache"
     # model_cache_path 未設定(モデル DL なし)のサービスは None。
     chunking = get_catalog_entry("pipeline-chunking")
     assert chunking is not None
@@ -194,10 +189,10 @@ def test_list_services_exposes_model_cache_mount(monkeypatch: MonkeyPatch) -> No
 
     monkeypatch.setattr("app.api.routes.services.probe_service_statuses", fake_probe)
     data = client.get("/api/services").json()["data"]
-    glm = next(s for s in data["services"] if s["service_id"] == "parser-glm-ocr")
-    assert glm["model_cache"] == {
-        "container_path": "/root/.cache",
-        "volume_name": "parser-glm-ocr-model-cache",
+    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
+    assert asr["model_cache"] == {
+        "container_path": "/home/appuser/.cache",
+        "volume_name": "parser-asr-model-cache",
         "editable": False,
     }
     # モデル DL なしのサービスは model_cache=None。
@@ -209,8 +204,8 @@ def test_list_services_hides_model_cache_mount_in_production(monkeypatch: Monkey
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "production")
     data = client.get("/api/services/catalog").json()["data"]
-    glm = next(s for s in data["services"] if s["service_id"] == "parser-glm-ocr")
-    assert glm["model_cache"] is None
+    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
+    assert asr["model_cache"] is None
 
 
 def test_dev_compose_uses_portable_named_model_cache_volumes() -> None:
@@ -218,7 +213,7 @@ def test_dev_compose_uses_portable_named_model_cache_volumes() -> None:
     text = compose.read_text(encoding="utf-8")
     cache_entries = [entry for entry in SERVICE_CATALOG if entry.model_cache_path]
 
-    assert len(cache_entries) == 7
+    assert len(cache_entries) == 3
     for entry in cache_entries:
         volume_name = service_model_cache_volume_name(entry)
         assert volume_name is not None
@@ -231,8 +226,7 @@ def test_dev_compose_uses_portable_named_model_cache_volumes() -> None:
 
 def test_model_parser_images_prepare_cache_without_root_escalation() -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    appuser_services = ("docling", "marker", "mineru", "asr")
-    root_services = ("unlimited_ocr", "dots_ocr", "glm_ocr")
+    appuser_services = ("docling", "marker", "asr")
 
     for service in appuser_services:
         text = (repo_root / "services" / "parsers" / service / "Dockerfile").read_text(
@@ -243,18 +237,8 @@ def test_model_parser_images_prepare_cache_without_root_escalation() -> None:
         user_lines = [line for line in text.splitlines() if line.startswith("USER ")]
         assert user_lines[-1] == "USER appuser"
 
-    for service in root_services:
-        text = (repo_root / "services" / "parsers" / service / "Dockerfile").read_text(
-            encoding="utf-8"
-        )
-        assert "mkdir -p /root/.cache" in text
-
-    mineru_dir = repo_root / "services" / "parsers" / "mineru"
-    mineru_dockerfile = (mineru_dir / "Dockerfile").read_text(encoding="utf-8")
-    mineru_project = (mineru_dir / "pyproject.toml").read_text(encoding="utf-8")
-    assert "services/parsers/mineru/uv.lock" in mineru_dockerfile
-    assert "uv sync --locked" in mineru_dockerfile
-    assert '"pdftext==0.6.3"' in mineru_project
+    for service in ("unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"):
+        assert not (repo_root / "services" / "parsers" / service).exists()
 
 
 def test_compose_uses_shared_oci_config_volume() -> None:
@@ -405,9 +389,9 @@ def test_probe_non_deployable_returns_in_process_without_http(monkeypatch: Monke
 def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "prod")  # prod: override 無し
-    mineru = get_catalog_entry("parser-mineru")
-    assert mineru is not None
-    args = _compose_args(settings, mineru, "start")
+    asr = get_catalog_entry("parser-asr")
+    assert asr is not None
+    args = _compose_args(settings, asr, "start")
     assert args == [
         "docker",
         "compose",
@@ -416,70 +400,24 @@ def test_compose_args_gpu_gets_profile_flag(monkeypatch: MonkeyPatch) -> None:
         "up",
         "-d",
         "--no-build",
-        "parser-mineru",
+        "parser-asr",
     ]
     # GPU は profile gate に隠れるため stop / restart でも --profile gpu を付ける。
-    assert _compose_args(settings, mineru, "stop") == [
+    assert _compose_args(settings, asr, "stop") == [
         "docker",
         "compose",
         "--profile",
         "gpu",
         "stop",
-        "parser-mineru",
+        "parser-asr",
     ]
-    assert _compose_args(settings, mineru, "restart") == [
+    assert _compose_args(settings, asr, "restart") == [
         "docker",
         "compose",
         "--profile",
         "gpu",
         "restart",
-        "parser-mineru",
-    ]
-
-    unlimited = get_catalog_entry("parser-unlimited-ocr")
-    assert unlimited is not None
-    assert _compose_args(settings, unlimited, "start") == [
-        "docker",
-        "compose",
-        "--profile",
-        "gpu",
-        "--profile",
-        "unlimited-ocr",
-        "up",
-        "-d",
-        "--no-build",
-        "parser-unlimited-ocr",
-    ]
-
-    # OCR 系 parser は推論サーバー内包の単一サービスなので gpu-vllm profile は付かない。
-    dots = get_catalog_entry("parser-dots-ocr")
-    assert dots is not None
-    assert _compose_args(settings, dots, "start") == [
-        "docker",
-        "compose",
-        "--profile",
-        "gpu",
-        "--profile",
-        "dots-ocr",
-        "up",
-        "-d",
-        "--no-build",
-        "parser-dots-ocr",
-    ]
-
-    glm = get_catalog_entry("parser-glm-ocr")
-    assert glm is not None
-    assert _compose_args(settings, glm, "start") == [
-        "docker",
-        "compose",
-        "--profile",
-        "gpu",
-        "--profile",
-        "glm-ocr",
-        "up",
-        "-d",
-        "--no-build",
-        "parser-glm-ocr",
+        "parser-asr",
     ]
 
 
@@ -526,18 +464,16 @@ def test_compose_args_build_and_remove(monkeypatch: MonkeyPatch) -> None:
         "-s",
         "parser-docling",
     ]
-    # GPU サービスの build/remove も profile gate を越える。
-    glm = get_catalog_entry("parser-glm-ocr")
-    assert glm is not None
-    assert _compose_args(settings, glm, "build") == [
+    # 残る GPU サービスの build も profile gate を越える。
+    asr = get_catalog_entry("parser-asr")
+    assert asr is not None
+    assert _compose_args(settings, asr, "build") == [
         "docker",
         "compose",
         "--profile",
         "gpu",
-        "--profile",
-        "glm-ocr",
         "build",
-        "parser-glm-ocr",
+        "parser-asr",
     ]
 
 
@@ -586,10 +522,10 @@ def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
         "--no-build",
         "parser-docling",
     ]
-    mineru = get_catalog_entry("parser-mineru")
-    assert mineru is not None
+    asr = get_catalog_entry("parser-asr")
+    assert asr is not None
     # GPU は override に加えて --profile gpu。
-    assert _compose_args(settings, mineru, "start") == [
+    assert _compose_args(settings, asr, "start") == [
         "docker",
         "compose",
         "-f",
@@ -601,7 +537,7 @@ def test_compose_args_dev_adds_override_files(monkeypatch: MonkeyPatch) -> None:
         "up",
         "-d",
         "--no-build",
-        "parser-mineru",
+        "parser-asr",
     ]
 
 
@@ -642,9 +578,9 @@ def test_friendly_compose_error_maps_missing_image(monkeypatch: MonkeyPatch) -> 
     assert "docker-compose.dev.yml" in friendly  # dev は override 付きで案内
 
     # GPU は --profile gpu を含める。
-    mineru = get_catalog_entry("parser-mineru")
-    assert mineru is not None
-    assert "--profile gpu" in _friendly_compose_error("no such image: x", settings, mineru)
+    asr = get_catalog_entry("parser-asr")
+    assert asr is not None
+    assert "--profile gpu" in _friendly_compose_error("no such image: x", settings, asr)
 
     # 既知でないエラーはそのまま返す。
     assert _friendly_compose_error("boom", settings, docling) == "boom"
@@ -743,8 +679,8 @@ def test_list_services_returns_catalog_prod(monkeypatch: MonkeyPatch) -> None:
     assert data["deployment_mode"] == "prod"
     assert len(data["services"]) == len(SERVICE_CATALOG)
     assert {s["service_id"] for s in data["services"]} == {e.service_id for e in SERVICE_CATALOG}
-    dots = next(s for s in data["services"] if s["service_id"] == "parser-dots-ocr")
-    assert dots["execution_policy"] == "selected_adapter"
+    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
+    assert asr["execution_policy"] == "selected_adapter"
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
     assert chunking["execution_policy"] == "in_process_when_disabled"
     assert chunking["deployable"] is False
@@ -797,8 +733,8 @@ def test_list_service_catalog_does_not_probe_status(monkeypatch: MonkeyPatch) ->
     assert data["deployment_mode"] == "prod"
     assert len(data["services"]) == len(SERVICE_CATALOG)
     assert "status" not in data["services"][0]
-    dots = next(s for s in data["services"] if s["service_id"] == "parser-dots-ocr")
-    assert dots["execution_policy"] == "selected_adapter"
+    asr = next(s for s in data["services"] if s["service_id"] == "parser-asr")
+    assert asr["execution_policy"] == "selected_adapter"
     chunking = next(s for s in data["services"] if s["service_id"] == "pipeline-chunking")
     assert chunking["execution_policy"] == "in_process_when_disabled"
     retrieval = next(s for s in data["services"] if s["service_id"] == "pipeline-retrieval")
@@ -813,12 +749,12 @@ def test_get_service_status_probes_only_target(monkeypatch: MonkeyPatch) -> None
         return "running"
 
     monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
-    resp = client.get("/api/services/parser-dots-ocr/status")
+    resp = client.get("/api/services/parser-asr/status")
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["service_id"] == "parser-dots-ocr"
+    assert data["service_id"] == "parser-asr"
     assert data["status"] == "running"
-    assert seen == ["parser-dots-ocr"]
+    assert seen == ["parser-asr"]
 
 
 def test_get_service_logs_returns_tail(monkeypatch: MonkeyPatch) -> None:
@@ -916,10 +852,9 @@ def test_control_acts_on_single_service(monkeypatch: MonkeyPatch) -> None:
         return "running"
 
     monkeypatch.setattr("app.api.routes.services.probe_service_status", fake_probe)
-    resp = client.post("/api/services/parser-dots-ocr/start")
+    resp = client.post("/api/services/parser-asr/start")
     assert resp.status_code == 200
-    # 各 OCR parser は推論サーバー内包の単一サービス。連鎖制御は無く本体のみ操作する。
-    assert calls == [("parser-dots-ocr", "start")]
+    assert calls == [("parser-asr", "start")]
 
 
 def test_control_build_and_remove_endpoints(monkeypatch: MonkeyPatch) -> None:
@@ -1009,18 +944,11 @@ def test_resolve_service_base_url_dev_rewrites_docker_default(monkeypatch: Monke
     # docker 既定(host == compose service 名)→ dev_port へ書き換え(画面プローブと一致)。
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
     monkeypatch.setattr(
-        settings, "rag_parser_unlimited_ocr_service_url", "http://parser-unlimited-ocr:8000"
-    )
-    monkeypatch.setattr(
         settings, "rag_preprocess_csv_to_json_service_url", "http://preprocess-csv-to-json:8000"
     )
     assert (
         resolve_service_base_url(settings, "rag_parser_docling_service_url")
         == "http://127.0.0.1:18020"
-    )
-    assert (
-        resolve_service_base_url(settings, "rag_parser_unlimited_ocr_service_url")
-        == "http://127.0.0.1:18029"
     )
     assert (
         resolve_service_base_url(settings, "rag_preprocess_csv_to_json_service_url")
@@ -1062,16 +990,8 @@ def test_parser_client_service_url_dev_resolves_localhost(monkeypatch: MonkeyPat
     settings = get_settings()
     monkeypatch.setattr(settings, "environment", "dev")
     monkeypatch.setattr(settings, "rag_parser_docling_service_url", "http://parser-docling:8000")
-    monkeypatch.setattr(
-        settings,
-        "rag_parser_unlimited_ocr_service_url",
-        "http://parser-unlimited-ocr:8000",
-    )
-    monkeypatch.setattr(settings, "rag_parser_mineru_service_url", "http://parser-mineru:8000")
     client = ParserServiceClient(settings)
     assert client.service_url("docling") == "http://127.0.0.1:18020"
-    assert client.service_url("unlimited_ocr") == "http://127.0.0.1:18029"
-    assert client.service_url("mineru") == "http://127.0.0.1:18023"
 
 
 def test_preprocess_service_url_dev_resolves_localhost(monkeypatch: MonkeyPatch) -> None:

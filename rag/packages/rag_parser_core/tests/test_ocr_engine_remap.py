@@ -7,6 +7,7 @@ GPU は CI 非搭載のため、実 OCR(GPU シーム)が呼ぶ SDK を fake mod
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import sys
@@ -15,6 +16,7 @@ import types
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
+from urllib import request as urllib_request
 
 import pytest
 
@@ -112,7 +114,7 @@ def test_mineru_cli_fallback_reads_generated_markdown(
     source = tmp_path / "source.png"
     source.write_bytes(b"png")
 
-    monkeypatch.setattr(registry.sys, "executable", str(python_path))
+    monkeypatch.setattr(sys, "executable", str(python_path))
 
     assert registry._run_mineru_cli(source) == "# MinerU OCR\n"
 
@@ -179,7 +181,7 @@ def test_mineru_cli_fallback_reads_json_artifacts_when_markdown_is_empty(
     )
     mineru_bin.chmod(0o755)
 
-    monkeypatch.setattr(registry.sys, "executable", str(python_path))
+    monkeypatch.setattr(sys, "executable", str(python_path))
 
     result = _external_adapter_result(
         "mineru",
@@ -227,9 +229,9 @@ def test_dots_ocr_vllm_parser_reads_generated_markdown(
             return [{"md_content_path": str(md_path)}]
 
     fake_parser_module = types.ModuleType("dots_ocr.parser")
-    fake_parser_module.DotsOCRParser = FakeDotsOCRParser
+    fake_parser_module.__dict__["DotsOCRParser"] = FakeDotsOCRParser
     monkeypatch.setitem(sys.modules, "dots_ocr.parser", fake_parser_module)
-    monkeypatch.setattr(registry.importlib, "import_module", lambda name: fake_parser_module)
+    monkeypatch.setattr(importlib, "import_module", lambda name: fake_parser_module)
 
     source = tmp_path / "source.png"
     source.write_bytes(b"png")
@@ -264,9 +266,9 @@ def test_dots_ocr_hf_parser_reads_generated_markdown(
             return [{"md_content_path": str(md_path)}]
 
     fake_parser_module = types.ModuleType("dots_ocr.parser")
-    fake_parser_module.DotsOCRParser = FakeDotsOCRParser
+    fake_parser_module.__dict__["DotsOCRParser"] = FakeDotsOCRParser
     monkeypatch.setitem(sys.modules, "dots_ocr.parser", fake_parser_module)
-    monkeypatch.setattr(registry.importlib, "import_module", lambda name: fake_parser_module)
+    monkeypatch.setattr(importlib, "import_module", lambda name: fake_parser_module)
 
     source = tmp_path / "source.png"
     source.write_bytes(b"png")
@@ -317,7 +319,8 @@ def test_glm_ocr_pipeline_uses_explicit_cuda_device(monkeypatch: pytest.MonkeyPa
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
 
-    _processor, model = registry._load_glm_ocr_pipeline("test/glm-ocr")
+    _processor, loaded_model = registry._load_glm_ocr_pipeline("test/glm-ocr")
+    model = cast(FakeModel, loaded_model)
 
     model_kwargs = captured["model_kwargs"]
     assert isinstance(model_kwargs, dict)
@@ -385,7 +388,8 @@ def test_unlimited_ocr_pipeline_uses_dtype_keyword(
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
 
-    _tokenizer, model = registry._load_unlimited_ocr_pipeline("test/unlimited-ocr")
+    _tokenizer, loaded_model = registry._load_unlimited_ocr_pipeline("test/unlimited-ocr")
+    model = cast(FakeModel, loaded_model)
 
     model_kwargs = captured["model_kwargs"]
     assert isinstance(model_kwargs, dict)
@@ -424,7 +428,7 @@ def test_glm_ocr_without_wrapper_uses_transformers_fallback(
         def open(_path: str) -> FakeImage:
             return FakeImage()
 
-    class FakeInputs(dict):
+    class FakeInputs(dict[str, object]):
         def to(self, _device: object) -> FakeInputs:
             return self
 
@@ -452,7 +456,7 @@ def test_glm_ocr_without_wrapper_uses_transformers_fallback(
         "_load_glm_ocr_pipeline",
         lambda _model_id: (FakeProcessor(), FakeModel()),
     )
-    monkeypatch.setattr(registry.importlib, "import_module", lambda _name: FakeImageModule)
+    monkeypatch.setattr(importlib, "import_module", lambda _name: FakeImageModule)
 
     result = registry._external_adapter_result(
         "glm_ocr",
@@ -510,8 +514,8 @@ def test_unlimited_ocr_sglang_posts_images_and_reads_stream(
         def __enter__(self) -> FakeResponse:
             return self
 
-        def __exit__(self, *_exc: object) -> bool:
-            return False
+        def __exit__(self, *_exc: object) -> None:
+            pass
 
         def __iter__(self) -> object:
             return iter(
@@ -532,7 +536,7 @@ def test_unlimited_ocr_sglang_posts_images_and_reads_stream(
         return FakeResponse()
 
     monkeypatch.setenv("UNLIMITED_OCR_CUSTOM_LOGIT_PROCESSOR", "processor")
-    monkeypatch.setattr(registry.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(urllib_request, "urlopen", fake_urlopen)
 
     result = registry._run_unlimited_ocr_sglang(source)
 
@@ -725,8 +729,8 @@ def test_glm_ocr_vllm_posts_image_and_reads_chat_completion(
         def __enter__(self) -> FakeResponse:
             return self
 
-        def __exit__(self, *_exc: object) -> bool:
-            return False
+        def __exit__(self, *_exc: object) -> None:
+            pass
 
         def read(self) -> bytes:
             return json.dumps(
@@ -734,12 +738,13 @@ def test_glm_ocr_vllm_posts_image_and_reads_chat_completion(
             ).encode("utf-8")
 
     def fake_urlopen(request: object, timeout: float) -> FakeResponse:
-        captured["url"] = request.full_url
+        typed_request = cast(Any, request)
+        captured["url"] = typed_request.full_url
         captured["timeout"] = timeout
-        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        captured["payload"] = json.loads(typed_request.data.decode("utf-8"))
         return FakeResponse()
 
-    monkeypatch.setattr(registry.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(urllib_request, "urlopen", fake_urlopen)
     monkeypatch.setenv("GLM_OCR_VLLM_BASE_URL", "http://glm-vllm:8080/v1")
     monkeypatch.setenv("GLM_OCR_VLLM_MODEL", "glm-ocr-test")
     source = tmp_path / "source.png"

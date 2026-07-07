@@ -13,6 +13,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from app.clients.external_parser import (
+    ENGINE_SPECS,
+    external_parser_connection,
+)
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import ParserAdapterBackend, Settings
 
@@ -23,10 +27,6 @@ _SERVICE_URL_FIELDS: dict[str, str] = {
     "docling": "rag_parser_docling_service_url",
     "marker": "rag_parser_marker_service_url",
     "unstructured": "rag_parser_unstructured_service_url",
-    "unlimited_ocr": "rag_parser_unlimited_ocr_service_url",
-    "mineru": "rag_parser_mineru_service_url",
-    "dots_ocr": "rag_parser_dots_ocr_service_url",
-    "glm_ocr": "rag_parser_glm_ocr_service_url",
 }
 
 ParserAdapterName = Literal[
@@ -66,30 +66,28 @@ ADAPTER_PACKAGES: dict[ParserAdapterName, ParserAdapterPackageSpec] = {
         distribution_names=("unstructured",),
         install_package="unstructured[all-docs]==0.23.1",
     ),
-    # Unlimited-OCR は parser image 内の公式 SGLang runtime を使う。
     "unlimited_ocr": ParserAdapterPackageSpec(
-        import_name="sglang",
-        distribution_names=("sglang",),
-        install_package="parser-unlimited-ocr image (official SGLang wheel + baidu/Unlimited-OCR)",
+        import_name="external_api",
+        distribution_names=("openai_chat_completions",),
+        install_package="外部 Unlimited-OCR API",
     ),
-    # PoweRAG 由来の OCR/解析エンジン。未導入時は missing として安全に fallback する。
+    # 外部 native API の接続設定を実装証跡として扱う。
     "mineru": ParserAdapterPackageSpec(
-        import_name="mineru",
-        distribution_names=("mineru", "magic-pdf"),
-        install_package="mineru[core]==3.4.0",
+        import_name="external_api",
+        distribution_names=("mineru_file_parse",),
+        install_package="外部 MinerU API",
     ),
-    # dots.ocr は PyPI 配布がなく GitHub からの editable install が公式手順。
+    # 外部 OpenAI 互換 API の接続設定を実装証跡として扱う。
     "dots_ocr": ParserAdapterPackageSpec(
-        import_name="dots_ocr",
-        distribution_names=("dots-ocr", "dots_ocr"),
-        install_package="git+https://github.com/rednote-hilab/dots.ocr.git",
+        import_name="external_api",
+        distribution_names=("openai_chat_completions",),
+        install_package="外部 Dots.OCR API",
     ),
-    # GLM-OCR は専用 pip package が無く、GPU サービス image で transformers から HF モデルを
-    # ロードして実 OCR する。import 検出は実行時 transformers の有無で代理する。
+    # 外部 OpenAI 互換 API の接続設定を実装証跡として扱う。
     "glm_ocr": ParserAdapterPackageSpec(
-        import_name="transformers",
-        distribution_names=("transformers",),
-        install_package="transformers (zai-org/GLM-OCR via HuggingFace)",
+        import_name="external_api",
+        distribution_names=("openai_chat_completions",),
+        install_package="外部 GLM-OCR API",
     ),
 }
 ADAPTER_ORDER: tuple[ParserAdapterName, ...] = (
@@ -179,7 +177,15 @@ def _adapter_status(
     enabled = _adapter_flag(settings, backend)
     explicitly_selected = adapter_backend == backend
     selected = explicitly_selected or backend in _effective_adapter_order(settings, adapter_backend)
-    if settings.rag_parser_readiness_probe_enabled:
+    installed: bool
+    version: str | None
+    distribution_name: str | None
+    if backend in ENGINE_SPECS:
+        connection = external_parser_connection(settings, backend)
+        installed = connection.configured
+        version = connection.model
+        distribution_name = connection.protocol
+    elif settings.rag_parser_readiness_probe_enabled:
         # 本番/compose: parser サービスの /health で導入状況・version を解決する。
         installed, version, distribution_name = _probe_service_health(settings, backend)
     else:
@@ -198,7 +204,9 @@ def _adapter_status(
         status = "active"
     elif selected:
         status = "missing"
-        warning_code = "adapter_package_missing"
+        warning_code = (
+            "external_parser_unconfigured" if backend in ENGINE_SPECS else "adapter_package_missing"
+        )
     elif enabled:
         status = "ignored"
         warning_code = "adapter_flag_ignored_by_backend"

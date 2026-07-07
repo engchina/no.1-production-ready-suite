@@ -3380,7 +3380,7 @@ def _pptx_table_bytes(rows: list[list[str]]) -> bytes:
     table_rows = []
     for row in rows:
         cells = "".join(
-            ("<a:tc><a:txBody><a:p><a:r>" f"<a:t>{value}</a:t>" "</a:r></a:p></a:txBody></a:tc>")
+            (f"<a:tc><a:txBody><a:p><a:r><a:t>{value}</a:t></a:r></a:p></a:txBody></a:tc>")
             for value in row
         )
         table_rows.append(f"<a:tr>{cells}</a:tr>")
@@ -3470,10 +3470,10 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         # mineru: PDF・画像・Office(HTML 不可)
         ("mineru", "sheet.xlsx", _XLSX_MIME, True),
         ("mineru", "page.html", "text/html", False),
-        # 画像専用 OCR
+        # 外部 GPU OCR は backend 側で PDF をページ画像化する。
         ("dots_ocr", "scan.png", "image/png", True),
-        ("dots_ocr", "doc.pdf", "application/pdf", False),
-        ("glm_ocr", "doc.pdf", "application/pdf", False),
+        ("dots_ocr", "doc.pdf", "application/pdf", True),
+        ("glm_ocr", "doc.pdf", "application/pdf", True),
         ("unlimited_ocr", "doc.pdf", "application/pdf", True),
         # OCI service backend: PDF・画像
         ("oci_genai_vision", "doc.pdf", "application/pdf", True),

@@ -1,11 +1,15 @@
 """設定 API のテスト。"""
 
+import asyncio
 import json
 import stat
+import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any
 from zipfile import ZipFile
@@ -14,16 +18,26 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import settings as settings_routes
+from app.clients.external_parser import ExternalParserClient
 from app.clients.oracle import (
     GenerationSettingsRevisionConflictError,
     OracleConnectionTimeoutError,
     OracleWalletPasswordRequiredError,
     StoredGenerationSettings,
 )
-from app.config import Settings, get_settings, load_persisted_model_settings
+from app.config import (
+    Settings,
+    get_settings,
+    load_persisted_model_settings,
+    reload_persisted_model_settings_if_changed,
+)
 from app.main import app
 from app.rag import parser_adapter_readiness
-from app.schemas.settings import EnterpriseAiModelSettings
+from app.schemas.settings import (
+    EnterpriseAiModelSettings,
+    ModelSettingsPayload,
+    ParserAdapterSettingsUpdate,
+)
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -88,11 +102,15 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
     assert by_backend["marker"]["warning_code"] == "adapter_flag_ignored_by_backend"
     assert by_backend["unstructured"]["install_package"] == "unstructured[all-docs]==0.23.1"
     assert by_backend["unstructured"]["status"] == "disabled"
-    # unlimited_ocr は pip ではなく image 内包(公式 SGLang wheel + baidu/Unlimited-OCR)で配信する。
+    # unlimited_ocr はローカル package/image ではなく外部 API で配信する。
     unlimited_pkg = by_backend["unlimited_ocr"]["install_package"]
-    assert "image" in unlimited_pkg and "SGLang" in unlimited_pkg
+    assert unlimited_pkg == "外部 Unlimited-OCR API"
+    connections = {item["backend"]: item for item in body["connections"]}
+    assert connections["unlimited_ocr"]["endpoint"] == ""
+    assert connections["unlimited_ocr"]["api_key_configured"] is False
+    assert "api_key" not in connections["unlimited_ocr"]
     assert by_backend["unlimited_ocr"]["status"] == "disabled"
-    assert by_backend["mineru"]["install_package"] == "mineru[core]==3.4.0"
+    assert by_backend["mineru"]["install_package"] == "外部 MinerU API"
     assert by_backend["mineru"]["status"] == "disabled"
     assert by_backend["dots_ocr"]["status"] == "disabled"
     assert by_backend["glm_ocr"]["status"] == "disabled"
@@ -302,11 +320,10 @@ def test_parser_adapter_settings_explicit_backend_requires_feature_flag(
     assert by_backend["docling"]["status"] == "ignored"
 
 
-def test_update_parser_adapter_settings_persists_env_and_mutates_runtime(
+def test_update_parser_adapter_settings_rejects_legacy_auto_without_mutating_runtime(
     monkeypatch: MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    """parser adapter 設定は .env と現在プロセスの ingestion 設定へ反映する。"""
+    """廃止済み auto は拒否し、現在プロセスの ingestion 設定を変えない。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "local")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
@@ -317,19 +334,6 @@ def test_update_parser_adapter_settings_persists_env_and_mutates_runtime(
         "_package_info",
         lambda *_args: (False, None, None),
     )
-    env_file = _settings_env_file(
-        monkeypatch,
-        tmp_path,
-        "\n".join(
-            [
-                "# Parser adapters",
-                "RAG_PARSER_ADAPTER_BACKEND=local",
-                "RAG_PARSER_DOCLING_ENABLED=false",
-                "",
-            ]
-        ),
-    )
-
     resp = client.patch(
         "/api/settings/parser-adapters",
         json={
@@ -345,15 +349,10 @@ def test_update_parser_adapter_settings_persists_env_and_mutates_runtime(
     assert settings.rag_parser_docling_enabled is False
     assert settings.rag_parser_marker_enabled is False
     assert settings.rag_parser_unstructured_enabled is False
-    persisted = env_file.read_text(encoding="utf-8")
-    assert "RAG_PARSER_ADAPTER_BACKEND=local" in persisted
-    assert "RAG_PARSER_DOCLING_ENABLED=false" in persisted
-    assert "RAG_PARSER_UNSTRUCTURED_ENABLED=true" not in persisted
 
 
-def test_update_parser_adapter_settings_persists_gpu_flags_and_preserves_omitted_flags(
+def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_omitted_flags(
     monkeypatch: MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     """GPU parser flags も保存し、省略された既存 flag は維持する。"""
     settings = get_settings()
@@ -370,19 +369,6 @@ def test_update_parser_adapter_settings_persists_gpu_flags_and_preserves_omitted
         "_package_info",
         lambda *_args: (False, None, None),
     )
-    env_file = _settings_env_file(
-        monkeypatch,
-        tmp_path,
-        "\n".join(
-            [
-                "# Parser adapters",
-                "RAG_PARSER_ADAPTER_BACKEND=local",
-                "RAG_PARSER_DOCLING_ENABLED=true",
-                "",
-            ]
-        ),
-    )
-
     resp = client.patch(
         "/api/settings/parser-adapters",
         json={
@@ -410,16 +396,193 @@ def test_update_parser_adapter_settings_persists_gpu_flags_and_preserves_omitted
     assert settings.rag_parser_mineru_enabled is True
     assert settings.rag_parser_dots_ocr_enabled is False
     assert settings.rag_parser_glm_ocr_enabled is True
-    persisted = env_file.read_text(encoding="utf-8")
-    assert "RAG_PARSER_ADAPTER_BACKEND=mineru" in persisted
-    assert "RAG_PARSER_DOCLING_ENABLED=true" in persisted
-    assert "RAG_PARSER_UNLIMITED_OCR_ENABLED=true" in persisted
-    assert "RAG_PARSER_MINERU_ENABLED=true" in persisted
-    assert "RAG_PARSER_DOTS_OCR_ENABLED=false" in persisted
-    assert "RAG_PARSER_GLM_OCR_ENABLED=true" in persisted
+    persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
+    assert persisted["version"] == 2
+    parser = persisted["parser_adapters"]
+    assert parser["adapter_backend"] == "mineru"
+    assert parser["docling_enabled"] is True
+    assert parser["unlimited_ocr_enabled"] is True
+    assert parser["mineru_enabled"] is True
+    assert parser["dots_ocr_enabled"] is False
+    assert parser["glm_ocr_enabled"] is True
 
 
-def test_update_parser_adapter_settings_does_not_mutate_runtime_when_env_write_fails(
+def test_update_external_parser_connection_retains_and_clears_secret(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_parser_mineru_api_host", "https://old.example.com")
+    monkeypatch.setattr(settings, "rag_parser_mineru_api_key", "top-secret")
+    retained = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "mineru",
+            "connections": [
+                {
+                    "backend": "mineru",
+                    "endpoint": "https://mineru.example.com/",
+                    "api_key": "",
+                }
+            ],
+        },
+    )
+
+    assert retained.status_code == 200
+    connection = next(
+        item for item in retained.json()["data"]["connections"] if item["backend"] == "mineru"
+    )
+    assert connection == {
+        "backend": "mineru",
+        "protocol": "mineru_file_parse",
+        "endpoint": "https://mineru.example.com",
+        "model": None,
+        "api_key_configured": True,
+        "configured": True,
+    }
+    assert "top-secret" not in retained.text
+    assert settings.rag_parser_mineru_api_key == "top-secret"
+    persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
+    assert persisted["parser_adapters"]["mineru_api_host"] == "https://mineru.example.com"
+    assert persisted["parser_adapters"]["mineru_api_key"] == "top-secret"
+
+    cleared = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "mineru",
+            "connections": [{"backend": "mineru", "clear_api_key": True}],
+        },
+    )
+
+    assert cleared.status_code == 200
+    assert settings.rag_parser_mineru_api_key == ""
+    assert "top-secret" not in cleared.text
+
+
+def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_it(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    settings_file = Path(settings.model_settings_file)
+    monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "https://existing.example.com")
+    monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "existing-model-secret")
+    worker_settings = Settings(
+        _env_file=None,
+        model_settings_file=str(settings_file),
+        rag_parser_adapter_backend="local",
+        rag_parser_glm_ocr_api_host="",
+        rag_parser_glm_ocr_api_key="",
+    )
+    load_persisted_model_settings(worker_settings)
+
+    response = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "glm_ocr",
+            "glm_ocr_enabled": True,
+            "connections": [
+                {
+                    "backend": "glm_ocr",
+                    "endpoint": "https://glm.example.com/v1",
+                    "model": "glm-production",
+                    "api_key": "parser-secret",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    persisted = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert persisted["enterprise_ai"]["endpoint"] == "https://existing.example.com"
+    assert persisted["enterprise_ai"]["api_key"] == "existing-model-secret"
+    reload_persisted_model_settings_if_changed(worker_settings)
+    assert worker_settings.rag_parser_adapter_backend == "glm_ocr"
+    assert worker_settings.rag_parser_glm_ocr_api_host == "https://glm.example.com/v1"
+    assert worker_settings.rag_parser_glm_ocr_model == "glm-production"
+    assert worker_settings.rag_parser_glm_ocr_api_key == "parser-secret"
+
+    model_response = client.patch("/api/settings/model", json=_payload())
+
+    assert model_response.status_code == 200
+    persisted = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert persisted["enterprise_ai"]["api_key"] == "sk-update-secret"
+    assert persisted["parser_adapters"]["glm_ocr_api_key"] == "parser-secret"
+    assert persisted["parser_adapters"]["glm_ocr_model"] == "glm-production"
+
+
+def test_parallel_model_and_parser_updates_preserve_both_sections(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    settings_file = Path(settings.model_settings_file)
+    settings.oci_enterprise_ai_endpoint = "https://existing.example.com"
+    settings.oci_enterprise_ai_api_key = "existing-model-secret"
+    parser_inside_persist = Event()
+    model_started = Event()
+    allow_parser_write = Event()
+    original_get_settings = get_settings
+    original_persist = settings_routes._persist_model_settings
+
+    def signal_model_start() -> Settings:
+        current = original_get_settings()
+        if parser_inside_persist.is_set():
+            model_started.set()
+        return current
+
+    def pause_first_persist(
+        candidate: Settings,
+        payload: ModelSettingsPayload,
+    ) -> None:
+        if not parser_inside_persist.is_set():
+            parser_inside_persist.set()
+            assert allow_parser_write.wait(timeout=2)
+        original_persist(candidate, payload)
+
+    monkeypatch.setattr(settings_routes, "get_settings", signal_model_start)
+    monkeypatch.setattr(settings_routes, "_persist_model_settings", pause_first_persist)
+    parser_update = ParserAdapterSettingsUpdate.model_validate(
+        {
+            "adapter_backend": "glm_ocr",
+            "glm_ocr_enabled": True,
+            "connections": [
+                {
+                    "backend": "glm_ocr",
+                    "endpoint": "https://glm.example.com/v1",
+                    "model": "glm-production",
+                    "api_key": "parser-secret",
+                }
+            ],
+        }
+    )
+    model_update = ModelSettingsPayload.model_validate(_payload())
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        parser_future = pool.submit(
+            asyncio.run,
+            settings_routes.update_parser_adapter_settings(parser_update),
+        )
+        assert parser_inside_persist.wait(timeout=2)
+        model_future = pool.submit(
+            asyncio.run,
+            settings_routes.update_model_settings(model_update),
+        )
+        assert model_started.wait(timeout=2)
+        time.sleep(0.05)
+        try:
+            assert not model_future.done()
+        finally:
+            allow_parser_write.set()
+        parser_future.result(timeout=2)
+        model_future.result(timeout=2)
+
+    persisted = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert persisted["enterprise_ai"]["api_key"] == "sk-update-secret"
+    assert persisted["parser_adapters"]["glm_ocr_api_key"] == "parser-secret"
+    assert persisted["parser_adapters"]["glm_ocr_model"] == "glm-production"
+    lock_file = settings_file.with_name(f"{settings_file.name}.lock")
+    assert stat.S_IMODE(lock_file.stat().st_mode) == 0o600
+
+
+def test_update_parser_adapter_settings_does_not_mutate_runtime_when_shared_write_fails(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -429,7 +592,7 @@ def test_update_parser_adapter_settings_does_not_mutate_runtime_when_env_write_f
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_marker_enabled", False)
     monkeypatch.setattr(settings, "rag_parser_unstructured_enabled", False)
-    monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path)
+    monkeypatch.setattr(settings, "model_settings_file", str(tmp_path))
 
     resp = client.patch(
         "/api/settings/parser-adapters",
@@ -460,6 +623,48 @@ def test_update_parser_adapter_settings_rejects_unknown_backend() -> None:
     )
 
     assert resp.status_code == 422
+
+
+def test_external_parser_status_endpoint_and_unknown_backend(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    async def run_inline(function: Any, *args: Any) -> Any:
+        return function(*args)
+
+    monkeypatch.setattr(asyncio, "to_thread", run_inline)
+    monkeypatch.setattr(
+        ExternalParserClient,
+        "status",
+        lambda _self, backend: SimpleNamespace(
+            backend=backend,
+            status="available",
+            version="served-model",
+            warning_code=None,
+        ),
+    )
+
+    response = client.get("/api/settings/parser-adapters/glm_ocr/status")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "backend": "glm_ocr",
+        "status": "available",
+        "version": "served-model",
+        "warning_code": None,
+    }
+    assert client.get("/api/settings/parser-adapters/removed_engine/status").status_code == 422
+
+
+def test_update_parser_connection_rejects_unknown_engine() -> None:
+    response = client.patch(
+        "/api/settings/parser-adapters",
+        json={
+            "adapter_backend": "unstructured",
+            "connections": [{"backend": "removed_engine", "endpoint": "https://example.com"}],
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_preprocess_settings_reports_runtime_profile(monkeypatch: MonkeyPatch) -> None:
@@ -1559,7 +1764,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert stat.S_IMODE(settings_file.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert persisted["version"] == 1
+    assert persisted["version"] == 2
     assert persisted["enterprise_ai"]["api_key"] == "sk-update-secret"
     assert persisted["enterprise_ai"]["models"] == [
         {
@@ -1578,6 +1783,7 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert persisted["enterprise_ai"]["llm_max_output_tokens"] == 1600
     assert persisted["enterprise_ai"]["vlm_max_output_tokens"] == 64000
     assert persisted["generative_ai"]["embedding_dim"] == 1536
+    assert persisted["parser_adapters"]["adapter_backend"] == "unstructured"
     assert "sk-update-secret" not in resp.text
 
 
@@ -1626,7 +1832,11 @@ def test_load_persisted_model_settings_applies_saved_model_catalog(
         ),
         encoding="utf-8",
     )
-    settings = Settings(model_settings_file=str(settings_file))
+    settings = Settings(
+        model_settings_file=str(settings_file),
+        rag_parser_adapter_backend="docling",
+        rag_parser_docling_enabled=True,
+    )
     load_persisted_model_settings(settings)
 
     assert settings.oci_enterprise_ai_endpoint == "https://persisted-enterprise.example"
@@ -1646,6 +1856,8 @@ def test_load_persisted_model_settings_applies_saved_model_catalog(
     assert settings.oci_enterprise_ai_max_retries == 1
     assert settings.oci_enterprise_ai_llm_max_output_tokens == 1700
     assert settings.oci_enterprise_ai_vlm_max_output_tokens == 63000
+    assert settings.rag_parser_adapter_backend == "docling"
+    assert settings.rag_parser_docling_enabled is True
 
 
 def test_update_model_settings_does_not_mutate_runtime_when_persist_fails(
@@ -1856,6 +2068,16 @@ def test_model_settings_missing_values_are_reported() -> None:
     assert body["checks"]["enterprise_ai"] == "missing"
     assert body["checks"]["generative_ai"] == "missing"
     assert body["checks"]["embedding_dim"] == "ok"
+
+
+def test_model_settings_rejects_null_endpoint() -> None:
+    payload = _payload()
+    payload["enterprise_ai"]["endpoint"] = None
+
+    resp = client.patch("/api/settings/model", json=payload)
+
+    assert resp.status_code == 422
+    assert resp.json()["error_messages"]
 
 
 def test_update_model_settings_allows_invalid_readiness_fields() -> None:
