@@ -4,6 +4,7 @@ import json
 import re
 from datetime import UTC, datetime
 from typing import Literal, get_args
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -48,6 +49,11 @@ ParserAdapterBackendName = Literal[
     "mineru",
     "dots_ocr",
     "glm_ocr",
+]
+ExternalParserBackendName = Literal["unlimited_ocr", "mineru", "dots_ocr", "glm_ocr"]
+ExternalParserProtocol = Literal["mineru_file_parse", "openai_chat_completions"]
+ExternalParserConnectionStatus = Literal[
+    "available", "unconfigured", "unreachable", "model_missing", "invalid_response"
 ]
 ParserAdapterScoreBackendName = Literal[
     "local",
@@ -396,6 +402,58 @@ class UploadStorageSettingsUpdate(BaseModel):
         return value
 
 
+class ExternalParserConnectionData(BaseModel):
+    """外部 GPU parser の非機密接続設定。"""
+
+    backend: ExternalParserBackendName
+    protocol: ExternalParserProtocol
+    endpoint: str
+    model: str | None = None
+    api_key_configured: bool
+    configured: bool
+
+
+class ExternalParserConnectionUpdate(BaseModel):
+    """外部 GPU parser 接続の部分更新。secret は明示削除だけを許可する。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    backend: ExternalParserBackendName
+    endpoint: str = Field(default="", max_length=2048)
+    model: str | None = Field(default=None, max_length=512)
+    api_key: str | None = Field(default=None, max_length=4096)
+    clear_api_key: bool = False
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().rstrip("/")
+        if not cleaned:
+            return ""
+        parsed = urlsplit(cleaned)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("接続先 URL は http:// または https:// で入力してください。")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("接続先 URL に認証情報、query、fragment は含められません。")
+        return cleaned
+
+    @field_validator("model", "api_key")
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+
+class ExternalParserConnectionStatusData(BaseModel):
+    """外部 GPU parser の疎通結果。"""
+
+    backend: ExternalParserBackendName
+    status: ExternalParserConnectionStatus
+    version: str | None = None
+    warning_code: str | None = None
+
+
 class ParserAdapterStatusData(BaseModel):
     """任意 parser adapter の feature flag / package readiness。"""
 
@@ -571,6 +629,7 @@ class ParserAdapterSettingsData(BaseModel):
     adapter_backend: ParserAdapterBackend
     effective_order: list[ParserAdapterBackendName]
     adapters: list[ParserAdapterStatusData]
+    connections: list[ExternalParserConnectionData] = Field(default_factory=list)
     service_backends: list[ParserServiceBackendData] = Field(default_factory=list)
     scorecard: ParserAdapterScorecardData
     source_routes: list[ParserAdapterSourceRouteData] = Field(default_factory=list)
@@ -590,6 +649,7 @@ class ParserAdapterSettingsUpdate(BaseModel):
     mineru_enabled: bool | None = None
     dots_ocr_enabled: bool | None = None
     glm_ocr_enabled: bool | None = None
+    connections: list[ExternalParserConnectionUpdate] = Field(default_factory=list, max_length=4)
 
     @field_validator("adapter_backend", mode="before")
     @classmethod
@@ -599,6 +659,13 @@ class ParserAdapterSettingsUpdate(BaseModel):
                 "parser adapter の旧既定値は廃止されました。明示的な解析方式を選択してください。"
             )
         return value
+
+    @model_validator(mode="after")
+    def reject_duplicate_connections(self) -> "ParserAdapterSettingsUpdate":
+        backends = [connection.backend for connection in self.connections]
+        if len(backends) != len(set(backends)):
+            raise ValueError("同じ外部解析エンジンの接続設定を重複して保存できません。")
+        return self
 
 
 ChunkingStrategyName = ChunkingStrategy

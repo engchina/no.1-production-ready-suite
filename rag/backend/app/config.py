@@ -239,16 +239,49 @@ class _PersistedGenerativeAiSettings(BaseModel):
         return value.strip()
 
 
-class _PersistedModelSettings(BaseModel):
-    """UI 保存用のモデル設定ファイル schema。"""
+class _PersistedParserAdapterSettings(BaseModel):
+    """UI から保存された文書解析 backend と外部接続設定。"""
 
-    version: Literal[1] = 1
+    adapter_backend: ParserAdapterBackend = "unstructured"
+    docling_enabled: bool = False
+    marker_enabled: bool = False
+    unstructured_enabled: bool = True
+    unlimited_ocr_enabled: bool = False
+    mineru_enabled: bool = False
+    dots_ocr_enabled: bool = False
+    glm_ocr_enabled: bool = False
+    unlimited_ocr_api_host: str = Field(default="", max_length=2048)
+    unlimited_ocr_model: str = Field(default="/models/Unlimited-OCR", max_length=512)
+    unlimited_ocr_api_key: str = Field(default="", max_length=4096)
+    mineru_api_host: str = Field(default="", max_length=2048)
+    mineru_api_key: str = Field(default="", max_length=4096)
+    dots_ocr_api_host: str = Field(default="", max_length=2048)
+    dots_ocr_model: str = Field(default="rednote-hilab/dots.mocr", max_length=512)
+    dots_ocr_api_key: str = Field(default="", max_length=4096)
+    glm_ocr_api_host: str = Field(default="", max_length=2048)
+    glm_ocr_model: str = Field(default="ggml-org/GLM-OCR-GGUF:f16", max_length=512)
+    glm_ocr_api_key: str = Field(default="", max_length=4096)
+
+
+class _PersistedModelSettings(BaseModel):
+    """UI 保存用の共有ランタイム設定ファイル schema。"""
+
+    version: Literal[1, 2] = 1
     enterprise_ai: _PersistedEnterpriseAiSettings = Field(
         default_factory=_PersistedEnterpriseAiSettings
     )
     generative_ai: _PersistedGenerativeAiSettings = Field(
         default_factory=_PersistedGenerativeAiSettings
     )
+    # v1 には存在しない。None なら環境変数由来の parser 設定を維持する。
+    parser_adapters: _PersistedParserAdapterSettings | None = None
+
+    @model_validator(mode="after")
+    def validate_versioned_sections(self) -> "_PersistedModelSettings":
+        """v2 は parser 設定を必須とし、破損した部分保存を拒否する。"""
+        if self.version == 2 and self.parser_adapters is None:
+            raise ValueError("v2 設定には parser_adapters が必要です。")
+        return self
 
 
 class Settings(BaseSettings):
@@ -273,7 +306,7 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = Field(default=False)
     model_settings_file: str = Field(
         default=DEFAULT_MODEL_SETTINGS_FILE,
-        description="UI から保存したモデル設定 JSON。存在する場合は .env より優先する。",
+        description="UI から保存した共有ランタイム設定 JSON。存在する場合は .env より優先する。",
     )
 
     # --- HuggingFace モデルダウンロード ---
@@ -397,7 +430,7 @@ class Settings(BaseSettings):
     upload_storage_backend: UploadStorageBackend = Field(
         default="local",
         description=(
-            "アップロード原本の保存先。local は LOCAL_STORAGE_DIR、" "oci は OCI Object Storage。"
+            "アップロード原本の保存先。local は LOCAL_STORAGE_DIR、oci は OCI Object Storage。"
         ),
     )
 
@@ -1048,31 +1081,19 @@ class Settings(BaseSettings):
     )
     rag_parser_unlimited_ocr_enabled: bool = Field(
         default=False,
-        description=(
-            "Unlimited-OCR adapter(HuggingFace baidu/Unlimited-OCR)を feature flag で有効化する。"
-            "未導入時は安全に fallback する。GPU parser マイクロサービスで実 OCR を行う。"
-        ),
+        description="外部 Unlimited-OCR API adapter を feature flag で有効化する。",
     )
     rag_parser_mineru_enabled: bool = Field(
         default=False,
-        description=(
-            "MinerU adapter(PoweRAG 由来)を feature flag で有効化する。未導入時は安全に "
-            "fallback する。実 OCR は OCI Enterprise AI VLM へ再マップ。"
-        ),
+        description="外部 MinerU native API adapter を feature flag で有効化する。",
     )
     rag_parser_dots_ocr_enabled: bool = Field(
         default=False,
-        description=(
-            "Dots.OCR adapter(PoweRAG 由来)を feature flag で有効化する。未導入時は安全に "
-            "fallback する。GPU parser マイクロサービスで実 OCR を行う。"
-        ),
+        description="外部 Dots.OCR OpenAI 互換 API adapter を feature flag で有効化する。",
     )
     rag_parser_glm_ocr_enabled: bool = Field(
         default=False,
-        description=(
-            "GLM-OCR adapter(HuggingFace zai-org/GLM-OCR)を feature flag で有効化する。"
-            "未導入時は安全に fallback する。GPU parser マイクロサービスで実 OCR を行う。"
-        ),
+        description="外部 GLM-OCR OpenAI 互換 API adapter を feature flag で有効化する。",
     )
     rag_parser_docling_service_url: str = Field(
         default="http://parser-docling:8000",
@@ -1086,22 +1107,44 @@ class Settings(BaseSettings):
         default="http://parser-unstructured:8000",
         description="Unstructured parser マイクロサービスの base URL。",
     )
-    rag_parser_unlimited_ocr_service_url: str = Field(
-        default="http://parser-unlimited-ocr:8000",
-        description="Unlimited-OCR(GPU)parser マイクロサービスの base URL。",
+    # GPU OCR は外部で運用済みの native API を呼ぶ。旧 *_SERVICE_URL(/parse wrapper)
+    # は読まず、誤った protocol への自動移行を避ける。
+    rag_parser_unlimited_ocr_api_host: str = Field(
+        default="", description="Unlimited-OCR OpenAI 互換 API の base URL。"
     )
-    rag_parser_mineru_service_url: str = Field(
-        default="http://parser-mineru:8000",
-        description="MinerU(GPU)parser マイクロサービスの base URL。",
+    rag_parser_unlimited_ocr_model: str = Field(
+        default="/models/Unlimited-OCR", description="Unlimited-OCR の model ID。"
     )
-    rag_parser_dots_ocr_service_url: str = Field(
-        default="http://parser-dots-ocr:8000",
-        description="Dots.OCR(GPU)parser マイクロサービスの base URL(vLLM をイメージへ内包)。",
+    rag_parser_unlimited_ocr_api_key: str = Field(default="", repr=False)
+    rag_parser_unlimited_ocr_dpi: int = Field(default=300, ge=72, le=600)
+    rag_parser_unlimited_ocr_pdf_batch_size: int = Field(default=2, ge=1, le=16)
+    rag_parser_mineru_api_host: str = Field(
+        default="", description="MinerU native /file_parse API の base URL。"
     )
-    rag_parser_glm_ocr_service_url: str = Field(
-        default="http://parser-glm-ocr:8000",
-        description="GLM-OCR(GPU)parser マイクロサービスの base URL(vLLM をイメージへ内包)。",
+    rag_parser_mineru_api_key: str = Field(default="", repr=False)
+    rag_parser_mineru_language: str = Field(
+        default="japan",
+        max_length=64,
+        description="MinerU /file_parse の言語コード。",
     )
+    rag_parser_dots_ocr_api_host: str = Field(
+        default="", description="Dots.OCR OpenAI 互換 API の base URL。"
+    )
+    rag_parser_dots_ocr_model: str = Field(
+        default="rednote-hilab/dots.mocr", description="Dots.OCR の model ID。"
+    )
+    rag_parser_dots_ocr_api_key: str = Field(default="", repr=False)
+    rag_parser_dots_ocr_dpi: int = Field(default=200, ge=72, le=600)
+    rag_parser_dots_ocr_pdf_workers: int = Field(default=4, ge=1, le=16)
+    rag_parser_glm_ocr_api_host: str = Field(
+        default="", description="GLM-OCR OpenAI 互換 API の base URL。"
+    )
+    rag_parser_glm_ocr_model: str = Field(
+        default="ggml-org/GLM-OCR-GGUF:f16",
+        description="GLM-OCR の model ID。",
+    )
+    rag_parser_glm_ocr_api_key: str = Field(default="", repr=False)
+    rag_parser_glm_ocr_dpi: int = Field(default=300, ge=72, le=600)
     rag_parser_asr_enabled: bool = Field(
         default=True,
         description=(
@@ -1355,8 +1398,7 @@ class Settings(BaseSettings):
     oci_document_understanding_compartment_id: str = Field(
         default="",
         description=(
-            "OCI Document Understanding の compartment OCID。空のときは "
-            "oci_compartment_id を使う。"
+            "OCI Document Understanding の compartment OCID。空のときは oci_compartment_id を使う。"
         ),
     )
     oci_document_understanding_namespace: str = Field(
@@ -1580,6 +1622,15 @@ class Settings(BaseSettings):
             return "local"
         return value
 
+    @field_validator("rag_parser_mineru_language")
+    @classmethod
+    def normalize_mineru_language(cls, value: str) -> str:
+        """MinerU の言語コードは空白を除去し、空値を拒否する。"""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("RAG_PARSER_MINERU_LANGUAGE は空にできません。")
+        return normalized
+
     @field_validator("rag_preprocess_profile", mode="before")
     @classmethod
     def normalize_legacy_preprocess_profile(cls, value: object) -> object:
@@ -1755,7 +1806,7 @@ def resolve_model_settings_file(path_value: str) -> Path:
 
 
 def load_persisted_model_settings(settings: Settings) -> None:
-    """UI 保存済みのモデル設定 JSON があれば Settings へ上書き適用する。"""
+    """UI 保存済みの共有ランタイム設定 JSON があれば Settings へ上書き適用する。"""
     path = resolve_model_settings_file(settings.model_settings_file)
     if not path.is_file():
         _remember_model_settings_file(path, None)
@@ -1773,7 +1824,7 @@ def load_persisted_model_settings(settings: Settings) -> None:
 
 
 def reload_persisted_model_settings_if_changed(settings: Settings) -> None:
-    """別 worker が保存したモデル設定を次回リクエストで取り込む。"""
+    """別 worker が保存した共有ランタイム設定を次回リクエストで取り込む。"""
     path = resolve_model_settings_file(settings.model_settings_file)
     mtime_ns = _model_settings_mtime_ns(path)
     if _MODEL_SETTINGS_STATE["path"] == str(path) and _MODEL_SETTINGS_STATE["mtime_ns"] == mtime_ns:
@@ -1816,6 +1867,29 @@ def _apply_persisted_model_settings(
     settings.oci_genai_embedding_model = generative_ai.embedding_model
     settings.oci_genai_embedding_dim = generative_ai.embedding_dim
     settings.oci_genai_rerank_model = generative_ai.rerank_model
+
+    parser = persisted.parser_adapters
+    if parser is None:
+        return
+    settings.rag_parser_adapter_backend = parser.adapter_backend
+    settings.rag_parser_docling_enabled = parser.docling_enabled
+    settings.rag_parser_marker_enabled = parser.marker_enabled
+    settings.rag_parser_unstructured_enabled = parser.unstructured_enabled
+    settings.rag_parser_unlimited_ocr_enabled = parser.unlimited_ocr_enabled
+    settings.rag_parser_mineru_enabled = parser.mineru_enabled
+    settings.rag_parser_dots_ocr_enabled = parser.dots_ocr_enabled
+    settings.rag_parser_glm_ocr_enabled = parser.glm_ocr_enabled
+    settings.rag_parser_unlimited_ocr_api_host = parser.unlimited_ocr_api_host
+    settings.rag_parser_unlimited_ocr_model = parser.unlimited_ocr_model
+    settings.rag_parser_unlimited_ocr_api_key = parser.unlimited_ocr_api_key
+    settings.rag_parser_mineru_api_host = parser.mineru_api_host
+    settings.rag_parser_mineru_api_key = parser.mineru_api_key
+    settings.rag_parser_dots_ocr_api_host = parser.dots_ocr_api_host
+    settings.rag_parser_dots_ocr_model = parser.dots_ocr_model
+    settings.rag_parser_dots_ocr_api_key = parser.dots_ocr_api_key
+    settings.rag_parser_glm_ocr_api_host = parser.glm_ocr_api_host
+    settings.rag_parser_glm_ocr_model = parser.glm_ocr_model
+    settings.rag_parser_glm_ocr_api_key = parser.glm_ocr_api_key
 
 
 def _persisted_vision_model_id(

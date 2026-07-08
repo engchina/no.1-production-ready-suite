@@ -6,7 +6,7 @@
 #
 # サービス管理画面(dev)は内部で次を実行する:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d <service_id>
-# GPU(unlimited_ocr/mineru/dots_ocr/glm_ocr/asr)は base 側の profiles:["gpu"] を継承するため
+# GPU ASR は base 側の profiles:["gpu"] を継承するため
 # --profile gpu が併用される。oci parser は profiles:["oci"]。
 # 推論サーバー(SGLang/vLLM)は各 parser イメージへ内包するため、別建ての sidecar ポート公開は不要。
 #
@@ -66,35 +66,7 @@ services:
     ports:
       - "127.0.0.1:18022:8000"
 
-  # ---- 解析(parser GPU)----
-  parser-unlimited-ocr:
-    build: *dev-no-bake
-    volumes:
-      - parser-unlimited-ocr-model-cache:/root/.cache
-    ports:
-      - "127.0.0.1:18029:8000"
-
-  parser-mineru:
-    build: *dev-no-bake
-    volumes:
-      - parser-mineru-model-cache:/home/appuser/.cache
-    ports:
-      - "127.0.0.1:18023:8000"
-
-  parser-dots-ocr:
-    build: *dev-no-bake
-    volumes:
-      - parser-dots-ocr-model-cache:/root/.cache
-    ports:
-      - "127.0.0.1:18024:8000"
-
-  parser-glm-ocr:
-    build: *dev-no-bake
-    volumes:
-      - parser-glm-ocr-model-cache:/root/.cache
-    ports:
-      - "127.0.0.1:18025:8000"
-
+  # ---- 解析(parser GPU / ASR のみ)----
   parser-asr:
     build: *dev-no-bake
     volumes:
@@ -151,8 +123,4 @@ services:
 volumes:
   parser-docling-model-cache:
   parser-marker-model-cache:
-  parser-unlimited-ocr-model-cache:
-  parser-mineru-model-cache:
-  parser-dots-ocr-model-cache:
-  parser-glm-ocr-model-cache:
   parser-asr-model-cache:

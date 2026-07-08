@@ -81,7 +81,7 @@ def test_readiness_reports_missing_when_package_absent() -> None:
     # 有効化したが未導入 → missing。flag off かつ未導入 → disabled。
     assert status["unlimited_ocr"].status == "disabled"
     assert status["mineru"].status == "missing"
-    assert status["mineru"].install_package.startswith("mineru")
+    assert status["mineru"].install_package == "外部 MinerU API"
     assert status["dots_ocr"].status == "disabled"
 
 

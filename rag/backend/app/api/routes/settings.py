@@ -1,7 +1,9 @@
 """設定 API。"""
 
+import asyncio
 import base64
 import configparser
+import fcntl
 import importlib
 import io
 import json
@@ -9,7 +11,8 @@ import re
 import shutil
 import stat
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -19,6 +22,12 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
+from app.clients.external_parser import (
+    ENGINE_SPECS,
+    ExternalParserBackend,
+    ExternalParserClient,
+    external_parser_connection,
+)
 from app.clients.oci_auth import (
     load_oci_config_without_prompt,
     pem_file_is_encrypted,
@@ -43,6 +52,7 @@ from app.config import (
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
     get_settings,
+    load_persisted_model_settings,
     resolve_model_settings_file,
 )
 from app.rag.agentic_adapter import (
@@ -126,6 +136,8 @@ from app.schemas.settings import (
     EvaluationSettingsData,
     EvaluationSettingsUpdate,
     EvaluationSuiteStatusData,
+    ExternalParserConnectionData,
+    ExternalParserConnectionStatusData,
     ExtractionFieldsSettingsData,
     ExtractionFieldsSettingsUpdate,
     FieldDefinitionData,
@@ -286,9 +298,11 @@ async def update_model_settings(
 ) -> ApiResponse[ModelSettingsData]:
     """モデル設定を永続化し、ランタイム設定へ反映する。"""
     settings = get_settings()
-    resolved_request = _model_settings_with_resolved_secret(settings, request)
-    _persist_model_settings(settings, resolved_request)
-    _apply_model_settings(settings, request)
+    with _model_settings_write_lock(settings):
+        load_persisted_model_settings(settings)
+        resolved_request = _model_settings_with_resolved_secret(settings, request)
+        _persist_model_settings(settings, resolved_request)
+        _apply_model_settings(settings, request)
     payload = _payload_from_settings(settings)
     return ApiResponse(data=_model_settings_data(payload, settings))
 
@@ -499,15 +513,40 @@ async def get_parser_adapter_contract() -> ApiResponse[ParserAdapterContractData
     return ApiResponse(data=_parser_adapter_contract_data(get_settings()))
 
 
+@router.get(
+    "/parser-adapters/{backend}/status",
+    response_model=ApiResponse[ExternalParserConnectionStatusData],
+)
+async def get_external_parser_status(
+    backend: ExternalParserBackend,
+) -> ApiResponse[ExternalParserConnectionStatusData]:
+    """外部 GPU parser の native health/models endpoint を確認する。"""
+    result = await asyncio.to_thread(ExternalParserClient(get_settings()).status, backend)
+    return ApiResponse(
+        data=ExternalParserConnectionStatusData(
+            backend=result.backend,
+            status=result.status,
+            version=result.version,
+            warning_code=result.warning_code,
+        )
+    )
+
+
 @router.patch("/parser-adapters", response_model=ApiResponse[ParserAdapterSettingsData])
 async def update_parser_adapter_settings(
     payload: ParserAdapterSettingsUpdate,
 ) -> ApiResponse[ParserAdapterSettingsData]:
-    """任意 parser adapter の backend/feature flag を .env と runtime へ反映する。"""
+    """任意 parser adapter の backend/feature flag を共有設定と runtime へ反映する。"""
     settings = get_settings()
-    candidate = _parser_adapter_settings_candidate(settings, payload)
-    _persist_parser_adapter_settings(candidate)
-    _apply_parser_adapter_settings(settings, candidate)
+    with _model_settings_write_lock(settings):
+        load_persisted_model_settings(settings)
+        candidate = _parser_adapter_settings_candidate(settings, payload)
+        model_payload = _model_settings_with_resolved_secret(
+            settings,
+            _payload_from_settings(settings),
+        )
+        _persist_model_settings(candidate, model_payload)
+        _apply_parser_adapter_settings(settings, candidate)
     return ApiResponse(data=_parser_adapter_settings_data(settings))
 
 
@@ -954,7 +993,7 @@ def _apply_model_settings(settings: Settings, request: ModelSettingsPayload) -> 
     enterprise_ai = request.enterprise_ai
     generative_ai = request.generative_ai
 
-    settings.oci_enterprise_ai_endpoint = enterprise_ai.endpoint
+    settings.oci_enterprise_ai_endpoint = enterprise_ai.endpoint or ""
     settings.oci_enterprise_ai_project_ocid = enterprise_ai.project_ocid
     settings.oci_enterprise_ai_api_key = _secret_value(
         current=settings.oci_enterprise_ai_api_key,
@@ -1027,10 +1066,31 @@ def _model_settings_with_resolved_secret(
     return request.model_copy(update={"enterprise_ai": resolved_enterprise_ai})
 
 
-def _persist_model_settings(settings: Settings, payload: ModelSettingsPayload) -> None:
-    """モデル設定を JSON ファイルへ atomic に保存する。"""
+@contextmanager
+def _model_settings_write_lock(settings: Settings) -> Iterator[None]:
+    """共有設定の read-modify-write を worker 間で直列化する。"""
     path = resolve_model_settings_file(settings.model_settings_file)
-    document = _model_settings_document(payload)
+    lock_path = path.with_name(f"{path.name}.lock")
+    try:
+        _ensure_model_settings_directory(lock_path.parent)
+        with lock_path.open("a", encoding="utf-8") as lock_file:
+            lock_path.chmod(MODEL_SETTINGS_FILE_MODE)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="設定の共有ロックを取得できませんでした。",
+        ) from exc
+
+
+def _persist_model_settings(settings: Settings, payload: ModelSettingsPayload) -> None:
+    """共有ランタイム設定を JSON ファイルへ atomic に保存する。"""
+    path = resolve_model_settings_file(settings.model_settings_file)
+    document = _model_settings_document(payload, settings)
     try:
         _ensure_model_settings_directory(path.parent)
         tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
@@ -1047,16 +1107,19 @@ def _persist_model_settings(settings: Settings, payload: ModelSettingsPayload) -
     except OSError as exc:
         raise HTTPException(
             status_code=500,
-            detail="モデル設定を永続化ファイルへ保存できませんでした。",
+            detail="設定を共有永続化ファイルへ保存できませんでした。",
         ) from exc
 
 
-def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]:
-    """複数 LLM catalog を保てる永続化 document へ変換する。"""
+def _model_settings_document(
+    payload: ModelSettingsPayload,
+    parser_settings: Settings,
+) -> dict[str, object]:
+    """モデルと parser 接続を保つ共有永続化 document へ変換する。"""
     enterprise_ai = payload.enterprise_ai
     generative_ai = payload.generative_ai
     return {
-        "version": 1,
+        "version": 2,
         "enterprise_ai": {
             "endpoint": enterprise_ai.endpoint,
             "project_ocid": enterprise_ai.project_ocid,
@@ -1086,6 +1149,27 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]
             "embedding_model": generative_ai.embedding_model,
             "embedding_dim": generative_ai.embedding_dim,
             "rerank_model": generative_ai.rerank_model,
+        },
+        "parser_adapters": {
+            "adapter_backend": parser_settings.rag_parser_adapter_backend,
+            "docling_enabled": parser_settings.rag_parser_docling_enabled,
+            "marker_enabled": parser_settings.rag_parser_marker_enabled,
+            "unstructured_enabled": parser_settings.rag_parser_unstructured_enabled,
+            "unlimited_ocr_enabled": parser_settings.rag_parser_unlimited_ocr_enabled,
+            "mineru_enabled": parser_settings.rag_parser_mineru_enabled,
+            "dots_ocr_enabled": parser_settings.rag_parser_dots_ocr_enabled,
+            "glm_ocr_enabled": parser_settings.rag_parser_glm_ocr_enabled,
+            "unlimited_ocr_api_host": parser_settings.rag_parser_unlimited_ocr_api_host,
+            "unlimited_ocr_model": parser_settings.rag_parser_unlimited_ocr_model,
+            "unlimited_ocr_api_key": parser_settings.rag_parser_unlimited_ocr_api_key,
+            "mineru_api_host": parser_settings.rag_parser_mineru_api_host,
+            "mineru_api_key": parser_settings.rag_parser_mineru_api_key,
+            "dots_ocr_api_host": parser_settings.rag_parser_dots_ocr_api_host,
+            "dots_ocr_model": parser_settings.rag_parser_dots_ocr_model,
+            "dots_ocr_api_key": parser_settings.rag_parser_dots_ocr_api_key,
+            "glm_ocr_api_host": parser_settings.rag_parser_glm_ocr_api_host,
+            "glm_ocr_model": parser_settings.rag_parser_glm_ocr_model,
+            "glm_ocr_api_key": parser_settings.rag_parser_glm_ocr_api_key,
         },
     }
 
@@ -1225,8 +1309,7 @@ def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_
         return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
     if target_type == "enterprise_vision":
         return (
-            f"Enterprise AI の Vision モデル「{model_id}」から"
-            "構造化抽出レスポンスを取得しました。"
+            f"Enterprise AI の Vision モデル「{model_id}」から構造化抽出レスポンスを取得しました。"
         )
     if target_type == "embedding":
         return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"
@@ -1275,7 +1358,7 @@ def _model_test_troubleshooting(
         )
     if any(token in lowered for token in ("401", "unauthorized", "authentication")):
         tips.append(
-            "認証エラーです。API key / OCI config の資格情報を" "再発行または再保存してください。"
+            "認証エラーです。API key / OCI config の資格情報を再発行または再保存してください。"
         )
     if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
         tips.append(
@@ -1389,8 +1472,7 @@ def _database_connection_troubleshooting(
     tips: list[str] = []
     if readiness == "missing":
         tips.append(
-            "ユーザー名、Wallet サービス名、Wallet ZIP が"
-            "入力・アップロード済みか確認してください。"
+            "ユーザー名、Wallet サービス名、Wallet ZIP が入力・アップロード済みか確認してください。"
         )
     if readiness == "missing_credentials":
         tips.append("DB パスワードまたは Wallet パスワードが保存済みか確認してください。")
@@ -1418,11 +1500,11 @@ def _database_connection_troubleshooting(
         tips.append("Wallet サービス名が ADB の接続文字列として有効か確認してください。")
     if "ora-12541" in combined or "dpy-6005" in combined or "dpy-6000" in combined:
         tips.append(
-            "データベースが停止していないか、ADB の listener に" "到達できるか確認してください。"
+            "データベースが停止していないか、ADB の listener に到達できるか確認してください。"
         )
     if "wallet" in combined or "dpy-4011" in combined:
         tips.append(
-            "Wallet ZIP の内容、Wallet パスワード、" "ORACLE_CLIENT_LIB_DIR を確認してください。"
+            "Wallet ZIP の内容、Wallet パスワード、ORACLE_CLIENT_LIB_DIR を確認してください。"
         )
     if "dpi-1047" in combined or "dpi-1072" in combined:
         tips.append(
@@ -2023,6 +2105,18 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
             )
             for adapter in runtime.adapters
         ],
+        connections=[
+            ExternalParserConnectionData(
+                backend=backend,
+                protocol=connection.protocol,
+                endpoint=connection.endpoint,
+                model=connection.model,
+                api_key_configured=bool(connection.api_key),
+                configured=connection.configured,
+            )
+            for backend in ENGINE_SPECS
+            for connection in [external_parser_connection(settings, backend)]
+        ],
         scorecard=ParserAdapterScorecardData(
             selected_backend=scorecard.selected_backend,
             recommended_backend=scorecard.recommended_backend,
@@ -2180,39 +2274,49 @@ def _parser_adapter_settings_candidate(
     payload: ParserAdapterSettingsUpdate,
 ) -> Settings:
     """parser adapter 更新 payload から保存候補 settings を作る。"""
-    return base.model_copy(
-        update={
-            "rag_parser_adapter_backend": payload.adapter_backend,
-            "rag_parser_docling_enabled": _optional_bool(
-                payload.docling_enabled,
-                base.rag_parser_docling_enabled,
-            ),
-            "rag_parser_marker_enabled": _optional_bool(
-                payload.marker_enabled,
-                base.rag_parser_marker_enabled,
-            ),
-            "rag_parser_unstructured_enabled": _optional_bool(
-                payload.unstructured_enabled,
-                base.rag_parser_unstructured_enabled,
-            ),
-            "rag_parser_unlimited_ocr_enabled": _optional_bool(
-                payload.unlimited_ocr_enabled,
-                base.rag_parser_unlimited_ocr_enabled,
-            ),
-            "rag_parser_mineru_enabled": _optional_bool(
-                payload.mineru_enabled,
-                base.rag_parser_mineru_enabled,
-            ),
-            "rag_parser_dots_ocr_enabled": _optional_bool(
-                payload.dots_ocr_enabled,
-                base.rag_parser_dots_ocr_enabled,
-            ),
-            "rag_parser_glm_ocr_enabled": _optional_bool(
-                payload.glm_ocr_enabled,
-                base.rag_parser_glm_ocr_enabled,
-            ),
-        }
-    )
+    updates: dict[str, object] = {
+        "rag_parser_adapter_backend": payload.adapter_backend,
+        "rag_parser_docling_enabled": _optional_bool(
+            payload.docling_enabled,
+            base.rag_parser_docling_enabled,
+        ),
+        "rag_parser_marker_enabled": _optional_bool(
+            payload.marker_enabled,
+            base.rag_parser_marker_enabled,
+        ),
+        "rag_parser_unstructured_enabled": _optional_bool(
+            payload.unstructured_enabled,
+            base.rag_parser_unstructured_enabled,
+        ),
+        "rag_parser_unlimited_ocr_enabled": _optional_bool(
+            payload.unlimited_ocr_enabled,
+            base.rag_parser_unlimited_ocr_enabled,
+        ),
+        "rag_parser_mineru_enabled": _optional_bool(
+            payload.mineru_enabled,
+            base.rag_parser_mineru_enabled,
+        ),
+        "rag_parser_dots_ocr_enabled": _optional_bool(
+            payload.dots_ocr_enabled,
+            base.rag_parser_dots_ocr_enabled,
+        ),
+        "rag_parser_glm_ocr_enabled": _optional_bool(
+            payload.glm_ocr_enabled,
+            base.rag_parser_glm_ocr_enabled,
+        ),
+    }
+    for connection in payload.connections:
+        spec = ENGINE_SPECS[connection.backend]
+        if "endpoint" in connection.model_fields_set:
+            updates[spec.endpoint_field] = connection.endpoint or ""
+        if spec.model_field and "model" in connection.model_fields_set:
+            updates[spec.model_field] = connection.model or ""
+        updates[spec.api_key_field] = _secret_value(
+            current=str(getattr(base, spec.api_key_field, "") or ""),
+            update=connection.api_key,
+            clear=connection.clear_api_key,
+        )
+    return base.model_copy(update=updates)
 
 
 def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
@@ -2225,6 +2329,11 @@ def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
     target.rag_parser_mineru_enabled = source.rag_parser_mineru_enabled
     target.rag_parser_dots_ocr_enabled = source.rag_parser_dots_ocr_enabled
     target.rag_parser_glm_ocr_enabled = source.rag_parser_glm_ocr_enabled
+    for spec in ENGINE_SPECS.values():
+        setattr(target, spec.endpoint_field, getattr(source, spec.endpoint_field))
+        if spec.model_field:
+            setattr(target, spec.model_field, getattr(source, spec.model_field))
+        setattr(target, spec.api_key_field, getattr(source, spec.api_key_field))
 
 
 def _optional_bool(value: bool | None, fallback: bool) -> bool:
@@ -2813,29 +2922,6 @@ def _persist_chunking_settings(settings: Settings) -> None:
     )
 
 
-def _persist_parser_adapter_settings(settings: Settings) -> None:
-    """任意 parser adapter 設定を backend/.env へ永続化する。"""
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "RAG_PARSER_ADAPTER_BACKEND": settings.rag_parser_adapter_backend,
-            "RAG_PARSER_DOCLING_ENABLED": _format_env_bool(settings.rag_parser_docling_enabled),
-            "RAG_PARSER_MARKER_ENABLED": _format_env_bool(settings.rag_parser_marker_enabled),
-            "RAG_PARSER_UNSTRUCTURED_ENABLED": _format_env_bool(
-                settings.rag_parser_unstructured_enabled
-            ),
-            "RAG_PARSER_UNLIMITED_OCR_ENABLED": _format_env_bool(
-                settings.rag_parser_unlimited_ocr_enabled
-            ),
-            "RAG_PARSER_MINERU_ENABLED": _format_env_bool(settings.rag_parser_mineru_enabled),
-            "RAG_PARSER_DOTS_OCR_ENABLED": _format_env_bool(settings.rag_parser_dots_ocr_enabled),
-            "RAG_PARSER_GLM_OCR_ENABLED": _format_env_bool(settings.rag_parser_glm_ocr_enabled),
-        },
-        section_comment="# Parser adapters",
-        error_detail="Parser adapter 設定を backend/.env へ保存できませんでした。",
-    )
-
-
 def _format_env_bool(value: bool) -> str:
     return "true" if value else "false"
 
@@ -3385,9 +3471,9 @@ def _enterprise_ai_status(
 ) -> ModelSettingsCheckStatus:
     """Enterprise AI の必須設定が揃っているか確認する。"""
     required = (settings.endpoint, settings.project_ocid, settings.api_path)
-    if not all(_is_present(value) for value in required):
+    if not all(_is_present(value or "") for value in required):
         return "missing"
-    if not settings.endpoint.startswith(("http://", "https://")):
+    if not settings.endpoint or not settings.endpoint.startswith(("http://", "https://")):
         return "invalid"
     if not settings.project_ocid.startswith("ocid1.generativeaiproject."):
         return "invalid"

@@ -2496,7 +2496,29 @@ def _ocr_engine_adapter_result(
     """
     with _temporary_source_file(source_bytes, source_profile, content_type) as path:
         rendered = runner(path)
-    structured_elements = _adapter_child_elements(rendered)
+    return remap_external_ocr_output(
+        backend,
+        rendered,
+        source_profile=source_profile,
+    )
+
+
+def remap_external_ocr_output(
+    backend: str,
+    rendered: object,
+    *,
+    source_profile: SourceProfile | None,
+    parser_version: str | None = None,
+    pages: Sequence[ExtractionPage] | None = None,
+    extra_artifacts: Mapping[str, ExtractionMetadataValue] | None = None,
+) -> ParserRegistryResult:
+    """外部 OCR API の出力を共通 ``StructuredExtraction`` へ再マップする。"""
+    if isinstance(rendered, Sequence) and not isinstance(rendered, str | bytes | bytearray):
+        structured_elements = tuple(
+            element for item in rendered for element in _adapter_child_elements(item)
+        )
+    else:
+        structured_elements = _adapter_child_elements(rendered)
     if structured_elements:
         text = ""
         export_kind = "structured_elements"
@@ -2513,7 +2535,7 @@ def _ocr_engine_adapter_result(
         )
     if not structured_elements and (not isinstance(text, str) or not text.strip()):
         return _adapter_fallback_result(backend, f"{backend}_adapter_empty")
-    version = _adapter_version(backend)
+    version = parser_version or _adapter_version(backend)
     template = template_for_source_profile(source_profile)
     source_parser = f"{backend}_adapter"
     artifacts: dict[str, ExtractionMetadataValue] = {
@@ -2521,6 +2543,7 @@ def _ocr_engine_adapter_result(
         "external_adapter": backend,
         "ocr_engine": True,
     }
+    artifacts.update(extra_artifacts or {})
     if structured_elements:
         extraction = _structured_from_adapter_elements(
             structured_elements,
@@ -2529,7 +2552,7 @@ def _ocr_engine_adapter_result(
             template=template,
             parser_backend=backend,
             parser_version=version,
-            pages=_adapter_pages_from_source(rendered),
+            pages=pages if pages is not None else _adapter_pages_from_source(rendered),
             extra_artifacts=artifacts,
         )
     else:
@@ -4208,20 +4231,34 @@ def _structured_from_adapter_elements(
             text = _table_markdown_from_cells(adapter_cells)
         if adapter_rows:
             text = "\n".join(_xlsx_markdown_row(row) for row in adapter_rows)
-        if not text:
-            continue
         element_id = _adapter_element_id(item, order)
-        parent_id = _adapter_element_parent_id(item)
-        if parent_id is None and kind == "figure_caption":
-            parent_id = last_figure_element_id
-        if parent_id is None and kind == "table_caption":
-            parent_id = last_table_element_id
         page_number = _adapter_element_page_number(item)
         if page_number is None:
             page_number = inferred_page_number
         elif inferred_page_number is not None:
             inferred_page_number = page_number
         bbox = _adapter_element_bbox(item)
+        if not text:
+            adapter_asset = _asset_from_adapter_element(
+                item,
+                kind=kind,
+                text="",
+                order=order,
+                element_id=element_id,
+                page_number=page_number,
+                bbox=bbox,
+                source_parser=source_parser,
+                parser_backend=parser_backend,
+                parser_version=parser_version,
+            )
+            if adapter_asset is not None:
+                mapped_assets.append(adapter_asset)
+            continue
+        parent_id = _adapter_element_parent_id(item)
+        if parent_id is None and kind == "figure_caption":
+            parent_id = last_figure_element_id
+        if parent_id is None and kind == "table_caption":
+            parent_id = last_table_element_id
         confidence = _adapter_element_confidence(item)
         metadata = _adapter_element_metadata(item)
         for key, value in _adapter_link_metadata(item, fallback_text=text).items():
@@ -5164,10 +5201,10 @@ def _adapter_leaf_element(
     value: object,
     inherited_metadata: Mapping[str, object],
 ) -> object | None:
-    """container と element を兼ねる adapter node から searchable leaf を取り出す。"""
+    """container と element を兼ねる adapter node から本文または figure asset を取り出す。"""
     if not _adapter_looks_like_element(value):
         return None
-    if not _adapter_element_text(value):
+    if not _adapter_element_text(value) and _adapter_element_kind(value) != "figure":
         return None
     if inherited_metadata:
         return _AdapterElementView(value, inherited_metadata)
@@ -5618,6 +5655,7 @@ def _adapter_element_text(item: object) -> str:
         text = _adapter_text_value(item)
         if text:
             return _clean_text(text)
+        return ""
     text = str(item)
     return "" if text.startswith("<") and text.endswith(">") else _clean_text(text)
 
@@ -5863,7 +5901,7 @@ def _asset_from_adapter_element(
         page_number=page_number,
         # bbox は ExtractionAsset の before-validator(normalize_bbox)が正規化する。
         bbox=cast("list[float] | None", bbox),
-        alt_text=text,
+        alt_text=text or None,
         metadata=metadata,
     )
 

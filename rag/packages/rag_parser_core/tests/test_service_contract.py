@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -65,7 +67,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         distribution_names=("pydantic",),
     )
     test_client = TestClient(app)
-    test_client.captured = captured  # type: ignore[attr-defined]
+    test_client.captured = captured
     return test_client
 
 
@@ -134,9 +136,9 @@ def test_parse_roundtrips_structured_extraction(client: TestClient) -> None:
     assert parsed.extraction is not None
     assert parsed.extraction.elements[0].text == "見出し"
     # source_profile が JSON 経由で adapter まで届くこと
-    assert client.captured["content_type"] == "application/pdf"  # type: ignore[attr-defined]
-    assert client.captured["bytes"] == b"abc"  # type: ignore[attr-defined]
-    forwarded = client.captured["profile"]  # type: ignore[attr-defined]
+    assert client.captured["content_type"] == "application/pdf"
+    assert client.captured["bytes"] == b"abc"
+    forwarded = client.captured["profile"]
     assert isinstance(forwarded, SourceProfile)
     assert forwarded.modality == SourceModality.PDF
 
@@ -164,7 +166,7 @@ def test_parse_runs_external_adapter_in_worker(
             template="structure_aware",
         )
 
-    monkeypatch.setattr(service_module.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
     monkeypatch.setattr(service_module, "run_external_adapter", fake_run)
     app = create_parse_app(
         backend="unlimited_ocr",

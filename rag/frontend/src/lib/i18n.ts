@@ -158,10 +158,10 @@ export const ja = {
   "settings.parserAdapters.backend.docling.description": "Docling を優先",
   "settings.parserAdapters.backend.marker.description": "Marker を優先",
   "settings.parserAdapters.backend.unstructured.description": "Unstructured を優先",
-  "settings.parserAdapters.backend.unlimited_ocr.description": "Unlimited-OCR を優先(GPU)",
-  "settings.parserAdapters.backend.mineru.description": "MinerU を優先(GPU)",
-  "settings.parserAdapters.backend.dots_ocr.description": "Dots.OCR を優先(GPU)",
-  "settings.parserAdapters.backend.glm_ocr.description": "GLM-OCR を優先(GPU)",
+  "settings.parserAdapters.backend.unlimited_ocr.description": "外部 Unlimited-OCR API を使用",
+  "settings.parserAdapters.backend.mineru.description": "外部 MinerU API を使用",
+  "settings.parserAdapters.backend.dots_ocr.description": "外部 Dots.OCR API を使用",
+  "settings.parserAdapters.backend.glm_ocr.description": "外部 GLM-OCR API を使用",
   "settings.parserAdapters.backend.oci_genai_vision": "OCI Generative AI (Vision)",
   "settings.parserAdapters.backend.oci_genai_vision.description":
     "OCI Generative AI の Chat/Responses + Files API を Vision モデルで呼び文書ページを解析",
@@ -177,7 +177,34 @@ export const ja = {
     "旧『local』設定です。未選択時は既定の Unstructured で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
   "settings.parserAdapters.serviceBackend.note":
-    "「OCI サービス」は Python package ではなく OCI クラウドサービスを直接呼びます。未設定のときは選択しても安全に既存フロー(ローカル / Enterprise AI VLM)へ縮退します。",
+    "GPU 解析エンジンは外部 API を直接呼びます。この画面から Docker イメージの構築や起動は行いません。",
+  "settings.parserAdapters.connection.title": "外部 GPU 解析エンジンの接続",
+  "settings.parserAdapters.connection.description":
+    "接続先とモデルを保存してから接続を確認します。API key は再表示されず、空欄のまま保存すると現在値を保持します。",
+  "settings.parserAdapters.connection.endpoint": "Endpoint",
+  "settings.parserAdapters.connection.model": "Model",
+  "settings.parserAdapters.connection.apiKey": "API key",
+  "settings.parserAdapters.connection.nativeModel": "接続先の MinerU 設定を使用",
+  "settings.parserAdapters.connection.apiKeyRetained": "設定済み（空欄なら保持）",
+  "settings.parserAdapters.connection.apiKeyOptional": "任意",
+  "settings.parserAdapters.connection.clearApiKey": "保存済み API key を削除",
+  "settings.parserAdapters.connection.configured": "設定済み",
+  "settings.parserAdapters.connection.test": "接続を確認",
+  "settings.parserAdapters.connection.testing": "確認中",
+  "settings.parserAdapters.connection.saveBeforeTest":
+    "接続確認には保存済み設定を使います。先に変更を保存してください。",
+  "settings.parserAdapters.connection.testFailed": "接続を確認できませんでした。",
+  "settings.parserAdapters.connection.invalidEndpoint":
+    "http または https の Endpoint を入力してください。認証情報、query、fragment は URL に含められません。",
+  "settings.parserAdapters.connection.modelRequired": "Model を入力してください。",
+  "settings.parserAdapters.connection.status.available": "接続できました。",
+  "settings.parserAdapters.connection.status.unconfigured": "接続設定が未完了です。",
+  "settings.parserAdapters.connection.status.unreachable":
+    "接続先へ到達できません。Endpoint、ネットワーク、認証を確認してください。",
+  "settings.parserAdapters.connection.status.model_missing":
+    "設定した Model が接続先にありません。Model 名を確認してください。",
+  "settings.parserAdapters.connection.status.invalid_response":
+    "接続先の応答形式を確認できませんでした。対応プロトコルを確認してください。",
   "settings.parserAdapters.effectiveOrder": "実行順",
   "settings.parserAdapters.noEffectiveOrder": "外部解析方式なし",
   "settings.parserAdapters.source": "設定元",
@@ -543,11 +570,6 @@ export const ja = {
   "settings.services.item.parserDocling": "Docling",
   "settings.services.item.parserMarker": "Marker",
   "settings.services.item.parserUnstructured": "Unstructured",
-  "settings.services.item.parserUnlimitedOcr": "Unlimited-OCR",
-  "settings.services.item.parserUnlimitedOcrSglang": "Unlimited-OCR SGLang",
-  "settings.services.item.parserMineru": "MinerU",
-  "settings.services.item.parserDotsOcr": "Dots.OCR",
-  "settings.services.item.parserGlmOcr": "GLM-OCR",
   "settings.services.item.parserAsr": "ASR(音声文字起こし)",
   "settings.services.item.parserOciGenaiVision": "OCI Generative AI (Vision)",
   "settings.services.item.parserOciDocumentUnderstanding": "OCI Document Understanding",
@@ -2203,6 +2225,9 @@ export const ja = {
   "documents.processingConfig.parserFormats": "対応形式: {formats}",
   "documents.processingConfig.parserUnsupported":
     "この解析エンジンは {modality} 形式の文書に対応していません（対応: {formats}）。取込は開始前に失敗します。",
+  "documents.processingConfig.parserRemoved": "解析エンジンは削除されました（{engine}）",
+  "documents.processingConfig.parserRemovedDetail":
+    "このレシピが参照する解析エンジン（{engine}）は削除されました。旧結果は保持されますが、新しい処理は開始できません。利用可能な解析エンジンを選び直してください。",
   "documents.processingConfig.contextHeader": "文脈ヘッダを検索対象へ追加",
   "documents.recipes.title": "処理レシピ",
   "documents.recipes.subtitle": "各レシピの索引を自動で融合検索します。",

@@ -134,25 +134,8 @@ def test_runner_fail_fast_raises_when_service_unreachable(
     assert "選択した文書解析サービス（Unstructured）に接続できません" in str(exc_info.value)
 
 
-def test_runner_fail_fast_raises_when_service_returns_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = ParseResponse(
-        extraction=None,
-        parser_backend="mineru",
-        parser_version="service_unavailable",
-        fallback_used=True,
-        warnings=["mineru_adapter_failed"],
-    )
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/parse"
-        return httpx.Response(200, json=response.model_dump(mode="json"))
-
-    _install_transport(monkeypatch, httpx.MockTransport(handle))
-    client = ParserServiceClient(
-        Settings(rag_parser_mineru_service_url="http://parser-mineru:8000")
-    )
+def test_runner_fail_fast_raises_when_external_parser_is_unconfigured() -> None:
+    client = ParserServiceClient(Settings(rag_parser_mineru_api_host=""))
 
     with pytest.raises(ParserServiceUnavailableError) as exc_info:
         client.runner(
@@ -164,9 +147,9 @@ def test_runner_fail_fast_raises_when_service_returns_fallback(
         )
 
     assert exc_info.value.backend == "mineru"
-    assert exc_info.value.reason == "adapter_failed"
-    assert exc_info.value.warning_code == "mineru_adapter_failed"
-    assert "選択した文書解析サービス（MinerU）で解析処理が失敗しました" in str(exc_info.value)
+    assert exc_info.value.reason == "unconfigured"
+    assert exc_info.value.warning_code == "mineru_unconfigured"
+    assert "MinerU）の接続先 URL が未設定です" in str(exc_info.value)
 
 
 def test_runner_retries_retryable_status_then_returns_success(

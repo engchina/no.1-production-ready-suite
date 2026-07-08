@@ -1166,7 +1166,7 @@ def _preflight_pipeline(backend: str, monkeypatch: pytest.MonkeyPatch) -> Ingest
         object_storage=cast(Any, FakeObjectStorage()),
         document_understanding=cast(Any, object()),
         speech=cast(Any, object()),
-        settings=Settings(rag_parser_adapter_backend=backend),
+        settings=Settings().model_copy(update={"rag_parser_adapter_backend": backend}),
     )
 
 
@@ -1206,6 +1206,26 @@ def test_partition_source_preflight_blocks_service_backend_unsupported(
         )
 
     assert exc_info.value.reason == "adapter_source_unsupported"
+
+
+def test_partition_source_blocks_historical_removed_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """履歴レシピの削除済み engine は旧結果を使うだけにし、新規処理を開始しない。"""
+    from app.clients.parser_service import ParserServiceUnavailableError
+
+    pipeline = _preflight_pipeline("removed_engine", monkeypatch)
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        pipeline._partition_source(
+            parse_bytes=b"docx-bytes",
+            source_profile=_office_source_profile(),
+            content_type=_office_source_profile().content_type,
+        )
+
+    assert exc_info.value.reason == "engine_removed"
+    assert "解析エンジン（removed_engine）は削除されました" in str(exc_info.value)
+    assert "旧結果は保持されています" in str(exc_info.value)
 
 
 def test_partition_source_preflight_passes_converted_pdf(

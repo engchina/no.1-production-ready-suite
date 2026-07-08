@@ -14,7 +14,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from pydantic import ValidationError
-from rag_parser_core.capabilities import adapter_supports_source
+from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.preprocess import ConvertOutcome, SourceDerivation
 from rag_parser_core.result import (
     EXTERNAL_ADAPTER_PACKAGES,
@@ -78,6 +78,7 @@ from app.rag.preprocess_strategy import resolve_preprocess_profile
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
+    extraction_recipe_subset,
 )
 from app.schemas.document import (
     DocumentChunkView,
@@ -254,6 +255,12 @@ class IngestionPipeline:
         # (in-process 解析は実行しない)。診断側は設定値 local をそのまま baseline として扱う。
         if backend in {"local", "local_partition"}:
             backend = "unstructured"
+        if backend not in ADAPTER_CAPABILITIES and backend not in SERVICE_ADAPTER_BACKENDS:
+            raise ParserServiceUnavailableError(
+                backend,
+                "engine_removed",
+                warning_code="parser_engine_removed",
+            )
         # pre-flight: 宣言 matrix で非対応形式なら microservice/OCI を呼ぶ前に停止する
         # (preprocess 変換後の content_type で判定するため、office_to_pdf 済み等は通る)。
         if not adapter_supports_source(
@@ -646,10 +653,7 @@ class IngestionPipeline:
                     self._recipe_id,
                     self._recipe_revision,
                 )
-            recipe = {
-                "rag_preprocess_profile": recipe_settings.rag_preprocess_profile,
-                "rag_parser_adapter_backend": self._settings.rag_parser_adapter_backend,
-            }
+            recipe = extraction_recipe_subset(recipe_settings)
             await self._oracle.upsert_document_extraction_artifact(
                 document_id=document_id,
                 extraction_recipe_id=extraction_recipe_id,

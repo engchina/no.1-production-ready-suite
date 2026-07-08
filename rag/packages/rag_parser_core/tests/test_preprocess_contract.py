@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
-import rag_parser_core.preprocess_service as preprocess_service_module
 from rag_parser_core.preprocess import (
     ConvertHealth,
     ConvertOutcome,
@@ -134,7 +135,7 @@ def test_convert_runs_converter_in_worker(monkeypatch: pytest.MonkeyPatch) -> No
     def _health() -> ConvertHealth:
         return ConvertHealth(status="ok", supported_profiles=["csv_to_json"])
 
-    monkeypatch.setattr(preprocess_service_module.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
     app = create_preprocess_app(converter=_converter, health_probe=_health)
 
     response = TestClient(app).post(

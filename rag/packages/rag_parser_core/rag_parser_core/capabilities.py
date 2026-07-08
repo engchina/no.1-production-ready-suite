@@ -144,9 +144,9 @@ ADAPTER_CAPABILITIES: Mapping[str, ParserBackendCapability] = {
         content_types=frozenset({"application/pdf"}) | _OPENXML_CONTENT_TYPES,
         content_type_prefixes=frozenset({"image/"}),
     ),
-    "dots_ocr": _IMAGE_ONLY,
-    # GLM-OCR は vLLM 経路が単一画像、transformers 経路も PIL で PDF 不可。
-    "glm_ocr": _IMAGE_ONLY,
+    # 外部 API は画像入力。backend が PDF をページ画像へ変換して順序を維持する。
+    "dots_ocr": _PDF_AND_IMAGE,
+    "glm_ocr": _PDF_AND_IMAGE,
     "unlimited_ocr": _PDF_AND_IMAGE,
     "oci_genai_vision": _PDF_AND_IMAGE,
     "enterprise_ai_vlm": _PDF_AND_IMAGE,  # oci_genai_vision の後方互換エイリアス
