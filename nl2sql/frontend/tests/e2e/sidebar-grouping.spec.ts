@@ -103,8 +103,7 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   const toggle = sidebar.getByRole("button", { name: "改善・運用 を折りたたむ" });
-  await toggle.focus();
-  await page.keyboard.press("Enter");
+  await toggle.press("Enter");
 
   await expect(sidebar.getByText("フィードバック学習", { exact: true })).toBeHidden();
   await expect(sidebar.getByRole("button", { name: "改善・運用 を展開" })).toHaveAttribute(
@@ -112,8 +111,7 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
     "false"
   );
 
-  await sidebar.getByRole("button", { name: "改善・運用 を展開" }).focus();
-  await page.keyboard.press(" ");
+  await sidebar.getByRole("button", { name: "改善・運用 を展開" }).press(" ");
   await expect(sidebar.getByText("フィードバック学習", { exact: true })).toBeVisible();
 });
 
