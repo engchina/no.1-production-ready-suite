@@ -18,6 +18,7 @@ import type { Nl2SqlProfile, ProfileUpsertPayload, SchemaCatalog } from "../type
 
 interface ProfileFormState {
   name: string;
+  category: string;
   description: string;
   allowedTables: string[];
   glossaryText: string;
@@ -28,6 +29,7 @@ interface ProfileFormState {
 
 const EMPTY_FORM: ProfileFormState = {
   name: "",
+  category: "",
   description: "",
   allowedTables: [],
   glossaryText: "",
@@ -79,6 +81,7 @@ function textToFewShot(text: string) {
 function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
   return {
     name: profile.name,
+    category: profile.category ?? "",
     description: profile.description,
     allowedTables: profile.allowed_tables,
     glossaryText: glossaryToText(profile.glossary),
@@ -91,6 +94,7 @@ function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
 function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
   return {
     name: form.name.trim(),
+    category: form.category.trim(),
     description: form.description.trim(),
     allowed_tables: form.allowedTables,
     glossary: textToGlossary(form.glossaryText),
@@ -266,7 +270,7 @@ export function ProfileManagementPage() {
               </div>
             )}
 
-            <div className="grid gap-4 md:grid-cols-[1fr_10rem]">
+            <div className="grid gap-4 md:grid-cols-[1fr_14rem_10rem]">
               <label className="grid gap-1 text-sm font-medium text-slate-800">
                 <span>{t("profiles.field.name")}</span>
                 <input
@@ -274,6 +278,18 @@ export function ProfileManagementPage() {
                   onChange={(event) => {
                     const value = event.currentTarget.value;
                     setForm((current) => ({ ...current, name: value }));
+                  }}
+                  className="min-h-11 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                />
+              </label>
+              <label className="grid gap-1 text-sm font-medium text-slate-800">
+                <span>{t("profiles.field.category")}</span>
+                <input
+                  value={form.category}
+                  placeholder={form.name || t("profiles.field.name")}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setForm((current) => ({ ...current, category: value }));
                   }}
                   className="min-h-11 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
                 />
@@ -309,20 +325,19 @@ export function ProfileManagementPage() {
 
             <section className="grid gap-2">
               <h3 className="text-sm font-semibold text-slate-900">{t("profiles.field.allowedTables")}</h3>
-              <div className="grid gap-2 md:grid-cols-2">
-                {catalog?.tables.map((table) => (
-                  <label key={table.table_name} className="flex min-h-11 items-start gap-2 rounded-md border border-slate-200 p-3 text-sm">
+              <div
+                data-testid="profile-allowed-table-list"
+                className="grid h-[32rem] gap-2 overflow-y-auto md:grid-cols-2"
+              >
+                {catalog?.tables.filter((table) => !table.table_name.includes("$")).map((table) => (
+                  <label key={table.table_name} className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 p-3 text-sm">
                     <input
                       type="checkbox"
                       checked={form.allowedTables.includes(table.table_name)}
                       onChange={() => toggleTable(table.table_name)}
-                      className="mt-1 h-4 w-4 rounded border-slate-300"
+                      className="h-4 w-4 rounded border-slate-300"
                     />
-                    <span>
-                      <span className="font-medium text-slate-900">{table.logical_name}</span>
-                      <span className="ml-2 font-mono text-xs text-slate-500">{table.table_name}</span>
-                      <span className="mt-1 block text-xs text-slate-500">{table.comment}</span>
-                    </span>
+                    <span className="font-mono text-sm font-medium text-slate-900">{table.table_name}</span>
                   </label>
                 ))}
               </div>

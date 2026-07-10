@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowRightLeft, Play, ShieldCheck, Wrench } from "lucide-react";
+import { Play, ShieldCheck, Wrench } from "lucide-react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
@@ -7,7 +7,7 @@ import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { DEFAULT_ANALYZE_SQL, sqlAnalyzePayload } from "../analysisState";
 import { Nl2SqlResultTable } from "../components/Nl2SqlResultTable";
-import type { AnalyzeData, QueryResults, RepairData, ReverseSqlData } from "../types";
+import type { AnalyzeData, QueryResults, RepairData } from "../types";
 
 export function SqlAnalysisPage() {
   const [analysisSql, setAnalysisSql] = useState(DEFAULT_ANALYZE_SQL);
@@ -18,12 +18,9 @@ export function SqlAnalysisPage() {
   const [repairSql, setRepairSql] = useState("");
   const [repairError, setRepairError] = useState("");
   const [repair, setRepair] = useState<RepairData | null>(null);
-  const [reverseSql, setReverseSql] = useState("");
-  const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [executeLoading, setExecuteLoading] = useState(false);
   const [repairLoading, setRepairLoading] = useState(false);
-  const [reverseLoading, setReverseLoading] = useState(false);
   const [message, setMessage] = useState("");
 
   const analyzeSql = async () => {
@@ -83,34 +80,6 @@ export function SqlAnalysisPage() {
       setMessage(err instanceof Error ? err.message : t("sqlAnalysis.error.repair"));
     } finally {
       setRepairLoading(false);
-    }
-  };
-
-  const reverseExplain = async () => {
-    const sql = reverseSql.trim();
-    if (!sql) return;
-    setReverseLoading(true);
-    setMessage("");
-    try {
-      setReverse(await apiPost<ReverseSqlData>("/api/nl2sql/reverse", { sql }));
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("sqlAnalysis.error.reverse"));
-    } finally {
-      setReverseLoading(false);
-    }
-  };
-
-  const reverseDeepExplain = async () => {
-    const sql = reverseSql.trim();
-    if (!sql) return;
-    setReverseLoading(true);
-    setMessage("");
-    try {
-      setReverse(await apiPost<ReverseSqlData>("/api/nl2sql/reverse/deep", { sql }));
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("sqlAnalysis.error.reverse"));
-    } finally {
-      setReverseLoading(false);
     }
   };
 
@@ -252,64 +221,6 @@ export function SqlAnalysisPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ArrowRightLeft size={18} aria-hidden="true" />
-              {t("sqlAnalysis.reverse.title")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.85fr)]">
-            <div className="grid content-start gap-4">
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
-                <span>{t("sqlAnalysis.reverse.sql")}</span>
-                <textarea
-                  value={reverseSql}
-                  onChange={(event) => setReverseSql(event.currentTarget.value)}
-                  rows={6}
-                  className="min-h-36 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  loading={reverseLoading}
-                  disabled={!reverseSql.trim()}
-                  onClick={() => void reverseExplain()}
-                >
-                  <ArrowRightLeft size={16} aria-hidden="true" />
-                  <span>{t("sqlAnalysis.action.reverse")}</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  loading={reverseLoading}
-                  disabled={!reverseSql.trim()}
-                  onClick={() => void reverseDeepExplain()}
-                >
-                  <ArrowRightLeft size={16} aria-hidden="true" />
-                  <span>{t("sqlAnalysis.action.reverseDeep")}</span>
-                </Button>
-              </div>
-            </div>
-
-            {reverse && (
-              <section className="grid content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                <div className="flex flex-wrap gap-2">
-                  <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />
-                </div>
-                <CompactFact label={t("sqlAnalysis.reverse.question")} value={reverse.question} />
-                <CompactFact label={t("sqlAnalysis.reverse.explanation")} value={reverse.explanation} />
-                <CompactFact
-                  label={t("sqlAnalysis.reverse.tables")}
-                  value={reverse.referenced_tables.join(", ") || "-"}
-                />
-                <TextList label={t("sqlAnalysis.reverse.steps")} items={reverse.logical_steps ?? []} />
-                <TextList label={t("sqlAnalysis.warnings")} items={reverse.warnings ?? []} />
-              </section>
-            )}
-          </CardContent>
-        </Card>
       </main>
     </>
   );

@@ -39,13 +39,23 @@ from .models import (
     CompareData,
     CompareHistoryData,
     CompareRequest,
+    DbAdminAiAnalysisData,
+    DbAdminAiAnalysisRequest,
+    DbAdminCsvUploadData,
+    DbAdminCsvUploadRequest,
+    DbAdminDataPreviewData,
+    DbAdminDataPreviewRequest,
     DbAdminDropTableRequest,
+    DbAdminDropViewRequest,
     DbAdminExecuteData,
     DbAdminExecuteRequest,
     DbAdminImportTabularData,
     DbAdminImportTabularRequest,
+    DbAdminJoinWhereData,
+    DbAdminJoinWhereRequest,
     DbAdminObjectDetail,
     DbAdminObjectsData,
+    DbAdminStatementsRequest,
     DemoLearningData,
     DiagnosticsData,
     EvaluateData,
@@ -67,6 +77,9 @@ from .models import (
     JobCreateData,
     JobCreateRequest,
     JobData,
+    LegacyLearningMaterialData,
+    MetadataSqlGenerateData,
+    MetadataSqlGenerateRequest,
     Nl2SqlProfile,
     PreviewData,
     PreviewRequest,
@@ -90,6 +103,10 @@ from .models import (
     SelectAiDbProfileMutationData,
     SelectAiDbProfilesData,
     SelectAiDbProfileUpsertRequest,
+    SelectAiFeedbackDeleteRequest,
+    SelectAiFeedbackEntriesData,
+    SelectAiFeedbackMutationData,
+    SelectAiFeedbackVectorIndexRequest,
     SelectAiProfilesExportData,
     SelectAiProfilesImportRequest,
     SimilarHistoryData,
@@ -222,6 +239,69 @@ async def export_profile_learning_material(profile_id: str) -> Response:
     )
 
 
+@router.get(
+    "/legacy-learning-material",
+    response_model=ApiResponse[LegacyLearningMaterialData],
+)
+async def get_legacy_learning_material() -> ApiResponse[LegacyLearningMaterialData]:
+    """旧版 terms.xlsx / rules.xlsx 互換の用語・ルールを返す。"""
+    return ApiResponse(data=nl2sql_service.get_legacy_learning_material())
+
+
+@router.post(
+    "/legacy-learning-material/terms/import",
+    response_model=ApiResponse[LegacyLearningMaterialData],
+)
+async def import_legacy_terms(
+    file: Annotated[UploadFile, File()],
+) -> ApiResponse[LegacyLearningMaterialData]:
+    """旧版 terms.xlsx 互換の用語集を取り込む。"""
+    return ApiResponse(
+        data=nl2sql_service.import_legacy_terms(
+            filename=file.filename or "terms.xlsx",
+            content=await file.read(),
+        )
+    )
+
+
+@router.post(
+    "/legacy-learning-material/rules/import",
+    response_model=ApiResponse[LegacyLearningMaterialData],
+)
+async def import_legacy_rules(
+    file: Annotated[UploadFile, File()],
+) -> ApiResponse[LegacyLearningMaterialData]:
+    """旧版 rules.xlsx 互換のルールを取り込む。"""
+    return ApiResponse(
+        data=nl2sql_service.import_legacy_rules(
+            filename=file.filename or "rules.xlsx",
+            content=await file.read(),
+        )
+    )
+
+
+@router.get("/legacy-learning-material/terms/export.xlsx")
+async def export_legacy_terms() -> Response:
+    """旧版 terms.xlsx 互換の用語集を Excel workbook として出力する。"""
+    filename, content = nl2sql_service.export_legacy_terms_xlsx()
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/legacy-learning-material/rules/export.xlsx")
+async def export_legacy_rules() -> Response:
+    """旧版 rules.xlsx 互換のルールを Excel workbook として出力する。"""
+    filename, content = nl2sql_service.export_legacy_rules_xlsx()
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/profiles/{profile_id}/archive", response_model=ApiResponse[Nl2SqlProfile])
 async def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
     """NL2SQL profile を archive する。"""
@@ -278,6 +358,37 @@ async def select_ai_db_profile_detail(
 ) -> ApiResponse[SelectAiDbProfileDetailData]:
     """Oracle DBMS_CLOUD_AI profile 詳細を返す。"""
     return ApiResponse(data=nl2sql_service.get_select_ai_db_profile(profile_name))
+
+
+@router.get("/select-ai/feedback", response_model=ApiResponse[SelectAiFeedbackEntriesData])
+async def select_ai_feedback(
+    profile_name: str,
+    limit: int = 50,
+) -> ApiResponse[SelectAiFeedbackEntriesData]:
+    """Oracle DBMS_CLOUD_AI profile feedback vector entries を返す。"""
+    return ApiResponse(data=nl2sql_service.list_select_ai_feedback_entries(profile_name, limit))
+
+
+@router.post(
+    "/select-ai/feedback/delete",
+    response_model=ApiResponse[SelectAiFeedbackMutationData],
+)
+async def delete_select_ai_feedback(
+    req: SelectAiFeedbackDeleteRequest,
+) -> ApiResponse[SelectAiFeedbackMutationData]:
+    """Oracle DBMS_CLOUD_AI profile feedback entry を削除する。"""
+    return ApiResponse(data=nl2sql_service.delete_select_ai_feedback(req))
+
+
+@router.post(
+    "/select-ai/feedback/vector-index",
+    response_model=ApiResponse[SelectAiFeedbackMutationData],
+)
+async def update_select_ai_feedback_vector_index(
+    req: SelectAiFeedbackVectorIndexRequest,
+) -> ApiResponse[SelectAiFeedbackMutationData]:
+    """Oracle DBMS_CLOUD_AI feedback vector index attributes を更新する。"""
+    return ApiResponse(data=nl2sql_service.update_select_ai_feedback_vector_index(req))
 
 
 @router.post(
@@ -728,6 +839,14 @@ async def suggest_comments(
     return ApiResponse(data=nl2sql_service.suggest_comments(req))
 
 
+@router.post("/comments/generate-sql", response_model=ApiResponse[MetadataSqlGenerateData])
+async def generate_comment_sql(
+    req: MetadataSqlGenerateRequest,
+) -> ApiResponse[MetadataSqlGenerateData]:
+    """SQL Assist コメント管理互換の COMMENT ON SQL を生成する。"""
+    return ApiResponse(data=nl2sql_service.generate_comment_sql(req))
+
+
 @router.post("/comments/apply", response_model=ApiResponse[CommentApplyData])
 async def apply_comments(req: CommentApplyRequest) -> ApiResponse[CommentApplyData]:
     """COMMENT ON TABLE/COLUMN の dry-run / restricted execution。"""
@@ -738,6 +857,14 @@ async def apply_comments(req: CommentApplyRequest) -> ApiResponse[CommentApplyDa
 async def generate_annotations() -> ApiResponse[AnnotationSuggestionData]:
     """Oracle annotation 候補を生成する。"""
     return ApiResponse(data=nl2sql_service.suggest_annotations())
+
+
+@router.post("/annotations/generate-sql", response_model=ApiResponse[MetadataSqlGenerateData])
+async def generate_annotation_sql(
+    req: MetadataSqlGenerateRequest,
+) -> ApiResponse[MetadataSqlGenerateData]:
+    """SQL Assist アノテーション管理互換の ALTER ... ANNOTATIONS SQL を生成する。"""
+    return ApiResponse(data=nl2sql_service.generate_annotation_sql(req))
 
 
 @router.post("/annotations/apply", response_model=ApiResponse[AnnotationApplyData])
@@ -780,6 +907,70 @@ async def db_admin_drop_table(req: DbAdminDropTableRequest) -> ApiResponse[DbAdm
 async def db_admin_execute(req: DbAdminExecuteRequest) -> ApiResponse[DbAdminExecuteData]:
     """DB admin SQL executor。通常 NL2SQL 実行 path とは分離する。"""
     return ApiResponse(data=nl2sql_service.execute_db_admin_sql(req))
+
+
+@router.post("/db-admin/statements", response_model=ApiResponse[DbAdminExecuteData])
+async def db_admin_statements(req: DbAdminStatementsRequest) -> ApiResponse[DbAdminExecuteData]:
+    """文種 whitelist 付き複数 statement 実行(テーブル/ビュー作成・データ SQL)。"""
+    return ApiResponse(data=nl2sql_service.execute_db_admin_statements(req))
+
+
+@router.post("/db-admin/drop-view", response_model=ApiResponse[DbAdminExecuteData])
+async def db_admin_drop_view(req: DbAdminDropViewRequest) -> ApiResponse[DbAdminExecuteData]:
+    """DB admin DROP VIEW dry-run / execution。"""
+    return ApiResponse(data=nl2sql_service.drop_db_admin_view(req))
+
+
+@router.post("/db-admin/preview-data", response_model=ApiResponse[DbAdminDataPreviewData])
+async def db_admin_preview_data(
+    req: DbAdminDataPreviewRequest,
+) -> ApiResponse[DbAdminDataPreviewData]:
+    """テーブル/ビューのデータ表示(件数上限+任意 WHERE)。"""
+    try:
+        return ApiResponse(data=nl2sql_service.preview_db_admin_data(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/db-admin/preview-data/export.xlsx")
+async def db_admin_export_preview_xlsx(req: DbAdminDataPreviewRequest) -> Response:
+    """テーブル/ビューの表示結果を Excel workbook として出力する。"""
+    try:
+        filename, content = nl2sql_service.export_db_admin_preview_xlsx(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/db-admin/upload-csv", response_model=ApiResponse[DbAdminCsvUploadData])
+async def db_admin_upload_csv(
+    req: DbAdminCsvUploadRequest,
+) -> ApiResponse[DbAdminCsvUploadData]:
+    """既存テーブルへの CSV アップロード(INSERT / TRUNCATE&INSERT)。"""
+    try:
+        return ApiResponse(data=nl2sql_service.upload_db_admin_csv(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/db-admin/analyze-error", response_model=ApiResponse[DbAdminAiAnalysisData])
+async def db_admin_analyze_error(
+    req: DbAdminAiAnalysisRequest,
+) -> ApiResponse[DbAdminAiAnalysisData]:
+    """Admin SQL 実行結果の AI 分析(OCI Enterprise AI、未設定時は deterministic)。"""
+    return ApiResponse(data=nl2sql_service.analyze_db_admin_failure(req))
+
+
+@router.post("/db-admin/extract-join-where", response_model=ApiResponse[DbAdminJoinWhereData])
+async def db_admin_extract_join_where(
+    req: DbAdminJoinWhereRequest,
+) -> ApiResponse[DbAdminJoinWhereData]:
+    """ビュー DDL から JOIN/WHERE 条件を抽出する(OCI Enterprise AI、未設定時は deterministic)。"""
+    return ApiResponse(data=nl2sql_service.extract_db_admin_join_where(req))
 
 
 @router.post("/db-admin/import-tabular", response_model=ApiResponse[DbAdminImportTabularData])

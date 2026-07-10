@@ -5,6 +5,7 @@ import io
 from typing import Any, cast
 
 import httpx
+import pytest
 
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import (
@@ -17,6 +18,7 @@ from app.features.nl2sql.models import (
     DbAdminExecuteRequest,
     Nl2SqlEngine,
     Nl2SqlProfile,
+    PreviewRequest,
     ProfileRecommendationRequest,
     ReverseSqlRequest,
     RewriteRequest,
@@ -34,6 +36,7 @@ class FakeEnterpriseAiClient:
     def __init__(self, *responses: str | Exception, configured: bool = True) -> None:
         self.responses = list(responses)
         self.configured = configured
+        self.calls: list[dict[str, str]] = []
 
     def is_configured(self) -> bool:
         return self.configured
@@ -42,6 +45,9 @@ class FakeEnterpriseAiClient:
         return "fake-enterprise-ai"
 
     def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+        self.calls.append(
+            {"prompt": prompt, "context": context, "system_prompt": system_prompt}
+        )
         if not self.responses:
             return ""
         response = self.responses.pop(0)
@@ -61,6 +67,23 @@ class FakeEmbeddingClient:
             vector[1 if "入金" in text or "支払" in text else 2] = 1.0
             vectors.append(vector)
         return vectors
+
+
+class FakeOracleGenerator:
+    def __init__(self) -> None:
+        self.questions: list[str] = []
+
+    def generate_select_ai_sql(self, *, profile_name: str, question: str) -> str:
+        del profile_name
+        self.questions.append(question)
+        return "SELECT * FROM INVOICES"
+
+    def run_select_ai_agent_team(
+        self, *, team_name: str, question: str, tool_name: str
+    ) -> tuple[str, str]:
+        del team_name, tool_name
+        self.questions.append(question)
+        return "SELECT * FROM INVOICES", "conversation-1"
 
 
 def _workbook_bytes(workbook: Any) -> bytes:
@@ -333,6 +356,107 @@ def test_profile_learning_material_xlsx_handles_multi_sheet_dedupe_and_replace()
     assert replaced.profile.few_shot_examples == []
 
 
+def test_legacy_learning_material_imports_exports_and_resolves_by_category() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="osaka",
+            name="大阪プロファイル",
+            category="OSAKA",
+            glossary={"売上": "PROFILE.SALES"},
+            sql_rules=["profile 固有ルール"],
+        )
+    )
+    openpyxl = importlib.import_module("openpyxl")
+    terms_book = openpyxl.Workbook()
+    terms = terms_book.active
+    terms.title = "terms"
+    terms.append(["TERM", "DEFINITION"])
+    terms.append(["粗利", "INVOICES.PROFIT"])
+    terms.append(["売上", "LEGACY.SALES"])
+    rules_book = openpyxl.Workbook()
+    rules = rules_book.active
+    rules.title = "rules"
+    rules.append(["CATEGORY", "RULE"])
+    rules.append(["共通", "共通ルール"])
+    rules.append(["OSAKA", "大阪ルール"])
+    rules.append(["TOKYO", "東京ルール"])
+
+    material = service.import_legacy_terms(
+        filename="terms.xlsx",
+        content=_workbook_bytes(terms_book),
+    )
+    assert material.glossary["粗利"] == "INVOICES.PROFIT"
+    material = service.import_legacy_rules(
+        filename="rules.xlsx",
+        content=_workbook_bytes(rules_book),
+    )
+    assert len(material.rule_entries) == 3
+
+    profile = service.get_profile("osaka")
+    assert cast(Any, service)._effective_glossary(profile)["売上"] == "PROFILE.SALES"
+    assert cast(Any, service)._effective_sql_rules(profile) == [
+        "共通ルール",
+        "大阪ルール",
+        "profile 固有ルール",
+    ]
+    assert "東京ルール" not in cast(Any, service)._append_rules_to_question("質問", profile)
+
+    terms_filename, terms_bytes = service.export_legacy_terms_xlsx()
+    rules_filename, rules_bytes = service.export_legacy_rules_xlsx()
+    assert terms_filename == "terms.xlsx"
+    assert rules_filename == "rules.xlsx"
+    terms_export = openpyxl.load_workbook(io.BytesIO(terms_bytes), read_only=True)
+    rules_export = openpyxl.load_workbook(io.BytesIO(rules_bytes), read_only=True)
+    assert terms_export.active["A1"].value == "TERM"
+    assert rules_export.active["A1"].value == "CATEGORY"
+
+
+def test_oracle_runtime_appends_effective_rules_to_select_ai_questions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="rules",
+            name="ルール検証",
+            category="OSAKA",
+            allowed_tables=["INVOICES"],
+            sql_rules=["profile 固有ルール"],
+        )
+    )
+    service.import_legacy_rules(
+        filename="rules.csv",
+        content="CATEGORY,RULE\n共通,共通ルール\nOSAKA,大阪ルール\nTOKYO,東京ルール\n".encode(),
+    )
+    fake_oracle = FakeOracleGenerator()
+    cast(Any, service)._oracle_adapter = fake_oracle
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+
+    service.preview(
+        PreviewRequest(
+            question="請求を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id="rules",
+        )
+    )
+    service.preview(
+        PreviewRequest(
+            question="請求を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI_AGENT,
+            profile_id="rules",
+        )
+    )
+
+    assert len(fake_oracle.questions) == 2
+    for question in fake_oracle.questions:
+        assert "=== Rules ===" in question
+        assert "共通ルール" in question
+        assert "大阪ルール" in question
+        assert "profile 固有ルール" in question
+        assert "東京ルール" not in question
+
+
 async def test_db_profile_drop_endpoint_supports_dry_run_and_execute_mock(
     monkeypatch: Any,
 ) -> None:
@@ -474,6 +598,7 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
         '{"question":"請求金額を確認したい",'
         '"explanation":"INVOICES から TOTAL_AMOUNT を取得します。",'
+        '"logical_structure":"SQL 論理構造",'
         '"logical_steps":["INVOICES を参照","TOTAL_AMOUNT を選択"]}'
     )
 
@@ -481,6 +606,7 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
 
     assert reversed_sql.source == "oci_enterprise_ai"
     assert reversed_sql.question == "請求金額を確認したい"
+    assert reversed_sql.logical_structure == "SQL 論理構造"
     assert reversed_sql.logical_steps == ["INVOICES を参照", "TOTAL_AMOUNT を選択"]
 
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient("not json")
@@ -489,3 +615,38 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
 
     assert fallback.source == "deterministic"
     assert fallback.warnings
+
+
+def test_reverse_deep_uses_profile_context_and_glossary() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="billing",
+            name="請求管理",
+            description="請求テーブルを扱う profile。",
+            allowed_tables=["INVOICES"],
+            glossary={"請求金額": "INVOICES.TOTAL_AMOUNT"},
+        )
+    )
+    fake = FakeEnterpriseAiClient(
+        '{"question":"請求金額を一覧で確認したい",'
+        '"explanation":"請求管理 profile の文脈で逆生成しました。",'
+        '"logical_structure":"SQL 論理構造\\n- SELECT: 請求金額",'
+        '"logical_steps":["請求金額を選択"]}'
+    )
+    cast(Any, service)._enterprise_ai_client = fake
+
+    reversed_sql = service.reverse_sql_deep(
+        ReverseSqlRequest(
+            sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+            profile_id="billing",
+            use_glossary=True,
+        )
+    )
+
+    assert reversed_sql.question == "請求金額を一覧で確認したい"
+    assert "請求金額" in reversed_sql.logical_structure
+    assert fake.calls
+    assert "profile: 請求管理" in fake.calls[0]["context"]
+    assert "- 請求金額: INVOICES.TOTAL_AMOUNT" in fake.calls[0]["context"]
+    assert "logical_structure" in fake.calls[0]["system_prompt"]

@@ -4,9 +4,15 @@ import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, Skeleton } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
-import { buildSchemaInsertText, type SchemaSelection } from "../workbenchState";
+import {
+  buildSchemaInsertText,
+  buildSchemaSqlIdentifierText,
+  type SchemaSelection,
+} from "../workbenchState";
 import { formatSampleValues, formatSchemaCount } from "../schemaDisplay";
 import type { SchemaCatalog, SchemaColumn, SchemaTable } from "../types";
+
+type SchemaInsertMode = "logical" | "physical";
 
 function hasColumn(selection: SchemaSelection, tableName: string, columnName: string) {
   return selection.columns[tableName]?.includes(columnName) ?? false;
@@ -17,6 +23,7 @@ export function SchemaReferencePanel({
   loading,
   selection,
   disabled,
+  insertMode = "logical",
   onToggleTable,
   onToggleColumn,
   onInsert,
@@ -25,6 +32,7 @@ export function SchemaReferencePanel({
   loading: boolean;
   selection: SchemaSelection;
   disabled?: boolean;
+  insertMode?: SchemaInsertMode;
   onToggleTable: (tableName: string) => void;
   onToggleColumn: (tableName: string, columnName: string) => void;
   onInsert: (text: string) => void;
@@ -114,6 +122,7 @@ export function SchemaReferencePanel({
               onToggleExpanded={toggleExpanded}
               onToggleTable={onToggleTable}
               onToggleColumn={onToggleColumn}
+              insertMode={insertMode}
               onInsert={onInsert}
             />
           ))}
@@ -129,6 +138,7 @@ function SchemaTableItem({
   selected,
   selection,
   disabled,
+  insertMode,
   onToggleExpanded,
   onToggleTable,
   onToggleColumn,
@@ -139,6 +149,7 @@ function SchemaTableItem({
   selected: boolean;
   selection: SchemaSelection;
   disabled?: boolean;
+  insertMode: SchemaInsertMode;
   onToggleExpanded: (tableName: string) => void;
   onToggleTable: (tableName: string) => void;
   onToggleColumn: (tableName: string, columnName: string) => void;
@@ -184,6 +195,7 @@ function SchemaTableItem({
               column={column}
               selected={hasColumn(selection, table.table_name, column.column_name)}
               disabled={disabled}
+              insertMode={insertMode}
               onToggleColumn={onToggleColumn}
               onInsert={onInsert}
             />
@@ -199,6 +211,7 @@ function SchemaColumnItem({
   column,
   selected,
   disabled,
+  insertMode,
   onToggleColumn,
   onInsert,
 }: {
@@ -206,10 +219,14 @@ function SchemaColumnItem({
   column: SchemaColumn;
   selected: boolean;
   disabled?: boolean;
+  insertMode: SchemaInsertMode;
   onToggleColumn: (tableName: string, columnName: string) => void;
   onInsert: (text: string) => void;
 }) {
-  const insertText = buildSchemaInsertText(table, column);
+  const insertText =
+    insertMode === "physical"
+      ? buildSchemaSqlIdentifierText(table, column)
+      : buildSchemaInsertText(table, column);
   return (
     <li className="grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
       <input

@@ -48,6 +48,7 @@ export interface AllowedObjects {
 export interface Nl2SqlProfile {
   id: string;
   name: string;
+  category?: string;
   description: string;
   allowed_tables: string[];
   glossary: Record<string, string>;
@@ -60,6 +61,7 @@ export interface Nl2SqlProfile {
 
 export interface ProfileUpsertPayload {
   name: string;
+  category?: string;
   description: string;
   allowed_tables: string[];
   glossary: Record<string, string>;
@@ -79,6 +81,16 @@ export interface ProfileLearningMaterialImportData {
   skipped_count: number;
   warnings: string[];
   profile: Nl2SqlProfile;
+}
+
+export interface LegacySqlRuleEntry {
+  category: string;
+  rule: string;
+}
+
+export interface LegacyLearningMaterialData {
+  glossary: Record<string, string>;
+  rule_entries: LegacySqlRuleEntry[];
 }
 
 export interface ProfileRecommendationCandidate {
@@ -459,6 +471,7 @@ export interface ReverseSqlData {
   question: string;
   explanation: string;
   referenced_tables: string[];
+  logical_structure?: string;
   logical_steps?: string[];
   source?: string;
   warnings?: string[];
@@ -732,6 +745,73 @@ export interface DbAdminImportTabularData {
   timing: TimingEnvelope;
 }
 
+export type DbAdminStatementPolicy =
+  | "table_ddl"
+  | "view_ddl"
+  | "data_dml"
+  | "comment_sql"
+  | "annotation_sql";
+
+export interface MetadataSqlTarget {
+  object_name: string;
+  object_type: "table" | "view";
+}
+
+export interface MetadataSqlGeneratePayload {
+  targets: MetadataSqlTarget[];
+  structure_text: string;
+  primary_key_text: string;
+  foreign_key_text: string;
+  sample_text: string;
+  extra_text: string;
+}
+
+export interface MetadataSqlGenerateData {
+  sql: string;
+  source: string;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface DbAdminDataPreviewData {
+  runtime: string;
+  sql: string;
+  results: QueryResults;
+  warnings: string[];
+}
+
+export interface DbAdminCsvUploadData {
+  table_name: string;
+  filename: string;
+  mode: string;
+  matched_columns: string[];
+  unmatched_csv_columns: string[];
+  row_count: number;
+  success_count: number;
+  error_count: number;
+  row_errors: string[];
+  hint: string;
+  dry_run: boolean;
+  executed: boolean;
+  runtime: string;
+  sample_rows: Array<Record<string, string | null>>;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface DbAdminAiAnalysisData {
+  analysis: string;
+  source: string;
+  warnings: string[];
+}
+
+export interface DbAdminJoinWhereData {
+  join_text: string;
+  where_text: string;
+  source: string;
+  warnings: string[];
+}
+
 export interface SelectAiDbProfile {
   name: string;
   status: string;
@@ -772,6 +852,35 @@ export interface SelectAiDbProfileMutationData {
 export interface SelectAiProfilesExportData {
   profiles: SelectAiDbProfile[];
   exported_at: string;
+}
+
+export interface SelectAiFeedbackEntry {
+  content: string;
+  sql_id: string;
+  sql_text: string;
+  attributes: Record<string, unknown>;
+  raw_attributes: string;
+}
+
+export interface SelectAiFeedbackEntriesData {
+  runtime: string;
+  profile_name: string;
+  index_name: string;
+  table_name: string;
+  items: SelectAiFeedbackEntry[];
+  total: number;
+  warnings: string[];
+}
+
+export interface SelectAiFeedbackMutationData {
+  runtime: string;
+  executed: boolean;
+  status: string;
+  profile_name: string;
+  index_name: string;
+  table_name: string;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
 }
 
 export interface AgentTeamRunData {

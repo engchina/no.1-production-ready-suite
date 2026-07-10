@@ -26,6 +26,8 @@ from app.features.nl2sql.models import (
     SampleDataStep,
     SchemaCatalog,
     SchemaTable,
+    SelectAiFeedbackDeleteRequest,
+    SelectAiFeedbackVectorIndexRequest,
     SimilarHistoryRequest,
     SyntheticCase,
 )
@@ -53,6 +55,8 @@ class _FakeOracleDb:
         self.constraint_rows: list[tuple[object, ...]] = []
         self.sample_values: dict[tuple[str, str], list[object]] = {}
         self.feedback_vector_rows: list[tuple[object, ...]] = []
+        self.select_ai_feedback_rows: list[tuple[object, ...]] = []
+        self.select_ai_feedback_missing = False
         self.unsupported_agent_runtime = False
         self.run_team_signature_failures = 0
         self.run_team_calls = 0
@@ -127,6 +131,17 @@ class _FakeOracleCursor:
             self._rows = [(_FakeLob("long text"),)]
         elif "VECTOR_DISTANCE" in normalized_sql:
             self._rows = self.db.feedback_vector_rows
+        elif "FEEDBACK_VECINDEX$VECTAB" in normalized_sql:
+            if self.db.select_ai_feedback_missing:
+                raise RuntimeError("ORA-00942: table or view does not exist")
+            self.description = [("CONTENT",), ("SQL_ID",), ("SQL_TEXT",), ("ATTRIBUTES",)]
+            self._rows = self.db.select_ai_feedback_rows
+        elif (
+            "DBMS_CLOUD_AI.FEEDBACK" in normalized_sql
+            or "DBMS_CLOUD_AI.UPDATE_VECTOR_INDEX" in normalized_sql
+        ):
+            if self.db.select_ai_feedback_missing:
+                raise RuntimeError("ORA-00942: table or view does not exist")
         elif "DBMS_CLOUD_AI_AGENT.CREATE_CONVERSATION" in normalized_sql:
             self._row = ("conversation-001",)
         elif "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA" in normalized_sql:
@@ -220,7 +235,10 @@ class _SampleAdminOracleAdapter(_FakeRuntimeOracleAdapter):
         self.missing_objects = missing_objects
         self.admin_statements: list[str] = []
 
-    def execute_admin_statements(self, statements: list[str]) -> list[dict[str, Any]]:
+    def execute_admin_statements(
+        self, statements: list[str], *, atomic: bool = True
+    ) -> list[dict[str, Any]]:
+        _ = atomic
         self.admin_statements.extend(statements)
         results: list[dict[str, Any]] = []
         for index, statement in enumerate(statements, start=1):
@@ -1437,6 +1455,100 @@ def test_service_feedback_index_rebuild_uses_embedding_and_oracle_vector_table()
     assert "TO_VECTOR(:embedding_json)" in insert_sql
     assert rows[0]["history_id"] == "hist-vector-001"
     assert str(rows[0]["embedding_json"]).startswith("[0.01")
+
+
+def test_service_select_ai_feedback_management_uses_dbms_cloud_ai() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.select_ai_feedback_rows = [
+        (
+            "select ai showsql 請求金額を確認したい",
+            "sql-001",
+            "SELECT TOTAL_AMOUNT FROM INVOICES",
+            '{"sql_id":"sql-001","sql_text":"SELECT TOTAL_AMOUNT FROM INVOICES"}',
+        )
+    ]
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
+
+    entries = service.list_select_ai_feedback_entries("default")
+
+    assert entries.runtime == "oracle"
+    assert entries.profile_name == "DEFAULT"
+    assert entries.table_name == "DEFAULT_FEEDBACK_VECINDEX$VECTAB"
+    assert entries.items[0].sql_id == "sql-001"
+    assert entries.items[0].sql_text == "SELECT TOTAL_AMOUNT FROM INVOICES"
+    assert any('FROM "DEFAULT_FEEDBACK_VECINDEX$VECTAB"' in sql for sql in fake_db.executed)
+
+    deleted = service.delete_select_ai_feedback(
+        SelectAiFeedbackDeleteRequest(
+            profile_name="default",
+            sql_text="select ai showsql 請求金額を確認したい",
+        )
+    )
+
+    assert deleted.executed is True
+    assert deleted.status == "deleted"
+    assert any("DBMS_CLOUD_AI.FEEDBACK" in sql for sql in fake_db.executed)
+    assert any(
+        (params or {}).get("sql_text") == "select ai showsql 請求金額を確認したい"
+        for params in fake_db.executed_params
+    )
+
+    updated = service.update_select_ai_feedback_vector_index(
+        SelectAiFeedbackVectorIndexRequest(
+            profile_name="default",
+            similarity_threshold=0.85,
+            match_limit=4,
+        )
+    )
+
+    assert updated.executed is True
+    assert updated.status == "updated"
+    assert any("DBMS_CLOUD_AI.UPDATE_VECTOR_INDEX" in sql for sql in fake_db.executed)
+    assert any(
+        (params or {}).get("index_name") == "DEFAULT_FEEDBACK_VECINDEX"
+        and '"match_limit": 4' in str((params or {}).get("attributes"))
+        for params in fake_db.executed_params
+    )
+    assert fake_db.commits >= 2
+
+
+def test_service_select_ai_feedback_missing_table_returns_warning() -> None:
+    fake_db = _FakeOracleDb()
+    fake_db.select_ai_feedback_missing = True
+    service = _OracleRuntimeNl2SqlService(_QuestionCaptureOracleAdapter(fake_db))
+
+    entries = service.list_select_ai_feedback_entries("default")
+
+    assert entries.runtime == "oracle"
+    assert entries.items == []
+    assert "feedback vector table" in " ".join(entries.warnings)
+
+    deleted = service.delete_select_ai_feedback(
+        SelectAiFeedbackDeleteRequest(profile_name="default", sql_text="select ai showsql x")
+    )
+    updated = service.update_select_ai_feedback_vector_index(
+        SelectAiFeedbackVectorIndexRequest(profile_name="default")
+    )
+
+    assert deleted.status == "error"
+    assert updated.status == "error"
+
+
+def test_service_select_ai_feedback_management_requires_oracle_runtime() -> None:
+    service = Nl2SqlService()
+
+    entries = service.list_select_ai_feedback_entries("default")
+    deleted = service.delete_select_ai_feedback(
+        SelectAiFeedbackDeleteRequest(profile_name="default", sql_text="select ai showsql x")
+    )
+    updated = service.update_select_ai_feedback_vector_index(
+        SelectAiFeedbackVectorIndexRequest(profile_name="default")
+    )
+
+    assert entries.items == []
+    assert "NL2SQL_RUNTIME_MODE=oracle" in " ".join(entries.warnings)
+    assert deleted.status == "requires_oracle"
+    assert updated.status == "requires_oracle"
 
 
 def test_service_similar_history_uses_oracle_vector_search(

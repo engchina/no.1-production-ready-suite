@@ -34,6 +34,15 @@ export function previewExecutePayload(
   allowedObjects: AllowedObjects,
   rowLimit: number
 ) {
+  return sqlExecutePayload(sql, profileId, allowedObjects, rowLimit);
+}
+
+export function sqlExecutePayload(
+  sql: string,
+  profileId: string | null,
+  allowedObjects: AllowedObjects,
+  rowLimit: number
+) {
   return {
     sql: sql.trim(),
     profile_id: profileId,

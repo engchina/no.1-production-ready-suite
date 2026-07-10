@@ -17,33 +17,46 @@ import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 import { Nl2SqlWorkbench } from "@/features/nl2sql/Nl2SqlWorkbench";
-import { DataToolsPage } from "@/features/nl2sql/pages/DataToolsPage";
+import { DataManagementPage } from "@/features/nl2sql/pages/DataManagementPage";
 import { EngineOperationsPage } from "@/features/nl2sql/pages/EngineOperationsPage";
 import { EvaluationPage } from "@/features/nl2sql/pages/EvaluationPage";
 import { GlossaryRulesPage } from "@/features/nl2sql/pages/GlossaryRulesPage";
 import { HistoryPage } from "@/features/nl2sql/pages/HistoryPage";
 import { LearningPage } from "@/features/nl2sql/pages/LearningPage";
-import { ProfileManagementPage } from "@/features/nl2sql/pages/ProfileManagementPage";
-import { SchemaCatalogPage } from "@/features/nl2sql/pages/SchemaCatalogPage";
 import {
-  ConnectionSettingsPage as Nl2SqlConnectionSettingsPage,
+  AnnotationManagementPage,
+  CommentManagementPage,
+} from "@/features/nl2sql/pages/MetadataSqlManagementPage";
+import { ProfileManagementPage } from "@/features/nl2sql/pages/ProfileManagementPage";
+import { SampleDataPage } from "@/features/nl2sql/pages/SampleDataPage";
+import { TableManagementPage } from "@/features/nl2sql/pages/TableManagementPage";
+import { ViewManagementPage } from "@/features/nl2sql/pages/ViewManagementPage";
+import {
   DatabaseSettingsPage as Nl2SqlDatabaseSettingsPage,
   ModelSettingsPage as Nl2SqlModelSettingsPage,
 } from "@/features/nl2sql/pages/SettingsPages";
 import { SqlAnalysisPage } from "@/features/nl2sql/pages/SqlAnalysisPage";
-import { DashboardPage } from "@/pages/DashboardPage";
+import { SqlToQuestionPage } from "@/features/nl2sql/pages/SqlToQuestionPage";
 
 export function App() {
   return (
     <AppLayout>
       <Routes>
-        <Route path={APP_ROUTES.dashboard} element={<DashboardPage />} />
-        <Route path={APP_ROUTES.schema} element={<SchemaCatalogPage />} />
-        <Route path={APP_ROUTES.dataTools} element={<DataToolsPage />} />
+        <Route path={APP_ROUTES.dashboard} element={<Navigate to={APP_ROUTES.query} replace />} />
+        <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
+        <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
+        <Route path={APP_ROUTES.dataManagement} element={<DataManagementPage />} />
+        <Route path={APP_ROUTES.sampleData} element={<SampleDataPage />} />
+        <Route path={APP_ROUTES.commentManagement} element={<CommentManagementPage />} />
+        <Route path={APP_ROUTES.annotationManagement} element={<AnnotationManagementPage />} />
+        {/* 旧ルート互換: スキーマ管理はテーブルの管理へ、データ投入はデータの管理へ */}
+        <Route path="/schema" element={<Navigate to={APP_ROUTES.tableManagement} replace />} />
+        <Route path="/data-tools" element={<Navigate to={APP_ROUTES.dataManagement} replace />} />
         <Route path={APP_ROUTES.query} element={<Nl2SqlWorkbench />} />
         <Route path={APP_ROUTES.profiles} element={<ProfileManagementPage />} />
         <Route path={APP_ROUTES.glossaryRules} element={<GlossaryRulesPage />} />
         <Route path={APP_ROUTES.sqlAnalysis} element={<SqlAnalysisPage />} />
+        <Route path={APP_ROUTES.sqlToQuestion} element={<SqlToQuestionPage />} />
         <Route path={APP_ROUTES.learning} element={<LearningPage />} />
         <Route path={APP_ROUTES.history} element={<HistoryPage />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
@@ -57,7 +70,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route
           path={APP_ROUTES.nl2sqlSettingsConnection}
-          element={<Nl2SqlConnectionSettingsPage />}
+          element={<Navigate to={APP_ROUTES.engineOperations} replace />}
         />
         <Route
           path={APP_ROUTES.nl2sqlSettingsModel}

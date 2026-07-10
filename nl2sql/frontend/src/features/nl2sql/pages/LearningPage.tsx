@@ -17,12 +17,12 @@ import { useNavigate } from "react-router-dom";
 import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { engineLabel } from "../labels";
 import { historyRerunUrl } from "../queryPrefillState";
 import type {
-  DemoLearningData,
   FeedbackData,
   FeedbackEntriesData,
   FeedbackIndexData,
@@ -38,6 +38,10 @@ import type {
   ClassifierStatusData,
   Nl2SqlProfile,
   ProfileRecommendationData,
+  SelectAiDbProfilesData,
+  SelectAiFeedbackEntriesData,
+  SelectAiFeedbackEntry,
+  SelectAiFeedbackMutationData,
   SimilarHistoryData,
   SimilarHistoryItem,
 } from "../types";
@@ -52,8 +56,15 @@ function feedbackLabel(item: HistoryItem) {
 
 export function LearningPage() {
   const navigate = useNavigate();
+  const confirm = useConfirm();
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [profileId, setProfileId] = useState("");
+  const [selectAiDbProfiles, setSelectAiDbProfiles] = useState<SelectAiDbProfilesData | null>(null);
+  const [selectAiProfileName, setSelectAiProfileName] = useState("");
+  const [selectAiFeedback, setSelectAiFeedback] = useState<SelectAiFeedbackEntriesData | null>(null);
+  const [selectedSelectAiFeedbackIndex, setSelectedSelectAiFeedbackIndex] = useState(0);
+  const [selectAiSimilarityThreshold, setSelectAiSimilarityThreshold] = useState(0.9);
+  const [selectAiMatchLimit, setSelectAiMatchLimit] = useState(3);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [question, setQuestion] = useState("登録済みの表から主要な列を一覧したい");
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
@@ -73,7 +84,6 @@ export function LearningPage() {
   const [classifierImport, setClassifierImport] = useState<ClassifierImportData | null>(null);
   const [classifierPrediction, setClassifierPrediction] = useState<ClassifierPredictionData | null>(null);
   const [classifierReplace, setClassifierReplace] = useState(false);
-  const [demoSeed, setDemoSeed] = useState<DemoLearningData | null>(null);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"error" | "success">("error");
@@ -99,14 +109,24 @@ export function LearningPage() {
     () => history.find((item) => item.id === selectedFeedbackId) ?? history[0] ?? null,
     [history, selectedFeedbackId]
   );
+  const selectedSelectAiFeedback = useMemo(() => {
+    const items = selectAiFeedback?.items ?? [];
+    return items[selectedSelectAiFeedbackIndex] ?? items[0] ?? null;
+  }, [selectAiFeedback, selectedSelectAiFeedbackIndex]);
+
+  const fetchSelectAiFeedback = (profileName: string) =>
+    apiGet<SelectAiFeedbackEntriesData>(
+      `/api/nl2sql/select-ai/feedback?profile_name=${encodeURIComponent(profileName)}&limit=50`
+    );
 
   const load = async () => {
     setLoading("load");
     setMessage("");
     try {
-      const [profileData, historyData] = await Promise.all([
+      const [profileData, historyData, dbProfileData] = await Promise.all([
         apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
         apiGet<HistoryData>("/api/nl2sql/history"),
+        apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles"),
       ]);
       const [indexData, classifierData, classifierModelData, entriesData, configData] = await Promise.all([
         apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index"),
@@ -115,7 +135,15 @@ export function LearningPage() {
         apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"),
         apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config"),
       ]);
+      const nextSelectAiProfile = selectAiProfileName || dbProfileData.profiles[0]?.name || "";
+      const selectAiFeedbackData = nextSelectAiProfile
+        ? await fetchSelectAiFeedback(nextSelectAiProfile)
+        : null;
       setProfiles(profileData);
+      setSelectAiDbProfiles(dbProfileData);
+      setSelectAiProfileName(nextSelectAiProfile);
+      setSelectAiFeedback(selectAiFeedbackData);
+      setSelectedSelectAiFeedbackIndex(0);
       setHistory(historyData.items);
       setFeedbackIndex(indexData);
       setFeedbackEntries(entriesData);
@@ -127,6 +155,76 @@ export function LearningPage() {
     } catch (err) {
       setMessageTone("error");
       setMessage(err instanceof Error ? err.message : t("learning.error.load"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const refreshSelectAiFeedback = async (profileName = selectAiProfileName) => {
+    const name = profileName.trim();
+    if (!name) return;
+    setLoading("select-ai-feedback");
+    setMessage("");
+    try {
+      setSelectAiFeedback(await fetchSelectAiFeedback(name));
+      setSelectedSelectAiFeedbackIndex(0);
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.selectAiFeedback"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const deleteSelectAiFeedback = async () => {
+    if (!selectedSelectAiFeedback || !selectAiProfileName.trim()) return;
+    const ok = await confirm({
+      title: t("learning.selectAiFeedback.deleteConfirmTitle"),
+      description: t("learning.selectAiFeedback.deleteConfirmDescription"),
+      confirmLabel: t("learning.selectAiFeedback.delete"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
+    setLoading("select-ai-feedback-delete");
+    setMessage("");
+    try {
+      const data = await apiPost<SelectAiFeedbackMutationData>("/api/nl2sql/select-ai/feedback/delete", {
+        profile_name: selectAiProfileName,
+        sql_text: selectedSelectAiFeedback.sql_text,
+      });
+      setMessageTone(data.executed ? "success" : "error");
+      setMessage(data.warnings.join(" ") || t("learning.selectAiFeedback.deleted"));
+      setSelectAiFeedback(await fetchSelectAiFeedback(selectAiProfileName));
+      setSelectedSelectAiFeedbackIndex(0);
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.selectAiFeedbackDelete"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const updateSelectAiFeedbackVectorIndex = async () => {
+    if (!selectAiProfileName.trim()) return;
+    setLoading("select-ai-feedback-update");
+    setMessage("");
+    try {
+      const data = await apiPost<SelectAiFeedbackMutationData>(
+        "/api/nl2sql/select-ai/feedback/vector-index",
+        {
+          profile_name: selectAiProfileName,
+          similarity_threshold: selectAiSimilarityThreshold,
+          match_limit: selectAiMatchLimit,
+        }
+      );
+      setMessageTone(data.executed ? "success" : "error");
+      setMessage(data.warnings.join(" ") || t("learning.selectAiFeedback.indexUpdated"));
+      setSelectAiFeedback(await fetchSelectAiFeedback(selectAiProfileName));
+      setSelectedSelectAiFeedbackIndex(0);
+    } catch (err) {
+      setMessageTone("error");
+      setMessage(err instanceof Error ? err.message : t("learning.error.selectAiFeedbackUpdate"));
     } finally {
       setLoading("");
     }
@@ -403,30 +501,6 @@ export function LearningPage() {
     }
   };
 
-  const seedDemoLearning = async () => {
-    setLoading("demo");
-    setMessage("");
-    try {
-      const data = await apiPost<DemoLearningData>("/api/nl2sql/demo/learning", {});
-      const [historyData, indexData] = await Promise.all([
-        apiGet<HistoryData>("/api/nl2sql/history"),
-        apiGet<FeedbackIndexData>("/api/nl2sql/feedback-index"),
-      ]);
-      setHistory(historyData.items);
-      setFeedbackIndex(indexData);
-      setFeedbackEntries(await apiGet<FeedbackEntriesData>("/api/nl2sql/feedback-entries"));
-      setSelectedFeedbackId((current) => current || historyData.items[0]?.id || "");
-      setDemoSeed(data);
-      setMessageTone("success");
-      setMessage(data.message);
-    } catch (err) {
-      setMessageTone("error");
-      setMessage(err instanceof Error ? err.message : t("learning.error.demoSeed"));
-    } finally {
-      setLoading("");
-    }
-  };
-
   return (
     <>
       <PageHeader
@@ -434,17 +508,6 @@ export function LearningPage() {
         subtitle={t("learning.subtitle")}
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              loading={loading === "demo"}
-              disabled={loading === "demo"}
-              onClick={() => void seedDemoLearning()}
-            >
-              <DatabaseZap size={15} aria-hidden="true" />
-              <span>{t("learning.action.demoSeed")}</span>
-            </Button>
             <Button
               type="button"
               variant="secondary"
@@ -471,22 +534,162 @@ export function LearningPage() {
             {message}
           </div>
         )}
-        {demoSeed && (
-          <section className="grid gap-3 rounded-md border border-sky-200 bg-sky-50 p-4 text-sm text-slate-800 md:grid-cols-[1fr_1fr_1fr]">
-            <CompactFact
-              label={t("learning.demo.historyCount")}
-              value={String(demoSeed.seeded_history_count)}
-            />
-            <CompactFact
-              label={t("learning.demo.feedbackCount")}
-              value={String(demoSeed.seeded_feedback_count)}
-            />
-            <CompactFact
-              label={t("learning.demo.profiles")}
-              value={demoSeed.profile_ids.join(", ") || "-"}
-            />
-          </section>
-        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MessageSquareText size={18} aria-hidden="true" />
+              {t("learning.selectAiFeedback.title")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]">
+            <div className="grid content-start gap-3">
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                <label className="grid gap-1 text-sm font-medium text-slate-800">
+                  <span>{t("learning.selectAiFeedback.profile")}</span>
+                  <select
+                    value={selectAiProfileName}
+                    onChange={(event) => {
+                      const nextProfileName = event.currentTarget.value;
+                      setSelectAiProfileName(nextProfileName);
+                      void refreshSelectAiFeedback(nextProfileName);
+                    }}
+                    className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                  >
+                    {(selectAiDbProfiles?.profiles ?? []).map((profile) => (
+                      <option key={profile.name} value={profile.name}>
+                        {profile.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    loading={loading === "select-ai-feedback"}
+                    disabled={!selectAiProfileName.trim()}
+                    onClick={() => void refreshSelectAiFeedback()}
+                  >
+                    <RefreshCw size={15} aria-hidden="true" />
+                    <span>{t("learning.selectAiFeedback.refresh")}</span>
+                  </Button>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge variant="neutral" label={selectAiFeedback?.runtime ?? "deterministic"} />
+                <StatusBadge
+                  variant="neutral"
+                  label={t("learning.selectAiFeedback.entryTotal", {
+                    count: selectAiFeedback?.total ?? 0,
+                  })}
+                />
+                {selectAiFeedback?.index_name && (
+                  <code className="break-all rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-900">
+                    {selectAiFeedback.index_name}
+                  </code>
+                )}
+              </div>
+              {(selectAiFeedback?.warnings ?? []).map((warning) => (
+                <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  {warning}
+                </p>
+              ))}
+              <div className="overflow-x-auto rounded-md border border-slate-200">
+                <table className="min-w-full divide-y divide-slate-200 text-sm">
+                  <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-600">
+                    <tr>
+                      <th scope="col" className="px-3 py-2">{t("learning.selectAiFeedback.sqlId")}</th>
+                      <th scope="col" className="px-3 py-2">{t("learning.selectAiFeedback.content")}</th>
+                      <th scope="col" className="px-3 py-2">{t("learning.selectAiFeedback.sqlText")}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {(selectAiFeedback?.items ?? []).map((entry, index) => (
+                      <SelectAiFeedbackRow
+                        key={`${entry.sql_id}-${index}`}
+                        entry={entry}
+                        selected={selectedSelectAiFeedbackIndex === index}
+                        onSelect={() => setSelectedSelectAiFeedbackIndex(index)}
+                      />
+                    ))}
+                    {(!selectAiFeedback || selectAiFeedback.items.length === 0) && (
+                      <tr>
+                        <td colSpan={3} className="px-3 py-6">
+                          <EmptyState
+                            title={t("learning.selectAiFeedback.emptyTitle")}
+                            hint={t("learning.selectAiFeedback.emptyHint")}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="grid content-start gap-3">
+              <label className="grid gap-1 text-sm font-medium text-slate-800">
+                <span>{t("learning.selectAiFeedback.selectedSql")}</span>
+                <textarea
+                  readOnly
+                  value={selectedSelectAiFeedback?.sql_text ?? ""}
+                  rows={7}
+                  className="min-h-44 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-xs leading-5 text-slate-800 outline-none"
+                />
+              </label>
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                loading={loading === "select-ai-feedback-delete"}
+                disabled={!selectedSelectAiFeedback}
+                onClick={() => void deleteSelectAiFeedback()}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+                <span>{t("learning.selectAiFeedback.delete")}</span>
+              </Button>
+              <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-semibold text-slate-900">{t("learning.selectAiFeedback.indexTitle")}</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("learning.index.threshold")}</span>
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={0.95}
+                      step={0.05}
+                      value={selectAiSimilarityThreshold}
+                      onChange={(event) => setSelectAiSimilarityThreshold(Number(event.currentTarget.value) || 0.9)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm font-medium text-slate-800">
+                    <span>{t("learning.index.matchLimit")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={selectAiMatchLimit}
+                      onChange={(event) => setSelectAiMatchLimit(Number(event.currentTarget.value) || 3)}
+                      className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+                    />
+                  </label>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  loading={loading === "select-ai-feedback-update"}
+                  disabled={!selectAiProfileName.trim()}
+                  onClick={() => void updateSelectAiFeedbackVectorIndex()}
+                >
+                  <Save size={15} aria-hidden="true" />
+                  <span>{t("learning.selectAiFeedback.updateIndex")}</span>
+                </Button>
+              </section>
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -1119,6 +1322,39 @@ function FeedbackHistoryRow({ item }: { item: HistoryItem }) {
         </p>
       )}
     </section>
+  );
+}
+
+function SelectAiFeedbackRow({
+  entry,
+  selected,
+  onSelect,
+}: {
+  entry: SelectAiFeedbackEntry;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <tr className={selected ? "bg-sky-50" : "hover:bg-slate-50"}>
+      <td className="max-w-36 px-3 py-2 align-top">
+        <button
+          type="button"
+          className="min-h-11 w-full rounded-md px-2 py-1 text-left font-mono text-xs font-semibold text-sky-800 outline-none hover:bg-sky-100 focus:ring-2 focus:ring-sky-200"
+          aria-pressed={selected}
+          onClick={onSelect}
+        >
+          {entry.sql_id || "-"}
+        </button>
+      </td>
+      <td className="max-w-80 px-3 py-2 align-top text-xs leading-5 text-slate-700">
+        <p className="line-clamp-3 break-words">{entry.content || "-"}</p>
+      </td>
+      <td className="max-w-96 px-3 py-2 align-top">
+        <pre className="max-h-20 overflow-hidden whitespace-pre-wrap break-words font-mono text-xs leading-5 text-slate-800">
+          {entry.sql_text || "-"}
+        </pre>
+      </td>
+    </tr>
   );
 }
 

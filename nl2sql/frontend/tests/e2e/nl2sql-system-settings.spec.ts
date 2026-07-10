@@ -401,8 +401,9 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await expectNoHorizontalOverflow(page);
 });
 
-test("旧 NL2SQL 設定は名前を変えたルートに残っている", async ({ page }) => {
+test("旧 NL2SQL 接続診断ルートはエンジン運用に集約される", async ({ page }) => {
   await page.goto("/settings/nl2sql-connection");
-  await expect(page.getByRole("heading", { name: "NL2SQL 接続診断" })).toBeVisible();
+  await expect(page).toHaveURL(/\/engine-operations$/);
+  await expect(page.getByRole("heading", { name: "エンジン運用" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });

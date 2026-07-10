@@ -7,7 +7,7 @@ service 層の adapter に閉じ込め、API と UI は同じ shape を使い続
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -107,6 +107,7 @@ class Nl2SqlProfile(BaseModel):
 
     id: str
     name: str
+    category: str = ""
     description: str = ""
     allowed_tables: list[str] = Field(default_factory=list)
     glossary: dict[str, str] = Field(default_factory=dict)
@@ -121,6 +122,7 @@ class ProfileUpsertRequest(BaseModel):
     """Profile 作成/更新 request."""
 
     name: str = Field(min_length=1)
+    category: str = ""
     description: str = ""
     allowed_tables: list[str] = Field(default_factory=list)
     glossary: dict[str, str] = Field(default_factory=dict)
@@ -142,6 +144,20 @@ class ProfileLearningMaterialImportData(BaseModel):
     skipped_count: int = 0
     warnings: list[str] = Field(default_factory=list)
     profile: Nl2SqlProfile
+
+
+class LegacySqlRuleEntry(BaseModel):
+    """旧版 rules.xlsx の 1 行."""
+
+    category: str = "共通"
+    rule: str
+
+
+class LegacyLearningMaterialData(BaseModel):
+    """旧版 terms.xlsx / rules.xlsx 互換の用語・ルール."""
+
+    glossary: dict[str, str] = Field(default_factory=dict)
+    rule_entries: list[LegacySqlRuleEntry] = Field(default_factory=list)
 
 
 class SafetyReport(BaseModel):
@@ -288,6 +304,107 @@ class DbAdminImportTabularRequest(AdminExecutionConfirmation):
     sheet_name: str = ""
     mode: str = "create"
     max_rows: int | None = Field(default=None, ge=1, le=50000)
+
+
+DbAdminStatementPolicy = Literal[
+    "table_ddl",
+    "view_ddl",
+    "data_dml",
+    "comment_sql",
+    "annotation_sql",
+]
+
+
+class DbAdminStatementsRequest(AdminExecutionConfirmation):
+    """文種 whitelist 付き複数 statement 実行 request(SQL Assist 移植)。"""
+
+    sql: str = Field(min_length=1)
+    policy: DbAdminStatementPolicy
+
+
+class DbAdminDropViewRequest(AdminExecutionConfirmation):
+    """Drop view dry-run / execution request."""
+
+    view_name: str = Field(min_length=1)
+
+
+class DbAdminDataPreviewRequest(BaseModel):
+    """テーブル/ビューのデータ表示 request。"""
+
+    object_name: str = Field(min_length=1)
+    limit: int = Field(default=100, ge=1, le=10000)
+    where_clause: str = ""
+
+
+class DbAdminDataPreviewData(BaseModel):
+    """テーブル/ビューのデータ表示 response。"""
+
+    runtime: str = "deterministic"
+    sql: str = ""
+    results: QueryResults
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminCsvUploadRequest(AdminExecutionConfirmation):
+    """既存テーブルへの CSV アップロード(INSERT / TRUNCATE&INSERT)request。"""
+
+    table_name: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1)
+    filename: str = "upload.csv"
+    mode: Literal["insert", "truncate_insert"] = "insert"
+    max_rows: int | None = Field(default=None, ge=1, le=50000)
+
+
+class DbAdminCsvUploadData(BaseModel):
+    """CSV アップロード dry-run / execution response。"""
+
+    table_name: str
+    filename: str = ""
+    mode: str = "insert"
+    matched_columns: list[str] = Field(default_factory=list)
+    unmatched_csv_columns: list[str] = Field(default_factory=list)
+    row_count: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    row_errors: list[str] = Field(default_factory=list)
+    hint: str = ""
+    dry_run: bool = True
+    executed: bool = False
+    runtime: str = "deterministic"
+    sample_rows: list[dict[str, str | None]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class DbAdminAiAnalysisRequest(BaseModel):
+    """Admin SQL 実行結果の AI 分析 request。"""
+
+    sql: str = ""
+    result_text: str = ""
+    target: Literal["table", "view", "data", "comment", "annotation"] = "table"
+
+
+class DbAdminAiAnalysisData(BaseModel):
+    """Admin SQL 実行結果の AI 分析 response。"""
+
+    analysis: str = ""
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminJoinWhereRequest(BaseModel):
+    """ビュー DDL の JOIN/WHERE 条件抽出 request。"""
+
+    ddl: str = Field(min_length=1)
+
+
+class DbAdminJoinWhereData(BaseModel):
+    """ビュー DDL の JOIN/WHERE 条件抽出 response。"""
+
+    join_text: str = "None"
+    where_text: str = "None"
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
 
 
 class Nl2SqlResult(BaseModel):
@@ -889,6 +1006,56 @@ class SelectAiProfilesImportRequest(AdminExecutionConfirmation):
     replace_existing: bool = False
 
 
+class SelectAiFeedbackEntry(BaseModel):
+    """Oracle Select AI feedback vector table row."""
+
+    content: str = ""
+    sql_id: str = ""
+    sql_text: str = ""
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    raw_attributes: str = ""
+
+
+class SelectAiFeedbackEntriesData(BaseModel):
+    """Oracle Select AI feedback management list response."""
+
+    runtime: str = "deterministic"
+    profile_name: str = ""
+    index_name: str = ""
+    table_name: str = ""
+    items: list[SelectAiFeedbackEntry] = Field(default_factory=list)
+    total: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SelectAiFeedbackDeleteRequest(BaseModel):
+    """Delete one Oracle Select AI feedback entry by SQL text."""
+
+    profile_name: str = Field(min_length=1)
+    sql_text: str = Field(min_length=1)
+
+
+class SelectAiFeedbackVectorIndexRequest(BaseModel):
+    """Update Oracle Select AI feedback vector index attributes."""
+
+    profile_name: str = Field(min_length=1)
+    similarity_threshold: float = Field(default=0.9, ge=0.1, le=0.95)
+    match_limit: int = Field(default=3, ge=1, le=5)
+
+
+class SelectAiFeedbackMutationData(BaseModel):
+    """Oracle Select AI feedback mutation response."""
+
+    runtime: str = "deterministic"
+    executed: bool = False
+    status: str = "dry_run"
+    profile_name: str = ""
+    index_name: str = ""
+    table_name: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentTeamRunRequest(BaseModel):
     """Select AI Agent team run request."""
 
@@ -1083,6 +1250,8 @@ class ReverseSqlRequest(BaseModel):
     """SQL から自然言語説明を生成する request."""
 
     sql: str = Field(min_length=1)
+    profile_id: str | None = None
+    use_glossary: bool = False
 
 
 class ReverseSqlData(BaseModel):
@@ -1091,6 +1260,7 @@ class ReverseSqlData(BaseModel):
     question: str
     explanation: str
     referenced_tables: list[str]
+    logical_structure: str = ""
     logical_steps: list[str] = Field(default_factory=list)
     source: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
@@ -1210,6 +1380,33 @@ class AnnotationApplyData(BaseModel):
     executed: bool = False
     runtime: str = "deterministic"
     statements: list[AnnotationApplyStatement] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class MetadataSqlTarget(BaseModel):
+    """Comment / annotation generation target object."""
+
+    object_name: str = Field(min_length=1, max_length=260)
+    object_type: Literal["table", "view"] = "table"
+
+
+class MetadataSqlGenerateRequest(BaseModel):
+    """SQL Assist comment / annotation generation input."""
+
+    targets: list[MetadataSqlTarget] = Field(default_factory=list)
+    structure_text: str = ""
+    primary_key_text: str = ""
+    foreign_key_text: str = ""
+    sample_text: str = ""
+    extra_text: str = ""
+
+
+class MetadataSqlGenerateData(BaseModel):
+    """Generated comment / annotation SQL."""
+
+    sql: str = ""
+    source: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
     timing: TimingEnvelope
 

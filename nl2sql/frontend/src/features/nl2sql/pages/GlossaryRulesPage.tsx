@@ -5,7 +5,12 @@ import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, PageHeade
 
 import { apiGet, apiPatch } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import type { Nl2SqlProfile, ProfileLearningMaterialImportData, ProfileUpsertPayload } from "../types";
+import type {
+  LegacyLearningMaterialData,
+  Nl2SqlProfile,
+  ProfileLearningMaterialImportData,
+  ProfileUpsertPayload,
+} from "../types";
 
 interface GlossaryFormState {
   glossaryText: string;
@@ -139,6 +144,7 @@ function profileToForm(profile: Nl2SqlProfile): GlossaryFormState {
 function profileToPayload(profile: Nl2SqlProfile, form: GlossaryFormState): ProfileUpsertPayload {
   return {
     name: profile.name,
+    category: profile.category ?? "",
     description: profile.description,
     allowed_tables: profile.allowed_tables,
     glossary: textToGlossary(form.glossaryText),
@@ -151,10 +157,15 @@ function profileToPayload(profile: Nl2SqlProfile, form: GlossaryFormState): Prof
 
 export function GlossaryRulesPage() {
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
+  const [legacyMaterial, setLegacyMaterial] = useState<LegacyLearningMaterialData>({
+    glossary: {},
+    rule_entries: [],
+  });
   const [selectedId, setSelectedId] = useState("");
   const [form, setForm] = useState<GlossaryFormState>(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [legacyBusy, setLegacyBusy] = useState(false);
   const [materialBusy, setMaterialBusy] = useState(false);
   const [materialMode, setMaterialMode] = useState<"merge" | "replace">("merge");
   const [message, setMessage] = useState("");
@@ -168,8 +179,12 @@ export function GlossaryRulesPage() {
     setLoading(true);
     setMessage("");
     try {
-      const profileData = await apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles");
+      const [profileData, legacyData] = await Promise.all([
+        apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
+        apiGet<LegacyLearningMaterialData>("/api/nl2sql/legacy-learning-material"),
+      ]);
       setProfiles(profileData);
+      setLegacyMaterial(legacyData);
       const next = profileData.find((profile) => profile.id === selectedId) ?? profileData[0] ?? null;
       setSelectedId(next?.id ?? "");
       setForm(next ? profileToForm(next) : EMPTY_FORM);
@@ -207,6 +222,46 @@ export function GlossaryRulesPage() {
       setMessage(err instanceof Error ? err.message : t("glossary.error.save"));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const importLegacyMaterial = async (
+    file: File | undefined,
+    kind: "terms" | "rules"
+  ) => {
+    if (!file) return;
+    setLegacyBusy(true);
+    setMessage("");
+    try {
+      const data = await uploadLegacyLearningMaterialFile(kind, file);
+      setLegacyMaterial(data);
+      setMessage(
+        t("glossary.message.legacyImported", {
+          terms: Object.keys(data.glossary).length,
+          rules: data.rule_entries.length,
+        })
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("glossary.error.importMaterial"));
+    } finally {
+      setLegacyBusy(false);
+    }
+  };
+
+  const exportLegacyMaterial = async (kind: "terms" | "rules") => {
+    setLegacyBusy(true);
+    setMessage("");
+    try {
+      const filename = kind === "terms" ? "terms.xlsx" : "rules.xlsx";
+      const response = await fetch(`/api/nl2sql/legacy-learning-material/${kind}/export.xlsx`, {
+        headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+      });
+      if (!response.ok) throw new Error(t("glossary.error.exportMaterial"));
+      downloadBlob(filename, await response.blob());
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("glossary.error.exportMaterial"));
+    } finally {
+      setLegacyBusy(false);
     }
   };
 
@@ -335,52 +390,91 @@ export function GlossaryRulesPage() {
           </Button>
         }
       />
-      <main className="grid gap-5 p-4 lg:grid-cols-[minmax(16rem,0.55fr)_minmax(0,1.45fr)] lg:p-8">
+      <main className="grid gap-5 p-4 lg:p-8">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <BookOpen size={18} aria-hidden="true" />
-              {t("glossary.profiles.title")}
+              {t("glossary.legacy.title")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-2">
-            {profiles.length === 0 ? (
-              <EmptyState title={t("profiles.empty.title")} hint={t("profiles.empty.hint")} />
-            ) : (
-              profiles.map((profile) => (
-                <button
-                  key={profile.id}
-                  type="button"
-                  onClick={() => selectProfile(profile.id)}
-                  className={`grid gap-2 rounded-md border p-3 text-left transition ${
-                    selectedId === profile.id ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-white hover:bg-slate-50"
-                  }`}
-                >
-                  <span className="font-medium text-slate-900">{profile.name}</span>
-                  <span className="flex flex-wrap gap-2">
-                    <StatusBadge
-                      variant="neutral"
-                      label={t("glossary.count.terms", { count: Object.keys(profile.glossary).length })}
-                    />
-                    <StatusBadge
-                      variant="neutral"
-                      label={t("glossary.count.rules", { count: profile.sql_rules.length })}
-                    />
-                    <StatusBadge
-                      variant="neutral"
-                      label={t("glossary.count.examples", { count: profile.few_shot_examples.length })}
-                    />
-                  </span>
-                </button>
-              ))
-            )}
+          <CardContent className="grid gap-4">
+            <p className="text-sm leading-6 text-slate-600">{t("glossary.legacy.hint")}</p>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <LegacyMaterialPanel
+                title={t("glossary.legacy.terms")}
+                countLabel={t("glossary.count.terms", { count: Object.keys(legacyMaterial.glossary).length })}
+                importLabel={t("glossary.legacy.importTerms")}
+                exportLabel={t("glossary.legacy.exportTerms")}
+                busy={legacyBusy}
+                rows={Object.entries(legacyMaterial.glossary).map(([term, definition]) => `${term} = ${definition}`)}
+                onImport={(file) => void importLegacyMaterial(file, "terms")}
+                onExport={() => void exportLegacyMaterial("terms")}
+              />
+              <LegacyMaterialPanel
+                title={t("glossary.legacy.rules")}
+                countLabel={t("glossary.count.rules", { count: legacyMaterial.rule_entries.length })}
+                importLabel={t("glossary.legacy.importRules")}
+                exportLabel={t("glossary.legacy.exportRules")}
+                busy={legacyBusy}
+                rows={legacyMaterial.rule_entries.map((entry) => `${entry.category}: ${entry.rule}`)}
+                onImport={(file) => void importLegacyMaterial(file, "rules")}
+                onExport={() => void exportLegacyMaterial("rules")}
+              />
+            </div>
           </CardContent>
         </Card>
 
-        <Card>
+        <div className="grid gap-5 lg:grid-cols-[minmax(16rem,0.55fr)_minmax(0,1.45fr)]">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BookOpen size={18} aria-hidden="true" />
+                {t("glossary.profiles.title")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-2">
+              {profiles.length === 0 ? (
+                <EmptyState title={t("profiles.empty.title")} hint={t("profiles.empty.hint")} />
+              ) : (
+                profiles.map((profile) => (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    onClick={() => selectProfile(profile.id)}
+                    className={`grid gap-2 rounded-md border p-3 text-left transition ${
+                      selectedId === profile.id ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-white hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="font-medium text-slate-900">{profile.name}</span>
+                    <span className="flex flex-wrap gap-2">
+                      <StatusBadge
+                        variant="neutral"
+                        label={t("glossary.count.terms", { count: Object.keys(profile.glossary).length })}
+                      />
+                      <StatusBadge
+                        variant="neutral"
+                        label={t("glossary.count.rules", { count: profile.sql_rules.length })}
+                      />
+                      <StatusBadge
+                        variant="neutral"
+                        label={t("glossary.count.examples", { count: profile.few_shot_examples.length })}
+                      />
+                    </span>
+                  </button>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
           <CardHeader>
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <CardTitle>{selectedProfile?.name ?? t("glossary.editor.title")}</CardTitle>
+              <CardTitle>
+                {selectedProfile
+                  ? `${t("glossary.profileOverride.title")}: ${selectedProfile.name}`
+                  : t("glossary.profileOverride.title")}
+              </CardTitle>
               <Button
                 type="button"
                 size="sm"
@@ -489,7 +583,8 @@ export function GlossaryRulesPage() {
               </section>
             </div>
           </CardContent>
-        </Card>
+          </Card>
+        </div>
       </main>
     </>
   );
@@ -520,6 +615,93 @@ async function uploadProfileLearningMaterialFile(
     throw new Error(payload.error || payload.detail || t("glossary.error.importMaterial"));
   }
   return payload.data;
+}
+
+async function uploadLegacyLearningMaterialFile(
+  kind: "terms" | "rules",
+  file: File
+): Promise<LegacyLearningMaterialData> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`/api/nl2sql/legacy-learning-material/${kind}/import`, {
+    method: "POST",
+    body: form,
+    headers: { Accept: "application/json" },
+  });
+  const payload = (await response.json()) as {
+    data?: LegacyLearningMaterialData;
+    error?: string;
+    detail?: string;
+  };
+  if (!response.ok || !payload.data) {
+    throw new Error(payload.error || payload.detail || t("glossary.error.importMaterial"));
+  }
+  return payload.data;
+}
+
+function LegacyMaterialPanel({
+  title,
+  countLabel,
+  importLabel,
+  exportLabel,
+  busy,
+  rows,
+  onImport,
+  onExport,
+}: {
+  title: string;
+  countLabel: string;
+  importLabel: string;
+  exportLabel: string;
+  busy: boolean;
+  rows: string[];
+  onImport: (file: File | undefined) => void;
+  onExport: () => void;
+}) {
+  return (
+    <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-slate-900">{title}</span>
+          <StatusBadge variant="neutral" label={countLabel} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="relative inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 hover:bg-slate-100 focus-within:ring-2 focus-within:ring-sky-200">
+            <Upload size={15} aria-hidden="true" />
+            <span>{importLabel}</span>
+            <input
+              type="file"
+              accept=".csv,.tsv,.txt,.xlsx,.xlsm"
+              className="absolute inset-0 cursor-pointer opacity-0"
+              aria-label={importLabel}
+              disabled={busy}
+              onChange={(event) => {
+                onImport(event.currentTarget.files?.[0]);
+                event.currentTarget.value = "";
+              }}
+            />
+          </span>
+          <Button type="button" variant="secondary" size="sm" loading={busy} onClick={onExport}>
+            <Download size={15} aria-hidden="true" />
+            <span>{exportLabel}</span>
+          </Button>
+        </div>
+      </div>
+      <div className="max-h-48 overflow-auto rounded-md border border-slate-200 bg-white p-3 text-sm leading-6 text-slate-700">
+        {rows.length === 0 ? (
+          <p className="text-slate-500">{t("glossary.legacy.empty")}</p>
+        ) : (
+          <ul className="grid gap-1">
+            {rows.map((row, index) => (
+              <li key={`${row}-${index}`} className="break-words font-mono text-xs">
+                {row}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function FieldToolbar({

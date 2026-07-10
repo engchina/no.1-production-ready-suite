@@ -16,6 +16,7 @@ import { elapsedSecondsSince, formatElapsed } from "../src/features/nl2sql/opera
 import {
   previewExecutePayload,
   previewToGeneratedSqlPanelData,
+  sqlExecutePayload,
 } from "../src/features/nl2sql/previewState.ts";
 import {
   historyRerunUrl,
@@ -30,6 +31,7 @@ import { formatSampleValues, formatSchemaCount } from "../src/features/nl2sql/sc
 import type { HistoryItem, PreviewData, SchemaColumn, SchemaTable } from "../src/features/nl2sql/types.ts";
 import {
   buildSchemaInsertText,
+  buildSchemaSqlIdentifierText,
   emptySelection,
   insertTextAtRange,
   toAllowedObjects,
@@ -76,6 +78,10 @@ class MemoryStorage implements ActiveJobStorage {
 
 test("schema insertion uses denpyo-style logical table and column names", () => {
   assert.equal(buildSchemaInsertText(invoiceTable, invoiceColumn), "\"請求\".\"請求金額\"");
+});
+
+test("schema SQL insertion uses quoted physical table and column names", () => {
+  assert.equal(buildSchemaSqlIdentifierText(invoiceTable, invoiceColumn), "\"INVOICES\".\"TOTAL_AMOUNT\"");
 });
 
 test("selection converts to allowed_objects without empty column arrays", () => {
@@ -166,6 +172,23 @@ test("SQL analysis payload trims SQL and clamps row limits", () => {
     sql: "SELECT * FROM CUSTOMERS",
     row_limit: 5000,
   });
+});
+
+test("SQL execution payload trims SQL and preserves execution scope", () => {
+  assert.deepEqual(
+    sqlExecutePayload(
+      " SELECT TOTAL_AMOUNT FROM INVOICES ",
+      "finance",
+      { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } },
+      250
+    ),
+    {
+      sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
+      profile_id: "finance",
+      allowed_objects: { table_names: ["INVOICES"], columns: { INVOICES: ["TOTAL_AMOUNT"] } },
+      row_limit: 250,
+    }
+  );
 });
 
 test("active job persistence restores and clears polling state", () => {

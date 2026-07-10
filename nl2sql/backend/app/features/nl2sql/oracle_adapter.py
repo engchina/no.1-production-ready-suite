@@ -11,7 +11,7 @@ import json
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +44,41 @@ def _coerce_result_value(value: Any) -> Any:
     if callable(read):
         return _coerce_text(value)
     return value
+
+
+_FLEXIBLE_DATE_FORMATS = (
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y%m%d",
+    "%d/%m/%Y",
+    "%m/%d/%Y",
+    "%Y年%m月%d日",
+)
+
+
+def _flexible_date_value(value: str) -> datetime | None:
+    """CSV セル値を柔軟に datetime へ変換する(SQL Assist の _convert_to_date 再マップ)。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    # 'YYYY-MM-DD HH:MM:SS.ffffff' のマイクロ秒は落として解釈する
+    text = re.sub(r"\.\d+$", "", text)
+    for fmt in _FLEXIBLE_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)  # noqa: DTZ007
+        except ValueError:
+            continue
+    # Excel シリアル日付(1899-12-30 起点、9999-12-31 まで)
+    try:
+        serial = float(text)
+    except ValueError:
+        return None
+    if 1 <= serial <= 2958465:
+        return datetime(1899, 12, 30) + timedelta(days=serial)  # noqa: DTZ001
+    return None
 
 
 def _extract_select_statement(text: str) -> str:
@@ -86,6 +121,15 @@ def _strict_sql_name(value: str) -> str:
     if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", normalized):
         raise OracleAdapterError(f"安全でない Oracle object name です: {value}")
     return normalized
+
+
+def _select_ai_feedback_index_names(profile_name: str) -> tuple[str, str, str]:
+    safe_profile = _strict_sql_name(profile_name)
+    index_name = f"{safe_profile}_FEEDBACK_VECINDEX"
+    table_name = f"{index_name}$VECTAB"
+    if len(index_name) > 128 or len(table_name) > 128:
+        raise OracleAdapterError(f"feedback index 名が長すぎます: {profile_name}")
+    return safe_profile, index_name, table_name
 
 
 def _oracle_connect_kwargs(settings: Settings) -> dict[str, object]:
@@ -457,10 +501,30 @@ class OracleNl2SqlAdapter:
                     row_count = int(row[0] or 0) if row else None
                 except Exception as exc:
                     warnings.append(f"row count の取得に失敗しました: {exc}")
+            ddl_type = normalized_type
+            if normalized_type == "VIEW":
+                # MView/実体 TABLE を VIEW として GET_DDL すると ORA-31603 になるため
+                # user_objects で実種別を判定する
+                with suppress(Exception):
+                    cursor.execute(
+                        """
+                        SELECT object_type FROM user_objects
+                        WHERE object_name = :object_name
+                        ORDER BY CASE object_type
+                          WHEN 'MATERIALIZED VIEW' THEN 0 WHEN 'VIEW' THEN 1 ELSE 2 END
+                        """,
+                        {"object_name": safe_name},
+                    )
+                    row = cursor.fetchone()
+                    actual = str(row[0] or "").upper() if row else ""
+                    if actual == "MATERIALIZED VIEW":
+                        ddl_type = "MATERIALIZED_VIEW"
+                    elif actual == "TABLE":
+                        ddl_type = "TABLE"
             try:
                 cursor.execute(
                     "SELECT DBMS_METADATA.GET_DDL(:object_type, :object_name) FROM DUAL",
-                    {"object_type": normalized_type, "object_name": safe_name},
+                    {"object_type": ddl_type, "object_name": safe_name},
                 )
                 row = cursor.fetchone()
                 ddl = _coerce_text(row[0]) if row and row[0] else ""
@@ -495,10 +559,17 @@ class OracleNl2SqlAdapter:
             "warnings": warnings,
         }
 
-    def execute_admin_statements(self, statements: list[str]) -> list[dict[str, Any]]:
-        """Execute non-SELECT admin SQL statements with all-or-nothing transaction."""
+    def execute_admin_statements(
+        self, statements: list[str], *, atomic: bool = True
+    ) -> list[dict[str, Any]]:
+        """Execute non-SELECT admin SQL statements.
+
+        atomic=True は all-or-nothing、atomic=False は SQL Assist 互換の部分成功
+        (成功が 1 件でもあれば commit、全滅なら rollback)。
+        """
         results: list[dict[str, Any]] = []
         ok = True
+        success_count = 0
         with self.connection() as conn, conn.cursor() as cursor:
             with suppress(Exception):
                 cursor.callproc("dbms_output.enable")
@@ -514,6 +585,7 @@ class OracleNl2SqlAdapter:
                         row_count,
                     )
                     elapsed_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+                    success_count += 1
                     results.append(
                         {
                             "index": index,
@@ -540,7 +612,8 @@ class OracleNl2SqlAdapter:
                             "error_message": str(exc),
                         }
                     )
-            if ok:
+            committed = ok if atomic else success_count > 0
+            if committed:
                 conn.commit()
             else:
                 conn.rollback()
@@ -595,6 +668,125 @@ class OracleNl2SqlAdapter:
             "ddl": ddl,
             "insert_sql": insert_sql,
         }
+
+    def upload_csv_to_existing_table(
+        self,
+        *,
+        table_name: str,
+        columns: list[CsvImportColumn],
+        rows: list[dict[str, str | None]],
+        truncate: bool,
+    ) -> dict[str, Any]:
+        """既存テーブルへ CSV 行を投入する(SQL Assist upload_csv_data の再マップ)。
+
+        CSV 列名とテーブル列名を大文字比較でマッチングし、行ごとに INSERT して
+        エラー先頭 5 件を収集する。成功 1 件以上で commit。
+        """
+        safe_table = _strict_sql_name(table_name)
+        quoted_table = _quote_identifier(safe_table)
+        with self.connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT column_name, data_type
+                FROM user_tab_columns
+                WHERE table_name = :table_name
+                ORDER BY column_id
+                """,
+                {"table_name": safe_table},
+            )
+            table_columns = [
+                (str(row[0] or ""), str(row[1] or "")) for row in cursor.fetchall()
+            ]
+            if not table_columns:
+                raise OracleAdapterError(f"{safe_table}: テーブルが見つからないか列がありません。")
+            csv_by_upper: dict[str, CsvImportColumn] = {}
+            for column in columns:
+                for key in (column.source_name.strip().upper(), column.column_name.upper()):
+                    if key and key not in csv_by_upper:
+                        csv_by_upper[key] = column
+            matched: list[tuple[str, str, CsvImportColumn]] = []
+            for name, data_type in table_columns:
+                csv_column = csv_by_upper.get(name.upper())
+                if csv_column is not None:
+                    matched.append((name, data_type, csv_column))
+            if not matched:
+                raise OracleAdapterError(
+                    "CSV の列名がテーブルの列名と一致しません。ヘッダ行を確認してください。"
+                )
+            matched_csv_names = {column.column_name for _name, _type, column in matched}
+            unmatched_csv = [
+                column.source_name
+                for column in columns
+                if column.column_name not in matched_csv_names
+            ]
+            if truncate:
+                self._execute_plsql_like(cursor, f"TRUNCATE TABLE {quoted_table}", {})
+            bind_names = [f"c{index}" for index in range(len(matched))]
+            insert_sql = (
+                f"INSERT INTO {quoted_table} "  # nosec B608
+                f"({', '.join(_quote_identifier(name) for name, _type, _column in matched)}) "
+                f"VALUES ({', '.join(':' + bind for bind in bind_names)})"
+            )
+            success_count = 0
+            row_errors: list[str] = []
+            date_error = False
+            for row_index, row in enumerate(rows, start=1):
+                binds = {
+                    bind_names[bind_index]: self._csv_upload_value(
+                        row.get(csv_column.column_name), data_type
+                    )
+                    for bind_index, (_name, data_type, csv_column) in enumerate(matched)
+                }
+                try:
+                    cursor.execute(insert_sql, binds)
+                    success_count += 1
+                except Exception as exc:
+                    message = str(exc)
+                    if "ORA-01861" in message or "ORA-01843" in message:
+                        date_error = True
+                    if len(row_errors) < 5:
+                        row_errors.append(f"行{row_index}: {message}")
+            if success_count > 0:
+                conn.commit()
+            else:
+                conn.rollback()
+        hint = (
+            "日付列のフォーマットを解釈できませんでした。"
+            "YYYY-MM-DD(例: 2026-01-31)形式を推奨します。"
+            if date_error
+            else ""
+        )
+        return {
+            "runtime": "oracle",
+            "table_name": safe_table,
+            "matched_columns": [name for name, _type, _column in matched],
+            "unmatched_csv_columns": unmatched_csv,
+            "row_count": len(rows),
+            "success_count": success_count,
+            "error_count": len(rows) - success_count,
+            "row_errors": row_errors,
+            "hint": hint,
+            "insert_sql": insert_sql,
+        }
+
+    def _csv_upload_value(self, value: str | None, data_type: str) -> Any:
+        if value is None or str(value).strip() == "":
+            return None
+        upper_type = data_type.upper()
+        if upper_type == "DATE" or upper_type.startswith("TIMESTAMP"):
+            converted = _flexible_date_value(str(value))
+            # 変換不能な値はそのまま渡し、Oracle 側の行エラー(ORA-01861 等)として報告する
+            return converted if converted is not None else str(value)
+        if upper_type == "NUMBER":
+            text = str(value).strip()
+            try:
+                return int(text)
+            except ValueError:
+                try:
+                    return float(text)
+                except ValueError:
+                    return text
+        return value
 
     def apply_comment_statements(self, statements: list[str]) -> dict[str, Any]:
         """Execute generated COMMENT ON statements.
@@ -713,6 +905,129 @@ class OracleNl2SqlAdapter:
         raise OracleAdapterError(
             "Oracle Select AI profile 詳細を取得できませんでした: " + "; ".join(errors)
         )
+
+    def list_select_ai_feedback_entries(
+        self, *, profile_name: str, limit: int = 50
+    ) -> dict[str, Any]:
+        """List entries from a DBMS_CLOUD_AI profile feedback vector table."""
+        safe_profile, index_name, table_name = _select_ai_feedback_index_names(profile_name)
+        quoted_table = _quote_identifier(table_name)
+        query = (
+            "SELECT CONTENT, "
+            "JSON_VALUE(ATTRIBUTES, '$.sql_id' RETURNING VARCHAR2(128)) AS SQL_ID, "
+            "JSON_VALUE(ATTRIBUTES, '$.sql_text' RETURNING CLOB) AS SQL_TEXT, "
+            f"ATTRIBUTES FROM {quoted_table} "  # nosec B608
+            "FETCH FIRST :limit ROWS ONLY"
+        )
+        with self.connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(query, {"limit": max(1, min(int(limit), 50))})
+                rows = cursor.fetchall() if hasattr(cursor, "fetchall") else list(cursor)
+            except Exception as exc:
+                message = str(exc)
+                if "ORA-00942" in message or "ORA-04043" in message:
+                    raise OracleAdapterError(
+                        f"{table_name}: Select AI feedback vector table が未作成です。"
+                        "feedback vector index を再構築してください。"
+                    ) from exc
+                raise OracleAdapterError(
+                    f"Select AI feedback entries の取得に失敗しました: {message}"
+                ) from exc
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            attributes_text = _coerce_text(row[3] if len(row) > 3 else "")
+            try:
+                attributes = json.loads(attributes_text) if attributes_text.strip() else {}
+            except json.JSONDecodeError:
+                attributes = {"raw": attributes_text}
+            items.append(
+                {
+                    "content": _coerce_text(row[0] if len(row) > 0 else ""),
+                    "sql_id": _coerce_text(row[1] if len(row) > 1 else ""),
+                    "sql_text": _coerce_text(row[2] if len(row) > 2 else ""),
+                    "attributes": (
+                        attributes if isinstance(attributes, dict) else {"raw": attributes}
+                    ),
+                    "raw_attributes": attributes_text,
+                }
+            )
+        return {
+            "runtime": "oracle",
+            "profile_name": safe_profile,
+            "index_name": index_name,
+            "table_name": table_name,
+            "items": items,
+            "total": len(items),
+        }
+
+    def delete_select_ai_feedback(self, *, profile_name: str, sql_text: str) -> dict[str, Any]:
+        """Delete one DBMS_CLOUD_AI feedback entry by SQL text."""
+        safe_profile, index_name, table_name = _select_ai_feedback_index_names(profile_name)
+        with self.connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(
+                    """
+                    BEGIN
+                        DBMS_CLOUD_AI.FEEDBACK(
+                            profile_name => :profile_name,
+                            sql_text => :sql_text,
+                            operation => 'DELETE'
+                        );
+                    END;
+                    """,
+                    {"profile_name": safe_profile, "sql_text": sql_text},
+                )
+                conn.commit()
+            except Exception as exc:
+                raise OracleAdapterError(
+                    f"Select AI feedback の削除に失敗しました: {exc}"
+                ) from exc
+        return {
+            "runtime": "oracle",
+            "package": "DBMS_CLOUD_AI",
+            "profile_name": safe_profile,
+            "index_name": index_name,
+            "table_name": table_name,
+        }
+
+    def update_select_ai_feedback_vector_index(
+        self, *, profile_name: str, similarity_threshold: float, match_limit: int
+    ) -> dict[str, Any]:
+        """Update DBMS_CLOUD_AI feedback vector index attributes."""
+        safe_profile, index_name, table_name = _select_ai_feedback_index_names(profile_name)
+        attributes = json.dumps(
+            {
+                "similarity_threshold": float(similarity_threshold),
+                "match_limit": int(match_limit),
+            },
+            ensure_ascii=False,
+        )
+        with self.connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(
+                    """
+                    BEGIN
+                        DBMS_CLOUD_AI.UPDATE_VECTOR_INDEX(
+                            index_name => :index_name,
+                            attributes => :attributes
+                        );
+                    END;
+                    """,
+                    {"index_name": index_name, "attributes": attributes},
+                )
+                conn.commit()
+            except Exception as exc:
+                raise OracleAdapterError(
+                    f"Select AI feedback vector index の更新に失敗しました: {exc}"
+                ) from exc
+        return {
+            "runtime": "oracle",
+            "package": "DBMS_CLOUD_AI",
+            "profile_name": safe_profile,
+            "index_name": index_name,
+            "table_name": table_name,
+            "attributes": attributes,
+        }
 
     def upsert_select_ai_profile_low_level(
         self,

@@ -1,18 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
 import {
   Bot,
   Database,
   Download,
   FileSpreadsheet,
   FlaskConical,
-  Gauge,
-  KeyRound,
   Play,
   RefreshCw,
   Save,
   Wand2,
-  type LucideIcon,
 } from "lucide-react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
@@ -31,81 +27,6 @@ import type {
   SchemaCatalog,
   SyntheticCasesData,
 } from "../types";
-
-export function ConnectionSettingsPage() {
-  const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      setDiagnostics(await apiGet<DiagnosticsData>("/api/nl2sql/diagnostics"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void load();
-  }, []);
-
-  return (
-    <>
-      <PageHeader
-        title={t("nav.nl2sqlSettingsConnection")}
-        subtitle={t("nl2sqlSettings.connection.subtitle")}
-        actions={
-          <Button type="button" size="sm" variant="secondary" loading={loading} onClick={() => void load()}>
-            <RefreshCw size={15} aria-hidden="true" />
-            <span>{t("settings.action.diagnose")}</span>
-          </Button>
-        }
-      />
-      <SettingsShell icon={Gauge} title={t("ops.readiness.title")}>
-        <div className="grid gap-3 md:grid-cols-2">
-          {(diagnostics?.readiness ?? []).map((item) => (
-            <section key={item.area} className="grid gap-3 rounded-md border border-slate-200 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="font-semibold text-slate-900">{item.label}</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-700">{item.summary}</p>
-                </div>
-                <StatusBadge variant={item.status === "ok" ? "success" : "warning"} label={item.status} />
-              </div>
-              {item.next_action && (
-                <p className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
-                  <span className="font-medium text-slate-900">{t("ops.readiness.nextAction")}: </span>
-                  {item.next_action}
-                </p>
-              )}
-              <p className="text-xs leading-5 text-slate-500">
-                {t("ops.readiness.relatedChecks")}: {item.related_checks.join(", ")}
-              </p>
-            </section>
-          ))}
-          {(!diagnostics?.readiness || diagnostics.readiness.length === 0) && (
-            <div className="grid min-h-32 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 md:col-span-2">
-              {t("ops.readiness.empty")}
-            </div>
-          )}
-        </div>
-      </SettingsShell>
-      <SettingsShell icon={KeyRound} title={t("nl2sqlSettings.connection.checks")}>
-        <div className="grid gap-3">
-          {diagnostics?.checks.map((check) => (
-            <div key={check.name} className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-slate-200 p-3">
-              <div>
-                <p className="font-mono text-xs text-slate-500">{check.name}</p>
-                <p className="mt-1 text-sm text-slate-800">{check.message}</p>
-              </div>
-              <StatusBadge variant={check.status === "ok" ? "success" : "warning"} label={check.status} />
-            </div>
-          ))}
-        </div>
-      </SettingsShell>
-    </>
-  );
-}
 
 function trainingExamplesToText(examples: Array<Record<string, string>>) {
   return examples.map((example) => `${example.question ?? ""} => ${example.sql ?? example.expected_sql ?? ""}`).join("\n");
@@ -671,30 +592,6 @@ export function DatabaseSettingsPage() {
         </Card>
       </main>
     </>
-  );
-}
-
-function SettingsShell({
-  icon: Icon,
-  title,
-  children,
-}: {
-  icon: LucideIcon;
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <main className="p-4 lg:p-8">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Icon size={18} aria-hidden="true" />
-            {title}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>{children}</CardContent>
-      </Card>
-    </main>
   );
 }
 

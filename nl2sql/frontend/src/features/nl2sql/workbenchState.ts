@@ -58,6 +58,14 @@ export function buildSchemaInsertText(table: SchemaTable, column: SchemaColumn) 
   return `"${table.logical_name}"."${column.logical_name}"`;
 }
 
+function quoteSqlIdentifier(value: string) {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+export function buildSchemaSqlIdentifierText(table: SchemaTable, column: SchemaColumn) {
+  return `${quoteSqlIdentifier(table.table_name)}.${quoteSqlIdentifier(column.column_name)}`;
+}
+
 export function insertTextAtRange(source: string, insertText: string, start: number, end: number) {
   return `${source.slice(0, start)}${insertText}${source.slice(end)}`;
 }
