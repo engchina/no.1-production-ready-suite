@@ -5561,10 +5561,9 @@ class Nl2SqlService:
         insert_sql = self._csv_import_insert_sql(table_name, columns)
         executed = False
         if request.execute:
-            target = table_name if request.confirmation == table_name else "ADMIN_EXECUTE"
             confirmation_error = self._admin_confirmation_error(
                 confirmation=request.confirmation,
-                target=target,
+                target="ADMIN_EXECUTE",
             )
             if confirmation_error:
                 warnings.append(confirmation_error)
@@ -5607,27 +5606,45 @@ class Nl2SqlService:
         )
 
     def export_db_admin_table_xlsx(self, table_name: str, limit: int = 1000) -> tuple[str, bytes]:
+        _ = limit
         detail = self.get_db_admin_object(table_name, "table")
         safe_table = self._sanitize_import_table_name(detail.name)
-        sql = f"SELECT * FROM {_quote_identifier(safe_table)}"
-        results = (
-            self._oracle_adapter.execute_select(enforce_row_limit(sql, limit), limit)
-            if self._use_oracle_runtime()
-            else self._mock_execute(sql, min(limit, 20))
-        )
+        catalog_table = self._find_catalog_table(safe_table)
+        sample_by_column = {
+            column.column_name.upper(): ", ".join(column.sample_values)
+            for column in (catalog_table.columns if catalog_table else [])
+            if column.sample_values
+        }
         openpyxl = importlib.import_module("openpyxl")
+        styles = importlib.import_module("openpyxl.styles")
         workbook = openpyxl.Workbook()
-        data_sheet = workbook.active
-        data_sheet.title = "data"
-        data_sheet.append(results.columns)
-        for row in results.rows:
-            data_sheet.append([row.get(column) for column in results.columns])
-        ddl_sheet = workbook.create_sheet("ddl")
-        ddl_sheet.append(["DDL"])
-        ddl_sheet.append([detail.ddl])
+        columns_sheet = workbook.active
+        columns_sheet.title = "columns"
+        headers = ["物理名", "論理名", "型", "NULL 可", "サンプル"]
+        columns_sheet.append(headers)
+        for cell in columns_sheet[1]:
+            cell.font = styles.Font(bold=True)
+        columns_sheet.freeze_panes = "A2"
+        for column in detail.columns:
+            sample_values = column.sample_values or []
+            sample_text = ", ".join(sample_values) or sample_by_column.get(
+                column.column_name.upper(),
+                "",
+            )
+            columns_sheet.append(
+                [
+                    column.column_name,
+                    column.logical_name,
+                    column.data_type,
+                    "YES" if column.nullable else "NO",
+                    sample_text or "-",
+                ]
+            )
+        for column_letter, width in {"A": 28, "B": 32, "C": 22, "D": 12, "E": 48}.items():
+            columns_sheet.column_dimensions[column_letter].width = width
         buffer = io.BytesIO()
         workbook.save(buffer)
-        return f"{safe_table.lower()}_export.xlsx", buffer.getvalue()
+        return f"{safe_table.lower()}_columns.xlsx", buffer.getvalue()
 
     def execute_db_admin_statements(self, request: DbAdminStatementsRequest) -> DbAdminExecuteData:
         """文種 whitelist 付き複数 statement 実行(SQL Assist のテーブル/ビュー/データ SQL 実行)。"""
@@ -6198,6 +6215,8 @@ class Nl2SqlService:
         normalized = confirmation.strip()
         if normalized in {target, "ADMIN_EXECUTE"}:
             return ""
+        if target == "ADMIN_EXECUTE":
+            return "実行には confirmation=ADMIN_EXECUTE が必要です。"
         return f"実行には confirmation={target} または ADMIN_EXECUTE が必要です。"
 
     def _record_admin_audit(

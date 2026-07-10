@@ -983,7 +983,7 @@ async def db_admin_import_tabular(
 
 @router.get("/db-admin/tables/{table_name}/export.xlsx")
 async def db_admin_export_table_xlsx(table_name: str, limit: int = 1000) -> Response:
-    """DB admin table data + DDL/comments を Excel workbook として出力する。"""
+    """DB admin table の列情報を Excel workbook として出力する。"""
     filename, content = nl2sql_service.export_db_admin_table_xlsx(
         table_name,
         limit=max(1, min(limit, 50000)),

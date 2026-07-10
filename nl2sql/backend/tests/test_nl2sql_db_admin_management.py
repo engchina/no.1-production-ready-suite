@@ -15,12 +15,15 @@ from app.features.nl2sql.models import (
     DbAdminCsvUploadRequest,
     DbAdminDataPreviewRequest,
     DbAdminDropViewRequest,
+    DbAdminImportTabularRequest,
     DbAdminJoinWhereRequest,
     DbAdminStatementsRequest,
     MetadataSqlGenerateRequest,
     SampleDataMutationRequest,
     SampleDataStep,
     SchemaCatalog,
+    SchemaColumn,
+    SchemaTable,
 )
 from app.features.nl2sql.oracle_adapter import _flexible_date_value
 from app.features.nl2sql.service import Nl2SqlService
@@ -366,6 +369,62 @@ def test_preview_data_exports_xlsx() -> None:
     )
 
 
+def test_table_export_xlsx_contains_column_information_only() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-07-10T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="INVOICES",
+                logical_name="請求",
+                owner="APP",
+                row_count=2,
+                comment="請求情報",
+                columns=[
+                    SchemaColumn(
+                        column_name="CUSTOMER_NAME",
+                        logical_name="取引先名",
+                        data_type="VARCHAR2(120)",
+                        nullable=False,
+                        comment="取引先名",
+                        sample_values=["青山商事"],
+                    ),
+                    SchemaColumn(
+                        column_name="TOTAL_AMOUNT",
+                        logical_name="請求金額",
+                        data_type="NUMBER",
+                        nullable=False,
+                        comment="税込請求金額",
+                        sample_values=["1200000"],
+                    ),
+                ],
+            )
+        ],
+    )
+
+    filename, content = service.export_db_admin_table_xlsx("INVOICES")
+
+    openpyxl = importlib.import_module("openpyxl")
+    workbook = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    assert filename == "invoices_columns.xlsx"
+    assert workbook.sheetnames == ["columns"]
+    sheet = workbook["columns"]
+    assert [sheet.cell(row=1, column=index).value for index in range(1, 6)] == [
+        "物理名",
+        "論理名",
+        "型",
+        "NULL 可",
+        "サンプル",
+    ]
+    assert [sheet.cell(row=2, column=index).value for index in range(1, 6)] == [
+        "CUSTOMER_NAME",
+        "取引先名",
+        "VARCHAR2(120)",
+        "NO",
+        "青山商事",
+    ]
+
+
 def test_upload_csv_dry_run_matches_catalog_columns() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample(service)
@@ -397,6 +456,36 @@ def test_upload_csv_dry_run_matches_catalog_columns() -> None:
     )
     assert requires_oracle.executed is False
     assert any("NL2SQL_RUNTIME_MODE=oracle" in warning for warning in requires_oracle.warnings)
+
+
+def test_import_tabular_execute_requires_admin_execute_confirmation() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    import base64
+
+    content_base64 = base64.b64encode("ORDER_ID,ORDER_NAME\n1,青山商事\n".encode()).decode()
+    table_confirmation = service.import_db_admin_tabular(
+        DbAdminImportTabularRequest(
+            table_name="IMPORTED_ORDERS",
+            content_base64=content_base64,
+            filename="orders.csv",
+            execute=True,
+            confirmation="IMPORTED_ORDERS",
+        )
+    )
+    assert table_confirmation.executed is False
+    assert any("confirmation=ADMIN_EXECUTE" in warning for warning in table_confirmation.warnings)
+
+    admin_confirmation = service.import_db_admin_tabular(
+        DbAdminImportTabularRequest(
+            table_name="IMPORTED_ORDERS",
+            content_base64=content_base64,
+            filename="orders.csv",
+            execute=True,
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    assert admin_confirmation.executed is False
+    assert any("NL2SQL_RUNTIME_MODE=oracle" in warning for warning in admin_confirmation.warnings)
 
 
 def test_flexible_date_value_parses_common_formats() -> None:

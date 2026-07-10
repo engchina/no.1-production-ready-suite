@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowDownUp,
   Code2,
@@ -14,8 +14,6 @@ import {
 
 import {
   Button,
-  Card,
-  CardContent,
   EmptyState,
   PageHeader,
   StatusBadge,
@@ -25,8 +23,11 @@ import { apiGet, apiPost } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import {
+  ExecutionConfirmationField,
+  FileInputControl,
   QueryResultsTable,
   StatementRunnerCard,
+  downloadBlob,
   downloadText,
   fileToBase64,
 } from "../components/DbAdminShared";
@@ -67,6 +68,91 @@ function rowCountLabel(rowCount?: number | null) {
 
 function SkeletonBlock({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-slate-100 ${className}`} aria-hidden="true" />;
+}
+
+const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-slate-800";
+const importControlClass =
+  "h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-200";
+
+function TableManagementPanelShell({
+  id,
+  labelledBy,
+  ariaLabel,
+  className = "",
+  children,
+}: {
+  id: string;
+  labelledBy: string;
+  ariaLabel?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      id={id}
+      role="tabpanel"
+      aria-labelledby={labelledBy}
+      aria-label={ariaLabel}
+      className={`grid gap-4 rounded-md border border-slate-200 bg-white p-4 shadow-sm ${className}`}
+      data-testid="table-management-panel-shell"
+    >
+      {children}
+    </section>
+  );
+}
+
+function PanelHeader({
+  title,
+  description,
+  icon: Icon,
+  headingId,
+  action,
+}: {
+  title: string;
+  description?: string;
+  icon: LucideIcon;
+  headingId?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0">
+        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-slate-950">
+          <Icon size={18} aria-hidden="true" />
+          {title}
+        </h2>
+        {description && <p className="mt-1 text-sm text-slate-600">{description}</p>}
+      </div>
+      {action && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div>}
+    </div>
+  );
+}
+
+function StepIndicator({
+  steps,
+  activeIndex,
+  ariaLabel,
+  dataTestId,
+}: {
+  steps: string[];
+  activeIndex: number;
+  ariaLabel: string;
+  dataTestId?: string;
+}) {
+  return (
+    <ol className="grid gap-2 md:grid-cols-2" aria-label={ariaLabel} data-testid={dataTestId}>
+      {steps.map((label, index) => (
+        <li
+          key={label}
+          className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+            index <= activeIndex ? "border-sky-200 bg-sky-50 text-sky-900" : "border-slate-200 bg-white text-slate-500"
+          }`}
+        >
+          {index + 1}. {label}
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function TableListSkeleton() {
@@ -202,16 +288,13 @@ function TableGrid({
   const hasActiveFilter = Boolean(search.trim()) || filter !== "all";
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="table-grid-heading">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h2 id="table-grid-heading" className="flex items-center gap-2 text-base font-semibold text-slate-950">
-            <Table2 size={18} aria-hidden="true" />
-            {t("tableMgmt.list.title")}
-          </h2>
-          <p className="mt-1 text-sm text-slate-600">{t("tableMgmt.grid.hint")}</p>
-        </div>
-        <StatusBadge variant="info" label={t("tableMgmt.grid.count", { count: items.length })} />
-      </div>
+      <PanelHeader
+        headingId="table-grid-heading"
+        icon={Table2}
+        title={t("tableMgmt.list.title")}
+        description={t("tableMgmt.grid.hint")}
+        action={<StatusBadge variant="info" label={t("tableMgmt.grid.count", { count: items.length })} />}
+      />
 
       <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
         <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_13rem]">
@@ -318,15 +401,19 @@ function TableDetailPanel({
   detail,
   catalog,
   loading,
+  exporting,
   tab,
   onTabChange,
+  onExport,
   onDrop,
 }: {
   detail: DbAdminObjectDetail | null;
   catalog: SchemaCatalog | null;
   loading: boolean;
+  exporting: boolean;
   tab: DetailTab;
   onTabChange: (tab: DetailTab) => void;
+  onExport: (name: string) => void;
   onDrop: (name: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -393,13 +480,9 @@ function TableDetailPanel({
             type="button"
             variant="secondary"
             size="sm"
-            onClick={() =>
-              window.open(
-                `/api/nl2sql/db-admin/tables/${encodeURIComponent(detail.name)}/export.xlsx`,
-                "_blank",
-                "noopener,noreferrer"
-              )
-            }
+            loading={exporting}
+            aria-label={t("tableMgmt.exportColumns")}
+            onClick={() => onExport(detail.name)}
           >
             <Download size={15} aria-hidden="true" />
             <span>{t("tableMgmt.export")}</span>
@@ -535,6 +618,7 @@ function ImportWizard({
   onSheetChange,
   onModeChange,
   onFilePick,
+  onFileClear,
   onExecute,
   onConfirmationChange,
 }: {
@@ -551,6 +635,7 @@ function ImportWizard({
   onSheetChange: (value: string) => void;
   onModeChange: (value: string) => void;
   onFilePick: (file: File | undefined) => void;
+  onFileClear: () => void;
   onExecute: () => void;
   onConfirmationChange: (value: string) => void;
 }) {
@@ -559,72 +644,86 @@ function ImportWizard({
     { id: "execute", label: t("tableMgmt.importWizard.stepExecute") },
   ];
   const activeIndex = steps.findIndex((item) => item.id === step);
-  const canExecute =
-    Boolean(table.trim()) &&
-    fileReady &&
-    (confirmation.trim() === table.trim() || confirmation.trim() === "ADMIN_EXECUTE");
+  const isConfirmed = confirmation.trim() === "ADMIN_EXECUTE";
+  const canExecute = Boolean(table.trim()) && fileReady && isConfirmed;
 
   return (
-    <Card>
-      <CardContent className="grid gap-4 p-4">
-        <ol className="grid gap-2 md:grid-cols-2" aria-label={t("tableMgmt.importWizard.steps")}>
-          {steps.map((item, index) => (
-            <li
-              key={item.id}
-              className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-                index <= activeIndex ? "border-sky-200 bg-sky-50 text-sky-900" : "border-slate-200 bg-white text-slate-500"
-              }`}
-            >
-              {index + 1}. {item.label}
-            </li>
-          ))}
-        </ol>
+    <div className="grid gap-4">
+      <PanelHeader
+        icon={Upload}
+        title={t("dataTools.dbAdmin.importTitle")}
+        description={t("tableMgmt.import.note")}
+        action={
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            className="w-full sm:w-auto"
+            loading={loading}
+            disabled={!canExecute}
+            onClick={onExecute}
+          >
+            <Upload size={15} aria-hidden="true" />
+            <span>{t("dataTools.dbAdmin.import")}</span>
+          </Button>
+        }
+      />
 
-        <div className="grid gap-3 lg:grid-cols-2">
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+      <StepIndicator
+        steps={steps.map((item) => item.label)}
+        activeIndex={activeIndex}
+        ariaLabel={t("tableMgmt.importWizard.steps")}
+        dataTestId="table-import-steps"
+      />
+
+      <div className="grid gap-3 lg:grid-cols-2">
+          <label className={importFieldClass}>
             <span>{t("dataTools.dbAdmin.tableName")}</span>
             <input
               value={table}
               onChange={(event) => onTableChange(event.currentTarget.value)}
-              className="min-h-11 rounded-md border border-slate-300 px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              className={`${importControlClass} py-2`}
               placeholder="IMPORTED_ORDERS"
             />
           </label>
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <label className={importFieldClass}>
             <span>{t("dataTools.dbAdmin.sheet")}</span>
             <input
               value={sheet}
               onChange={(event) => onSheetChange(event.currentTarget.value)}
-              className="min-h-11 rounded-md border border-slate-300 px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              className={`${importControlClass} py-2`}
               placeholder="Sheet1"
             />
           </label>
         </div>
 
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem]">
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
-            <span>{t("dataTools.dbAdmin.file")}</span>
-            <input
-              type="file"
-              accept=".csv,.xlsx,.xls"
-              onChange={(event) => onFilePick(event.currentTarget.files?.[0])}
-              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1 file:text-sm file:font-medium file:text-slate-800 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-            />
-            <span className="text-xs text-slate-500">
-              {filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : t("tableMgmt.importWizard.noFile")}
-            </span>
-          </label>
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <FileInputControl
+            label={t("dataTools.dbAdmin.file")}
+            accept=".csv,.xlsx,.xls"
+            filename={filename}
+            selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
+            emptyText={t("tableMgmt.importWizard.noFile")}
+            pickText={t("tableMgmt.importWizard.filePick")}
+            replaceText={t("tableMgmt.importWizard.fileReplace")}
+            clearAriaLabel={t("tableMgmt.importWizard.clearFile")}
+            icon="spreadsheet"
+            className="min-w-0"
+            dataTestId="table-import-file-field"
+            onPick={onFilePick}
+            onClear={onFileClear}
+          />
+          <label className={importFieldClass} data-testid="table-import-mode-field">
             <span>{t("dataTools.dbAdmin.mode")}</span>
             <select
               value={mode}
               onChange={(event) => onModeChange(event.currentTarget.value)}
-              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+              className={`${importControlClass} py-2`}
             >
               <option value="create">{t("dataTools.dbAdmin.mode.create")}</option>
-              <option value="replace">{t("dataTools.dbAdmin.mode.replace")}</option>
               <option value="append">{t("dataTools.dbAdmin.mode.append")}</option>
               <option value="truncate">{t("dataTools.dbAdmin.mode.truncate")}</option>
+              <option value="replace">{t("dataTools.dbAdmin.mode.replace")}</option>
             </select>
           </label>
         </div>
@@ -657,32 +756,18 @@ function ImportWizard({
           </section>
         )}
 
-        <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
-          <legend className="px-1 text-sm font-semibold text-slate-900">{t("tableMgmt.importWizard.executeTitle")}</legend>
-          <p className="text-sm text-slate-600">{t("tableMgmt.importWizard.executeHint")}</p>
-          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-            <label className="grid gap-1 text-sm font-medium text-slate-800">
-              <span>{t("dataTools.dbAdmin.confirmation")}</span>
-              <input
-                value={confirmation}
-                onChange={(event) => onConfirmationChange(event.currentTarget.value)}
-                className="min-h-11 rounded-md border border-slate-300 px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                placeholder={table || "ADMIN_EXECUTE"}
-              />
-            </label>
-            <Button type="button" variant="secondary" size="sm" disabled={!table.trim()} onClick={() => onConfirmationChange(table)}>
-              <span>{t("tableMgmt.importWizard.useTableName")}</span>
-            </Button>
-          </div>
-          <div>
-            <Button type="button" variant="danger" size="sm" loading={loading} disabled={!canExecute} onClick={onExecute}>
-              <Upload size={15} aria-hidden="true" />
-              <span>{t("dataTools.dbAdmin.import")}</span>
-            </Button>
-          </div>
-        </fieldset>
-      </CardContent>
-    </Card>
+      <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
+        <legend className="px-1 text-sm font-semibold text-slate-900">{t("tableMgmt.importWizard.executeTitle")}</legend>
+        <ExecutionConfirmationField
+          value={confirmation}
+          onChange={onConfirmationChange}
+          confirmed={isConfirmed}
+          placeholder="ADMIN_EXECUTE"
+          expectedLabel="ADMIN_EXECUTE"
+          helper={t("tableMgmt.importWizard.executeHint")}
+        />
+      </fieldset>
+    </div>
   );
 }
 
@@ -802,16 +887,15 @@ function DropTableDialog({
           </div>
           <fieldset className="grid gap-3 rounded-md border border-red-200 bg-red-50/70 p-3">
             <legend className="px-1 text-sm font-semibold text-red-950">{t("tableMgmt.dropDialog.executeTitle")}</legend>
-            <p className="text-sm text-red-800">{t("tableMgmt.dropDialog.executeHint")}</p>
-            <label className="grid gap-1 text-sm font-medium text-slate-800">
-              <span>{t("tableMgmt.drop.confirmation")}</span>
-              <input
-                value={confirmation}
-                onChange={(event) => onConfirmationChange(event.currentTarget.value)}
-                className="min-h-11 rounded-md border border-red-200 bg-white px-3 py-2 focus:border-red-600 focus:ring-2 focus:ring-red-200"
-                placeholder={tableName}
-              />
-            </label>
+            <ExecutionConfirmationField
+              value={confirmation}
+              onChange={onConfirmationChange}
+              confirmed={canExecute}
+              placeholder={tableName}
+              expectedLabel={tableName}
+              helper={t("tableMgmt.dropDialog.executeHint")}
+              tone="danger"
+            />
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Button type="button" variant="danger" size="sm" loading={loading} disabled={!canExecute} onClick={onExecute}>
                 <Trash2 size={15} aria-hidden="true" />
@@ -932,6 +1016,13 @@ export function TableManagementPage() {
     setImportStep("file");
   };
 
+  const clearImportFile = () => {
+    setImportFilename("");
+    setImportBase64("");
+    setImportResult(null);
+    setImportStep("file");
+  };
+
   const importTabular = async () => {
     if (!importTable.trim() || !importBase64) return;
     setLoading("import-tabular");
@@ -954,6 +1045,26 @@ export function TableManagementPage() {
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("dataTools.error.import"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const downloadColumnsXlsx = async (name: string) => {
+    setLoading("table-export");
+    setMessage("");
+    try {
+      const response = await fetch(`/api/nl2sql/db-admin/tables/${encodeURIComponent(name)}/export.xlsx`, {
+        headers: {
+          Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+      });
+      if (!response.ok) {
+        throw new Error(t("tableMgmt.error.export"));
+      }
+      downloadBlob(`${name.toLowerCase()}_columns.xlsx`, await response.blob());
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("tableMgmt.error.export"));
     } finally {
       setLoading("");
     }
@@ -993,8 +1104,19 @@ export function TableManagementPage() {
         policy="table_ddl"
         target="table"
         title={t("tableMgmt.create.title")}
+        description={t("tableMgmt.create.note")}
         placeholder={t("tableMgmt.create.placeholder")}
+        progress={({ hasSql }) => (
+          <StepIndicator
+            steps={[t("tableMgmt.create.stepSql"), t("tableMgmt.create.stepExecute")]}
+            activeIndex={hasSql ? 1 : 0}
+            ariaLabel={t("tableMgmt.create.steps")}
+            dataTestId="table-create-steps"
+          />
+        )}
+        confirmationTitle={t("tableMgmt.create.executeTitle")}
         executeOnly
+        framed={false}
         onExecuted={() => load(true)}
       />
     ) : activeView === "import" ? (
@@ -1024,6 +1146,7 @@ export function TableManagementPage() {
           setImportStep("file");
         }}
         onFilePick={(file) => void pickImportFile(file)}
+        onFileClear={clearImportFile}
         onExecute={() => void importTabular()}
         onConfirmationChange={(value) => {
           setImportConfirmation(value);
@@ -1061,12 +1184,11 @@ export function TableManagementPage() {
         <TableManagementTabs activeView={activeView} onViewChange={setActiveView} />
 
         {activeView === "list" ? (
-          <section
+          <TableManagementPanelShell
             id="table-management-panel-list"
-            role="tabpanel"
-            aria-labelledby="table-management-tab-list"
-            className="grid gap-4 rounded-md border border-slate-200 bg-white p-4 shadow-sm xl:grid-cols-[minmax(28rem,0.9fr)_minmax(0,1.2fr)]"
+            labelledBy="table-management-tab-list"
             aria-label={t("tableMgmt.workspace.label")}
+            className="xl:grid-cols-[minmax(28rem,0.9fr)_minmax(0,1.2fr)]"
           >
             <TableGrid
               items={filteredTables}
@@ -1085,21 +1207,21 @@ export function TableManagementPage() {
               detail={detail}
               catalog={catalog}
               loading={loading.startsWith("detail-") || (loading === "load" && !detail)}
+              exporting={loading === "table-export"}
               tab={detailTab}
               onTabChange={setDetailTab}
+              onExport={(name) => void downloadColumnsXlsx(name)}
               onDrop={openDropDialog}
             />
-          </section>
+          </TableManagementPanelShell>
         ) : (
-          <section
+          <TableManagementPanelShell
             id={`table-management-panel-${activeView}`}
-            role="tabpanel"
-            aria-labelledby={`table-management-tab-${activeView}`}
-            className="grid gap-3 rounded-md border border-sky-200 bg-sky-50/40 p-3"
+            labelledBy={`table-management-tab-${activeView}`}
             aria-label={t("tableMgmt.toolbar.taskPanel")}
           >
             {taskContent}
-          </section>
+          </TableManagementPanelShell>
         )}
       </main>
 

@@ -321,6 +321,16 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       warnings: [],
     })
   );
+  await page.route("**/api/nl2sql/db-admin/tables/INVOICES/export.xlsx", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      headers: {
+        "Content-Disposition": 'attachment; filename="invoices_columns.xlsx"',
+      },
+      body: "xlsx",
+    })
+  );
   await page.route("**/api/nl2sql/db-admin/views/V_EMP_DEPT", (route) =>
     fulfillJson(route, {
       name: "V_EMP_DEPT",
@@ -2103,6 +2113,10 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
   await expect(page.getByText("2 列")).toBeVisible();
   await expect(page.getByRole("button", { name: /XLSX ダウンロード/ })).toBeVisible();
+  const columnsDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: /XLSX ダウンロード/ }).click();
+  const columnsDownload = await columnsDownloadPromise;
+  expect(columnsDownload.suggestedFilename()).toBe("invoices_columns.xlsx");
   await expect
     .poll(() =>
       page.getByTestId("db-admin-detail-columns").evaluate((wrapper) => {
@@ -2131,7 +2145,8 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.getByRole("button", { name: "削除" }).first().click();
   await expect(page.getByRole("dialog", { name: "DROP TABLE の確認" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Drop Dry-run" })).toHaveCount(0);
-  await page.getByLabel("DROP 確認語(テーブル名)").fill("INVOICES");
+  await page.getByRole("dialog", { name: "DROP TABLE の確認" }).getByLabel("実行確認語").fill("INVOICES");
+  await expect(page.getByRole("dialog", { name: "DROP TABLE の確認" }).getByText("確認済み")).toBeVisible();
   await page.getByRole("button", { name: "Drop 実行" }).click();
   await expect.poll(() => api.dropTablePayload?.execute).toBe(true);
   expect(api.dropTablePayload?.confirmation).toBe("INVOICES");
@@ -2144,11 +2159,13 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByTestId("db-admin-detail-columns")).toHaveCount(0);
   await expect(createPanel).toBeVisible();
   await createPanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)").fill("CREATE TABLE T1 (ID NUMBER)");
-  await expect(createPanel.getByText("実行確認語を入力すると Oracle に実行できます。")).toBeVisible();
+  await expect(createPanel.getByText("ADMIN_EXECUTE を正確に入力すると Oracle に実行できます。")).toBeVisible();
   await expect(createPanel.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
   await expect(createPanel.getByLabel("Oracle に実行する")).toHaveCount(0);
   await expect(createPanel.getByText("AI 分析")).toHaveCount(0);
+  await expect(createPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
   await createPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await expect(createPanel.getByText("確認済み")).toBeVisible();
   await createPanel.getByRole("button", { name: "SQL 実行" }).click();
   await expect.poll(() => api.statementsPayload?.policy).toBe("table_ddl");
   expect(api.statementsPayload?.execute).toBe(true);
@@ -2160,7 +2177,24 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByTestId("table-management-grid")).toHaveCount(0);
   await expect(page.getByTestId("db-admin-detail-columns")).toHaveCount(0);
   await expect(importPanel).toBeVisible();
+  const importExecuteButton = importPanel.getByRole("button", { name: "取込を実行" });
+  await expect(importPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
+  await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await expect(importPanel.getByText("確認済み")).toBeVisible();
+  await expect(importExecuteButton).toBeDisabled();
   await importPanel.getByLabel("Oracle 表名").fill("IMPORTED_ORDERS");
+  const importFileClearButton = importPanel.getByRole("button", { name: "取込ファイルをクリア" });
+  await expect(importFileClearButton).toBeDisabled();
+  await importPanel.getByLabel("CSV/XLSX 選択", { exact: true }).setInputFiles({
+    name: "orders.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("ORDER_ID,ORDER_NAME\n1,青山商事\n"),
+  });
+  await expect(importPanel.getByText("選択中: orders.csv")).toBeVisible();
+  await expect(importFileClearButton).toBeEnabled();
+  await importFileClearButton.click();
+  await expect(importPanel.getByText("CSV / XLSX ファイルを選択")).toBeVisible();
+  await expect(importFileClearButton).toBeDisabled();
   await importPanel.getByLabel("CSV/XLSX 選択").setInputFiles({
     name: "orders.csv",
     mimeType: "text/csv",
@@ -2168,15 +2202,22 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   });
   await expect(importPanel.getByRole("button", { name: "取込 Dry-run" })).toHaveCount(0);
   await expect(importPanel.getByText("2. Dry-run 確認")).toHaveCount(0);
-  await importPanel.getByRole("button", { name: "確認語に表名を入れる" }).click();
-  await expect(importPanel.getByRole("button", { name: "取込を実行" })).toBeEnabled();
-  await importPanel.getByRole("button", { name: "取込を実行" }).click();
+  const importExecuteButtonBox = await importExecuteButton.boundingBox();
+  const importConfirmationBox = await importPanel.getByLabel("実行確認語").boundingBox();
+  expect(importExecuteButtonBox).not.toBeNull();
+  expect(importConfirmationBox).not.toBeNull();
+  expect(importExecuteButtonBox!.y).toBeLessThan(importConfirmationBox!.y);
+  await expect(importPanel.getByRole("button", { name: "確認語に表名を入れる" })).toHaveCount(0);
+  await expect(importPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
+  await expect(importPanel.getByText("確認済み")).toBeVisible();
+  await expect(importExecuteButton).toBeEnabled();
+  await importExecuteButton.click();
   await expect(importPanel.getByText("IMPORTED_ORDERS", { exact: true })).toBeVisible();
   await expect(importPanel.getByText("2. 実行確認")).toBeVisible();
   await expect.poll(() => api.importTabularPayload?.table_name).toBe("IMPORTED_ORDERS");
   expect(api.importTabularPayload?.mode).toBe("create");
   expect(api.importTabularPayload?.execute).toBe(true);
-  expect(api.importTabularPayload?.confirmation).toBe("IMPORTED_ORDERS");
+  expect(api.importTabularPayload?.confirmation).toBe("ADMIN_EXECUTE");
 
   await listTab.click();
   await expect(listTab).toHaveAttribute("aria-selected", "true");

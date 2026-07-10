@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BookOpenText, Code2, Eye, History, Play, RefreshCw, RotateCcw, Sparkles } from "lucide-react";
+import { BookOpenText, Code2, Eye, History, Play, RefreshCw, RotateCcw, Sparkles, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -77,6 +77,7 @@ export function Nl2SqlWorkbench() {
   const [rowLimit, setRowLimit] = useState(100);
   const [question, setQuestion] = useState("");
   const [sqlText, setSqlText] = useState("");
+  const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [selection, setSelection] = useState<SchemaSelection>(() => emptySelection());
   const [result, setResult] = useState<Nl2SqlResult | null>(null);
   const [previewResult, setPreviewResult] = useState<GeneratedSqlPanelData | null>(null);
@@ -757,20 +758,31 @@ export function Nl2SqlWorkbench() {
                     />
                   </label>
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap gap-2">
-                      <SqlFileInput onLoad={setSqlText} />
+                    <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                      <SqlFileInput
+                        resetSignal={sqlFileResetSignal}
+                        disabled={active}
+                        onLoad={(text) => {
+                          setSqlText(text);
+                          setSqlExecutionResults(null);
+                          setError("");
+                        }}
+                      />
                       <Button
                         type="button"
-                        variant="ghost"
+                        variant="secondary"
                         size="sm"
+                        className="min-h-11 sm:self-end"
                         disabled={!sqlText || active}
                         onClick={() => {
                           setSqlText("");
                           setSqlExecutionResults(null);
                           setError("");
+                          setSqlFileResetSignal((value) => value + 1);
                         }}
                       >
-                        {t("nl2sql.action.clearSql")}
+                        <X size={15} aria-hidden="true" />
+                        <span>{t("nl2sql.action.clearSql")}</span>
                       </Button>
                     </div>
                     <Button

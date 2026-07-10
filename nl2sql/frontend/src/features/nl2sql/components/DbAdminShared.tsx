@@ -1,5 +1,17 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Code2, Download, FileText, Play, Search, Sparkles } from "lucide-react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Code2,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Play,
+  Search,
+  Sparkles,
+  Upload,
+  X,
+} from "lucide-react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
 
@@ -99,6 +111,89 @@ export function WorkSection({
       </summary>
       <div className="border-t border-current/10 bg-white p-3">{children}</div>
     </details>
+  );
+}
+
+export function ExecutionConfirmationField({
+  value,
+  onChange,
+  confirmed,
+  placeholder,
+  expectedLabel,
+  helper,
+  tone = "neutral",
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  confirmed: boolean;
+  placeholder: string;
+  expectedLabel: string;
+  helper: string;
+  tone?: "neutral" | "danger";
+  disabled?: boolean;
+}) {
+  const id = useId();
+  const helperId = `${id}-helper`;
+  const statusLabel = confirmed
+    ? t("dbAdmin.confirmation.status.confirmed")
+    : value.trim()
+      ? t("dbAdmin.confirmation.status.mismatch")
+      : t("dbAdmin.confirmation.status.pending");
+  const isDanger = tone === "danger";
+  const containerClass = [
+    "grid gap-2 rounded-md border p-3",
+    isDanger ? "border-red-200 bg-red-50/70" : "border-slate-200 bg-slate-50",
+  ].join(" ");
+  const inputClass = [
+    "h-11 w-full rounded-md border bg-white px-3 py-2 text-sm outline-none transition-colors placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500",
+    isDanger
+      ? "border-red-200 focus:border-red-600 focus:ring-2 focus:ring-red-200"
+      : "border-slate-300 focus:border-sky-600 focus:ring-2 focus:ring-sky-200",
+  ].join(" ");
+  const statusClass = [
+    "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
+    confirmed
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : value.trim()
+        ? "border-red-200 bg-red-50 text-red-800"
+        : "border-slate-200 bg-white text-slate-600",
+  ].join(" ");
+
+  return (
+    <div className={containerClass} data-testid="execution-confirmation-field">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <label htmlFor={id} className={`text-sm font-semibold ${isDanger ? "text-red-950" : "text-slate-900"}`}>
+          {t("dbAdmin.confirmation.label")}
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="max-w-full break-all rounded-md bg-white px-2 py-1 font-mono text-xs text-slate-700">
+            {t("dbAdmin.confirmation.expected", { phrase: expectedLabel })}
+          </span>
+          <span className={statusClass} aria-live="polite">
+            {statusLabel}
+          </span>
+        </div>
+      </div>
+      <div className="grid gap-2">
+        <input
+          id={id}
+          value={value}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          className={inputClass}
+          placeholder={placeholder}
+          disabled={disabled}
+          aria-describedby={helperId}
+          aria-invalid={value.trim() && !confirmed ? "true" : undefined}
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      </div>
+      <p id={helperId} className={`text-xs leading-5 ${isDanger ? "text-red-800" : "text-slate-600"}`}>
+        {helper}
+      </p>
+    </div>
   );
 }
 
@@ -227,24 +322,156 @@ export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData 
   );
 }
 
-/** .sql/.txt ファイルを読み込んで textarea へ流し込むボタン。 */
-export function SqlFileInput({ onLoad }: { onLoad: (text: string) => void }) {
+type FileInputIcon = "file" | "spreadsheet" | "upload";
+
+const fileInputIcons: Record<FileInputIcon, typeof FileText> = {
+  file: FileText,
+  spreadsheet: FileSpreadsheet,
+  upload: Upload,
+};
+
+export function FileInputControl({
+  label,
+  ariaLabel = label,
+  accept,
+  filename,
+  selectedText,
+  emptyText,
+  pickText,
+  replaceText,
+  clearText = t("dbAdmin.runner.clear"),
+  clearAriaLabel,
+  icon = "upload",
+  disabled = false,
+  clearDisabled,
+  className = "",
+  dataTestId,
+  onPick,
+  onClear,
+}: {
+  label: string;
+  ariaLabel?: string;
+  accept: string;
+  filename: string;
+  selectedText?: string;
+  emptyText: string;
+  pickText: string;
+  replaceText?: string;
+  clearText?: string;
+  clearAriaLabel?: string;
+  icon?: FileInputIcon;
+  disabled?: boolean;
+  clearDisabled?: boolean;
+  className?: string;
+  dataTestId?: string;
+  onPick: (file: File) => void | Promise<void>;
+  onClear?: () => void;
+}) {
+  const inputId = useId();
+  const Icon = fileInputIcons[icon];
+  const hasFile = Boolean(filename);
+  const clearIsDisabled = clearDisabled ?? !hasFile;
+
   return (
-    <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-sky-200">
-      <FileText size={15} aria-hidden="true" />
-      <span>{t("dbAdmin.runner.filePick")}</span>
-      <input
-        className="sr-only"
-        type="file"
-        accept=".sql,.txt"
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0];
-          if (!file) return;
-          void readTextFileSmart(file).then(onLoad);
-          event.currentTarget.value = "";
-        }}
-      />
-    </label>
+    <div className={`grid min-w-0 gap-1 text-sm font-medium text-slate-800 ${className}`} data-testid={dataTestId}>
+      <span>{label}</span>
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <label
+          htmlFor={inputId}
+          className={`group flex h-11 min-w-0 items-center gap-2 rounded-md border bg-white px-3 py-1 text-left transition-colors focus-within:ring-2 focus-within:ring-sky-200 ${
+            disabled
+              ? "cursor-not-allowed border-slate-200 opacity-60"
+              : "cursor-pointer border-slate-300 hover:border-sky-300 hover:bg-sky-50/40"
+          }`}
+        >
+          <span
+            className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
+              hasFile ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-500 group-hover:text-sky-700"
+            }`}
+            aria-hidden="true"
+          >
+            <Icon size={16} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-slate-900">
+              {hasFile ? selectedText ?? filename : pickText}
+            </span>
+          </span>
+          <span
+            className={`hidden max-w-56 shrink-0 truncate rounded-md border px-2 py-1 text-xs font-semibold sm:inline-block ${
+              hasFile ? "border-sky-200 bg-sky-50 text-sky-800" : "border-slate-200 bg-slate-50 text-slate-600"
+            }`}
+          >
+            {hasFile ? replaceText ?? pickText : emptyText}
+          </span>
+          <input
+            id={inputId}
+            className="sr-only"
+            type="file"
+            accept={accept}
+            disabled={disabled}
+            aria-label={ariaLabel}
+            onChange={(event) => {
+              const input = event.currentTarget;
+              const file = input.files?.[0];
+              if (!file) return;
+              void Promise.resolve(onPick(file)).finally(() => {
+                input.value = "";
+              });
+            }}
+          />
+        </label>
+        {onClear && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="min-h-11 whitespace-nowrap"
+            disabled={clearIsDisabled || disabled}
+            aria-label={clearAriaLabel ?? clearText}
+            onClick={onClear}
+          >
+            <X size={15} aria-hidden="true" />
+            <span>{clearText}</span>
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** .sql/.txt ファイルを読み込んで textarea へ流し込むボタン。 */
+export function SqlFileInput({
+  onLoad,
+  resetSignal = 0,
+  disabled = false,
+}: {
+  onLoad: (text: string) => void;
+  resetSignal?: number;
+  disabled?: boolean;
+}) {
+  const [filename, setFilename] = useState("");
+
+  useEffect(() => {
+    setFilename("");
+  }, [resetSignal]);
+
+  return (
+    <FileInputControl
+      label={t("dbAdmin.runner.filePick")}
+      accept=".sql,.txt"
+      filename={filename}
+      selectedText={filename}
+      emptyText={t("dbAdmin.runner.fileHint")}
+      pickText={t("dbAdmin.runner.filePickAction")}
+      replaceText={t("dbAdmin.runner.fileReplaceAction")}
+      icon="file"
+      disabled={disabled}
+      onPick={(file) => {
+        setFilename(file.name);
+        void readTextFileSmart(file).then(onLoad);
+      }}
+    />
   );
 }
 
@@ -325,20 +552,28 @@ export function AiAnalysisPanel({
 export function StatementRunnerCard({
   policy,
   title,
+  description,
   target,
   initialSql,
   placeholder,
   templates,
+  progress,
+  confirmationTitle,
   executeOnly = false,
+  framed = true,
   onExecuted,
 }: {
   policy: DbAdminStatementPolicy;
   title: string;
+  description?: string;
   target: "table" | "view" | "data" | "comment" | "annotation";
   initialSql?: string;
   placeholder?: string;
   templates?: Array<{ label: string; build: () => string }>;
+  progress?: (state: { hasSql: boolean; isConfirmed: boolean; canRun: boolean }) => ReactNode;
+  confirmationTitle?: string;
   executeOnly?: boolean;
+  framed?: boolean;
   onExecuted?: () => void | Promise<void>;
 }) {
   const [sql, setSql] = useState("");
@@ -347,6 +582,7 @@ export function StatementRunnerCard({
   const [result, setResult] = useState<DbAdminExecuteData | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
 
   useEffect(() => {
     if (initialSql !== undefined) setSql(initialSql);
@@ -378,94 +614,170 @@ export function StatementRunnerCard({
   };
 
   const shouldExecute = executeOnly || execute;
-  const canRun = Boolean(sql.trim()) && (!shouldExecute || Boolean(confirmation.trim()));
+  const isConfirmed = confirmation.trim() === "ADMIN_EXECUTE";
+  const canRun = Boolean(sql.trim()) && (!shouldExecute || isConfirmed);
+  const progressNode = progress?.({ hasSql: Boolean(sql.trim()), isConfirmed, canRun });
+
+  const header = executeOnly ? (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950">
+          <Code2 size={18} aria-hidden="true" />
+          {title}
+        </h2>
+        {description && <p className="mt-1 text-sm text-slate-600">{description}</p>}
+      </div>
+      <Button
+        type="button"
+        variant={shouldExecute ? "danger" : "secondary"}
+        size="sm"
+        className="w-full sm:w-auto"
+        loading={loading}
+        disabled={!canRun}
+        onClick={() => void run()}
+      >
+        <Play size={15} aria-hidden="true" />
+        <span>{shouldExecute ? t("dbAdmin.runner.run") : t("dbAdmin.runner.dryRun")}</span>
+      </Button>
+    </div>
+  ) : (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <CardTitle className="flex items-center gap-2">
+        <Code2 size={18} aria-hidden="true" />
+        {title}
+      </CardTitle>
+      <Button
+        type="button"
+        variant={shouldExecute ? "danger" : "secondary"}
+        size="sm"
+        loading={loading}
+        disabled={!canRun}
+        onClick={() => void run()}
+      >
+        <Play size={15} aria-hidden="true" />
+        <span>{shouldExecute ? t("dbAdmin.runner.run") : t("dbAdmin.runner.dryRun")}</span>
+      </Button>
+    </div>
+  );
+
+  const confirmationField = (
+    <ExecutionConfirmationField
+      value={confirmation}
+      onChange={setConfirmation}
+      confirmed={isConfirmed}
+      placeholder="ADMIN_EXECUTE"
+      expectedLabel="ADMIN_EXECUTE"
+      helper={shouldExecute ? t("dbAdmin.confirmation.adminHelper") : t("dbAdmin.confirmation.dryRunHelper")}
+      disabled={!shouldExecute}
+    />
+  );
+
+  const content = (
+    <>
+      {executeOnly && header}
+      {progressNode}
+      {message && (
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
+          {message}
+        </p>
+      )}
+      {templates && templates.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-slate-500">{t("dbAdmin.runner.templates")}</span>
+          {templates.map((template) => (
+            <Button
+              key={template.label}
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSql(template.build())}
+            >
+              {template.label}
+            </Button>
+          ))}
+        </div>
+      )}
+      <label className="grid gap-1 text-sm font-medium text-slate-800">
+        <span>{t("dbAdmin.runner.sqlLabel")}</span>
+        <textarea
+          value={sql}
+          onChange={(event) => setSql(event.currentTarget.value)}
+          rows={9}
+          placeholder={placeholder}
+          className="min-h-52 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+        />
+      </label>
+      {!executeOnly && (
+        <p className="text-xs leading-5 text-slate-500">
+          {t("dbAdmin.runner.previewHint")}
+        </p>
+      )}
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <SqlFileInput
+          resetSignal={sqlFileResetSignal}
+          onLoad={(text) => {
+            setSql(text);
+            setResult(null);
+            setMessage("");
+          }}
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="min-h-11 sm:self-end"
+          disabled={!sql}
+          onClick={() => {
+            setSql("");
+            setResult(null);
+            setSqlFileResetSignal((value) => value + 1);
+          }}
+        >
+          <X size={15} aria-hidden="true" />
+          <span>{t("dbAdmin.runner.clear")}</span>
+        </Button>
+      </div>
+      <div className={executeOnly ? "grid gap-3" : "grid gap-3 sm:grid-cols-2"}>
+        {!executeOnly && (
+          <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+            <input
+              type="checkbox"
+              checked={execute}
+              onChange={(event) => setExecute(event.currentTarget.checked)}
+              className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
+            />
+            <span>{t("dbAdmin.runner.execute")}</span>
+          </label>
+        )}
+        {executeOnly ? (
+          <fieldset className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
+            <legend className="px-1 text-sm font-semibold text-slate-900">
+              {confirmationTitle ?? t("dbAdmin.runner.confirmation")}
+            </legend>
+            {confirmationField}
+          </fieldset>
+        ) : (
+          confirmationField
+        )}
+      </div>
+      {result && <DbAdminExecutionResult result={result} />}
+      {!executeOnly && <AiAnalysisPanel sql={sql} resultText={executionResultText(result)} target={target} />}
+    </>
+  );
+
+  if (!framed) {
+    return <div className="grid gap-4">{!executeOnly && header}{content}</div>;
+  }
 
   return (
     <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="flex items-center gap-2">
-            <Code2 size={18} aria-hidden="true" />
-            {title}
-          </CardTitle>
-          <Button
-            type="button"
-            variant={shouldExecute ? "danger" : "secondary"}
-            size="sm"
-            loading={loading}
-            disabled={!canRun}
-            onClick={() => void run()}
-          >
-            <Play size={15} aria-hidden="true" />
-            <span>{shouldExecute ? t("dbAdmin.runner.run") : t("dbAdmin.runner.dryRun")}</span>
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        {message && (
-          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
-            {message}
-          </p>
-        )}
-        {templates && templates.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-slate-500">{t("dbAdmin.runner.templates")}</span>
-            {templates.map((template) => (
-              <Button
-                key={template.label}
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setSql(template.build())}
-              >
-                {template.label}
-              </Button>
-            ))}
-          </div>
-        )}
-        <label className="grid gap-1 text-sm font-medium text-slate-800">
-          <span>{t("dbAdmin.runner.sqlLabel")}</span>
-          <textarea
-            value={sql}
-            onChange={(event) => setSql(event.currentTarget.value)}
-            rows={9}
-            placeholder={placeholder}
-            className="min-h-52 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-          />
-        </label>
-        <p className="text-xs leading-5 text-slate-500">
-          {executeOnly ? t("dbAdmin.runner.executeHint") : t("dbAdmin.runner.previewHint")}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <SqlFileInput onLoad={setSql} />
-          <Button type="button" variant="ghost" size="sm" disabled={!sql} onClick={() => setSql("")}>
-            {t("dbAdmin.runner.clear")}
-          </Button>
-        </div>
-        <div className={executeOnly ? "grid gap-3" : "grid gap-3 sm:grid-cols-2"}>
-          {!executeOnly && (
-            <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
-              <input
-                type="checkbox"
-                checked={execute}
-                onChange={(event) => setExecute(event.currentTarget.checked)}
-                className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
-              />
-              <span>{t("dbAdmin.runner.execute")}</span>
-            </label>
-          )}
-          <label className="grid gap-1 text-sm font-medium text-slate-800">
-            <span>{t("dbAdmin.runner.confirmation")}</span>
-            <input
-              value={confirmation}
-              onChange={(event) => setConfirmation(event.currentTarget.value)}
-              className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-              placeholder="ADMIN_EXECUTE"
-            />
-          </label>
-        </div>
-        {result && <DbAdminExecutionResult result={result} />}
-        {!executeOnly && <AiAnalysisPanel sql={sql} resultText={executionResultText(result)} target={target} />}
+      {!executeOnly && (
+        <CardHeader>
+          {header}
+        </CardHeader>
+      )}
+      <CardContent className={`grid gap-3 ${executeOnly ? "p-4" : ""}`}>
+        {content}
       </CardContent>
     </Card>
   );
