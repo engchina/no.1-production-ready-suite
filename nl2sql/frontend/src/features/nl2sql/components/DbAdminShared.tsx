@@ -329,6 +329,7 @@ export function StatementRunnerCard({
   initialSql,
   placeholder,
   templates,
+  executeOnly = false,
   onExecuted,
 }: {
   policy: DbAdminStatementPolicy;
@@ -337,6 +338,7 @@ export function StatementRunnerCard({
   initialSql?: string;
   placeholder?: string;
   templates?: Array<{ label: string; build: () => string }>;
+  executeOnly?: boolean;
   onExecuted?: () => void | Promise<void>;
 }) {
   const [sql, setSql] = useState("");
@@ -352,14 +354,16 @@ export function StatementRunnerCard({
 
   const run = async () => {
     if (!sql.trim()) return;
+    const shouldExecute = executeOnly || execute;
+    if (shouldExecute && !confirmation.trim()) return;
     setLoading(true);
     setMessage("");
     try {
       const data = await apiPost<DbAdminExecuteData>("/api/nl2sql/db-admin/statements", {
         sql,
         policy,
-        execute,
-        confirmation: execute ? confirmation : "",
+        execute: shouldExecute,
+        confirmation: shouldExecute ? confirmation : "",
         reason: `ui-db-admin-${policy}`,
       });
       setResult(data);
@@ -373,6 +377,9 @@ export function StatementRunnerCard({
     }
   };
 
+  const shouldExecute = executeOnly || execute;
+  const canRun = Boolean(sql.trim()) && (!shouldExecute || Boolean(confirmation.trim()));
+
   return (
     <Card>
       <CardHeader>
@@ -383,14 +390,14 @@ export function StatementRunnerCard({
           </CardTitle>
           <Button
             type="button"
-            variant={execute ? "danger" : "secondary"}
+            variant={shouldExecute ? "danger" : "secondary"}
             size="sm"
             loading={loading}
-            disabled={!sql.trim()}
+            disabled={!canRun}
             onClick={() => void run()}
           >
             <Play size={15} aria-hidden="true" />
-            <span>{execute ? t("dbAdmin.runner.run") : t("dbAdmin.runner.dryRun")}</span>
+            <span>{shouldExecute ? t("dbAdmin.runner.run") : t("dbAdmin.runner.dryRun")}</span>
           </Button>
         </div>
       </CardHeader>
@@ -426,23 +433,27 @@ export function StatementRunnerCard({
             className="min-h-52 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs leading-5 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
           />
         </label>
-        <p className="text-xs leading-5 text-slate-500">{t("dbAdmin.runner.previewHint")}</p>
+        <p className="text-xs leading-5 text-slate-500">
+          {executeOnly ? t("dbAdmin.runner.executeHint") : t("dbAdmin.runner.previewHint")}
+        </p>
         <div className="flex flex-wrap gap-2">
           <SqlFileInput onLoad={setSql} />
           <Button type="button" variant="ghost" size="sm" disabled={!sql} onClick={() => setSql("")}>
             {t("dbAdmin.runner.clear")}
           </Button>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
-            <input
-              type="checkbox"
-              checked={execute}
-              onChange={(event) => setExecute(event.currentTarget.checked)}
-              className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
-            />
-            <span>{t("dbAdmin.runner.execute")}</span>
-          </label>
+        <div className={executeOnly ? "grid gap-3" : "grid gap-3 sm:grid-cols-2"}>
+          {!executeOnly && (
+            <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
+              <input
+                type="checkbox"
+                checked={execute}
+                onChange={(event) => setExecute(event.currentTarget.checked)}
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-red-700 focus:ring-red-500"
+              />
+              <span>{t("dbAdmin.runner.execute")}</span>
+            </label>
+          )}
           <label className="grid gap-1 text-sm font-medium text-slate-800">
             <span>{t("dbAdmin.runner.confirmation")}</span>
             <input
@@ -454,7 +465,7 @@ export function StatementRunnerCard({
           </label>
         </div>
         {result && <DbAdminExecutionResult result={result} />}
-        <AiAnalysisPanel sql={sql} resultText={executionResultText(result)} target={target} />
+        {!executeOnly && <AiAnalysisPanel sql={sql} resultText={executionResultText(result)} target={target} />}
       </CardContent>
     </Card>
   );

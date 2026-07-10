@@ -13,6 +13,7 @@ export const APP_ROUTES = {
   sqlAnalysis: "/sql-analysis",
   sqlToQuestion: "/sql-to-question",
   learning: "/learning",
+  questionLearning: "/question-learning",
   history: "/history",
   evaluation: "/evaluation",
   engineOperations: "/engine-operations",

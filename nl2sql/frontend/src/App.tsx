@@ -23,6 +23,7 @@ import { EvaluationPage } from "@/features/nl2sql/pages/EvaluationPage";
 import { GlossaryRulesPage } from "@/features/nl2sql/pages/GlossaryRulesPage";
 import { HistoryPage } from "@/features/nl2sql/pages/HistoryPage";
 import { LearningPage } from "@/features/nl2sql/pages/LearningPage";
+import { QuestionLearningPage } from "@/features/nl2sql/pages/QuestionLearningPage";
 import {
   AnnotationManagementPage,
   CommentManagementPage,
@@ -58,6 +59,7 @@ export function App() {
         <Route path={APP_ROUTES.sqlAnalysis} element={<SqlAnalysisPage />} />
         <Route path={APP_ROUTES.sqlToQuestion} element={<SqlToQuestionPage />} />
         <Route path={APP_ROUTES.learning} element={<LearningPage />} />
+        <Route path={APP_ROUTES.questionLearning} element={<QuestionLearningPage />} />
         <Route path={APP_ROUTES.history} element={<HistoryPage />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationPage />} />
         <Route path={APP_ROUTES.engineOperations} element={<EngineOperationsPage />} />
