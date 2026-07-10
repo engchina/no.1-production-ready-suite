@@ -25,7 +25,10 @@ from app.features.nl2sql.models import (
     SchemaColumn,
     SchemaTable,
 )
-from app.features.nl2sql.oracle_adapter import _flexible_date_value
+from app.features.nl2sql.oracle_adapter import (
+    _flexible_date_value,
+    _normalize_select_ai_object_list,
+)
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 
@@ -34,6 +37,7 @@ class FakeEnterpriseAiClient:
     def __init__(self, *responses: str | Exception, configured: bool = True) -> None:
         self.responses = list(responses)
         self.configured = configured
+        self.calls: list[dict[str, str]] = []
 
     def is_configured(self) -> bool:
         return self.configured
@@ -42,6 +46,7 @@ class FakeEnterpriseAiClient:
         return "fake-enterprise-ai"
 
     def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+        self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
         if not self.responses:
             return ""
         response = self.responses.pop(0)
@@ -74,6 +79,36 @@ class _OracleRuntimeService(Nl2SqlService):
 
     def _use_oracle_runtime(self) -> bool:
         return True
+
+
+class _FakeSelectAiProfileAdapter:
+    """DBMS_CLOUD_AI profile list/detail を固定で返す fake adapter。"""
+
+    def list_select_ai_profiles(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": "FINANCE_SELECT_AI",
+                "status": "available",
+                "description": "財務 profile",
+                "created_at": "2026-07-10T00:00:00+00:00",
+            }
+        ]
+
+    def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, Any]:
+        assert profile_name == "FINANCE_SELECT_AI"
+        return {
+            "name": profile_name,
+            "attributes": {
+                "provider": "oci",
+                "region": "ap-osaka-1",
+                "model": "cohere.command-r-plus",
+                "embedding_model": "cohere.embed-v4.0",
+                "object_list": [
+                    {"owner": "APP", "name": "INVOICES"},
+                    {"owner": "APP", "name": "V_INVOICE_SUMMARY"},
+                ],
+            },
+        }
 
 
 def _import_sample(service: Nl2SqlService) -> None:
@@ -114,6 +149,34 @@ def test_statement_policy_table_ddl_accepts_and_blocks() -> None:
     assert blocked.statements[1].status == "blocked"
     assert "禁止された操作" in blocked.statements[1].error_message
     assert any("禁止された操作" in warning for warning in blocked.warnings)
+
+
+def test_select_ai_db_profiles_include_detail_enriches_objects_and_models() -> None:
+    service = _OracleRuntimeService(_FakeSelectAiProfileAdapter())
+    cast(Any, service)._catalog = SchemaCatalog(
+        refreshed_at="2026-07-10T00:00:00+00:00",
+        tables=[
+            SchemaTable(table_name="INVOICES", logical_name="請求", table_type="TABLE"),
+            SchemaTable(
+                table_name="V_INVOICE_SUMMARY",
+                logical_name="請求サマリ",
+                table_type="VIEW",
+            ),
+        ],
+    )
+
+    data = service.list_select_ai_db_profiles(include_detail=True)
+
+    assert data.runtime == "oracle"
+    assert data.warnings == []
+    assert len(data.profiles) == 1
+    profile = data.profiles[0]
+    assert profile.name == "FINANCE_SELECT_AI"
+    assert profile.tables == ["INVOICES"]
+    assert profile.views == ["V_INVOICE_SUMMARY"]
+    assert profile.region == "ap-osaka-1"
+    assert profile.model == "cohere.command-r-plus"
+    assert profile.embedding_model == "cohere.embed-v4.0"
 
 
 def test_statement_policy_view_ddl_and_data_dml() -> None:
@@ -502,6 +565,19 @@ def test_flexible_date_value_parses_common_formats() -> None:
     assert _flexible_date_value("") is None
 
 
+def test_select_ai_object_list_normalizes_nested_oracle_profile_attributes() -> None:
+    oracle_object_list_json = (
+        '[{"OWNER": "APP", "NAME": "PAYMENTS"}, '
+        '{"owner": "APP", "name": "INVOICES"}]'
+    )
+    object_list = _normalize_select_ai_object_list(
+        {"PROFILE_ATTRIBUTES": {"OBJECT_LIST": oracle_object_list_json}}
+    )
+
+    assert [item["name"] for item in object_list] == ["PAYMENTS", "INVOICES"]
+    assert object_list[0]["owner"] == "APP"
+
+
 def test_analyze_error_uses_enterprise_ai_and_falls_back() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
@@ -539,9 +615,10 @@ def test_analyze_error_uses_enterprise_ai_and_falls_back() -> None:
 
 def test_extract_join_where_parses_strict_format_and_falls_back() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
-    cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(
+    fake_client = FakeEnterpriseAiClient(
         "JOIN:\n[INNER] e(EMPLOYEE).DEPT_ID = d(DEPARTMENT).DEPT_ID\nWHERE:\ne.STATUS = 'A'"
     )
+    cast(Any, service)._enterprise_ai_client = fake_client
     ddl = (
         'CREATE OR REPLACE VIEW "V_EMP_DEPT" AS\n'
         "SELECT e.EMP_ID, d.DEPT_NAME FROM EMPLOYEE e "
@@ -549,12 +626,62 @@ def test_extract_join_where_parses_strict_format_and_falls_back() -> None:
     )
     extracted = service.extract_db_admin_join_where(DbAdminJoinWhereRequest(ddl=ddl))
     assert extracted.source == "oci_enterprise_ai"
+    assert extracted.prompt_profile == "join_where_strict"
     assert "EMPLOYEE" in extracted.join_text
     assert extracted.where_text == "e.STATUS = 'A'"
+    assert "Extract ONLY JOIN and WHERE" in fake_client.calls[0]["prompt"]
 
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient("整形されていない応答")
     fallback = service.extract_db_admin_join_where(DbAdminJoinWhereRequest(ddl=ddl))
     assert fallback.source == "deterministic"
+    assert fallback.prompt_profile == "join_where_strict"
     assert fallback.warnings
     assert "JOIN" in fallback.join_text.upper() or fallback.join_text == "None"
     assert fallback.where_text != ""
+
+
+def test_extract_join_where_uses_sql_structure_prompt_profile() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    fake_client = FakeEnterpriseAiClient(
+        "## SQL構造分析\n\n"
+        "### SELECT句\n"
+        "- EMPLOYEE(e).EMP_ID\n\n"
+        "### JOIN句\n"
+        "- **JOIN**: EMPLOYEE(e) JOIN DEPARTMENT(d)\n"
+        "  - ON: EMPLOYEE(e).DEPT_ID = DEPARTMENT(d).DEPT_ID\n\n"
+        "### WHERE句\n"
+        "- EMPLOYEE(e).STATUS = 'A'\n"
+    )
+    cast(Any, service)._enterprise_ai_client = fake_client
+    ddl = (
+        "CREATE OR REPLACE VIEW V_EMP_DEPT AS "
+        "SELECT e.EMP_ID, d.DEPT_NAME FROM EMPLOYEE e "
+        "JOIN DEPARTMENT d ON e.DEPT_ID = d.DEPT_ID WHERE e.STATUS = 'A'"
+    )
+
+    extracted = service.extract_db_admin_join_where(
+        DbAdminJoinWhereRequest(ddl=ddl, prompt_profile="sql_structure")
+    )
+
+    assert extracted.source == "oci_enterprise_ai"
+    assert extracted.prompt_profile == "sql_structure"
+    assert "EMPLOYEE(e) JOIN DEPARTMENT(d)" in extracted.join_text
+    assert "ON: EMPLOYEE(e).DEPT_ID = DEPARTMENT(d).DEPT_ID" in extracted.join_text
+    assert extracted.where_text == "EMPLOYEE(e).STATUS = 'A'"
+    assert "SQL構造分析" in extracted.structure_markdown
+    assert "Analyze the SQL query" in fake_client.calls[0]["prompt"]
+
+
+def test_extract_join_where_unconfigured_keeps_selected_prompt_profile() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+    result = service.extract_db_admin_join_where(
+        DbAdminJoinWhereRequest(
+            ddl="CREATE OR REPLACE VIEW V1 AS SELECT * FROM EMPLOYEE",
+            prompt_profile="sql_structure",
+        )
+    )
+
+    assert result.source == "deterministic"
+    assert result.prompt_profile == "sql_structure"
+    assert result.warnings

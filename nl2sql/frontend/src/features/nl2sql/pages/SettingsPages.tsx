@@ -3,23 +3,23 @@ import {
   Bot,
   Database,
   Download,
-  FileSpreadsheet,
   FlaskConical,
-  Play,
   RefreshCw,
   Save,
+  ShieldCheck,
   Wand2,
 } from "lucide-react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { csvImportPayload, defaultCsvImportForm, type CsvImportFormState } from "../csvImportState";
+import { ManagementPanelHeader, ManagementPanelShell, ManagementTabs } from "../components/DbAdminShared";
 import { engineLabel } from "../labels";
 import type {
   AssetRefreshData,
-  CsvImportData,
+  DiagnosticReadiness,
   DiagnosticsData,
   EvaluateData,
   Nl2SqlProfile,
@@ -60,11 +60,13 @@ function trainingPayload(profile: Nl2SqlProfile, trainingText: string): ProfileU
     name: profile.name,
     description: profile.description,
     allowed_tables: profile.allowed_tables,
+    allowed_views: profile.allowed_views ?? [],
     glossary: profile.glossary,
     sql_rules: profile.sql_rules,
     default_row_limit: profile.default_row_limit,
     safety_policy: profile.safety_policy,
     few_shot_examples: trainingTextToFewShot(trainingText),
+    select_ai_config: profile.select_ai_config,
   };
 }
 
@@ -384,15 +386,14 @@ export function ModelSettingsPage() {
   );
 }
 
+type DatabaseSettingsView = "boundary" | "readiness";
+
 export function DatabaseSettingsPage() {
   const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
-  const [csvForm, setCsvForm] = useState<CsvImportFormState>(() => defaultCsvImportForm());
-  const [csvResult, setCsvResult] = useState<CsvImportData | null>(null);
+  const [activeView, setActiveView] = useState<DatabaseSettingsView>("boundary");
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewError, setOverviewError] = useState("");
-  const [csvLoading, setCsvLoading] = useState(false);
-  const [csvError, setCsvError] = useState("");
 
   const loadOverview = async () => {
     setOverviewLoading(true);
@@ -416,182 +417,210 @@ export function DatabaseSettingsPage() {
   }, []);
 
   const totalColumns = catalog?.tables.reduce((sum, table) => sum + table.columns.length, 0) ?? 0;
-  const canSubmitCsv = csvForm.tableName.trim().length > 0 && csvForm.csvText.trim().length > 0;
   const databaseReadiness = (diagnostics?.readiness ?? []).filter((item) =>
     ["oracle_adb", "persistence", "feedback_embedding", "select_ai", "select_ai_agent"].includes(item.area)
   );
-
-  const updateCsvForm = <K extends keyof CsvImportFormState>(key: K, value: CsvImportFormState[K]) => {
-    setCsvForm((current) => ({ ...current, [key]: value }));
-  };
-
-  const importCsv = async () => {
-    if (!canSubmitCsv) return;
-    setCsvLoading(true);
-    setCsvError("");
-    try {
-      const result = await apiPost<CsvImportData>("/api/schema/import-csv", csvImportPayload(csvForm));
-      setCsvResult(result);
-      if (result.executed) {
-        setCatalog(await apiGet<SchemaCatalog>("/api/schema/catalog"));
-      }
-    } catch (err) {
-      setCsvError(err instanceof Error ? err.message : t("nl2sqlSettings.database.import.error"));
-    } finally {
-      setCsvLoading(false);
-    }
-  };
+  const readyCount = databaseReadiness.filter((item) => item.status === "ok").length;
 
   return (
     <>
       <PageHeader
         title={t("nav.nl2sqlSettingsDatabase")}
         subtitle={t("nl2sqlSettings.database.subtitle")}
-        actions={
-          <Button type="button" size="sm" variant="secondary" loading={overviewLoading} onClick={() => void loadOverview()}>
+      />
+      <main className="grid gap-4 p-4 lg:p-8">
+        {overviewError && (
+          <div className="flex flex-col gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:flex-row sm:items-center sm:justify-between" role="alert">
+            <span>{overviewError}</span>
+            <Button type="button" variant="secondary" size="sm" onClick={() => void loadOverview()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              <span>{t("nl2sqlSettings.database.overview.refresh")}</span>
+            </Button>
+          </div>
+        )}
+
+        <DatabaseStatusBar
+          tableCount={catalog?.tables.length ?? 0}
+          columnCount={totalColumns}
+          readyCount={readyCount}
+          readinessCount={databaseReadiness.length}
+          refreshedAt={catalog?.refreshed_at ?? ""}
+          loading={overviewLoading}
+          onRefresh={() => void loadOverview()}
+        />
+
+        <ManagementTabs
+          activeView={activeView}
+          tabs={[
+            { id: "boundary", label: t("nl2sqlSettings.database.tabs.boundary"), icon: ShieldCheck },
+            { id: "readiness", label: t("nl2sqlSettings.database.tabs.readiness"), icon: Database },
+          ]}
+          idPrefix="nl2sql-database"
+          ariaLabel={t("nl2sqlSettings.database.tabs.label")}
+          onViewChange={(view) => setActiveView(view)}
+        />
+
+        {activeView === "boundary" ? (
+          <ManagementPanelShell
+            id="nl2sql-database-panel-boundary"
+            labelledBy="nl2sql-database-tab-boundary"
+            aria-label={t("nl2sqlSettings.database.workspace.boundary")}
+          >
+            <SafetyBoundaryPanel
+              tableCount={catalog?.tables.length ?? 0}
+              columnCount={totalColumns}
+              refreshedAt={catalog?.refreshed_at ?? ""}
+            />
+          </ManagementPanelShell>
+        ) : (
+          <ManagementPanelShell
+            id="nl2sql-database-panel-readiness"
+            labelledBy="nl2sql-database-tab-readiness"
+            aria-label={t("nl2sqlSettings.database.workspace.readiness")}
+          >
+            <ReadinessPanel readiness={databaseReadiness} readyCount={readyCount} />
+          </ManagementPanelShell>
+        )}
+      </main>
+    </>
+  );
+}
+
+function DatabaseStatusBar({
+  tableCount,
+  columnCount,
+  readyCount,
+  readinessCount,
+  refreshedAt,
+  loading,
+  onRefresh,
+}: {
+  tableCount: number;
+  columnCount: number;
+  readyCount: number;
+  readinessCount: number;
+  refreshedAt: string;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="rounded-md border border-slate-200 bg-white px-4 py-3 shadow-sm" aria-label={t("nl2sqlSettings.database.toolbar.status")}>
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:flex xl:flex-wrap xl:items-center">
+          <StatusMetric label={t("nl2sqlSettings.database.tables")} value={formatNumber(tableCount)} />
+          <StatusMetric label={t("nl2sqlSettings.database.columns")} value={formatNumber(columnCount)} />
+          <StatusMetric
+            label={t("nl2sqlSettings.database.readiness.status")}
+            value={`${formatNumber(readyCount)}/${formatNumber(readinessCount)}`}
+          />
+          <StatusMetric label={t("nl2sqlSettings.database.schemaRefreshed")} value={formatDateTime(refreshedAt)} />
+        </dl>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+          <Button type="button" variant="secondary" size="sm" loading={loading} onClick={onRefresh}>
             <RefreshCw size={15} aria-hidden="true" />
             <span>{t("nl2sqlSettings.database.overview.refresh")}</span>
           </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StatusMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+      <dd className="mt-1 font-semibold text-slate-950">{value}</dd>
+    </div>
+  );
+}
+
+function SafetyBoundaryPanel({
+  tableCount,
+  columnCount,
+  refreshedAt,
+}: {
+  tableCount: number;
+  columnCount: number;
+  refreshedAt: string;
+}) {
+  return (
+    <section className="grid min-w-0 content-start gap-3" aria-labelledby="nl2sql-boundary-heading">
+      <ManagementPanelHeader
+        headingId="nl2sql-boundary-heading"
+        icon={ShieldCheck}
+        title={t("nl2sqlSettings.database.boundary")}
+        description={t("nl2sqlSettings.database.boundary.description")}
+        action={<StatusBadge variant="success" label="SELECT/WITH" />}
+      />
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <StatusMetric label={t("nl2sqlSettings.database.tables")} value={formatNumber(tableCount)} />
+        <StatusMetric label={t("nl2sqlSettings.database.columns")} value={formatNumber(columnCount)} />
+        <StatusMetric label={t("nl2sqlSettings.database.safety")} value="SELECT/WITH" />
+        <StatusMetric label={t("nl2sqlSettings.database.schemaRefreshed")} value={formatDateTime(refreshedAt)} />
+      </div>
+    </section>
+  );
+}
+
+function ReadinessPanel({
+  readiness,
+  readyCount,
+}: {
+  readiness: DiagnosticReadiness[];
+  readyCount: number;
+}) {
+  return (
+    <section className="grid min-w-0 content-start gap-3" aria-labelledby="nl2sql-readiness-heading">
+      <ManagementPanelHeader
+        headingId="nl2sql-readiness-heading"
+        icon={Database}
+        title={t("nl2sqlSettings.database.readiness.title")}
+        description={t("nl2sqlSettings.database.readiness.description")}
+        action={
+          <StatusBadge
+            variant={readiness.length > 0 && readyCount === readiness.length ? "success" : "warning"}
+            label={`${readyCount}/${readiness.length || 0}`}
+          />
         }
       />
-      <main className="grid gap-5 p-4 lg:p-8">
-        {overviewError && (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-            {overviewError}
-          </div>
-        )}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Database size={18} aria-hidden="true" />
-              {t("nl2sqlSettings.database.boundary")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-3 md:grid-cols-3">
-              <Metric label={t("nl2sqlSettings.database.tables")} value={String(catalog?.tables.length ?? 0)} />
-              <Metric label={t("nl2sqlSettings.database.columns")} value={String(totalColumns)} />
-              <Metric label={t("nl2sqlSettings.database.safety")} value="SELECT/WITH" />
-            </div>
-            <section className="mt-5 grid gap-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-slate-900">
-                  {t("nl2sqlSettings.database.overview.title")}
-                </h3>
-                <StatusBadge
-                  variant={databaseReadiness.every((item) => item.status === "ok") ? "success" : "warning"}
-                  label={`${databaseReadiness.filter((item) => item.status === "ok").length}/${databaseReadiness.length || 0}`}
-                />
-              </div>
-              {databaseReadiness.length > 0 ? (
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {databaseReadiness.map((item) => (
-                    <div key={item.area} className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="font-semibold text-slate-900">{item.label}</p>
-                          <p className="mt-1 text-sm leading-6 text-slate-700">{item.summary}</p>
-                        </div>
-                        <StatusBadge variant={item.status === "ok" ? "success" : "warning"} label={item.status} />
-                      </div>
-                      {item.next_action && (
-                        <p className="rounded-md bg-white px-3 py-2 text-sm leading-6 text-slate-700">
-                          {item.next_action}
-                        </p>
-                      )}
-                      {item.related_checks.length > 0 && (
-                        <p className="font-mono text-xs leading-5 text-slate-500">
-                          {item.related_checks.join(", ")}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="grid min-h-28 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                  {t("nl2sqlSettings.database.overview.empty")}
-                </div>
-              )}
-            </section>
-          </CardContent>
-        </Card>
+      {readiness.length > 0 ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {readiness.map((item) => (
+            <ReadinessCard key={item.area} item={item} />
+          ))}
+        </div>
+      ) : (
+        <div className="grid min-h-32 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+          {t("nl2sqlSettings.database.overview.empty")}
+        </div>
+      )}
+    </section>
+  );
+}
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileSpreadsheet size={18} aria-hidden="true" />
-              {t("nl2sqlSettings.database.import.title")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-5">
-            {csvError && (
-              <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-                {csvError}
-              </div>
-            )}
-            <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
-              <div className="grid gap-4 content-start">
-                <label className="grid gap-1 text-sm font-medium text-slate-800">
-                  <span>{t("nl2sqlSettings.database.import.tableName")}</span>
-                  <input
-                    value={csvForm.tableName}
-                    onChange={(event) => updateCsvForm("tableName", event.currentTarget.value)}
-                    className="min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                    placeholder={t("nl2sqlSettings.database.import.tableNamePlaceholder")}
-                  />
-                </label>
-                <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
-                  <input
-                    type="checkbox"
-                    checked={csvForm.execute}
-                    onChange={(event) => updateCsvForm("execute", event.currentTarget.checked)}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
-                  />
-                  <span>{t("nl2sqlSettings.database.import.execute")}</span>
-                </label>
-                <label className="flex min-h-11 items-start gap-3 rounded-md border border-slate-200 p-3 text-sm text-slate-800">
-                  <input
-                    type="checkbox"
-                    checked={csvForm.replaceExisting}
-                    onChange={(event) => updateCsvForm("replaceExisting", event.currentTarget.checked)}
-                    disabled={!csvForm.execute}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500 disabled:opacity-50"
-                  />
-                  <span>{t("nl2sqlSettings.database.import.replace")}</span>
-                </label>
-                <Button
-                  type="button"
-                  variant={csvForm.execute && csvForm.replaceExisting ? "danger" : "primary"}
-                  size="md"
-                  loading={csvLoading}
-                  disabled={!canSubmitCsv || csvLoading}
-                  onClick={() => void importCsv()}
-                >
-                  {csvForm.execute ? <Play size={16} aria-hidden="true" /> : <FileSpreadsheet size={16} aria-hidden="true" />}
-                  <span>
-                    {csvForm.execute
-                      ? t("nl2sqlSettings.database.import.actionExecute")
-                      : t("nl2sqlSettings.database.import.actionDryRun")}
-                  </span>
-                </Button>
-              </div>
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
-                <span>{t("nl2sqlSettings.database.import.csv")}</span>
-                <textarea
-                  value={csvForm.csvText}
-                  onChange={(event) => updateCsvForm("csvText", event.currentTarget.value)}
-                  rows={10}
-                  className="min-h-72 rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                  placeholder={t("nl2sqlSettings.database.import.csvPlaceholder")}
-                />
-              </label>
-            </div>
-
-            {csvResult && <CsvImportResult result={csvResult} />}
-          </CardContent>
-        </Card>
-      </main>
-    </>
+function ReadinessCard({ item }: { item: DiagnosticReadiness }) {
+  return (
+    <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-semibold text-slate-900">{item.label}</p>
+          <p className="mt-1 text-sm leading-6 text-slate-700">{item.summary}</p>
+        </div>
+        <StatusBadge variant={item.status === "ok" ? "success" : "warning"} label={item.status} />
+      </div>
+      {item.next_action && (
+        <p className="rounded-md bg-white px-3 py-2 text-sm leading-6 text-slate-700">
+          <span className="font-medium text-slate-900">{t("nl2sqlSettings.database.readiness.nextAction")}: </span>
+          {item.next_action}
+        </p>
+      )}
+      {item.related_checks.length > 0 && (
+        <p className="break-words font-mono text-xs leading-5 text-slate-500">
+          {t("nl2sqlSettings.database.readiness.relatedChecks")}: {item.related_checks.join(", ")}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -656,101 +685,6 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
       <p className="text-xs font-medium text-slate-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold text-slate-900">{value}</p>
-    </div>
-  );
-}
-
-export function CsvImportResult({ result }: { result: CsvImportData }) {
-  const sampleColumns = result.columns.map((column) => column.column_name);
-  return (
-    <section className="grid gap-4 rounded-md border border-slate-200 bg-slate-50 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold text-slate-900">{result.table_name}</p>
-          <p className="mt-1 text-sm text-slate-600">
-            {t("nl2sqlSettings.database.import.resultSummary", {
-              rows: result.row_count,
-              columns: result.columns.length,
-            })}
-          </p>
-        </div>
-        <StatusBadge
-          variant={result.executed ? "success" : "info"}
-          label={result.executed ? t("nl2sqlSettings.database.import.executed") : t("nl2sqlSettings.database.import.dryRun")}
-        />
-      </div>
-
-      {result.warnings.length > 0 && (
-        <div className="grid gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          {result.warnings.map((warning) => (
-            <p key={warning}>{warning}</p>
-          ))}
-        </div>
-      )}
-
-      <div className="overflow-auto rounded-md border border-slate-200 bg-white">
-        <table className="min-w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-white">
-            <tr>
-              <th className="px-3 py-2 text-left">{t("nl2sqlSettings.database.import.sourceColumn")}</th>
-              <th className="px-3 py-2 text-left">{t("nl2sqlSettings.database.import.oracleColumn")}</th>
-              <th className="px-3 py-2 text-left">{t("schema.col.type")}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {result.columns.map((column) => (
-              <tr key={column.column_name}>
-                <td className="px-3 py-2">{column.source_name}</td>
-                <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
-                <td className="px-3 py-2">{column.data_type}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="grid gap-3 lg:grid-cols-2">
-        <SqlSnippet title={t("nl2sqlSettings.database.import.ddl")} value={result.ddl} />
-        <SqlSnippet title={t("nl2sqlSettings.database.import.insertSql")} value={result.insert_sql} />
-      </div>
-
-      {result.sample_rows.length > 0 && (
-        <div className="overflow-auto rounded-md border border-slate-200 bg-white">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-white">
-              <tr>
-                {sampleColumns.map((column) => (
-                  <th key={column} className="px-3 py-2 text-left font-mono text-xs">
-                    {column}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {result.sample_rows.map((row, index) => (
-                <tr key={index}>
-                  {sampleColumns.map((column) => (
-                    <td key={column} className="px-3 py-2">
-                      {row[column] ?? "-"}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function SqlSnippet({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-md border border-slate-200 bg-white p-3">
-      <p className="text-xs font-medium text-slate-500">{title}</p>
-      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-slate-800">
-        <code>{value}</code>
-      </pre>
     </div>
   );
 }

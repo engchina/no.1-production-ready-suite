@@ -46,6 +46,103 @@ def _coerce_result_value(value: Any) -> Any:
     return value
 
 
+def _select_ai_object_name(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if not isinstance(item, dict):
+        return ""
+    for key in (
+        "name",
+        "NAME",
+        "object_name",
+        "OBJECT_NAME",
+        "table_name",
+        "TABLE_NAME",
+        "objectName",
+        "tableName",
+    ):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _select_ai_object_list_items(
+    value: Any, *, candidate_scope: bool = False, depth: int = 0
+) -> list[Any]:
+    if value is None or depth > 6:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        with suppress(json.JSONDecodeError):
+            return _select_ai_object_list_items(
+                json.loads(text), candidate_scope=candidate_scope, depth=depth + 1
+            )
+        return [text] if candidate_scope else []
+    if isinstance(value, list):
+        items: list[Any] = []
+        for item in value:
+            items.extend(_select_ai_object_list_items(item, candidate_scope=True, depth=depth + 1))
+        return items
+    if not isinstance(value, dict):
+        return []
+    if candidate_scope and _select_ai_object_name(value):
+        return [value]
+
+    collected: list[Any] = []
+    for key in (
+        "object_list",
+        "OBJECT_LIST",
+        "objectList",
+        "objects",
+        "OBJECTS",
+        "tables",
+        "TABLES",
+    ):
+        if key in value:
+            collected.extend(
+                _select_ai_object_list_items(value[key], candidate_scope=True, depth=depth + 1)
+            )
+    for key in (
+        "attributes",
+        "ATTRIBUTES",
+        "profile_attributes",
+        "PROFILE_ATTRIBUTES",
+        "profileAttributes",
+        "params",
+        "PARAMS",
+    ):
+        if key in value:
+            collected.extend(
+                _select_ai_object_list_items(value[key], candidate_scope=False, depth=depth + 1)
+            )
+    return collected
+
+
+def _normalize_select_ai_object_list(value: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in _select_ai_object_list_items(value, candidate_scope=False):
+        name = _select_ai_object_name(item)
+        if not name:
+            continue
+        key = name.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        record = dict(item) if isinstance(item, dict) else {"name": name}
+        record.setdefault("name", name)
+        for owner_key in ("owner", "OWNER", "schema", "SCHEMA"):
+            owner = record.get(owner_key)
+            if isinstance(owner, str) and owner.strip():
+                record.setdefault("owner", owner.strip())
+                break
+        normalized.append(record)
+    return normalized
+
+
 _FLEXIBLE_DATE_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%dT%H:%M:%S",
@@ -885,9 +982,7 @@ class OracleNl2SqlAdapter:
                         attributes = json.loads(attributes_text) if attributes_text else {}
                     except json.JSONDecodeError:
                         attributes = {"raw": attributes_text}
-                    object_list = attributes.get("object_list")
-                    if not isinstance(object_list, list):
-                        object_list = []
+                    object_list = _normalize_select_ai_object_list(attributes)
                     return {
                         "name": str(row[0] or safe_name),
                         "status": str(row[1] or "unknown").lower(),
@@ -1561,49 +1656,6 @@ class OracleNl2SqlAdapter:
                 }
             )
         return results
-
-    def import_csv_table(
-        self,
-        *,
-        table_name: str,
-        columns: list[CsvImportColumn],
-        rows: list[dict[str, str | None]],
-        replace_existing: bool,
-    ) -> dict[str, Any]:
-        """Create a table and insert parsed CSV rows into Oracle."""
-        quoted_table = _quote_identifier(table_name)
-        column_defs = ", ".join(
-            f"{_quote_identifier(column.column_name)} {column.data_type}" for column in columns
-        )
-        ddl = f"CREATE TABLE {quoted_table} ({column_defs})"
-        bind_names = [f"c{index}" for index, _column in enumerate(columns)]
-        # Safe: table and columns are sanitized and quoted; values use binds.
-        insert_sql = (
-            f"INSERT INTO {quoted_table} "  # nosec B608
-            f"({', '.join(_quote_identifier(column.column_name) for column in columns)}) "
-            f"VALUES ({', '.join(':' + name for name in bind_names)})"
-        )
-        bind_rows = [
-            {
-                bind_names[index]: self._coerce_csv_value(row.get(column.column_name), column)
-                for index, column in enumerate(columns)
-            }
-            for row in rows
-        ]
-        with self.connection() as conn, conn.cursor() as cursor:
-            if replace_existing:
-                self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
-            self._execute_plsql_like(cursor, ddl, {})
-            if bind_rows:
-                cursor.executemany(insert_sql, bind_rows)
-            conn.commit()
-        return {
-            "runtime": "oracle",
-            "table_name": table_name,
-            "row_count": len(bind_rows),
-            "ddl": ddl,
-            "insert_sql": insert_sql,
-        }
 
     def generate_select_ai_sql(
         self, *, profile_name: str, question: str, action: str = "showsql"

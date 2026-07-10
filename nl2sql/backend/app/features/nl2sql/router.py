@@ -86,6 +86,7 @@ from .models import (
     ProfileLearningMaterialImportData,
     ProfileRecommendationData,
     ProfileRecommendationRequest,
+    ProfileSelectAiProfileRequest,
     ProfileUpsertRequest,
     QueryResults,
     RepairData,
@@ -313,6 +314,23 @@ async def archive_profile(profile_id: str) -> ApiResponse[Nl2SqlProfile]:
         ) from exc
 
 
+@router.post(
+    "/profiles/{profile_id}/select-ai-profile",
+    response_model=ApiResponse[SelectAiDbProfileMutationData],
+)
+async def upsert_profile_select_ai_profile(
+    profile_id: str,
+    req: ProfileSelectAiProfileRequest,
+) -> ApiResponse[SelectAiDbProfileMutationData]:
+    """業務 profile から Oracle DBMS_CLOUD_AI profile を dry-run / 作成する。"""
+    try:
+        return ApiResponse(data=nl2sql_service.upsert_profile_select_ai_profile(profile_id, req))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="指定された profile が見つかりません。"
+        ) from exc
+
+
 @router.post("/select-ai/profiles/refresh", response_model=ApiResponse[AssetRefreshData])
 async def refresh_select_ai_profile(profile_id: str | None = None) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI profile を作成/更新する adapter boundary。"""
@@ -344,9 +362,11 @@ async def cleanup_select_ai_assets(
 
 
 @router.get("/select-ai/db-profiles", response_model=ApiResponse[SelectAiDbProfilesData])
-async def select_ai_db_profiles() -> ApiResponse[SelectAiDbProfilesData]:
+async def select_ai_db_profiles(
+    include_detail: bool = False,
+) -> ApiResponse[SelectAiDbProfilesData]:
     """Oracle DBMS_CLOUD_AI profile 一覧を返す。"""
-    return ApiResponse(data=nl2sql_service.list_select_ai_db_profiles())
+    return ApiResponse(data=nl2sql_service.list_select_ai_db_profiles(include_detail))
 
 
 @router.get(

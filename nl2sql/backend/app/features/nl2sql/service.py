@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import dotenv_values
 from pydantic import BaseModel
@@ -85,8 +85,6 @@ from .models import (
     CompareRecord,
     CompareRequest,
     CsvImportColumn,
-    CsvImportData,
-    CsvImportRequest,
     DbAdminAiAnalysisData,
     DbAdminAiAnalysisRequest,
     DbAdminCsvUploadData,
@@ -147,6 +145,7 @@ from .models import (
     ProfileRecommendationCandidate,
     ProfileRecommendationData,
     ProfileRecommendationRequest,
+    ProfileSelectAiProfileRequest,
     QueryResults,
     RepairData,
     RepairRequest,
@@ -193,6 +192,8 @@ from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
 
 logger = logging.getLogger(__name__)
 
+_JoinWherePromptProfile = Literal["join_where_strict", "sql_structure"]
+
 _SAMPLE_PROFILE_ID = "sql_assist_sample"
 _SAMPLE_CONFIRMATION = "SQL_ASSIST_SAMPLE"
 _SAMPLE_OBJECTS = [
@@ -202,6 +203,19 @@ _SAMPLE_OBJECTS = [
     "V_EMP_DEPT",
     "V_DEPT_PROJECT",
 ]
+_SYNTHETIC_DATA_UNSUPPORTED_DATA_TYPES = {
+    "BFILE",
+    "BLOB",
+    "CLOB",
+    "JSON",
+    "LONG",
+    "LONG RAW",
+    "NCLOB",
+    "RAW",
+    "SDO_GEOMETRY",
+    "VECTOR",
+    "XMLTYPE",
+}
 _SAMPLE_TABLES = ["DEPARTMENT", "EMPLOYEE", "PROJECT"]
 _SAMPLE_VIEWS = ["V_EMP_DEPT", "V_DEPT_PROJECT"]
 _SCHEMA_EMPTY_MESSAGE = (
@@ -276,6 +290,97 @@ _SQL_RESERVED_OR_FUNCTIONS = {
     "UPPER",
     "WHEN",
 }
+_JOIN_WHERE_STRICT_SYSTEM_PROMPT = (
+    "You are a SQL parser. Output ONLY the requested format. No explanations."
+)
+_JOIN_WHERE_STRICT_PROMPT = (
+    "Extract ONLY JOIN and WHERE conditions from the SQL query below.\n"
+    "Output in STRICT format (no explanations, no markdown, no extra text):\n\n"
+    "JOIN:\n"
+    "[JOIN_TYPE] alias1(schema.table1).column1 = alias2(schema.table2).column2\n"
+    "[JOIN_TYPE] alias3(schema.table3).column3 = alias4(schema.table4).column4\n\n"
+    "WHERE:\n"
+    "alias(schema.table).column operator value\n\n"
+    "Rules:\n"
+    "- Format: alias(schema.table_name).column or schema.table_name.column (if no alias)\n"
+    "- JOIN_TYPE must be one of: INNER JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN, CROSS JOIN, JOIN\n"
+    "- Include schema name if present (e.g., ADMIN.USER_ROLE)\n"
+    "- One condition per line\n"
+    "- Keep original operators (=, >, <, LIKE, IN, etc.)\n"
+    "- Preserve exact column names and values with quotes\n"
+    "- If no JOIN/WHERE exists, output 'JOIN:\\nNone' or 'WHERE:\\nNone'\n\n"
+    "SQL:\n```sql\n{sql}\n```"
+)
+_SQL_STRUCTURE_SYSTEM_PROMPT = (
+    "You are a SQL parser. Output ONLY the requested markdown format. No explanations."
+)
+_SQL_STRUCTURE_ANALYSIS_PROMPT = (
+    "Analyze the SQL query and extract its COMPLETE structure in Markdown format.\n"
+    "GOAL: Output must contain 100% of SQL information to enable exact SQL reconstruction.\n"
+    "Output ONLY the markdown text below (no code blocks, no explanations):\n\n"
+    "## SQL構造分析\n\n"
+    "### SELECT句\n"
+    "- [DISTINCT] (if present)\n"
+    "- schema.table(alias).column1 [AS alias1]\n"
+    "- aggregate_function(schema.table(alias).column) [AS alias]\n"
+    "- expression [AS alias]\n"
+    "- (サブクエリ-N) AS alias\n"
+    "- * (if SELECT *)\n\n"
+    "### FROM句\n"
+    "- schema.table_name [alias]\n"
+    "- (サブクエリ-N) AS alias (if inline view)\n\n"
+    "### JOIN句\n"
+    "- **[JOIN_TYPE]**: schema.table1(alias1) JOIN schema.table2(alias2)\n"
+    "  - ON: condition1\n"
+    "  - ON: condition2 (if multiple conditions)\n"
+    "  - USING: (column_name) (if USING clause)\n\n"
+    "### WHERE句\n"
+    "- schema.table(alias).column operator value\n"
+    "- AND/OR schema.table(alias).column operator value\n"
+    "- AND/OR schema.table(alias).column IN (サブクエリ-N)\n"
+    "- AND/OR EXISTS (サブクエリ-N)\n"
+    "- AND/OR schema.table(alias).column BETWEEN value1 AND value2\n"
+    "- AND/OR schema.table(alias).column LIKE 'pattern'\n"
+    "- AND/OR schema.table(alias).column IS [NOT] NULL\n\n"
+    "### GROUP BY句\n"
+    "- schema.table(alias).column1\n"
+    "- schema.table(alias).column2\n\n"
+    "### HAVING句\n"
+    "- aggregate_function(schema.table(alias).column) operator value\n\n"
+    "### ORDER BY句\n"
+    "- schema.table(alias).column1 ASC/DESC [NULLS FIRST/LAST]\n\n"
+    "### WITH句(CTE)\n"
+    "- **cte_name**:\n"
+    "  - SELECT: columns and expressions\n"
+    "  - FROM: schema.table_name(alias)\n"
+    "  - JOIN: **[JOIN_TYPE]** schema.table(alias) ON condition\n"
+    "  - WHERE: condition1 AND/OR condition2\n\n"
+    "### サブクエリ\n"
+    "- **サブクエリ-1** [Location: SELECT/FROM/WHERE/HAVING in main/CTE]:\n"
+    "  - SELECT: columns/expressions\n"
+    "  - FROM: schema.table_name(alias)\n"
+    "  - JOIN: **[JOIN_TYPE]** schema.table(alias) ON condition\n"
+    "  - WHERE: conditions\n\n"
+    "Rules for 100% SQL Reconstruction:\n"
+    "- MUST output ALL columns in SELECT with exact order, aliases, and expressions\n"
+    "- MUST preserve ALL literal values, operators, and functions exactly as written\n"
+    "- MUST include schema prefix when present in original SQL\n"
+    "- Format: schema.table_name(alias).column when alias exists\n"
+    "- JOIN_TYPE: INNER JOIN, LEFT [OUTER] JOIN, RIGHT [OUTER] JOIN, "
+    "FULL [OUTER] JOIN, CROSS JOIN, NATURAL JOIN\n"
+    "- For implicit JOIN (FROM t1, t2 WHERE t1.id=t2.id), "
+    "list in FROM and show condition in WHERE\n"
+    "- For compound JOIN conditions, list each ON condition separately\n"
+    "- Preserve ALL operators: =, >, <, >=, <=, <>, !=, LIKE, NOT LIKE, IN, "
+    "NOT IN, BETWEEN, IS NULL, IS NOT NULL, EXISTS, NOT EXISTS\n"
+    "- Preserve ALL string literals with quotes, numeric values, date literals\n"
+    "- Preserve AND/OR/NOT logical structure exactly\n"
+    "- Do NOT merge JOIN ON conditions into WHERE\n"
+    "- WITH句(CTE): Expand EACH CTE completely\n"
+    "- サブクエリ: Number sequentially and expand completely\n"
+    "- If section is empty/not present, omit that section entirely\n\n"
+    "SQL:\n```sql\n{sql}\n```"
+)
 
 
 class _SqlAnalysisLlmPayload(BaseModel):
@@ -501,6 +606,15 @@ def _elapsed_ms(started: float) -> int:
 def _normalize_identifier(value: str) -> str:
     parts = [part.strip().strip('"') for part in value.strip().split(".")]
     return (parts[-1] if parts else "").upper()
+
+
+def _synthetic_data_type_key(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", value.strip().upper())
+    if normalized.startswith("LONG RAW"):
+        return "LONG RAW"
+    if normalized.startswith("SDO_GEOMETRY"):
+        return "SDO_GEOMETRY"
+    return normalized.split("(", 1)[0].strip()
 
 
 def _csv_identifier(value: str, fallback: str) -> str:
@@ -1028,7 +1142,7 @@ class Nl2SqlService:
             elif self._use_oracle_runtime():
                 execution = self.execute_db_admin_sql(
                     DbAdminExecuteRequest(
-                        sql="\n".join(statements),
+                        sql=";\n".join(statements),
                         execute=True,
                         confirmation="ADMIN_EXECUTE",
                         reason=request.reason or "sql-assist-sample-import",
@@ -1053,7 +1167,7 @@ class Nl2SqlService:
             step=step,
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             executed=executed,
-            dry_run=not executed,
+            dry_run=not request.execute,
             objects=list(_SAMPLE_OBJECTS),
             statements=results,
             warnings=warnings,
@@ -1078,26 +1192,27 @@ class Nl2SqlService:
                     error_message=confirmation_error,
                 )
             elif self._use_oracle_runtime():
-                results = []
-                for statement in statements:
-                    execution = self.execute_db_admin_sql(
-                        DbAdminExecuteRequest(
-                            sql=statement,
-                            execute=True,
-                            confirmation="ADMIN_EXECUTE",
-                            reason=request.reason or "sql-assist-sample-delete",
-                        )
+                execution = self.execute_db_admin_sql(
+                    DbAdminExecuteRequest(
+                        sql=";\n".join(statements),
+                        execute=True,
+                        confirmation="ADMIN_EXECUTE",
+                        reason=request.reason or "sql-assist-sample-delete",
                     )
-                    item = execution.statements[0] if execution.statements else None
-                    if item is None:
-                        continue
+                )
+                warnings.extend(execution.warnings)
+                results = []
+                for index, item in enumerate(execution.statements):
                     if item.status == "error" and self._is_missing_object_error(
                         item.error_message
                     ):
+                        statement = item.sql or (
+                            statements[index] if index < len(statements) else ""
+                        )
                         warnings.append(f"{statement}: 対象が存在しないため skip しました。")
                         item = item.model_copy(update={"status": "skipped_missing_object"})
                     results.append(item)
-                executed = all(
+                executed = bool(results) and all(
                     item.status in {"success", "skipped_missing_object"} for item in results
                 )
                 if executed:
@@ -1115,7 +1230,7 @@ class Nl2SqlService:
             step=SampleDataStep.ALL,
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             executed=executed,
-            dry_run=not executed,
+            dry_run=not request.execute,
             objects=list(_SAMPLE_OBJECTS),
             statements=results,
             warnings=warnings,
@@ -1335,6 +1450,43 @@ class Nl2SqlService:
     def list_profiles(self) -> list[Nl2SqlProfile]:
         with self._lock:
             return [profile for profile in self._profiles.values() if not profile.archived]
+
+    def profile_allowed_object_names(self, profile: Nl2SqlProfile) -> list[str]:
+        """Profile が検索・Select AI で参照できる table/view 名を返す。"""
+        return self._dedupe_object_names([*profile.allowed_tables, *profile.allowed_views])
+
+    def build_select_ai_profile_attributes(self, profile: Nl2SqlProfile) -> dict[str, Any]:
+        """業務 profile から OCI 固定の DBMS_CLOUD_AI attributes を組み立てる。"""
+        settings = get_settings()
+        config = profile.select_ai_config
+        attributes: dict[str, Any] = {
+            "provider": "oci",
+            "enforce_object_list": config.enforce_object_list,
+            "comments": config.comments,
+            "annotations": config.annotations,
+            "constraints": config.constraints,
+            "max_tokens": config.max_tokens,
+            "object_list": self._select_ai_object_list(self.profile_allowed_object_names(profile)),
+        }
+        credential_name = settings.nl2sql_select_ai_credential_name.strip()
+        region = config.region.strip() or settings.oci_region.strip()
+        model = config.model.strip() or settings.nl2sql_select_ai_model.strip()
+        embedding_model = (
+            config.embedding_model.strip()
+            or settings.oci_genai_embed_model_id.strip()
+            or "cohere.embed-v4.0"
+        )
+        if credential_name:
+            attributes["credential_name"] = credential_name
+        if settings.oci_compartment_id.strip():
+            attributes["oci_compartment_id"] = settings.oci_compartment_id.strip()
+        if region:
+            attributes["region"] = region
+        if model:
+            attributes["model"] = model
+        if embedding_model:
+            attributes["embedding_model"] = embedding_model
+        return attributes
 
     def create_profile(self, profile: Nl2SqlProfile) -> Nl2SqlProfile:
         with self._lock:
@@ -2768,7 +2920,7 @@ class Nl2SqlService:
                         profile_name=profile.name,
                         score=candidate.score,
                         matched_terms=[candidate.category],
-                        allowed_tables=profile.allowed_tables,
+                        allowed_tables=self.profile_allowed_object_names(profile),
                         category=candidate.category,
                     )
                 )
@@ -2824,7 +2976,7 @@ class Nl2SqlService:
                 profile_name=profile.name,
                 score=round(score, 3),
                 matched_terms=terms[:8],
-                allowed_tables=profile.allowed_tables,
+                allowed_tables=self.profile_allowed_object_names(profile),
             )
             for score, profile, terms in scored[:3]
         ]
@@ -4233,6 +4385,14 @@ class Nl2SqlService:
             None,
         )
 
+    def _synthetic_unsupported_columns(self, table: SchemaTable) -> list[SchemaColumn]:
+        return [
+            column
+            for column in table.columns
+            if _synthetic_data_type_key(column.data_type)
+            in _SYNTHETIC_DATA_UNSUPPORTED_DATA_TYPES
+        ]
+
     def _find_catalog_column(self, table: SchemaTable, column_name: str) -> SchemaColumn | None:
         normalized = _normalize_identifier(column_name)
         return next(
@@ -4280,11 +4440,23 @@ class Nl2SqlService:
             if table is None:
                 warnings.append(f"{object_name}: catalog に存在しない table です。")
                 safe_objects.append(object_name)
-            else:
-                safe_objects.append(table.table_name)
+                continue
+            unsupported_columns = self._synthetic_unsupported_columns(table)
+            if unsupported_columns:
+                column_text = ", ".join(
+                    f"{column.column_name}({column.data_type})"
+                    for column in unsupported_columns
+                )
+                warnings.append(
+                    f"{table.table_name}: DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA は "
+                    f"{column_text} を含む table をサポートしません。"
+                    "BLOB/CLOB/RAW/VECTOR などを除いた view または別 table を対象にしてください。"
+                )
+                continue
+            safe_objects.append(table.table_name)
         safe_table_name = safe_objects[0] if safe_objects else ""
         if not safe_objects:
-            warnings.append("synthetic data 対象 table/object_list が指定されていません。")
+            warnings.append("synthetic data の対象にできる table がありません。")
         executed = False
         status = "dry_run"
         operation_id = ""
@@ -4299,6 +4471,8 @@ class Nl2SqlService:
         )
         object_summary = ", ".join(safe_objects) or "-"
         message = f"{object_summary} に {row_count} 行/表の synthetic data を生成する plan です。"
+        if not safe_objects:
+            message = "synthetic data の対象にできる table がありません。"
         if request.execute and safe_objects:
             confirmation_error = self._admin_confirmation_error(
                 confirmation=request.confirmation,
@@ -5211,60 +5385,6 @@ class Nl2SqlService:
             ),
         ]
 
-    def import_csv_sample(self, request: CsvImportRequest) -> CsvImportData:
-        started = time.monotonic()
-        created_at = _utc_now()
-        settings = get_settings()
-        row_limit = request.max_rows or settings.nl2sql_csv_import_max_rows
-        columns, rows, warnings = self._parse_csv_sample(
-            table_name=request.table_name,
-            csv_text=request.csv_text,
-            max_rows=min(row_limit, settings.nl2sql_csv_import_max_rows),
-            max_columns=settings.nl2sql_csv_import_max_columns,
-        )
-        table_name = self._sanitize_import_table_name(request.table_name)
-        ddl = self._csv_import_ddl(table_name, columns)
-        insert_sql = self._csv_import_insert_sql(table_name, columns)
-        executed = False
-        if request.execute:
-            if self._use_oracle_runtime():
-                self._oracle_adapter.import_csv_table(
-                    table_name=table_name,
-                    columns=columns,
-                    rows=rows,
-                    replace_existing=request.replace_existing,
-                )
-                executed = True
-                try:
-                    self._catalog = self._oracle_adapter.fetch_catalog()
-                    self._persist_state()
-                except OracleAdapterError as exc:
-                    warnings.append(f"import 後の schema refresh に失敗しました: {exc}")
-            else:
-                warnings.append(
-                    "deterministic runtime のため dry-run として返しました。"
-                    "実投入には NL2SQL_RUNTIME_MODE=oracle が必要です。"
-                )
-        finished_at = _utc_now()
-        return CsvImportData(
-            table_name=table_name,
-            columns=columns,
-            row_count=len(rows),
-            dry_run=not executed,
-            executed=executed,
-            ddl=ddl,
-            insert_sql=insert_sql,
-            warnings=warnings,
-            sample_rows=rows[:5],
-            timing=TimingEnvelope(
-                created_at=created_at,
-                started_at=created_at,
-                finished_at=finished_at,
-                elapsed_ms=_elapsed_ms(started),
-                stage_timings=[StageTiming(stage="parse_csv", elapsed_ms=_elapsed_ms(started))],
-            ),
-        )
-
     def list_db_admin_tables(self) -> DbAdminObjectsData:
         warnings: list[str] = []
         if self._use_oracle_runtime():
@@ -6103,52 +6223,136 @@ class Nl2SqlService:
         """ビュー DDL から JOIN/WHERE 条件を抽出する(SQL Assist の AI 抽出再マップ)。"""
         match = re.search(r"\b(SELECT|WITH)\b[\s\S]*", request.ddl, re.IGNORECASE)
         view_sql = match.group(0) if match else request.ddl
-        deterministic = self._deterministic_join_where(view_sql)
+        prompt_profile: _JoinWherePromptProfile = request.prompt_profile
+        deterministic = self._deterministic_join_where(view_sql, prompt_profile)
         if not self._enterprise_ai_client.is_configured():
             return deterministic.model_copy(
                 update={
                     "warnings": [
-                        "OCI Enterprise AI が未設定のため deterministic 抽出を使用しました。"
+                        f"{prompt_profile}: OCI Enterprise AI が未設定のため "
+                        "deterministic 抽出を使用しました。"
                     ]
                 }
             )
         try:
+            prompt, system_prompt = self._join_where_prompt(view_sql, prompt_profile)
             raw = self._enterprise_ai_client.generate(
-                prompt=view_sql,
+                prompt=prompt,
                 context="",
-                system_prompt=(
-                    "Oracle のビュー定義 SQL から JOIN 条件と WHERE 条件を抽出してください。"
-                    "出力は次の厳格フォーマットのみです:\n"
-                    "JOIN:\n<JOIN 条件を 1 行ずつ。無ければ None>\n"
-                    "WHERE:\n<WHERE 条件。無ければ None>\n"
-                    "説明文・コードフェンスは出力しないでください。"
-                ),
+                system_prompt=system_prompt,
             )
-            cleaned = re.sub(r"```+\w*", "", raw).strip()
-            parsed = re.search(
-                r"JOIN:\s*([\s\S]*?)\n\s*WHERE:\s*([\s\S]*)$", cleaned, re.IGNORECASE
-            )
-            if not parsed:
-                raise ValueError("JOIN:/WHERE: フォーマットを解析できませんでした。")
-            return DbAdminJoinWhereData(
-                join_text=parsed.group(1).strip() or "None",
-                where_text=parsed.group(2).strip() or "None",
-                source="oci_enterprise_ai",
-            )
+            if prompt_profile == "sql_structure":
+                return self._parse_structure_join_where(raw, deterministic, prompt_profile)
+            return self._parse_strict_join_where(raw, prompt_profile)
         except (EnterpriseAiDirectError, ValueError) as exc:
             return deterministic.model_copy(
                 update={
-                    "warnings": [f"Enterprise AI 抽出に失敗したため fallback しました: {exc}"]
+                    "warnings": [
+                        f"{prompt_profile}: Enterprise AI 抽出に失敗したため "
+                        f"fallback しました: {exc}"
+                    ]
                 }
             )
 
-    def _deterministic_join_where(self, view_sql: str) -> DbAdminJoinWhereData:
+    def _join_where_prompt(
+        self, view_sql: str, prompt_profile: _JoinWherePromptProfile
+    ) -> tuple[str, str]:
+        if prompt_profile == "sql_structure":
+            return (
+                _SQL_STRUCTURE_ANALYSIS_PROMPT.format(sql=view_sql),
+                _SQL_STRUCTURE_SYSTEM_PROMPT,
+            )
+        return (
+            _JOIN_WHERE_STRICT_PROMPT.format(sql=view_sql),
+            _JOIN_WHERE_STRICT_SYSTEM_PROMPT,
+        )
+
+    def _parse_strict_join_where(
+        self, raw: str, prompt_profile: _JoinWherePromptProfile
+    ) -> DbAdminJoinWhereData:
+        cleaned = self._clean_join_where_ai_text(raw)
+        parsed = re.search(
+            r"JOIN:\s*([\s\S]*?)\n\s*WHERE:\s*([\s\S]*)$", cleaned, re.IGNORECASE
+        )
+        if not parsed:
+            raise ValueError("JOIN:/WHERE: フォーマットを解析できませんでした。")
+        return DbAdminJoinWhereData(
+            join_text=parsed.group(1).strip() or "None",
+            where_text=parsed.group(2).strip() or "None",
+            source="oci_enterprise_ai",
+            prompt_profile=prompt_profile,
+        )
+
+    def _parse_structure_join_where(
+        self,
+        raw: str,
+        deterministic: DbAdminJoinWhereData,
+        prompt_profile: _JoinWherePromptProfile,
+    ) -> DbAdminJoinWhereData:
+        structure_markdown = self._clean_join_where_ai_text(raw)
+        join_lines, join_section_found = self._markdown_sql_section_lines(
+            structure_markdown, ("JOIN句", "JOIN")
+        )
+        where_lines, where_section_found = self._markdown_sql_section_lines(
+            structure_markdown, ("WHERE句", "WHERE")
+        )
+        expected_conditions = (
+            deterministic.join_text != "None" or deterministic.where_text != "None"
+        )
+        if expected_conditions and not join_section_found and not where_section_found:
+            raise ValueError("SQL構造解析の JOIN句 / WHERE句 セクションを解析できませんでした。")
+        return DbAdminJoinWhereData(
+            join_text="\n".join(join_lines) if join_lines else "None",
+            where_text="\n".join(where_lines) if where_lines else "None",
+            source="oci_enterprise_ai",
+            prompt_profile=prompt_profile,
+            structure_markdown=structure_markdown,
+        )
+
+    def _markdown_sql_section_lines(
+        self, markdown: str, heading_tokens: tuple[str, ...]
+    ) -> tuple[list[str], bool]:
+        heading_pattern = re.compile(r"^#{2,4}\s+(.+?)\s*$", re.MULTILINE)
+        for match in heading_pattern.finditer(markdown):
+            heading = match.group(1).strip()
+            if not any(token.lower() in heading.lower() for token in heading_tokens):
+                continue
+            next_match = heading_pattern.search(markdown, match.end())
+            end = next_match.start() if next_match else len(markdown)
+            return self._clean_markdown_sql_lines(markdown[match.end() : end]), True
+        return [], False
+
+    def _clean_markdown_sql_lines(self, section: str) -> list[str]:
+        lines: list[str] = []
+        for raw_line in section.splitlines():
+            line = raw_line.strip()
+            if not line or line == "---":
+                continue
+            line = re.sub(r"^[-*]\s*", "", line)
+            line = re.sub(r"^\d+[.)]\s*", "", line)
+            line = line.replace("**", "").strip()
+            if line.lower() in {"none", "n/a", "not present", "なし", "該当なし"}:
+                continue
+            lines.append(line)
+        return lines
+
+    def _clean_join_where_ai_text(self, raw: str) -> str:
+        cleaned = re.sub(r"```+\w*", "", str(raw or ""))
+        cleaned = re.sub(r"```+", "", cleaned)
+        return cleaned.strip()
+
+    def _deterministic_join_where(
+        self,
+        view_sql: str,
+        prompt_profile: _JoinWherePromptProfile = "join_where_strict",
+    ) -> DbAdminJoinWhereData:
         structure = self._sql_structure(view_sql, [])
         joins = structure.get("joins") or []
         filters = structure.get("filters") or []
         return DbAdminJoinWhereData(
             join_text="\n".join(joins) if joins else "None",
             where_text="\n".join(filters) if filters else "None",
+            prompt_profile=prompt_profile,
         )
 
     def _catalog_object_detail(self, object_name: str, object_type: str) -> DbAdminObjectDetail:
@@ -6246,23 +6450,24 @@ class Nl2SqlService:
     def refresh_select_ai_profile(self, profile_id: str | None) -> AssetRefreshData:
         profile = self.get_profile(profile_id)
         profile_name = self._select_ai_profile_name(profile)
+        attributes = self.build_select_ai_profile_attributes(profile)
         warning = ""
         refreshed = True
         status = "ready"
         engine_meta: dict[str, Any] = {
             "allowed_tables": profile.allowed_tables,
-            "use_comments": True,
-            "use_constraints": True,
+            "allowed_views": profile.allowed_views,
+            "allowed_objects": self.profile_allowed_object_names(profile),
+            "profile_attributes": attributes,
             "runtime": "deterministic",
         }
         if self._use_oracle_runtime():
             try:
                 engine_meta.update(
-                    self._oracle_adapter.refresh_select_ai_profile(
+                    self._oracle_adapter.upsert_select_ai_profile_low_level(
                         profile_name=profile_name,
-                        allowed_tables=profile.allowed_tables,
-                        row_limit=profile.default_row_limit,
                         description=profile.description,
+                        attributes=attributes,
                     )
                 )
             except OracleAdapterError as exc:
@@ -6283,6 +6488,29 @@ class Nl2SqlService:
             self._asset_meta[Nl2SqlEngine.SELECT_AI] = data
         self._persist_state()
         return data
+
+    def upsert_profile_select_ai_profile(
+        self,
+        profile_id: str,
+        request: ProfileSelectAiProfileRequest,
+    ) -> SelectAiDbProfileMutationData:
+        with self._lock:
+            profile = self._profiles[profile_id]
+        attributes = self.build_select_ai_profile_attributes(profile)
+        if request.attributes_override:
+            attributes = {**attributes, **request.attributes_override}
+        profile_name = self._select_ai_profile_name(profile)
+        return self.upsert_select_ai_db_profile(
+            SelectAiDbProfileUpsertRequest(
+                profile_name=profile_name,
+                attributes=attributes,
+                description=profile.description,
+                category=profile.category or profile.name,
+                execute=request.execute,
+                confirmation=request.confirmation,
+                reason=request.reason,
+            )
+        )
 
     def _parse_csv_sample(
         self,
@@ -6403,6 +6631,9 @@ class Nl2SqlService:
             "tool_name": tool_name,
             "agent_name": agent_name,
             "task_name": task_name,
+            "allowed_tables": profile.allowed_tables,
+            "allowed_views": profile.allowed_views,
+            "allowed_objects": self.profile_allowed_object_names(profile),
             "runtime": "deterministic",
         }
         if self._use_oracle_runtime():
@@ -6558,24 +6789,42 @@ class Nl2SqlService:
         self._persist_state()
         return cleaned
 
-    def list_select_ai_db_profiles(self) -> SelectAiDbProfilesData:
+    def list_select_ai_db_profiles(self, include_detail: bool = False) -> SelectAiDbProfilesData:
         warnings: list[str] = []
         if self._use_oracle_runtime():
             try:
-                profiles = [
-                    SelectAiDbProfile.model_validate(item)
-                    for item in self._oracle_adapter.list_select_ai_profiles()
-                ]
-                return SelectAiDbProfilesData(runtime="oracle", profiles=profiles)
+                profiles: list[SelectAiDbProfile] = []
+                for item in self._oracle_adapter.list_select_ai_profiles():
+                    profile = SelectAiDbProfile.model_validate(item)
+                    if include_detail:
+                        try:
+                            detail = self._oracle_adapter.get_select_ai_profile_detail(
+                                profile_name=profile.name
+                            )
+                            profile = SelectAiDbProfile.model_validate(
+                                {**profile.model_dump(), **detail}
+                            )
+                        except OracleAdapterError as exc:
+                            warnings.append(f"{profile.name}: {exc}")
+                    profiles.append(self._enrich_select_ai_db_profile(profile))
+                return SelectAiDbProfilesData(
+                    runtime="oracle",
+                    profiles=profiles,
+                    warnings=warnings,
+                )
             except OracleAdapterError as exc:
                 warnings.append(str(exc))
         with self._lock:
             profiles = [
-                SelectAiDbProfile(
-                    name=data.profile_name,
-                    status=data.status,
-                    attributes=dict(data.engine_meta),
-                    created_at=data.refreshed_at,
+                self._enrich_select_ai_db_profile(
+                    SelectAiDbProfile(
+                        name=data.profile_name,
+                        status=data.status,
+                        attributes=dict(
+                            data.engine_meta.get("profile_attributes") or data.engine_meta
+                        ),
+                        created_at=data.refreshed_at,
+                    )
                 )
                 for data in self._asset_meta.values()
                 if data.profile_name
@@ -6591,13 +6840,17 @@ class Nl2SqlService:
             try:
                 return SelectAiDbProfileDetailData(
                     runtime="oracle",
-                    profile=SelectAiDbProfile.model_validate(
-                        self._oracle_adapter.get_select_ai_profile_detail(profile_name=profile_name)
+                    profile=self._enrich_select_ai_db_profile(
+                        SelectAiDbProfile.model_validate(
+                            self._oracle_adapter.get_select_ai_profile_detail(
+                                profile_name=profile_name
+                            )
+                        )
                     ),
                 )
             except OracleAdapterError as exc:
                 warnings.append(str(exc))
-        profiles = self.list_select_ai_db_profiles()
+        profiles = self.list_select_ai_db_profiles(include_detail=True)
         profile = next(
             (
                 item
@@ -6611,6 +6864,51 @@ class Nl2SqlService:
             profile=profile,
             warnings=[*warnings, *profiles.warnings],
         )
+
+    def _enrich_select_ai_db_profile(self, profile: SelectAiDbProfile) -> SelectAiDbProfile:
+        attributes = dict(profile.attributes)
+        object_list = profile.object_list
+        raw_object_list = attributes.get("object_list")
+        if not object_list and isinstance(raw_object_list, list):
+            object_list = [
+                item
+                for item in raw_object_list
+                if isinstance(item, dict)
+            ]
+        table_names, view_names = self._split_select_ai_object_names(object_list)
+        return profile.model_copy(
+            update={
+                "object_list": object_list,
+                "tables": table_names,
+                "views": view_names,
+                "region": str(attributes.get("region") or profile.region or ""),
+                "model": str(attributes.get("model") or profile.model or ""),
+                "embedding_model": str(
+                    attributes.get("embedding_model") or profile.embedding_model or ""
+                ),
+                "category": profile.category or profile.description,
+            }
+        )
+
+    def _split_select_ai_object_names(
+        self, object_list: Sequence[dict[str, Any]]
+    ) -> tuple[list[str], list[str]]:
+        catalog_types = {
+            table.table_name.upper(): table.table_type.lower()
+            for table in self._catalog.tables
+        }
+        tables: list[str] = []
+        views: list[str] = []
+        for item in object_list:
+            name = _normalize_identifier(str(item.get("name") or ""))
+            if not name:
+                continue
+            object_type = catalog_types.get(name, "")
+            if "view" in object_type or name.startswith("V_"):
+                views.append(name)
+            else:
+                tables.append(name)
+        return self._dedupe_object_names(tables), self._dedupe_object_names(views)
 
     def list_select_ai_feedback_entries(
         self, profile_name: str, limit: int = 50
@@ -6756,16 +7054,18 @@ class Nl2SqlService:
                 profile_name=profile_name,
                 original_name=original_name,
                 ddl=ddl,
-                profile=SelectAiDbProfile(
-                    name=profile_name,
-                    status="dry_run",
-                    description=request.description,
-                    category=request.category,
-                    attributes=request.attributes,
-                    object_list=(
-                        request.attributes.get("object_list", [])
-                        if isinstance(request.attributes.get("object_list"), list)
-                        else []
+                profile=self._enrich_select_ai_db_profile(
+                    SelectAiDbProfile(
+                        name=profile_name,
+                        status="dry_run",
+                        description=request.description,
+                        category=request.category,
+                        attributes=request.attributes,
+                        object_list=(
+                            request.attributes.get("object_list", [])
+                            if isinstance(request.attributes.get("object_list"), list)
+                            else []
+                        ),
                     ),
                 ),
             )
@@ -7223,7 +7523,7 @@ class Nl2SqlService:
             agent_name=agent_name,
             task_name=task_name,
             team_name=team_name,
-            allowed_tables=profile.allowed_tables,
+            allowed_tables=self.profile_allowed_object_names(profile),
             row_limit=profile.default_row_limit,
             description=profile.description,
         )
@@ -7296,7 +7596,7 @@ class Nl2SqlService:
             for rule in rules[:20]:
                 lines.append(f"- {rule}")
         if use_schema:
-            allowed = {name.upper() for name in profile.allowed_tables}
+            allowed = {name.upper() for name in self.profile_allowed_object_names(profile)}
             lines.append("schema:")
             for table in self._catalog.tables:
                 if allowed and table.table_name not in allowed:
@@ -7404,7 +7704,7 @@ class Nl2SqlService:
         candidates: list[ProfileRecommendationCandidate],
     ) -> ProfileRecommendationData:
         confidence = min(round(score / 6, 3), 1.0)
-        allowed_tables = profile.allowed_tables or [
+        allowed_tables = self.profile_allowed_object_names(profile) or [
             table.table_name for table in self._catalog.tables
         ]
         reason_terms = "、".join(matched_terms[:4]) if matched_terms else profile.name
@@ -7442,7 +7742,9 @@ class Nl2SqlService:
         for example in profile.few_shot_examples:
             add_match(example.get("question", ""), 1.2)
 
-        allowed_tables = {_normalize_identifier(table) for table in profile.allowed_tables}
+        allowed_tables = {
+            _normalize_identifier(table) for table in self.profile_allowed_object_names(profile)
+        }
         for table in self._catalog.tables:
             if allowed_tables and table.table_name not in allowed_tables:
                 continue
@@ -7794,7 +8096,7 @@ class Nl2SqlService:
             "profile_id": profile.id,
             "profile_name": profile.name,
             "row_limit": row_limit or profile.default_row_limit,
-            "allowed_tables": allowed.table_names or profile.allowed_tables,
+            "allowed_tables": allowed.table_names or self.profile_allowed_object_names(profile),
         }
         learning_examples = self._learning_examples_for_generation(
             question=question,
@@ -7931,7 +8233,7 @@ class Nl2SqlService:
     ) -> str:
         allowed_tables = {
             _normalize_identifier(table)
-            for table in (allowed.table_names or profile.allowed_tables)
+            for table in (allowed.table_names or self.profile_allowed_object_names(profile))
         }
         allowed_columns = {
             _normalize_identifier(table): {_normalize_identifier(column) for column in columns}
@@ -8059,6 +8361,9 @@ class Nl2SqlService:
         return get_settings().nl2sql_runtime_mode.strip().lower() == "oracle"
 
     def _select_ai_profile_name(self, profile: Nl2SqlProfile) -> str:
+        configured = profile.select_ai_config.profile_name.strip()
+        if configured:
+            return configured
         prefix = get_settings().nl2sql_select_ai_profile_prefix.strip() or "NL2SQL"
         return f"{prefix}_{profile.id.upper()}_PROFILE"
 
@@ -8091,13 +8396,43 @@ class Nl2SqlService:
             "team": f"{prefix}_{profile_key}_TEAM",
         }
 
+    def _dedupe_object_names(self, names: Sequence[str]) -> list[str]:
+        seen: set[str] = set()
+        objects: list[str] = []
+        for name in names:
+            normalized = _normalize_identifier(name)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            objects.append(normalized)
+        return objects
+
+    def _select_ai_object_list(self, object_names: Sequence[str]) -> list[dict[str, str]]:
+        owner = get_settings().oracle_user.strip().upper()
+        objects: list[dict[str, str]] = []
+        for object_name in object_names:
+            normalized = _normalize_identifier(object_name)
+            if not normalized:
+                continue
+            if "." in normalized:
+                object_owner, name = normalized.split(".", 1)
+                objects.append({"owner": object_owner, "name": name})
+            elif owner:
+                objects.append({"owner": owner, "name": normalized})
+            else:
+                objects.append({"name": normalized})
+        return objects
+
     def _resolve_allowed_objects(
         self, profile_id: str | None, requested: AllowedObjects
     ) -> AllowedObjects:
         if requested.table_names:
             return requested
         profile = self.get_profile(profile_id)
-        return AllowedObjects(table_names=profile.allowed_tables, columns=requested.columns)
+        return AllowedObjects(
+            table_names=self.profile_allowed_object_names(profile),
+            columns=requested.columns,
+        )
 
     def _resolve_row_limit(self, profile_id: str | None, requested: int | None) -> int:
         if requested:
@@ -8108,7 +8443,8 @@ class Nl2SqlService:
         self, question: str, profile: Nl2SqlProfile, allowed: AllowedObjects
     ) -> SchemaTable:
         allowed_names = {
-            _normalize_identifier(name) for name in (allowed.table_names or profile.allowed_tables)
+            _normalize_identifier(name)
+            for name in (allowed.table_names or self.profile_allowed_object_names(profile))
         }
         candidates = [
             table

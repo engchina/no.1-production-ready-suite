@@ -11,7 +11,6 @@ import pytest
 from app.features.nl2sql.models import (
     AgentTeamRunRequest,
     CompareRequest,
-    CsvImportRequest,
     EvaluateRequest,
     EvaluationSetUpsertRequest,
     FeedbackIndexRequest,
@@ -234,11 +233,13 @@ class _SampleAdminOracleAdapter(_FakeRuntimeOracleAdapter):
         super().__init__(db)
         self.missing_objects = missing_objects
         self.admin_statements: list[str] = []
+        self.admin_execute_calls = 0
 
     def execute_admin_statements(
         self, statements: list[str], *, atomic: bool = True
     ) -> list[dict[str, Any]]:
         _ = atomic
+        self.admin_execute_calls += 1
         self.admin_statements.extend(statements)
         results: list[dict[str, Any]] = []
         for index, statement in enumerate(statements, start=1):
@@ -526,8 +527,18 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     )
 
     assert imported.executed is True
+    assert imported.dry_run is False
     assert imported.runtime == "oracle"
+    assert adapter.admin_execute_calls == 1
     assert any("CREATE TABLE DEPARTMENT" in statement for statement in adapter.admin_statements)
+    assert len(adapter.admin_statements) > 5
+    assert adapter.admin_statements[0].startswith("CREATE TABLE DEPARTMENT")
+    assert adapter.admin_statements[1].startswith("CREATE TABLE EMPLOYEE")
+    assert adapter.admin_statements[2].startswith("CREATE TABLE PROJECT")
+    assert not any(
+        "CREATE TABLE DEPARTMENT" in statement and "CREATE TABLE EMPLOYEE" in statement
+        for statement in adapter.admin_statements
+    )
     profile = service.get_profile(imported.profile_id)
     assert set(profile.allowed_tables) == {
         "DEPARTMENT",
@@ -544,9 +555,19 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     )
 
     assert deleted.executed is True
+    assert deleted.dry_run is False
     assert {statement.status for statement in deleted.statements} == {"skipped_missing_object"}
     assert deleted.warnings
+    assert missing_adapter.admin_execute_calls == 1
     assert all("DROP" in statement for statement in missing_adapter.admin_statements)
+
+    rejected = service.import_sample_data(
+        SampleDataMutationRequest(execute=True, confirmation="WRONG")
+    )
+
+    assert rejected.executed is False
+    assert rejected.dry_run is False
+    assert {statement.status for statement in rejected.statements} == {"confirmation_required"}
 
 
 async def test_job_supports_select_ai_agent_and_timing() -> None:
@@ -1892,76 +1913,15 @@ def test_service_cleanup_assets_executes_oracle_drops_when_confirmed() -> None:
     assert any("DBMS_CLOUD_AI.DROP_PROFILE" in sql for sql in fake_db.executed)
 
 
-async def test_schema_import_csv_dry_run_parses_columns_and_rows() -> None:
-    csv_text = "取引先名,請求金額,請求金額\n青山商事,12000,13000\n東京製作所,9800,\n"
+async def test_schema_import_csv_route_was_removed() -> None:
     async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
         resp = await client.post(
             "/api/schema/import-csv",
             json={
                 "table_name": "sample invoices",
-                "csv_text": csv_text,
+                "csv_text": "ID,NAME\n1,青山商事\n",
                 "execute": False,
             },
         )
 
-    assert resp.status_code == 200
-    data = resp.json()["data"]
-    assert data["table_name"] == "SAMPLE_INVOICES"
-    assert data["dry_run"] is True
-    assert data["executed"] is False
-    assert data["row_count"] == 2
-    assert [column["column_name"] for column in data["columns"]] == [
-        "COLUMN_1",
-        "COLUMN_2",
-        "COLUMN_3",
-    ]
-    assert [column["source_name"] for column in data["columns"]] == [
-        "取引先名",
-        "請求金額",
-        "請求金額",
-    ]
-    assert data["columns"][1]["data_type"] == "NUMBER"
-    assert 'CREATE TABLE "SAMPLE_INVOICES"' in data["ddl"]
-    assert data["sample_rows"][0]["COLUMN_2"] == "12000"
-
-
-def test_service_import_csv_execute_uses_oracle_adapter() -> None:
-    fake_db = _FakeOracleDb()
-    service = _OracleRuntimeNl2SqlService(_FakeRuntimeOracleAdapter(fake_db))
-
-    data = service.import_csv_sample(
-        CsvImportRequest(
-            table_name="imported_customers",
-            csv_text="CUSTOMER_ID,CUSTOMER_NAME\n1,青山商事\n2,東京製作所\n",
-            replace_existing=True,
-            execute=True,
-        )
-    )
-
-    assert data.executed is True
-    assert data.dry_run is False
-    assert data.table_name == "IMPORTED_CUSTOMERS"
-    assert any('DROP TABLE "IMPORTED_CUSTOMERS" PURGE' in sql for sql in fake_db.executed)
-    assert any('CREATE TABLE "IMPORTED_CUSTOMERS"' in sql for sql in fake_db.executed)
-    assert fake_db.insert_batches
-    insert_sql, rows = fake_db.insert_batches[0]
-    assert 'INSERT INTO "IMPORTED_CUSTOMERS"' in insert_sql
-    assert rows[0]["c0"] == 1
-    assert rows[0]["c1"] == "青山商事"
-    assert fake_db.commits >= 1
-
-
-def test_service_import_csv_execute_stays_dry_run_without_oracle_runtime() -> None:
-    service = Nl2SqlService(store=MemoryNl2SqlStore())
-
-    data = service.import_csv_sample(
-        CsvImportRequest(
-            table_name="local_import",
-            csv_text="ID,NAME\n1,local\n",
-            execute=True,
-        )
-    )
-
-    assert data.executed is False
-    assert data.dry_run is True
-    assert any("deterministic runtime" in warning for warning in data.warnings)
+    assert resp.status_code == 404

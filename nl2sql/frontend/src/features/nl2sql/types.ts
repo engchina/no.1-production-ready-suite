@@ -45,17 +45,31 @@ export interface AllowedObjects {
   columns: Record<string, string[]>;
 }
 
+export interface ProfileSelectAiConfig {
+  profile_name: string;
+  region: string;
+  model: string;
+  embedding_model: string;
+  max_tokens: number;
+  enforce_object_list: boolean;
+  comments: boolean;
+  annotations: boolean;
+  constraints: boolean;
+}
+
 export interface Nl2SqlProfile {
   id: string;
   name: string;
   category?: string;
   description: string;
   allowed_tables: string[];
+  allowed_views: string[];
   glossary: Record<string, string>;
   sql_rules: string[];
   default_row_limit: number;
   safety_policy: string;
   few_shot_examples: Array<Record<string, string>>;
+  select_ai_config: ProfileSelectAiConfig;
   archived: boolean;
 }
 
@@ -64,11 +78,13 @@ export interface ProfileUpsertPayload {
   category?: string;
   description: string;
   allowed_tables: string[];
+  allowed_views: string[];
   glossary: Record<string, string>;
   sql_rules: string[];
   default_row_limit: number;
   safety_policy: string;
   few_shot_examples: Array<Record<string, string>>;
+  select_ai_config: ProfileSelectAiConfig;
 }
 
 export interface ProfileLearningMaterialImportData {
@@ -799,17 +815,15 @@ export interface DbAdminCsvUploadData {
   timing: TimingEnvelope;
 }
 
-export interface DbAdminAiAnalysisData {
-  analysis: string;
-  source: string;
-  warnings: string[];
-}
+export type DbAdminJoinWherePromptProfile = "join_where_strict" | "sql_structure";
 
 export interface DbAdminJoinWhereData {
   join_text: string;
   where_text: string;
   source: string;
   warnings: string[];
+  prompt_profile: DbAdminJoinWherePromptProfile;
+  structure_markdown?: string;
 }
 
 export interface SelectAiDbProfile {
@@ -819,7 +833,12 @@ export interface SelectAiDbProfile {
   created_at: string;
   description?: string;
   category?: string;
-  object_list?: Array<Record<string, unknown>>;
+  object_list?: Array<Record<string, unknown> | string>;
+  tables?: string[];
+  views?: string[];
+  region?: string;
+  model?: string;
+  embedding_model?: string;
   schema_text?: string;
   context_ddl?: string;
   attributes: Record<string, unknown>;
@@ -972,17 +991,4 @@ export interface CsvImportColumn {
   column_name: string;
   data_type: string;
   nullable: boolean;
-}
-
-export interface CsvImportData {
-  table_name: string;
-  columns: CsvImportColumn[];
-  row_count: number;
-  dry_run: boolean;
-  executed: boolean;
-  ddl: string;
-  insert_sql: string;
-  warnings: string[];
-  sample_rows: Array<Record<string, string | null>>;
-  timing: TimingEnvelope;
 }

@@ -20,10 +20,14 @@ from app.features.nl2sql.models import (
     Nl2SqlProfile,
     PreviewRequest,
     ProfileRecommendationRequest,
+    ProfileSelectAiProfileRequest,
     ReverseSqlRequest,
     RewriteRequest,
     SampleDataMutationRequest,
     SampleDataStep,
+    SchemaCatalog,
+    SchemaColumn,
+    SchemaTable,
     SelectAiDbProfileUpsertRequest,
     SyntheticDataGenerateRequest,
 )
@@ -213,6 +217,145 @@ def test_select_ai_profile_json_and_synthetic_object_list_dry_run() -> None:
     assert synthetic.row_count == 5
 
 
+def test_profile_upsert_preserves_allowed_views_and_select_ai_config() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    created = service.create_profile(
+        Nl2SqlProfile(
+            id="finance",
+            name="財務プロファイル",
+            description="表とビューを併用する profile。",
+            allowed_tables=["INVOICES"],
+            allowed_views=["V_INVOICE_SUMMARY"],
+            select_ai_config={
+                "profile_name": "FINANCE_SELECT_AI",
+                "region": "ap-osaka-1",
+                "model": "cohere.command-r-plus",
+                "embedding_model": "cohere.embed-v4.0",
+                "max_tokens": 24000,
+                "enforce_object_list": True,
+                "comments": True,
+                "annotations": True,
+                "constraints": True,
+            },
+        )
+    )
+
+    assert created.allowed_views == ["V_INVOICE_SUMMARY"]
+    assert created.select_ai_config.profile_name == "FINANCE_SELECT_AI"
+    assert created.select_ai_config.embedding_model == "cohere.embed-v4.0"
+
+    updated = service.update_profile(
+        "finance",
+        lambda current: current.model_copy(
+            update={
+                "allowed_views": ["V_CUSTOMER_BALANCE"],
+                "select_ai_config": current.select_ai_config.model_copy(
+                    update={"profile_name": "FINANCE_SELECT_AI_V2", "max_tokens": 32000}
+                ),
+            }
+        ),
+    )
+
+    assert updated.allowed_views == ["V_CUSTOMER_BALANCE"]
+    assert updated.select_ai_config.profile_name == "FINANCE_SELECT_AI_V2"
+    assert updated.select_ai_config.max_tokens == 32000
+
+
+def test_profile_legacy_snapshot_defaults_allowed_views_and_select_ai_config() -> None:
+    profile = Nl2SqlProfile.model_validate(
+        {
+            "id": "legacy",
+            "name": "旧 snapshot",
+            "description": "allowed_views と select_ai_config が無い旧データ。",
+            "allowed_tables": ["INVOICES"],
+        }
+    )
+
+    assert profile.allowed_views == []
+    assert profile.select_ai_config.embedding_model == "cohere.embed-v4.0"
+    assert profile.select_ai_config.enforce_object_list is True
+
+
+def test_profile_select_ai_dry_run_uses_tables_and_views_object_list() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    cast(Any, service)._catalog = SchemaCatalog(
+        refreshed_at="2026-07-10T00:00:00+00:00",
+        tables=[
+            SchemaTable(table_name="INVOICES", logical_name="請求", table_type="TABLE"),
+            SchemaTable(
+                table_name="V_INVOICE_SUMMARY",
+                logical_name="請求サマリ",
+                table_type="VIEW",
+            ),
+        ],
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="finance",
+            name="財務プロファイル",
+            description="Select AI dry-run 対象。",
+            allowed_tables=["INVOICES"],
+            allowed_views=["V_INVOICE_SUMMARY"],
+            select_ai_config={
+                "profile_name": "FINANCE_SELECT_AI",
+                "region": "ap-osaka-1",
+                "model": "cohere.command-r-plus",
+                "embedding_model": "cohere.embed-v4.0",
+            },
+        )
+    )
+
+    dry_run = service.upsert_profile_select_ai_profile(
+        "finance",
+        ProfileSelectAiProfileRequest(execute=False, reason="pytest-dry-run"),
+    )
+
+    assert dry_run.executed is False
+    assert dry_run.status == "dry_run"
+    assert dry_run.profile is not None
+    assert dry_run.profile.name == "FINANCE_SELECT_AI"
+    assert dry_run.profile.attributes["provider"] == "oci"
+    assert dry_run.profile.attributes["embedding_model"] == "cohere.embed-v4.0"
+    object_list = dry_run.profile.attributes["object_list"]
+    assert [item["name"] for item in object_list] == ["INVOICES", "V_INVOICE_SUMMARY"]
+    assert all(item["owner"] for item in object_list)
+    assert dry_run.profile.tables == ["INVOICES"]
+    assert dry_run.profile.views == ["V_INVOICE_SUMMARY"]
+
+
+def test_profile_select_ai_execute_requires_confirmation_and_oracle_runtime() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="finance",
+            name="財務プロファイル",
+            allowed_tables=["INVOICES"],
+            allowed_views=["V_INVOICE_SUMMARY"],
+            select_ai_config={"profile_name": "FINANCE_SELECT_AI"},
+        )
+    )
+
+    missing_confirmation = service.upsert_profile_select_ai_profile(
+        "finance",
+        ProfileSelectAiProfileRequest(execute=True),
+    )
+    assert missing_confirmation.status == "confirmation_required"
+    assert missing_confirmation.executed is False
+
+    requires_oracle = service.upsert_profile_select_ai_profile(
+        "finance",
+        ProfileSelectAiProfileRequest(
+            execute=True,
+            confirmation="FINANCE_SELECT_AI",
+            reason="pytest-execute",
+        ),
+    )
+    assert requires_oracle.status == "requires_oracle"
+    assert requires_oracle.executed is False
+    assert any("NL2SQL_RUNTIME_MODE=oracle" in warning for warning in requires_oracle.warnings)
+
+
 def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     openpyxl = importlib.import_module("openpyxl")
@@ -268,6 +411,123 @@ def test_annotations_and_synthetic_data_support_dry_run_without_oracle() -> None
     assert synthetic.status == "dry_run"
     assert synthetic.table_name == "EMPLOYEE"
     assert synthetic.row_count == 5
+
+
+def test_synthetic_data_rejects_blob_table_before_oracle_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-06-21T10:00:00Z",
+        tables=[
+            SchemaTable(
+                table_name="DENPYO_FILES",
+                logical_name="伝票ファイル",
+                columns=[
+                    SchemaColumn(column_name="FILE_ID", logical_name="ID", data_type="NUMBER"),
+                    SchemaColumn(column_name="FILE_BODY", logical_name="本文", data_type="BLOB"),
+                ],
+            )
+        ],
+    )
+
+    class FailIfCalledAdapter:
+        def generate_synthetic_data(self, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("Oracle should not be called for BLOB tables")
+
+    service._oracle_adapter = cast(Any, FailIfCalledAdapter())
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+
+    synthetic = service.generate_synthetic_data(
+        SyntheticDataGenerateRequest(
+            table_name="DENPYO_FILES",
+            row_count=1,
+            execute=True,
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert synthetic.status == "error"
+    assert not synthetic.executed
+    assert synthetic.table_name == ""
+    assert any("DENPYO_FILES" in warning and "BLOB" in warning for warning in synthetic.warnings)
+
+
+def test_synthetic_data_skips_unsupported_tables_and_generates_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-06-21T10:00:00Z",
+        tables=[
+            SchemaTable(
+                table_name="DENPYO_FILES",
+                logical_name="伝票ファイル",
+                columns=[
+                    SchemaColumn(column_name="FILE_ID", logical_name="ID", data_type="NUMBER"),
+                    SchemaColumn(column_name="FILE_BODY", logical_name="本文", data_type="BLOB"),
+                ],
+            ),
+            SchemaTable(
+                table_name="INVOICES",
+                logical_name="請求",
+                columns=[
+                    SchemaColumn(
+                        column_name="INVOICE_ID",
+                        logical_name="請求ID",
+                        data_type="NUMBER",
+                    ),
+                    SchemaColumn(
+                        column_name="CUSTOMER_NAME",
+                        logical_name="取引先",
+                        data_type="VARCHAR2(120)",
+                    ),
+                ],
+            ),
+        ],
+    )
+    calls: list[dict[str, Any]] = []
+
+    class RecordingAdapter:
+        def generate_synthetic_data(self, **kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            return {
+                "runtime": "oracle",
+                "operation_id": "op-001",
+                "table_name": kwargs["table_name"],
+                "object_list": kwargs["object_list"],
+                "row_count": kwargs["row_count"],
+            }
+
+    service._oracle_adapter = cast(Any, RecordingAdapter())
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+
+    synthetic = service.generate_synthetic_data(
+        SyntheticDataGenerateRequest(
+            object_list=["DENPYO_FILES", "INVOICES"],
+            row_count=2,
+            execute=True,
+            confirmation="ADMIN_EXECUTE",
+            profile_name="NL2SQL_PROFILE",
+        )
+    )
+
+    assert synthetic.status == "submitted"
+    assert synthetic.executed
+    assert synthetic.table_name == "INVOICES"
+    assert synthetic.object_list == ["INVOICES"]
+    assert calls == [
+        {
+            "table_name": "INVOICES",
+            "object_list": [],
+            "row_count": 2,
+            "profile_name": "NL2SQL_PROFILE",
+            "user_prompt": "",
+            "sample_rows": 0,
+            "use_comments": True,
+        }
+    ]
+    assert any("DENPYO_FILES" in warning and "BLOB" in warning for warning in synthetic.warnings)
 
 
 def test_profile_learning_material_imports_csv_and_exports_xlsx() -> None:

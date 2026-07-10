@@ -102,6 +102,20 @@ class AllowedObjects(BaseModel):
     columns: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class ProfileSelectAiConfig(BaseModel):
+    """業務 profile から Oracle DBMS_CLOUD_AI profile を作るための設定。"""
+
+    profile_name: str = ""
+    region: str = ""
+    model: str = ""
+    embedding_model: str = "cohere.embed-v4.0"
+    max_tokens: int = Field(default=32000, ge=1, le=128000)
+    enforce_object_list: bool = True
+    comments: bool = True
+    annotations: bool = False
+    constraints: bool = False
+
+
 class Nl2SqlProfile(BaseModel):
     """業務/Profile 単位の NL2SQL 設定。"""
 
@@ -110,11 +124,13 @@ class Nl2SqlProfile(BaseModel):
     category: str = ""
     description: str = ""
     allowed_tables: list[str] = Field(default_factory=list)
+    allowed_views: list[str] = Field(default_factory=list)
     glossary: dict[str, str] = Field(default_factory=dict)
     sql_rules: list[str] = Field(default_factory=list)
     default_row_limit: int = 100
     safety_policy: str = "select_only"
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
+    select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
     archived: bool = False
 
 
@@ -125,11 +141,22 @@ class ProfileUpsertRequest(BaseModel):
     category: str = ""
     description: str = ""
     allowed_tables: list[str] = Field(default_factory=list)
+    allowed_views: list[str] = Field(default_factory=list)
     glossary: dict[str, str] = Field(default_factory=dict)
     sql_rules: list[str] = Field(default_factory=list)
     default_row_limit: int = Field(default=100, ge=1, le=5000)
     safety_policy: str = "select_only"
     few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
+    select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
+
+
+class ProfileSelectAiProfileRequest(BaseModel):
+    """業務 profile から DBMS_CLOUD_AI profile を dry-run / 作成する request."""
+
+    execute: bool = False
+    confirmation: str = ""
+    reason: str = ""
+    attributes_override: dict[str, Any] | None = None
 
 
 class ProfileLearningMaterialImportData(BaseModel):
@@ -396,6 +423,7 @@ class DbAdminJoinWhereRequest(BaseModel):
     """ビュー DDL の JOIN/WHERE 条件抽出 request。"""
 
     ddl: str = Field(min_length=1)
+    prompt_profile: Literal["join_where_strict", "sql_structure"] = "join_where_strict"
 
 
 class DbAdminJoinWhereData(BaseModel):
@@ -405,6 +433,8 @@ class DbAdminJoinWhereData(BaseModel):
     where_text: str = "None"
     source: str = "deterministic"
     warnings: list[str] = Field(default_factory=list)
+    prompt_profile: Literal["join_where_strict", "sql_structure"] = "join_where_strict"
+    structure_markdown: str = ""
 
 
 class Nl2SqlResult(BaseModel):
@@ -939,6 +969,11 @@ class SelectAiDbProfile(BaseModel):
     description: str = ""
     category: str = ""
     object_list: list[dict[str, Any]] = Field(default_factory=list)
+    tables: list[str] = Field(default_factory=list)
+    views: list[str] = Field(default_factory=list)
+    region: str = ""
+    model: str = ""
+    embedding_model: str = ""
     schema_text: str = ""
     context_ddl: str = ""
     attributes: dict[str, Any] = Field(default_factory=dict)
@@ -1548,20 +1583,6 @@ class DiagnosticsData(BaseModel):
     config_guides: list[DiagnosticConfigGuide] = Field(default_factory=list)
 
 
-class CsvImportRequest(BaseModel):
-    """CSV sample data import request.
-
-    `execute=false` は dry-run として DDL / parsed rows preview だけを返す。
-    `execute=true` でも Oracle runtime 以外では dry-run に縮退する。
-    """
-
-    table_name: str = Field(min_length=1)
-    csv_text: str = Field(min_length=1)
-    replace_existing: bool = False
-    execute: bool = False
-    max_rows: int | None = Field(default=None, ge=1, le=50000)
-
-
 class CsvImportColumn(BaseModel):
     """CSV import column mapping."""
 
@@ -1569,21 +1590,6 @@ class CsvImportColumn(BaseModel):
     column_name: str
     data_type: str
     nullable: bool = True
-
-
-class CsvImportData(BaseModel):
-    """CSV import dry-run / execution response."""
-
-    table_name: str
-    columns: list[CsvImportColumn]
-    row_count: int
-    dry_run: bool
-    executed: bool
-    ddl: str
-    insert_sql: str
-    warnings: list[str] = Field(default_factory=list)
-    sample_rows: list[dict[str, str | None]] = Field(default_factory=list)
-    timing: TimingEnvelope
 
 
 class DbAdminImportTabularData(BaseModel):

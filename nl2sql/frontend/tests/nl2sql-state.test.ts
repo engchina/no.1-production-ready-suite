@@ -23,10 +23,6 @@ import {
   parseNl2SqlEngine,
   prefillFromSearchParams,
 } from "../src/features/nl2sql/queryPrefillState.ts";
-import {
-  csvImportPayload,
-  defaultCsvImportForm,
-} from "../src/features/nl2sql/csvImportState.ts";
 import { formatSampleValues, formatSchemaCount } from "../src/features/nl2sql/schemaDisplayCore.ts";
 import type { HistoryItem, PreviewData, SchemaColumn, SchemaTable } from "../src/features/nl2sql/types.ts";
 import {
@@ -150,17 +146,6 @@ test("schema metadata helpers format counts and sample values for compact UI", (
   assert.equal(formatSchemaCount(invoiceTable.row_count), "12,034");
   assert.equal(formatSchemaCount(null), "-");
   assert.equal(formatSampleValues(invoiceColumn.sample_values), "12000, 9800, 45100");
-});
-
-test("CSV import payload keeps dry-run as the default", () => {
-  const form = defaultCsvImportForm();
-  assert.equal(form.execute, false);
-  assert.deepEqual(csvImportPayload({ ...form, tableName: " imported_customers " }), {
-    table_name: "imported_customers",
-    csv_text: form.csvText,
-    execute: false,
-    replace_existing: false,
-  });
 });
 
 test("SQL analysis payload trims SQL and clamps row limits", () => {

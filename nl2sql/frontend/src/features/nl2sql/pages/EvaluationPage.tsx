@@ -933,11 +933,13 @@ function profilePayloadWithSynthetic(
     name: profile.name,
     description: profile.description,
     allowed_tables: profile.allowed_tables,
+    allowed_views: profile.allowed_views ?? [],
     glossary: profile.glossary,
     sql_rules: profile.sql_rules,
     default_row_limit: profile.default_row_limit,
     safety_policy: profile.safety_policy,
     few_shot_examples: [...profile.few_shot_examples, ...additions],
+    select_ai_config: profile.select_ai_config,
   };
 }
 

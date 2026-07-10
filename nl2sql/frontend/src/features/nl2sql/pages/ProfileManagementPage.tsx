@@ -1,42 +1,99 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, Plus, RefreshCw, RotateCcw, Save } from "lucide-react";
-
 import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  EmptyState,
-  PageHeader,
-  StatusBadge,
-} from "@engchina/production-ready-ui";
+  Archive,
+  ArrowDownUp,
+  Code2,
+  Database,
+  FileJson,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Search,
+  Trash2,
+  UserCog,
+  X,
+} from "lucide-react";
+
+import { Button, EmptyState, PageHeader, StatusBadge } from "@engchina/production-ready-ui";
 
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import type { Nl2SqlProfile, ProfileUpsertPayload, SchemaCatalog } from "../types";
+import {
+  ExecutionConfirmationField,
+} from "../components/DbAdminShared";
+import {
+  DbObjectManagementPanelShell,
+  DbObjectManagementStatusBar,
+  DbObjectManagementTabs,
+  DbObjectPanelHeader,
+  type DbObjectTab,
+} from "../components/DbObjectManagementShared";
+import type {
+  DbAdminObjectsData,
+  Nl2SqlProfile,
+  ProfileSelectAiConfig,
+  ProfileUpsertPayload,
+  SchemaCatalog,
+  SelectAiDbProfile,
+  SelectAiDbProfileMutationData,
+  SelectAiDbProfilesData,
+} from "../types";
+
+type ActiveView = "list" | "create" | "oracle";
+type SortKey = "name" | "tables" | "views";
+type SortDirection = "asc" | "desc";
+
+const PROFILE_MANAGEMENT_ID = "profile-management";
+
+interface SortState {
+  key: SortKey;
+  direction: SortDirection;
+}
 
 interface ProfileFormState {
   name: string;
   category: string;
   description: string;
   allowedTables: string[];
+  allowedViews: string[];
   glossaryText: string;
   sqlRulesText: string;
   defaultRowLimit: number;
   fewShotText: string;
+  selectAiConfig: ProfileSelectAiConfig;
 }
+
+const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
+  profile_name: "",
+  region: "",
+  model: "",
+  embedding_model: "cohere.embed-v4.0",
+  max_tokens: 32000,
+  enforce_object_list: true,
+  comments: true,
+  annotations: false,
+  constraints: false,
+};
 
 const EMPTY_FORM: ProfileFormState = {
   name: "",
   category: "",
   description: "",
   allowedTables: [],
+  allowedViews: [],
   glossaryText: "",
   sqlRulesText: "SELECT/WITH のみ\nFETCH FIRST で行数制限\n許可された表・列のみ参照",
   defaultRowLimit: 100,
   fewShotText: "",
+  selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
 };
+
+const inputClass =
+  "min-h-11 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200";
+const textareaClass =
+  "rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200";
 
 function glossaryToText(glossary: Record<string, string>) {
   return Object.entries(glossary)
@@ -66,28 +123,39 @@ function lines(text: string) {
 }
 
 function fewShotToText(examples: Array<Record<string, string>>) {
-  return examples
-    .map((example) => `${example.question ?? ""} => ${example.sql ?? ""}`)
-    .join("\n");
+  return examples.map((example) => `${example.question ?? ""} => ${example.sql ?? ""}`).join("\n");
 }
 
 function textToFewShot(text: string) {
-  return lines(text).map((line) => {
-    const [question, ...rest] = line.split("=>");
-    return { question: question.trim(), sql: rest.join("=>").trim() };
-  }).filter((example) => example.question && example.sql);
+  return lines(text)
+    .map((line) => {
+      const [question, ...rest] = line.split("=>");
+      return { question: question.trim(), sql: rest.join("=>").trim() };
+    })
+    .filter((example) => example.question && example.sql);
+}
+
+function normalizeProfile(profile: Nl2SqlProfile): Nl2SqlProfile {
+  return {
+    ...profile,
+    allowed_views: profile.allowed_views ?? [],
+    select_ai_config: { ...DEFAULT_SELECT_AI_CONFIG, ...(profile.select_ai_config ?? {}) },
+  };
 }
 
 function profileToForm(profile: Nl2SqlProfile): ProfileFormState {
+  const normalized = normalizeProfile(profile);
   return {
-    name: profile.name,
-    category: profile.category ?? "",
-    description: profile.description,
-    allowedTables: profile.allowed_tables,
-    glossaryText: glossaryToText(profile.glossary),
-    sqlRulesText: profile.sql_rules.join("\n"),
-    defaultRowLimit: profile.default_row_limit,
-    fewShotText: fewShotToText(profile.few_shot_examples),
+    name: normalized.name,
+    category: normalized.category ?? "",
+    description: normalized.description,
+    allowedTables: normalized.allowed_tables,
+    allowedViews: normalized.allowed_views,
+    glossaryText: glossaryToText(normalized.glossary),
+    sqlRulesText: normalized.sql_rules.join("\n"),
+    defaultRowLimit: normalized.default_row_limit,
+    fewShotText: fewShotToText(normalized.few_shot_examples),
+    selectAiConfig: normalized.select_ai_config,
   };
 }
 
@@ -97,46 +165,928 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
     category: form.category.trim(),
     description: form.description.trim(),
     allowed_tables: form.allowedTables,
+    allowed_views: form.allowedViews,
     glossary: textToGlossary(form.glossaryText),
     sql_rules: lines(form.sqlRulesText),
     default_row_limit: form.defaultRowLimit,
     safety_policy: "select_only",
     few_shot_examples: textToFewShot(form.fewShotText),
+    select_ai_config: {
+      ...form.selectAiConfig,
+      profile_name: form.selectAiConfig.profile_name.trim(),
+      region: form.selectAiConfig.region.trim(),
+      model: form.selectAiConfig.model.trim(),
+      embedding_model: form.selectAiConfig.embedding_model.trim() || "cohere.embed-v4.0",
+      max_tokens: Number(form.selectAiConfig.max_tokens) || 32000,
+    },
   };
+}
+
+function profileSortValue(profile: Nl2SqlProfile, key: SortKey) {
+  if (key === "tables") return profile.allowed_tables.length;
+  if (key === "views") return (profile.allowed_views ?? []).length;
+  return profile.name.toLowerCase();
+}
+
+function SortButton({
+  label,
+  sortKey,
+  sort,
+  onToggle,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: SortState;
+  onToggle: (key: SortKey) => void;
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-slate-700 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-sky-200"
+      aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
+      onClick={() => onToggle(sortKey)}
+    >
+      <span>{label}</span>
+      <ArrowDownUp size={13} className={active ? "text-sky-700" : "text-slate-400"} aria-hidden="true" />
+    </button>
+  );
+}
+
+function profileObjectList(profile: SelectAiDbProfile) {
+  const explicit = [...(profile.tables ?? []), ...(profile.views ?? [])].filter(Boolean);
+  if (explicit.length > 0) return explicit.join(", ");
+  return (profile.object_list ?? [])
+    .map((item) => {
+      if (typeof item === "string") return item;
+      return String(item.name ?? "");
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function profileAttributesSql(profileName: string, description: string) {
+  const escapedName = profileName.replace(/'/g, "''");
+  const escapedDescription = description.replace(/'/g, "''");
+  return [
+    `BEGIN DBMS_CLOUD_AI.DROP_PROFILE(profile_name => '${escapedName}'); EXCEPTION WHEN OTHERS THEN NULL; END;`,
+    `BEGIN DBMS_CLOUD_AI.CREATE_PROFILE(profile_name => '${escapedName}', attributes => :attrs, description => '${escapedDescription}'); END;`,
+  ].join("\n");
+}
+
+function updateSelectAiConfig(
+  setForm: (updater: (current: ProfileFormState) => ProfileFormState) => void,
+  patch: Partial<ProfileSelectAiConfig>
+) {
+  setForm((current) => ({
+    ...current,
+    selectAiConfig: { ...current.selectAiConfig, ...patch },
+  }));
+}
+
+function StatusBar({
+  profileCount,
+  objectCount,
+  oracleProfileCount,
+  runtime,
+  loading,
+  onRefresh,
+}: {
+  profileCount: number;
+  objectCount: number;
+  oracleProfileCount: number;
+  runtime: string;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <DbObjectManagementStatusBar
+      ariaLabel={t("profiles.status.label")}
+      metricColumnsClass="sm:grid-cols-3 lg:grid-cols-4"
+      metrics={[
+        { label: t("profiles.metric.profiles"), value: formatNumber(profileCount), emphasis: true },
+        { label: t("profiles.metric.objects"), value: formatNumber(objectCount), emphasis: true },
+        { label: t("profiles.metric.oracleProfiles"), value: formatNumber(oracleProfileCount), emphasis: true },
+        { label: t("profiles.oracle.runtime"), value: runtime },
+      ]}
+      actions={
+        <Button type="button" variant="secondary" size="sm" loading={loading} onClick={onRefresh}>
+          <RefreshCw size={15} aria-hidden="true" />
+          <span>{t("profiles.action.refresh")}</span>
+        </Button>
+      }
+    />
+  );
+}
+
+function ProfileList({
+  profiles,
+  selectedId,
+  loading,
+  search,
+  sort,
+  onSearchChange,
+  onSortChange,
+  onSelect,
+}: {
+  profiles: Nl2SqlProfile[];
+  selectedId: string | null;
+  loading: boolean;
+  search: string;
+  sort: SortState;
+  onSearchChange: (value: string) => void;
+  onSortChange: (key: SortKey) => void;
+  onSelect: (profile: Nl2SqlProfile) => void;
+}) {
+  return (
+    <section className="grid min-w-0 content-start gap-3" aria-labelledby="profile-list-heading">
+      <DbObjectPanelHeader
+        headingId="profile-list-heading"
+        icon={UserCog}
+        title={t("profiles.list.title")}
+        description={t("profiles.list.hint")}
+        action={<StatusBadge variant="info" label={t("profiles.objects.count", { count: profiles.length })} />}
+      />
+      <label className="grid gap-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-medium text-slate-800">
+        <span>{t("profiles.list.search")}</span>
+        <span className="relative">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <input
+            value={search}
+            onChange={(event) => onSearchChange(event.currentTarget.value)}
+            className="min-h-11 w-full rounded-md border border-slate-300 bg-white py-2 pl-9 pr-3 outline-none focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
+            placeholder={t("profiles.list.searchPlaceholder")}
+          />
+        </span>
+      </label>
+      {loading ? (
+        <div className="grid gap-2" data-testid="profile-list-skeleton">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="h-12 animate-pulse rounded-md bg-slate-100" />
+          ))}
+        </div>
+      ) : profiles.length === 0 ? (
+        <EmptyState
+          title={search.trim() ? t("profiles.list.noResultsTitle") : t("profiles.empty.title")}
+          hint={search.trim() ? t("profiles.list.noResultsHint") : t("profiles.empty.hint")}
+        />
+      ) : (
+        <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+          <div className="max-h-[42rem] overflow-auto" data-testid="profile-management-list">
+            <table className="w-full min-w-[32rem] table-fixed divide-y divide-slate-200 text-left text-sm" data-testid="profile-management-grid">
+              <colgroup>
+                <col />
+                <col className="w-[5rem]" />
+                <col className="w-[5rem]" />
+                <col className="w-[7rem]" />
+              </colgroup>
+              <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-600">
+                <tr>
+                  <th className="px-3 py-2">
+                    <SortButton label={t("profiles.field.name")} sortKey="name" sort={sort} onToggle={onSortChange} />
+                  </th>
+                  <th className="px-3 py-2">
+                    <SortButton label={t("profiles.field.allowedTables")} sortKey="tables" sort={sort} onToggle={onSortChange} />
+                  </th>
+                  <th className="px-3 py-2">
+                    <SortButton label={t("profiles.field.allowedViews")} sortKey="views" sort={sort} onToggle={onSortChange} />
+                  </th>
+                  <th className="px-3 py-2 text-right">{t("tableMgmt.grid.actions")}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {profiles.map((profile) => {
+                  const selected = profile.id === selectedId;
+                  return (
+                    <tr key={profile.id} className={selected ? "bg-sky-50" : "hover:bg-slate-50"}>
+                      <td className="px-3 py-2 align-top">
+                        <button
+                          type="button"
+                          className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+                          aria-current={selected ? "true" : undefined}
+                          onClick={() => onSelect(profile)}
+                        >
+                          <span className="break-words font-semibold text-sky-900">{profile.name}</span>
+                          <span className="line-clamp-2 text-xs leading-5 text-slate-600">{profile.description || "-"}</span>
+                        </button>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-700">{profile.allowed_tables.length}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-700">{(profile.allowed_views ?? []).length}</td>
+                      <td className="px-3 py-2 text-right">
+                        <Button type="button" variant="secondary" size="sm" onClick={() => onSelect(profile)}>
+                          <span>{t("profiles.action.select")}</span>
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ObjectCheckboxGrid({
+  title,
+  items,
+  selected,
+  dataTestId,
+  emptyText,
+  onToggle,
+}: {
+  title: string;
+  items: string[];
+  selected: string[];
+  dataTestId: string;
+  emptyText: string;
+  onToggle: (name: string) => void;
+}) {
+  return (
+    <section className="grid min-w-0 gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <StatusBadge variant="neutral" label={t("profiles.objects.selected", { count: selected.length })} />
+      </div>
+      <div data-testid={dataTestId} className="grid h-[28rem] content-start gap-2 overflow-y-auto rounded-md border border-slate-200 bg-white p-2 md:grid-cols-2">
+        {items.length === 0 ? (
+          <div className="grid min-h-24 place-items-center rounded-md border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-500">
+            {emptyText}
+          </div>
+        ) : (
+          items.map((name) => (
+            <label key={name} className="flex min-h-11 min-w-0 items-center gap-2 rounded-md border border-slate-200 p-3 text-sm">
+              <input
+                type="checkbox"
+                checked={selected.includes(name)}
+                onChange={() => onToggle(name)}
+                className="h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+              />
+              <span className="break-all font-mono text-xs font-semibold text-slate-900">{name}</span>
+            </label>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SelectAiConfigFields({
+  form,
+  setForm,
+}: {
+  form: ProfileFormState;
+  setForm: (updater: (current: ProfileFormState) => ProfileFormState) => void;
+}) {
+  return (
+    <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3" aria-label={t("profiles.editor.selectAi")}>
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_10rem_10rem]">
+        <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <span>{t("profiles.field.profileName")}</span>
+          <input
+            value={form.selectAiConfig.profile_name}
+            placeholder={t("profiles.placeholder.profileName")}
+            onChange={(event) => updateSelectAiConfig(setForm, { profile_name: event.currentTarget.value })}
+            className={inputClass}
+          />
+        </label>
+        <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <span>{t("profiles.field.region")}</span>
+          <input
+            value={form.selectAiConfig.region}
+            placeholder="ap-osaka-1"
+            onChange={(event) => updateSelectAiConfig(setForm, { region: event.currentTarget.value })}
+            className={inputClass}
+          />
+        </label>
+        <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <span>{t("profiles.field.maxTokens")}</span>
+          <input
+            type="number"
+            min={1}
+            max={128000}
+            value={form.selectAiConfig.max_tokens}
+            onChange={(event) => updateSelectAiConfig(setForm, { max_tokens: Number(event.currentTarget.value) || 32000 })}
+            className={inputClass}
+          />
+        </label>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <span>{t("profiles.field.model")}</span>
+          <input
+            value={form.selectAiConfig.model}
+            onChange={(event) => updateSelectAiConfig(setForm, { model: event.currentTarget.value })}
+            className={inputClass}
+          />
+        </label>
+        <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <span>{t("profiles.field.embeddingModel")}</span>
+          <input
+            value={form.selectAiConfig.embedding_model}
+            onChange={(event) => updateSelectAiConfig(setForm, { embedding_model: event.currentTarget.value })}
+            className={inputClass}
+          />
+        </label>
+      </div>
+      <div className="grid gap-2 md:grid-cols-4">
+        {([
+          ["enforce_object_list", "profiles.field.enforceObjectList"],
+          ["comments", "profiles.field.comments"],
+          ["annotations", "profiles.field.annotations"],
+          ["constraints", "profiles.field.constraints"],
+        ] as const).map(([key, labelKey]) => (
+          <label key={key} className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-800">
+            <input
+              type="checkbox"
+              checked={Boolean(form.selectAiConfig[key])}
+              onChange={(event) => updateSelectAiConfig(setForm, { [key]: event.currentTarget.checked })}
+              className="h-4 w-4 rounded border-slate-300 text-sky-700 focus:ring-sky-500"
+            />
+            <span>{t(labelKey)}</span>
+          </label>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProfileEditor({
+  selectedProfile,
+  form,
+  tableNames,
+  viewNames,
+  objectFilter,
+  saving,
+  oraclePreview,
+  oracleConfirmation,
+  oracleLoading,
+  onObjectFilterChange,
+  onFormChange,
+  onToggleTable,
+  onToggleView,
+  onSave,
+  onArchive,
+  onReset,
+  onOraclePreview,
+  onOracleExecute,
+  onOracleConfirmationChange,
+}: {
+  selectedProfile: Nl2SqlProfile | null;
+  form: ProfileFormState;
+  tableNames: string[];
+  viewNames: string[];
+  objectFilter: string;
+  saving: boolean;
+  oraclePreview: SelectAiDbProfileMutationData | null;
+  oracleConfirmation: string;
+  oracleLoading: boolean;
+  onObjectFilterChange: (value: string) => void;
+  onFormChange: (updater: (current: ProfileFormState) => ProfileFormState) => void;
+  onToggleTable: (name: string) => void;
+  onToggleView: (name: string) => void;
+  onSave: () => void;
+  onArchive: () => void;
+  onReset: () => void;
+  onOraclePreview: () => void;
+  onOracleExecute: () => void;
+  onOracleConfirmationChange: (value: string) => void;
+}) {
+  const oracleConfirmed = oracleConfirmation.trim() === "ADMIN_EXECUTE" || oracleConfirmation.trim() === (oraclePreview?.profile_name ?? "");
+  return (
+    <section className="grid min-w-0 content-start gap-4" aria-labelledby="profile-editor-heading">
+      <DbObjectPanelHeader
+        headingId="profile-editor-heading"
+        icon={FileJson}
+        title={selectedProfile ? t("profiles.editor.edit") : t("profiles.editor.new")}
+        description={selectedProfile?.name ?? t("profiles.empty.hint")}
+        action={
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Button type="button" variant="secondary" size="sm" disabled={saving} onClick={onReset}>
+              <RotateCcw size={15} aria-hidden="true" />
+              <span>{t("profiles.action.reset")}</span>
+            </Button>
+            <Button type="button" variant="danger" size="sm" disabled={!selectedProfile || saving} onClick={onArchive}>
+              <Archive size={15} aria-hidden="true" />
+              <span>{t("profiles.action.archive")}</span>
+            </Button>
+            <Button type="button" variant="primary" size="sm" loading={saving} onClick={onSave}>
+              <Save size={15} aria-hidden="true" />
+              <span>{t("profiles.action.save")}</span>
+            </Button>
+          </div>
+        }
+      />
+
+      <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+        <h3 className="text-sm font-semibold text-slate-900">{t("profiles.editor.basic")}</h3>
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem_10rem]">
+          <label className="grid gap-1 text-sm font-medium text-slate-800">
+            <span>{t("profiles.field.name")}</span>
+            <input
+              value={form.name}
+              onChange={(event) => onFormChange((current) => ({ ...current, name: event.currentTarget.value }))}
+              className={inputClass}
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-medium text-slate-800">
+            <span>{t("profiles.field.category")}</span>
+            <input
+              value={form.category}
+              onChange={(event) => onFormChange((current) => ({ ...current, category: event.currentTarget.value }))}
+              className={inputClass}
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-medium text-slate-800">
+            <span>{t("profiles.field.rowLimit")}</span>
+            <input
+              type="number"
+              min={1}
+              max={5000}
+              value={form.defaultRowLimit}
+              onChange={(event) => onFormChange((current) => ({ ...current, defaultRowLimit: Number(event.currentTarget.value) || 100 }))}
+              className={inputClass}
+            />
+          </label>
+        </div>
+        <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <span>{t("profiles.field.description")}</span>
+          <textarea
+            value={form.description}
+            rows={3}
+            onChange={(event) => onFormChange((current) => ({ ...current, description: event.currentTarget.value }))}
+            className={textareaClass}
+          />
+        </label>
+      </section>
+
+      <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="profile-allowed-object-list">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">{t("profiles.editor.objects")}</h3>
+            <p className="mt-1 text-sm text-slate-600">{t("profiles.field.allowedObjects")}</p>
+          </div>
+          <label className="grid min-w-0 gap-1 text-sm font-medium text-slate-800 md:w-72">
+            <span>{t("profiles.objects.filter")}</span>
+            <input
+              value={objectFilter}
+              onChange={(event) => onObjectFilterChange(event.currentTarget.value)}
+              className={inputClass}
+              placeholder={t("profiles.objects.filterPlaceholder")}
+            />
+          </label>
+        </div>
+        <div className="grid gap-3 xl:grid-cols-2">
+          <ObjectCheckboxGrid
+            title={t("profiles.objects.tablesTitle")}
+            items={tableNames}
+            selected={form.allowedTables}
+            dataTestId="profile-allowed-table-list"
+            emptyText={t("profiles.objects.emptyTables")}
+            onToggle={onToggleTable}
+          />
+          <ObjectCheckboxGrid
+            title={t("profiles.objects.viewsTitle")}
+            items={viewNames}
+            selected={form.allowedViews}
+            dataTestId="profile-allowed-view-list"
+            emptyText={t("profiles.objects.emptyViews")}
+            onToggle={onToggleView}
+          />
+        </div>
+      </section>
+
+      <section className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+        <h3 className="text-sm font-semibold text-slate-900">{t("profiles.editor.learning")}</h3>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <label className="grid gap-1 text-sm font-medium text-slate-800">
+            <span>{t("profiles.field.glossary")}</span>
+            <textarea
+              value={form.glossaryText}
+              rows={6}
+              placeholder={t("profiles.placeholder.glossary")}
+              onChange={(event) => onFormChange((current) => ({ ...current, glossaryText: event.currentTarget.value }))}
+              className={`${textareaClass} font-mono`}
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-medium text-slate-800">
+            <span>{t("profiles.field.rules")}</span>
+            <textarea
+              value={form.sqlRulesText}
+              rows={6}
+              onChange={(event) => onFormChange((current) => ({ ...current, sqlRulesText: event.currentTarget.value }))}
+              className={textareaClass}
+            />
+          </label>
+        </div>
+        <label className="grid gap-1 text-sm font-medium text-slate-800">
+          <span>{t("profiles.field.fewShot")}</span>
+          <textarea
+            value={form.fewShotText}
+            rows={4}
+            placeholder={t("profiles.placeholder.fewShot")}
+            onChange={(event) => onFormChange((current) => ({ ...current, fewShotText: event.currentTarget.value }))}
+            className={`${textareaClass} font-mono`}
+          />
+        </label>
+      </section>
+
+      <SelectAiConfigFields form={form} setForm={onFormChange} />
+
+      <section className="grid gap-3 rounded-md border border-slate-200 bg-white p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">{t("profiles.editor.oraclePreview")}</h3>
+            <p className="mt-1 text-sm text-slate-600">{t("profiles.oracle.hint")}</p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+            <Button type="button" variant="secondary" size="sm" loading={oracleLoading} onClick={onOraclePreview}>
+              <Code2 size={15} aria-hidden="true" />
+              <span>{t("profiles.action.previewOracle")}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              loading={oracleLoading}
+              disabled={!oraclePreview || !oracleConfirmed}
+              onClick={onOracleExecute}
+            >
+              <Database size={15} aria-hidden="true" />
+              <span>{t("profiles.action.executeOracle")}</span>
+            </Button>
+          </div>
+        </div>
+        {oraclePreview ? (
+          <OracleMutationResult result={oraclePreview} />
+        ) : (
+          <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+            {t("profiles.oracle.previewEmpty")}
+          </div>
+        )}
+        <ExecutionConfirmationField
+          value={oracleConfirmation}
+          onChange={onOracleConfirmationChange}
+          confirmed={oracleConfirmed}
+          placeholder={oraclePreview?.profile_name || "ADMIN_EXECUTE"}
+          expectedLabel={oraclePreview?.profile_name || "ADMIN_EXECUTE"}
+          helper={t("profiles.oracle.executeHint")}
+          disabled={!oraclePreview}
+        />
+      </section>
+    </section>
+  );
+}
+
+function OracleMutationResult({ result }: { result: SelectAiDbProfileMutationData }) {
+  return (
+    <section className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm" data-testid="profile-oracle-result">
+      <div className="flex flex-wrap gap-2">
+        <StatusBadge variant={result.executed ? "success" : result.status === "error" ? "danger" : "neutral"} label={result.status} />
+        <StatusBadge variant="neutral" label={result.runtime} />
+        {result.profile_name && <StatusBadge variant="info" label={result.profile_name} />}
+      </div>
+      {result.warnings.map((warning) => (
+        <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
+          {warning}
+        </p>
+      ))}
+      {result.ddl.length > 0 && (
+        <pre className="overflow-auto rounded-md border border-slate-200 bg-white p-3 font-mono text-xs leading-5 text-slate-800">
+          <code>{result.ddl.join("\n")}</code>
+        </pre>
+      )}
+      {result.profile && (
+        <pre className="max-h-72 overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-50">
+          <code>{JSON.stringify(result.profile.attributes ?? {}, null, 2)}</code>
+        </pre>
+      )}
+    </section>
+  );
+}
+
+function OracleProfilesPanel({
+  dbProfiles,
+  selectedProfileName,
+  selectedProfile,
+  profileJson,
+  dropTargetName,
+  dropConfirmation,
+  loading,
+  onSelect,
+  onJsonChange,
+  onSaveJson,
+  onOpenDrop,
+  onCloseDrop,
+  onDropConfirmationChange,
+  onDropExecute,
+}: {
+  dbProfiles: SelectAiDbProfilesData | null;
+  selectedProfileName: string;
+  selectedProfile: SelectAiDbProfile | null;
+  profileJson: string;
+  dropTargetName: string;
+  dropConfirmation: string;
+  loading: string;
+  onSelect: (profile: SelectAiDbProfile) => void;
+  onJsonChange: (value: string) => void;
+  onSaveJson: (execute: boolean) => void;
+  onOpenDrop: (name: string) => void;
+  onCloseDrop: () => void;
+  onDropConfirmationChange: (value: string) => void;
+  onDropExecute: () => void;
+}) {
+  const dropConfirmed = dropConfirmation.trim() === dropTargetName || dropConfirmation.trim() === "ADMIN_EXECUTE";
+  const selectedDescription = selectedProfile?.description || selectedProfile?.category || "";
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(24rem,0.9fr)_minmax(0,1.2fr)]">
+      <section className="grid min-w-0 content-start gap-3">
+        <DbObjectPanelHeader
+          icon={Database}
+          title={t("profiles.oracle.list")}
+          description={t("profiles.oracle.hint")}
+          action={<StatusBadge variant="neutral" label={dbProfiles?.runtime ?? "deterministic"} />}
+        />
+        <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+          <div className="max-h-[42rem] overflow-auto" data-testid="profile-oracle-list">
+            {(dbProfiles?.profiles ?? []).length === 0 ? (
+              <div className="grid min-h-28 place-items-center p-4 text-sm text-slate-500">{t("profiles.oracle.empty")}</div>
+            ) : (
+              <table className="w-full min-w-[34rem] table-fixed divide-y divide-slate-200 text-left text-sm">
+                <colgroup>
+                  <col />
+                  <col className="w-[7rem]" />
+                  <col className="w-[9rem]" />
+                </colgroup>
+                <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2">{t("profiles.field.profileName")}</th>
+                    <th className="px-3 py-2">{t("profiles.oracle.runtime")}</th>
+                    <th className="px-3 py-2 text-right">{t("tableMgmt.grid.actions")}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(dbProfiles?.profiles ?? []).map((profile) => {
+                    const selected = profile.name === selectedProfileName;
+                    return (
+                      <tr key={profile.name} className={selected ? "bg-sky-50" : "hover:bg-slate-50"}>
+                        <td className="px-3 py-2 align-top">
+                          <button
+                            type="button"
+                            className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-sky-200"
+                            aria-current={selected ? "true" : undefined}
+                            onClick={() => onSelect(profile)}
+                          >
+                            <span className="break-all font-mono text-xs font-semibold text-sky-900">{profile.name}</span>
+                            <span className="line-clamp-2 text-xs leading-5 text-slate-600">{profileObjectList(profile) || "-"}</span>
+                          </button>
+                        </td>
+                        <td className="px-3 py-2">
+                          <StatusBadge variant="neutral" label={profile.status || "-"} />
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <Button type="button" variant="secondary" size="sm" onClick={() => onSelect(profile)}>
+                              <FileJson size={15} aria-hidden="true" />
+                              <span>{t("engineOps.dbProfiles.detail")}</span>
+                            </Button>
+                            <Button type="button" variant="danger" size="sm" onClick={() => onOpenDrop(profile.name)}>
+                              <Trash2 size={15} aria-hidden="true" />
+                              <span>{t("profiles.oracle.drop")}</span>
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+        {dbProfiles?.warnings.map((warning) => (
+          <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+            {warning}
+          </p>
+        ))}
+      </section>
+
+      <section className="grid min-w-0 content-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-4" aria-label={t("profiles.oracle.detail")}>
+        <DbObjectPanelHeader
+          icon={FileJson}
+          title={selectedProfile?.name || t("profiles.oracle.detail")}
+          description={selectedProfile ? selectedDescription || profileObjectList(selectedProfile) || "-" : t("profiles.oracle.noSelection")}
+          action={
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <Button type="button" variant="secondary" size="sm" disabled={!profileJson.trim()} loading={loading === "oracle-save"} onClick={() => onSaveJson(false)}>
+                <Save size={15} aria-hidden="true" />
+                <span>{t("profiles.oracle.saveDryRun")}</span>
+              </Button>
+              <Button type="button" variant="primary" size="sm" disabled={!profileJson.trim()} loading={loading === "oracle-save"} onClick={() => onSaveJson(true)}>
+                <Database size={15} aria-hidden="true" />
+                <span>{t("profiles.oracle.saveExecute")}</span>
+              </Button>
+            </div>
+          }
+        />
+        {selectedProfile ? (
+          <>
+            <div className="grid gap-2 md:grid-cols-3">
+              <StatusBadge variant="neutral" label={selectedProfile.region || "-"} />
+              <StatusBadge variant="neutral" label={selectedProfile.model || "-"} />
+              <StatusBadge variant="neutral" label={selectedProfile.embedding_model || "-"} />
+            </div>
+            <label className="grid gap-1 text-sm font-medium text-slate-800">
+              <span>{t("profiles.oracle.json")}</span>
+              <textarea
+                value={profileJson}
+                onChange={(event) => onJsonChange(event.currentTarget.value)}
+                rows={14}
+                className={`${textareaClass} min-h-80 font-mono text-xs`}
+              />
+            </label>
+            <section className="grid gap-2">
+              <h3 className="text-sm font-semibold text-slate-900">{t("profiles.oracle.sql")}</h3>
+              <pre className="overflow-auto rounded-md border border-slate-200 bg-white p-3 font-mono text-xs leading-5 text-slate-800">
+                <code>{profileAttributesSql(selectedProfile.name, selectedDescription)}</code>
+              </pre>
+            </section>
+          </>
+        ) : (
+          <EmptyState title={t("profiles.oracle.noSelection")} hint={t("profiles.oracle.hint")} />
+        )}
+      </section>
+
+      {dropTargetName && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 p-3 sm:items-center" role="presentation">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="profile-oracle-drop-title"
+            className="max-h-[90dvh] w-full max-w-2xl overflow-auto rounded-md border border-red-200 bg-white shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-red-100 bg-red-50 px-4 py-3">
+              <div>
+                <h2 id="profile-oracle-drop-title" className="text-base font-semibold text-red-950">
+                  {t("profiles.oracle.dropTitle")}
+                </h2>
+                <p className="mt-1 text-sm text-red-800">{t("profiles.oracle.dropHint")}</p>
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={onCloseDrop}>
+                <X size={15} aria-hidden="true" />
+                <span>{t("tableMgmt.dropDialog.close")}</span>
+              </Button>
+            </div>
+            <div className="grid gap-4 p-4">
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                <p className="text-xs font-semibold text-red-800">{t("profiles.oracle.dropTarget")}</p>
+                <p className="mt-1 break-all font-mono text-sm font-semibold text-red-950">{dropTargetName}</p>
+              </div>
+              <ExecutionConfirmationField
+                value={dropConfirmation}
+                onChange={onDropConfirmationChange}
+                confirmed={dropConfirmed}
+                placeholder={dropTargetName}
+                expectedLabel={dropTargetName}
+                helper={t("profiles.oracle.dropHint")}
+                tone="danger"
+              />
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <Button type="button" variant="danger" size="sm" loading={loading === "oracle-drop"} disabled={!dropConfirmed} onClick={onDropExecute}>
+                  <Trash2 size={15} aria-hidden="true" />
+                  <span>{t("profiles.oracle.drop")}</span>
+                </Button>
+                <Button type="button" variant="secondary" size="sm" onClick={onCloseDrop}>
+                  <span>{t("tableMgmt.dropDialog.cancel")}</span>
+                </Button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ProfileManagementPage() {
   const [profiles, setProfiles] = useState<Nl2SqlProfile[]>([]);
   const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
+  const [views, setViews] = useState<DbAdminObjectsData | null>(null);
+  const [dbProfiles, setDbProfiles] = useState<SelectAiDbProfilesData | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedOracleProfileName, setSelectedOracleProfileName] = useState("");
+  const [profileJson, setProfileJson] = useState("");
   const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [activeView, setActiveView] = useState<ActiveView>("list");
+  const [profileSearch, setProfileSearch] = useState("");
+  const [objectFilter, setObjectFilter] = useState("");
+  const [profileSort, setProfileSort] = useState<SortState>({ key: "name", direction: "asc" });
+  const [oraclePreview, setOraclePreview] = useState<SelectAiDbProfileMutationData | null>(null);
+  const [oracleConfirmation, setOracleConfirmation] = useState("");
+  const [dropTargetName, setDropTargetName] = useState("");
+  const [dropConfirmation, setDropConfirmation] = useState("");
+  const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
 
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === selectedId) ?? null,
     [profiles, selectedId]
   );
+  const selectedOracleProfile = useMemo(
+    () => (dbProfiles?.profiles ?? []).find((profile) => profile.name === selectedOracleProfileName) ?? null,
+    [dbProfiles, selectedOracleProfileName]
+  );
+
+  const tableNames = useMemo(
+    () =>
+      (catalog?.tables ?? [])
+        .filter((table) => !table.table_name.includes("$") && !table.table_type.toLowerCase().includes("view"))
+        .map((table) => table.table_name)
+        .sort(),
+    [catalog]
+  );
+  const viewNames = useMemo(() => {
+    const fromCatalog = (catalog?.tables ?? [])
+      .filter((table) => !table.table_name.includes("$") && table.table_type.toLowerCase().includes("view"))
+      .map((table) => table.table_name);
+    const fromAdmin = (views?.items ?? []).filter((view) => !view.name.includes("$")).map((view) => view.name);
+    return Array.from(new Set([...fromCatalog, ...fromAdmin])).sort();
+  }, [catalog, views]);
+  const filteredTableNames = useMemo(() => {
+    const q = objectFilter.trim().toLowerCase();
+    return q ? tableNames.filter((name) => name.toLowerCase().includes(q)) : tableNames;
+  }, [objectFilter, tableNames]);
+  const filteredViewNames = useMemo(() => {
+    const q = objectFilter.trim().toLowerCase();
+    return q ? viewNames.filter((name) => name.toLowerCase().includes(q)) : viewNames;
+  }, [objectFilter, viewNames]);
+  const filteredProfiles = useMemo(() => {
+    const q = profileSearch.trim().toLowerCase();
+    return profiles
+      .filter((profile) => {
+        if (!q) return true;
+        return (
+          profile.name.toLowerCase().includes(q) ||
+          (profile.category ?? "").toLowerCase().includes(q) ||
+          profile.description.toLowerCase().includes(q)
+        );
+      })
+      .sort((left, right) => {
+        const a = profileSortValue(left, profileSort.key);
+        const b = profileSortValue(right, profileSort.key);
+        const result = a < b ? -1 : a > b ? 1 : 0;
+        return profileSort.direction === "asc" ? result : -result;
+      });
+  }, [profileSearch, profileSort, profiles]);
+
+  const selectProfile = (profile: Nl2SqlProfile) => {
+    const normalized = normalizeProfile(profile);
+    setSelectedId(normalized.id);
+    setForm(profileToForm(normalized));
+    setOraclePreview(null);
+    setOracleConfirmation("");
+    setMessage("");
+  };
+
+  const selectOracleProfile = (profile: SelectAiDbProfile) => {
+    setSelectedOracleProfileName(profile.name);
+    setProfileJson(JSON.stringify(profile.attributes ?? {}, null, 2));
+    setMessage("");
+  };
 
   const load = async () => {
-    setLoading(true);
+    setLoading("load");
     setMessage("");
     try {
-      const [profileData, catalogData] = await Promise.all([
+      const [profileData, catalogData, viewData, dbProfileData] = await Promise.all([
         apiGet<Nl2SqlProfile[]>("/api/nl2sql/profiles"),
         apiGet<SchemaCatalog>("/api/schema/catalog"),
+        apiGet<DbAdminObjectsData>("/api/nl2sql/db-admin/views"),
+        apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"),
       ]);
-      setProfiles(profileData);
+      const normalizedProfiles = profileData.map(normalizeProfile);
+      setProfiles(normalizedProfiles);
       setCatalog(catalogData);
-      if (!selectedId && profileData[0]) {
-        setSelectedId(profileData[0].id);
-        setForm(profileToForm(profileData[0]));
+      setViews(viewData);
+      setDbProfiles(dbProfileData);
+      const nextProfile = normalizedProfiles.find((profile) => profile.id === selectedId) ?? normalizedProfiles[0] ?? null;
+      if (nextProfile) {
+        setSelectedId(nextProfile.id);
+        setForm(profileToForm(nextProfile));
+      }
+      const nextOracle =
+        dbProfileData.profiles.find((profile) => profile.name === selectedOracleProfileName) ??
+        dbProfileData.profiles[0] ??
+        null;
+      if (nextOracle) {
+        selectOracleProfile(nextOracle);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.load"));
     } finally {
-      setLoading(false);
+      setLoading("");
     }
   };
 
@@ -144,26 +1094,22 @@ export function ProfileManagementPage() {
     void load();
   }, []);
 
-  const selectProfile = (profile: Nl2SqlProfile) => {
-    setSelectedId(profile.id);
-    setForm(profileToForm(profile));
-    setMessage("");
-  };
-
   const startNew = () => {
     setSelectedId(null);
     setForm(EMPTY_FORM);
+    setActiveView("create");
+    setOraclePreview(null);
+    setOracleConfirmation("");
     setMessage("");
   };
 
-  const toggleTable = (tableName: string) => {
+  const toggleObject = (kind: "table" | "view", name: string) => {
     setForm((current) => {
-      const selected = current.allowedTables.includes(tableName);
+      const key = kind === "table" ? "allowedTables" : "allowedViews";
+      const selected = current[key].includes(name);
       return {
         ...current,
-        allowedTables: selected
-          ? current.allowedTables.filter((name) => name !== tableName)
-          : [...current.allowedTables, tableName],
+        [key]: selected ? current[key].filter((item) => item !== name) : [...current[key], name],
       };
     });
   };
@@ -173,7 +1119,7 @@ export function ProfileManagementPage() {
       setMessage(t("profiles.error.nameRequired"));
       return;
     }
-    setSaving(true);
+    setLoading("save");
     setMessage("");
     try {
       const payload = formToPayload(form);
@@ -182,18 +1128,19 @@ export function ProfileManagementPage() {
         : await apiPost<Nl2SqlProfile>("/api/nl2sql/profiles", payload);
       await load();
       setSelectedId(saved.id);
-      setForm(profileToForm(saved));
+      setForm(profileToForm(normalizeProfile(saved)));
+      setActiveView("list");
       setMessage(t("profiles.message.saved"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.save"));
     } finally {
-      setSaving(false);
+      setLoading("");
     }
   };
 
   const archiveSelected = async () => {
     if (!selectedProfile) return;
-    setSaving(true);
+    setLoading("archive");
     setMessage("");
     try {
       await apiPost<Nl2SqlProfile>(`/api/nl2sql/profiles/${selectedProfile.id}/archive`);
@@ -204,9 +1151,135 @@ export function ProfileManagementPage() {
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("profiles.error.archive"));
     } finally {
-      setSaving(false);
+      setLoading("");
     }
   };
+
+  const previewOracleProfile = async () => {
+    const profile = selectedProfile;
+    if (!profile) return;
+    setLoading("oracle-preview");
+    setMessage("");
+    try {
+      const result = await apiPost<SelectAiDbProfileMutationData>(`/api/nl2sql/profiles/${profile.id}/select-ai-profile`, {
+        execute: false,
+        confirmation: "",
+        reason: "ui-profile-management-select-ai-dry-run",
+      });
+      setOraclePreview(result);
+      setOracleConfirmation("");
+      setMessage(t("profiles.message.oraclePreview"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const executeOracleProfile = async () => {
+    const profile = selectedProfile;
+    if (!profile || !oraclePreview) return;
+    setLoading("oracle-preview");
+    setMessage("");
+    try {
+      const result = await apiPost<SelectAiDbProfileMutationData>(`/api/nl2sql/profiles/${profile.id}/select-ai-profile`, {
+        execute: true,
+        confirmation: oracleConfirmation,
+        reason: "ui-profile-management-select-ai-upsert",
+      });
+      setOraclePreview(result);
+      setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"));
+      setMessage(result.executed ? t("profiles.message.oracleSaved") : result.warnings.join(" ") || t("profiles.error.oracle"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const saveOracleJson = async (execute: boolean) => {
+    const profile = selectedOracleProfile;
+    if (!profile) return;
+    setLoading("oracle-save");
+    setMessage("");
+    try {
+      const attributes = JSON.parse(profileJson || "{}") as Record<string, unknown>;
+      const result = await apiPost<SelectAiDbProfileMutationData>("/api/nl2sql/select-ai/db-profiles", {
+        profile_name: profile.name,
+        attributes,
+        description: profile.description ?? "",
+        category: profile.category ?? "",
+        original_name: profile.name,
+        execute,
+        confirmation: execute ? profile.name : "",
+        reason: "ui-profile-management-oracle-json-save",
+      });
+      setOraclePreview(result);
+      setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"));
+      setMessage(execute && result.executed ? t("profiles.message.oracleSaved") : t("profiles.message.oraclePreview"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const dropOracleProfile = async () => {
+    if (!dropTargetName) return;
+    setLoading("oracle-drop");
+    setMessage("");
+    try {
+      const result = await apiPost(`/api/nl2sql/select-ai/db-profiles/${encodeURIComponent(dropTargetName)}/drop`, {
+        execute: true,
+        confirmation: dropConfirmation,
+        reason: "ui-profile-management-oracle-drop",
+      });
+      void result;
+      setDropTargetName("");
+      setDropConfirmation("");
+      setDbProfiles(await apiGet<SelectAiDbProfilesData>("/api/nl2sql/select-ai/db-profiles?include_detail=true"));
+      setMessage(t("profiles.message.oracleDropped"));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : t("profiles.error.oracle"));
+    } finally {
+      setLoading("");
+    }
+  };
+
+  const toggleSort = (key: SortKey) => {
+    setProfileSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  };
+
+  const handleTabChange = (view: ActiveView) => {
+    setActiveView(view);
+  };
+
+  const editor = (
+    <ProfileEditor
+      selectedProfile={selectedProfile}
+      form={form}
+      tableNames={filteredTableNames}
+      viewNames={filteredViewNames}
+      objectFilter={objectFilter}
+      saving={loading === "save" || loading === "archive"}
+      oraclePreview={oraclePreview}
+      oracleConfirmation={oracleConfirmation}
+      oracleLoading={loading === "oracle-preview"}
+      onObjectFilterChange={setObjectFilter}
+      onFormChange={setForm}
+      onToggleTable={(name) => toggleObject("table", name)}
+      onToggleView={(name) => toggleObject("view", name)}
+      onSave={() => void save()}
+      onArchive={() => void archiveSelected()}
+      onReset={startNew}
+      onOraclePreview={() => void previewOracleProfile()}
+      onOracleExecute={() => void executeOracleProfile()}
+      onOracleConfirmationChange={setOracleConfirmation}
+    />
+  );
 
   return (
     <>
@@ -215,7 +1288,7 @@ export function ProfileManagementPage() {
         subtitle={t("profiles.subtitle")}
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="secondary" loading={loading} onClick={() => void load()}>
+            <Button type="button" size="sm" variant="secondary" loading={loading === "load"} onClick={() => void load()}>
               <RefreshCw size={15} aria-hidden="true" />
               <span>{t("profiles.action.refresh")}</span>
             </Button>
@@ -227,182 +1300,91 @@ export function ProfileManagementPage() {
         }
       />
 
-      <main className="grid gap-5 p-4 lg:grid-cols-[minmax(18rem,0.75fr)_minmax(0,1.5fr)] lg:p-8">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("profiles.list.title")}</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-2">
-            {profiles.length === 0 ? (
-              <EmptyState title={t("profiles.empty.title")} hint={t("profiles.empty.hint")} />
-            ) : (
-              profiles.map((profile) => (
-                <button
-                  key={profile.id}
-                  type="button"
-                  onClick={() => selectProfile(profile)}
-                  className={`grid gap-2 rounded-md border p-3 text-left transition ${
-                    selectedId === profile.id
-                      ? "border-sky-300 bg-sky-50"
-                      : "border-slate-200 bg-white hover:bg-slate-50"
-                  }`}
-                >
-                  <span className="font-medium text-slate-900">{profile.name}</span>
-                  <span className="line-clamp-2 text-sm text-slate-600">{profile.description || "-"}</span>
-                  <span className="flex flex-wrap gap-2">
-                    <StatusBadge variant="neutral" label={t("profiles.list.tables", { count: profile.allowed_tables.length })} />
-                    <StatusBadge variant="neutral" label={t("profiles.list.rules", { count: profile.sql_rules.length })} />
-                  </span>
-                </button>
-              ))
-            )}
-          </CardContent>
-        </Card>
+      <main className="grid gap-4 p-4 lg:p-8">
+        {message && (
+          <div className="flex flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between" role="status">
+            <span>{message}</span>
+          </div>
+        )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{selectedProfile ? t("profiles.editor.edit") : t("profiles.editor.new")}</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-5">
-            {message && (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" role="status">
-                {message}
-              </div>
-            )}
+        <StatusBar
+          profileCount={profiles.length}
+          objectCount={profiles.reduce((sum, profile) => sum + profile.allowed_tables.length + (profile.allowed_views ?? []).length, 0)}
+          oracleProfileCount={dbProfiles?.profiles.length ?? 0}
+          runtime={dbProfiles?.runtime ?? "deterministic"}
+          loading={loading === "load"}
+          onRefresh={() => void load()}
+        />
 
-            <div className="grid gap-4 md:grid-cols-[1fr_14rem_10rem]">
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
-                <span>{t("profiles.field.name")}</span>
-                <input
-                  value={form.name}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setForm((current) => ({ ...current, name: value }));
-                  }}
-                  className="min-h-11 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                />
-              </label>
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
-                <span>{t("profiles.field.category")}</span>
-                <input
-                  value={form.category}
-                  placeholder={form.name || t("profiles.field.name")}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setForm((current) => ({ ...current, category: value }));
-                  }}
-                  className="min-h-11 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                />
-              </label>
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
-                <span>{t("profiles.field.rowLimit")}</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={5000}
-                  value={form.defaultRowLimit}
-                  onChange={(event) => {
-                    const value = Number(event.currentTarget.value) || 100;
-                    setForm((current) => ({ ...current, defaultRowLimit: value }));
-                  }}
-                  className="min-h-11 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                />
-              </label>
-            </div>
+        <DbObjectManagementTabs
+          activeView={activeView}
+          tabs={[
+            { id: "list", label: t("profiles.tabs.list"), icon: UserCog },
+            { id: "create", label: t("profiles.tabs.create"), icon: Plus },
+            { id: "oracle", label: t("profiles.tabs.oracle"), icon: Database },
+          ] satisfies Array<DbObjectTab<ActiveView>>}
+          idPrefix={PROFILE_MANAGEMENT_ID}
+          ariaLabel={t("profiles.tabs.label")}
+          onViewChange={handleTabChange}
+        />
 
-            <label className="grid gap-1 text-sm font-medium text-slate-800">
-              <span>{t("profiles.field.description")}</span>
-              <textarea
-                value={form.description}
-                rows={3}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setForm((current) => ({ ...current, description: value }));
-                }}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm leading-6 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-              />
-            </label>
-
-            <section className="grid gap-2">
-              <h3 className="text-sm font-semibold text-slate-900">{t("profiles.field.allowedTables")}</h3>
-              <div
-                data-testid="profile-allowed-table-list"
-                className="grid h-[32rem] gap-2 overflow-y-auto md:grid-cols-2"
-              >
-                {catalog?.tables.filter((table) => !table.table_name.includes("$")).map((table) => (
-                  <label key={table.table_name} className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 p-3 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={form.allowedTables.includes(table.table_name)}
-                      onChange={() => toggleTable(table.table_name)}
-                      className="h-4 w-4 rounded border-slate-300"
-                    />
-                    <span className="font-mono text-sm font-medium text-slate-900">{table.table_name}</span>
-                  </label>
-                ))}
-              </div>
-            </section>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
-                <span>{t("profiles.field.glossary")}</span>
-                <textarea
-                  value={form.glossaryText}
-                  rows={6}
-                  placeholder={t("profiles.placeholder.glossary")}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setForm((current) => ({ ...current, glossaryText: value }));
-                  }}
-                  className="rounded-md border border-slate-300 px-3 py-2 font-mono text-sm leading-6 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                />
-              </label>
-              <label className="grid gap-1 text-sm font-medium text-slate-800">
-                <span>{t("profiles.field.rules")}</span>
-                <textarea
-                  value={form.sqlRulesText}
-                  rows={6}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setForm((current) => ({ ...current, sqlRulesText: value }));
-                  }}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-sm leading-6 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-                />
-              </label>
-            </div>
-
-            <label className="grid gap-1 text-sm font-medium text-slate-800">
-              <span>{t("profiles.field.fewShot")}</span>
-              <textarea
-                value={form.fewShotText}
-                rows={4}
-                placeholder={t("profiles.placeholder.fewShot")}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  setForm((current) => ({ ...current, fewShotText: value }));
-                }}
-                className="rounded-md border border-slate-300 px-3 py-2 font-mono text-sm leading-6 focus:border-sky-600 focus:ring-2 focus:ring-sky-200"
-              />
-            </label>
-
-            <div className="flex flex-wrap justify-between gap-2">
-              <Button type="button" variant="secondary" disabled={saving} onClick={startNew}>
-                <RotateCcw size={16} aria-hidden="true" />
-                <span>{t("profiles.action.reset")}</span>
-              </Button>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="danger" disabled={!selectedProfile || saving} onClick={() => void archiveSelected()}>
-                  <Archive size={16} aria-hidden="true" />
-                  <span>{t("profiles.action.archive")}</span>
-                </Button>
-                <Button type="button" variant="primary" loading={saving} onClick={() => void save()}>
-                  <Save size={16} aria-hidden="true" />
-                  <span>{t("profiles.action.save")}</span>
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        {activeView === "list" ? (
+          <DbObjectManagementPanelShell
+            id="profile-management-panel-list"
+            labelledBy="profile-management-tab-list"
+            idPrefix={PROFILE_MANAGEMENT_ID}
+            ariaLabel={t("profiles.workspace.label")}
+            className="xl:grid-cols-[minmax(28rem,0.85fr)_minmax(0,1.35fr)]"
+          >
+            <ProfileList
+              profiles={filteredProfiles}
+              selectedId={selectedId}
+              loading={loading === "load" && profiles.length === 0}
+              search={profileSearch}
+              sort={profileSort}
+              onSearchChange={setProfileSearch}
+              onSortChange={toggleSort}
+              onSelect={selectProfile}
+            />
+            {editor}
+          </DbObjectManagementPanelShell>
+        ) : activeView === "create" ? (
+          <DbObjectManagementPanelShell
+            id="profile-management-panel-create"
+            labelledBy="profile-management-tab-create"
+            idPrefix={PROFILE_MANAGEMENT_ID}
+            ariaLabel={t("profiles.tabs.create")}
+          >
+            {editor}
+          </DbObjectManagementPanelShell>
+        ) : (
+          <DbObjectManagementPanelShell
+            id="profile-management-panel-oracle"
+            labelledBy="profile-management-tab-oracle"
+            idPrefix={PROFILE_MANAGEMENT_ID}
+            ariaLabel={t("profiles.tabs.oracle")}
+          >
+            <OracleProfilesPanel
+              dbProfiles={dbProfiles}
+              selectedProfileName={selectedOracleProfileName}
+              selectedProfile={selectedOracleProfile}
+              profileJson={profileJson}
+              dropTargetName={dropTargetName}
+              dropConfirmation={dropConfirmation}
+              loading={loading}
+              onSelect={selectOracleProfile}
+              onJsonChange={setProfileJson}
+              onSaveJson={(execute) => void saveOracleJson(execute)}
+              onOpenDrop={(name) => {
+                setDropTargetName(name);
+                setDropConfirmation("");
+              }}
+              onCloseDrop={() => setDropTargetName("")}
+              onDropConfirmationChange={setDropConfirmation}
+              onDropExecute={() => void dropOracleProfile()}
+            />
+          </DbObjectManagementPanelShell>
+        )}
       </main>
     </>
   );

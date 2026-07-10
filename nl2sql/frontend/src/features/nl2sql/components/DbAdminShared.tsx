@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -8,9 +8,9 @@ import {
   FileText,
   Play,
   Search,
-  Sparkles,
   Upload,
   X,
+  type LucideIcon,
 } from "lucide-react";
 
 import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, StatusBadge } from "@engchina/production-ready-ui";
@@ -18,10 +18,10 @@ import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, StatusBad
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import type {
-  DbAdminAiAnalysisData,
   DbAdminExecuteData,
   DbAdminObjectDetail,
   DbAdminObjectSummary,
+  DbAdminStatementResult,
   DbAdminStatementPolicy,
   QueryResults,
   SchemaCatalog,
@@ -67,17 +67,6 @@ export async function readTextFileSmart(file: File): Promise<string> {
   }
 }
 
-/** 実行結果を AI 分析へ渡すテキストに整形する。 */
-export function executionResultText(result: DbAdminExecuteData | null): string {
-  if (!result) return "";
-  return result.statements
-    .map((statement) =>
-      `#${statement.index} [${statement.status}] ${statement.message || ""} ${statement.error_message || ""}`.trim()
-    )
-    .concat(result.warnings)
-    .join("\n");
-}
-
 export function PageMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
@@ -111,6 +100,162 @@ export function WorkSection({
       </summary>
       <div className="border-t border-current/10 bg-white p-3">{children}</div>
     </details>
+  );
+}
+
+export function focusManagementTabElement(id: string) {
+  window.requestAnimationFrame(() => document.getElementById(id)?.focus());
+}
+
+export function ManagementPanelShell({
+  id,
+  labelledBy,
+  ariaLabel,
+  className = "",
+  children,
+}: {
+  id: string;
+  labelledBy: string;
+  ariaLabel?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      id={id}
+      role="tabpanel"
+      aria-labelledby={labelledBy}
+      aria-label={ariaLabel}
+      className={`grid gap-4 rounded-md border border-slate-200 bg-white p-4 shadow-sm ${className}`}
+      data-testid="management-panel-shell"
+    >
+      {children}
+    </section>
+  );
+}
+
+export function ManagementPanelHeader({
+  title,
+  description,
+  icon: Icon,
+  headingId,
+  action,
+}: {
+  title: string;
+  description?: string;
+  icon: LucideIcon;
+  headingId?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0">
+        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-slate-950">
+          <Icon size={18} aria-hidden="true" />
+          {title}
+        </h2>
+        {description && <p className="mt-1 text-sm text-slate-600">{description}</p>}
+      </div>
+      {action && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div>}
+    </div>
+  );
+}
+
+export function StepIndicator({
+  steps,
+  activeIndex,
+  ariaLabel,
+  dataTestId,
+}: {
+  steps: string[];
+  activeIndex: number;
+  ariaLabel: string;
+  dataTestId?: string;
+}) {
+  return (
+    <ol className="grid gap-2 md:grid-cols-2" aria-label={ariaLabel} data-testid={dataTestId}>
+      {steps.map((label, index) => (
+        <li
+          key={label}
+          className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+            index <= activeIndex ? "border-sky-200 bg-sky-50 text-sky-900" : "border-slate-200 bg-white text-slate-500"
+          }`}
+        >
+          {index + 1}. {label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+export function ManagementTabs<TView extends string>({
+  activeView,
+  tabs,
+  idPrefix,
+  ariaLabel,
+  onViewChange,
+}: {
+  activeView: TView;
+  tabs: Array<{ id: TView; label: string; icon: LucideIcon }>;
+  idPrefix: string;
+  ariaLabel: string;
+  onViewChange: (view: TView) => void;
+}) {
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const keyMap: Record<string, number | undefined> = {
+      ArrowRight: (index + 1) % tabs.length,
+      ArrowLeft: (index - 1 + tabs.length) % tabs.length,
+      Home: 0,
+      End: tabs.length - 1,
+    };
+    const nextIndex = keyMap[event.key];
+    if (nextIndex === undefined) return;
+    event.preventDefault();
+    const nextView = tabs[nextIndex];
+    onViewChange(nextView.id);
+    focusManagementTabElement(`${idPrefix}-tab-${nextView.id}`);
+  };
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-x-auto p-1.5">
+        <div className="flex max-w-full min-w-max gap-1 rounded-md bg-slate-100/80 p-1" role="tablist" aria-label={ariaLabel}>
+          {tabs.map((view, index) => {
+            const Icon = view.icon;
+            const selected = activeView === view.id;
+            return (
+              <button
+                key={view.id}
+                id={`${idPrefix}-tab-${view.id}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={`${idPrefix}-panel-${view.id}`}
+                className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border px-4 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-sky-200 ${
+                  selected
+                    ? "border-sky-200 bg-white text-sky-950 shadow-sm ring-1 ring-sky-100"
+                    : "border-transparent text-slate-600 hover:bg-white/80 hover:text-slate-950"
+                }`}
+                onClick={() => onViewChange(view.id)}
+                onKeyDown={(event) => handleKeyDown(event, index)}
+              >
+                <span
+                  className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+                    selected
+                      ? "bg-sky-100 text-sky-700"
+                      : "bg-transparent text-slate-400 group-hover:bg-slate-100 group-hover:text-slate-600"
+                  }`}
+                  aria-hidden="true"
+                >
+                  <Icon size={16} />
+                </span>
+                <span>{view.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -281,14 +426,135 @@ export function QueryResultsTable({ results }: { results: QueryResults }) {
   );
 }
 
+function runtimeLabel(runtime: string) {
+  if (runtime === "oracle") return "Oracle";
+  if (runtime === "deterministic") return t("dbAdmin.result.runtime.deterministic");
+  return runtime;
+}
+
+type ResultStatusVariant = "success" | "neutral" | "danger" | "info";
+
+function statusVariant(status: string): ResultStatusVariant {
+  if (["success", "executed", "applied_to_local_state", "submitted"].includes(status)) return "success";
+  if (["error", "blocked"].includes(status)) return "danger";
+  if (["confirmation_required", "requires_oracle"].includes(status)) return "info";
+  return "neutral";
+}
+
+function statusLabel(status: string) {
+  const key = `dbAdmin.result.status.${status}`;
+  const label = t(key);
+  return label === key ? status : label;
+}
+
+function resultSummary(result: DbAdminExecuteData): { variant: ResultStatusVariant; label: string } {
+  const statuses = result.statements.map((statement) => statement.status);
+  if (result.executed) return { variant: "success", label: t("dbAdmin.result.summary.executed") };
+  if (statuses.includes("error")) return { variant: "danger", label: t("dbAdmin.result.summary.error") };
+  if (statuses.includes("blocked")) return { variant: "danger", label: t("dbAdmin.result.summary.blocked") };
+  if (statuses.includes("confirmation_required")) return { variant: "info", label: t("dbAdmin.result.summary.confirmation") };
+  if (statuses.includes("requires_oracle")) return { variant: "info", label: t("dbAdmin.result.summary.requiresOracle") };
+  if (statuses.length > 0 && statuses.every((status) => status === "dry_run")) {
+    return { variant: "neutral", label: t("dbAdmin.result.summary.preview") };
+  }
+  return { variant: "neutral", label: t("dbAdmin.result.summary.notExecuted") };
+}
+
+function oracleErrorGuidance(code: string | null) {
+  if (code === "ORA-00922") {
+    return {
+      cause: t("dbAdmin.result.error.ora00922.cause"),
+      actions: [
+        t("dbAdmin.result.error.ora00922.action.split"),
+        t("dbAdmin.result.error.ora00922.action.syntax"),
+        t("dbAdmin.result.error.action.refresh"),
+      ],
+    };
+  }
+  if (code === "ORA-00955") {
+    return {
+      cause: t("dbAdmin.result.error.ora00955.cause"),
+      actions: [
+        t("dbAdmin.result.error.ora00955.action.delete"),
+        t("dbAdmin.result.error.ora00955.action.refresh"),
+      ],
+    };
+  }
+  if (code === "ORA-00942") {
+    return {
+      cause: t("dbAdmin.result.error.ora00942.cause"),
+      actions: [
+        t("dbAdmin.result.error.ora00942.action.target"),
+        t("dbAdmin.result.error.action.refresh"),
+      ],
+    };
+  }
+  return {
+    cause: t("dbAdmin.result.error.generic.cause"),
+    actions: [
+      t("dbAdmin.result.error.generic.action.sql"),
+      t("dbAdmin.result.error.action.refresh"),
+    ],
+  };
+}
+
+function parseDbAdminError(message: string) {
+  const helpUrl = message.match(/https?:\/\/\S+/)?.[0] ?? "";
+  const summary = message.replace(/\s*Help:\s*https?:\/\/\S+/i, "").trim();
+  const code = summary.match(/\bORA-\d{5}\b/)?.[0] ?? null;
+  const guidance = oracleErrorGuidance(code);
+  return { code, summary: summary || message, helpUrl, ...guidance };
+}
+
+function DbAdminStatementError({ statement }: { statement: DbAdminStatementResult }) {
+  const error = parseDbAdminError(statement.error_message);
+  return (
+    <div className="mt-3 grid gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-red-950" role="alert">
+      <div className="grid gap-1">
+        <p className="text-xs font-semibold text-red-700">{t("dbAdmin.result.error.summary")}</p>
+        <p className="break-words text-sm font-semibold">{error.summary}</p>
+      </div>
+      <div className="grid gap-1">
+        <p className="text-xs font-semibold text-red-700">{t("dbAdmin.result.error.cause")}</p>
+        <p className="text-sm leading-6">{error.cause}</p>
+      </div>
+      <div className="grid gap-1">
+        <p className="text-xs font-semibold text-red-700">{t("dbAdmin.result.error.nextAction")}</p>
+        <ul className="grid gap-1 text-sm leading-6">
+          {error.actions.map((action) => (
+            <li key={action} className="flex gap-2">
+              <span aria-hidden="true">-</span>
+              <span>{action}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <details className="rounded-md border border-red-200 bg-white/70">
+        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-red-200">
+          {t("dbAdmin.result.error.detail")}
+        </summary>
+        <div className="grid gap-2 border-t border-red-100 p-3">
+          {error.helpUrl && (
+            <a className="text-sm font-semibold text-red-800 underline" href={error.helpUrl} target="_blank" rel="noreferrer">
+              {t("dbAdmin.result.error.help")}
+            </a>
+          )}
+          <code className="block break-words text-xs leading-5 text-red-900">{statement.error_message}</code>
+        </div>
+      </details>
+    </div>
+  );
+}
+
 export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData }) {
+  const summary = resultSummary(result);
   return (
     <section className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
       <div className="flex flex-wrap gap-2">
-        <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "dry-run"} />
-        <StatusBadge variant="neutral" label={result.runtime} />
-        {result.committed && <StatusBadge variant="success" label="committed" />}
-        {result.rolled_back && <StatusBadge variant="danger" label="rolled back" />}
+        <StatusBadge variant={summary.variant} label={summary.label} />
+        <StatusBadge variant="neutral" label={runtimeLabel(result.runtime)} />
+        {result.committed && <StatusBadge variant="success" label={t("dbAdmin.result.summary.committed")} />}
+        {result.rolled_back && <StatusBadge variant="danger" label={t("dbAdmin.result.summary.rolledBack")} />}
       </div>
       {result.warnings.map((warning) => (
         <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
@@ -302,19 +568,12 @@ export function DbAdminExecutionResult({ result }: { result: DbAdminExecuteData 
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap gap-2">
                 <StatusBadge variant="neutral" label={statement.statement_type} />
-                <StatusBadge
-                  variant={statement.status === "success" || statement.status === "executed" ? "success" : statement.status === "error" || statement.status === "blocked" ? "danger" : "neutral"}
-                  label={statement.status}
-                />
+                <StatusBadge variant={statusVariant(statement.status)} label={statusLabel(statement.status)} />
               </div>
               <span className="text-xs text-slate-500">{statement.elapsed_ms}ms</span>
             </div>
             <code className="mt-2 block break-words text-xs text-slate-700">{statement.sql}</code>
-            {statement.error_message && (
-              <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
-                {statement.error_message}
-              </p>
-            )}
+            {statement.error_message && <DbAdminStatementError statement={statement} />}
           </div>
         ))}
       </div>
@@ -475,85 +734,11 @@ export function SqlFileInput({
   );
 }
 
-/** SQL + 実行結果を OCI Enterprise AI で分析するパネル。 */
-export function AiAnalysisPanel({
-  sql,
-  resultText,
-  target,
-}: {
-  sql: string;
-  resultText: string;
-  target: "table" | "view" | "data" | "comment" | "annotation";
-}) {
-  const [analysis, setAnalysis] = useState<DbAdminAiAnalysisData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-
-  const analyze = async () => {
-    setLoading(true);
-    setMessage("");
-    try {
-      setAnalysis(
-        await apiPost<DbAdminAiAnalysisData>("/api/nl2sql/db-admin/analyze-error", {
-          sql,
-          result_text: resultText,
-          target,
-        })
-      );
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("dbAdmin.error.analyze"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <section className="grid gap-2 border-t border-slate-200 pt-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-slate-900">{t("dbAdmin.ai.title")}</p>
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          loading={loading}
-          disabled={!sql.trim() || !resultText.trim()}
-          onClick={() => void analyze()}
-        >
-          <Sparkles size={15} aria-hidden="true" />
-          <span>{t("dbAdmin.ai.analyze")}</span>
-        </Button>
-      </div>
-      {message && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
-          {message}
-        </p>
-      )}
-      {analysis ? (
-        <div className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-          <StatusBadge
-            variant={analysis.source === "oci_enterprise_ai" ? "success" : "neutral"}
-            label={analysis.source}
-          />
-          {analysis.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
-              {warning}
-            </p>
-          ))}
-          <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-800">{analysis.analysis}</pre>
-        </div>
-      ) : (
-        <p className="text-sm text-slate-500">{t("dbAdmin.ai.empty")}</p>
-      )}
-    </section>
-  );
-}
-
 /** 文種 whitelist 付き SQL 実行カード(テーブル/ビュー作成・データ SQL 共用)。 */
 export function StatementRunnerCard({
   policy,
   title,
   description,
-  target,
   initialSql,
   placeholder,
   templates,
@@ -566,7 +751,6 @@ export function StatementRunnerCard({
   policy: DbAdminStatementPolicy;
   title: string;
   description?: string;
-  target: "table" | "view" | "data" | "comment" | "annotation";
   initialSql?: string;
   placeholder?: string;
   templates?: Array<{ label: string; build: () => string }>;
@@ -761,7 +945,6 @@ export function StatementRunnerCard({
         )}
       </div>
       {result && <DbAdminExecutionResult result={result} />}
-      {!executeOnly && <AiAnalysisPanel sql={sql} resultText={executionResultText(result)} target={target} />}
     </>
   );
 
